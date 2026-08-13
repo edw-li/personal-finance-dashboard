@@ -1,0 +1,52 @@
+import {
+  Banknote,
+  Briefcase,
+  LayoutDashboard,
+  LineChart,
+  LogOut,
+  Receipt,
+  Settings,
+  TrendingUp,
+  Wallet,
+} from 'lucide-react'
+import { NavLink, Outlet } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
+import './Layout.css'
+
+const NAV_ITEMS = [
+  { to: '/', label: 'Overview', icon: LayoutDashboard },
+  { to: '/net-worth', label: 'Net Worth', icon: TrendingUp },
+  { to: '/spending', label: 'Spending', icon: Wallet },
+  { to: '/portfolio', label: 'Portfolio', icon: LineChart },
+  { to: '/taxes', label: 'Taxes', icon: Receipt },
+  { to: '/espp', label: 'ESPP', icon: Banknote },
+  { to: '/paycheck', label: 'Paycheck', icon: Banknote },
+  { to: '/comp', label: 'Comp', icon: Briefcase },
+  { to: '/settings', label: 'Settings', icon: Settings },
+]
+
+export default function Layout() {
+  const { logout } = useAuth()
+  return (
+    <div className="layout">
+      <aside className="sidebar">
+        <div className="sidebar-title">Finance</div>
+        <nav>
+          {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+            <NavLink key={to} to={to} end={to === '/'} className="nav-link">
+              <Icon size={16} />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
+        <button className="logout-button" onClick={logout}>
+          <LogOut size={16} />
+          <span>Log out</span>
+        </button>
+      </aside>
+      <main className="content">
+        <Outlet />
+      </main>
+    </div>
+  )
+}
