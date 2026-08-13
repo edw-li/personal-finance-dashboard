@@ -25,6 +25,10 @@
 - Run ruff ONLY from `backend/` (as all steps do). From the repo root, `ruff format --check .`
   spuriously flags Python code blocks inside this plan's markdown (ruff 0.16 formats md code
   blocks, and the root has no ruff config so defaults apply). `ruff check` is unaffected.
+- Foreground `sleep` is blocked by the harness — wait for servers with
+  `curl --retry N --retry-connrefused --retry-delay 1` instead. Backgrounded `cmd &` chains
+  run in a wrapper subshell under Git Bash: `kill %1` kills the wrapper, NOT the server —
+  find the real PID (`netstat -ano | grep :PORT`) and `taskkill //F //PID`.
 
 ---
 
@@ -1263,11 +1267,15 @@ Expected: PASS (all tests including the 8 auth tests)
 ```bash
 python -m app.seed
 uvicorn app.main:app --port 8000 &
-sleep 2
-curl -s -X POST http://localhost:8000/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@example.com","password":"changeme123"}'
-kill %1
+curl -s --retry 30 --retry-connrefused --retry-delay 1 -X POST \
+  http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" -d '{"email":"admin@example.com","password":"changeme123"}'
+# kill %1 only kills the wrapper subshell under Git Bash — kill the real server:
+netstat -ano | grep :8000   # note the PID, then:
+taskkill //F //PID <pid>
 ```
-Expected: JSON with `access_token`.
+Expected: JSON with `access_token`. (curl --retry replaces a fixed sleep — the harness blocks
+foreground `sleep`, and retry-until-connect is more reliable anyway.)
 
 - [ ] **Step 8: Lint and commit**
 
@@ -2396,8 +2404,9 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (!res.ok) {
     let detail = res.statusText
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body.detail) detail = body.detail
+      // FastAPI errors use {detail}; slowapi's 429 rate-limit body uses {error}
+      const body = (await res.json()) as { detail?: string; error?: string }
+      detail = body.detail ?? body.error ?? detail
     } catch {
       // non-JSON error body
     }
@@ -3057,6 +3066,9 @@ server {
 ```
 Note: the HTTPS server block (Cloudflare origin certs, 443, HTTP→HTTPS redirect) is added in
 Plan 6 by copying `photography-webpage/nginx.conf` lines 1–21 with the finance domain.
+Also note: behind Nginx, slowapi's `get_remote_address` sees the proxy's IP, so all clients
+share ONE login rate bucket — fine (arguably desirable) for a single-user app; a conscious
+decision, revisit only if multi-client access ever matters.
 
 - [ ] **Step 3: Prod compose file and env template**
 
