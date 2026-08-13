@@ -2769,16 +2769,16 @@ const AuthContext = createContext<AuthState | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [email, setEmail] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  // Seeded from the token: tokenless mounts start with isLoading=false so the effect never
+  // needs a setState for that case (react-hooks/set-state-in-effect errors on it in
+  // eslint-plugin-react-hooks 7).
+  const [isLoading, setIsLoading] = useState(() => getToken() !== null)
 
   useEffect(() => {
     // LOAD-BEARING guard — do not drop: without it, a tokenless mount calls /auth/me,
     // gets 401, and client.ts clears+redirects to /login, remounting this provider in an
     // infinite full-page reload loop (verified during Task 11 review).
-    if (!getToken()) {
-      setIsLoading(false)
-      return
-    }
+    if (!getToken()) return
     authApi
       .fetchMe()
       .then((me) => setEmail(me.email))
