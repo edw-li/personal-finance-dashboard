@@ -376,17 +376,28 @@ git commit -m "feat: backend skeleton with health endpoint"
 
 - [ ] **Step 1: Create dev Postgres compose file**
 
-`backend/docker-compose.yml` (port 5433 so it never clashes with photography-webpage's dev DB on 5432):
+`backend/docker-compose.yml`. The explicit `name:` is load-bearing: without it Compose derives the
+project name from the directory (`backend`), which is IDENTICAL to photography-webpage's dev
+compose — the two stacks would share container/volume names and `down -v` in either repo would
+destroy the other's data. Port 5433 avoids the port clash; `name:` avoids the namespace clash.
+Loopback-only binding keeps the finance DB off the LAN; image pinned like everything else:
 ```yaml
+name: finance-dashboard
+
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16.14-alpine
     environment:
       POSTGRES_USER: finance
       POSTGRES_PASSWORD: finance
       POSTGRES_DB: finance
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/initdb:/docker-entrypoint-initdb.d:ro
@@ -403,10 +414,13 @@ CREATE DATABASE finance_test OWNER finance;
 - [ ] **Step 2: Start the dev DB and verify both databases exist**
 
 ```bash
-docker compose -f docker-compose.yml up -d db
-docker compose -f docker-compose.yml exec db psql -U finance -c "\l" | grep finance
+docker compose -f docker-compose.yml up -d --wait db
+docker compose -f docker-compose.yml exec -T db psql -U finance -c "\l" | grep finance
 ```
-Expected: lines for `finance` and `finance_test`. (If `finance_test` is missing, the volume predates the init script: `docker compose down -v` and re-up.)
+Expected: lines for `finance` and `finance_test`. (`--wait` blocks on the healthcheck so psql
+can't race the server start. `finance_test` is self-healing: the conftest bootstrap in Step 4
+creates it if missing, so a stale volume no longer needs `down -v`. `-T` avoids "the input
+device is not a TTY" under Git Bash.)
 
 - [ ] **Step 3: Create `backend/app/database.py`**
 
@@ -420,14 +434,16 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
 NAMING_CONVENTION = {
-    "ix": "ix_%(column_0_label)s",
+    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
-    "ck": "ck_%(table_name)s_%(constraint_name)s",
-    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referenced_table_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",  # CheckConstraints MUST be explicitly named
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
 
-engine = create_async_engine(settings.database_url)
+# pool_pre_ping: the prod backend outlives host-Postgres restarts and sits idle for hours;
+# without it the first request after any DB restart fails on a stale pooled connection.
+engine = create_async_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -447,17 +463,34 @@ The `client` fixture overrides `get_db` so API code shares the test session; tab
 ```python
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import settings
 from app.database import Base, get_db
 from app.main import app
 
-TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/finance_test"
+# make_url().set() survives query params / odd DSNs, unlike string surgery; guarantees the
+# destructive drop_all below can only ever target the *_test database.
+TEST_DATABASE_URL = make_url(settings.database_url).set(database="finance_test")
+
+
+async def _ensure_test_database() -> None:
+    """Create finance_test if missing — self-heals stale dev volumes and plain-CI Postgres."""
+    admin = create_async_engine(make_url(settings.database_url), isolation_level="AUTOCOMMIT")
+    async with admin.connect() as conn:
+        exists = await conn.scalar(
+            text("SELECT 1 FROM pg_database WHERE datname = 'finance_test'")
+        )
+        if not exists:
+            await conn.execute(text("CREATE DATABASE finance_test"))
+    await admin.dispose()
 
 
 @pytest.fixture(scope="session")
 async def engine():
+    await _ensure_test_database()
     eng = create_async_engine(TEST_DATABASE_URL)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -468,6 +501,9 @@ async def engine():
 
 @pytest.fixture
 async def db(engine):
+    # Shared-session contract: `client` drives endpoints through THIS session. After an
+    # endpoint raises IntegrityError the session is poisoned — `await db.rollback()` before
+    # reusing it — and concurrent requests within one test are not permitted.
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         yield session
@@ -487,7 +523,7 @@ async def client(db):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(get_db, None)
 ```
 
 - [ ] **Step 5: Update the health test to use the fixture and verify everything still passes**
@@ -501,7 +537,54 @@ async def test_health(client):
 ```
 
 Run: `pytest -v`
-Expected: PASS (1 passed)
+Expected: PASS (6 passed: health + 4 config + naming convention)
+
+- [ ] **Step 5b: Pin the naming convention with a regression test**
+
+The `fk` token typo (`referenced_` vs `referred_table_name`) would have crashed every
+ForeignKey-bearing model at import — this test makes the convention impossible to break silently.
+
+`backend/tests/test_database.py`:
+```python
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    Table,
+    UniqueConstraint,
+)
+
+from app.database import NAMING_CONVENTION
+
+
+def test_naming_convention_generates_expected_names():
+    md = MetaData(naming_convention=NAMING_CONVENTION)
+    Table("parents", md, Column("id", Integer, primary_key=True))
+    child = Table(
+        "children",
+        md,
+        Column("id", Integer, primary_key=True),
+        Column("parent_id", Integer, ForeignKey("parents.id")),
+        Column("a", Integer),
+        Column("b", Integer),
+        CheckConstraint("a >= 0", name="a_nonnegative"),
+        UniqueConstraint("a", "b"),
+        Index(None, "a"),
+        Index(None, "a", "b"),
+    )
+    constraint_names = {c.name for c in child.constraints}
+    assert "pk_children" in constraint_names
+    assert "fk_children_parent_id_parents" in constraint_names
+    assert "uq_children_a" in constraint_names
+    assert "ck_children_a_nonnegative" in constraint_names
+    assert {i.name for i in child.indexes} == {"ix_children_a", "ix_children_a_b"}
+```
+
+Run: `pytest tests/test_database.py -v`
+Expected: PASS
 
 - [ ] **Step 6: Lint and commit**
 
@@ -1059,6 +1142,9 @@ git commit -m "feat: single-user JWT auth (login, me, change-password, rate limi
 - Create: `backend/app/models/net_worth.py`, `backend/app/models/spending.py`
 - Modify: `backend/app/models/__init__.py`
 - Test: `backend/tests/test_models_net_worth.py`, `backend/tests/test_models_spending.py`
+
+> Applies to all schema tasks (7–10): any `CheckConstraint` added now or later MUST be
+> explicitly named — the `ck_` naming convention raises on unnamed check constraints.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2898,11 +2984,13 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16.14-alpine
         env:
           POSTGRES_USER: finance
           POSTGRES_PASSWORD: finance
-          POSTGRES_DB: finance_test
+          # finance (not finance_test): DATABASE_URL points at finance, and the conftest
+          # bootstrap creates finance_test from it — same flow as dev.
+          POSTGRES_DB: finance
         ports:
           - "5433:5432"
         options: >-
@@ -2920,6 +3008,12 @@ jobs:
       - run: ruff check backend
       - run: ruff format --check backend
       - run: pytest -v
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://finance:finance@localhost:5433/finance
+      # Migration smoke + drift guard: upgrade an empty DB to head, then verify the
+      # migrations and Base.metadata agree (catches "changed a model, forgot a migration").
+      - run: alembic upgrade head && alembic check
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://finance:finance@localhost:5433/finance
