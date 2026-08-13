@@ -1004,6 +1004,7 @@ async def auth_client(client, seeded_user):
         "/api/v1/auth/login",
         json={"email": "me@example.com", "password": "correct-horse"},
     )
+    assert resp.status_code == 200, resp.text  # fail loudly, not with an opaque KeyError
     token = resp.json()["access_token"]
     client.headers["Authorization"] = f"Bearer {token}"
     return client
@@ -1086,7 +1087,52 @@ async def test_login_rate_limited(client, seeded_user):
         json={"email": "me@example.com", "password": "nope"},
     )
     assert resp.status_code == 429
+
+
+async def test_me_rejects_token_for_missing_user(client, db, seeded_user):
+    token = create_access_token(seeded_user.id)
+    await db.execute(delete(User).where(User.id == seeded_user.id))
+    await db.commit()
+    client.headers["Authorization"] = f"Bearer {token}"
+    resp = await client.get("/api/v1/auth/me")
+    assert resp.status_code == 401
+
+
+async def test_me_rejects_garbage_token(client):
+    client.headers["Authorization"] = "Bearer not.a.real.token"
+    resp = await client.get("/api/v1/auth/me")
+    assert resp.status_code == 401
+
+
+async def test_login_normalizes_email(client, seeded_user):
+    # Pins the cross-file coupling with seed.py's .strip().lower() normalization
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "  ME@Example.COM  ", "password": "correct-horse"},
+    )
+    assert resp.status_code == 200
+
+
+async def test_login_long_password_is_401_not_500(client, seeded_user):
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "me@example.com", "password": "a" * 200},
+    )
+    assert resp.status_code == 401
+
+
+async def test_change_password_multibyte_over_72_bytes_rejected(auth_client):
+    # 40 accented chars pass the 72-CHAR schema cap but are 80 BYTES — the endpoint
+    # catch is the authoritative enforcement.
+    resp = await auth_client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "correct-horse", "new_password": "é" * 40},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Password must be at most 72 bytes"
 ```
+(`test_auth.py` needs these imports at the top: `from sqlalchemy import delete`,
+`from app.models import User`, `from app.security import create_access_token`.)
 
 Run: `pytest tests/test_auth.py -v`
 Expected: FAIL — 404s / import errors (endpoints don't exist)
@@ -1147,20 +1193,26 @@ from app.security import decode_access_token
 
 bearer = HTTPBearer(auto_error=False)
 
+AUTH_401_HEADERS = {"WWW-Authenticate": "Bearer"}  # RFC 9110 §15.5.2: 401 MUST carry it
+
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     if credentials is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise HTTPException(status_code=401, detail="Not authenticated", headers=AUTH_401_HEADERS)
     try:
         user_id = decode_access_token(credentials.credentials)
     except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired token", headers=AUTH_401_HEADERS
+        ) from None
     user = await db.get(User, user_id)
     if user is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired token", headers=AUTH_401_HEADERS
+        )
     return user
 ```
 
@@ -1260,7 +1312,7 @@ async def health() -> dict[str, str]:
 - [ ] **Step 6: Run the full suite**
 
 Run: `pytest -v`
-Expected: PASS (all tests including the 8 auth tests)
+Expected: PASS — 30 passed (17 existing + 13 auth), 0 warnings
 
 - [ ] **Step 7: Seed and smoke-test the live server**
 
@@ -1289,6 +1341,13 @@ git commit -m "feat: single-user JWT auth (login, me, change-password, rate limi
 > outstanding JWTs — a previously-issued token stays valid up to 24h. Acceptable for a
 > single-user v1 with no revocation by design (spec §5). Plan 6 hardening candidate:
 > `password_changed_at` column + `iat` check in `get_current_user`.
+
+> **Verified negative (Task 6 review): do NOT adopt slowapi `headers_enabled=True`.** It
+> 500s the login SUCCESS path (slowapi requires a `response: Response` param on every
+> rate-limited endpoint to inject headers), and `Retry-After` would additionally need CORS
+> `expose_headers` to be readable cross-origin. The frontend already parses the 429 `{error}`
+> body. Likewise `default_limits` without `SlowAPIMiddleware` is a silent no-op. Revisit both
+> only in Plan 3 when real data routers exist (middleware + `@limiter.exempt` on /health).
 
 ---
 
@@ -2760,6 +2819,11 @@ export default function Layout() {
 ```
 
 - [ ] **Step 4: Create the login page**
+
+Login-form UX constraints (pinned from Task 6 review): the rate limiter counts ALL attempts
+including successful ones — after 10 fumbles even the correct password 429s for up to 60s.
+The form must NOT auto-retry, and should surface the 429 message (client.ts already extracts
+slowapi's `{error}` body) as a "wait a minute" notice rather than a generic failure.
 
 `src/pages/LoginPage.tsx`:
 ```tsx
