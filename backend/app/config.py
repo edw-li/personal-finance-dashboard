@@ -3,8 +3,14 @@ from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEV_SECRET_KEY = "change-me-to-a-random-secret"
+DEV_SECRET_KEY = "dev-only-change-me-to-a-random-secret"
 DEV_ADMIN_PASSWORD = "changeme123"
+
+# HS256 keys under 32 bytes weaken the MAC (RFC 7518 3.2) and make PyJWT warn on every
+# encode/decode. bcrypt raises above 72 bytes, which would crash seed.py at container boot.
+MIN_SECRET_KEY_BYTES = 32
+MIN_PASSWORD_BYTES = 8
+MAX_PASSWORD_BYTES = 72
 
 
 class Settings(BaseSettings):
@@ -27,6 +33,13 @@ class Settings(BaseSettings):
                 raise ValueError("SECRET_KEY must be set outside dev")
             if self.admin_password == DEV_ADMIN_PASSWORD:
                 raise ValueError("ADMIN_PASSWORD must be set outside dev")
+            if len(self.secret_key.encode()) < MIN_SECRET_KEY_BYTES:
+                raise ValueError(f"SECRET_KEY must be at least {MIN_SECRET_KEY_BYTES} bytes")
+            # bcrypt's limit is BYTES, not characters: 40 accented chars is 80 bytes.
+            if not MIN_PASSWORD_BYTES <= len(self.admin_password.encode()) <= MAX_PASSWORD_BYTES:
+                raise ValueError(
+                    f"ADMIN_PASSWORD must be {MIN_PASSWORD_BYTES}-{MAX_PASSWORD_BYTES} bytes"
+                )
         if "*" in self.cors_origin_list:
             raise ValueError("CORS_ORIGINS must list explicit origins, not '*'")
         return self

@@ -27,7 +27,15 @@ def create_access_token(user_id: int) -> str:
 def decode_access_token(token: str) -> int:
     """Return the user id, or raise ValueError for any invalid/expired token."""
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+        # require: PyJWT only enforces exp when the claim is present, so a key-signed token
+        # minted without one would never expire. ValueError: int() on a non-numeric sub would
+        # otherwise escape uncaught, leaking "invalid literal for int()" to the caller.
+        payload = jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=[ALGORITHM],
+            options={"require": ["exp", "sub"]},
+        )
         return int(payload["sub"])
-    except (jwt.PyJWTError, KeyError, TypeError) as exc:
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
         raise ValueError("invalid token") from exc
