@@ -38,4 +38,6 @@ class AccountBalance(Base):
         ForeignKey("net_worth_snapshots.id", ondelete="CASCADE")
     )
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
+    # Signed. Liability-group balances are stored NEGATIVE (matching the sheet), so
+    # net worth = SUM(balance) with no sign-flipping anywhere downstream.
     balance: Mapped[Decimal] = mapped_column(Numeric(14, 2))
