@@ -1,11 +1,16 @@
 import pytest
 
-from app.config import Settings
+from app.config import DEV_ADMIN_PASSWORD, DEV_SECRET_KEY, Settings
 
 
-def test_dev_secrets_rejected_outside_dev():
+def test_dev_secret_key_rejected_outside_dev():
     with pytest.raises(ValueError, match="SECRET_KEY"):
-        Settings(environment="prod")
+        Settings(environment="prod", secret_key=DEV_SECRET_KEY)
+
+
+def test_dev_admin_password_rejected_outside_dev():
+    with pytest.raises(ValueError, match="ADMIN_PASSWORD"):
+        Settings(environment="prod", secret_key="x" * 64, admin_password=DEV_ADMIN_PASSWORD)
 
 
 def test_prod_with_real_secrets_ok():
