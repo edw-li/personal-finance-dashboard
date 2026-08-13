@@ -83,6 +83,7 @@ async def auth_client(client, seeded_user):
         "/api/v1/auth/login",
         json={"email": "me@example.com", "password": "correct-horse"},
     )
+    assert resp.status_code == 200, resp.text  # fail loudly, not with an opaque KeyError
     token = resp.json()["access_token"]
     client.headers["Authorization"] = f"Bearer {token}"
     return client
