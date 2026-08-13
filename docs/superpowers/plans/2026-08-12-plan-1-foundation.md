@@ -1342,6 +1342,11 @@ git commit -m "feat: single-user JWT auth (login, me, change-password, rate limi
 > single-user v1 with no revocation by design (spec §5). Plan 6 hardening candidate:
 > `password_changed_at` column + `iat` check in `get_current_user`.
 
+> **Accepted RFC nit:** the login endpoint's own 401 (bad credentials) carries no
+> `WWW-Authenticate` header — only `get_current_user`'s 401s do. A challenge header on a
+> JSON credential-submission endpoint is semantically murky and has zero browser impact;
+> left as-is deliberately.
+
 > **Verified negative (Task 6 review): do NOT adopt slowapi `headers_enabled=True`.** It
 > 500s the login SUCCESS path (slowapi requires a `response: Response` param on every
 > rate-limited endpoint to inject headers), and `Retry-After` would additionally need CORS
