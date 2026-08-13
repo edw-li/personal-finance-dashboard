@@ -1,7 +1,9 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.models import AppSetting, CompEvent, EsppLot, EsppPeriod, PaycheckProfile
 
@@ -70,3 +72,15 @@ async def test_comp_event_and_period_and_setting(db):
     await db.commit()
     setting = await db.get(AppSetting, "swr_pct")
     assert setting.value == {"value": 0.04}
+    ev = (await db.execute(select(CompEvent))).scalar_one()
+    # Numeric(14,4): the sheet's 6-dp unvested price rounds to 4 dp — documented and pinned
+    assert ev.unvested_price == Decimal("129.5651")
+
+
+async def test_focal_year_unique(db):
+    db.add(CompEvent(focal_year=2025, current_base=Decimal("1")))
+    await db.commit()
+    db.add(CompEvent(focal_year=2025, current_base=Decimal("2")))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
