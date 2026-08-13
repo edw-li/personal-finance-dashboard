@@ -152,27 +152,29 @@ git commit -m "chore: add gitignore and gitattributes"
 
 - [ ] **Step 1: Create requirements files**
 
-`backend/requirements.txt`:
+`backend/requirements.txt` (exact pins per Task 2 quality review — floor pins let pytest-asyncio
+jump a major version mid-plan; a proper cross-platform lockfile, e.g. `uv pip compile`, is a
+Plan 6 hardening item. Bump pins deliberately, never implicitly):
 ```
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-sqlalchemy[asyncio]>=2.0.30
-asyncpg>=0.30.0
-alembic>=1.13.0
-pydantic>=2.7.0
-pydantic-settings>=2.3.0
-PyJWT>=2.9.0
-bcrypt>=4.1.0
-slowapi>=0.1.9
-python-multipart>=0.0.9
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+sqlalchemy[asyncio]==2.0.52
+asyncpg==0.31.0
+alembic==1.19.1
+pydantic==2.13.4
+pydantic-settings==2.15.0
+PyJWT==2.13.0
+bcrypt==5.0.0
+slowapi==0.1.10
+python-multipart==0.0.32
 ```
 
 `backend/requirements-dev.txt`:
 ```
-pytest>=8.0.0
-pytest-asyncio>=0.24.0
-httpx>=0.27.0
-ruff>=0.6.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
+ruff==0.16.2
 ```
 
 - [ ] **Step 2: Create `backend/pyproject.toml` (tool config only)**
@@ -183,11 +185,22 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Depends()/Query()/etc. in argument defaults are intentional (B008)
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body",
+    "fastapi.Header", "fastapi.Form", "fastapi.File", "fastapi.Security",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# BOTH loop scopes must be session — pytest-asyncio 1.x defaults tests to a function-scoped
+# loop, which makes session-scoped async fixtures (Task 3's engine/db) run on a DIFFERENT
+# event loop than the tests, producing cross-loop RuntimeErrors with asyncpg.
 asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 ```
 
@@ -228,24 +241,48 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'app'`
 
 `backend/app/__init__.py`: empty file.
 
-`backend/app/config.py`:
+`backend/app/config.py` (hardened per Task 2 quality review: fail closed on dev secrets outside
+dev, reject wildcard CORS, package-relative .env so the CWD doesn't matter, tolerate shared env
+files via extra="ignore"):
 ```python
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEV_SECRET_KEY = "change-me-to-a-random-secret"
+DEV_ADMIN_PASSWORD = "changeme123"
 
 
 class Settings(BaseSettings):
+    environment: str = "dev"
     database_url: str = "postgresql+asyncpg://finance:finance@localhost:5433/finance"
-    secret_key: str = "change-me-to-a-random-secret"
+    secret_key: str = DEV_SECRET_KEY
     access_token_expire_hours: int = 24
     cors_origins: str = "http://localhost:5173"
     admin_email: str = "admin@example.com"
-    admin_password: str = "changeme123"
+    admin_password: str = DEV_ADMIN_PASSWORD
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    @model_validator(mode="after")
+    def _validate_safety(self) -> "Settings":
+        if self.environment != "dev":
+            if self.secret_key == DEV_SECRET_KEY:
+                raise ValueError("SECRET_KEY must be set outside dev")
+            if self.admin_password == DEV_ADMIN_PASSWORD:
+                raise ValueError("ADMIN_PASSWORD must be set outside dev")
+        if "*" in self.cors_origin_list:
+            raise ValueError("CORS_ORIGINS must list explicit origins, not '*'")
+        return self
+
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parent.parent / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()
@@ -258,7 +295,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 
-app = FastAPI(title="Personal Finance Dashboard", docs_url=None, redoc_url=None)
+app = FastAPI(title="Personal Finance Dashboard", docs_url=None, redoc_url=None, openapi_url=None)
 
 app.add_middleware(
     CORSMiddleware,
@@ -274,10 +311,45 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 ```
 
-- [ ] **Step 7: Run test to verify it passes**
+- [ ] **Step 6b: Add config-safety tests and env example**
 
-Run: `pytest tests/test_health.py -v`
-Expected: PASS (1 passed)
+`backend/tests/test_config.py`:
+```python
+import pytest
+
+from app.config import Settings
+
+
+def test_dev_secrets_rejected_outside_dev():
+    with pytest.raises(ValueError, match="SECRET_KEY"):
+        Settings(environment="prod")
+
+
+def test_prod_with_real_secrets_ok():
+    s = Settings(environment="prod", secret_key="x" * 64, admin_password="real-password")
+    assert s.environment == "prod"
+
+
+def test_wildcard_cors_rejected():
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        Settings(cors_origins="*")
+```
+
+`backend/.env.example` (dev-facing; the root `.env.example` for prod arrives in Task 13):
+```env
+# Local dev config for the backend (all optional — defaults work for dev).
+# ENVIRONMENT=dev
+# DATABASE_URL=postgresql+asyncpg://finance:finance@localhost:5433/finance
+# SECRET_KEY=
+# ADMIN_EMAIL=admin@example.com
+# ADMIN_PASSWORD=changeme123
+# CORS_ORIGINS=http://localhost:5173
+```
+
+- [ ] **Step 7: Run tests to verify they pass**
+
+Run: `pytest -v`
+Expected: PASS (test_health + 3 config tests)
 
 - [ ] **Step 8: Lint and commit**
 
@@ -929,7 +1001,7 @@ from app.api import auth
 from app.config import settings
 from app.rate_limit import limiter
 
-app = FastAPI(title="Personal Finance Dashboard", docs_url=None, redoc_url=None)
+app = FastAPI(title="Personal Finance Dashboard", docs_url=None, redoc_url=None, openapi_url=None)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -2636,7 +2708,8 @@ git commit -m "feat: frontend auth flow and protected layout shell"
 
 - [ ] **Step 1: Backend Dockerfile and start script**
 
-`backend/.dockerignore` (keeps the venv and caches out of the image):
+`backend/.dockerignore` (keeps the venv, caches, and local secrets out of the image — `.env`
+matters because `COPY . .` would otherwise bake a developer's local secrets into an image layer):
 ```
 .venv
 .pytest_cache
@@ -2644,6 +2717,7 @@ git commit -m "feat: frontend auth flow and protected layout shell"
 __pycache__
 tests
 docker-compose.yml
+.env
 ```
 
 `backend/start.sh`:
@@ -2752,6 +2826,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      ENVIRONMENT: prod
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@host.docker.internal:5432/${POSTGRES_DB:-finance}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
@@ -2778,6 +2853,7 @@ POSTGRES_PASSWORD=<your-db-password>
 POSTGRES_DB=finance
 
 # ── Backend ───────────────────────────────────────────────
+ENVIRONMENT=prod
 # Generate with: openssl rand -hex 32
 SECRET_KEY=<your-secret-key>
 CORS_ORIGINS=https://<your-finance-subdomain>
@@ -2836,6 +2912,7 @@ jobs:
           cache: pip
       - run: pip install -r backend/requirements.txt -r backend/requirements-dev.txt
       - run: ruff check backend
+      - run: ruff format --check backend
       - run: pytest -v
         working-directory: backend
         env:
