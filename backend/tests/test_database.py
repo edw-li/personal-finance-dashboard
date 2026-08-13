@@ -34,6 +34,12 @@ def test_naming_convention_generates_expected_names():
     assert "ck_children_a_nonnegative" in constraint_names
     assert {i.name for i in child.indexes} == {"ix_children_a", "ix_children_a_b"}
 
-    # Pin the wiring, not just the dict — a plain MetaData() in database.py would silently
-    # revert every constraint to Postgres defaults while the assertions above stayed green.
+
+def test_base_metadata_applies_convention_to_models():
+    # Pin the WIRING, not just the dict — a plain MetaData() in database.py would silently
+    # revert every constraint to Postgres defaults while the dict assertions stayed green.
+    import app.models  # noqa: F401
+
     assert Base.metadata.naming_convention == NAMING_CONVENTION
+    users = Base.metadata.tables["users"]
+    assert {c.name for c in users.constraints} == {"pk_users", "uq_users_email"}

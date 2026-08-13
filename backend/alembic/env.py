@@ -22,7 +22,8 @@ if config.config_file_name is not None:
 # The URL lives in app.config (one source of truth) rather than alembic.ini, so migrations
 # always target the same database as the app.
 # configparser interpolation: a literal % in DATABASE_URL (e.g. URL-encoded password chars
-# like %40) crashes every alembic command unless escaped as %%.
+# like %40) crashes every alembic command — and %% or %(...)s forms silently CORRUPT the
+# URL instead of crashing — unless escaped as %%.
 config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Base.metadata carries the naming convention and, via the app.models import above, every
