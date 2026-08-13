@@ -1,4 +1,5 @@
 """Idempotent seed: admin user, tax input definitions. Run: python -m app.seed"""
+
 import asyncio
 
 from sqlalchemy import select
@@ -26,8 +27,15 @@ async def seed_tax_definitions(db: AsyncSession) -> None:
     existing = set((await db.execute(select(TaxInputDefinition.key))).scalars().all())
     for key, label, section, sort_order, is_derived in TAX_INPUT_DEFINITIONS:
         if key not in existing:
-            db.add(TaxInputDefinition(key=key, label=label, section=section,
-                                      sort_order=sort_order, is_derived=is_derived))
+            db.add(
+                TaxInputDefinition(
+                    key=key,
+                    label=label,
+                    section=section,
+                    sort_order=sort_order,
+                    is_derived=is_derived,
+                )
+            )
 
 
 async def seed() -> None:

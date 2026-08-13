@@ -10,11 +10,21 @@ from app.tax_keys import TAX_INPUT_DEFINITIONS
 
 async def test_bracket_and_input_roundtrip(db):
     db.add(TaxYear(year=2024))
-    db.add(TaxInputDefinition(key="annual_salary", label="Annual Salary",
-                              section="ordinary_income", sort_order=10))
+    db.add(
+        TaxInputDefinition(
+            key="annual_salary", label="Annual Salary", section="ordinary_income", sort_order=10
+        )
+    )
     await db.flush()
-    db.add(TaxBracket(year=2024, jurisdiction="federal", bracket_index=1,
-                      rate=Decimal("0.10"), threshold=Decimal("0")))
+    db.add(
+        TaxBracket(
+            year=2024,
+            jurisdiction="federal",
+            bracket_index=1,
+            rate=Decimal("0.10"),
+            threshold=Decimal("0"),
+        )
+    )
     db.add(TaxInput(year=2024, key="annual_salary", value=Decimal("151000")))
     await db.commit()
     inp = (await db.execute(select(TaxInput))).scalar_one()
@@ -23,8 +33,11 @@ async def test_bracket_and_input_roundtrip(db):
 
 async def test_one_value_per_year_per_key(db):
     db.add(TaxYear(year=2024))
-    db.add(TaxInputDefinition(key="w2_bonuses", label="Bonuses",
-                              section="ordinary_income", sort_order=70))
+    db.add(
+        TaxInputDefinition(
+            key="w2_bonuses", label="Bonuses", section="ordinary_income", sort_order=70
+        )
+    )
     await db.flush()
     db.add(TaxInput(year=2024, key="w2_bonuses", value=Decimal("1")))
     await db.commit()

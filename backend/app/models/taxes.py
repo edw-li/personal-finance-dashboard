@@ -41,7 +41,5 @@ class TaxInput(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     year: Mapped[int] = mapped_column(ForeignKey("tax_years.year", ondelete="CASCADE"))
-    key: Mapped[str] = mapped_column(
-        ForeignKey("tax_input_definitions.key", ondelete="CASCADE")
-    )
+    key: Mapped[str] = mapped_column(ForeignKey("tax_input_definitions.key", ondelete="CASCADE"))
     value: Mapped[Decimal] = mapped_column(Numeric(14, 2))
