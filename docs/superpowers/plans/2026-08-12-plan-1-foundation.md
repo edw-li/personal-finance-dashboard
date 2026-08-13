@@ -80,7 +80,9 @@ Responsibilities: `models/*` one file per domain; `security.py` is pure function
 
 - [ ] **Step 1: Install Python 3.12**
 
-Run: `winget install -e --id Python.Python.3.12`
+Run: `winget install -e --id Python.Python.3.12 --source winget --accept-package-agreements --accept-source-agreements`
+(`--source winget` is required — the msstore source fails with a certificate error behind this
+machine's TLS-intercepting proxy. The install triggers a UAC dialog that a human must approve.)
 Then verify in a NEW shell: `py -3.12 --version`
 Expected: `Python 3.12.x`
 
