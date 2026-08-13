@@ -9,7 +9,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
-from app.database import NAMING_CONVENTION
+from app.database import NAMING_CONVENTION, Base
 
 
 def test_naming_convention_generates_expected_names():
@@ -33,3 +33,7 @@ def test_naming_convention_generates_expected_names():
     assert "uq_children_a" in constraint_names
     assert "ck_children_a_nonnegative" in constraint_names
     assert {i.name for i in child.indexes} == {"ix_children_a", "ix_children_a_b"}
+
+    # Pin the wiring, not just the dict — a plain MetaData() in database.py would silently
+    # revert every constraint to Postgres defaults while the assertions above stayed green.
+    assert Base.metadata.naming_convention == NAMING_CONVENTION
