@@ -1706,6 +1706,8 @@ class PositionTransaction(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
     fees: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     split_factor: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    # Preserves spreadsheet row order — cost-basis folding must process transactions in
+    # this order because most rows have no date. Order by (sort_index, id) for stability.
     sort_index: Mapped[int] = mapped_column(default=0)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -3378,6 +3380,14 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
   must supply them explicitly.
 - Alembic post_write_hooks output "Found N errors (M fixed, K remaining)" mid-generation is
   benign — ruff_format (second hook) resolves the remainder; final files are lint-clean.
+- **latest_prices refresh (Plan 4): use bulk `pg_insert(...).on_conflict_do_update(...)`** —
+  one statement for the whole ticker batch; `session.merge()` costs 2 round trips per row
+  (reserve it for single manual price edits).
+- **Cost-basis folding must ORDER BY (sort_index, id)** — sort_index has no uniqueness and
+  defaults to 0; the importer must assign distinct, order-preserving values per sheet row.
+- Shares beyond 6 dp round silently (1.0000005 → 1.000001) — importer quantizes shares too.
+- Sells convention (Plan 4 must choose explicitly): store positive shares + type="sell";
+  nothing DB-level enforces sign or type membership.
 
 ## Definition of done (Plan 1)
 
