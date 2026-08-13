@@ -25,6 +25,9 @@
 - Run ruff ONLY from `backend/` (as all steps do). From the repo root, `ruff format --check .`
   spuriously flags Python code blocks inside this plan's markdown (ruff 0.16 formats md code
   blocks, and the root has no ruff config so defaults apply). `ruff check` is unaffected.
+- **When a plan code block and `ruff format` disagree, format wins.** Run `ruff format` on
+  transcribed files before committing; AST-identical re-wrapping vs the plan text is expected
+  and sanctioned (reviewers: verify AST equivalence, not byte equality, for formatted files).
 - Foreground `sleep` is blocked by the harness — wait for servers with
   `curl --retry N --retry-connrefused --retry-delay 1` instead. Backgrounded `cmd &` chains
   run in a wrapper subshell under Git Bash: `kill %1` kills the wrapper, NOT the server —
@@ -3396,6 +3399,12 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
   scans ever matter; irrelevant at personal row counts.
 - `holding_type="private"` securities still require a unique ticker (String(20) NOT NULL) —
   the importer mints synthetic tickers for Fundrise-style assets; keep them short.
+- **`seed_tax_definitions` is insert-only** — editing a label/sort_order/is_derived in
+  tax_keys.py will NOT propagate to an already-seeded DB. Plan 5 definition changes need an
+  explicit upsert pass or a data migration.
+- `tax_brackets.rate` has no 0..1 CHECK (Numeric(7,4) allows 999.9999 and negatives) — the
+  Plan 5 bracket-editor UI/API must validate scale (a 37.43 entered for 37.43% would be
+  accepted by the DB); sub-basis-point rates round silently at 4 dp.
 
 ## Definition of done (Plan 1)
 
