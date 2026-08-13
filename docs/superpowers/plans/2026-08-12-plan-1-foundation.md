@@ -2583,9 +2583,15 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (!res.ok) {
     let detail = res.statusText
     try {
-      // FastAPI errors use {detail}; slowapi's 429 rate-limit body uses {error}
-      const body = (await res.json()) as { detail?: string; error?: string }
-      detail = body.detail ?? body.error ?? detail
+      // FastAPI errors use {detail} (a string, or an ARRAY for 422 validation errors);
+      // slowapi's 429 rate-limit body uses {error}
+      const body = (await res.json()) as { detail?: unknown; error?: unknown }
+      const raw = body.detail ?? body.error
+      if (typeof raw === 'string') {
+        detail = raw
+      } else if (Array.isArray(raw)) {
+        detail = raw.map((d) => (d as { msg?: string }).msg ?? 'Invalid input').join('; ')
+      }
     } catch {
       // non-JSON error body
     }
@@ -2695,6 +2701,14 @@ git commit -m "feat: frontend scaffold (Vite + React + TS + router + API client)
 
 ### Task 12: Frontend auth — context, login page, protected layout
 
+> **Pre-step (from Task 11 review, own commit FIRST):** (a) update `src/api/client.ts`'s
+> error-parsing block to the amended array-tolerant version in Task 11 Step 3 above (FastAPI
+> 422 validation errors carry an ARRAY detail, which previously rendered "[object Object]");
+> (b) create `.nvmrc` containing `20` and add `"engines": { "node": ">=20" }` to package.json
+> (dev box runs EOL Node 18 — works but 30 EBADENGINE warnings; this documents the real
+> floor). Verify lint + build still clean. Commit:
+> `fix: array-tolerant API error parsing, document Node 20 floor`.
+
 **Files:**
 - Create: `src/api/auth.ts`, `src/contexts/AuthContext.tsx`, `src/components/ProtectedRoute.tsx`
 - Create: `src/components/Layout.tsx`, `src/components/Layout.css`, `src/pages/LoginPage.tsx`, `src/pages/LoginPage.css`
@@ -2758,6 +2772,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
+    // LOAD-BEARING guard — do not drop: without it, a tokenless mount calls /auth/me,
+    // gets 401, and client.ts clears+redirects to /login, remounting this provider in an
+    // infinite full-page reload loop (verified during Task 11 review).
     if (!getToken()) {
       setIsLoading(false)
       return
@@ -3471,6 +3488,11 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
   drop the 5th dp — if Plans 3-4 ever bridge those tables, widen first.
 - No date-ordering constraints anywhere (period_end < period_start, sold_date < purchase_date
   all accepted) — consistent app-layer posture; the wizard/importer validate.
+- Frontend: package-lock is lockfileVersion 2 (npm 8) — CI/Docker `npm ci` reads it fine;
+  regenerate to v3 via a `node:20` container when convenient (first npm-10 `install` will
+  churn it otherwise). `npm ci --dry-run` on npm 8 DELETES node_modules — not read-only.
+- client.ts has no timeout/AbortSignal (hung backend = infinite spinner) and network failures
+  throw raw TypeError, not ApiError — catch blocks must tolerate both (Plan 2/3 candidates).
 
 ## Definition of done (Plan 1)
 
