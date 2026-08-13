@@ -2137,7 +2137,20 @@ async def test_comp_event_and_period_and_setting(db):
     await db.commit()
     setting = await db.get(AppSetting, "swr_pct")
     assert setting.value == {"value": 0.04}
+    ev = (await db.execute(select(CompEvent))).scalar_one()
+    # Numeric(14,4): the sheet's 6-dp unvested price rounds to 4 dp — documented and pinned
+    assert ev.unvested_price == Decimal("129.5651")
+
+
+async def test_focal_year_unique(db):
+    db.add(CompEvent(focal_year=2025, current_base=Decimal("1")))
+    await db.commit()
+    db.add(CompEvent(focal_year=2025, current_base=Decimal("2")))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
 ```
+(the file needs `import pytest` and `from sqlalchemy.exc import IntegrityError` when these land.)
 
 Run: `pytest tests/test_models_comp.py -v`
 Expected: FAIL — ImportError
@@ -2339,6 +2352,12 @@ git commit -m "feat: comp module and app settings schema"
 ---
 
 ### Task 11: Frontend scaffold — Vite app, router, API client
+
+> **Pre-step (from Task 10 review, own commit FIRST):** pin the comp tables — apply the
+> amended Task 10 test block above to `backend/tests/test_models_comp.py` (the
+> `unvested_price` rounding assertion + the new `test_focal_year_unique`, with the pytest
+> and IntegrityError imports). Suite: 47 passed. Commit:
+> `test: pin comp-table rounding and focal_year uniqueness`.
 
 **Files:**
 - Create: `package.json`, `vite.config.ts`, `tsconfig.json`, `tsconfig.app.json`, `tsconfig.node.json`, `eslint.config.js`, `index.html`
@@ -3440,6 +3459,18 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
   at cent precision, never byte-equality with sheet strings. Numeric(10,9) also hard-errors
   on a pct passed as `14` instead of `0.14` — a desirable mis-scale guard; keep it.
 - `comp_events.focal_year` has no range check (0, -1, 3000 all accepted) — app-layer.
+- `paycheck_profiles.pay_periods_per_year` accepts 0 — it is the waterfall DIVISOR; the
+  Plan 5 paycheck API must reject 0 (validate >= 1) or divide-by-zero crashes the endpoint.
+- Un-indexed FK children also include `tax_inputs.key` (composite unique leads with year).
+- `app_settings['espp_ticker']` is a dangling soft link — no matching securities row exists
+  after a clean seed; Plans 3-4 must handle the missing-security case, not assume a hit.
+- `app_settings.value` envelope (`{"value": ...}`) is convention only — JSONB accepts bare
+  scalars; any settings PUT endpoint must enforce the envelope or readers TypeError.
+- Price-scale crossing: espp_lots is (14,5), all other price columns are (14,4). READS are
+  safe (arithmetic promotes); WRITES from espp_lots into position_transactions would silently
+  drop the 5th dp — if Plans 3-4 ever bridge those tables, widen first.
+- No date-ordering constraints anywhere (period_end < period_start, sold_date < purchase_date
+  all accepted) — consistent app-layer posture; the wizard/importer validate.
 
 ## Definition of done (Plan 1)
 
