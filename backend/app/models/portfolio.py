@@ -37,8 +37,8 @@ class PositionTransaction(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
     fees: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     split_factor: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
-    # Preserves spreadsheet row order. Cost-basis folding MUST process transactions in this
-    # order because most rows have no date (Plan 4 depends on it).
+    # Preserves spreadsheet row order — cost-basis folding must process transactions in
+    # this order because most rows have no date. Order by (sort_index, id) for stability.
     sort_index: Mapped[int] = mapped_column(default=0)
     notes: Mapped[str | None] = mapped_column(Text)
 
