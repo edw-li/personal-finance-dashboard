@@ -685,7 +685,9 @@ from app.config import settings
 from app.database import Base
 import app.models  # noqa: F401  (registers all models on Base.metadata)
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# configparser interpolation: a literal % in DATABASE_URL (e.g. URL-encoded password chars
+# like %40) crashes every alembic command unless escaped as %%.
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 ```
 (Keep the generated async `run_migrations_online`/`run_migrations_offline` functions as-is.)
@@ -694,8 +696,13 @@ target_metadata = Base.metadata
 
 ```bash
 alembic revision --autogenerate -m "users table"
+ruff check --fix alembic/versions/ && ruff format alembic/versions/
 ```
-Review the file created under `backend/alembic/versions/`: it must create exactly the `users` table with unique constraint on `email`. Then:
+(The fixup pair is required after EVERY autogenerate — generated migrations violate UP/I001/E501
+and format rules; the fixes are cosmetic and leave DDL/constraint names unchanged. Applies to
+Tasks 7-10 as well.)
+
+Review the file created under `backend/alembic/versions/`: it must create exactly the `users` table with unique constraint on `email` (named `uq_users_email` per the naming convention, PK `pk_users`). Then:
 ```bash
 alembic upgrade head
 docker compose -f docker-compose.yml exec db psql -U finance -d finance -c "\dt"
@@ -1355,6 +1362,7 @@ Expected: PASS (5 passed)
 
 ```bash
 alembic revision --autogenerate -m "net worth and spending tables"
+ruff check --fix alembic/versions/ && ruff format alembic/versions/
 ```
 Review: creates `accounts`, `net_worth_snapshots`, `account_balances` (unique on snapshot_id+account_id), `spending_categories`, `monthly_spending` (unique on month+category_id), `monthly_cashflow`. Then:
 ```bash
@@ -1551,6 +1559,7 @@ Expected: PASS (3 passed)
 
 ```bash
 alembic revision --autogenerate -m "portfolio tables"
+ruff check --fix alembic/versions/ && ruff format alembic/versions/
 alembic upgrade head
 ```
 Review: creates `securities`, `position_transactions`, `dividend_payments`, `latest_prices`, `price_history` (unique security_id+date).
@@ -1822,6 +1831,7 @@ Expected: PASS (4 passed)
 
 ```bash
 alembic revision --autogenerate -m "tax tables"
+ruff check --fix alembic/versions/ && ruff format alembic/versions/
 alembic upgrade head
 python -m app.seed
 ruff check .
@@ -2017,6 +2027,7 @@ Expected: PASS (full suite)
 
 ```bash
 alembic revision --autogenerate -m "comp and settings tables"
+ruff check --fix alembic/versions/ && ruff format alembic/versions/
 alembic upgrade head
 python -m app.seed
 ruff check .
