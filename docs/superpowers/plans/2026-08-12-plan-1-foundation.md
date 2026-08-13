@@ -77,6 +77,7 @@ Responsibilities: `models/*` one file per domain; `security.py` is pure function
 
 **Files:**
 - Create: `.gitignore`
+- Create: `.gitattributes`
 
 - [ ] **Step 1: Install Python 3.12**
 
@@ -107,17 +108,37 @@ dist/
 
 # Env & secrets
 .env
+.env.*
+!.env.example
 
 # Editor/OS
 .vscode/
+.idea/
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# Tooling leftovers
+vite.config.ts.timestamp-*
+```
+
+- [ ] **Step 3b: Create `.gitattributes`** (this Windows box has system-wide `core.autocrlf=true`;
+without LF normalization, fresh checkouts materialize `backend/start.sh` as CRLF and Docker bakes
+a broken `#!/bin/sh\r` shebang into the image — this exact defect is live in photography-webpage)
+
+```gitattributes
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add .gitignore
-git commit -m "chore: add gitignore"
+git add .gitignore .gitattributes
+git commit -m "chore: add gitignore and gitattributes"
 ```
 
 ---
@@ -2770,10 +2791,13 @@ ADMIN_PASSWORD=<your-login-password>
 docker compose -f docker-compose.prod.yml config -q && echo "compose OK"
 docker build -t finance-frontend . 
 docker build -t finance-backend ./backend
+docker run --rm --entrypoint sh finance-backend -c "od -c start.sh | head -2"
 ```
-Expected: `compose OK` (with a `.env` present or vars exported); both images build. If the
-backend build fails on pip SSL (corporate proxy), note it and rely on the CI docker-build job —
-images are built on the OCI box in production anyway.
+Expected: `compose OK` (with a `.env` present or vars exported); both images build; the `od`
+output shows `#   !   /   b   i   n   /   s   h  \n` with NO `\r` — this guards against CRLF
+line endings getting baked into the image from a Windows checkout (the reason `.gitattributes`
+exists). If the backend build fails on pip SSL (corporate proxy), note it and rely on the CI
+docker-build job — images are built on the OCI box in production anyway.
 
 - [ ] **Step 5: Create CI workflow**
 
