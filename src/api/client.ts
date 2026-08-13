@@ -39,9 +39,15 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (!res.ok) {
     let detail = res.statusText
     try {
-      // FastAPI errors use {detail}; slowapi's 429 rate-limit body uses {error}
-      const body = (await res.json()) as { detail?: string; error?: string }
-      detail = body.detail ?? body.error ?? detail
+      // FastAPI errors use {detail} (a string, or an ARRAY for 422 validation errors);
+      // slowapi's 429 rate-limit body uses {error}
+      const body = (await res.json()) as { detail?: unknown; error?: unknown }
+      const raw = body.detail ?? body.error
+      if (typeof raw === 'string') {
+        detail = raw
+      } else if (Array.isArray(raw)) {
+        detail = raw.map((d) => (d as { msg?: string }).msg ?? 'Invalid input').join('; ')
+      }
     } catch {
       // non-JSON error body
     }
