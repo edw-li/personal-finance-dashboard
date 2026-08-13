@@ -3290,6 +3290,22 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
 
 ---
 
+## Forward notes for Plans 2+ (verified during Plan 1 execution)
+
+- **Numeric overflow raises bare `sqlalchemy.exc.DBAPIError`** (sqlstate `22003`,
+  asyncpg NumericValueOutOfRangeError) — NOT `DataError`. API/importer code must catch
+  DBAPIError + check sqlstate, or validate bounds before insert.
+- **Over-scale Decimals round silently** (`1.005` → `1.01` in Numeric(_,2)); only
+  over-precision errors. The importer must `quantize()` explicitly rather than rely on the DB.
+- Composite uniques get single-column-looking names per the `uq_%(column_0_name)s` convention
+  (e.g. `uq_account_balances_snapshot_id` covers snapshot_id+account_id) — cosmetic, expected.
+- FK child columns (`account_balances.account_id`, `monthly_spending.category_id`) are not
+  index-leading; add explicit indexes if Plans 2-3 introduce category-first query paths.
+- `sort_order`/`is_active` use Python-side defaults, not server_default — raw-SQL seeding
+  must supply them explicitly.
+- Alembic post_write_hooks output "Found N errors (M fixed, K remaining)" mid-generation is
+  benign — ruff_format (second hook) resolves the remainder; final files are lint-clean.
+
 ## Definition of done (Plan 1)
 
 - `pytest` green: health, security, auth (8 tests), and model tests for all 21 tables.
