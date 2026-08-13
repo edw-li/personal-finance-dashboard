@@ -10,6 +10,7 @@ from app.models.portfolio import (
     Security,
 )
 from app.models.spending import MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.models.taxes import TaxBracket, TaxInput, TaxInputDefinition, TaxYear
 from app.models.user import User
 
 __all__ = [
@@ -28,5 +29,9 @@ __all__ = [
     "Security",
     "SpendingCategory",
     "TRANSACTION_TYPES",
+    "TaxBracket",
+    "TaxInput",
+    "TaxInputDefinition",
+    "TaxYear",
     "User",
 ]
