@@ -1,16 +1,31 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import settings
 from app.database import Base, get_db
 from app.main import app
 
-TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/finance_test"
+# make_url().set() survives query params / odd DSNs, unlike string surgery; guarantees the
+# destructive drop_all below can only ever target the *_test database.
+TEST_DATABASE_URL = make_url(settings.database_url).set(database="finance_test")
+
+
+async def _ensure_test_database() -> None:
+    """Create finance_test if missing — self-heals stale dev volumes and plain-CI Postgres."""
+    admin = create_async_engine(make_url(settings.database_url), isolation_level="AUTOCOMMIT")
+    async with admin.connect() as conn:
+        exists = await conn.scalar(text("SELECT 1 FROM pg_database WHERE datname = 'finance_test'"))
+        if not exists:
+            await conn.execute(text("CREATE DATABASE finance_test"))
+    await admin.dispose()
 
 
 @pytest.fixture(scope="session")
 async def engine():
+    await _ensure_test_database()
     eng = create_async_engine(TEST_DATABASE_URL)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -21,6 +36,9 @@ async def engine():
 
 @pytest.fixture
 async def db(engine):
+    # Shared-session contract: `client` drives endpoints through THIS session. After an
+    # endpoint raises IntegrityError the session is poisoned — `await db.rollback()` before
+    # reusing it — and concurrent requests within one test are not permitted.
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         yield session
@@ -40,4 +58,4 @@ async def client(db):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(get_db, None)
