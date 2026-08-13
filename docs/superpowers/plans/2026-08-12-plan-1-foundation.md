@@ -313,16 +313,22 @@ async def health() -> dict[str, str]:
 
 - [ ] **Step 6b: Add config-safety tests and env example**
 
-`backend/tests/test_config.py`:
+`backend/tests/test_config.py` (each test passes the values it asserts about explicitly —
+ambient env vars like an exported SECRET_KEY must not change outcomes):
 ```python
 import pytest
 
-from app.config import Settings
+from app.config import DEV_ADMIN_PASSWORD, DEV_SECRET_KEY, Settings
 
 
-def test_dev_secrets_rejected_outside_dev():
+def test_dev_secret_key_rejected_outside_dev():
     with pytest.raises(ValueError, match="SECRET_KEY"):
-        Settings(environment="prod")
+        Settings(environment="prod", secret_key=DEV_SECRET_KEY)
+
+
+def test_dev_admin_password_rejected_outside_dev():
+    with pytest.raises(ValueError, match="ADMIN_PASSWORD"):
+        Settings(environment="prod", secret_key="x" * 64, admin_password=DEV_ADMIN_PASSWORD)
 
 
 def test_prod_with_real_secrets_ok():
@@ -349,7 +355,7 @@ def test_wildcard_cors_rejected():
 - [ ] **Step 7: Run tests to verify they pass**
 
 Run: `pytest -v`
-Expected: PASS (test_health + 3 config tests)
+Expected: PASS (test_health + 4 config tests)
 
 - [ ] **Step 8: Lint and commit**
 
@@ -698,7 +704,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'app.security'`
 - [ ] **Step 3: Implement `backend/app/security.py`**
 
 ```python
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
@@ -719,7 +725,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 def create_access_token(user_id: int) -> str:
     payload = {
         "sub": str(user_id),
-        "exp": datetime.now(timezone.utc) + timedelta(hours=settings.access_token_expire_hours),
+        "exp": datetime.now(UTC) + timedelta(hours=settings.access_token_expire_hours),
     }
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
 
@@ -1284,7 +1290,7 @@ git commit -m "feat: net worth and spending schema"
 
 `backend/tests/test_models_portfolio.py`:
 ```python
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -1313,7 +1319,7 @@ async def test_security_and_transaction_roundtrip(db):
     db.add(DividendPayment(security_id=sec.id, account="RH Taxable",
                            pay_date=date(2025, 3, 20), amount=Decimal("171.55")))
     db.add(LatestPrice(security_id=sec.id, price=Decimal("710.17"),
-                       quoted_at=datetime(2026, 8, 12, 20, 0, tzinfo=timezone.utc),
+                       quoted_at=datetime(2026, 8, 12, 20, 0, tzinfo=UTC),
                        source="yfinance"))
     db.add(PriceHistory(security_id=sec.id, date=date(2026, 8, 11),
                         close=Decimal("708.42")))
