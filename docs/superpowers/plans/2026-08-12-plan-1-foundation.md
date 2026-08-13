@@ -22,6 +22,9 @@
 - Only Python 3.8 is installed; Task 1 installs Python 3.12 (backend requires it). Docker Desktop 27 + Compose v2 already present. Node 18.12 is EOL but builds this exact stack in photography-webpage; upgrading to Node 22 LTS is optional.
 - Local pip needs `--trusted-host pypi.org --trusted-host files.pythonhosted.org` (corporate TLS interception). If `docker build` fails on pip SSL for the same reason, don't fight it locally — images build clean in CI and on the OCI instance.
 - Shell commands below are Git Bash syntax (works in Claude Code's Bash tool on this machine).
+- Run ruff ONLY from `backend/` (as all steps do). From the repo root, `ruff format --check .`
+  spuriously flags Python code blocks inside this plan's markdown (ruff 0.16 formats md code
+  blocks, and the root has no ruff config so defaults apply). `ruff check` is unaffected.
 
 ---
 
@@ -371,6 +374,9 @@ def test_out_of_range_admin_password_rejected_outside_dev():
 `backend/.env.example` (dev-facing; the root `.env.example` for prod arrives in Task 13):
 ```env
 # Local dev config for the backend (all optional — defaults work for dev).
+# Outside dev (ENVIRONMENT != dev) the app refuses to boot unless:
+#   SECRET_KEY is >= 32 bytes (generate: openssl rand -hex 32)
+#   ADMIN_PASSWORD is 8-72 BYTES (bcrypt limit; accented chars count as 2+ bytes)
 # ENVIRONMENT=dev
 # DATABASE_URL=postgresql+asyncpg://finance:finance@localhost:5433/finance
 # SECRET_KEY=
@@ -953,6 +959,11 @@ git commit -m "feat: bcrypt password hashing and JWT utilities"
 ---
 
 ### Task 6: Auth API — login, me, change-password, rate limit (TDD)
+
+> **Pre-step (from Task 5 re-review):** `backend/.env.example` in the worktree predates the
+> prod credential validators — update it to match the Task 2 Step 6b block above (adds the
+> two constraint comment lines). Commit as
+> `docs: document prod credential constraints in env example` — then start Task 6 proper.
 
 **Files:**
 - Create: `backend/app/rate_limit.py`, `backend/app/api/__init__.py`, `backend/app/api/deps.py`, `backend/app/api/auth.py`
@@ -3086,10 +3097,11 @@ POSTGRES_DB=finance
 
 # ── Backend ───────────────────────────────────────────────
 ENVIRONMENT=prod
-# Generate with: openssl rand -hex 32
+# Generate with: openssl rand -hex 32 (prod requires >= 32 bytes)
 SECRET_KEY=<your-secret-key>
 CORS_ORIGINS=https://<your-finance-subdomain>
 ADMIN_EMAIL=<your-login-email>
+# 8-72 BYTES (bcrypt limit; accented characters count as 2+ bytes)
 ADMIN_PASSWORD=<your-login-password>
 ```
 
