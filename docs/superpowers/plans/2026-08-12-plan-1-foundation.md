@@ -3376,8 +3376,9 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
   (e.g. `uq_account_balances_snapshot_id` covers snapshot_id+account_id) — cosmetic, expected.
 - FK child columns (`account_balances.account_id`, `monthly_spending.category_id`) are not
   index-leading; add explicit indexes if Plans 2-3 introduce category-first query paths.
-- `sort_order`/`is_active` use Python-side defaults, not server_default — raw-SQL seeding
-  must supply them explicitly.
+- `sort_order`/`is_active`/`is_manual_priced`/`sort_index` use Python-side defaults, not
+  server_default — raw-SQL / Core bulk inserts (including the recommended pg_insert upserts)
+  MUST supply them explicitly or hit NOT NULL violations.
 - Alembic post_write_hooks output "Found N errors (M fixed, K remaining)" mid-generation is
   benign — ruff_format (second hook) resolves the remainder; final files are lint-clean.
 - **latest_prices refresh (Plan 4): use bulk `pg_insert(...).on_conflict_do_update(...)`** —
@@ -3388,6 +3389,13 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
 - Shares beyond 6 dp round silently (1.0000005 → 1.000001) — importer quantizes shares too.
 - Sells convention (Plan 4 must choose explicitly): store positive shares + type="sell";
   nothing DB-level enforces sign or type membership.
+- Split rows: `shares`/`price` are NOT NULL, so type="split" rows carry dummy values (0) —
+  Plan 4's folding must special-case splits and read only `split_factor`.
+- Un-indexed FK children now include `position_transactions.security_id` and
+  `dividend_payments.security_id` (plus the Task 7 pair) — add indexes if per-security
+  scans ever matter; irrelevant at personal row counts.
+- `holding_type="private"` securities still require a unique ticker (String(20) NOT NULL) —
+  the importer mints synthetic tickers for Fundrise-style assets; keep them short.
 
 ## Definition of done (Plan 1)
 
