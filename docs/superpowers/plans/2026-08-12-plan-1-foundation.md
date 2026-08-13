@@ -1921,6 +1921,14 @@ async def test_seed_inserts_definitions(db):
     await db.commit()
     count = (await db.execute(select(func.count(TaxInputDefinition.key)))).scalar_one()
     assert count == 41
+    # payload fidelity, not just count — a transposed tuple in tax_keys.py fits the columns
+    row = await db.get(TaxInputDefinition, "gross_paycheck")
+    assert (row.label, row.section, row.sort_order, row.is_derived) == (
+        "Gross Paycheck",
+        "ordinary_income",
+        20,
+        True,
+    )
     # idempotent
     await seed_tax_definitions(db)
     await db.commit()
@@ -1945,7 +1953,9 @@ from app.database import Base
 class TaxYear(Base):
     __tablename__ = "tax_years"
 
-    year: Mapped[int] = mapped_column(primary_key=True)
+    # autoincrement=False: an integer PK otherwise emits SERIAL, and an omitted year would
+    # silently insert year=1 instead of erroring. This is a natural key, not a surrogate.
+    year: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
 
@@ -2064,6 +2074,14 @@ git commit -m "feat: tax schema and input definitions seed"
 ---
 
 ### Task 10: Schema — comp modules + app settings
+
+> **Pre-step (from Task 9 review, own commit FIRST):** (a) in `backend/app/models/taxes.py`,
+> change the TaxYear PK to `mapped_column(primary_key=True, autoincrement=False)` with the
+> comment from the amended Task 9 block above — the current SERIAL means an omitted year
+> silently inserts year=1; (b) in `backend/tests/test_models_taxes.py`, add the payload-fidelity
+> assertion from the amended Task 9 test block (db.get "gross_paycheck", assert all 4 fields).
+> Suite: 42 passed. Commit: `fix: tax_years natural key + definitions payload fidelity test`.
+> The DDL half of (a) — dropping the live sequence — rides in THIS task's migration (Step 2b).
 
 **Files:**
 - Create: `backend/app/models/comp.py`, `backend/app/models/app_setting.py`
@@ -2259,8 +2277,31 @@ matching what create_all emits in tests):
         "EXTRACT(DAY FROM month) = 1",
     )
 ```
-with mirror `op.drop_constraint("ck_...", "<table>", type_="check")` calls at the TOP of
-`downgrade()`. Verify live names via `\d` after upgrade. Add one pinning test to
+Also hand-append the tax_years natural-key DDL fix (the model half landed in the pre-step;
+autogenerate cannot see autoincrement changes either):
+```python
+    op.alter_column("tax_years", "year", server_default=None)
+    op.execute("DROP SEQUENCE IF EXISTS tax_years_year_seq")
+```
+with the mirror in `downgrade()`:
+```python
+    op.execute("CREATE SEQUENCE IF NOT EXISTS tax_years_year_seq OWNED BY tax_years.year")
+    op.alter_column(
+        "tax_years", "year", server_default=sa.text("nextval('tax_years_year_seq'::regclass)")
+    )
+```
+and mirror `op.drop_constraint("ck_...", "<table>", type_="check")` calls at the TOP of
+`downgrade()` for the three CKs.
+
+**MANDATORY verification — the gates are blind here:** tests build schema via `create_all`
+(which emits CKs and the non-serial PK from the models regardless of the migration), and
+`alembic check` diffs neither CheckConstraints nor autoincrement. A forgotten hand-append
+stays GREEN everywhere except the real DB. Therefore: after `alembic upgrade head`, run
+`\d net_worth_snapshots`, `\d monthly_spending`, `\d monthly_cashflow` (expect the three
+`ck_*_month_is_first_of_month` constraints) and `\d tax_years` (expect `year | integer |
+not null` with NO nextval default), and paste the output in your report. Also verify an
+omitted-year insert now errors: `INSERT INTO tax_years (notes) VALUES ('x')` must fail
+with a not-null violation (run inside BEGIN/ROLLBACK). Add one pinning test to
 `backend/tests/test_models_net_worth.py`:
 ```python
 async def test_month_must_be_first_of_month(db):
@@ -2282,12 +2323,12 @@ DEFAULT_SETTINGS: dict[str, dict] = {
 
 
 async def seed_app_settings(db: AsyncSession) -> None:
-    from app.models import AppSetting
-
     for key, value in DEFAULT_SETTINGS.items():
         if await db.get(AppSetting, key) is None:
             db.add(AppSetting(key=key, value=value))
 ```
+(add `AppSetting` to seed.py's existing top-level `from app.models import ...` line — no
+function-local imports.)
 and call it in `seed()` after `seed_tax_definitions(db)`:
 ```python
         await seed_app_settings(db)
