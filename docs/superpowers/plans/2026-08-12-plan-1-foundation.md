@@ -2257,28 +2257,14 @@ masquerade as a second September. Add a named CheckConstraint to each (imports a
     )
 ```
 
-**IMPORTANT: alembic autogenerate does NOT detect CheckConstraints.** After generating this
-task's migration in Step 4, hand-append to its `upgrade()` (full convention-expanded names,
-matching what create_all emits in tests):
-```python
-    op.create_check_constraint(
-        "ck_net_worth_snapshots_month_is_first_of_month",
-        "net_worth_snapshots",
-        "EXTRACT(DAY FROM month) = 1",
-    )
-    op.create_check_constraint(
-        "ck_monthly_spending_month_is_first_of_month",
-        "monthly_spending",
-        "EXTRACT(DAY FROM month) = 1",
-    )
-    op.create_check_constraint(
-        "ck_monthly_cashflow_month_is_first_of_month",
-        "monthly_cashflow",
-        "EXTRACT(DAY FROM month) = 1",
-    )
-```
-Also hand-append the tax_years natural-key DDL fix (the model half landed in the pre-step;
-autogenerate cannot see autoincrement changes either):
+**VERIFIED at execution (alembic 1.19.1): autogenerate DOES autodetect CheckConstraints**
+(plugin `checkconstraint_byname`) — it emitted all three `op.create_check_constraint(...)`
+calls and their downgrade drops itself, and `alembic check` catches a dropped CK. Do NOT
+hand-append the CK ops (double-appending fails the upgrade with duplicate constraints);
+just review that the generated migration contains them with the convention-expanded names.
+Hand-append ONLY the tax_years natural-key DDL fix (the model half landed in the pre-step;
+autogenerate genuinely cannot see autoincrement changes — verified: it logs "Detected
+sequence ... assuming SERIAL and omitting" and produces nothing):
 ```python
     op.alter_column("tax_years", "year", server_default=None)
     op.execute("DROP SEQUENCE IF EXISTS tax_years_year_seq")
@@ -3446,6 +3432,14 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
 - `tax_brackets.rate` has no 0..1 CHECK (Numeric(7,4) allows 999.9999 and negatives) — the
   Plan 5 bracket-editor UI/API must validate scale (a 37.43 entered for 37.43% would be
   accepted by the DB); sub-basis-point rates round silently at 4 dp.
+- **JSONB (app_settings): decimal text is preserved exactly** (0.04 stays 0.04 — PG stores
+  numbers as numeric), but integers beyond 2^53 silently lose precision in the BROWSER's
+  JSON parser (API-layer hazard), and jsonb does not preserve key order.
+- Paycheck percentages: the sheet's 15-dp withholding rounds (half-up) to 9 dp in
+  Numeric(10,9) — error ~1e-10, four orders inside cent tolerance. Reconciliation compares
+  at cent precision, never byte-equality with sheet strings. Numeric(10,9) also hard-errors
+  on a pct passed as `14` instead of `0.14` — a desirable mis-scale guard; keep it.
+- `comp_events.focal_year` has no range check (0, -1, 3000 all accepted) — app-layer.
 
 ## Definition of done (Plan 1)
 
