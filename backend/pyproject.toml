@@ -3,9 +3,20 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Depends()/Query()/etc. in argument defaults are intentional (B008)
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body",
+    "fastapi.Header", "fastapi.Form", "fastapi.File", "fastapi.Security",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# BOTH loop scopes must be session — pytest-asyncio 1.x defaults tests to a function-scoped
+# loop, which makes session-scoped async fixtures (Task 3's engine/db) run on a DIFFERENT
+# event loop than the tests, producing cross-loop RuntimeErrors with asyncpg.
 asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]

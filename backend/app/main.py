@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 
-app = FastAPI(title="Personal Finance Dashboard", docs_url=None, redoc_url=None)
+app = FastAPI(title="Personal Finance Dashboard", docs_url=None, redoc_url=None, openapi_url=None)
 
 app.add_middleware(
     CORSMiddleware,
