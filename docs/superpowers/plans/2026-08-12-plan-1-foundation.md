@@ -250,8 +250,14 @@ from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEV_SECRET_KEY = "change-me-to-a-random-secret"
+DEV_SECRET_KEY = "dev-only-change-me-to-a-random-secret"
 DEV_ADMIN_PASSWORD = "changeme123"
+
+# HS256 keys under 32 bytes weaken the MAC (RFC 7518 3.2) and make PyJWT warn on every
+# encode/decode. bcrypt raises above 72 bytes, which would crash seed.py at container boot.
+MIN_SECRET_KEY_BYTES = 32
+MIN_PASSWORD_BYTES = 8
+MAX_PASSWORD_BYTES = 72
 
 
 class Settings(BaseSettings):
@@ -274,6 +280,13 @@ class Settings(BaseSettings):
                 raise ValueError("SECRET_KEY must be set outside dev")
             if self.admin_password == DEV_ADMIN_PASSWORD:
                 raise ValueError("ADMIN_PASSWORD must be set outside dev")
+            if len(self.secret_key.encode()) < MIN_SECRET_KEY_BYTES:
+                raise ValueError(f"SECRET_KEY must be at least {MIN_SECRET_KEY_BYTES} bytes")
+            # bcrypt's limit is BYTES, not characters: 40 accented chars is 80 bytes.
+            if not MIN_PASSWORD_BYTES <= len(self.admin_password.encode()) <= MAX_PASSWORD_BYTES:
+                raise ValueError(
+                    f"ADMIN_PASSWORD must be {MIN_PASSWORD_BYTES}-{MAX_PASSWORD_BYTES} bytes"
+                )
         if "*" in self.cors_origin_list:
             raise ValueError("CORS_ORIGINS must list explicit origins, not '*'")
         return self
@@ -339,6 +352,20 @@ def test_prod_with_real_secrets_ok():
 def test_wildcard_cors_rejected():
     with pytest.raises(ValueError, match="CORS_ORIGINS"):
         Settings(cors_origins="*")
+
+
+def test_short_secret_key_rejected_outside_dev():
+    with pytest.raises(ValueError, match="SECRET_KEY"):
+        Settings(environment="prod", secret_key="x" * 31, admin_password="real-password")
+
+
+def test_out_of_range_admin_password_rejected_outside_dev():
+    # Empty passes the "is it still the dev default" check but yields a working empty login.
+    with pytest.raises(ValueError, match="ADMIN_PASSWORD"):
+        Settings(environment="prod", secret_key="x" * 64, admin_password="")
+    # bcrypt's limit is BYTES: 40 accented chars is 80 bytes and would crash seed at boot.
+    with pytest.raises(ValueError, match="ADMIN_PASSWORD"):
+        Settings(environment="prod", secret_key="x" * 64, admin_password="é" * 40)
 ```
 
 `backend/.env.example` (dev-facing; the root `.env.example` for prod arrives in Task 13):
@@ -355,7 +382,7 @@ def test_wildcard_cors_rejected():
 - [ ] **Step 7: Run tests to verify they pass**
 
 Run: `pytest -v`
-Expected: PASS (test_health + 4 config tests)
+Expected: PASS (test_health + 6 config tests)
 
 - [ ] **Step 8: Lint and commit**
 
@@ -798,8 +825,12 @@ git commit -m "feat: alembic setup, user model, seed script"
 
 `backend/tests/test_security.py`:
 ```python
+from datetime import UTC, datetime, timedelta
+
+import jwt as pyjwt
 import pytest
 
+from app.config import settings
 from app.security import create_access_token, decode_access_token, hash_password, verify_password
 
 
@@ -821,11 +852,38 @@ def test_jwt_garbage_rejected():
 
 
 def test_jwt_wrong_signature_rejected():
-    import jwt as pyjwt
-
-    forged = pyjwt.encode({"sub": "1"}, "other-key", algorithm="HS256")
+    forged = pyjwt.encode({"sub": "1"}, "a-different-key-at-least-32-bytes", algorithm="HS256")
     with pytest.raises(ValueError):
         decode_access_token(forged)
+
+
+def test_jwt_without_exp_rejected():
+    """A key-signed token minted without exp must not be an immortal credential."""
+    immortal = pyjwt.encode({"sub": "1"}, settings.secret_key, algorithm="HS256")
+    with pytest.raises(ValueError):
+        decode_access_token(immortal)
+
+
+def test_jwt_expired_rejected():
+    stale = pyjwt.encode(
+        {"sub": "1", "exp": datetime.now(UTC) - timedelta(seconds=1)},
+        settings.secret_key,
+        algorithm="HS256",
+    )
+    with pytest.raises(ValueError):
+        decode_access_token(stale)
+
+
+def test_jwt_non_numeric_sub_rejected():
+    """The match= is the point: without it this passes on the unhardened decode, which
+    leaks a raw "invalid literal for int()" instead of the documented ValueError."""
+    token = pyjwt.encode(
+        {"sub": "abc", "exp": datetime.now(UTC) + timedelta(hours=1)},
+        settings.secret_key,
+        algorithm="HS256",
+    )
+    with pytest.raises(ValueError, match="invalid token"):
+        decode_access_token(token)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -865,9 +923,17 @@ def create_access_token(user_id: int) -> str:
 def decode_access_token(token: str) -> int:
     """Return the user id, or raise ValueError for any invalid/expired token."""
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+        # require: PyJWT only enforces exp when the claim is present, so a key-signed token
+        # minted without one would never expire. ValueError: int() on a non-numeric sub would
+        # otherwise escape uncaught, leaking "invalid literal for int()" to the caller.
+        payload = jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=[ALGORITHM],
+            options={"require": ["exp", "sub"]},
+        )
         return int(payload["sub"])
-    except (jwt.PyJWTError, KeyError, TypeError) as exc:
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
         raise ValueError("invalid token") from exc
 ```
 
@@ -955,7 +1021,9 @@ async def test_login_unknown_email_same_error(client, seeded_user):
         json={"email": "who@example.com", "password": "nope"},
     )
     assert resp.status_code == 401
-    # Same detail as wrong password — don't leak which emails exist
+    # Same detail as wrong password — don't leak which emails exist. (Response TIMING still
+    # differs ~186ms since bcrypt runs only for known emails — accepted trade-off for a
+    # single-account app; a dummy-hash compare would cost more than the leak is worth.)
     assert resp.json()["detail"] == "Incorrect email or password"
 
 
@@ -1024,7 +1092,7 @@ AUTH_ATTEMPT = "10/minute"
 
 `backend/app/schemas/auth.py`:
 ```python
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
@@ -1043,7 +1111,9 @@ class MeResponse(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
-    new_password: str
+    # max_length is CHARS, not bytes — UX guard only; the endpoint's ValueError catch is
+    # the authoritative bcrypt 72-BYTE enforcement (e.g. 40 accented chars = 80 bytes).
+    new_password: str = Field(min_length=8, max_length=72)
 ```
 
 - [ ] **Step 3: Create the current-user dependency**
@@ -1104,7 +1174,12 @@ async def login(
 ) -> TokenResponse:
     email = body.email.strip().lower()  # must match seed.py's normalization
     user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
-    if user is None or not verify_password(body.password, user.password_hash):
+    try:
+        password_ok = user is not None and verify_password(body.password, user.password_hash)
+    except ValueError:
+        # >72-byte password or corrupt stored hash — treat as failed credentials, never 500
+        password_ok = False
+    if not password_ok:
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     return TokenResponse(access_token=create_access_token(user.id))
 
@@ -1120,9 +1195,16 @@ async def change_password(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    if not verify_password(body.current_password, user.password_hash):
+    try:
+        current_ok = verify_password(body.current_password, user.password_hash)
+    except ValueError:
+        current_ok = False
+    if not current_ok:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
-    user.password_hash = hash_password(body.new_password)
+    try:
+        user.password_hash = hash_password(body.new_password)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Password must be at most 72 bytes") from None
     await db.commit()
     return Response(status_code=204)
 ```
@@ -1183,6 +1265,11 @@ ruff check .
 git add backend
 git commit -m "feat: single-user JWT auth (login, me, change-password, rate limit)"
 ```
+
+> **Accepted trade-off (decided at Task 5 review):** change-password does NOT invalidate
+> outstanding JWTs — a previously-issued token stays valid up to 24h. Acceptable for a
+> single-user v1 with no revocation by design (spec §5). Plan 6 hardening candidate:
+> `password_changed_at` column + `iat` check in `get_current_user`.
 
 ---
 
