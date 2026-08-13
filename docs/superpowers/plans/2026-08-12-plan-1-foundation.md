@@ -736,7 +736,9 @@ Expected: `users` and `alembic_version` tables listed.
 `backend/app/seed.py` (idempotent; runs on EVERY container boot via start.sh; extended in Task 9
 with tax definitions/settings). Email is normalized and the single-user assumption is explicit:
 matching on the raw env value would mint a duplicate admin whenever ADMIN_EMAIL changes case —
-Postgres uniqueness is case-sensitive — with no UI to clean it up:
+Postgres uniqueness is case-sensitive — with no UI to clean it up. (Known residual: if
+case-duplicate users somehow pre-existed, the rename could hit uq_users_email and abort boot;
+unreachable on this unreleased schema, and this seed is what guarantees the one-user invariant.)
 ```python
 """Idempotent seed: admin user from env. Run: python -m app.seed"""
 import asyncio
