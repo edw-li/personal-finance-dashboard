@@ -1498,6 +1498,8 @@ class AccountBalance(Base):
         ForeignKey("net_worth_snapshots.id", ondelete="CASCADE")
     )
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
+    # Signed. Liability-group balances are stored NEGATIVE (matching the sheet), so
+    # net worth = SUM(balance) with no sign-flipping anywhere downstream.
     balance: Mapped[Decimal] = mapped_column(Numeric(14, 2))
 ```
 
@@ -1567,7 +1569,8 @@ Expected: PASS (5 passed)
 - [ ] **Step 4: Generate and apply the migration**
 
 ```bash
-alembic revision --autogenerate -m "net worth and spending tables"```
+alembic revision --autogenerate -m "net worth and spending tables"
+```
 Review: creates `accounts`, `net_worth_snapshots`, `account_balances` (unique on snapshot_id+account_id), `spending_categories`, `monthly_spending` (unique on month+category_id), `monthly_cashflow`. Then:
 ```bash
 alembic upgrade head
@@ -1626,7 +1629,7 @@ async def test_security_and_transaction_roundtrip(db):
     db.add(LatestPrice(security_id=sec.id, price=Decimal("710.17"),
                        quoted_at=datetime(2026, 8, 12, 20, 0, tzinfo=UTC),
                        source="yfinance"))
-    db.add(PriceHistory(security_id=sec.id, date=date(2026, 8, 11),
+    db.add(PriceHistory(security_id=sec.id, price_date=date(2026, 8, 11),
                         close=Decimal("708.42")))
     await db.commit()
     txn = (await db.execute(select(PositionTransaction))).scalar_one()
@@ -1647,9 +1650,9 @@ async def test_one_close_per_day(db):
     sec = Security(ticker="SCHD", name="Schwab US Dividend", holding_type="etf")
     db.add(sec)
     await db.flush()
-    db.add(PriceHistory(security_id=sec.id, date=date(2026, 1, 2), close=Decimal("34")))
+    db.add(PriceHistory(security_id=sec.id, price_date=date(2026, 1, 2), close=Decimal("34")))
     await db.commit()
-    db.add(PriceHistory(security_id=sec.id, date=date(2026, 1, 2), close=Decimal("35")))
+    db.add(PriceHistory(security_id=sec.id, price_date=date(2026, 1, 2), close=Decimal("35")))
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
@@ -1731,11 +1734,14 @@ class LatestPrice(Base):
 
 class PriceHistory(Base):
     __tablename__ = "price_history"
-    __table_args__ = (UniqueConstraint("security_id", "date"),)
+    __table_args__ = (UniqueConstraint("security_id", "price_date"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     security_id: Mapped[int] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"))
-    date: Mapped[date] = mapped_column(Date)
+    # price_date, NOT date: an attribute named `date` shadows datetime.date inside its own
+    # annotation — Mapped[date | None] would then silently build a SQL OR expression and
+    # leave the column non-nullable. Verified hazard; do not rename back.
+    price_date: Mapped[date] = mapped_column(Date)
     close: Mapped[Decimal] = mapped_column(Numeric(14, 4))
 ```
 
@@ -1752,7 +1758,7 @@ from app.models.portfolio import (
     Security,
 )
 ```
-(and append `"DividendPayment", "HOLDING_TYPES", "LatestPrice", "PRICE_SOURCES", "PositionTransaction", "PriceHistory", "Security", "TRANSACTION_TYPES"` to `__all__`.)
+(and merge `"DividendPayment", "HOLDING_TYPES", "LatestPrice", "PRICE_SOURCES", "PositionTransaction", "PriceHistory", "Security", "TRANSACTION_TYPES"` into `__all__`, keeping the whole list ASCII-sorted.)
 
 - [ ] **Step 3: Run tests to verify they pass**
 
@@ -1762,9 +1768,10 @@ Expected: PASS (3 passed)
 - [ ] **Step 4: Generate and apply the migration**
 
 ```bash
-alembic revision --autogenerate -m "portfolio tables"alembic upgrade head
+alembic revision --autogenerate -m "portfolio tables"
+alembic upgrade head
 ```
-Review: creates `securities`, `position_transactions`, `dividend_payments`, `latest_prices`, `price_history` (unique security_id+date).
+Review: creates `securities`, `position_transactions`, `dividend_payments`, `latest_prices`, `price_history` (unique security_id+price_date).
 
 - [ ] **Step 5: Lint and commit**
 
@@ -1799,6 +1806,8 @@ offers a computed suggestion but the stored value remains editable.
 ORDINARY_INCOME = "ordinary_income"
 DEDUCTIONS = "deductions"
 CAPITAL_GAINS = "capital_gains"
+
+SECTIONS = (ORDINARY_INCOME, DEDUCTIONS, CAPITAL_GAINS)
 
 TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("annual_salary", "Annual Salary", ORDINARY_INCOME, 10, False),
@@ -1973,7 +1982,7 @@ Add to `backend/app/models/__init__.py`:
 ```python
 from app.models.taxes import TaxBracket, TaxInput, TaxInputDefinition, TaxYear
 ```
-(append `"TaxBracket", "TaxInput", "TaxInputDefinition", "TaxYear"` to `__all__`.)
+(merge `"TaxBracket", "TaxInput", "TaxInputDefinition", "TaxYear"` into `__all__`, keeping it ASCII-sorted.)
 
 - [ ] **Step 4: Extend the seed script**
 
@@ -2039,7 +2048,8 @@ pytest tests/test_models_taxes.py -v
 Expected: PASS (4 passed)
 
 ```bash
-alembic revision --autogenerate -m "tax tables"alembic upgrade head
+alembic revision --autogenerate -m "tax tables"
+alembic upgrade head
 python -m app.seed
 ruff check .
 git add backend
@@ -2075,6 +2085,7 @@ async def test_espp_lot_roundtrip(db):
     lot = (await db.execute(select(EsppLot))).scalar_one()
     assert lot.sold_date is None
     assert lot.shares == Decimal("260")
+    assert lot.purchase_price == Decimal("41.23265")  # 5 dp must survive exactly
 
 
 async def test_paycheck_profile_roundtrip(db):
@@ -2128,11 +2139,13 @@ class EsppLot(Base):
     purchase_date: Mapped[date] = mapped_column(Date, unique=True)
     qualifying_date: Mapped[date] = mapped_column(Date)
     shares: Mapped[Decimal] = mapped_column(Numeric(12, 4))
-    subscription_price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
-    purchase_fmv: Mapped[Decimal] = mapped_column(Numeric(14, 4))
-    purchase_price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    # Numeric(14,5), not (14,4): the sheet's purchase price genuinely carries 5 dp
+    # (0.85 x 48.509 = 41.23265) — 4 dp would break cent-exact cost-basis reconciliation.
+    subscription_price: Mapped[Decimal] = mapped_column(Numeric(14, 5))
+    purchase_fmv: Mapped[Decimal] = mapped_column(Numeric(14, 5))
+    purchase_price: Mapped[Decimal] = mapped_column(Numeric(14, 5))
     sold_date: Mapped[date | None] = mapped_column(Date)
-    sold_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    sold_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 5))
     notes: Mapped[str | None] = mapped_column(Text)
 
 
@@ -2200,7 +2213,57 @@ Add to `backend/app/models/__init__.py`:
 from app.models.app_setting import AppSetting
 from app.models.comp import CompEvent, EsppLot, EsppPeriod, PaycheckProfile
 ```
-(append `"AppSetting", "CompEvent", "EsppLot", "EsppPeriod", "PaycheckProfile"` to `__all__`.)
+(merge `"AppSetting", "CompEvent", "EsppLot", "EsppPeriod", "PaycheckProfile"` into `__all__`, keeping it ASCII-sorted.)
+
+- [ ] **Step 2b: DB-enforce first-of-month (from Task 7 review)**
+
+The month columns are the importer's natural upsert keys — a stray `2023-09-24` must never
+masquerade as a second September. Add a named CheckConstraint to each (imports as needed):
+
+`NetWorthSnapshot` (net_worth.py) and `MonthlyCashflow` (spending.py) each gain:
+```python
+    __table_args__ = (
+        CheckConstraint("EXTRACT(DAY FROM month) = 1", name="month_is_first_of_month"),
+    )
+```
+`MonthlySpending`'s existing `__table_args__` becomes:
+```python
+    __table_args__ = (
+        UniqueConstraint("month", "category_id"),
+        CheckConstraint("EXTRACT(DAY FROM month) = 1", name="month_is_first_of_month"),
+    )
+```
+
+**IMPORTANT: alembic autogenerate does NOT detect CheckConstraints.** After generating this
+task's migration in Step 4, hand-append to its `upgrade()` (full convention-expanded names,
+matching what create_all emits in tests):
+```python
+    op.create_check_constraint(
+        "ck_net_worth_snapshots_month_is_first_of_month",
+        "net_worth_snapshots",
+        "EXTRACT(DAY FROM month) = 1",
+    )
+    op.create_check_constraint(
+        "ck_monthly_spending_month_is_first_of_month",
+        "monthly_spending",
+        "EXTRACT(DAY FROM month) = 1",
+    )
+    op.create_check_constraint(
+        "ck_monthly_cashflow_month_is_first_of_month",
+        "monthly_cashflow",
+        "EXTRACT(DAY FROM month) = 1",
+    )
+```
+with mirror `op.drop_constraint("ck_...", "<table>", type_="check")` calls at the TOP of
+`downgrade()`. Verify live names via `\d` after upgrade. Add one pinning test to
+`backend/tests/test_models_net_worth.py`:
+```python
+async def test_month_must_be_first_of_month(db):
+    db.add(NetWorthSnapshot(month=date(2024, 1, 15)))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+```
 
 - [ ] **Step 3: Seed default settings**
 
@@ -2233,7 +2296,8 @@ pytest -v
 Expected: PASS (full suite)
 
 ```bash
-alembic revision --autogenerate -m "comp and settings tables"alembic upgrade head
+alembic revision --autogenerate -m "comp and settings tables"
+alembic upgrade head
 python -m app.seed
 ruff check .
 git add backend
@@ -3296,7 +3360,16 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
   asyncpg NumericValueOutOfRangeError) — NOT `DataError`. API/importer code must catch
   DBAPIError + check sqlstate, or validate bounds before insert.
 - **Over-scale Decimals round silently** (`1.005` → `1.01` in Numeric(_,2)); only
-  over-precision errors. The importer must `quantize()` explicitly rather than rely on the DB.
+  over-precision errors. The importer must quantize explicitly with
+  `quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)` — PG rounds half-away-from-zero while
+  Python's default quantize is banker's rounding (2.665 → PG 2.67 vs Python 2.66).
+- **The sheet's `0.001`/`-0.001` placeholder sentinels are destroyed by Numeric(14,2)**
+  (stored as 0.00, indistinguishable from real zero) — the importer's normalize-with-warning
+  MUST happen on the raw cell value before the write.
+- **`group` membership is app-layer only** (ACCOUNT_GROUPS exported from app.models); the
+  importer's auto-create for unknown accounts needs a fallback group — use `"other"`.
+- **First-of-month is DB-enforced from Task 10 onward** (named CheckConstraints on the three
+  month columns); the importer should still normalize dates before insert for clean errors.
 - Composite uniques get single-column-looking names per the `uq_%(column_0_name)s` convention
   (e.g. `uq_account_balances_snapshot_id` covers snapshot_id+account_id) — cosmetic, expected.
 - FK child columns (`account_balances.account_id`, `monthly_spending.category_id`) are not
