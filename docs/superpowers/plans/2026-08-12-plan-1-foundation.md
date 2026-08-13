@@ -3199,8 +3199,13 @@ jobs:
 git add backend/Dockerfile backend/start.sh Dockerfile nginx.conf docker-compose.prod.yml .env.example .dockerignore .github
 git commit -m "feat: docker packaging and CI"
 ```
-If the GitHub remote exists: `git push` and confirm all three CI jobs pass. If no remote yet,
-create a **private** repo first: `gh repo create personal-finance-dashboard --private --source=. --push`.
+**GitHub/CI deferral (decided 2026-08-13 for the overnight run):** the `gh` CLI is not installed
+and authenticating it is interactive. Overnight, validate everything locally (compose config,
+both image builds, the od shebang smoke-run, full suite). NEXT MORNING (user-assisted):
+`winget install -e --id GitHub.cli --source winget` (UAC), `gh auth login`, then
+`gh repo create personal-finance-dashboard --private --source=. --push` from the MAIN checkout
+after merge — and confirm all three CI jobs pass. Until then this step's CI verification is
+explicitly pending, and the plan's Definition of Done carries that asterisk.
 
 ---
 
