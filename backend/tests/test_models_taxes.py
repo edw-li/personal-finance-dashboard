@@ -60,6 +60,14 @@ async def test_seed_inserts_definitions(db):
     await db.commit()
     count = (await db.execute(select(func.count(TaxInputDefinition.key)))).scalar_one()
     assert count == 41
+    # payload fidelity, not just count — a transposed tuple in tax_keys.py fits the columns
+    row = await db.get(TaxInputDefinition, "gross_paycheck")
+    assert (row.label, row.section, row.sort_order, row.is_derived) == (
+        "Gross Paycheck",
+        "ordinary_income",
+        20,
+        True,
+    )
     # idempotent
     await seed_tax_definitions(db)
     await db.commit()

@@ -9,7 +9,9 @@ from app.database import Base
 class TaxYear(Base):
     __tablename__ = "tax_years"
 
-    year: Mapped[int] = mapped_column(primary_key=True)
+    # autoincrement=False: an integer PK otherwise emits SERIAL, and an omitted year would
+    # silently insert year=1 instead of erroring. This is a natural key, not a surrogate.
+    year: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
 
