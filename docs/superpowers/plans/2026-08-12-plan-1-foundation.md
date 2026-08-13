@@ -555,7 +555,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
-from app.database import NAMING_CONVENTION
+from app.database import NAMING_CONVENTION, Base
 
 
 def test_naming_convention_generates_expected_names():
@@ -579,6 +579,9 @@ def test_naming_convention_generates_expected_names():
     assert "uq_children_a" in constraint_names
     assert "ck_children_a_nonnegative" in constraint_names
     assert {i.name for i in child.indexes} == {"ix_children_a", "ix_children_a_b"}
+    # Pin the wiring, not just the dict — a plain MetaData() in database.py would silently
+    # revert every constraint to Postgres defaults while the assertions above stayed green.
+    assert Base.metadata.naming_convention == NAMING_CONVENTION
 ```
 
 Run: `pytest tests/test_database.py -v`
@@ -595,6 +598,12 @@ git commit -m "feat: dev database, async SQLAlchemy base, test fixtures"
 ---
 
 ### Task 4: Alembic + User model + seed script
+
+> **Pre-step (from Task 3 re-review):** `backend/tests/test_database.py` in the worktree does
+> not yet contain the `Base.metadata.naming_convention` wiring assertion shown in Step 5b above
+> (added to the plan during the pause). Apply that one-line assertion + the `Base` import,
+> verify the suite still passes, commit as
+> `test: pin naming-convention wiring into Base.metadata` — then start Task 4 proper.
 
 **Files:**
 - Create: `backend/alembic.ini`, `backend/alembic/env.py`, `backend/alembic/script.py.mako`
