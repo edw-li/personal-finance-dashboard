@@ -480,9 +480,7 @@ async def _ensure_test_database() -> None:
     """Create finance_test if missing — self-heals stale dev volumes and plain-CI Postgres."""
     admin = create_async_engine(make_url(settings.database_url), isolation_level="AUTOCOMMIT")
     async with admin.connect() as conn:
-        exists = await conn.scalar(
-            text("SELECT 1 FROM pg_database WHERE datname = 'finance_test'")
-        )
+        exists = await conn.scalar(text("SELECT 1 FROM pg_database WHERE datname = 'finance_test'"))
         if not exists:
             await conn.execute(text("CREATE DATABASE finance_test"))
     await admin.dispose()
