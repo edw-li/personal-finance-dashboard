@@ -1,3 +1,5 @@
+from app.models.app_setting import AppSetting
+from app.models.comp import CompEvent, EsppLot, EsppPeriod, PaycheckProfile
 from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.models.portfolio import (
     HOLDING_TYPES,
@@ -17,13 +19,18 @@ __all__ = [
     "ACCOUNT_GROUPS",
     "Account",
     "AccountBalance",
+    "AppSetting",
+    "CompEvent",
     "DividendPayment",
+    "EsppLot",
+    "EsppPeriod",
     "HOLDING_TYPES",
     "LatestPrice",
     "MonthlyCashflow",
     "MonthlySpending",
     "NetWorthSnapshot",
     "PRICE_SOURCES",
+    "PaycheckProfile",
     "PositionTransaction",
     "PriceHistory",
     "Security",

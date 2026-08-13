@@ -41,3 +41,10 @@ async def test_snapshot_month_unique(db):
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
+
+
+async def test_month_must_be_first_of_month(db):
+    db.add(NetWorthSnapshot(month=date(2024, 1, 15)))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()

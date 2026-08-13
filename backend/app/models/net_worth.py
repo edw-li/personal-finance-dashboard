@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Date, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -22,6 +22,9 @@ class Account(Base):
 
 class NetWorthSnapshot(Base):
     __tablename__ = "net_worth_snapshots"
+    __table_args__ = (
+        CheckConstraint("EXTRACT(DAY FROM month) = 1", name="month_is_first_of_month"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     month: Mapped[date] = mapped_column(Date, unique=True)  # first of month

@@ -1,4 +1,4 @@
-"""Idempotent seed: admin user, tax input definitions. Run: python -m app.seed"""
+"""Idempotent seed: admin user, tax input definitions, app settings. Run: python -m app.seed"""
 
 import asyncio
 
@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.models import TaxInputDefinition, User
+from app.models import AppSetting, TaxInputDefinition, User
 from app.security import hash_password
 from app.tax_keys import TAX_INPUT_DEFINITIONS
 
@@ -38,10 +38,24 @@ async def seed_tax_definitions(db: AsyncSession) -> None:
             )
 
 
+DEFAULT_SETTINGS: dict[str, dict] = {
+    "swr_pct": {"value": 0.04},
+    "espp_ticker": {"value": "NVDA"},
+    "price_refresh_cron": {"value": "10 13 * * 1-5"},  # 13:10 PT weekdays, after US close
+}
+
+
+async def seed_app_settings(db: AsyncSession) -> None:
+    for key, value in DEFAULT_SETTINGS.items():
+        if await db.get(AppSetting, key) is None:
+            db.add(AppSetting(key=key, value=value))
+
+
 async def seed() -> None:
     async with SessionLocal() as db:
         await seed_admin_user(db)
         await seed_tax_definitions(db)
+        await seed_app_settings(db)
         await db.commit()
     print("Seed complete")
 
