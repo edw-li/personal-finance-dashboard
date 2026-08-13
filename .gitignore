@@ -11,10 +11,18 @@ dist/
 
 # Env & secrets
 .env
+.env.*
+!.env.example
 
 # Editor/OS
 .vscode/
+.idea/
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# Tooling leftovers
+vite.config.ts.timestamp-*
 
 # Worktrees
 .worktrees/
