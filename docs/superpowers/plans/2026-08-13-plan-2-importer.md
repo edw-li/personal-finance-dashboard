@@ -2456,6 +2456,51 @@ def test_parse_portfolio_warns_on_nonzero_dividends_only():
     dividend_warnings = [w for w in parsed.issues.warnings if "dividend" in w.lower()]
     assert len(dividend_warnings) == 1
     assert "DIVC" in dividend_warnings[0] and "12.5" in dividend_warnings[0]
+
+
+def test_parse_espp_and_paycheck_warn_on_percentage_scale():
+    from app.importer.parsers import parse_espp, parse_paycheck
+
+    rows = default_espp_rows()
+    for row in rows:
+        if len(row) > 2 and row[1] == "ESPP Contribution Percentage":
+            row[2] = 5.0  # meant 5%, typed as 5
+    parsed = parse_espp(_sheet("ESPP", espp=rows))
+    assert any("looks like a percentage" in w for w in parsed.issues.warnings)
+
+    rows = default_paycheck_rows()
+    for row in rows:
+        if len(row) > 5 and row[4] == "ESPP %":
+            row[5] = 5.0
+    parsed = parse_paycheck(_sheet("Paycheck Modeler", paycheck=rows))
+    assert any("looks like a percentage" in w for w in parsed.issues.warnings)
+    assert parsed.profile is not None  # warn, not error: profile still imports
+
+
+def test_parse_espp_period_derivation_skips_already_purchased_dates():
+    import datetime as dt
+
+    from app.importer.parsers import parse_espp
+
+    rows = default_espp_rows()
+    # A lot for 2025-02-27 exists at the bottom while its template row stays unfilled:
+    # derivation must skip to the NEXT unpurchased February (2026-02-27).
+    rows.append(
+        [None] * 8 + [dt.datetime(2025, 2, 27), dt.datetime(2026, 2, 27), 80.0, 41.0, 60.0, 35.0]
+    )
+    parsed = parse_espp(_sheet("ESPP", espp=rows))
+    assert len(parsed.lots) == 3
+    feb = next(p for p in parsed.periods if p.label.startswith("February"))
+    assert feb.label == "February 2026 Purchase"
+
+
+def test_parse_portfolio_warns_on_negative_dividends_too():
+    from app.importer.parsers import parse_portfolio
+
+    rows = default_portfolio_rows()
+    rows[3][15] = -12.5
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert any("-12.5" in w for w in parsed.issues.warnings)
 ```
 
 Add `default_espp_rows, default_paycheck_rows` to the workbook_builder import line.
@@ -2561,11 +2606,22 @@ def parse_espp(ws) -> ParsedEspp:
             aug = to_decimal(
                 row[3], quantum, digits, ctx=cell_ref("ESPP", index, 4), issues=issues
             )
+            if field == "pct":
+                for pct_column, pct in ((3, feb), (4, aug)):
+                    if pct is not None and pct > 1:
+                        issues.warn(
+                            f"{cell_ref('ESPP', index, pct_column)}: contribution pct "
+                            f"{pct} looks like a percentage, not a fraction"
+                        )
             modeler[field] = (feb, aug)
 
     periods: list[ParsedEsppPeriod] = []
-    next_feb = min((d for d in template_dates if d.month == 2), default=None)
-    next_aug = min((d for d in template_dates if d.month == 8), default=None)
+    next_feb = min(
+        (d for d in template_dates if d.month == 2 and d not in seen_purchases), default=None
+    )
+    next_aug = min(
+        (d for d in template_dates if d.month == 8 and d not in seen_purchases), default=None
+    )
     have_values = all(field in modeler for field in ("base", "pct"))
     if next_feb and next_aug and have_values:
         additional = modeler.get("additional", (None, None))
@@ -2657,6 +2713,11 @@ def parse_paycheck(ws) -> ParsedPaycheck:
             value = to_decimal(
                 row[5], Q9, 1, ctx=cell_ref("Paycheck Modeler", rnum, 6), issues=issues
             )
+            if value is not None and value > 1:
+                issues.warn(
+                    f"{cell_ref('Paycheck Modeler', rnum, 6)}: {right_label} value "
+                    f"{value} looks like a percentage, not a fraction"
+                )
             if value is not None:
                 percentages[PAYCHECK_PCT_LABELS[right_label]] = value
 
@@ -2766,7 +2827,7 @@ def parse_portfolio(ws) -> ParsedPortfolio:
         dividends = to_decimal(
             row[15], Q2, 10, ctx=cell_ref("Portfolio", rnum, 16), issues=issues
         )
-        if dividends and dividends > 0:
+        if dividends:  # any nonzero, negative included — the user must know it exists
             issues.warn(
                 f"Portfolio: {ticker} has Dividends Collected {dividends} — NOT imported "
                 "(sheet has no payment dates); enter via the UI in Plan 4"
