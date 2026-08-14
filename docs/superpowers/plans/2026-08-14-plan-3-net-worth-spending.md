@@ -5117,6 +5117,13 @@ Seed list — extend with anything learned during execution:
   upserts make retry safe). Acceptable for a single user; revisit only if it ever bites.
 - client.ts now has a 15s default timeout and maps network failures to ApiError(0);
   caller-supplied AbortSignals are honored (and AbortError passes through untouched).
+- `accounts.group` has no DB CHECK constraint (app-layer only); an out-of-vocabulary
+  value would KeyError the rollups. All write paths validate today — fold a
+  CheckConstraint into whichever future migration next touches accounts (Task 4 review).
+- Deactivation lifecycle nuance (tell the user): an inactive account's HISTORY still
+  counts in net worth (correct — real money), but the wizard only writes rows for
+  active accounts, so a deactivated account with a non-zero last balance silently
+  contributes zero to the NEXT wizard-created month. Deactivate only zeroed accounts.
 - Placeholder pages remaining: /portfolio /taxes /espp /paycheck /comp /settings + Overview.
 ```
 
