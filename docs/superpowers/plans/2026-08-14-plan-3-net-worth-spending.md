@@ -1840,7 +1840,7 @@ cd .. && git add backend/app/schemas/spending.py backend/app/api/spending.py bac
 - Modify: `backend/app/api/spending.py` (append)
 - Modify: `backend/tests/test_spending_api.py` (append)
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 Extend the test file's model imports to `Account, AccountBalance, MonthlyCashflow, MonthlySpending, NetWorthSnapshot, SpendingCategory` (the seed below needs them all), then append:
 
@@ -1927,9 +1927,9 @@ async def test_yearly_rollups(auth_client, db):
     assert y26["savings_rate"] is None  # zero net pay -> undefined, not -inf
 ```
 
-- [ ] **Step 2: Run — expect FAIL.**
+- [x] **Step 2: Run — expect FAIL.**
 
-- [ ] **Step 3: Append endpoints**
+- [x] **Step 3: Append endpoints**
 
 Extend the imports first: `from datetime import date`, `from decimal import Decimal`, `MonthlyCashflow` (merge into `app.models`), `CategorySeries, MatrixOut, YearCategoryTotal, YearRollup, YearlyOut` (merge into the schemas import), `from app.services.money import quantize_money, quantize_pct, require_first_of_month`, and `from app.services.net_worth_calc import get_swr_pct, investable_base`. Then append:
 
@@ -2053,7 +2053,7 @@ async def yearly(db: AsyncSession = Depends(get_db)) -> YearlyOut:
     return YearlyOut(years=rollups)
 ```
 
-- [ ] **Step 4: Run — expect PASS; full gate; commit**
+- [x] **Step 4: Run — expect PASS; full gate; commit**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_spending_api.py -q -W error

@@ -1,3 +1,6 @@
+from datetime import date
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,8 +8,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import MonthlySpending, SpendingCategory
-from app.schemas.spending import CategoryCreate, CategoryOut, CategoryUpdate
+from app.models import MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.schemas.spending import (
+    CategoryCreate,
+    CategoryOut,
+    CategorySeries,
+    CategoryUpdate,
+    MatrixOut,
+    YearCategoryTotal,
+    YearlyOut,
+    YearRollup,
+)
+from app.services.money import quantize_money, quantize_pct, require_first_of_month
+from app.services.net_worth_calc import get_swr_pct, investable_base
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
 
@@ -115,3 +129,114 @@ async def delete_category(category_id: int, db: AsyncSession = Depends(get_db)) 
     await db.delete(category)
     await db.commit()
     return Response(status_code=204)
+
+
+def _savings_rate(net_pay: Decimal | None, total: Decimal) -> Decimal | None:
+    if net_pay is None or net_pay == 0:
+        return None
+    return quantize_pct((net_pay - total) / net_pay)
+
+
+@router.get("/matrix", response_model=MatrixOut)
+async def matrix(
+    start: date | None = None,
+    end: date | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> MatrixOut:
+    if start is not None:
+        require_first_of_month(start)
+    if end is not None:
+        require_first_of_month(end)
+    categories = list(
+        (
+            await db.execute(
+                select(SpendingCategory).order_by(SpendingCategory.sort_order, SpendingCategory.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    spend_query = select(MonthlySpending)
+    cashflow_query = select(MonthlyCashflow)
+    if start is not None:
+        spend_query = spend_query.where(MonthlySpending.month >= start)
+        cashflow_query = cashflow_query.where(MonthlyCashflow.month >= start)
+    if end is not None:
+        spend_query = spend_query.where(MonthlySpending.month <= end)
+        cashflow_query = cashflow_query.where(MonthlyCashflow.month <= end)
+    spend_rows = list((await db.execute(spend_query)).scalars().all())
+    cashflow = {row.month: row.net_pay for row in (await db.execute(cashflow_query)).scalars()}
+    months = sorted({row.month for row in spend_rows} | set(cashflow))
+    month_index = {month: i for i, month in enumerate(months)}
+    cells: dict[tuple[int, int], Decimal] = {
+        (row.category_id, month_index[row.month]): row.amount for row in spend_rows
+    }
+    totals = [
+        sum(
+            (cells.get((c.id, i), Decimal("0.00")) for c in categories),
+            Decimal("0.00"),
+        )
+        for i in range(len(months))
+    ]
+    net_pay = [cashflow.get(month) for month in months]
+    savings = [_savings_rate(net_pay[i], totals[i]) for i in range(len(months))]
+    swr = await get_swr_pct(db)
+    four_pct: list[Decimal | None] = []
+    for month in months:
+        base = await investable_base(db, month)
+        four_pct.append(None if base is None else quantize_money(base * swr / 12, "four_pct_rule"))
+    return MatrixOut(
+        months=months,
+        categories=[CategoryOut.model_validate(c) for c in categories],
+        series=[
+            CategorySeries(
+                category_id=c.id,
+                values=[cells.get((c.id, i)) for i in range(len(months))],
+            )
+            for c in categories
+        ],
+        totals=totals,
+        net_pay=net_pay,
+        savings_rate=savings,
+        four_pct_rule=four_pct,
+    )
+
+
+@router.get("/yearly", response_model=YearlyOut)
+async def yearly(db: AsyncSession = Depends(get_db)) -> YearlyOut:
+    categories = list(
+        (
+            await db.execute(
+                select(SpendingCategory).order_by(SpendingCategory.sort_order, SpendingCategory.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    spend_rows = list((await db.execute(select(MonthlySpending))).scalars().all())
+    cashflow_rows = list((await db.execute(select(MonthlyCashflow))).scalars().all())
+    years = sorted(
+        {row.month.year for row in spend_rows} | {row.month.year for row in cashflow_rows}
+    )
+    rollups = []
+    for year in years:
+        by_category = {c.id: Decimal("0.00") for c in categories}
+        total = Decimal("0.00")
+        for row in spend_rows:
+            if row.month.year == year:
+                by_category[row.category_id] += row.amount
+                total += row.amount
+        pay_rows = [r.net_pay for r in cashflow_rows if r.month.year == year]
+        net_pay_total = sum(pay_rows, Decimal("0.00")) if pay_rows else None
+        rollups.append(
+            YearRollup(
+                year=year,
+                by_category=[
+                    YearCategoryTotal(category_id=c.id, total=by_category[c.id]) for c in categories
+                ],
+                total=total,
+                net_pay_total=net_pay_total,
+                savings_rate=_savings_rate(net_pay_total, total),
+            )
+        )
+    return YearlyOut(years=rollups)
