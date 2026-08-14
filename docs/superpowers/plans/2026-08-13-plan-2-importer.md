@@ -2090,6 +2090,52 @@ def test_parse_taxes_warns_on_rate_above_one():
             row[2] = 1.45  # a percent entered as 1.45 instead of 0.0145
     parsed = parse_taxes(_sheet("Taxes", taxes=rows))
     assert any("looks like a percentage" in w for w in parsed.issues.warnings)
+
+
+def test_parse_taxes_missing_bracket_section_is_error():
+    from app.importer.parsers import parse_taxes
+
+    rows = [
+        row if row[0] != "MEDICARE TAX INFO" else ["MEDICARE INFO", *row[1:]]
+        for row in default_taxes_rows()
+    ]
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    joined = " ".join(parsed.issues.errors)
+    # the renamed header ends the walk: medicare AND everything after it goes missing
+    assert "never found" in joined
+    assert "medicare" in joined and "capital_gains" in joined
+
+
+def test_parse_taxes_duplicate_bracket_row_is_error():
+    from app.importer.parsers import parse_taxes
+
+    rows = default_taxes_rows()
+    for index, row in enumerate(rows):
+        if row[0] == "MEDICARE TAX INFO":
+            rows.insert(index + 1, [None, "Bracket 1 Rate", 0.9, 0.9, None])
+            break
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    assert any("duplicate 'Bracket 1 Rate'" in e for e in parsed.issues.errors)
+    # first occurrence wins: the original 0.0145 rate is preserved for 2023
+    medicare = [b for b in parsed.brackets if b.jurisdiction == "medicare" and b.year == 2023]
+    assert medicare and medicare[0].rate == Decimal("0.0145")
+
+
+def test_parse_taxes_negative_rate_warns_and_no_year_columns_errors():
+    from app.importer.parsers import parse_taxes
+
+    rows = default_taxes_rows()
+    for row in rows:
+        if row[0] == "CAPITAL GAINS TAX INFO":
+            row[2] = -0.05
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    assert any("is negative" in w for w in parsed.issues.warnings)
+
+    rows = default_taxes_rows()
+    rows[0] = ["Fill in White cells", None, "2023", "2024", None]  # text years
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    assert any("no year columns" in e for e in parsed.issues.errors)
+    assert parsed.inputs == [] and parsed.brackets == []
 ```
 
 Add `default_taxes_rows` to the workbook_builder import line.
@@ -2151,6 +2197,9 @@ def parse_taxes(ws) -> ParsedTaxes:  # noqa: PLR0912, PLR0915 — one sheet, one
     for index, cell in enumerate(rows[0]):
         if index >= 2 and isinstance(cell, int | float) and not isinstance(cell, bool):
             year_columns.append((index, int(cell)))
+    if not year_columns:
+        issues.error("Taxes!r1: no year columns found — years must be numeric cells")
+        return ParsedTaxes(inputs=[], brackets=[], issues=issues)
 
     def collect(row_values, rnum: int, quantum, max_int_digits: int) -> dict[int, Decimal]:
         values: dict[int, Decimal] = {}
@@ -2193,6 +2242,7 @@ def parse_taxes(ws) -> ParsedTaxes:  # noqa: PLR0912, PLR0915 — one sheet, one
     brackets: list[ParsedBracket] = []
     pending: dict[tuple[str, int], dict[str, tuple[dict[int, Decimal], int]]] = {}
     jurisdiction: str | None = None
+    seen_jurisdictions: set[str] = set()
     while cursor < len(rows):
         row = rows[cursor]
         header = _text(row[0])
@@ -2201,6 +2251,7 @@ def parse_taxes(ws) -> ParsedTaxes:  # noqa: PLR0912, PLR0915 — one sheet, one
             if header not in BRACKET_SECTIONS:
                 break  # computed output sections begin (FEDERAL INCOME TAX, ...)
             jurisdiction = BRACKET_SECTIONS[header]
+            seen_jurisdictions.add(jurisdiction)
         if jurisdiction is None or label is None:
             cursor += 1
             continue
@@ -2232,11 +2283,30 @@ def parse_taxes(ws) -> ParsedTaxes:  # noqa: PLR0912, PLR0915 — one sheet, one
                         f"{cell_ref('Taxes', cursor + 1, 1)}: {jurisdiction} bracket "
                         f"{bracket_index} rate {rate} looks like a percentage, not a fraction"
                     )
+                elif rate < 0:
+                    issues.warn(
+                        f"{cell_ref('Taxes', cursor + 1, 1)}: {jurisdiction} bracket "
+                        f"{bracket_index} rate {rate} is negative"
+                    )
         else:
             values = collect(row, cursor + 1, Q2, 10)
         slot = pending.setdefault((jurisdiction, bracket_index), {})
-        slot[kind] = (values, cursor + 1)
+        if kind in slot:
+            issues.error(
+                f"{cell_ref('Taxes', cursor + 1, 2)}: duplicate '{label}' row in "
+                f"{jurisdiction} section"
+            )
+        else:
+            slot[kind] = (values, cursor + 1)
         cursor += 1
+
+    missing_sections = set(BRACKET_SECTIONS.values()) - seen_jurisdictions
+    if missing_sections:
+        issues.error(
+            "Taxes: bracket section(s) never found: "
+            + ", ".join(sorted(missing_sections))
+            + " — section header renamed or deleted? All six must be present"
+        )
 
     for (jur, index), parts in pending.items():
         rates, rate_row = parts.get("Rate", ({}, 0))
@@ -3831,6 +3901,13 @@ async def test_missing_sheet_is_error(db):
     assert report.has_errors
 
 
+async def test_parser_crash_is_captured_as_sheet_error(db):
+    # A present-but-empty sheet makes parse_taxes hit rows[0] on an empty list
+    report = await run_import(build_workbook(taxes=[]), db, dry_run=True)
+    assert any("parser crashed" in e for e in report.sheets["taxes"].errors)
+    assert report.has_errors and report.applied is False
+
+
 def test_cli_parser_flags():
     args = build_parser().parse_args(["book.xlsx", "--dry-run"])
     assert args.workbook.name == "book.xlsx" and args.dry_run is True
@@ -3900,7 +3977,13 @@ async def run_import(data: bytes, db: AsyncSession, *, dry_run: bool) -> ImportR
             if sheet_name not in workbook.sheetnames:
                 sheet_report.errors.append(f"sheet {sheet_name!r} not found in workbook")
                 continue
-            result = parser(workbook[sheet_name])
+            try:
+                result = parser(workbook[sheet_name])
+            except Exception as exc:
+                # A structurally hollow sheet (e.g. zero rows) must be a row-context-free
+                # sheet error, not a CLI traceback / HTTP 500 (Task 8 review finding).
+                sheet_report.errors.append(f"{sheet_name}: parser crashed: {exc!r}")
+                continue
             sheet_report.warnings.extend(result.issues.warnings)
             sheet_report.errors.extend(result.issues.errors)
             parsed[key] = result
