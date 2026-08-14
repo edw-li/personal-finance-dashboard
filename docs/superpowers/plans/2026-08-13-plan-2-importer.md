@@ -1786,7 +1786,9 @@ NET_WORTH_TERMINAL_BAND = "NET WORTH"
 NET_WORTH_HEADER_SCAN_COLS = 120
 
 
-@dataclasses.dataclass
+# frozen=True: instances key the per-row raw-cell dicts below (plain dataclasses with
+# eq=True are unhashable); these are pure value records, never mutated downstream.
+@dataclasses.dataclass(frozen=True)
 class ParsedAccountColumn:
     name: str
     group: str
@@ -1890,7 +1892,7 @@ def parse_net_worth(ws) -> ParsedNetWorth:
     return ParsedNetWorth(accounts=accounts, snapshots=snapshots, issues=issues)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)  # dict key in parse_spending, same as ParsedAccountColumn
 class ParsedCategoryColumn:
     name: str
     sort_order: int  # sheet column index
