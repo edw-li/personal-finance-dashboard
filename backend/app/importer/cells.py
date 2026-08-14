@@ -73,7 +73,16 @@ def to_decimal(
     else:
         issues.error(f"{ctx}: expected a number, got {type(value).__name__}")
         return None
-    quantized = raw.quantize(quantum, rounding=ROUND_HALF_UP)
+    # Quiet NaN would pass through quantize silently and blow up the bounds
+    # comparison instead; inf/snan/oversized-digit values raise at quantize.
+    if not raw.is_finite():
+        issues.error(f"{ctx}: expected a finite number, got {value!r}")
+        return None
+    try:
+        quantized = raw.quantize(quantum, rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        issues.error(f"{ctx}: expected a finite number, got {value!r}")
+        return None
     if quantized.copy_abs() >= 10**max_int_digits:
         issues.error(f"{ctx}: {raw} exceeds NUMERIC({max_int_digits} integer digits) bounds")
         return None
@@ -133,7 +142,7 @@ def slugify(name: str) -> str:
 def synthetic_ticker(name: str, taken: set[str]) -> str:
     """Short deterministic ticker for a Positions security missing from ReferenceData
     (String(20), Plan 1 forward note: keep them short)."""
-    base = "X-" + "".join(ch for ch in name.upper() if ch.isalnum())[:8]
+    base = "X-" + "".join(ch for ch in name.upper() if ch.isascii() and ch.isalnum())[:8]
     if base == "X-":
         base = "X-ASSET"
     candidate = base

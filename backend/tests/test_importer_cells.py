@@ -153,3 +153,19 @@ def test_import_report_error_detection():
         "paycheck",
         "focal_history",
     }
+
+
+def test_to_decimal_nonfinite_and_huge_values_error_not_crash():
+    issues = CellIssues()
+    assert dec("nan", issues=issues) is None
+    assert dec("Infinity", issues=issues) is None
+    assert dec(float("nan"), issues=issues) is None
+    assert dec(float("inf"), issues=issues) is None
+    # 1e100 overflows quantize's 28-digit context, not the bounds path
+    assert dec(1e100, issues=issues) is None
+    assert len(issues.errors) == 5
+    assert all("T!r1c1" in e for e in issues.errors)
+
+
+def test_synthetic_ticker_unicode_only_name_falls_back():
+    assert synthetic_ticker("日本ファンド", set()) == "X-ASSET"
