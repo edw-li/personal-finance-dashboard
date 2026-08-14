@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,8 +7,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import Account, AccountBalance
-from app.schemas.net_worth import AccountCreate, AccountOut, AccountUpdate
+from app.models import ACCOUNT_GROUPS, Account, AccountBalance
+from app.schemas.net_worth import (
+    AccountCreate,
+    AccountOut,
+    AccountSeries,
+    AccountUpdate,
+    GroupSummary,
+    SummaryOut,
+    TimeseriesOut,
+)
+from app.services.money import mom_pct
+from app.services.net_worth_calc import group_totals_for, load_balance_matrix, net_worth_for
 
 router = APIRouter(
     prefix="/net-worth", tags=["net-worth"], dependencies=[Depends(get_current_user)]
@@ -117,3 +129,67 @@ async def delete_account(account_id: int, db: AsyncSession = Depends(get_db)) ->
     await db.delete(account)
     await db.commit()
     return Response(status_code=204)
+
+
+QUARTER_END_MONTHS = (3, 6, 9, 12)
+
+
+@router.get("/timeseries", response_model=TimeseriesOut)
+async def timeseries(
+    granularity: Literal["monthly", "quarterly"] = "monthly",
+    db: AsyncSession = Depends(get_db),
+) -> TimeseriesOut:
+    snapshots, accounts, balances = await load_balance_matrix(db)
+    if granularity == "quarterly":
+        snapshots = [s for s in snapshots if s.month.month in QUARTER_END_MONTHS]
+    net_worth = [net_worth_for(s.id, accounts, balances) for s in snapshots]
+    mom = [
+        None if i == 0 else mom_pct(net_worth[i], net_worth[i - 1]) for i in range(len(net_worth))
+    ]
+    per_snapshot_groups = [group_totals_for(s.id, accounts, balances) for s in snapshots]
+    group_totals = {
+        group: [totals[group] for totals in per_snapshot_groups] for group in ACCOUNT_GROUPS
+    }
+    return TimeseriesOut(
+        months=[s.month for s in snapshots],
+        accounts=[AccountOut.model_validate(a) for a in accounts],
+        series=[
+            AccountSeries(
+                account_id=a.id,
+                values=[balances.get((s.id, a.id)) for s in snapshots],
+            )
+            for a in accounts
+        ],
+        group_totals=group_totals,
+        net_worth=net_worth,
+        mom_pct=mom,
+    )
+
+
+@router.get("/summary", response_model=SummaryOut)
+async def summary(db: AsyncSession = Depends(get_db)) -> SummaryOut:
+    snapshots, accounts, balances = await load_balance_matrix(db)
+    if not snapshots:
+        return SummaryOut(month=None, net_worth=None, mom_delta=None, mom_pct=None, groups=[])
+    latest = snapshots[-1]
+    previous = snapshots[-2] if len(snapshots) > 1 else None
+    latest_nw = net_worth_for(latest.id, accounts, balances)
+    latest_groups = group_totals_for(latest.id, accounts, balances)
+    prev_nw = net_worth_for(previous.id, accounts, balances) if previous else None
+    prev_groups = group_totals_for(previous.id, accounts, balances) if previous else None
+    return SummaryOut(
+        month=latest.month,
+        net_worth=latest_nw,
+        mom_delta=None if prev_nw is None else latest_nw - prev_nw,
+        mom_pct=mom_pct(latest_nw, prev_nw),
+        groups=[
+            GroupSummary(
+                group=group,
+                total=latest_groups[group],
+                mom_delta=None
+                if prev_groups is None
+                else latest_groups[group] - prev_groups[group],
+            )
+            for group in ACCOUNT_GROUPS
+        ],
+    )

@@ -145,3 +145,86 @@ async def test_patch_account_name_rules(auth_client):
     resp = await auth_client.patch(f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": None})
     assert resp.status_code == 200
     assert resp.json()["name"] == "Alpha"
+
+
+async def _seed_timeseries(db):
+    """3 months x {aggregate, component, liability} — enough to exercise every rule."""
+    agg = Account(name="Agg", slug="agg", group="pre_tax", sort_order=1)
+    comp = Account(name="Bucket", slug="bucket", group="pre_tax", sort_order=2, is_component=True)
+    card = Account(name="Card", slug="card", group="liability", sort_order=3)
+    months = [date(2025, 12, 1), date(2026, 1, 1), date(2026, 3, 1)]  # gap at 2026-02
+    snaps = [NetWorthSnapshot(month=m) for m in months]
+    db.add_all([agg, comp, card, *snaps])
+    await db.flush()
+    balances = [
+        (snaps[0], agg, "1000.00"),
+        (snaps[0], comp, "300.00"),
+        (snaps[0], card, "-100.00"),
+        (snaps[1], agg, "1200.00"),
+        (snaps[1], comp, "330.00"),
+        (snaps[1], card, "-80.00"),
+        (snaps[2], agg, "1500.00"),
+        (snaps[2], comp, "360.00"),  # card missing this month
+    ]
+    for snap, account, value in balances:
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal(value)))
+    await db.commit()
+    return agg, comp, card
+
+
+async def test_timeseries_shapes_and_component_exclusion(auth_client, db):
+    agg, comp, card = await _seed_timeseries(db)
+    resp = await auth_client.get("/api/v1/net-worth/timeseries")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["months"] == ["2025-12-01", "2026-01-01", "2026-03-01"]
+    # Decimals arrive as JSON strings (pydantic v2) — assert exact strings.
+    assert body["net_worth"] == ["900.00", "1120.00", "1500.00"]
+    assert body["group_totals"]["pre_tax"] == ["1000.00", "1200.00", "1500.00"]
+    assert body["group_totals"]["liability"] == ["-100.00", "-80.00", "0.00"]
+    assert body["group_totals"]["cash"] == ["0.00", "0.00", "0.00"]
+    by_id = {s["account_id"]: s["values"] for s in body["series"]}
+    assert by_id[comp.id] == ["300.00", "330.00", "360.00"]  # components still listed
+    assert by_id[card.id] == ["-100.00", "-80.00", None]  # missing balance is null
+    assert body["mom_pct"][0] is None
+    assert body["mom_pct"][1] == "0.244444"  # (1120-900)/900, 6 dp HALF_UP
+
+
+async def test_timeseries_quarterly_filters_to_quarter_end_months(auth_client, db):
+    await _seed_timeseries(db)
+    resp = await auth_client.get("/api/v1/net-worth/timeseries?granularity=quarterly")
+    body = resp.json()
+    assert body["months"] == ["2025-12-01", "2026-03-01"]
+    assert body["net_worth"] == ["900.00", "1500.00"]
+    assert body["mom_pct"] == [None, "0.666667"]  # vs previous kept month
+
+
+async def test_timeseries_rejects_unknown_granularity(auth_client):
+    resp = await auth_client.get("/api/v1/net-worth/timeseries?granularity=weekly")
+    assert resp.status_code == 422
+
+
+async def test_summary_latest_month_with_deltas(auth_client, db):
+    await _seed_timeseries(db)
+    resp = await auth_client.get("/api/v1/net-worth/summary")
+    body = resp.json()
+    assert body["month"] == "2026-03-01"
+    assert body["net_worth"] == "1500.00"
+    assert body["mom_delta"] == "380.00"
+    assert body["mom_pct"] == "0.339286"
+    groups = {g["group"]: g for g in body["groups"]}
+    assert groups["pre_tax"]["total"] == "1500.00"
+    assert groups["liability"]["mom_delta"] == "80.00"  # -80 -> 0.00 (paid off)
+    assert len(body["groups"]) == 7
+
+
+async def test_summary_empty_db(auth_client):
+    resp = await auth_client.get("/api/v1/net-worth/summary")
+    body = resp.json()
+    assert body == {
+        "month": None,
+        "net_worth": None,
+        "mom_delta": None,
+        "mom_pct": None,
+        "groups": [],
+    }

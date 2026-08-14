@@ -1081,7 +1081,7 @@ cd .. && git add backend/app/schemas/net_worth.py backend/app/api/net_worth.py b
 - Modify: `backend/app/api/net_worth.py` (append endpoints)
 - Modify: `backend/tests/test_net_worth_api.py` (append tests)
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 async def _seed_timeseries(db):
@@ -1161,9 +1161,9 @@ async def test_summary_empty_db(auth_client):
     }
 ```
 
-- [ ] **Step 2: Run — expect FAIL (404).**
+- [x] **Step 2: Run — expect FAIL (404).**
 
-- [ ] **Step 3: Append endpoints to `net_worth.py`**
+- [x] **Step 3: Append endpoints to `net_worth.py`**
 
 Extend the imports first (ruff sorts them):
 
@@ -1253,7 +1253,7 @@ async def summary(db: AsyncSession = Depends(get_db)) -> SummaryOut:
     )
 ```
 
-- [ ] **Step 4: Run — expect PASS; full gate; commit**
+- [x] **Step 4: Run — expect PASS; full gate; commit**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_net_worth_api.py -q -W error
