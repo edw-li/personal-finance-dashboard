@@ -2226,7 +2226,7 @@ def parse_taxes(ws) -> ParsedTaxes:  # noqa: PLR0912, PLR0915 — one sheet, one
         kind = match.group(2)
         if kind == "Rate":
             values = collect(row, cursor + 1, Q4, 3)
-            for year, rate in values.items():
+            for rate in values.values():  # B007: year unused here
                 if rate > 1:
                     issues.warn(
                         f"{cell_ref('Taxes', cursor + 1, 1)}: {jurisdiction} bracket "
