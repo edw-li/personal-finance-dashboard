@@ -1,0 +1,465 @@
+from datetime import date
+from decimal import Decimal
+
+from sqlalchemy import select
+
+from app.importer.apply import (
+    apply_net_worth,
+    apply_positions,
+    apply_reference_data,
+    apply_spending,
+)
+from app.importer.parsers import (
+    parse_net_worth,
+    parse_positions,
+    parse_reference_data,
+    parse_spending,
+)
+from app.importer.report import SheetReport
+from app.models import (
+    Account,
+    AccountBalance,
+    LatestPrice,
+    MonthlyCashflow,
+    MonthlySpending,
+    NetWorthSnapshot,
+    PositionTransaction,
+    Security,
+    SpendingCategory,
+)
+from tests.workbook_builder import build_workbook, load_readonly
+
+
+def sheets(**overrides):
+    return load_readonly(build_workbook(**overrides))
+
+
+async def test_apply_reference_data_creates_then_skips(db):
+    wb = sheets()
+    parsed = parse_reference_data(wb["ReferenceData"])
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parsed, report)
+    await db.commit()
+    assert report.entities["securities"].creates == 3
+    assert report.entities["latest_prices"].creates == 2  # DIVC '#N/A' price skipped
+    assert set(by_name) == {"Acme ETF", "Div Corp", "Mut Fund"}
+    acme = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one()
+    assert acme.holding_type == "etf" and acme.is_manual_priced is False
+    price = await db.get(LatestPrice, acme.id)
+    assert price.price == Decimal("100.5000") and price.source == "manual"
+    assert price.quoted_at is not None
+
+    report2 = SheetReport()
+    await apply_reference_data(db, parse_reference_data(sheets()["ReferenceData"]), report2)
+    await db.commit()
+    assert report2.entities["securities"].creates == 0
+    assert report2.entities["securities"].skips == 3
+    assert report2.entities["latest_prices"].skips == 2  # insert-only: never updated
+
+
+async def test_apply_reference_data_updates_changed_metadata_only(db):
+    report = SheetReport()
+    await apply_reference_data(db, parse_reference_data(sheets()["ReferenceData"]), report)
+    await db.commit()
+    # User flags survive re-import; metadata updates flow through
+    acme = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one()
+    acme.is_active = False
+    await db.commit()
+    from tests.workbook_builder import default_reference_data_rows
+
+    rows = default_reference_data_rows()
+    rows[1][2] = "Large Blend"  # sector change
+    report2 = SheetReport()
+    await apply_reference_data(
+        db, parse_reference_data(sheets(reference_data=rows)["ReferenceData"]), report2
+    )
+    await db.commit()
+    assert report2.entities["securities"].updates == 1
+    refreshed = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one()
+    assert refreshed.industry == "Large Blend"
+    assert refreshed.is_active is False  # untouched
+
+
+async def test_apply_positions_full_flow(db):
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    parsed = parse_positions(wb["Positions"])
+    await apply_positions(db, parsed, by_name, report)
+    await db.commit()
+    assert report.entities["position_transactions"].creates == 3
+    # Unknown name auto-created: private, manual-priced, synthetic ticker, warning
+    mystery = (
+        await db.execute(select(Security).where(Security.name == "Mystery Fund"))
+    ).scalar_one()
+    assert mystery.ticker == "X-MYSTERYF"
+    assert mystery.holding_type == "private" and mystery.is_manual_priced is True
+    assert any("Mystery Fund" in w for w in report.warnings)
+    txns = (
+        (await db.execute(select(PositionTransaction).order_by(PositionTransaction.sort_index)))
+        .scalars()
+        .all()
+    )
+    assert [t.sort_index for t in txns] == [20, 40, 50]
+    assert txns[0].shares == Decimal("10.123457")
+
+    # Idempotent second pass
+    wb2 = sheets()
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+    counts = report2.entities["position_transactions"]
+    assert (counts.creates, counts.updates, counts.deletes) == (0, 0, 0)
+    assert counts.skips == 3
+
+
+async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+    db.add(  # stale importer-owned row (as if its sheet row was deleted)
+        PositionTransaction(
+            security_id=acme_id,
+            account="Old",
+            type="buy",
+            shares=Decimal("1"),
+            price=Decimal("1"),
+            sort_index=990,
+        )
+    )
+    db.add(  # UI-owned row: sort_index 0 default — never touched by the sync
+        PositionTransaction(
+            security_id=acme_id,
+            account="Manual",
+            type="buy",
+            shares=Decimal("2"),
+            price=Decimal("2"),
+        )
+    )
+    await db.commit()
+    wb2 = sheets()
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+    assert report2.entities["position_transactions"].deletes == 1
+    remaining = (await db.execute(select(PositionTransaction.account))).scalars().all()
+    assert "Manual" in remaining and "Old" not in remaining
+
+
+async def test_apply_net_worth_accounts_snapshots_balances(db):
+    report = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets()["Net Worth"]), report)
+    await db.commit()
+    assert report.entities["accounts"].creates == 3
+    assert report.entities["net_worth_snapshots"].creates == 2
+    assert report.entities["account_balances"].creates == 6
+    checking = (await db.execute(select(Account).where(Account.slug == "checking"))).scalar_one()
+    assert checking.group == "cash" and checking.sort_order == 3
+    january = (
+        await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == date(2024, 1, 1)))
+    ).scalar_one()
+    assert january.recorded_on == date(2024, 1, 5)
+    cc = (await db.execute(select(Account).where(Account.slug == "credit-card"))).scalar_one()
+    cc_balance = (
+        await db.execute(
+            select(AccountBalance.balance).where(
+                AccountBalance.snapshot_id == january.id, AccountBalance.account_id == cc.id
+            )
+        )
+    ).scalar_one()
+    assert cc_balance == Decimal("-25.00")
+
+    report2 = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets()["Net Worth"]), report2)
+    await db.commit()
+    assert report2.entities["account_balances"].creates == 0
+    assert report2.entities["account_balances"].skips == 6
+
+
+async def test_apply_net_worth_updates_changed_balance(db):
+    report = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets()["Net Worth"]), report)
+    await db.commit()
+    from tests.workbook_builder import default_net_worth_rows
+
+    rows = default_net_worth_rows()
+    rows[2][2] = 111.11  # Checking, January
+    report2 = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets(net_worth=rows)["Net Worth"]), report2)
+    await db.commit()
+    assert report2.entities["account_balances"].updates == 1
+    assert any("checking" in s.lower() for s in report2.samples)
+
+
+async def test_apply_spending_categories_months_cashflow(db):
+    report = SheetReport()
+    await apply_spending(db, parse_spending(sheets()["Spending"]), report)
+    await db.commit()
+    assert report.entities["spending_categories"].creates == 2
+    assert report.entities["monthly_spending"].creates == 4
+    assert report.entities["monthly_cashflow"].creates == 2
+    food = (
+        await db.execute(select(SpendingCategory).where(SpendingCategory.slug == "food"))
+    ).scalar_one()
+    january_food = (
+        await db.execute(
+            select(MonthlySpending.amount).where(
+                MonthlySpending.month == date(2024, 1, 1),
+                MonthlySpending.category_id == food.id,
+            )
+        )
+    ).scalar_one()
+    assert january_food == Decimal("100.00")
+    cashflow = await db.get(MonthlyCashflow, date(2024, 1, 1))
+    assert cashflow.net_pay == Decimal("3000.00")
+
+    report2 = SheetReport()
+    await apply_spending(db, parse_spending(sheets()["Spending"]), report2)
+    await db.commit()
+    assert report2.entities["monthly_spending"].creates == 0
+    assert report2.entities["monthly_spending"].skips == 4
+
+
+async def test_refdata_rename_keeps_positions_attached(db):
+    from tests.workbook_builder import default_reference_data_rows
+
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+
+    rows = default_reference_data_rows()
+    rows[1][1] = "Acme Fund"  # cosmetic rename; Positions still says 'Acme ETF'
+    wb2 = sheets(reference_data=rows)
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+    assert any("renamed" in w for w in report2.warnings)
+    tickers = set((await db.execute(select(Security.ticker))).scalars().all())
+    assert "X-ACMEETF" not in tickers  # no synthetic duplicate minted
+    acme_txns = (
+        (
+            await db.execute(
+                select(PositionTransaction).where(PositionTransaction.security_id == acme_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(acme_txns) == 2  # holdings stayed on the real security
+
+
+async def test_apply_spending_duplicate_slug_is_report_error(db):
+    from tests.workbook_builder import default_spending_rows
+
+    rows = default_spending_rows()
+    rows[0][2] = "Food!"  # slugs to 'food', colliding with column 2
+    report = SheetReport()
+    await apply_spending(db, parse_spending(sheets(spending=rows)["Spending"]), report)
+    await db.commit()  # must not raise IntegrityError
+    assert any("share slug" in e for e in report.errors)
+
+
+async def test_apply_net_worth_warns_on_db_account_missing_from_sheet(db):
+    from tests.workbook_builder import default_net_worth_rows
+
+    report = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets()["Net Worth"]), report)
+    await db.commit()
+    rows = default_net_worth_rows()
+    rows[1][2] = "Primary Checking"  # renamed column: old 'checking' slug left in DB
+    report2 = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets(net_worth=rows)["Net Worth"]), report2)
+    await db.commit()
+    assert any("no column in the sheet" in w for w in report2.warnings)
+
+
+async def test_apply_taxes_years_inputs_brackets(db):
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import TaxInput, TaxYear
+
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
+    await db.commit()
+    assert report.entities["tax_years"].creates == 2
+    assert report.entities["tax_inputs"].creates == 86  # 43 keys x 2 years
+    assert report.entities["tax_brackets"].creates == 14  # 7 x 2 years
+    years = (await db.execute(select(TaxYear.year))).scalars().all()
+    assert sorted(years) == [2023, 2024]
+    exempt = (
+        await db.execute(
+            select(TaxInput.value).where(
+                TaxInput.year == 2023, TaxInput.key == "unq_div_state_exempt_pct"
+            )
+        )
+    ).scalar_one()
+    assert exempt == Decimal("0.9645")
+
+    report2 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report2)
+    await db.commit()
+    assert report2.entities["tax_inputs"].creates == 0
+    assert report2.entities["tax_inputs"].skips == 86
+    assert report2.entities["tax_brackets"].skips == 14
+
+
+async def test_apply_taxes_syncs_brackets_and_inputs_within_imported_years(db):
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import TaxBracket, TaxInput
+    from tests.workbook_builder import default_taxes_rows
+
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
+    await db.commit()
+    rows = [
+        row
+        for row in default_taxes_rows()
+        if not (row[1] == "Bracket 2 Rate" and row[0] is None)
+        and not (row[1] == "Bracket 2 Threshold" and row[0] is None)
+    ]  # federal bracket 2 removed from the sheet
+    report2 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets(taxes=rows)["Taxes"]), report2)
+    await db.commit()
+    assert report2.entities["tax_brackets"].deletes == 2  # 2023 + 2024 federal bracket 2
+    remaining = (
+        (
+            await db.execute(
+                select(TaxBracket).where(
+                    TaxBracket.jurisdiction == "federal", TaxBracket.bracket_index == 2
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+    # UI-created data for a year the sheet doesn't know stays untouched
+    from app.models import TaxYear
+
+    db.add(TaxYear(year=2030))
+    await db.flush()
+    db.add(TaxInput(year=2030, key="annual_salary", value=Decimal("1")))
+    await db.commit()
+    report3 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report3)
+    await db.commit()
+    untouched = (
+        await db.execute(
+            select(TaxInput).where(TaxInput.year == 2030, TaxInput.key == "annual_salary")
+        )
+    ).scalar_one()
+    assert untouched.value == Decimal("1.0000")
+
+
+async def test_apply_espp_lots_and_periods(db):
+    from app.importer.apply import apply_espp
+    from app.importer.parsers import parse_espp
+    from app.models import EsppLot, EsppPeriod
+
+    report = SheetReport()
+    await apply_espp(db, parse_espp(sheets()["ESPP"]), report)
+    await db.commit()
+    assert report.entities["espp_lots"].creates == 2
+    assert report.entities["espp_periods"].creates == 2
+    lot = (
+        await db.execute(select(EsppLot).where(EsppLot.purchase_date == date(2024, 2, 29)))
+    ).scalar_one()
+    assert lot.subscription_price == Decimal("40.00000")
+    assert lot.sold_date is None
+    # sold fields are user-owned: set one, re-apply, verify preserved
+    lot.sold_date = date(2025, 10, 1)
+    lot.sold_price = Decimal("55.00000")
+    await db.commit()
+    report2 = SheetReport()
+    await apply_espp(db, parse_espp(sheets()["ESPP"]), report2)
+    await db.commit()
+    assert report2.entities["espp_lots"].skips == 2
+    refreshed = (
+        await db.execute(select(EsppLot).where(EsppLot.purchase_date == date(2024, 2, 29)))
+    ).scalar_one()
+    assert refreshed.sold_date == date(2025, 10, 1)
+    period = (
+        await db.execute(select(EsppPeriod).where(EsppPeriod.label == "February 2025 Purchase"))
+    ).scalar_one()
+    assert period.period_start == date(2024, 9, 1)
+    assert period.contribution_pct == Decimal("0.100000000")
+
+
+async def test_apply_paycheck_derives_effective_date_from_focal(db):
+    from app.importer.apply import apply_focal_history, apply_paycheck
+    from app.importer.parsers import parse_focal_history, parse_paycheck
+    from app.models import CompEvent, PaycheckProfile
+
+    wb = sheets()
+    report = SheetReport()
+    focal = parse_focal_history(wb["Focal History"])
+    await apply_focal_history(db, focal, report)
+    await apply_paycheck(db, parse_paycheck(wb["Paycheck Modeler"]), focal, report)
+    await db.commit()
+    assert report.entities["comp_events"].creates == 2
+    assert report.entities["paycheck_profiles"].creates == 1
+    profile = (await db.execute(select(PaycheckProfile))).scalar_one()
+    assert profile.effective_date == date(2024, 1, 1)  # latest focal year with a New Base
+    assert profile.annual_salary == Decimal("120000.00")
+    assert profile.pay_periods_per_year == 24
+    assert any("effective_date" in w for w in report.warnings)
+    events = (await db.execute(select(CompEvent))).scalars().all()
+    assert {(e.focal_year, e.new_base is None) for e in events} == {(2024, False), (2025, True)}
+
+    report2 = SheetReport()
+    wb2 = sheets()
+    focal2 = parse_focal_history(wb2["Focal History"])
+    await apply_focal_history(db, focal2, report2)
+    await apply_paycheck(db, parse_paycheck(wb2["Paycheck Modeler"]), focal2, report2)
+    await db.commit()
+    assert report2.entities["paycheck_profiles"].skips == 1
+    assert report2.entities["comp_events"].skips == 2
+
+
+async def test_apply_paycheck_without_focal_new_base_skips(db):
+    from app.importer.apply import apply_focal_history, apply_paycheck
+    from app.importer.parsers import parse_focal_history, parse_paycheck
+    from app.models import PaycheckProfile
+    from tests.workbook_builder import default_focal_rows
+
+    rows = default_focal_rows()
+    rows[2][3] = None  # 2024 loses its New Base -> no derivable effective_date
+    wb = sheets(focal=rows)
+    report = SheetReport()
+    focal = parse_focal_history(wb["Focal History"])
+    await apply_focal_history(db, focal, report)
+    await apply_paycheck(db, parse_paycheck(wb["Paycheck Modeler"]), focal, report)
+    await db.commit()
+    assert (await db.execute(select(PaycheckProfile))).scalars().all() == []
+    assert any("no focal year" in w.lower() for w in report.warnings)
+
+
+async def test_apply_espp_warns_on_stale_period_rows(db):
+    import datetime as dt
+
+    from app.importer.apply import apply_espp
+    from app.importer.parsers import parse_espp
+    from tests.workbook_builder import default_espp_rows
+
+    report = SheetReport()
+    await apply_espp(db, parse_espp(sheets()["ESPP"]), report)
+    await db.commit()  # creates 'February 2025 Purchase' + 'August 2025 Purchase'
+
+    rows = default_espp_rows()
+    rows.append(
+        [None] * 8 + [dt.datetime(2025, 2, 27), dt.datetime(2026, 2, 27), 80.0, 41.0, 60.0, 35.0]
+    )  # new lot advances the derived February label to 2026
+    report2 = SheetReport()
+    await apply_espp(db, parse_espp(sheets(espp=rows)["ESPP"]), report2)
+    await db.commit()
+    assert any("February 2025 Purchase" in w and "no longer derived" in w for w in report2.warnings)

@@ -47,6 +47,10 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("itemized_vehicle_reg", "Itemized: Vehicle Registration Fees", DEDUCTIONS, 120, False),
     ("itemized_sec199a_div", "Itemized: Sec 199A Div (20%)", DEDUCTIONS, 130, False),
     ("itemized_other", "Itemized: Other Items", DEDUCTIONS, 140, False),
+    # CA state-engine data rows from the sheet's STATE INCOME TAX INFO block — per-year
+    # values the Plan 5 engine needs; they are inputs, not brackets.
+    ("state_standard_deduction", "State Standard Deduction", DEDUCTIONS, 150, False),
+    ("state_exemption_credits", "State Exemption Credits", DEDUCTIONS, 160, False),
     ("ltcg_total", "Long Term Capital Gain/Loss", CAPITAL_GAINS, 10, True),
     ("ltcg_brokerage", "LTCG: Brokerage Gain/Loss", CAPITAL_GAINS, 20, False),
     ("ltcg_espp_component", "LTCG: ESPP Sale Component", CAPITAL_GAINS, 30, False),

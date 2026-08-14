@@ -48,7 +48,7 @@ async def test_one_value_per_year_per_key(db):
 
 
 async def test_definitions_constant_is_complete():
-    assert len(TAX_INPUT_DEFINITIONS) == 41
+    assert len(TAX_INPUT_DEFINITIONS) == 43
     keys = [d[0] for d in TAX_INPUT_DEFINITIONS]
     assert len(keys) == len(set(keys)), "duplicate keys"
 
@@ -59,7 +59,7 @@ async def test_seed_inserts_definitions(db):
     await seed_tax_definitions(db)
     await db.commit()
     count = (await db.execute(select(func.count(TaxInputDefinition.key)))).scalar_one()
-    assert count == 41
+    assert count == 43
     # payload fidelity, not just count — a transposed tuple in tax_keys.py fits the columns
     row = await db.get(TaxInputDefinition, "gross_paycheck")
     assert (row.label, row.section, row.sort_order, row.is_derived) == (
@@ -72,4 +72,23 @@ async def test_seed_inserts_definitions(db):
     await seed_tax_definitions(db)
     await db.commit()
     count = (await db.execute(select(func.count(TaxInputDefinition.key)))).scalar_one()
-    assert count == 41
+    assert count == 43
+
+
+async def test_tax_input_value_keeps_four_decimal_places(db):
+    # The sheet stores fractional inputs (state-exempt pct 0.9645); 2 dp would corrupt them
+    # and break Plan 5's cent-exact golden tests.
+    db.add(TaxYear(year=2025))
+    db.add(
+        TaxInputDefinition(
+            key="unq_div_state_exempt_pct",
+            label="Unq Div: State Exempt Percentage",
+            section="ordinary_income",
+            sort_order=170,
+        )
+    )
+    await db.flush()
+    db.add(TaxInput(year=2025, key="unq_div_state_exempt_pct", value=Decimal("0.9645")))
+    await db.commit()
+    stored = (await db.execute(select(TaxInput.value))).scalar_one()
+    assert stored == Decimal("0.9645")
