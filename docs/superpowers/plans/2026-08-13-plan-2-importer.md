@@ -133,7 +133,7 @@ Imported: Net Worth, Spending, Positions, Portfolio (warn-only), Taxes, ESPP, Pa
 - Formula-error strings `{'#N/A','#REF!','#VALUE!','#DIV/0!','#NAME?','#NUM!','#NULL!','#ERROR!'}` and literal `'N/A'`/`'n/a'`/`''` coerce to None (caller decides warn/skip/error). Any other non-numeric string where a number is expected → **error** with `Sheet!r<row>c<col>` context (spec §5: strict Decimal).
 - Dates: months normalized to first-of-month before insert (CheckConstraints enforce it DB-side; normalize for clean errors) with a warning when normalization actually changed a value.
 
-**Upsert semantics:** per entity, preload all existing rows keyed by natural key in one query, diff in memory, then `db.add()` news / mutate changed / count identical as skips. Natural keys: account slug; snapshot month; (snapshot_id, account_id); category slug; (month, category_id); cashflow month; ticker; tax year; (year, key); (year, jurisdiction, bracket_index); espp purchase_date; espp period label; paycheck effective_date; comp focal_year. `position_transactions` have no natural key → keyed on `sort_index` (deterministic from row order) and **synced**: imported-set upsert + delete of importer-owned strays (`sort_index > 0` and not in the incoming set) — the only entity with deletes. Auto-created rows must set `sort_order`/`is_active`/`sort_index` explicitly (Python-side defaults don't apply to raw inserts; ORM `db.add` does apply them, but be explicit anyway where the value is meaningful).
+**Upsert semantics:** per entity, preload all existing rows keyed by natural key in one query, diff in memory, then `db.add()` news / mutate changed / count identical as skips. Natural keys: account slug; snapshot month; (snapshot_id, account_id); category slug; (month, category_id); cashflow month; ticker; tax year; (year, key); (year, jurisdiction, bracket_index); espp purchase_date; espp period label; paycheck effective_date; comp focal_year. `position_transactions` have no natural key → keyed on `sort_index` (deterministic from row order) and **synced**: imported-set upsert + delete of importer-owned strays (`sort_index > 0` and not in the incoming set). Deletes exist only there and in the taxes sync (tax_inputs/tax_brackets within imported years — stale bracket rows are load-bearing wrong data for the Plan 5 engine). Auto-created rows must set `sort_order`/`is_active`/`sort_index` explicitly (Python-side defaults don't apply to raw inserts; ORM `db.add` does apply them, but be explicit anyway where the value is meaningful).
 - Unknown accounts are auto-created active with the group from their sheet band; the fallback when a band is unrecognized is `"other"` + warning (Plan 1 forward note). Unknown categories: auto-created active, sort_order = column index. Unknown securities (Positions name miss): auto-created active `holding_type='private'`, synthetic ticker + warning.
 - `accounts.sort_order` = sheet column index; `spending_categories.sort_order` = column index.
 
@@ -3722,6 +3722,27 @@ async def test_apply_paycheck_derives_effective_date_from_focal(db):
     assert report2.entities["comp_events"].skips == 2
 
 
+async def test_apply_espp_warns_on_stale_period_rows(db):
+    import datetime as dt
+
+    from app.importer.apply import apply_espp
+    from app.importer.parsers import parse_espp
+    from tests.workbook_builder import default_espp_rows
+
+    report = SheetReport()
+    await apply_espp(db, parse_espp(sheets()["ESPP"]), report)
+    await db.commit()  # creates 'February 2025 Purchase' + 'August 2025 Purchase'
+
+    rows = default_espp_rows()
+    rows.append(
+        [None] * 8 + [dt.datetime(2025, 2, 27), dt.datetime(2026, 2, 27), 80.0, 41.0, 60.0, 35.0]
+    )  # new lot advances the derived February label to 2026
+    report2 = SheetReport()
+    await apply_espp(db, parse_espp(sheets(espp=rows)["ESPP"]), report2)
+    await db.commit()
+    assert any("February 2025 Purchase" in w and "no longer derived" in w for w in report2.warnings)
+
+
 async def test_apply_paycheck_without_focal_new_base_skips(db):
     from app.importer.apply import apply_focal_history, apply_paycheck
     from app.importer.parsers import parse_focal_history, parse_paycheck
@@ -3791,8 +3812,8 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
     for item in parsed.inputs:
         if item.key not in known_keys:
             report.errors.append(
-                f"Taxes: input key {item.key!r} missing from tax_input_definitions — "
-                "run `python -m app.seed` and retry"
+                f"Taxes: input key {item.key!r} is not defined in app/tax_keys.py — "
+                "the parser's label sequence and TAX_INPUT_DEFINITIONS have drifted"
             )
             return
 
@@ -3917,6 +3938,13 @@ async def apply_espp(db: AsyncSession, parsed: ParsedEspp, report: SheetReport) 
             report.add_sample(f"espp_periods[{period.label}]: created")
         else:
             _diff_update(row, fields, period_counts, report, f"espp_periods[{period.label}]")
+    incoming_labels = {period.label for period in parsed.periods}
+    for label in existing_periods:
+        if label not in incoming_labels:
+            report.warnings.append(
+                f"ESPP: period {label!r} exists in the database but is no longer derived "
+                "from the sheet — left untouched; delete manually once concluded"
+            )
 
 
 async def apply_focal_history(
