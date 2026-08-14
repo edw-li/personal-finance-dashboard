@@ -315,6 +315,8 @@ def test_quantize_money_half_up():
     assert quantize_money(Decimal("2.665"), "x") == Decimal("2.67")
     assert quantize_money(Decimal("-2.665"), "x") == Decimal("-2.67")
     assert quantize_money(Decimal("100"), "x") == Decimal("100.00")
+    # Exponent pinned, not just value: pydantic serializes "100.00", never "100".
+    assert str(quantize_money(Decimal("100"), "x")) == "100.00"
 
 
 def test_quantize_money_bounds():
@@ -325,6 +327,12 @@ def test_quantize_money_bounds():
     assert "balance[account_id=3]" in exc.value.detail
     with pytest.raises(HTTPException):
         quantize_money(Decimal("-1000000000000.00"), "x")
+    with pytest.raises(HTTPException):
+        quantize_money(Decimal("999999999999.996"), "x")  # rounding crosses the bound
+    with pytest.raises(HTTPException):
+        quantize_money(Decimal("1e26"), "x")  # pydantic-accepted; quantize() would raise
+    with pytest.raises(HTTPException):
+        quantize_money(Decimal("NaN"), "x")  # comparisons on NaN raise without the guard
 
 
 def test_require_first_of_month():
@@ -376,8 +384,15 @@ MONEY_MAX_ABS = Decimal(10) ** 12
 
 
 def quantize_money(value: Decimal, field: str) -> Decimal:
+    # Pre-check BEFORE quantize: pydantic accepts huge finite Decimals ("1e26") whose
+    # quantize() raises InvalidOperation, and NaN comparisons raise too — either would
+    # surface as a 500 instead of this module's promised 422.
+    if not value.is_finite() or value.copy_abs() >= MONEY_MAX_ABS:
+        raise HTTPException(
+            status_code=422, detail=f"{field}: |value| must be below 10^12"
+        )
     quantized = value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
-    if quantized.copy_abs() >= MONEY_MAX_ABS:
+    if quantized.copy_abs() >= MONEY_MAX_ABS:  # rounding can cross the bound
         raise HTTPException(
             status_code=422, detail=f"{field}: |value| must be below 10^12"
         )
@@ -401,6 +416,8 @@ def mom_pct(curr: Decimal, prev: Decimal | None) -> Decimal | None:
 
     Signed denominator so the result's sign always matches net-worth impact —
     a liability balance rising toward zero reads as a positive change.
+    Assumes API-bounded inputs (|values| < 10^12 at 2dp); ratios beyond ~1e20
+    would exceed the default 28-digit Decimal context.
     """
     if prev is None or prev == 0:
         return None
@@ -493,6 +510,16 @@ async def test_get_swr_pct_reads_envelope_with_fallback(db):
     assert await get_swr_pct(db) == Decimal("0.05")
     setting = await db.get(AppSetting, "swr_pct")
     setting.value = {"wrong": "shape"}  # envelope is convention-only (Plan 1 note)
+    await db.commit()
+    assert await get_swr_pct(db) == Decimal("0.04")
+    # Decimal("NaN")/"1e100000" construct without raising — must fall back, not leak.
+    setting.value = {"value": "NaN"}
+    await db.commit()
+    assert await get_swr_pct(db) == Decimal("0.04")
+    setting.value = {"value": "1e100000"}
+    await db.commit()
+    assert await get_swr_pct(db) == Decimal("0.04")
+    setting.value = {"value": 2}  # a withdrawal rate above 1 is nonsense
     await db.commit()
     assert await get_swr_pct(db) == Decimal("0.04")
 ```
@@ -603,9 +630,15 @@ async def get_swr_pct(db: AsyncSession) -> Decimal:
     if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
         return DEFAULT_SWR_PCT
     try:
-        return Decimal(str(raw))
+        parsed = Decimal(str(raw))
     except ArithmeticError:
         return DEFAULT_SWR_PCT
+    # Decimal("NaN")/"Infinity"/"1e100000" all CONSTRUCT successfully — a leaked
+    # non-finite or absurd rate turns the 4%-line math downstream into a 500. A
+    # withdrawal rate outside [0, 1] is nonsense; fall back rather than crash.
+    if not parsed.is_finite() or parsed < 0 or parsed > 1:
+        return DEFAULT_SWR_PCT
+    return parsed
 ```
 
 - [x] **Step 8: Run both new files + full gate — expect PASS**
