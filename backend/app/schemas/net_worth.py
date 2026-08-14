@@ -27,7 +27,8 @@ class AccountOut(BaseModel):
 class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     group: str
-    sort_order: int = 0
+    # int32-safe and generous; sheet column indexes top out at 51.
+    sort_order: int = Field(default=0, ge=0, le=1_000_000)
     is_component: bool = False
 
     group_known = field_validator("group")(_check_group)
@@ -36,7 +37,7 @@ class AccountCreate(BaseModel):
 class AccountUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     group: str | None = None
-    sort_order: int | None = None
+    sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
     is_active: bool | None = None
     is_component: bool | None = None
 

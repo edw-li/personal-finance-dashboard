@@ -22,10 +22,13 @@ async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
 @router.post("/accounts", response_model=AccountOut, status_code=201)
 async def create_account(body: AccountCreate, db: AsyncSession = Depends(get_db)) -> Account:
     slug = slugify(body.name)
-    if not slug:
+    # len guard: unicode lowercasing can EXPAND ('İ' -> 2 code points), so a <=120-char
+    # name can slugify past String(120) — 422 here, never a DBAPIError 500.
+    if not slug or len(slug) > 120:
         raise HTTPException(
             status_code=422,
-            detail="name needs at least one ASCII letter or digit to derive a slug",
+            detail="name must contain an ASCII letter or digit and slugify to "
+            "at most 120 characters",
         )
     existing = (
         (
@@ -70,6 +73,12 @@ async def update_account(
         if value is not None
     }
     new_name = updates.get("name")
+    if new_name is not None and not slugify(new_name):
+        # Same rule as create: PATCH must not produce a blank/whitespace display name.
+        raise HTTPException(
+            status_code=422,
+            detail="name must contain at least one ASCII letter or digit",
+        )
     if new_name is not None and new_name != account.name:
         clash = (
             (

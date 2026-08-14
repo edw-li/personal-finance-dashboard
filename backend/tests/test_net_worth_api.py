@@ -102,3 +102,46 @@ async def test_delete_account_guarded_by_balances(auth_client, db):
     resp = await auth_client.delete(f"/api/v1/net-worth/accounts/{empty['id']}")
     assert resp.status_code == 204
     assert (await db.get(Account, empty["id"])) is None
+
+
+async def test_create_account_guards_slug_length_and_sort_order(auth_client):
+    # 'İ'.lower() expands to 2 code points; 61 of them slugify to 121 chars — 422, not 500.
+    resp = await auth_client.post(
+        "/api/v1/net-worth/accounts", json={"name": "İ" * 61, "group": "cash"}
+    )
+    assert resp.status_code == 422
+    resp = await auth_client.post(
+        "/api/v1/net-worth/accounts",
+        json={"name": "Cash", "group": "cash", "sort_order": 2**31},
+    )
+    assert resp.status_code == 422  # int32-bounds guard, not a DBAPIError
+
+
+async def test_patch_account_name_rules(auth_client):
+    alpha = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Alpha", "group": "cash"}
+        )
+    ).json()
+    beta = (
+        await auth_client.post("/api/v1/net-worth/accounts", json={"name": "Beta", "group": "cash"})
+    ).json()
+    assert beta["id"] != alpha["id"]
+    # Whitespace-only names are rejected on PATCH too (create's unsluggable rule).
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": "   "}
+    )
+    assert resp.status_code == 422
+    # Renaming onto another account's name conflicts; own name is a no-op.
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": "Beta"}
+    )
+    assert resp.status_code == 409
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": "Alpha"}
+    )
+    assert resp.status_code == 200
+    # Explicit null is a no-op, never a NULL write.
+    resp = await auth_client.patch(f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": None})
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Alpha"
