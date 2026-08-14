@@ -3584,7 +3584,7 @@ git commit -m "feat: importer apply layer for securities, positions, net worth, 
 async def test_apply_taxes_years_inputs_brackets(db):
     from app.importer.apply import apply_taxes
     from app.importer.parsers import parse_taxes
-    from app.models import TaxBracket, TaxInput, TaxYear
+    from app.models import TaxInput, TaxYear
 
     report = SheetReport()
     await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
