@@ -311,12 +311,14 @@ def parse_net_worth(ws) -> ParsedNetWorth:
     bands, names = header[0], header[1]
     accounts: list[ParsedAccountColumn] = []
     current_band: str | None = None
+    terminal_seen = False
     for index, band_cell in enumerate(bands):
         column = index + 1
         band_text = _text(band_cell)
         if band_text is not None and column >= 3:
             current_band = band_text
         if current_band == NET_WORTH_TERMINAL_BAND:
+            terminal_seen = True
             break  # computed totals begin — no more account columns
         name = _text(names[index]) if index < len(names) else None
         if column < 3 or name is None or name == "%":
@@ -333,6 +335,11 @@ def parse_net_worth(ws) -> ParsedNetWorth:
             continue
         accounts.append(
             ParsedAccountColumn(name=name, group=group, sort_order=column, column=column)
+        )
+    if not terminal_seen:
+        issues.warn(
+            f"Net Worth: 'NET WORTH' terminal band not found within the first "
+            f"{NET_WORTH_HEADER_SCAN_COLS} columns — account columns may be truncated"
         )
 
     snapshots: list[ParsedSnapshot] = []
@@ -434,14 +441,16 @@ def parse_spending(ws) -> ParsedSpending:
         if first is None:
             break
         if isinstance(first, str):
-            continue  # 'Average' summary row
+            if first.strip() == "Average":
+                continue  # the sheet's computed summary row
+            issues.error(f"{cell_ref('Spending', rnum, 1)}: expected a month date, got {first!r}")
+            continue
         if not isinstance(first, datetime.date):  # covers datetime too (subclass)
             continue  # numeric-year rollup row
-        month = first_of_month(
-            to_date_strict(first, ctx=cell_ref("Spending", rnum, 1), issues=issues),
-            ctx=cell_ref("Spending", rnum, 1),
-            issues=issues,
-        )
+        month = to_date_strict(first, ctx=cell_ref("Spending", rnum, 1), issues=issues)
+        if month is None:
+            continue
+        month = first_of_month(month, ctx=cell_ref("Spending", rnum, 1), issues=issues)
         raw_amounts = {category: row[category.column - 1] for category in categories}
         raw_net_pay = row[net_pay_column - 1]
         if all(value is None for value in raw_amounts.values()) and raw_net_pay is None:

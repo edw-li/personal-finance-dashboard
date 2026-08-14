@@ -207,3 +207,24 @@ def test_parse_spending_missing_total_column_is_error():
     rows[0][3] = "NOT-TOTAL"
     parsed = parse_spending(_sheet("Spending", spending=rows))
     assert any("TOTAL" in e for e in parsed.issues.errors)
+
+
+def test_parse_spending_string_month_is_error_not_silent_skip():
+    from app.importer.parsers import parse_spending
+
+    rows = default_spending_rows()
+    rows[2][0] = "2024-01-01"  # CSV-pasted month as text must not vanish silently
+    parsed = parse_spending(_sheet("Spending", spending=rows))
+    assert any("expected a month date" in e for e in parsed.issues.errors)
+    assert len(parsed.months) == 1  # only February survives
+    # the 'Average' row is still skipped silently
+    assert not any("Average" in e for e in parsed.issues.errors)
+
+
+def test_parse_net_worth_warns_when_terminal_band_missing():
+    from app.importer.parsers import parse_net_worth
+
+    rows = default_net_worth_rows()
+    rows[0][8] = None  # remove the 'NET WORTH' band header
+    parsed = parse_net_worth(_sheet("Net Worth", net_worth=rows))
+    assert any("terminal band not found" in w for w in parsed.issues.warnings)
