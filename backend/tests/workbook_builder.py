@@ -8,6 +8,8 @@ taxation-calculator block, partial focal rows.
 """
 
 import io
+import re
+import zipfile
 from datetime import datetime, time
 
 import openpyxl
@@ -180,7 +182,7 @@ def default_espp_rows() -> list[list]:
             [None, None, None, None, None, None],
         ),
     ]
-    rows += [[None]] * 3
+    rows += [[None] for _ in range(3)]
     rows += [
         [None, "ESPP Taxation Calculator"],
         [None, "Date of Sale", datetime(2025, 9, 1)],
@@ -243,8 +245,38 @@ def default_reference_data_rows() -> list[list]:
     ]
 
 
+def _strip_dimensions(xlsx: bytes) -> bytes:
+    """Remove <dimension> records so read_only sheets present as UNSIZED (max_row=None),
+    matching the real Google-Sheets export — the workbook's most treacherous quirk."""
+    source = zipfile.ZipFile(io.BytesIO(xlsx))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename.startswith("xl/worksheets/sheet"):
+                data, count = re.subn(rb"<dimension[^>]*/>", b"", data)
+                assert count == 1, f"expected one dimension record in {item.filename}"
+            target.writestr(item, data)
+    source.close()
+    return buffer.getvalue()
+
+
 def build_workbook(**overrides) -> bytes:
     """Build the synthetic workbook; override any sheet via keyword (rows list-of-lists)."""
+    known = {
+        "paycheck",
+        "espp",
+        "focal",
+        "positions",
+        "spending",
+        "taxes",
+        "net_worth",
+        "portfolio",
+        "reference_data",
+    }
+    unknown = set(overrides) - known
+    if unknown:
+        raise TypeError(f"unknown sheet override(s): {sorted(unknown)}")
     sheets = {
         "Paycheck Modeler": overrides.get("paycheck", default_paycheck_rows()),
         "ESPP": overrides.get("espp", default_espp_rows()),
@@ -266,7 +298,7 @@ def build_workbook(**overrides) -> bytes:
             ws.append(row)
     buffer = io.BytesIO()
     wb.save(buffer)
-    return buffer.getvalue()
+    return _strip_dimensions(buffer.getvalue())
 
 
 def load_readonly(data: bytes) -> openpyxl.Workbook:
