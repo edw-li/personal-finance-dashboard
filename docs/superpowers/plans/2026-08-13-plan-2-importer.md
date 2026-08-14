@@ -4524,7 +4524,7 @@ In `vite.config.ts`: add this reference as the FIRST line of the file, keep ever
 `src/contexts/AuthContext.test.tsx`:
 
 ```tsx
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AuthProvider, useAuth } from './AuthContext'
 import * as authApi from '../api/auth'
@@ -4545,6 +4545,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // RTL auto-cleanup needs a global afterEach; vitest runs without globals here,
+  // so clean up explicitly or renders accumulate across tests in this file.
+  cleanup()
   vi.clearAllMocks()
 })
 
