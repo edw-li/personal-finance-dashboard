@@ -427,7 +427,7 @@ from app.tax_keys import TAX_INPUT_DEFINITIONS
 
 
 async def test_seed_admin_user_creates_user(db, monkeypatch):
-    monkeypatch.setattr(seed_module.settings, "admin_email", "Admin@Example.com")
+    monkeypatch.setattr(seed_module.settings, "admin_email", " Admin@Example.com ")
     monkeypatch.setattr(seed_module.settings, "admin_password", "changeme123")
     await seed_admin_user(db)
     await db.commit()
@@ -443,12 +443,15 @@ async def test_seed_admin_user_renames_existing_instead_of_duplicating(db, monke
     monkeypatch.setattr(seed_module.settings, "admin_email", "first@example.com")
     await seed_admin_user(db)
     await db.commit()
+    original_hash = (await db.execute(select(User))).scalar_one().password_hash
     monkeypatch.setattr(seed_module.settings, "admin_email", "second@example.com")
+    monkeypatch.setattr(seed_module.settings, "admin_password", "a-different-password")
     await seed_admin_user(db)
     await db.commit()
     users = (await db.execute(select(User))).scalars().all()
     assert len(users) == 1
     assert users[0].email == "second@example.com"
+    assert users[0].password_hash == original_hash  # rename must not rotate the password
 
 
 async def test_seed_admin_user_is_idempotent_and_keeps_password(db, monkeypatch):
