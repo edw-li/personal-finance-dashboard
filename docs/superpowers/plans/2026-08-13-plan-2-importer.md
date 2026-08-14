@@ -683,6 +683,22 @@ def test_import_report_error_detection():
         "paycheck",
         "focal_history",
     }
+
+
+def test_to_decimal_nonfinite_and_huge_values_error_not_crash():
+    issues = CellIssues()
+    assert dec("nan", issues=issues) is None
+    assert dec("Infinity", issues=issues) is None
+    assert dec(float("nan"), issues=issues) is None
+    assert dec(float("inf"), issues=issues) is None
+    # 1e100 overflows quantize's 28-digit context, not the bounds path
+    assert dec(1e100, issues=issues) is None
+    assert len(issues.errors) == 5
+    assert all("T!r1c1" in e for e in issues.errors)
+
+
+def test_synthetic_ticker_unicode_only_name_falls_back():
+    assert synthetic_ticker("日本ファンド", set()) == "X-ASSET"
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -776,7 +792,16 @@ def to_decimal(
     else:
         issues.error(f"{ctx}: expected a number, got {type(value).__name__}")
         return None
-    quantized = raw.quantize(quantum, rounding=ROUND_HALF_UP)
+    # Quiet NaN would pass through quantize silently and blow up the bounds
+    # comparison instead; inf/snan/oversized-digit values raise at quantize.
+    if not raw.is_finite():
+        issues.error(f"{ctx}: expected a finite number, got {value!r}")
+        return None
+    try:
+        quantized = raw.quantize(quantum, rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        issues.error(f"{ctx}: expected a finite number, got {value!r}")
+        return None
     if quantized.copy_abs() >= 10**max_int_digits:
         issues.error(f"{ctx}: {raw} exceeds NUMERIC({max_int_digits} integer digits) bounds")
         return None
@@ -838,7 +863,7 @@ def slugify(name: str) -> str:
 def synthetic_ticker(name: str, taken: set[str]) -> str:
     """Short deterministic ticker for a Positions security missing from ReferenceData
     (String(20), Plan 1 forward note: keep them short)."""
-    base = "X-" + "".join(ch for ch in name.upper() if ch.isalnum())[:8]
+    base = "X-" + "".join(ch for ch in name.upper() if ch.isascii() and ch.isalnum())[:8]
     if base == "X-":
         base = "X-ASSET"
     candidate = base
@@ -3043,6 +3068,12 @@ async def apply_net_worth(
     seen_slugs: set[str] = set()
     for column in parsed.accounts:
         slug = slugify(column.name)
+        if not slug:
+            report.errors.append(
+                f"Net Worth: account name {column.name!r} has no ASCII alphanumeric "
+                "characters — cannot derive a slug; rename it in the sheet"
+            )
+            continue
         if slug in seen_slugs:
             report.errors.append(
                 f"Net Worth: accounts {column.name!r} and another column share slug "
@@ -3118,6 +3149,12 @@ async def apply_spending(
     categories_by_name: dict[str, SpendingCategory] = {}
     for column in parsed.categories:
         slug = slugify(column.name)
+        if not slug:
+            report.errors.append(
+                f"Spending: category name {column.name!r} has no ASCII alphanumeric "
+                "characters — cannot derive a slug; rename it in the sheet"
+            )
+            continue
         category = existing_categories.get(slug)
         fields = {"name": column.name, "sort_order": column.sort_order}
         if category is None:
@@ -3139,7 +3176,9 @@ async def apply_spending(
     }
     for month_row in parsed.months:
         for category_name, amount in month_row.amounts.items():
-            category = categories_by_name[category_name]
+            category = categories_by_name.get(category_name)
+            if category is None:
+                continue  # empty-slug error above already reported
             key = (month_row.month, category.id)
             row = existing_spend.get(key)
             if row is None:
