@@ -89,3 +89,13 @@ async def test_get_swr_pct_reads_envelope_with_fallback(db):
     setting.value = {"wrong": "shape"}  # envelope is convention-only (Plan 1 note)
     await db.commit()
     assert await get_swr_pct(db) == Decimal("0.04")
+    # Decimal("NaN")/"1e100000" construct without raising — must fall back, not leak.
+    setting.value = {"value": "NaN"}
+    await db.commit()
+    assert await get_swr_pct(db) == Decimal("0.04")
+    setting.value = {"value": "1e100000"}
+    await db.commit()
+    assert await get_swr_pct(db) == Decimal("0.04")
+    setting.value = {"value": 2}  # a withdrawal rate above 1 is nonsense
+    await db.commit()
+    assert await get_swr_pct(db) == Decimal("0.04")

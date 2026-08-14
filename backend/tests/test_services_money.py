@@ -12,6 +12,8 @@ def test_quantize_money_half_up():
     assert quantize_money(Decimal("2.665"), "x") == Decimal("2.67")
     assert quantize_money(Decimal("-2.665"), "x") == Decimal("-2.67")
     assert quantize_money(Decimal("100"), "x") == Decimal("100.00")
+    # Exponent pinned, not just value: pydantic serializes "100.00", never "100".
+    assert str(quantize_money(Decimal("100"), "x")) == "100.00"
 
 
 def test_quantize_money_bounds():
@@ -22,6 +24,12 @@ def test_quantize_money_bounds():
     assert "balance[account_id=3]" in exc.value.detail
     with pytest.raises(HTTPException):
         quantize_money(Decimal("-1000000000000.00"), "x")
+    with pytest.raises(HTTPException):
+        quantize_money(Decimal("999999999999.996"), "x")  # rounding crosses the bound
+    with pytest.raises(HTTPException):
+        quantize_money(Decimal("1e26"), "x")  # pydantic-accepted; quantize() would raise
+    with pytest.raises(HTTPException):
+        quantize_money(Decimal("NaN"), "x")  # comparisons on NaN raise without the guard
 
 
 def test_require_first_of_month():

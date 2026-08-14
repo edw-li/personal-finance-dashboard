@@ -97,6 +97,12 @@ async def get_swr_pct(db: AsyncSession) -> Decimal:
     if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
         return DEFAULT_SWR_PCT
     try:
-        return Decimal(str(raw))
+        parsed = Decimal(str(raw))
     except ArithmeticError:
         return DEFAULT_SWR_PCT
+    # Decimal("NaN")/"Infinity"/"1e100000" all CONSTRUCT successfully — a leaked
+    # non-finite or absurd rate turns the 4%-line math downstream into a 500. A
+    # withdrawal rate outside [0, 1] is nonsense; fall back rather than crash.
+    if not parsed.is_finite() or parsed < 0 or parsed > 1:
+        return DEFAULT_SWR_PCT
+    return parsed

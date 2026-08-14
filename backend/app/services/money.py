@@ -17,8 +17,13 @@ MONEY_MAX_ABS = Decimal(10) ** 12
 
 
 def quantize_money(value: Decimal, field: str) -> Decimal:
+    # Pre-check BEFORE quantize: pydantic accepts huge finite Decimals ("1e26") whose
+    # quantize() raises InvalidOperation, and NaN comparisons raise too — either would
+    # surface as a 500 instead of this module's promised 422.
+    if not value.is_finite() or value.copy_abs() >= MONEY_MAX_ABS:
+        raise HTTPException(status_code=422, detail=f"{field}: |value| must be below 10^12")
     quantized = value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
-    if quantized.copy_abs() >= MONEY_MAX_ABS:
+    if quantized.copy_abs() >= MONEY_MAX_ABS:  # rounding can cross the bound
         raise HTTPException(status_code=422, detail=f"{field}: |value| must be below 10^12")
     return quantized
 
@@ -40,6 +45,8 @@ def mom_pct(curr: Decimal, prev: Decimal | None) -> Decimal | None:
 
     Signed denominator so the result's sign always matches net-worth impact —
     a liability balance rising toward zero reads as a positive change.
+    Assumes API-bounded inputs (|values| < 10^12 at 2dp); ratios beyond ~1e20
+    would exceed the default 28-digit Decimal context.
     """
     if prev is None or prev == 0:
         return None
