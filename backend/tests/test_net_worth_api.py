@@ -341,3 +341,22 @@ async def test_put_month_validation(auth_client, db):
     # Nothing was written by the failed puts:
     read = (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()
     assert read["exists"] is False
+
+
+async def test_put_month_refuses_empty_create_but_allows_meta_update(auth_client, db):
+    account = Account(name="Cash", slug="cash", group="cash", sort_order=1)
+    db.add(account)
+    await db.commit()
+    put = "/api/v1/net-worth/months/2026-06-01"
+    # An empty body must NOT mint a permanent empty month (KPI/ribbon poison).
+    assert (await auth_client.put(put, json={})).status_code == 422
+    assert (await auth_client.get(put)).json()["exists"] is False
+    resp = await auth_client.put(
+        put, json={"balances": [{"account_id": account.id, "balance": "1.00"}]}
+    )
+    assert resp.status_code == 200
+    # Meta-only PUTs on an existing month stay legal.
+    assert (await auth_client.put(put, json={"notes": "meta only"})).status_code == 200
+    read = (await auth_client.get(put)).json()
+    assert read["notes"] == "meta only"
+    assert len(read["balances"]) == 1

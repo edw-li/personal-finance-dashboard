@@ -255,6 +255,14 @@ async def put_month(
     ).scalar_one_or_none()
     snapshot_created = snapshot is None
     if snapshot is None:
+        if not body.balances:
+            # An empty month would poison the summary KPI and the coverage ribbon,
+            # and no DELETE /months exists to undo it. Meta-only PUTs remain legal
+            # on months that already exist.
+            raise HTTPException(
+                status_code=422,
+                detail="refusing to create an empty month — include at least one balance",
+            )
         snapshot = NetWorthSnapshot(
             month=month,
             recorded_on=body.recorded_on or date.today(),
