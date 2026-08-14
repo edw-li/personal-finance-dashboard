@@ -3165,13 +3165,16 @@ git commit -m "feat: frontend auth flow and protected layout shell"
 matters because `COPY . .` would otherwise bake a developer's local secrets into an image layer):
 ```
 .venv
-.pytest_cache
-.ruff_cache
-__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/__pycache__
 tests
 docker-compose.yml
 .env
 ```
+(the `**/` prefixes are load-bearing: bare names match only the context root, and nested
+`__pycache__` dirs — app/, alembic/versions/, etc. — would otherwise bake host bytecode
+into the image.)
 
 `backend/start.sh`:
 ```sh
@@ -3412,7 +3415,7 @@ jobs:
 - [ ] **Step 6: Commit and verify CI**
 
 ```bash
-git add backend/Dockerfile backend/start.sh Dockerfile nginx.conf docker-compose.prod.yml .env.example .dockerignore .github
+git add backend/Dockerfile backend/start.sh backend/.dockerignore Dockerfile nginx.conf docker-compose.prod.yml .env.example .dockerignore .github
 git commit -m "feat: docker packaging and CI"
 ```
 **GitHub/CI deferral (decided 2026-08-13 for the overnight run):** the `gh` CLI is not installed
@@ -3491,6 +3494,18 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
   drop the 5th dp — if Plans 3-4 ever bridge those tables, widen first.
 - No date-ordering constraints anywhere (period_end < period_start, sold_date < purchase_date
   all accepted) — consistent app-layer posture; the wizard/importer validate.
+- **Container builds fail LOCALLY on this box** (corporate TLS interception has no CA inside
+  containers): pip fails loud, but **npm ci fails with EXIT 0 and a "DONE" layer** while
+  producing an empty node_modules/.bin — the sharpest read-output-not-exit-codes case yet.
+  CI (GitHub runners) and the OCI box build clean. Never trust a local image-build layer's
+  status; grep its output.
+- **Boot-testing the backend image against the dev DB REQUIRES `-e ADMIN_EMAIL=admin@example.com`** —
+  the seed's rename semantics otherwise rename the dev admin to whatever the test env says
+  (happened once; repaired). Also: use Docker Desktop's built-in host.docker.internal (no
+  --add-host override) to reach the loopback-bound dev DB.
+- nginx image: IPv4-only listen (no `listen [::]:80`), can't run standalone (`upstream
+  "backend"` resolves at parse time — needs compose or --add-host), and expires+add_header
+  emits two Cache-Control headers. All benign; revisit at Plan 6 deploy.
 - Frontend: package-lock is lockfileVersion 2 (npm 8) — CI/Docker `npm ci` reads it fine;
   regenerate to v3 via a `node:20` container when convenient (first npm-10 `install` will
   churn it otherwise). `npm ci --dry-run` on npm 8 DELETES node_modules — not read-only.
