@@ -664,7 +664,7 @@ cd .. && git add backend/app/services backend/tests/test_services_money.py backe
 - Modify: `backend/app/main.py`
 - Create: `backend/tests/test_net_worth_api.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_net_worth_api.py` (start of file — Tasks 4/5 append to it):
 
@@ -779,13 +779,13 @@ async def test_delete_account_guarded_by_balances(auth_client, db):
     assert (await db.get(Account, empty["id"])) is None
 ```
 
-- [ ] **Step 2: Run — expect FAIL (404s: router not registered).**
+- [x] **Step 2: Run — expect FAIL (404s: router not registered).**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_net_worth_api.py -q -W error
 ```
 
-- [ ] **Step 3: Implement schemas**
+- [x] **Step 3: Implement schemas**
 
 `backend/app/schemas/net_worth.py`:
 
@@ -893,7 +893,7 @@ class SummaryOut(BaseModel):
     groups: list[GroupSummary]
 ```
 
-- [ ] **Step 4: Implement the router (CRUD half)**
+- [x] **Step 4: Implement the router (CRUD half)**
 
 `backend/app/api/net_worth.py`:
 
@@ -1004,11 +1004,11 @@ async def delete_account(account_id: int, db: AsyncSession = Depends(get_db)) ->
     return Response(status_code=204)
 ```
 
-- [ ] **Step 5: Register the router**
+- [x] **Step 5: Register the router**
 
 In `backend/app/main.py`: `from app.api import auth, import_, net_worth` and `app.include_router(net_worth.router, prefix="/api/v1")` (keep alphabetical grouping with the others).
 
-- [ ] **Step 6: Run — expect PASS; full gate; commit**
+- [x] **Step 6: Run — expect PASS; full gate; commit**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_net_worth_api.py -q -W error
