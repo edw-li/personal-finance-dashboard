@@ -777,6 +777,53 @@ async def test_delete_account_guarded_by_balances(auth_client, db):
     resp = await auth_client.delete(f"/api/v1/net-worth/accounts/{empty['id']}")
     assert resp.status_code == 204
     assert (await db.get(Account, empty["id"])) is None
+
+
+async def test_create_account_guards_slug_length_and_sort_order(auth_client):
+    # 'İ'.lower() expands to 2 code points; 61 of them slugify to 121 chars — 422, not 500.
+    resp = await auth_client.post(
+        "/api/v1/net-worth/accounts", json={"name": "İ" * 61, "group": "cash"}
+    )
+    assert resp.status_code == 422
+    resp = await auth_client.post(
+        "/api/v1/net-worth/accounts",
+        json={"name": "Cash", "group": "cash", "sort_order": 2**31},
+    )
+    assert resp.status_code == 422  # int32-bounds guard, not a DBAPIError
+
+
+async def test_patch_account_name_rules(auth_client):
+    alpha = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Alpha", "group": "cash"}
+        )
+    ).json()
+    beta = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Beta", "group": "cash"}
+        )
+    ).json()
+    assert beta["id"] != alpha["id"]
+    # Whitespace-only names are rejected on PATCH too (create's unsluggable rule).
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": "   "}
+    )
+    assert resp.status_code == 422
+    # Renaming onto another account's name conflicts; own name is a no-op.
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": "Beta"}
+    )
+    assert resp.status_code == 409
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": "Alpha"}
+    )
+    assert resp.status_code == 200
+    # Explicit null is a no-op, never a NULL write.
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{alpha['id']}", json={"name": None}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Alpha"
 ```
 
 - [x] **Step 2: Run — expect FAIL (404s: router not registered).**
@@ -819,7 +866,8 @@ class AccountOut(BaseModel):
 class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     group: str
-    sort_order: int = 0
+    # int32-safe and generous; sheet column indexes top out at 51.
+    sort_order: int = Field(default=0, ge=0, le=1_000_000)
     is_component: bool = False
 
     group_known = field_validator("group")(_check_group)
@@ -828,7 +876,7 @@ class AccountCreate(BaseModel):
 class AccountUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     group: str | None = None
-    sort_order: int | None = None
+    sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
     is_active: bool | None = None
     is_component: bool | None = None
 
@@ -924,10 +972,13 @@ async def create_account(
     body: AccountCreate, db: AsyncSession = Depends(get_db)
 ) -> Account:
     slug = slugify(body.name)
-    if not slug:
+    # len guard: unicode lowercasing can EXPAND ('İ' -> 2 code points), so a <=120-char
+    # name can slugify past String(120) — 422 here, never a DBAPIError 500.
+    if not slug or len(slug) > 120:
         raise HTTPException(
             status_code=422,
-            detail="name needs at least one ASCII letter or digit to derive a slug",
+            detail="name must contain an ASCII letter or digit and slugify to "
+            "at most 120 characters",
         )
     existing = (
         await db.execute(
@@ -968,6 +1019,12 @@ async def update_account(
         if value is not None
     }
     new_name = updates.get("name")
+    if new_name is not None and not slugify(new_name):
+        # Same rule as create: PATCH must not produce a blank/whitespace display name.
+        raise HTTPException(
+            status_code=422,
+            detail="name must contain at least one ASCII letter or digit",
+        )
     if new_name is not None and new_name != account.name:
         clash = (
             await db.execute(
@@ -1503,6 +1560,23 @@ async def test_category_delete_guarded_by_rows(auth_client, db):
     assert (
         await auth_client.delete(f"/api/v1/spending/categories/{empty['id']}")
     ).status_code == 204
+
+
+async def test_category_input_guards(auth_client):
+    # 'İ' lowercases to 2 code points; 41 of them slugify to 81 chars (> String(80)).
+    resp = await auth_client.post("/api/v1/spending/categories", json={"name": "İ" * 41})
+    assert resp.status_code == 422
+    resp = await auth_client.post(
+        "/api/v1/spending/categories", json={"name": "Pets", "sort_order": 2**31}
+    )
+    assert resp.status_code == 422
+    created = (
+        await auth_client.post("/api/v1/spending/categories", json={"name": "Pets"})
+    ).json()
+    resp = await auth_client.patch(
+        f"/api/v1/spending/categories/{created['id']}", json={"name": "   "}
+    )
+    assert resp.status_code == 422
 ```
 
 - [ ] **Step 2: Run — expect FAIL (404).**
@@ -1534,12 +1608,13 @@ class CategoryOut(BaseModel):
 
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    sort_order: int = 0
+    # int32-safe and generous; sheet column indexes top out at 20.
+    sort_order: int = Field(default=0, ge=0, le=1_000_000)
 
 
 class CategoryUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
-    sort_order: int | None = None
+    sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
     is_active: bool | None = None
 
 
@@ -1633,10 +1708,13 @@ async def create_category(
     body: CategoryCreate, db: AsyncSession = Depends(get_db)
 ) -> SpendingCategory:
     slug = slugify(body.name)
-    if not slug:
+    # Same guard as accounts, at this table's String(80): unicode lowercasing can
+    # expand, so the slug length is checked here — 422, never a DBAPIError 500.
+    if not slug or len(slug) > 80:
         raise HTTPException(
             status_code=422,
-            detail="name needs at least one ASCII letter or digit to derive a slug",
+            detail="name must contain an ASCII letter or digit and slugify to "
+            "at most 80 characters",
         )
     existing = (
         await db.execute(
@@ -1672,6 +1750,12 @@ async def update_category(
         if value is not None
     }
     new_name = updates.get("name")
+    if new_name is not None and not slugify(new_name):
+        # Same rule as create: PATCH must not produce a blank/whitespace display name.
+        raise HTTPException(
+            status_code=422,
+            detail="name must contain at least one ASCII letter or digit",
+        )
     if new_name is not None and new_name != category.name:
         clash = (
             await db.execute(
