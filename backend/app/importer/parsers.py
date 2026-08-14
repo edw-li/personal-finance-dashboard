@@ -536,6 +536,10 @@ def parse_taxes(ws) -> ParsedTaxes:
         if index >= 2 and isinstance(cell, int | float) and not isinstance(cell, bool):
             year_columns.append((index, int(cell)))
 
+    if not year_columns:
+        issues.error("Taxes!r1: no year columns found — years must be numeric cells")
+        return ParsedTaxes(inputs=[], brackets=[], issues=issues)
+
     def collect(row_values, rnum: int, quantum, max_int_digits: int) -> dict[int, Decimal]:
         values: dict[int, Decimal] = {}
         for col_index, year in year_columns:
@@ -580,6 +584,7 @@ def parse_taxes(ws) -> ParsedTaxes:
     brackets: list[ParsedBracket] = []
     pending: dict[tuple[str, int], dict[str, tuple[dict[int, Decimal], int]]] = {}
     jurisdiction: str | None = None
+    seen_jurisdictions: set[str] = set()
     while cursor < len(rows):
         row = rows[cursor]
         header = _text(row[0])
@@ -588,6 +593,7 @@ def parse_taxes(ws) -> ParsedTaxes:
             if header not in BRACKET_SECTIONS:
                 break  # computed output sections begin (FEDERAL INCOME TAX, ...)
             jurisdiction = BRACKET_SECTIONS[header]
+            seen_jurisdictions.add(jurisdiction)
         if jurisdiction is None or label is None:
             cursor += 1
             continue
@@ -619,11 +625,30 @@ def parse_taxes(ws) -> ParsedTaxes:
                         f"{cell_ref('Taxes', cursor + 1, 1)}: {jurisdiction} bracket "
                         f"{bracket_index} rate {rate} looks like a percentage, not a fraction"
                     )
+                elif rate < 0:
+                    issues.warn(
+                        f"{cell_ref('Taxes', cursor + 1, 1)}: {jurisdiction} bracket "
+                        f"{bracket_index} rate {rate} is negative"
+                    )
         else:
             values = collect(row, cursor + 1, Q2, 10)
         slot = pending.setdefault((jurisdiction, bracket_index), {})
-        slot[kind] = (values, cursor + 1)
+        if kind in slot:
+            issues.error(
+                f"{cell_ref('Taxes', cursor + 1, 2)}: duplicate '{label}' row in "
+                f"{jurisdiction} section"
+            )
+        else:
+            slot[kind] = (values, cursor + 1)
         cursor += 1
+
+    missing_sections = set(BRACKET_SECTIONS.values()) - seen_jurisdictions
+    if missing_sections:
+        issues.error(
+            "Taxes: bracket section(s) never found: "
+            + ", ".join(sorted(missing_sections))
+            + " — section header renamed or deleted? All six must be present"
+        )
 
     for (jur, index), parts in pending.items():
         rates, rate_row = parts.get("Rate", ({}, 0))

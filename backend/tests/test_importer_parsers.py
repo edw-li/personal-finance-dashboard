@@ -279,3 +279,49 @@ def test_parse_taxes_warns_on_rate_above_one():
             row[2] = 1.45  # a percent entered as 1.45 instead of 0.0145
     parsed = parse_taxes(_sheet("Taxes", taxes=rows))
     assert any("looks like a percentage" in w for w in parsed.issues.warnings)
+
+
+def test_parse_taxes_missing_bracket_section_is_error():
+    from app.importer.parsers import parse_taxes
+
+    rows = [
+        row if row[0] != "MEDICARE TAX INFO" else ["MEDICARE INFO", *row[1:]]
+        for row in default_taxes_rows()
+    ]
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    joined = " ".join(parsed.issues.errors)
+    # the renamed header ends the walk: medicare AND everything after it goes missing
+    assert "never found" in joined
+    assert "medicare" in joined and "capital_gains" in joined
+
+
+def test_parse_taxes_duplicate_bracket_row_is_error():
+    from app.importer.parsers import parse_taxes
+
+    rows = default_taxes_rows()
+    for index, row in enumerate(rows):
+        if row[0] == "MEDICARE TAX INFO":
+            rows.insert(index + 1, [None, "Bracket 1 Rate", 0.9, 0.9, None])
+            break
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    assert any("duplicate 'Bracket 1 Rate'" in e for e in parsed.issues.errors)
+    # first occurrence wins: the original 0.0145 rate is preserved for 2023
+    medicare = [b for b in parsed.brackets if b.jurisdiction == "medicare" and b.year == 2023]
+    assert medicare and medicare[0].rate == Decimal("0.0145")
+
+
+def test_parse_taxes_negative_rate_warns_and_no_year_columns_errors():
+    from app.importer.parsers import parse_taxes
+
+    rows = default_taxes_rows()
+    for row in rows:
+        if row[0] == "CAPITAL GAINS TAX INFO":
+            row[2] = -0.05
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    assert any("is negative" in w for w in parsed.issues.warnings)
+
+    rows = default_taxes_rows()
+    rows[0] = ["Fill in White cells", None, "2023", "2024", None]  # text years
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    assert any("no year columns" in e for e in parsed.issues.errors)
+    assert parsed.inputs == [] and parsed.brackets == []
