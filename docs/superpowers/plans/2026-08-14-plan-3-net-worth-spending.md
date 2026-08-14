@@ -159,7 +159,7 @@ Responsibilities: `services/` never imports FastAPI (except `money.py`'s HTTPExc
 
 All backend commands in this plan run from `backend/` in the worktree with its venv: `cd .worktrees/plan-3-net-worth-spending/backend` (first task only — stay there).
 
-- [ ] **Step 1: Write the failing model test**
+- [x] **Step 1: Write the failing model test**
 
 Append to `backend/tests/test_models_net_worth.py` (match the file's existing style — it inserts models via the `db` fixture):
 
@@ -177,14 +177,14 @@ async def test_account_is_component_defaults_false(db):
 
 (If the file imports `Account` from `app.models` already, reuse; otherwise add the import.)
 
-- [ ] **Step 2: Run it — expect FAIL**
+- [x] **Step 2: Run it — expect FAIL**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_models_net_worth.py -q -W error
 ```
 Expected: `AttributeError`/`TypeError` — `is_component` doesn't exist.
 
-- [ ] **Step 3: Add the column to the model**
+- [x] **Step 3: Add the column to the model**
 
 In `backend/app/models/net_worth.py`, class `Account`, after `is_active`:
 
@@ -194,9 +194,9 @@ In `backend/app/models/net_worth.py`, class `Account`, after `is_active`:
     is_component: Mapped[bool] = mapped_column(default=False)
 ```
 
-- [ ] **Step 4: Re-run — expect PASS** (same command; conftest builds the test schema via `create_all`, so no migration is needed for tests to pass).
+- [x] **Step 4: Re-run — expect PASS** (same command; conftest builds the test schema via `create_all`, so no migration is needed for tests to pass).
 
-- [ ] **Step 5: Write the migration with backfill**
+- [x] **Step 5: Write the migration with backfill**
 
 ```bash
 .venv/Scripts/alembic revision -m "account is_component flag"
@@ -230,7 +230,7 @@ def downgrade() -> None:
     op.drop_column("accounts", "is_component")
 ```
 
-- [ ] **Step 6: Apply to the dev DB and verify the backfill**
+- [x] **Step 6: Apply to the dev DB and verify the backfill**
 
 ```bash
 .venv/Scripts/alembic upgrade head
@@ -239,7 +239,7 @@ docker exec finance-dashboard-db-1 psql -U finance -d finance -tAc "SELECT slug 
 ```
 Expected: `alembic check` reports no new upgrade operations; psql prints exactly the five slugs above (sheet order: employer-match, reverse-rollover, traditional, roth-basic, after-tax). Also run the CI round-trip guard locally once: `.venv/Scripts/alembic downgrade a3f86e58ac4d && .venv/Scripts/alembic upgrade head` — then re-run the psql check (the backfill must re-apply).
 
-- [ ] **Step 7: Write the failing importer-preservation test**
+- [x] **Step 7: Write the failing importer-preservation test**
 
 Append to `backend/tests/test_importer_apply.py` (imports at top of file already include most of these; add what's missing):
 
@@ -271,13 +271,13 @@ async def test_reimport_preserves_user_owned_is_component(db):
 
 (Adjust the `SheetReport()` construction/`apply_net_worth` import to the file's existing conventions — the test's assertion is the contract; if `SheetReport` needs a sheet key argument, pass what sibling tests pass.)
 
-- [ ] **Step 8: Run it — expect PASS immediately** (the importer already only diffs `{name, group, sort_order}`). This is a pin, not a change: if it FAILS, the importer regressed — stop and investigate, do not "fix" the test.
+- [x] **Step 8: Run it — expect PASS immediately** (the importer already only diffs `{name, group, sort_order}`). This is a pin, not a change: if it FAILS, the importer regressed — stop and investigate, do not "fix" the test.
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_importer_apply.py -q -W error
 ```
 
-- [ ] **Step 9: Full backend gate + commit**
+- [x] **Step 9: Full backend gate + commit**
 
 ```bash
 .venv/Scripts/ruff format . && .venv/Scripts/ruff check . && .venv/Scripts/python -m pytest -q -W error

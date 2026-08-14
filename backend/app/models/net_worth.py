@@ -18,6 +18,9 @@ class Account(Base):
     group: Mapped[str] = mapped_column(String(20))  # one of ACCOUNT_GROUPS
     sort_order: Mapped[int] = mapped_column(default=0)
     is_active: Mapped[bool] = mapped_column(default=True)
+    # Source-bucket columns the sheet tracks inside an aggregate account (the two Fidelity
+    # 401(k)s). Excluded from every computed rollup; user-owned (the importer never diffs it).
+    is_component: Mapped[bool] = mapped_column(default=False)
 
 
 class NetWorthSnapshot(Base):

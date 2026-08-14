@@ -463,3 +463,38 @@ async def test_apply_espp_warns_on_stale_period_rows(db):
     await apply_espp(db, parse_espp(sheets(espp=rows)["ESPP"]), report2)
     await db.commit()
     assert any("February 2025 Purchase" in w and "no longer derived" in w for w in report2.warnings)
+
+
+async def test_reimport_preserves_user_owned_is_component(db):
+    from app.importer.cells import CellIssues
+    from app.importer.parsers import ParsedAccountColumn, ParsedNetWorth
+    from app.importer.report import SheetReport
+
+    db.add(
+        Account(
+            name="Traditional 401(k)",
+            slug="traditional-401-k",
+            group="pre_tax",
+            sort_order=11,
+            is_component=True,
+        )
+    )
+    await db.commit()
+
+    parsed = ParsedNetWorth(
+        accounts=[
+            ParsedAccountColumn(
+                name="Traditional 401(k)", group="pre_tax", sort_order=11, column=11
+            )
+        ],
+        snapshots=[],
+        issues=CellIssues(),
+    )
+    report = SheetReport()
+    await apply_net_worth(db, parsed, report)
+    await db.commit()
+
+    account = (
+        await db.execute(select(Account).where(Account.slug == "traditional-401-k"))
+    ).scalar_one()
+    assert account.is_component is True  # importer diff-fields are {name, group, sort_order} only

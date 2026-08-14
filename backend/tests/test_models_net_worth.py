@@ -48,3 +48,14 @@ async def test_month_must_be_first_of_month(db):
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
+
+
+async def test_account_is_component_defaults_false(db):
+    account = Account(name="Comp Test", slug="comp-test", group="pre_tax")
+    db.add(account)
+    await db.commit()
+    assert account.is_component is False
+    account.is_component = True
+    await db.commit()
+    await db.refresh(account)
+    assert account.is_component is True
