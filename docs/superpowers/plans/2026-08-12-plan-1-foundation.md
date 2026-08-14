@@ -3251,6 +3251,8 @@ server {
 
     location /api/ {
         client_max_body_size 20m;
+        # NO trailing slash on proxy_pass — it must preserve the full /api/v1/... path.
+        # "Tidying" this to http://backend:8000/ strips /api/ and breaks every call.
         proxy_pass http://backend:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -3392,6 +3394,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # No --max-warnings 0: the react-refresh warning on useAuth is plan-sanctioned (warn).
       - run: npm run lint
       - run: npm run build
 
@@ -3491,8 +3494,16 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
 - Frontend: package-lock is lockfileVersion 2 (npm 8) — CI/Docker `npm ci` reads it fine;
   regenerate to v3 via a `node:20` container when convenient (first npm-10 `install` will
   churn it otherwise). `npm ci --dry-run` on npm 8 DELETES node_modules — not read-only.
-- client.ts has no timeout/AbortSignal (hung backend = infinite spinner) and network failures
-  throw raw TypeError, not ApiError — catch blocks must tolerate both (Plan 2/3 candidates).
+- client.ts has no timeout/AbortSignal — sharpened: a token-bearing user against a hung
+  backend gets a permanently BLANK page (ProtectedRoute renders null while loading), not a
+  spinner. Network failures throw raw TypeError, not ApiError. Plan 2/3 candidates.
+- **Frontend has zero automated tests** — mutation-proven: deleting AuthContext's load-bearing
+  loop guard passes lint+build+CI green. Plan 2 candidate: vitest + a loop-guard regression
+  test + a 422-array parsing test. Until then the guard's only defense is its comment.
+- LoginPage doesn't gate on isLoading: an authenticated deep-link to /login flashes the form
+  before redirecting (cosmetic, accepted). AuthContext.login stores the token BEFORE fetchMe —
+  a non-401 fetchMe failure reports "login failed" while a valid token sits stored
+  (self-heals on reload; accepted, narrow window).
 
 ## Definition of done (Plan 1)
 
