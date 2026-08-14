@@ -213,6 +213,11 @@ def parse_positions(ws) -> ParsedPositions:
             issues.error(f"{cell_ref('Positions', rnum, 2)}: unknown type {type_text!r}")
             continue
         fees = to_decimal(row[5], Q2, 8, ctx=cell_ref("Positions", rnum, 6), issues=issues)
+        if fees is None and row[5] is not None:
+            issues.warn(
+                f"{cell_ref('Positions', rnum, 6)}: fees value {row[5]!r} unreadable — "
+                "transaction imported without fees"
+            )
         split_factor = to_decimal(row[6], Q4, 6, ctx=cell_ref("Positions", rnum, 7), issues=issues)
         if txn_type == "split":
             if split_factor is None:
@@ -229,6 +234,11 @@ def parse_positions(ws) -> ParsedPositions:
                     f"{cell_ref('Positions', rnum, 4)}: buy/sell row needs shares and price"
                 )
                 continue
+            if shares < 0 or price < 0:
+                issues.warn(
+                    f"{cell_ref('Positions', rnum, 4)}: negative shares/price on "
+                    f"{txn_type} row (sheet convention is positive values + type)"
+                )
             if shares == 0:
                 zero_share_rows += 1
                 continue

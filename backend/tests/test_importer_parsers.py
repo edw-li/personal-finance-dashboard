@@ -122,3 +122,16 @@ def test_parse_positions_split_and_bad_type():
         "0"
     )  # dummy per Plan 1 convention
     assert len(parsed.issues.errors) == 2  # split without factor; unknown type 'Gift'
+
+
+def test_parse_positions_warns_on_negative_and_unreadable_fees():
+    from app.importer.parsers import parse_positions
+
+    rows = default_positions_rows()[:2]
+    rows.append(["RH Taxable", "Buy", "Acme ETF", -5.0, 10.0, None, None, 0, 0, 0, 0, 0])
+    rows.append(["RH Taxable", "Buy", "Acme ETF", 1.0, 10.0, "#REF!", None, 0, 0, 0, 0, 0])
+    parsed = parse_positions(_sheet("Positions", positions=rows))
+    assert parsed.issues.errors == []
+    assert len(parsed.transactions) == 3  # both flagged rows still import
+    assert any("negative shares/price" in w for w in parsed.issues.warnings)
+    assert any("without fees" in w for w in parsed.issues.warnings)
