@@ -1522,7 +1522,7 @@ cd .. && git add backend/app/api/net_worth.py backend/tests/test_net_worth_api.p
 - Modify: `backend/app/main.py`
 - Create: `backend/tests/test_spending_api.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_spending_api.py` (start of file — Tasks 7/8 append):
 
@@ -1606,13 +1606,13 @@ async def test_category_input_guards(auth_client):
     assert resp.status_code == 422
 ```
 
-- [ ] **Step 2: Run — expect FAIL (404).**
+- [x] **Step 2: Run — expect FAIL (404).**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_spending_api.py -q -W error
 ```
 
-- [ ] **Step 3: Implement schemas**
+- [x] **Step 3: Implement schemas**
 
 `backend/app/schemas/spending.py`:
 
@@ -1702,7 +1702,7 @@ class YearlyOut(BaseModel):
     years: list[YearRollup]
 ```
 
-- [ ] **Step 4: Implement the router (CRUD half)**
+- [x] **Step 4: Implement the router (CRUD half)**
 
 `backend/app/api/spending.py`:
 
@@ -1822,9 +1822,9 @@ async def delete_category(
     return Response(status_code=204)
 ```
 
-- [ ] **Step 5: Register in `main.py`** (`from app.api import auth, import_, net_worth, spending`; `app.include_router(spending.router, prefix="/api/v1")`).
+- [x] **Step 5: Register in `main.py`** (`from app.api import auth, import_, net_worth, spending`; `app.include_router(spending.router, prefix="/api/v1")`).
 
-- [ ] **Step 6: Run — expect PASS; full gate; commit**
+- [x] **Step 6: Run — expect PASS; full gate; commit**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_spending_api.py -q -W error
