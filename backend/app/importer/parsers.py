@@ -8,7 +8,9 @@ from decimal import Decimal
 from app.importer.cells import (
     Q2,
     Q4,
+    Q5,
     Q6,
+    Q9,
     CellIssues,
     cell_ref,
     first_of_month,
@@ -672,3 +674,310 @@ def parse_taxes(ws) -> ParsedTaxes:
                     f"is missing its {missing} value"
                 )
     return ParsedTaxes(inputs=inputs, brackets=brackets, issues=issues)
+
+
+@dataclasses.dataclass
+class ParsedEsppLot:
+    purchase_date: datetime.date
+    qualifying_date: datetime.date
+    shares: Decimal
+    subscription_price: Decimal
+    purchase_fmv: Decimal
+    purchase_price: Decimal
+    sold_date: datetime.date | None = None
+    sold_price: Decimal | None = None
+
+
+@dataclasses.dataclass
+class ParsedEsppPeriod:
+    label: str
+    period_start: datetime.date
+    period_end: datetime.date
+    semi_annual_base: Decimal
+    additional_payments: Decimal
+    contribution_pct: Decimal
+
+
+@dataclasses.dataclass
+class ParsedEspp:
+    lots: list[ParsedEsppLot]
+    periods: list[ParsedEsppPeriod]
+    issues: CellIssues
+
+
+ESPP_MODELER_LABELS = {
+    "Semi-Annual Base Salary": "base",
+    "Additional payments (i.e. bonuses)": "additional",
+    "ESPP Contribution Percentage": "pct",
+}
+
+
+def parse_espp(ws) -> ParsedEspp:
+    issues = CellIssues()
+    rows = list(ws.iter_rows(min_row=1, max_row=80, max_col=14, values_only=True))
+
+    lots: list[ParsedEsppLot] = []
+    template_dates: list[datetime.date] = []
+    seen_purchases: set[datetime.date] = set()
+    for index, row in enumerate(rows[2:], start=3):  # lots table data starts sheet r3
+        purchase_raw = row[8] if len(row) > 8 else None
+        if purchase_raw is None:
+            continue  # modeler-only row (columns B-E) or gap
+        purchase = to_date_strict(purchase_raw, ctx=cell_ref("ESPP", index, 9), issues=issues)
+        if purchase is None:
+            continue
+        shares_raw = row[10] if len(row) > 10 else None
+        if shares_raw is None:
+            template_dates.append(purchase)  # future purchase-date template row
+            continue
+        if purchase in seen_purchases:
+            issues.error(f"{cell_ref('ESPP', index, 9)}: duplicate lot {purchase.isoformat()}")
+            continue
+        qualifying = to_date_strict(row[9], ctx=cell_ref("ESPP", index, 10), issues=issues)
+        shares = to_decimal(shares_raw, Q4, 8, ctx=cell_ref("ESPP", index, 11), issues=issues)
+        subscription = to_decimal(row[11], Q5, 9, ctx=cell_ref("ESPP", index, 12), issues=issues)
+        fmv = to_decimal(row[12], Q5, 9, ctx=cell_ref("ESPP", index, 13), issues=issues)
+        price = to_decimal(row[13], Q5, 9, ctx=cell_ref("ESPP", index, 14), issues=issues)
+        if None in (qualifying, shares, subscription, fmv, price):
+            issues.error(
+                f"{cell_ref('ESPP', index, 9)}: lot {purchase.isoformat()} is missing "
+                "qualifying date, shares or one of its prices"
+            )
+            continue
+        seen_purchases.add(purchase)
+        lots.append(
+            ParsedEsppLot(
+                purchase_date=purchase,
+                qualifying_date=qualifying,
+                shares=shares,
+                subscription_price=subscription,
+                purchase_fmv=fmv,
+                purchase_price=price,
+            )
+        )
+
+    modeler: dict[str, tuple[Decimal | None, Decimal | None]] = {}
+    calculator_present = False
+    for index, row in enumerate(rows, start=1):
+        label = _text(row[1] if len(row) > 1 else None)
+        if label is None:
+            continue
+        if label == "ESPP Taxation Calculator":
+            calculator_present = True
+        field = ESPP_MODELER_LABELS.get(label)
+        if field is not None:
+            quantum, digits = (Q9, 1) if field == "pct" else (Q2, 10)
+            feb = to_decimal(row[2], quantum, digits, ctx=cell_ref("ESPP", index, 3), issues=issues)
+            aug = to_decimal(row[3], quantum, digits, ctx=cell_ref("ESPP", index, 4), issues=issues)
+            modeler[field] = (feb, aug)
+
+    periods: list[ParsedEsppPeriod] = []
+    next_feb = min((d for d in template_dates if d.month == 2), default=None)
+    next_aug = min((d for d in template_dates if d.month == 8), default=None)
+    have_values = all(field in modeler for field in ("base", "pct"))
+    if next_feb and next_aug and have_values:
+        additional = modeler.get("additional", (None, None))
+        for column, (label, start, end) in enumerate(
+            [
+                (
+                    f"February {next_feb.year} Purchase",
+                    datetime.date(next_feb.year - 1, 9, 1),
+                    next_feb,
+                ),
+                (f"August {next_aug.year} Purchase", datetime.date(next_aug.year, 3, 1), next_aug),
+            ]
+        ):
+            base = modeler["base"][column]
+            pct = modeler["pct"][column]
+            if base is None or pct is None:
+                issues.warn(f"ESPP: modeler column for {label!r} incomplete — period skipped")
+                continue
+            periods.append(
+                ParsedEsppPeriod(
+                    label=label,
+                    period_start=start,
+                    period_end=end,
+                    semi_annual_base=base,
+                    additional_payments=additional[column] or Decimal("0.00"),
+                    contribution_pct=pct,
+                )
+            )
+        if periods:
+            issues.warn(
+                "ESPP: period labels and start/end dates derived from the purchase-date "
+                "template (the sheet stores none) — edit in the UI once Plan 5 lands"
+            )
+    else:
+        issues.warn(
+            "ESPP: modeler values or future purchase-date template rows missing — "
+            "espp_periods not imported"
+        )
+    if calculator_present:
+        issues.warn(
+            "ESPP: 'ESPP Taxation Calculator' block ignored — it is a hypothetical what-if "
+            "(Positions still holds all lot shares; every Taxes ESPP Sale Component is 0), "
+            "so no sold_date/sold_price are imported"
+        )
+    return ParsedEspp(lots=lots, periods=periods, issues=issues)
+
+
+@dataclasses.dataclass
+class ParsedPaycheckProfile:
+    annual_salary: Decimal
+    trad_401k_pct: Decimal
+    roth_401k_pct: Decimal
+    after_tax_401k_pct: Decimal
+    espp_pct: Decimal
+    withholding_pct: Decimal
+    dental_vision_per_check: Decimal
+    hsa_per_check: Decimal
+
+
+@dataclasses.dataclass
+class ParsedPaycheck:
+    profile: ParsedPaycheckProfile | None
+    issues: CellIssues
+
+
+PAYCHECK_AMOUNT_LABELS = {"Annual Salary", "Gross Paycheck", "Dental & Vision", "HSA"}
+PAYCHECK_PCT_LABELS = {
+    "Traditional 401(k) %": "trad_401k_pct",
+    "Roth 401(k) %": "roth_401k_pct",
+    "AT 401(k) %": "after_tax_401k_pct",
+    "Tax Withholding %": "withholding_pct",
+    "ESPP %": "espp_pct",
+}
+SEMI_MONTHLY_PERIODS = 24
+
+
+def parse_paycheck(ws) -> ParsedPaycheck:
+    issues = CellIssues()
+    amounts: dict[str, Decimal] = {}
+    percentages: dict[str, Decimal] = {}
+    for rnum, row in _iter_rows(ws, min_row=2, max_col=6, max_row=40):
+        left_label = _text(row[1])
+        if left_label in PAYCHECK_AMOUNT_LABELS:
+            digits = 10 if left_label in ("Annual Salary", "Gross Paycheck") else 6
+            value = to_decimal(
+                row[2], Q2, digits, ctx=cell_ref("Paycheck Modeler", rnum, 3), issues=issues
+            )
+            if value is not None:
+                amounts[left_label] = value
+        right_label = _text(row[4])
+        if right_label in PAYCHECK_PCT_LABELS:
+            value = to_decimal(
+                row[5], Q9, 1, ctx=cell_ref("Paycheck Modeler", rnum, 6), issues=issues
+            )
+            if value is not None:
+                percentages[PAYCHECK_PCT_LABELS[right_label]] = value
+
+    salary = amounts.get("Annual Salary")
+    if salary is None:
+        issues.warn("Paycheck Modeler: 'Annual Salary' not found — profile not imported")
+        return ParsedPaycheck(profile=None, issues=issues)
+    gross = amounts.get("Gross Paycheck")
+    if gross is not None and abs(salary / SEMI_MONTHLY_PERIODS - gross) >= Decimal("0.01"):
+        issues.warn(
+            f"Paycheck Modeler: Gross Paycheck {gross} != Annual Salary / 24 "
+            f"({salary / SEMI_MONTHLY_PERIODS:.2f}) — check pay_periods_per_year after import"
+        )
+    missing = [k for k in PAYCHECK_PCT_LABELS.values() if k not in percentages]
+    for key in missing:
+        issues.warn(f"Paycheck Modeler: {key} not found — defaulting to 0")
+    zero_pct = Decimal("0.000000000")
+    return ParsedPaycheck(
+        profile=ParsedPaycheckProfile(
+            annual_salary=salary,
+            trad_401k_pct=percentages.get("trad_401k_pct", zero_pct),
+            roth_401k_pct=percentages.get("roth_401k_pct", zero_pct),
+            after_tax_401k_pct=percentages.get("after_tax_401k_pct", zero_pct),
+            espp_pct=percentages.get("espp_pct", zero_pct),
+            withholding_pct=percentages.get("withholding_pct", zero_pct),
+            dental_vision_per_check=amounts.get("Dental & Vision", Decimal("0.00")),
+            hsa_per_check=amounts.get("HSA", Decimal("0.00")),
+        ),
+        issues=issues,
+    )
+
+
+@dataclasses.dataclass
+class ParsedCompEvent:
+    focal_year: int
+    current_base: Decimal
+    new_base: Decimal | None
+    unvested_rsus: Decimal | None
+    unvested_price: Decimal | None
+    refresh_rsus: Decimal | None
+    grant_price: Decimal | None
+
+
+@dataclasses.dataclass
+class ParsedFocalHistory:
+    events: list[ParsedCompEvent]
+    issues: CellIssues
+
+
+def parse_focal_history(ws) -> ParsedFocalHistory:
+    issues = CellIssues()
+    events: list[ParsedCompEvent] = []
+    seen_years: set[int] = set()
+    for rnum, row in _iter_rows(ws, min_row=3, max_col=11, max_row=200):
+        year_raw = row[1]
+        if year_raw is None:
+            break
+        if isinstance(year_raw, bool) or not isinstance(year_raw, int | float):
+            issues.error(f"{cell_ref('Focal History', rnum, 2)}: expected a year")
+            continue
+        year = int(year_raw)
+        current_base = to_decimal(
+            row[2], Q2, 10, ctx=cell_ref("Focal History", rnum, 3), issues=issues
+        )
+        if current_base is None:
+            continue  # year-only template row
+        if year in seen_years:
+            issues.error(f"{cell_ref('Focal History', rnum, 2)}: duplicate focal year {year}")
+            continue
+        seen_years.add(year)
+        ref = cell_ref("Focal History", rnum, 2)
+        events.append(
+            ParsedCompEvent(
+                focal_year=year,
+                current_base=current_base,
+                new_base=to_decimal(row[3], Q2, 10, ctx=ref, issues=issues),
+                unvested_rsus=to_decimal(row[6], Q4, 8, ctx=ref, issues=issues),
+                unvested_price=to_decimal(row[7], Q4, 10, ctx=ref, issues=issues),
+                refresh_rsus=to_decimal(row[9], Q4, 8, ctx=ref, issues=issues),
+                grant_price=to_decimal(row[10], Q4, 10, ctx=ref, issues=issues),
+            )
+        )
+    return ParsedFocalHistory(events=events, issues=issues)
+
+
+@dataclasses.dataclass
+class ParsedPortfolio:
+    issues: CellIssues
+
+
+def parse_portfolio(ws) -> ParsedPortfolio:
+    """Warn-only: the sheet's Dividends Collected are all 0 today; nonzero values cannot be
+    imported faithfully (no payment dates for dividend_payments.pay_date) — sanctioned
+    deviation from spec section 5, recorded in the plan's forward notes."""
+    issues = CellIssues()
+    blanks = 0
+    for rnum, row in _iter_rows(ws, min_row=2, max_col=16, max_row=200):
+        if all(v is None for v in row):
+            blanks += 1
+            if blanks >= BLANK_STREAK_STOP:
+                break
+            continue
+        blanks = 0
+        ticker = _text(row[1])
+        if ticker is None:
+            continue  # totals row
+        dividends = to_decimal(row[15], Q2, 10, ctx=cell_ref("Portfolio", rnum, 16), issues=issues)
+        if dividends and dividends > 0:
+            issues.warn(
+                f"Portfolio: {ticker} has Dividends Collected {dividends} — NOT imported "
+                "(sheet has no payment dates); enter via the UI in Plan 4"
+            )
+    return ParsedPortfolio(issues=issues)

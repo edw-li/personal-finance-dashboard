@@ -7,7 +7,9 @@ from app.importer.parsers import SHEET_TAX_INPUT_SEQUENCE
 from app.tax_keys import TAX_INPUT_DEFINITIONS
 from tests.workbook_builder import (
     build_workbook,
+    default_espp_rows,
     default_net_worth_rows,
+    default_paycheck_rows,
     default_positions_rows,
     default_spending_rows,
     default_taxes_rows,
@@ -325,3 +327,105 @@ def test_parse_taxes_negative_rate_warns_and_no_year_columns_errors():
     parsed = parse_taxes(_sheet("Taxes", taxes=rows))
     assert any("no year columns" in e for e in parsed.issues.errors)
     assert parsed.inputs == [] and parsed.brackets == []
+
+
+def test_parse_espp_lots_periods_and_ignored_calculator():
+    from app.importer.parsers import parse_espp
+
+    parsed = parse_espp(_sheet("ESPP"))
+    assert parsed.issues.errors == []
+    assert [(lot.purchase_date, lot.shares) for lot in parsed.lots] == [
+        (datetime.date(2024, 2, 29), Decimal("100.0000")),
+        (datetime.date(2024, 8, 30), Decimal("90.0000")),
+    ]
+    lot = parsed.lots[0]
+    assert lot.qualifying_date == datetime.date(2025, 9, 1)
+    assert lot.subscription_price == Decimal("40.00000")
+    assert lot.purchase_fmv == Decimal("50.00000")
+    assert lot.purchase_price == Decimal("34.00000")
+    assert lot.sold_date is None and lot.sold_price is None
+    feb, aug = parsed.periods
+    assert feb.label == "February 2025 Purchase"
+    assert feb.period_start == datetime.date(2024, 9, 1)
+    assert feb.period_end == datetime.date(2025, 2, 27)
+    assert feb.semi_annual_base == Decimal("50000.00")
+    assert feb.additional_payments == Decimal("0.00")
+    assert feb.contribution_pct == Decimal("0.100000000")
+    assert aug.label == "August 2025 Purchase"
+    assert aug.period_start == datetime.date(2025, 3, 1)
+    assert aug.period_end == datetime.date(2025, 8, 29)
+    assert aug.additional_payments == Decimal("100.00")
+    assert any("derived" in w.lower() for w in parsed.issues.warnings)
+    assert any("taxation calculator" in w.lower() for w in parsed.issues.warnings)
+
+
+def test_parse_espp_missing_template_dates_skips_periods():
+    from app.importer.parsers import parse_espp
+
+    rows = default_espp_rows()
+    for row in rows:
+        if len(row) > 8 and isinstance(row[8], datetime.datetime) and row[8].year >= 2025:
+            row[8] = None  # remove the future template dates
+    parsed = parse_espp(_sheet("ESPP", espp=rows))
+    assert parsed.periods == []
+    assert any("period" in w.lower() for w in parsed.issues.warnings)
+    assert len(parsed.lots) == 2  # lots unaffected
+
+
+def test_parse_paycheck_fields_and_quantization():
+    from app.importer.parsers import parse_paycheck
+
+    parsed = parse_paycheck(_sheet("Paycheck Modeler"))
+    assert parsed.issues.errors == []
+    profile = parsed.profile
+    assert profile is not None
+    assert profile.annual_salary == Decimal("120000.00")
+    assert profile.trad_401k_pct == Decimal("0.100000000")
+    assert profile.roth_401k_pct == Decimal("0.000000000")
+    assert profile.after_tax_401k_pct == Decimal("0.020000000")
+    assert profile.withholding_pct == Decimal("0.250000000")  # 15dp cell -> 9dp HALF_UP
+    assert profile.espp_pct == Decimal("0.050000000")
+    assert profile.dental_vision_per_check == Decimal("10.00")
+    assert profile.hsa_per_check == Decimal("50.00")
+    assert not any("Gross Paycheck" in w for w in parsed.issues.warnings)  # 120000/24 == 5000
+
+
+def test_parse_paycheck_gross_mismatch_warns_and_missing_salary_skips():
+    from app.importer.parsers import parse_paycheck
+
+    rows = default_paycheck_rows()
+    rows[3][2] = 4321.0  # Gross Paycheck != salary/24
+    parsed = parse_paycheck(_sheet("Paycheck Modeler", paycheck=rows))
+    assert any("Gross Paycheck" in w for w in parsed.issues.warnings)
+
+    rows = default_paycheck_rows()
+    rows[2][1] = "Yearly Salary"  # label drift: Annual Salary not found
+    parsed = parse_paycheck(_sheet("Paycheck Modeler", paycheck=rows))
+    assert parsed.profile is None
+    assert any("Annual Salary" in w for w in parsed.issues.warnings)
+
+
+def test_parse_focal_full_partial_and_template_rows():
+    from app.importer.parsers import parse_focal_history
+
+    parsed = parse_focal_history(_sheet("Focal History"))
+    assert parsed.issues.errors == []
+    assert [(e.focal_year, e.current_base, e.new_base) for e in parsed.events] == [
+        (2024, Decimal("110000.00"), Decimal("120000.00")),
+        (2025, Decimal("120000.00"), None),  # partial row imported as-is
+    ]
+    full = parsed.events[0]
+    assert full.unvested_rsus == Decimal("500.0000")
+    assert full.unvested_price == Decimal("89.6600")
+    assert full.refresh_rsus == Decimal("100.0000")
+    assert full.grant_price == Decimal("90.0000")
+
+
+def test_parse_portfolio_warns_on_nonzero_dividends_only():
+    from app.importer.parsers import parse_portfolio
+
+    parsed = parse_portfolio(_sheet("Portfolio"))
+    assert parsed.issues.errors == []
+    dividend_warnings = [w for w in parsed.issues.warnings if "dividend" in w.lower()]
+    assert len(dividend_warnings) == 1
+    assert "DIVC" in dividend_warnings[0] and "12.5" in dividend_warnings[0]
