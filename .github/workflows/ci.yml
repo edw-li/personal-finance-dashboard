@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, edwli/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.14-alpine
+        env:
+          POSTGRES_USER: finance
+          POSTGRES_PASSWORD: finance
+          # finance (not finance_test): DATABASE_URL points at finance, and the conftest
+          # bootstrap creates finance_test from it — same flow as dev.
+          POSTGRES_DB: finance
+        ports:
+          - "5433:5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - run: ruff check backend
+      - run: ruff format --check backend
+      - run: pytest -v
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://finance:finance@localhost:5433/finance
+      # Migration smoke + drift guard: upgrade an empty DB to head, then verify the
+      # migrations and Base.metadata agree (catches "changed a model, forgot a migration").
+      - run: alembic upgrade head && alembic check
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://finance:finance@localhost:5433/finance
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # No --max-warnings 0: the react-refresh warning on useAuth is plan-sanctioned (warn).
+      - run: npm run lint
+      - run: npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build frontend image
+        run: docker build -t finance-frontend .
+      - name: Build backend image
+        run: docker build -t finance-backend ./backend
