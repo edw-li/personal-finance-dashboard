@@ -769,11 +769,22 @@ def parse_espp(ws) -> ParsedEspp:
             quantum, digits = (Q9, 1) if field == "pct" else (Q2, 10)
             feb = to_decimal(row[2], quantum, digits, ctx=cell_ref("ESPP", index, 3), issues=issues)
             aug = to_decimal(row[3], quantum, digits, ctx=cell_ref("ESPP", index, 4), issues=issues)
+            if field == "pct":
+                for pct_column, pct in ((3, feb), (4, aug)):
+                    if pct is not None and pct > 1:
+                        issues.warn(
+                            f"{cell_ref('ESPP', index, pct_column)}: contribution pct "
+                            f"{pct} looks like a percentage, not a fraction"
+                        )
             modeler[field] = (feb, aug)
 
     periods: list[ParsedEsppPeriod] = []
-    next_feb = min((d for d in template_dates if d.month == 2), default=None)
-    next_aug = min((d for d in template_dates if d.month == 8), default=None)
+    next_feb = min(
+        (d for d in template_dates if d.month == 2 and d not in seen_purchases), default=None
+    )
+    next_aug = min(
+        (d for d in template_dates if d.month == 8 and d not in seen_purchases), default=None
+    )
     have_values = all(field in modeler for field in ("base", "pct"))
     if next_feb and next_aug and have_values:
         additional = modeler.get("additional", (None, None))
@@ -868,6 +879,11 @@ def parse_paycheck(ws) -> ParsedPaycheck:
             value = to_decimal(
                 row[5], Q9, 1, ctx=cell_ref("Paycheck Modeler", rnum, 6), issues=issues
             )
+            if value is not None and value > 1:
+                issues.warn(
+                    f"{cell_ref('Paycheck Modeler', rnum, 6)}: {right_label} value "
+                    f"{value} looks like a percentage, not a fraction"
+                )
             if value is not None:
                 percentages[PAYCHECK_PCT_LABELS[right_label]] = value
 
@@ -975,7 +991,7 @@ def parse_portfolio(ws) -> ParsedPortfolio:
         if ticker is None:
             continue  # totals row
         dividends = to_decimal(row[15], Q2, 10, ctx=cell_ref("Portfolio", rnum, 16), issues=issues)
-        if dividends and dividends > 0:
+        if dividends:
             issues.warn(
                 f"Portfolio: {ticker} has Dividends Collected {dividends} — NOT imported "
                 "(sheet has no payment dates); enter via the UI in Plan 4"
