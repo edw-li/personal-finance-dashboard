@@ -10,6 +10,7 @@ from tests.workbook_builder import (
     default_net_worth_rows,
     default_positions_rows,
     default_spending_rows,
+    default_taxes_rows,
     load_readonly,
 )
 
@@ -228,3 +229,53 @@ def test_parse_net_worth_warns_when_terminal_band_missing():
     rows[0][8] = None  # remove the 'NET WORTH' band header
     parsed = parse_net_worth(_sheet("Net Worth", net_worth=rows))
     assert any("terminal band not found" in w for w in parsed.issues.warnings)
+
+
+def test_parse_taxes_inputs_brackets_and_active_years():
+    from app.importer.parsers import parse_taxes
+
+    parsed = parse_taxes(_sheet("Taxes"))
+    assert parsed.issues.errors == []
+    years = {i.year for i in parsed.inputs}
+    assert years == {2023, 2024}  # the empty 2025 column is skipped silently
+    by_key = {(i.year, i.key): i.value for i in parsed.inputs}
+    assert by_key[(2023, "annual_salary")] == Decimal("100.0000")
+    assert by_key[(2023, "unq_div_state_exempt_pct")] == Decimal("0.9645")  # 4dp survives
+    assert by_key[(2024, "unq_div_state_exempt_pct")] == Decimal("0.9753")
+    # State special rows land as inputs; the federal Standard/Itemized row is derived -> absent
+    assert by_key[(2023, "state_standard_deduction")] == Decimal("5363.0000")
+    assert by_key[(2023, "state_exemption_credits")] == Decimal("144.0000")
+    assert len({i.key for i in parsed.inputs}) == 43
+    brackets = [(b.year, b.jurisdiction, b.bracket_index) for b in parsed.brackets]
+    assert (2023, "federal", 1) in brackets and (2023, "federal", 2) in brackets
+    assert (2024, "capital_gains", 1) in brackets
+    federal_1 = next(
+        b
+        for b in parsed.brackets
+        if (b.year, b.jurisdiction, b.bracket_index) == (2023, "federal", 1)
+    )
+    assert federal_1.rate == Decimal("0.1000")
+    assert federal_1.threshold == Decimal("0.00")
+    per_year = sum(1 for b in parsed.brackets if b.year == 2023)
+    assert per_year == 7  # fixture: fed 2 + state 1 + medicare 1 + ss 1 + sdi 1 + cg 1
+
+
+def test_parse_taxes_label_drift_is_fatal_error():
+    from app.importer.parsers import parse_taxes
+
+    rows = default_taxes_rows()
+    rows[3][1] = "Pay Cadence"  # was 'Pay Periods'
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    assert any("Pay Periods" in e and "Pay Cadence" in e for e in parsed.issues.errors)
+    assert parsed.inputs == [] and parsed.brackets == []  # aborted: layout no longer trusted
+
+
+def test_parse_taxes_warns_on_rate_above_one():
+    from app.importer.parsers import parse_taxes
+
+    rows = default_taxes_rows()
+    for row in rows:
+        if row[0] == "MEDICARE TAX INFO":
+            row[2] = 1.45  # a percent entered as 1.45 instead of 0.0145
+    parsed = parse_taxes(_sheet("Taxes", taxes=rows))
+    assert any("looks like a percentage" in w for w in parsed.issues.warnings)

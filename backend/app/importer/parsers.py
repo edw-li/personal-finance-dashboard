@@ -2,6 +2,7 @@
 
 import dataclasses
 import datetime
+import re
 from decimal import Decimal
 
 from app.importer.cells import (
@@ -485,3 +486,164 @@ def parse_spending(ws) -> ParsedSpending:
             )
         months.append(ParsedSpendingMonth(month=month, amounts=amounts, net_pay=net_pay))
     return ParsedSpending(categories=categories, months=months, issues=issues)
+
+
+BRACKET_SECTIONS = {
+    "FEDERAL INCOME TAX INFO": "federal",
+    "STATE INCOME TAX INFO": "state",
+    "MEDICARE TAX INFO": "medicare",
+    "SOCIAL SECURITY TAX INFO": "social_security",
+    "DISABILITY TAX INFO": "disability",
+    "CAPITAL GAINS TAX INFO": "capital_gains",
+}
+STATE_SPECIAL_INPUTS = {
+    "Standard/Itemized Deductions": "state_standard_deduction",
+    "Exemption Credits": "state_exemption_credits",
+}
+FEDERAL_DERIVED_ROW = "Standard/Itemized Deductions"  # computed max(std, itemized) — skipped
+BRACKET_ROW_RE = re.compile(r"^Bracket (\d+) (Rate|Threshold)$")
+
+
+@dataclasses.dataclass
+class ParsedTaxInput:
+    year: int
+    key: str
+    value: Decimal
+
+
+@dataclasses.dataclass
+class ParsedBracket:
+    year: int
+    jurisdiction: str
+    bracket_index: int
+    rate: Decimal
+    threshold: Decimal
+
+
+@dataclasses.dataclass
+class ParsedTaxes:
+    inputs: list[ParsedTaxInput]
+    brackets: list[ParsedBracket]
+    issues: CellIssues
+
+
+def parse_taxes(ws) -> ParsedTaxes:
+    issues = CellIssues()
+    rows = list(ws.iter_rows(min_row=1, max_row=300, max_col=20, values_only=True))
+
+    year_columns: list[tuple[int, int]] = []  # (0-based index, year)
+    for index, cell in enumerate(rows[0]):
+        if index >= 2 and isinstance(cell, int | float) and not isinstance(cell, bool):
+            year_columns.append((index, int(cell)))
+
+    def collect(row_values, rnum: int, quantum, max_int_digits: int) -> dict[int, Decimal]:
+        values: dict[int, Decimal] = {}
+        for col_index, year in year_columns:
+            cell = row_values[col_index] if col_index < len(row_values) else None
+            value = to_decimal(
+                cell,
+                quantum,
+                max_int_digits,
+                ctx=cell_ref("Taxes", rnum, col_index + 1),
+                issues=issues,
+            )
+            if value is not None:
+                values[year] = value
+        return values
+
+    inputs: list[ParsedTaxInput] = []
+    cursor = 1  # 0-based index into rows; row 2 of the sheet
+    for section_header, sequence in SHEET_TAX_INPUT_SEQUENCE:
+        for position, (label, key) in enumerate(sequence):
+            if cursor >= len(rows):
+                issues.error(f"Taxes: sheet ended before label {label!r}")
+                return ParsedTaxes(inputs=[], brackets=[], issues=issues)
+            row = rows[cursor]
+            found_label = _text(row[1])
+            if position == 0 and _text(row[0]) != section_header:
+                issues.error(
+                    f"{cell_ref('Taxes', cursor + 1, 1)}: expected section "
+                    f"{section_header!r}, found {_text(row[0])!r} — sheet layout changed; "
+                    "aborting Taxes parse"
+                )
+                return ParsedTaxes(inputs=[], brackets=[], issues=issues)
+            if found_label != label:
+                issues.error(
+                    f"{cell_ref('Taxes', cursor + 1, 2)}: expected label {label!r}, "
+                    f"found {found_label!r} — sheet layout changed; aborting Taxes parse"
+                )
+                return ParsedTaxes(inputs=[], brackets=[], issues=issues)
+            for year, value in collect(row, cursor + 1, Q4, 10).items():
+                inputs.append(ParsedTaxInput(year=year, key=key, value=value))
+            cursor += 1
+
+    brackets: list[ParsedBracket] = []
+    pending: dict[tuple[str, int], dict[str, tuple[dict[int, Decimal], int]]] = {}
+    jurisdiction: str | None = None
+    while cursor < len(rows):
+        row = rows[cursor]
+        header = _text(row[0])
+        label = _text(row[1])
+        if header is not None:
+            if header not in BRACKET_SECTIONS:
+                break  # computed output sections begin (FEDERAL INCOME TAX, ...)
+            jurisdiction = BRACKET_SECTIONS[header]
+        if jurisdiction is None or label is None:
+            cursor += 1
+            continue
+        if jurisdiction == "federal" and label == FEDERAL_DERIVED_ROW:
+            cursor += 1
+            continue
+        if jurisdiction == "state" and label in STATE_SPECIAL_INPUTS:
+            for year, value in collect(row, cursor + 1, Q4, 10).items():
+                inputs.append(
+                    ParsedTaxInput(year=year, key=STATE_SPECIAL_INPUTS[label], value=value)
+                )
+            cursor += 1
+            continue
+        match = BRACKET_ROW_RE.match(label)
+        if match is None:
+            issues.error(
+                f"{cell_ref('Taxes', cursor + 1, 2)}: unexpected row {label!r} in "
+                f"{jurisdiction} bracket section"
+            )
+            cursor += 1
+            continue
+        bracket_index = int(match.group(1))
+        kind = match.group(2)
+        if kind == "Rate":
+            values = collect(row, cursor + 1, Q4, 3)
+            for rate in values.values():
+                if rate > 1:
+                    issues.warn(
+                        f"{cell_ref('Taxes', cursor + 1, 1)}: {jurisdiction} bracket "
+                        f"{bracket_index} rate {rate} looks like a percentage, not a fraction"
+                    )
+        else:
+            values = collect(row, cursor + 1, Q2, 10)
+        slot = pending.setdefault((jurisdiction, bracket_index), {})
+        slot[kind] = (values, cursor + 1)
+        cursor += 1
+
+    for (jur, index), parts in pending.items():
+        rates, rate_row = parts.get("Rate", ({}, 0))
+        thresholds, threshold_row = parts.get("Threshold", ({}, 0))
+        for year in sorted(set(rates) | set(thresholds)):
+            if year in rates and year in thresholds:
+                brackets.append(
+                    ParsedBracket(
+                        year=year,
+                        jurisdiction=jur,
+                        bracket_index=index,
+                        rate=rates[year],
+                        threshold=thresholds[year],
+                    )
+                )
+            else:
+                missing = "Threshold" if year in rates else "Rate"
+                present_row = rate_row if year in rates else threshold_row
+                issues.error(
+                    f"Taxes!r{present_row}: {jur} bracket {index} year {year} "
+                    f"is missing its {missing} value"
+                )
+    return ParsedTaxes(inputs=inputs, brackets=brackets, issues=issues)
