@@ -38,9 +38,9 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://finance:finance@localhost:5433/finance
-      # Migration smoke + drift guard: upgrade an empty DB to head, then verify the
-      # migrations and Base.metadata agree (catches "changed a model, forgot a migration").
-      - run: alembic upgrade head && alembic check
+      # Migration smoke + drift guard + downgrade round-trip: a broken downgrade()
+      # otherwise merges green because the test suite builds schema via create_all.
+      - run: alembic upgrade head && alembic check && alembic downgrade base && alembic upgrade head
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://finance:finance@localhost:5433/finance

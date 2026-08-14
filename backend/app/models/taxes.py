@@ -44,4 +44,6 @@ class TaxInput(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     year: Mapped[int] = mapped_column(ForeignKey("tax_years.year", ondelete="CASCADE"))
     key: Mapped[str] = mapped_column(ForeignKey("tax_input_definitions.key", ondelete="CASCADE"))
-    value: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    # (14,4), not (14,2): the sheet stores fractional inputs (e.g. state-exempt dividend
+    # percentage 0.9645) alongside dollar amounts; 4 dp preserves both.
+    value: Mapped[Decimal] = mapped_column(Numeric(14, 4))
