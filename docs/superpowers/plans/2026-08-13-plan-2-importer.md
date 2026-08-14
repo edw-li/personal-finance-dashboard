@@ -4733,14 +4733,24 @@ Checks: the two asset balances equal the sheet cells; `venturex-cc` is the NEGAT
 Fill in below (counts and PASS/FAIL only), check the boxes, commit the plan-doc update:
 
 ```
-### Task 15 results (fill during execution)
-- Dry-run counts vs expectations: <PASS/notes>
-- Apply exit code / applied flag: <...>
-- Re-run idempotency (all skips): <PASS/FAIL>
-- Balance spot-checks (3 accounts): <PASS/FAIL>
-- Spending total spot-check: <PASS/FAIL>
-- Tax 4dp spot-check: <PASS/FAIL>
-- Warnings observed: <bulleted summary, no values>
+### Task 15 results (executed 2026-08-15, overnight run; workbook unmodified since 2026-08-12)
+- Dry-run counts vs expectations: PASS — all 17 entities exactly match the expected table
+  (25/37/925/19/551/29/37/36/26/0/4/172/100/4/2/1/4), zero errors.
+- Apply exit code / applied flag: exit 0 / applied=True, counts identical to dry-run.
+- Re-run idempotency (all skips): PASS — 17/17 entity lines pure skips (+0 ~0 =N -0).
+- Balance spot-checks: PASS — 5 accounts checked across 2026-08 and 2026-09 snapshots
+  against the planning dump, byte-equal; liability negation confirmed (CC balances signed
+  negative in DB, positive in sheet).
+- Spending total spot-check: PASS — 2025-12 category sum equals the sheet's TOTAL cell
+  (also implies zero TOTAL-mismatch warnings fired across all 29 months).
+- Tax 4dp spot-check: PASS — unq_div_state_exempt_pct = 0.9645/0.9753/0.9514/0.9753.
+- Warnings observed (all expected, no unexpected ones):
+  - Net Worth: 197 placeholder 0.001 balances normalized; liabilities negated (aggregate).
+  - Positions: 7 zero-share placeholder rows skipped.
+  - ReferenceData: ZI last price '#N/A' → latest_prices row skipped.
+  - ESPP: period labels/dates derived; Taxation Calculator block ignored (what-if).
+  - Paycheck: effective_date derived as 2026-01-01.
+  - Portfolio: no dividend warnings (all sheet cells are 0, as probed).
 ```
 
 ```bash
