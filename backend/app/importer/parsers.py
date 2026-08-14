@@ -150,6 +150,9 @@ def parse_reference_data(ws) -> ParsedReferenceData:
         seen_tickers.add(ticker)
         seen_names.add(name)
         sector = _text(row[2])
+        if sector is not None and len(sector) > 80:
+            issues.error(f"{cell_ref('ReferenceData', rnum, 3)}: Sector too long (max 80)")
+            continue
         last_price = to_decimal(
             row[4], Q4, 10, ctx=cell_ref("ReferenceData", rnum, 5), issues=issues
         )
@@ -213,6 +216,9 @@ def parse_positions(ws) -> ParsedPositions:
         name = _text(row[2])
         if account is None or type_text is None or name is None:
             issues.error(f"{cell_ref('Positions', rnum, 1)}: row needs Platforms, Type and Stock")
+            continue
+        if len(account) > 80:
+            issues.error(f"{cell_ref('Positions', rnum, 1)}: platform label too long (max 80)")
             continue
         txn_type = TRANSACTION_TYPE_MAP.get(type_text.lower())
         if txn_type is None:
@@ -326,6 +332,9 @@ def parse_net_worth(ws) -> ParsedNetWorth:
         name = _text(names[index]) if index < len(names) else None
         if column < 3 or name is None or name == "%":
             continue
+        if len(name) > 120:
+            issues.error(f"{cell_ref('Net Worth', 2, column)}: account name too long (max 120)")
+            continue
         group = GROUP_BY_BAND.get(current_band or "")
         if group is None:
             issues.warn(
@@ -432,6 +441,9 @@ def parse_spending(ws) -> ParsedSpending:
             net_pay_column = column
             continue
         if total_column is None:  # category columns all precede TOTAL
+            if len(text) > 80:
+                issues.error(f"{cell_ref('Spending', 1, column)}: category name too long (max 80)")
+                continue
             categories.append(ParsedCategoryColumn(name=text, sort_order=column, column=column))
     if total_column is None or net_pay_column is None:
         issues.error("Spending!r1: TOTAL and Net Pay header columns are required")

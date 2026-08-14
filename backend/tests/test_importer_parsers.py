@@ -12,6 +12,7 @@ from tests.workbook_builder import (
     default_paycheck_rows,
     default_portfolio_rows,
     default_positions_rows,
+    default_reference_data_rows,
     default_spending_rows,
     default_taxes_rows,
     load_readonly,
@@ -475,3 +476,34 @@ def test_parse_portfolio_warns_on_negative_dividends_too():
     rows[3][15] = -12.5
     parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
     assert any("-12.5" in w for w in parsed.issues.warnings)
+
+
+def test_parsers_reject_overlong_text_fields():
+    from app.importer.parsers import (
+        parse_net_worth,
+        parse_positions,
+        parse_reference_data,
+        parse_spending,
+    )
+
+    long_name = "X" * 130
+    rows = default_positions_rows()
+    rows.append([long_name[:100], "Buy", "Acme ETF", 1.0, 1.0, None, None, 0, 0, 0, 0, 0])
+    assert any(
+        "too long" in e for e in parse_positions(_sheet("Positions", positions=rows)).issues.errors
+    )
+
+    rows = default_reference_data_rows()
+    rows[1][2] = "S" * 90
+    parsed = parse_reference_data(_sheet("ReferenceData", reference_data=rows))
+    assert any("Sector too long" in e for e in parsed.issues.errors)
+
+    rows = default_net_worth_rows()
+    rows[1][2] = long_name
+    parsed = parse_net_worth(_sheet("Net Worth", net_worth=rows))
+    assert any("account name too long" in e for e in parsed.issues.errors)
+
+    rows = default_spending_rows()
+    rows[0][1] = "C" * 90
+    parsed = parse_spending(_sheet("Spending", spending=rows))
+    assert any("category name too long" in e for e in parsed.issues.errors)

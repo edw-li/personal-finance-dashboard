@@ -69,7 +69,16 @@ async def apply_reference_data(
             security_counts.creates += 1
             report.add_sample(f"securities[{row.ticker}]: created")
         else:
+            old_name = security.name
             _diff_update(security, fields, security_counts, report, f"securities[{row.ticker}]")
+            if old_name != row.name:
+                # Positions rows may still carry the old name; keep resolving it to this
+                # ticker instead of minting a synthetic duplicate and reassigning holdings.
+                by_name.setdefault(old_name, security)
+                report.warnings.append(
+                    f"ReferenceData: {row.ticker} renamed {old_name!r} -> {row.name!r}; "
+                    "Positions rows using the old name still match this ticker"
+                )
         by_name[row.name] = security
     await db.flush()  # ids needed for latest_prices and callers
 
@@ -206,6 +215,15 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
             _diff_update(account, fields, account_counts, report, f"accounts[{slug}]")
         accounts_by_name[column.name] = account
 
+    sheet_slugs = {slugify(column.name) for column in parsed.accounts}
+    for slug, account in existing_accounts.items():
+        if account.is_active and slug not in sheet_slugs:
+            report.warnings.append(
+                f"Net Worth: account {account.name!r} ({slug}) exists in the database but "
+                "has no column in the sheet — left untouched; deactivate or merge manually "
+                "if it was renamed"
+            )
+
     existing_snapshots = {
         s.month: s for s in (await db.execute(select(NetWorthSnapshot))).scalars()
     }
@@ -263,6 +281,7 @@ async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: Sheet
         c.slug: c for c in (await db.execute(select(SpendingCategory))).scalars()
     }
     categories_by_name: dict[str, SpendingCategory] = {}
+    seen_slugs: set[str] = set()
     for column in parsed.categories:
         slug = slugify(column.name)
         if not slug:
@@ -271,6 +290,13 @@ async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: Sheet
                 "characters — cannot derive a slug; rename it in the sheet"
             )
             continue
+        if slug in seen_slugs:
+            report.errors.append(
+                f"Spending: categories {column.name!r} and another column share slug "
+                f"{slug!r} — rename one in the sheet"
+            )
+            continue
+        seen_slugs.add(slug)
         category = existing_categories.get(slug)
         fields = {"name": column.name, "sort_order": column.sort_order}
         if category is None:

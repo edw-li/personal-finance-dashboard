@@ -223,3 +223,60 @@ async def test_apply_spending_categories_months_cashflow(db):
     await db.commit()
     assert report2.entities["monthly_spending"].creates == 0
     assert report2.entities["monthly_spending"].skips == 4
+
+
+async def test_refdata_rename_keeps_positions_attached(db):
+    from tests.workbook_builder import default_reference_data_rows
+
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+
+    rows = default_reference_data_rows()
+    rows[1][1] = "Acme Fund"  # cosmetic rename; Positions still says 'Acme ETF'
+    wb2 = sheets(reference_data=rows)
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+    assert any("renamed" in w for w in report2.warnings)
+    tickers = set((await db.execute(select(Security.ticker))).scalars().all())
+    assert "X-ACMEETF" not in tickers  # no synthetic duplicate minted
+    acme_txns = (
+        (
+            await db.execute(
+                select(PositionTransaction).where(PositionTransaction.security_id == acme_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(acme_txns) == 2  # holdings stayed on the real security
+
+
+async def test_apply_spending_duplicate_slug_is_report_error(db):
+    from tests.workbook_builder import default_spending_rows
+
+    rows = default_spending_rows()
+    rows[0][2] = "Food!"  # slugs to 'food', colliding with column 2
+    report = SheetReport()
+    await apply_spending(db, parse_spending(sheets(spending=rows)["Spending"]), report)
+    await db.commit()  # must not raise IntegrityError
+    assert any("share slug" in e for e in report.errors)
+
+
+async def test_apply_net_worth_warns_on_db_account_missing_from_sheet(db):
+    from tests.workbook_builder import default_net_worth_rows
+
+    report = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets()["Net Worth"]), report)
+    await db.commit()
+    rows = default_net_worth_rows()
+    rows[1][2] = "Primary Checking"  # renamed column: old 'checking' slug left in DB
+    report2 = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets(net_worth=rows)["Net Worth"]), report2)
+    await db.commit()
+    assert any("no column in the sheet" in w for w in report2.warnings)
