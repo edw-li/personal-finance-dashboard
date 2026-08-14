@@ -296,7 +296,7 @@ Expected: 130 existing + 2 new tests pass.
 - Create: `backend/tests/test_services_money.py`
 - Create: `backend/tests/test_net_worth_calc.py`
 
-- [ ] **Step 1: Write the failing money tests**
+- [x] **Step 1: Write the failing money tests**
 
 `backend/tests/test_services_money.py`:
 
@@ -344,13 +344,13 @@ def test_mom_pct():
     assert mom_pct(Decimal("1.0000005"), Decimal("1")) == Decimal("0.000001")
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (`ModuleNotFoundError: app.services`).
+- [x] **Step 2: Run — expect FAIL** (`ModuleNotFoundError: app.services`).
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_services_money.py -q -W error
 ```
 
-- [ ] **Step 3: Implement `money.py`**
+- [x] **Step 3: Implement `money.py`**
 
 `backend/app/services/__init__.py`: empty file.
 
@@ -407,9 +407,9 @@ def mom_pct(curr: Decimal, prev: Decimal | None) -> Decimal | None:
     return quantize_pct((curr - prev) / prev.copy_abs())
 ```
 
-- [ ] **Step 4: Run — expect PASS.**
+- [x] **Step 4: Run — expect PASS.**
 
-- [ ] **Step 5: Write the failing calc tests**
+- [x] **Step 5: Write the failing calc tests**
 
 `backend/tests/test_net_worth_calc.py` — DB-backed, uses the `db` fixture; seeds a tiny two-snapshot world:
 
@@ -497,9 +497,9 @@ async def test_get_swr_pct_reads_envelope_with_fallback(db):
     assert await get_swr_pct(db) == Decimal("0.04")
 ```
 
-- [ ] **Step 6: Run — expect FAIL** (module missing).
+- [x] **Step 6: Run — expect FAIL** (module missing).
 
-- [ ] **Step 7: Implement `net_worth_calc.py`**
+- [x] **Step 7: Implement `net_worth_calc.py`**
 
 ```python
 """Query-time net-worth math. Nothing here is ever stored (spec section 4).
@@ -608,14 +608,14 @@ async def get_swr_pct(db: AsyncSession) -> Decimal:
         return DEFAULT_SWR_PCT
 ```
 
-- [ ] **Step 8: Run both new files + full gate — expect PASS**
+- [x] **Step 8: Run both new files + full gate — expect PASS**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_services_money.py tests/test_net_worth_calc.py -q -W error
 .venv/Scripts/ruff format . && .venv/Scripts/ruff check . && .venv/Scripts/python -m pytest -q -W error
 ```
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 cd .. && git add backend/app/services backend/tests/test_services_money.py backend/tests/test_net_worth_calc.py && git commit -m "feat: query-time net worth math + money guards (services layer)" && cd backend

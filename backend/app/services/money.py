@@ -1,0 +1,46 @@
+"""Shared money/percent/month guards for the API layer.
+
+Raises HTTPException(422) directly — these ARE the API's validation vocabulary; keeping
+the message format here means every router reports bad values identically.
+"""
+
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
+
+from fastapi import HTTPException
+
+MONEY_QUANTUM = Decimal("0.01")
+PCT_QUANTUM = Decimal("0.000001")
+# Numeric(14,2) / Numeric(12,2): 12 integer digits is the shared safe bound (over-scale
+# values otherwise surface as bare DBAPIError sqlstate 22003 — Plan 1 forward note).
+MONEY_MAX_ABS = Decimal(10) ** 12
+
+
+def quantize_money(value: Decimal, field: str) -> Decimal:
+    quantized = value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    if quantized.copy_abs() >= MONEY_MAX_ABS:
+        raise HTTPException(status_code=422, detail=f"{field}: |value| must be below 10^12")
+    return quantized
+
+
+def quantize_pct(value: Decimal) -> Decimal:
+    return value.quantize(PCT_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+def require_first_of_month(month: date) -> date:
+    if month.day != 1:
+        raise HTTPException(
+            status_code=422, detail="month must be the first of the month (YYYY-MM-01)"
+        )
+    return month
+
+
+def mom_pct(curr: Decimal, prev: Decimal | None) -> Decimal | None:
+    """(curr - prev) / |prev|; None when prev is missing or zero.
+
+    Signed denominator so the result's sign always matches net-worth impact —
+    a liability balance rising toward zero reads as a positive change.
+    """
+    if prev is None or prev == 0:
+        return None
+    return quantize_pct((curr - prev) / prev.copy_abs())
