@@ -1549,6 +1549,9 @@ def parse_reference_data(ws) -> ParsedReferenceData:
         seen_tickers.add(ticker)
         seen_names.add(name)
         sector = _text(row[2])
+        if sector is not None and len(sector) > 80:
+            issues.error(f"{cell_ref('ReferenceData', rnum, 3)}: Sector too long (max 80)")
+            continue
         last_price = to_decimal(
             row[4], Q4, 10, ctx=cell_ref("ReferenceData", rnum, 5), issues=issues
         )
@@ -1614,6 +1617,9 @@ def parse_positions(ws) -> ParsedPositions:
             issues.error(
                 f"{cell_ref('Positions', rnum, 1)}: row needs Platforms, Type and Stock"
             )
+            continue
+        if len(account) > 80:
+            issues.error(f"{cell_ref('Positions', rnum, 1)}: platform label too long (max 80)")
             continue
         txn_type = TRANSACTION_TYPE_MAP.get(type_text.lower())
         if txn_type is None:
@@ -1851,6 +1857,9 @@ def parse_net_worth(ws) -> ParsedNetWorth:
         name = _text(names[index]) if index < len(names) else None
         if column < 3 or name is None or name == "%":
             continue
+        if len(name) > 120:
+            issues.error(f"{cell_ref('Net Worth', 2, column)}: account name too long (max 120)")
+            continue
         group = GROUP_BY_BAND.get(current_band or "")
         if group is None:
             issues.warn(
@@ -1959,6 +1968,9 @@ def parse_spending(ws) -> ParsedSpending:
             net_pay_column = column
             continue
         if total_column is None:  # category columns all precede TOTAL
+            if len(text) > 80:
+                issues.error(f"{cell_ref('Spending', 1, column)}: category name too long (max 80)")
+                continue
             categories.append(ParsedCategoryColumn(name=text, sort_order=column, column=column))
     if total_column is None or net_pay_column is None:
         issues.error("Spending!r1: TOTAL and Net Pay header columns are required")
@@ -2501,6 +2513,37 @@ def test_parse_portfolio_warns_on_negative_dividends_too():
     rows[3][15] = -12.5
     parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
     assert any("-12.5" in w for w in parsed.issues.warnings)
+
+
+def test_parsers_reject_overlong_text_fields():
+    from app.importer.parsers import (
+        parse_net_worth,
+        parse_positions,
+        parse_reference_data,
+        parse_spending,
+    )
+
+    long_name = "X" * 130
+    rows = default_positions_rows()
+    rows.append([long_name[:100], "Buy", "Acme ETF", 1.0, 1.0, None, None, 0, 0, 0, 0, 0])
+    assert any(
+        "too long" in e for e in parse_positions(_sheet("Positions", positions=rows)).issues.errors
+    )
+
+    rows = default_reference_data_rows()
+    rows[1][2] = "S" * 90
+    parsed = parse_reference_data(_sheet("ReferenceData", reference_data=rows))
+    assert any("Sector too long" in e for e in parsed.issues.errors)
+
+    rows = default_net_worth_rows()
+    rows[1][2] = long_name
+    parsed = parse_net_worth(_sheet("Net Worth", net_worth=rows))
+    assert any("account name too long" in e for e in parsed.issues.errors)
+
+    rows = default_spending_rows()
+    rows[0][1] = "C" * 90
+    parsed = parse_spending(_sheet("Spending", spending=rows))
+    assert any("category name too long" in e for e in parsed.issues.errors)
 ```
 
 Add `default_espp_rows, default_paycheck_rows` to the workbook_builder import line.
@@ -3088,6 +3131,65 @@ async def test_apply_spending_categories_months_cashflow(db):
     await db.commit()
     assert report2.entities["monthly_spending"].creates == 0
     assert report2.entities["monthly_spending"].skips == 4
+
+
+async def test_refdata_rename_keeps_positions_attached(db):
+    from tests.workbook_builder import default_reference_data_rows
+
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    acme_id = (
+        (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+    )
+
+    rows = default_reference_data_rows()
+    rows[1][1] = "Acme Fund"  # cosmetic rename; Positions still says 'Acme ETF'
+    wb2 = sheets(reference_data=rows)
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+    assert any("renamed" in w for w in report2.warnings)
+    tickers = set((await db.execute(select(Security.ticker))).scalars().all())
+    assert "X-ACMEETF" not in tickers  # no synthetic duplicate minted
+    acme_txns = (
+        (
+            await db.execute(
+                select(PositionTransaction).where(PositionTransaction.security_id == acme_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(acme_txns) == 2  # holdings stayed on the real security
+
+
+async def test_apply_spending_duplicate_slug_is_report_error(db):
+    from tests.workbook_builder import default_spending_rows
+
+    rows = default_spending_rows()
+    rows[0][2] = "Food!"  # slugs to 'food', colliding with column 2
+    report = SheetReport()
+    await apply_spending(db, parse_spending(sheets(spending=rows)["Spending"]), report)
+    await db.commit()  # must not raise IntegrityError
+    assert any("share slug" in e for e in report.errors)
+
+
+async def test_apply_net_worth_warns_on_db_account_missing_from_sheet(db):
+    from tests.workbook_builder import default_net_worth_rows
+
+    report = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets()["Net Worth"]), report)
+    await db.commit()
+    rows = default_net_worth_rows()
+    rows[1][2] = "Primary Checking"  # renamed column: old 'checking' slug left in DB
+    report2 = SheetReport()
+    await apply_net_worth(db, parse_net_worth(sheets(net_worth=rows)["Net Worth"]), report2)
+    await db.commit()
+    assert any("no column in the sheet" in w for w in report2.warnings)
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -3173,7 +3275,16 @@ async def apply_reference_data(
             security_counts.creates += 1
             report.add_sample(f"securities[{row.ticker}]: created")
         else:
+            old_name = security.name
             _diff_update(security, fields, security_counts, report, f"securities[{row.ticker}]")
+            if old_name != row.name:
+                # Positions rows may still carry the old name; keep resolving it to this
+                # ticker instead of minting a synthetic duplicate and reassigning holdings.
+                by_name.setdefault(old_name, security)
+                report.warnings.append(
+                    f"ReferenceData: {row.ticker} renamed {old_name!r} -> {row.name!r}; "
+                    "Positions rows using the old name still match this ticker"
+                )
         by_name[row.name] = security
     await db.flush()  # ids needed for latest_prices and callers
 
@@ -3314,6 +3425,14 @@ async def apply_net_worth(
         else:
             _diff_update(account, fields, account_counts, report, f"accounts[{slug}]")
         accounts_by_name[column.name] = account
+    sheet_slugs = {slugify(column.name) for column in parsed.accounts}
+    for slug, account in existing_accounts.items():
+        if account.is_active and slug not in sheet_slugs:
+            report.warnings.append(
+                f"Net Worth: account {account.name!r} ({slug}) exists in the database but "
+                "has no column in the sheet — left untouched; deactivate or merge manually "
+                "if it was renamed"
+            )
 
     existing_snapshots = {
         s.month: s for s in (await db.execute(select(NetWorthSnapshot))).scalars()
@@ -3370,6 +3489,7 @@ async def apply_spending(
         c.slug: c for c in (await db.execute(select(SpendingCategory))).scalars()
     }
     categories_by_name: dict[str, SpendingCategory] = {}
+    seen_slugs: set[str] = set()
     for column in parsed.categories:
         slug = slugify(column.name)
         if not slug:
@@ -3378,6 +3498,13 @@ async def apply_spending(
                 "characters — cannot derive a slug; rename it in the sheet"
             )
             continue
+        if slug in seen_slugs:
+            report.errors.append(
+                f"Spending: categories {column.name!r} and another column share slug "
+                f"{slug!r} — rename one in the sheet"
+            )
+            continue
+        seen_slugs.add(slug)
         category = existing_categories.get(slug)
         fields = {"name": column.name, "sort_order": column.sort_order}
         if category is None:
