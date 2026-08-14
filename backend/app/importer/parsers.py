@@ -10,7 +10,10 @@ from app.importer.cells import (
     Q6,
     CellIssues,
     cell_ref,
+    first_of_month,
+    is_placeholder_balance,
     to_date_lenient,
+    to_date_strict,
     to_decimal,
 )
 
@@ -261,3 +264,215 @@ def parse_positions(ws) -> ParsedPositions:
             "(sheet running-total chain artifacts)"
         )
     return ParsedPositions(transactions=transactions, issues=issues)
+
+
+GROUP_BY_BAND = {
+    "CASH": "cash",
+    "PRE-TAX": "pre_tax",
+    "POST-TAX": "post_tax",
+    "TAXABLE": "taxable",
+    "EQUITY": "equity",
+    "OTHER": "other",
+    "LIABILITIES": "liability",
+}
+NET_WORTH_TERMINAL_BAND = "NET WORTH"
+NET_WORTH_HEADER_SCAN_COLS = 120
+
+
+# frozen=True: instances key the per-row raw-cell dicts below (plain dataclasses with
+# eq=True are unhashable); these are pure value records, never mutated downstream.
+@dataclasses.dataclass(frozen=True)
+class ParsedAccountColumn:
+    name: str
+    group: str
+    sort_order: int  # sheet column index — stable, sheet-ordered
+    column: int
+
+
+@dataclasses.dataclass
+class ParsedSnapshot:
+    month: datetime.date
+    recorded_on: datetime.date | None
+    balances: dict[str, Decimal]  # account name -> signed balance
+
+
+@dataclasses.dataclass
+class ParsedNetWorth:
+    accounts: list[ParsedAccountColumn]
+    snapshots: list[ParsedSnapshot]
+    issues: CellIssues
+
+
+def parse_net_worth(ws) -> ParsedNetWorth:
+    issues = CellIssues()
+    header = list(
+        ws.iter_rows(min_row=1, max_row=2, max_col=NET_WORTH_HEADER_SCAN_COLS, values_only=True)
+    )
+    bands, names = header[0], header[1]
+    accounts: list[ParsedAccountColumn] = []
+    current_band: str | None = None
+    for index, band_cell in enumerate(bands):
+        column = index + 1
+        band_text = _text(band_cell)
+        if band_text is not None and column >= 3:
+            current_band = band_text
+        if current_band == NET_WORTH_TERMINAL_BAND:
+            break  # computed totals begin — no more account columns
+        name = _text(names[index]) if index < len(names) else None
+        if column < 3 or name is None or name == "%":
+            continue
+        group = GROUP_BY_BAND.get(current_band or "")
+        if group is None:
+            issues.warn(
+                f"{cell_ref('Net Worth', 1, column)}: unknown group band "
+                f"{current_band!r} for account {name!r} — falling back to 'other'"
+            )
+            group = "other"
+        if any(a.name == name for a in accounts):
+            issues.error(f"{cell_ref('Net Worth', 2, column)}: duplicate account {name!r}")
+            continue
+        accounts.append(
+            ParsedAccountColumn(name=name, group=group, sort_order=column, column=column)
+        )
+
+    snapshots: list[ParsedSnapshot] = []
+    seen_months: set[datetime.date] = set()
+    sentinel_count = 0
+    negated_liabilities = False
+    max_col = max((a.column for a in accounts), default=2)
+    for rnum, row in _iter_rows(ws, min_row=3, max_col=max_col):
+        if row[0] is None:
+            break  # months run out — template region ends the sheet
+        month = to_date_strict(row[0], ctx=cell_ref("Net Worth", rnum, 1), issues=issues)
+        if month is None:
+            continue
+        month = first_of_month(month, ctx=cell_ref("Net Worth", rnum, 1), issues=issues)
+        raw_cells = {account: row[account.column - 1] for account in accounts}
+        if all(value is None for value in raw_cells.values()):
+            continue  # future template row (Month/Date filled, balances empty)
+        if month in seen_months:
+            issues.error(f"{cell_ref('Net Worth', rnum, 1)}: duplicate month {month.isoformat()}")
+            continue
+        seen_months.add(month)
+        recorded_on = to_date_strict(row[1], ctx=cell_ref("Net Worth", rnum, 2), issues=issues)
+        balances: dict[str, Decimal] = {}
+        for account, raw in raw_cells.items():
+            if raw is None:
+                continue  # sparse cell: no balance recorded for this account/month
+            if is_placeholder_balance(raw):
+                sentinel_count += 1
+                value = Decimal("0.00")
+            else:
+                value = to_decimal(
+                    raw, Q2, 12, ctx=cell_ref("Net Worth", rnum, account.column), issues=issues
+                )
+                if value is None:
+                    continue
+            if account.group == "liability" and value != 0:
+                value = -value  # sheet stores debt positive; schema stores it signed
+                negated_liabilities = True
+            balances[account.name] = value
+        snapshots.append(ParsedSnapshot(month=month, recorded_on=recorded_on, balances=balances))
+    if sentinel_count:
+        issues.warn(f"Net Worth: normalized {sentinel_count} placeholder 0.001 balance(s) to 0.00")
+    if negated_liabilities:
+        issues.warn(
+            "Net Worth: liability balances negated on import "
+            "(sheet stores debt positive; schema stores signed balances)"
+        )
+    return ParsedNetWorth(accounts=accounts, snapshots=snapshots, issues=issues)
+
+
+@dataclasses.dataclass(frozen=True)  # dict key in parse_spending, same as ParsedAccountColumn
+class ParsedCategoryColumn:
+    name: str
+    sort_order: int  # sheet column index
+    column: int
+
+
+@dataclasses.dataclass
+class ParsedSpendingMonth:
+    month: datetime.date
+    amounts: dict[str, Decimal]  # category name -> amount (explicit sheet zeros kept)
+    net_pay: Decimal | None
+
+
+@dataclasses.dataclass
+class ParsedSpending:
+    categories: list[ParsedCategoryColumn]
+    months: list[ParsedSpendingMonth]
+    issues: CellIssues
+
+
+def parse_spending(ws) -> ParsedSpending:
+    issues = CellIssues()
+    header = next(iter(ws.iter_rows(min_row=1, max_row=1, max_col=40, values_only=True)))
+    categories: list[ParsedCategoryColumn] = []
+    total_column: int | None = None
+    net_pay_column: int | None = None
+    for index, cell in enumerate(header):
+        column = index + 1
+        text = _text(cell)
+        if column < 2 or text is None:
+            continue
+        if text == "TOTAL":
+            total_column = column
+            continue
+        if text == "Net Pay":
+            net_pay_column = column
+            continue
+        if total_column is None:  # category columns all precede TOTAL
+            categories.append(ParsedCategoryColumn(name=text, sort_order=column, column=column))
+    if total_column is None or net_pay_column is None:
+        issues.error("Spending!r1: TOTAL and Net Pay header columns are required")
+        return ParsedSpending(categories=categories, months=[], issues=issues)
+
+    months: list[ParsedSpendingMonth] = []
+    seen_months: set[datetime.date] = set()
+    for rnum, row in _iter_rows(ws, min_row=2, max_col=net_pay_column):
+        first = row[0]
+        if first is None:
+            break
+        if isinstance(first, str):
+            continue  # 'Average' summary row
+        if not isinstance(first, datetime.date):  # covers datetime too (subclass)
+            continue  # numeric-year rollup row
+        month = first_of_month(
+            to_date_strict(first, ctx=cell_ref("Spending", rnum, 1), issues=issues),
+            ctx=cell_ref("Spending", rnum, 1),
+            issues=issues,
+        )
+        raw_amounts = {category: row[category.column - 1] for category in categories}
+        raw_net_pay = row[net_pay_column - 1]
+        if all(value is None for value in raw_amounts.values()) and raw_net_pay is None:
+            continue  # future template month
+        if month in seen_months:
+            issues.error(f"{cell_ref('Spending', rnum, 1)}: duplicate month {month.isoformat()}")
+            continue
+        seen_months.add(month)
+        amounts: dict[str, Decimal] = {}
+        for category, raw in raw_amounts.items():
+            if raw is None:
+                continue
+            value = to_decimal(
+                raw, Q2, 10, ctx=cell_ref("Spending", rnum, category.column), issues=issues
+            )
+            if value is not None:
+                amounts[category.name] = value
+        net_pay = to_decimal(
+            raw_net_pay, Q2, 10, ctx=cell_ref("Spending", rnum, net_pay_column), issues=issues
+        )
+        total = to_decimal(
+            row[total_column - 1],
+            Q2,
+            10,
+            ctx=cell_ref("Spending", rnum, total_column),
+            issues=issues,
+        )
+        if total is not None and amounts and abs(sum(amounts.values()) - total) >= Decimal("0.01"):
+            issues.warn(
+                f"Spending {month.isoformat()[:7]}: category sum {sum(amounts.values())} "
+                f"!= sheet TOTAL {total} (imported category values anyway)"
+            )
+        months.append(ParsedSpendingMonth(month=month, amounts=amounts, net_pay=net_pay))
+    return ParsedSpending(categories=categories, months=months, issues=issues)

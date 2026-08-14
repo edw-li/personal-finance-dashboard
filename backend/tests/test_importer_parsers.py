@@ -5,7 +5,13 @@ import pytest
 
 from app.importer.parsers import SHEET_TAX_INPUT_SEQUENCE
 from app.tax_keys import TAX_INPUT_DEFINITIONS
-from tests.workbook_builder import build_workbook, default_positions_rows, load_readonly
+from tests.workbook_builder import (
+    build_workbook,
+    default_net_worth_rows,
+    default_positions_rows,
+    default_spending_rows,
+    load_readonly,
+)
 
 
 def test_builder_produces_loadable_workbook_with_all_sheets():
@@ -135,3 +141,69 @@ def test_parse_positions_warns_on_negative_and_unreadable_fees():
     assert len(parsed.transactions) == 3  # both flagged rows still import
     assert any("negative shares/price" in w for w in parsed.issues.warnings)
     assert any("without fees" in w for w in parsed.issues.warnings)
+
+
+def test_parse_net_worth_accounts_groups_and_balances():
+    from app.importer.parsers import parse_net_worth
+
+    parsed = parse_net_worth(_sheet("Net Worth"))
+    assert parsed.issues.errors == []
+    assert [(a.name, a.group, a.sort_order) for a in parsed.accounts] == [
+        ("Checking", "cash", 3),
+        ("IRA", "pre_tax", 5),
+        ("Credit Card", "liability", 7),
+    ]
+    assert len(parsed.snapshots) == 2  # r5 future-template row skipped
+    first, second = parsed.snapshots
+    assert first.month == datetime.date(2024, 1, 1)
+    assert first.recorded_on == datetime.date(2024, 1, 5)
+    assert first.balances["Checking"] == Decimal("100.50")
+    assert first.balances["IRA"] == Decimal("0.00")  # 0.001 sentinel normalized
+    assert first.balances["Credit Card"] == Decimal("-25.00")  # liabilities stored negative
+    assert second.balances["Credit Card"] == Decimal("-30.00")
+    assert any("0.001" in w for w in parsed.issues.warnings)  # aggregate sentinel warning
+    assert any("liabilit" in w.lower() for w in parsed.issues.warnings)
+
+
+def test_parse_net_worth_unknown_band_falls_back_to_other():
+    from app.importer.parsers import parse_net_worth
+
+    rows = default_net_worth_rows()
+    rows[0][6] = "MYSTERY GROUP"
+    parsed = parse_net_worth(_sheet("Net Worth", net_worth=rows))
+    assert parsed.accounts[2].group == "other"
+    assert any("MYSTERY GROUP" in w for w in parsed.issues.warnings)
+
+
+def test_parse_net_worth_duplicate_month_is_error():
+    from app.importer.parsers import parse_net_worth
+
+    rows = default_net_worth_rows()
+    rows.append(rows[3][:])  # repeat 2024-02 row
+    parsed = parse_net_worth(_sheet("Net Worth", net_worth=rows))
+    assert any("duplicate month" in e.lower() for e in parsed.issues.errors)
+
+
+def test_parse_spending_months_rollups_and_total_check():
+    from app.importer.parsers import parse_spending
+
+    parsed = parse_spending(_sheet("Spending"))
+    assert parsed.issues.errors == []
+    assert [(c.name, c.sort_order) for c in parsed.categories] == [("Food", 2), ("Rent", 3)]
+    assert len(parsed.months) == 2  # Average, 2024.0 rollup and empty template all skipped
+    january, february = parsed.months
+    assert january.month == datetime.date(2024, 1, 1)
+    assert january.amounts == {"Food": Decimal("100.00"), "Rent": Decimal("900.00")}
+    assert january.net_pay == Decimal("3000.00")
+    # r4 TOTAL says 951 but Food+Rent = 950 -> cross-check warning names the month
+    assert any("2024-02" in w and "TOTAL" in w for w in parsed.issues.warnings)
+    assert february.net_pay == Decimal("3000.00")
+
+
+def test_parse_spending_missing_total_column_is_error():
+    from app.importer.parsers import parse_spending
+
+    rows = default_spending_rows()
+    rows[0][3] = "NOT-TOTAL"
+    parsed = parse_spending(_sheet("Spending", spending=rows))
+    assert any("TOTAL" in e for e in parsed.issues.errors)
