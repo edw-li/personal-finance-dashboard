@@ -11,12 +11,22 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
       ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+    healthcheck:
+      # Boot runs alembic upgrade + seed before uvicorn listens; start_period
+      # covers that window. A failed migration keeps the service unhealthy, so
+      # a redeploy fails visibly instead of silently 502ing behind nginx.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   frontend:
     build: .
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"
