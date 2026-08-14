@@ -3506,6 +3506,24 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
 - nginx image: IPv4-only listen (no `listen [::]:80`), can't run standalone (`upstream
   "backend"` resolves at parse time — needs compose or --add-host), and expires+add_header
   emits two Cache-Control headers. All benign; revisit at Plan 6 deploy.
+- **Plan 6 MUST-FIX #1 (verified): nginx pins the backend IP at config load** — a
+  backend-only redeploy (`compose up -d --build backend`) leaves nginx proxying the OLD IP:
+  every API call 502s while the frontend loads fine. Fix (path-preservation verified):
+  `resolver 127.0.0.11 valid=10s ipv6=off;` + `set $upstream_backend http://backend:8000;`
+  + `proxy_pass $upstream_backend;`. Interim runbook rule: ALWAYS
+  `docker compose restart frontend` after recreating the backend.
+- **Plan 6 MUST-FIX #2 (verified): the asset-caching regex location outranks `/api/`** —
+  any future endpoint path ending in .png/.svg/.js/etc. gets served from the filesystem
+  (404), never proxied. Fix: `location ^~ /api/ {`.
+- Plan 6 deploy flags: CI docker-build is amd64-only but OCI Ampere is aarch64 (all four
+  compiled deps have aarch64 wheels — verified — but add buildx linux/arm64 or treat the
+  box build as the real gate); add a backend healthcheck + service_healthy so alembic-boot
+  seconds don't 502 and redeploys fail visibly; `location = /index.html` needs
+  Cache-Control no-cache (stale-shell hazard); CI wants `permissions: contents: read` +
+  concurrency; CI push trigger is [main, edwli/*] so the plan-1-foundation branch itself
+  triggers nothing; keep ADMIN_EMAIL stable in prod .env (rename-on-boot semantics); root
+  .dockerignore should add `.env`, `.env.*`, `docs`, `.github` (builder-cache hygiene +
+  layer-bust avoidance); backend image can drop `libpq-dev` (asyncpg needs no libpq).
 - Frontend: package-lock is lockfileVersion 2 (npm 8) — CI/Docker `npm ci` reads it fine;
   regenerate to v3 via a `node:20` container when convenient (first npm-10 `install` will
   churn it otherwise). `npm ci --dry-run` on npm 8 DELETES node_modules — not read-only.
