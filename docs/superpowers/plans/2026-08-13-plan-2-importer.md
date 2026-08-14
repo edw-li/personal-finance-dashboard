@@ -1460,6 +1460,19 @@ def test_parse_positions_split_and_bad_type():
     assert split.split_factor == Decimal("4.0000")
     assert split.shares == Decimal("0") and split.price == Decimal("0")  # dummy per Plan 1 convention
     assert len(parsed.issues.errors) == 2  # split without factor; unknown type 'Gift'
+
+
+def test_parse_positions_warns_on_negative_and_unreadable_fees():
+    from app.importer.parsers import parse_positions
+
+    rows = default_positions_rows()[:2]
+    rows.append(["RH Taxable", "Buy", "Acme ETF", -5.0, 10.0, None, None, 0, 0, 0, 0, 0])
+    rows.append(["RH Taxable", "Buy", "Acme ETF", 1.0, 10.0, "#REF!", None, 0, 0, 0, 0, 0])
+    parsed = parse_positions(_sheet("Positions", positions=rows))
+    assert parsed.issues.errors == []
+    assert len(parsed.transactions) == 3  # both flagged rows still import
+    assert any("negative shares/price" in w for w in parsed.issues.warnings)
+    assert any("without fees" in w for w in parsed.issues.warnings)
 ```
 
 Add `default_positions_rows` to the existing `from tests.workbook_builder import ...` line.
@@ -1607,6 +1620,11 @@ def parse_positions(ws) -> ParsedPositions:
             issues.error(f"{cell_ref('Positions', rnum, 2)}: unknown type {type_text!r}")
             continue
         fees = to_decimal(row[5], Q2, 8, ctx=cell_ref("Positions", rnum, 6), issues=issues)
+        if fees is None and row[5] is not None:
+            issues.warn(
+                f"{cell_ref('Positions', rnum, 6)}: fees value {row[5]!r} unreadable — "
+                "transaction imported without fees"
+            )
         split_factor = to_decimal(
             row[6], Q4, 6, ctx=cell_ref("Positions", rnum, 7), issues=issues
         )
@@ -1625,6 +1643,11 @@ def parse_positions(ws) -> ParsedPositions:
                     f"{cell_ref('Positions', rnum, 4)}: buy/sell row needs shares and price"
                 )
                 continue
+            if shares < 0 or price < 0:
+                issues.warn(
+                    f"{cell_ref('Positions', rnum, 4)}: negative shares/price on "
+                    f"{txn_type} row (sheet convention is positive values + type)"
+                )
             if shares == 0:
                 zero_share_rows += 1
                 continue
