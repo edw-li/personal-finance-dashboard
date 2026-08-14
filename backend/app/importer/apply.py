@@ -375,8 +375,8 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
     for item in parsed.inputs:
         if item.key not in known_keys:
             report.errors.append(
-                f"Taxes: input key {item.key!r} missing from tax_input_definitions — "
-                "run `python -m app.seed` and retry"
+                f"Taxes: input key {item.key!r} is not defined in app/tax_keys.py — "
+                "the parser's label sequence and TAX_INPUT_DEFINITIONS have drifted"
             )
             return
 
@@ -504,6 +504,14 @@ async def apply_espp(db: AsyncSession, parsed: ParsedEspp, report: SheetReport) 
             report.add_sample(f"espp_periods[{period.label}]: created")
         else:
             _diff_update(row, fields, period_counts, report, f"espp_periods[{period.label}]")
+
+    incoming_labels = {period.label for period in parsed.periods}
+    for label in existing_periods:
+        if label not in incoming_labels:
+            report.warnings.append(
+                f"ESPP: period {label!r} exists in the database but is no longer derived "
+                "from the sheet — left untouched; delete manually once concluded"
+            )
 
 
 async def apply_focal_history(

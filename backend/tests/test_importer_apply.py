@@ -442,3 +442,24 @@ async def test_apply_paycheck_without_focal_new_base_skips(db):
     await db.commit()
     assert (await db.execute(select(PaycheckProfile))).scalars().all() == []
     assert any("no focal year" in w.lower() for w in report.warnings)
+
+
+async def test_apply_espp_warns_on_stale_period_rows(db):
+    import datetime as dt
+
+    from app.importer.apply import apply_espp
+    from app.importer.parsers import parse_espp
+    from tests.workbook_builder import default_espp_rows
+
+    report = SheetReport()
+    await apply_espp(db, parse_espp(sheets()["ESPP"]), report)
+    await db.commit()  # creates 'February 2025 Purchase' + 'August 2025 Purchase'
+
+    rows = default_espp_rows()
+    rows.append(
+        [None] * 8 + [dt.datetime(2025, 2, 27), dt.datetime(2026, 2, 27), 80.0, 41.0, 60.0, 35.0]
+    )  # new lot advances the derived February label to 2026
+    report2 = SheetReport()
+    await apply_espp(db, parse_espp(sheets(espp=rows)["ESPP"]), report2)
+    await db.commit()
+    assert any("February 2025 Purchase" in w and "no longer derived" in w for w in report2.warnings)
