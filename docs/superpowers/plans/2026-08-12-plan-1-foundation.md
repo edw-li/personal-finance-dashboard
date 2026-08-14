@@ -3420,11 +3420,20 @@ git commit -m "feat: docker packaging and CI"
 ```
 **GitHub/CI deferral (decided 2026-08-13 for the overnight run):** the `gh` CLI is not installed
 and authenticating it is interactive. Overnight, validate everything locally (compose config,
-both image builds, the od shebang smoke-run, full suite). NEXT MORNING (user-assisted):
-`winget install -e --id GitHub.cli --source winget` (UAC), `gh auth login`, then
-`gh repo create personal-finance-dashboard --private --source=. --push` from the MAIN checkout
-after merge — and confirm all three CI jobs pass. Until then this step's CI verification is
-explicitly pending, and the plan's Definition of Done carries that asterisk.
+both image builds, the od shebang smoke-run, full suite). Until CI runs, this step's
+verification is explicitly pending and the Definition of Done carries that asterisk.
+
+**MORNING PROCEDURE — CORRECTED by the final review:** a remote named `origin` ALREADY exists
+in the main checkout, with a plaintext PAT embedded in its URL (and the slug suggests the
+GitHub repo may already exist). Therefore, IN ORDER:
+1. Revoke the token at github.com/settings/tokens.
+2. `git remote set-url origin https://github.com/edw-li/personal-finance-dashboard.git`
+   (tokenless; auth via credential manager, `gh auth login`, or SSH).
+3. Skip `gh repo create --source=.` (it errors when origin exists) — if the repo doesn't
+   exist yet, `gh repo create edw-li/personal-finance-dashboard --private` WITHOUT --source,
+   then `git push -u origin main`.
+4. Confirm all three CI jobs green. (Branch pushes of plan-1-foundation trigger nothing —
+   the workflow's push filter is [main, edwli/*].)
 
 ---
 
@@ -3522,8 +3531,18 @@ explicitly pending, and the plan's Definition of Done carries that asterisk.
   Cache-Control no-cache (stale-shell hazard); CI wants `permissions: contents: read` +
   concurrency; CI push trigger is [main, edwli/*] so the plan-1-foundation branch itself
   triggers nothing; keep ADMIN_EMAIL stable in prod .env (rename-on-boot semantics); root
-  .dockerignore should add `.env`, `.env.*`, `docs`, `.github` (builder-cache hygiene +
-  layer-bust avoidance); backend image can drop `libpq-dev` (asyncpg needs no libpq).
+  .dockerignore adds `.env`, `.env.*`, `docs`, `.github` — **re-rated SECURITY (final
+  review): the prod .env (SECRET_KEY/passwords) otherwise lands in the frontend build-stage
+  layer and BuildKit cache** (runtime image unaffected — final stage copies only dist);
+  backend image can drop `libpq-dev` (asyncpg needs no libpq).
+- **UNTESTED seed paths (Plan 2 targets): `seed_admin_user`** (including the rename branch
+  that already caused one real incident during Task 13's boot test) **and
+  `seed_app_settings`**; only seed_tax_definitions is pinned.
+- **Migrations: upgrade() is exercised only by CI's alembic step; downgrade() by NOTHING** —
+  the suite builds schema via create_all, so a broken downgrade merges green. Plan 2
+  candidate: a head→base→head round-trip test or CI step.
+- Wording fix: LoginPage renders the form (not null) while isLoading — authenticated
+  deep-links to /login flash the form before redirecting.
 - Frontend: package-lock is lockfileVersion 2 (npm 8) — CI/Docker `npm ci` reads it fine;
   regenerate to v3 via a `node:20` container when convenient (first npm-10 `install` will
   churn it otherwise). `npm ci --dry-run` on npm 8 DELETES node_modules — not read-only.
