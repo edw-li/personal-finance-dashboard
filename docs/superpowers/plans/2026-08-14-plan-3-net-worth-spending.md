@@ -4975,6 +4975,11 @@ Seed list — extend with anything learned during execution:
   intentionally = sheet NW − After-Tax 401(k) (the sheet double-counts it — verified
   37/37). One PATCH (`is_component: false` on after-tax-401-k) reproduces sheet totals
   exactly if the user prefers. The importer never touches the flag (pinned by test).
+  **Plan 6 prod-import gotcha (Task 1 quality review):** on a FRESH prod DB the
+  migration's backfill no-ops (accounts empty) and the importer creates all accounts
+  with is_component=FALSE — prod NW would silently double-count the five buckets.
+  Plan 6 must re-run the five-slug UPDATE after the first prod import (or restore from
+  a dev dump) and re-verify the NW identity before cutover.
 - **Chart palette is frozen in `src/charts/theme.ts`** (dataviz-validated on #171a21).
   Plan 4's portfolio charts (treemap/donut/sparklines) must draw from the same slots —
   treemap/donut are ALL-PAIRS forms: ≤3 hues or fold/facet. Sequential blue ramp is
