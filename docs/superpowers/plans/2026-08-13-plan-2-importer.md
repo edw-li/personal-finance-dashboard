@@ -4124,6 +4124,20 @@ async def test_parser_crash_is_captured_as_sheet_error(db):
     assert report.has_errors and report.applied is False
 
 
+async def test_apply_phase_error_rolls_back_everything(db):
+    # Parse-clean workbook whose APPLY phase errors (duplicate account slug detected in
+    # apply_net_worth): the orchestrator must roll back the entire run, not half-land it.
+    from tests.workbook_builder import default_net_worth_rows
+
+    rows = default_net_worth_rows()
+    rows[1][4] = "Checking!"  # slugs to 'checking', colliding with column 3's account
+    report = await run_import(build_workbook(net_worth=rows), db, dry_run=False)
+    assert report.has_errors and report.applied is False
+    assert await _count(db, Account) == 0
+    assert await _count(db, Security) == 0
+    assert await _count(db, TaxInput) == 0
+
+
 def test_cli_parser_flags():
     args = build_parser().parse_args(["book.xlsx", "--dry-run"])
     assert args.workbook.name == "book.xlsx" and args.dry_run is True
@@ -4145,7 +4159,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'app.importer.service'`
 
 Same code path for dry-run and apply (spec section 5): the appliers always run; dry-run
 rolls the session back instead of committing. Any parse error anywhere blocks the apply
-entirely — the report still carries every count so the diff can be reviewed.
+entirely — the report still carries every sheet's errors and warnings.
 """
 
 import io
