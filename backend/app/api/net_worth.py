@@ -1,3 +1,5 @@
+from datetime import date
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -7,17 +9,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import ACCOUNT_GROUPS, Account, AccountBalance
+from app.models import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.schemas.net_worth import (
     AccountCreate,
     AccountOut,
     AccountSeries,
     AccountUpdate,
+    BalanceEntry,
     GroupSummary,
+    MonthBalancesOut,
+    MonthUpsert,
+    MonthUpsertResult,
     SummaryOut,
     TimeseriesOut,
 )
-from app.services.money import mom_pct
+from app.services.money import mom_pct, quantize_money, require_first_of_month
 from app.services.net_worth_calc import group_totals_for, load_balance_matrix, net_worth_for
 
 router = APIRouter(
@@ -192,4 +198,101 @@ async def summary(db: AsyncSession = Depends(get_db)) -> SummaryOut:
             )
             for group in ACCOUNT_GROUPS
         ],
+    )
+
+
+@router.get("/months/{month}", response_model=MonthBalancesOut)
+async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> MonthBalancesOut:
+    require_first_of_month(month)
+    snapshot = (
+        await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == month))
+    ).scalar_one_or_none()
+    if snapshot is None:
+        return MonthBalancesOut(
+            month=month, exists=False, recorded_on=None, notes=None, balances=[]
+        )
+    rows = (
+        (
+            await db.execute(
+                select(AccountBalance)
+                .where(AccountBalance.snapshot_id == snapshot.id)
+                .order_by(AccountBalance.account_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return MonthBalancesOut(
+        month=month,
+        exists=True,
+        recorded_on=snapshot.recorded_on,
+        notes=snapshot.notes,
+        balances=[BalanceEntry(account_id=r.account_id, balance=r.balance) for r in rows],
+    )
+
+
+@router.put("/months/{month}", response_model=MonthUpsertResult)
+async def put_month(
+    month: date, body: MonthUpsert, db: AsyncSession = Depends(get_db)
+) -> MonthUpsertResult:
+    require_first_of_month(month)
+    ids = [entry.account_id for entry in body.balances]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(status_code=422, detail="duplicate account_id in balances")
+    # Validate everything BEFORE any write so a rejected body creates no snapshot.
+    quantized: dict[int, Decimal] = {
+        entry.account_id: quantize_money(entry.balance, f"balance[account_id={entry.account_id}]")
+        for entry in body.balances
+    }
+    if ids:
+        known = set((await db.execute(select(Account.id).where(Account.id.in_(ids)))).scalars())
+        missing = sorted(set(ids) - known)
+        if missing:
+            raise HTTPException(status_code=422, detail=f"unknown account_id(s): {missing}")
+
+    snapshot = (
+        await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == month))
+    ).scalar_one_or_none()
+    snapshot_created = snapshot is None
+    if snapshot is None:
+        snapshot = NetWorthSnapshot(
+            month=month,
+            recorded_on=body.recorded_on or date.today(),
+            notes=body.notes,
+        )
+        db.add(snapshot)
+        await db.flush()
+    else:
+        provided = body.model_fields_set
+        if "recorded_on" in provided:
+            snapshot.recorded_on = body.recorded_on
+        if "notes" in provided:
+            snapshot.notes = body.notes
+
+    existing = {
+        row.account_id: row
+        for row in (
+            await db.execute(
+                select(AccountBalance).where(AccountBalance.snapshot_id == snapshot.id)
+            )
+        ).scalars()
+    }
+    created = updated = unchanged = 0
+    for account_id, value in quantized.items():
+        row = existing.get(account_id)
+        if row is None:
+            db.add(AccountBalance(snapshot_id=snapshot.id, account_id=account_id, balance=value))
+            created += 1
+        elif row.balance != value:
+            row.balance = value
+            updated += 1
+        else:
+            unchanged += 1
+    await db.commit()
+    return MonthUpsertResult(
+        month=month,
+        snapshot_created=snapshot_created,
+        created=created,
+        updated=updated,
+        unchanged=unchanged,
     )

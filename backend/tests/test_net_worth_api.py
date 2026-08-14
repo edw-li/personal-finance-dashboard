@@ -228,3 +228,116 @@ async def test_summary_empty_db(auth_client):
         "mom_pct": None,
         "groups": [],
     }
+
+
+async def test_get_month_missing_and_present(auth_client, db):
+    account = Account(name="Cash", slug="cash", group="cash", sort_order=1)
+    db.add(account)
+    await db.commit()
+
+    resp = await auth_client.get("/api/v1/net-worth/months/2026-05-01")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "month": "2026-05-01",
+        "exists": False,
+        "recorded_on": None,
+        "notes": None,
+        "balances": [],
+    }
+    assert (await auth_client.get("/api/v1/net-worth/months/2026-05-02")).status_code == 422
+
+
+async def test_put_month_creates_snapshot_and_upserts(auth_client, db):
+    account = Account(name="Cash", slug="cash", group="cash", sort_order=1)
+    card = Account(name="Card", slug="card", group="liability", sort_order=2)
+    db.add_all([account, card])
+    await db.commit()
+
+    resp = await auth_client.put(
+        "/api/v1/net-worth/months/2026-05-01",
+        json={
+            "recorded_on": "2026-05-14",
+            "notes": "first entry",
+            "balances": [
+                {"account_id": account.id, "balance": "1234.505"},
+                {"account_id": card.id, "balance": "-50.00"},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "month": "2026-05-01",
+        "snapshot_created": True,
+        "created": 2,
+        "updated": 0,
+        "unchanged": 0,
+    }
+
+    read = (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()
+    assert read["exists"] is True
+    assert read["recorded_on"] == "2026-05-14"
+    by_id = {b["account_id"]: b["balance"] for b in read["balances"]}
+    assert by_id[account.id] == "1234.51"  # server-side HALF_UP quantize
+    assert by_id[card.id] == "-50.00"
+
+    # Second put: one change, one identical, omission leaves the other row untouched.
+    resp = await auth_client.put(
+        "/api/v1/net-worth/months/2026-05-01",
+        json={"balances": [{"account_id": account.id, "balance": "1300.00"}]},
+    )
+    assert resp.json() == {
+        "month": "2026-05-01",
+        "snapshot_created": False,
+        "created": 0,
+        "updated": 1,
+        "unchanged": 0,
+    }
+    read = (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()
+    assert read["recorded_on"] == "2026-05-14"  # untouched: field wasn't sent
+    assert {b["account_id"]: b["balance"] for b in read["balances"]}[card.id] == "-50.00"
+
+
+async def test_put_month_validation(auth_client, db):
+    account = Account(name="Cash", slug="cash", group="cash", sort_order=1)
+    db.add(account)
+    await db.commit()
+    put = "/api/v1/net-worth/months/2026-05-01"
+
+    dup = await auth_client.put(
+        put,
+        json={
+            "balances": [
+                {"account_id": account.id, "balance": "1"},
+                {"account_id": account.id, "balance": "2"},
+            ]
+        },
+    )
+    assert dup.status_code == 422
+    assert "duplicate" in dup.json()["detail"]
+
+    unknown = await auth_client.put(
+        put,
+        json={
+            "balances": [
+                {"account_id": 999, "balance": "1"},
+            ]
+        },
+    )
+    assert unknown.status_code == 422
+    assert "999" in unknown.json()["detail"]
+
+    too_big = await auth_client.put(
+        put,
+        json={
+            "balances": [
+                {"account_id": account.id, "balance": "1000000000000"},
+            ]
+        },
+    )
+    assert too_big.status_code == 422
+
+    bad_month = await auth_client.put("/api/v1/net-worth/months/2026-05-02", json={"balances": []})
+    assert bad_month.status_code == 422
+    # Nothing was written by the failed puts:
+    read = (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()
+    assert read["exists"] is False

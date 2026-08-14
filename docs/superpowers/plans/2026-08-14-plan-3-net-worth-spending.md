@@ -1269,7 +1269,7 @@ cd .. && git add backend/app/api/net_worth.py backend/tests/test_net_worth_api.p
 - Modify: `backend/app/api/net_worth.py` (append endpoints)
 - Modify: `backend/tests/test_net_worth_api.py` (append tests)
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 async def test_get_month_missing_and_present(auth_client, db):
@@ -1367,9 +1367,9 @@ async def test_put_month_validation(auth_client, db):
 
 (The last assertion matters: validation must run BEFORE the snapshot insert, so a rejected body leaves no half-created snapshot. Structure the endpoint accordingly.)
 
-- [ ] **Step 2: Run — expect FAIL.**
+- [x] **Step 2: Run — expect FAIL.**
 
-- [ ] **Step 3: Append endpoints**
+- [x] **Step 3: Append endpoints**
 
 Extend the imports first: `from datetime import date`, `from decimal import Decimal`, `NetWorthSnapshot` (merge into the `app.models` import), `BalanceEntry, MonthBalancesOut, MonthUpsert, MonthUpsertResult` (merge into the schemas import), and `quantize_money, require_first_of_month` (merge into the `app.services.money` import). Then append:
 
@@ -1477,7 +1477,7 @@ async def put_month(
     )
 ```
 
-- [ ] **Step 4: Run — expect PASS; full gate; commit**
+- [x] **Step 4: Run — expect PASS; full gate; commit**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_net_worth_api.py -q -W error
