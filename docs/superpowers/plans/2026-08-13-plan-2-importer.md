@@ -4270,7 +4270,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _amain(workbook: Path, dry_run: bool) -> int:
-    data = workbook.read_bytes()
+    # One-shot CLI: blocking read before any awaits is fine (nothing else on the loop yet).
+    data = workbook.read_bytes()  # noqa: ASYNC240
     try:
         async with SessionLocal() as db:
             report = await run_import(data, db, dry_run=dry_run)
