@@ -320,8 +320,10 @@ only once).
 ### 5.3 Configure and test
 
 On the server, fill the `OCI_*` block in `.env`: the two keys, `OCI_BUCKET_NAME`,
-`OCI_NAMESPACE` (from 5.1), and `OCI_REGION` (your region's identifier, e.g.
-`us-sanjose-1`, shown in the console's region picker).
+`OCI_NAMESPACE` (from 5.1), and `OCI_REGION` — the region identifier **the bucket was
+created in** (the console's region picker at the top showed it in 5.1, e.g.
+`us-sanjose-1`). The endpoint is regional and the request signature embeds this value,
+so it must match the bucket's region exactly.
 
 ```bash
 sudo apt-get install -y python3-boto3
@@ -438,6 +440,16 @@ must show `\n`, never `\r \n`. (`.gitattributes` prevents this; a Linux clone is
 **Ports 80/443 time out but the security list is right** — Docker's iptables chains were
 clobbered (e.g. by restoring saved rules after Docker started): `sudo systemctl restart
 docker`.
+
+**Backup fails: `SignatureDoesNotMatch ... The secret key required to complete
+authentication could not be found. The region must be specified if this is not the home
+region for the tenancy.`** — the request's signature named the wrong region. The script
+passes `OCI_REGION` as boto3's `region_name` precisely for this; if it still occurs:
+(1) `OCI_REGION` doesn't match the region the *bucket* lives in — check the console's
+region picker while viewing the bucket; (2) the customer secret key was generated
+seconds ago — IAM replication to non-home regions can lag a few minutes; (3) the
+access/secret pair is mismatched — regenerate under My profile → Customer secret keys
+and re-copy both values.
 
 ## Security notes
 

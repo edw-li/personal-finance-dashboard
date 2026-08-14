@@ -53,16 +53,21 @@ DUMP_SIZE="$(du -h "$DUMP_FILE" | cut -f1)"
 echo "[$(date)] Dump complete: ${DUMP_FILE} (${DUMP_SIZE})"
 
 # Upload to OCI Object Storage and delete the backup that aged past retention
-python3 - "$S3_ENDPOINT" "$OCI_ACCESS_KEY" "$OCI_SECRET_KEY" \
+python3 - "$S3_ENDPOINT" "$OCI_REGION" "$OCI_ACCESS_KEY" "$OCI_SECRET_KEY" \
   "$OCI_BUCKET" "$DUMP_FILE" "$OBJECT_KEY" "$EXPIRED_KEY" <<'PYEOF'
 import sys, boto3
 from botocore.config import Config
 
-endpoint, access_key, secret_key, bucket, dump_file, obj_key, expired_key = sys.argv[1:8]
+endpoint, region, access_key, secret_key, bucket, dump_file, obj_key, expired_key = sys.argv[1:9]
 
+# region_name is REQUIRED: without it boto3 signs with us-east-1 in the SigV4
+# credential scope, which OCI only tolerates in the tenancy's home region
+# ("SignatureDoesNotMatch: The secret key ... could not be found. The region
+# must be specified if this is not the home region for the tenancy.")
 s3 = boto3.client(
     "s3",
     endpoint_url=endpoint,
+    region_name=region,
     aws_access_key_id=access_key,
     aws_secret_access_key=secret_key,
     config=Config(signature_version="s3v4"),
