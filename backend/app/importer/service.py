@@ -2,7 +2,7 @@
 
 Same code path for dry-run and apply (spec section 5): the appliers always run; dry-run
 rolls the session back instead of committing. Any parse error anywhere blocks the apply
-entirely — the report still carries every count so the diff can be reviewed.
+entirely — the report still carries every sheet's errors and warnings.
 """
 
 import io

@@ -69,3 +69,17 @@ def test_cli_parser_flags():
     assert args.workbook.name == "book.xlsx" and args.dry_run is True
     args = build_parser().parse_args(["book.xlsx"])
     assert args.dry_run is False
+
+
+async def test_apply_phase_error_rolls_back_everything(db):
+    # Parse-clean workbook whose APPLY phase errors (duplicate account slug detected in
+    # apply_net_worth): the orchestrator must roll back the entire run, not half-land it.
+    from tests.workbook_builder import default_net_worth_rows
+
+    rows = default_net_worth_rows()
+    rows[1][4] = "Checking!"  # slugs to 'checking', colliding with column 3's account
+    report = await run_import(build_workbook(net_worth=rows), db, dry_run=False)
+    assert report.has_errors and report.applied is False
+    assert await _count(db, Account) == 0
+    assert await _count(db, Security) == 0
+    assert await _count(db, TaxInput) == 0
