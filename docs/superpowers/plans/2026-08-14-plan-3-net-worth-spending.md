@@ -5146,6 +5146,11 @@ Seed list — extend with anything learned during execution:
   upserts make retry safe). Acceptable for a single user; revisit only if it ever bites.
 - client.ts now has a 15s default timeout and maps network failures to ApiError(0);
   caller-supplied AbortSignals are honored (and AbortError passes through untouched).
+- UI renames of accounts/categories are REVERTED by a sheet re-import (importer keys on
+  slug; sheet wins on name) — by design, import report shows it. A both-sides rename to
+  colliding values 500s on UNIQUE(name) with full rollback (accepted; accounts have the
+  same exposure). If re-imports persist post-Plan 3, give apply_spending the same
+  orphan-category warning apply_net_worth has (Task 6 review).
 - `accounts.group` has no DB CHECK constraint (app-layer only); an out-of-vocabulary
   value would KeyError the rollups. All write paths validate today — fold a
   CheckConstraint into whichever future migration next touches accounts (Task 4 review).
