@@ -4844,3 +4844,66 @@ Expected: ~16 commits, each scoped as above.
 - Upload endpoint live behind auth: dry-run default true, 400 on non-xlsx, 413 oversize, report JSON matches the CLI's.
 - The importer never stores derived values, never touches user-owned fields, and reports every quirk normalization as a warning.
 - Plan doc carries the filled reconciliation results and Forward notes for Plans 3+.
+
+## Forward notes for Plans 3+ (from Plan 2 execution, finalized 2026-08-15)
+
+**Data now live in the dev DB** (real import applied + reconciled, Task 15): Plans 3-5 can build
+against real data immediately. Prod import happens at Plan 6 deploy via the same CLI.
+
+- **NET WORTH != SUM(balances)** (Plan 3): the sheet's component accounts overlap —
+  Fidelity Traditional 401(k) = Employer Match + Reverse Rollover + Traditional 401(k);
+  Fidelity Roth 401(k) = Roth Basic + After-Tax. The sheet's own NET WORTH column excludes
+  a component subset (verified against r3/r39 cell values during planning). Plan 3's rollup
+  must decide: exclude component accounts (is_component flag or deactivate) or reproduce the
+  sheet's exclusion set. Verify against sheet cells before shipping the chart.
+- Spending data ends 2025-12 (2026 rows empty in the sheet); the wizard (Plan 3) starts
+  fresh from 2026-01. monthly_spending stores explicit sheet zeros (551 rows incl. 0.00s).
+- dividend_payments: importer is warn-only (sheet stores no payment dates; all current cells
+  are 0) — sanctioned deviation from spec §5's "aggregate entries". Plan 4's UI is the only
+  dividend entry path.
+- latest_prices: importer seeds insert-only with source='manual' (36 rows; ZI '#N/A' skipped);
+  the Plan 4 price service owns all updates. Never make the importer update prices.
+- **position_transactions ownership contract (Plan 4):** importer-owned rows have
+  sort_index > 0 (sheet row x 10) and are synced (incl. deletes) on re-import; UI-created
+  rows MUST keep sort_index 0 (default) or they will be deleted by the next import.
+  Folding orders by (sort_index, id) — sort_index 0 sorts FIRST, so UI rows fold BEFORE all
+  imported rows. If UI transaction entry lands before cutover, revisit (e.g. assign max+10
+  and exempt via a source flag).
+- Cost-basis cent drift (Plan 4 reconciliation): shares quantized to 6 dp and prices to 4 dp
+  make recomputed cost basis differ from sheet Transacted Value by up to ~$0.10 on 401(k)
+  fund rows — compare with tolerance, not equality.
+- espp_periods dates/labels and paycheck_profiles effective_date are DERIVED (sheet stores
+  none; rules documented in the Workbook reference). Plan 5's UIs must let the user edit
+  both. Stale periods from label advancement now WARN on import ("no longer derived");
+  they linger until manually deleted.
+- The ESPP "Taxation Calculator" block is a hypothetical what-if — never import it as a
+  sale (evidence: Positions holds all lot shares + the modeled next purchase; realized G/L 0;
+  ESPP Sale Component 0 in every tax year). sold_date/sold_price are UI-only.
+- **Taxes re-import: sheet wins within imported years** (values overwritten, stray
+  inputs/brackets sync-DELETED); years absent from the sheet are never touched. Plan 5
+  bracket-editor edits to sheet-covered years get clobbered by re-import — cutover order
+  matters (import first, then edit). Bracket hardening added during execution: all six
+  jurisdiction sections must be present (error otherwise), duplicate bracket rows error
+  (first wins), rates >1 or <0 warn.
+- tax_inputs.value is Numeric(14,4) (migration a3f86e58ac4d; its downgrade() is silently
+  lossy on populated data — acceptable, CI-only path). tax_input_definitions now has 43 keys
+  (2 CA state-engine keys added); dev DB seeded to 43 during Task 15.
+- **RefData rename semantics:** renaming a security's Name (same ticker) keeps holdings
+  attached via a per-run alias + warning — but the alias exists ONLY in the run where the
+  name changes. Fix Positions' Stock column to the new name before the NEXT import or a
+  synthetic duplicate will be minted then. The rename warning says so.
+- Parser strictness added during execution (all warn-or-error with row/col context):
+  non-'Average' string months in Spending error; NET WORTH terminal-band canary; pct fields
+  >1 warn ("looks like a percentage"); negative shares/prices warn; unreadable fees warn;
+  negative dividends warn; text-field length guards (account 80 / sector 80 / account-name
+  120 / category 80) error at parse time instead of DBAPIError at apply time.
+- client.ts still has no timeout/AbortSignal (deferred to Plan 3 with the real pages).
+- vitest pinned to major 3 for local Node 18.12; revisit when Node upgrades to 22 LTS.
+  RTL cleanup() must be called explicitly (no vitest globals mode).
+- Machine note: killing a backgrounded uvicorn on this box requires killing BOTH the
+  listening python PID (netstat) AND the uvicorn.exe wrapper, or the wrapper respawns the
+  server. Windows console renders the report's em-dashes as mojibake (cp1252) — cosmetic.
+- Endpoint accepted trade-offs: oversize uploads are read into memory once before the 413
+  (nginx caps bodies at 20MB in prod); unexpected mid-apply DB exceptions surface as 500
+  after full rollback (no partial writes — probe-verified); revisit only if account CRUD
+  ever makes name/slug divergence reachable.
