@@ -1761,6 +1761,27 @@ def test_parse_spending_missing_total_column_is_error():
     rows[0][3] = "NOT-TOTAL"
     parsed = parse_spending(_sheet("Spending", spending=rows))
     assert any("TOTAL" in e for e in parsed.issues.errors)
+
+
+def test_parse_spending_string_month_is_error_not_silent_skip():
+    from app.importer.parsers import parse_spending
+
+    rows = default_spending_rows()
+    rows[2][0] = "2024-01-01"  # CSV-pasted month as text must not vanish silently
+    parsed = parse_spending(_sheet("Spending", spending=rows))
+    assert any("expected a month date" in e for e in parsed.issues.errors)
+    assert len(parsed.months) == 1  # only February survives
+    # the 'Average' row is still skipped silently
+    assert not any("Average" in e for e in parsed.issues.errors)
+
+
+def test_parse_net_worth_warns_when_terminal_band_missing():
+    from app.importer.parsers import parse_net_worth
+
+    rows = default_net_worth_rows()
+    rows[0][8] = None  # remove the 'NET WORTH' band header
+    parsed = parse_net_worth(_sheet("Net Worth", net_worth=rows))
+    assert any("terminal band not found" in w for w in parsed.issues.warnings)
 ```
 
 Add `default_net_worth_rows, default_spending_rows` to the workbook_builder import line.
@@ -1818,12 +1839,14 @@ def parse_net_worth(ws) -> ParsedNetWorth:
     bands, names = header[0], header[1]
     accounts: list[ParsedAccountColumn] = []
     current_band: str | None = None
+    terminal_seen = False
     for index, band_cell in enumerate(bands):
         column = index + 1
         band_text = _text(band_cell)
         if band_text is not None and column >= 3:
             current_band = band_text
         if current_band == NET_WORTH_TERMINAL_BAND:
+            terminal_seen = True
             break  # computed totals begin — no more account columns
         name = _text(names[index]) if index < len(names) else None
         if column < 3 or name is None or name == "%":
@@ -1840,6 +1863,11 @@ def parse_net_worth(ws) -> ParsedNetWorth:
             continue
         accounts.append(
             ParsedAccountColumn(name=name, group=group, sort_order=column, column=column)
+        )
+    if not terminal_seen:
+        issues.warn(
+            f"Net Worth: 'NET WORTH' terminal band not found within the first "
+            f"{NET_WORTH_HEADER_SCAN_COLS} columns — account columns may be truncated"
         )
 
     snapshots: list[ParsedSnapshot] = []
@@ -1943,14 +1971,16 @@ def parse_spending(ws) -> ParsedSpending:
         if first is None:
             break
         if isinstance(first, str):
-            continue  # 'Average' summary row
+            if first.strip() == "Average":
+                continue  # the sheet's computed summary row
+            issues.error(f"{cell_ref('Spending', rnum, 1)}: expected a month date, got {first!r}")
+            continue
         if not isinstance(first, datetime.date):  # covers datetime too (subclass)
             continue  # numeric-year rollup row
-        month = first_of_month(
-            to_date_strict(first, ctx=cell_ref("Spending", rnum, 1), issues=issues),
-            ctx=cell_ref("Spending", rnum, 1),
-            issues=issues,
-        )
+        month = to_date_strict(first, ctx=cell_ref("Spending", rnum, 1), issues=issues)
+        if month is None:
+            continue
+        month = first_of_month(month, ctx=cell_ref("Spending", rnum, 1), issues=issues)
         raw_amounts = {category: row[category.column - 1] for category in categories}
         raw_net_pay = row[net_pay_column - 1]
         if all(value is None for value in raw_amounts.values()) and raw_net_pay is None:
