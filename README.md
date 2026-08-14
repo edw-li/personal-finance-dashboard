@@ -1,24 +1,31 @@
 # Personal Finance Dashboard
 
 A self-hosted, single-user personal finance dashboard — React 19 + TypeScript (Vite), FastAPI
-(Python 3.12), PostgreSQL 16, and Nginx, deployed with Docker Compose behind Cloudflare.
+(Python 3.12), PostgreSQL 16, and Nginx, deployed with Docker Compose.
 Design details live in [`docs/superpowers/specs/2026-08-12-finance-dashboard-design.md`](docs/superpowers/specs/2026-08-12-finance-dashboard-design.md).
 
 ```
-Browser ── Cloudflare (TLS, proxy) ── Nginx container (SPA static + /api proxy, 80/443)
-                                          │
-                                          ▼
-                                  FastAPI container (uvicorn :8000, internal only)
-                                          │ asyncpg (Docker bridge → host)
-                                          ▼
-                              PostgreSQL 16 on the instance host
-                                          │ nightly cron: pg_dump
-                                          ▼
-                              OCI Object Storage bucket (backups)
+Browser ── HTTPS ──[optional: Cloudflare proxy, Part 6]── Nginx container (SPA static + /api proxy, 80/443)
+                                                              │
+                                                              ▼
+                                                      FastAPI container (uvicorn :8000, internal only)
+                                                              │ asyncpg (Docker bridge → host)
+                                                              ▼
+                                                  PostgreSQL 16 on the instance host
+                                                              │ nightly cron: pg_dump
+                                                              ▼
+                                                  OCI Object Storage bucket (backups)
 ```
 
-This README is the full deployment runbook: OCI Always Free instance bring-up → DNS/TLS →
-server setup → deploy → verify → backups → updates → troubleshooting.
+This README is the full deployment runbook: OCI Always Free instance bring-up → server
+setup → deploy → verify → backups → updates → troubleshooting. The default setup is
+accessed directly at the instance's public IP over HTTPS with a self-signed certificate —
+no domain needed. Putting a real domain in front later is **Part 6**, and switching takes
+minutes (the configs are shared between both modes).
+
+> **Why not plain HTTP?** Without TLS, your login password and all financial data cross
+> the internet in cleartext on every visit. The self-signed cert costs one extra command
+> and a one-time browser warning, and everything is encrypted.
 
 ---
 
@@ -27,22 +34,20 @@ server setup → deploy → verify → backups → updates → troubleshooting.
 You need:
 
 - An **OCI account** with Always Free resources available (see capacity check below).
-- A **domain managed by Cloudflare** (the dashboard runs on a subdomain of it).
 - **GitHub access** to this private repo.
 - An **SSH keypair** (`ssh-keygen -t ed25519` in PowerShell if you don't have one;
   the public key is `~/.ssh/id_ed25519.pub`).
+- No domain required — that's optional Part 6.
 
-Then prepare the repo:
+Then prepare:
 
-1. **Pick the subdomain** (e.g. `finance.your-domain.com`) and set it in `nginx.conf` —
-   replace `finance.YOUR-DOMAIN.com` in **both** server blocks.
-2. **Commit and push to `main`.** The server deploys whatever is on GitHub, so the deploy
+1. **Push `main` to GitHub.** The server deploys whatever is on GitHub, so the deploy
    files (`nginx.conf`, `docker-compose.prod.yml`, `.env.example`,
    `backend/scripts/backup_db.sh`, this README) must be pushed first.
-3. **Create a server-only GitHub token**: GitHub → Settings → Developer settings →
+2. **Create a server-only GitHub token**: GitHub → Settings → Developer settings →
    Personal access tokens → **Fine-grained tokens** → Generate new token. Scope it to
    **only this repository** with **Contents: Read-only**, set an expiry, and save it —
-   it is used once in Part 4 to clone. Never reuse a broad-scope token on the server.
+   it is used once in Part 3 to clone. Never reuse a broad-scope token on the server.
 
 ## Part 1 — Provision the OCI instance
 
@@ -78,12 +83,17 @@ console versions, but every field below is in the wizard):
 | Boot volume | default (~47 GB) |
 
 Click **Create**. When it reaches *Running*, copy the **Public IP address** from the
-instance details page.
+instance details page — it's how you'll reach the dashboard, so keep it handy.
 
 > **"Out of capacity" error**: Ampere A1 free capacity fluctuates. Retry with fewer
 > OCPUs, a different availability domain, or just try again later (early mornings work
 > best). Don't fall back to the AMD `VM.Standard.E2.1.Micro` — 1 GB RAM is too small to
 > build the images.
+
+> **IP stability**: the default ephemeral public IP survives reboots and is only lost if
+> the instance is terminated. If you ever recreate the instance, either update the IP
+> everywhere it appears (`CORS_ORIGINS`, the cert SAN in 2.5, your bookmarks) or assign a
+> **Reserved Public IP** (Networking → Reserved IPs) so it never changes.
 
 ### 1.3 Open ports 80/443
 
@@ -96,32 +106,20 @@ its **Security List** → **Add Ingress Rules**:
 | `0.0.0.0/0` | TCP | `443` |
 
 Port 22 is already open by default. (Optional hardening: edit the 22 rule's source to
-your home IP.) If you reused the other instance's subnet, these rules may already exist.
+your home IP — and since only you use the dashboard, you can scope 80/443 the same way.)
+If you reused the other instance's subnet, these rules may already exist.
 
-## Part 2 — Cloudflare DNS + origin certificate
-
-On [dash.cloudflare.com](https://dash.cloudflare.com), select your domain's zone:
-
-1. **DNS record**: DNS → Records → Add record → Type `A`, Name `finance`,
-   IPv4 address = the instance's public IP, **Proxy status: Proxied** (orange cloud).
-2. **TLS mode**: SSL/TLS → Overview → **Full (strict)**. (If other proxied hosts on the
-   zone don't have origin certs yet, leave the zone mode as-is — don't break them.)
-3. **Origin certificate**: SSL/TLS → **Origin Server** → Create Certificate → keep the
-   default hostnames (`*.your-domain.com`, `your-domain.com` — these cover the
-   subdomain) → 15 years → Create. Copy the **Origin Certificate** and **Private Key**
-   into local files now — the key is shown only once. They go onto the server in Part 3.
-
-## Part 3 — Server setup
+## Part 2 — Server setup
 
 SSH in: `ssh ubuntu@<public-ip>`
 
-### 3.1 Base packages
+### 2.1 Base packages
 
 ```bash
 sudo apt-get update && sudo apt-get upgrade -y
 ```
 
-### 3.2 Docker
+### 2.2 Docker
 
 ```bash
 sudo apt-get install -y ca-certificates curl
@@ -142,7 +140,7 @@ sudo usermod -aG docker $USER
 newgrp docker
 ```
 
-### 3.3 PostgreSQL 16 (on the host)
+### 2.3 PostgreSQL 16 (on the host)
 
 ```bash
 sudo apt-get install -y postgresql postgresql-contrib
@@ -181,7 +179,7 @@ Restart:
 sudo systemctl restart postgresql
 ```
 
-### 3.4 Firewall: lock down port 5432
+### 2.4 Firewall: lock down port 5432
 
 The OCI security list already blocks 5432 from the internet; this is defense-in-depth on
 the host. OCI Ubuntu images ship an iptables INPUT chain that ends in a catch-all REJECT,
@@ -200,21 +198,32 @@ sudo netfilter-persistent save
 (Ports 80/443 need no iptables changes: Docker publishes them through the FORWARD chain,
 which it manages itself.)
 
-### 3.5 Install the Cloudflare origin certificate
+### 2.5 TLS certificate (self-signed)
+
+Nginx serves HTTPS from `/etc/ssl/finance/`. For IP-only access, generate a self-signed
+certificate with the instance's public IP in the SAN (10-year validity):
 
 ```bash
-sudo mkdir -p /etc/ssl/cloudflare
-sudo nano /etc/ssl/cloudflare/origin.pem       # paste the Origin Certificate
-sudo nano /etc/ssl/cloudflare/origin-key.pem   # paste the Private Key
-sudo chmod 644 /etc/ssl/cloudflare/origin.pem
-sudo chmod 600 /etc/ssl/cloudflare/origin-key.pem
+sudo mkdir -p /etc/ssl/finance
+sudo openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+  -keyout /etc/ssl/finance/key.pem \
+  -out /etc/ssl/finance/cert.pem \
+  -subj "/CN=finance-dashboard" \
+  -addext "subjectAltName=IP:<public-ip>"
+sudo chmod 644 /etc/ssl/finance/cert.pem
+sudo chmod 600 /etc/ssl/finance/key.pem
 ```
 
-The frontend container mounts this directory read-only.
+Browsers will show a warning the first time because no public authority vouches for the
+cert — the connection is still fully encrypted. Accept it once per browser, or silence it
+permanently by importing `cert.pem` into your OS trust store (see 3.4).
 
-## Part 4 — Deploy
+If you later put a domain in front, the same two file paths just get different contents —
+see Part 6.
 
-### 4.1 Clone
+## Part 3 — Deploy
+
+### 3.1 Clone
 
 Use the fine-grained read-only token from Part 0:
 
@@ -223,7 +232,7 @@ git clone https://<github-username>:<server-token>@github.com/edw-li/personal-fi
 cd ~/personal-finance-dashboard
 ```
 
-### 4.2 Configure `.env`
+### 3.2 Configure `.env`
 
 ```bash
 cp .env.example .env
@@ -235,16 +244,16 @@ Fill in every value:
 
 | Variable | Value |
 |---|---|
-| `POSTGRES_USER` / `POSTGRES_DB` | `finance` / `finance` (as created in 3.3) |
-| `POSTGRES_PASSWORD` | the password from 3.3 |
+| `POSTGRES_USER` / `POSTGRES_DB` | `finance` / `finance` (as created in 2.3) |
+| `POSTGRES_PASSWORD` | the password from 2.3 |
 | `ENVIRONMENT` | `prod` |
 | `SECRET_KEY` | `openssl rand -hex 32` (prod refuses to boot with < 32 bytes) |
-| `CORS_ORIGINS` | exactly `https://finance.your-domain.com` (comma-separated if you ever add more; `*` is rejected) |
+| `CORS_ORIGINS` | exactly `https://<public-ip>` — the origin you access the app at (comma-separated if you ever add a domain; `*` is rejected) |
 | `ADMIN_EMAIL` | your login email — **keep this stable**: the seed renames the admin account to match it on every boot, so changing it later changes your login |
 | `ADMIN_PASSWORD` | your login password, 8–72 bytes (bcrypt limit) |
-| `OCI_*` | backup settings — fill in during Part 6 (values may be blank until then; they're only read by the backup script) |
+| `OCI_*` | backup settings — fill in during Part 5 (values may be blank until then; they're only read by the backup script) |
 
-### 4.3 Build and start
+### 3.3 Build and start
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
@@ -256,7 +265,7 @@ which requires migrations and the admin seed to have succeeded — before starti
 If it fails, nothing is silently broken: the command errors and
 `docker compose -f docker-compose.prod.yml logs backend` shows why.
 
-### 4.4 Verify
+### 3.4 Verify
 
 ```bash
 # Both services up, backend "(healthy)"
@@ -265,17 +274,23 @@ docker compose -f docker-compose.prod.yml ps
 # Migrations applied, admin seeded, "Application startup complete"
 docker compose -f docker-compose.prod.yml logs backend
 
-# API through nginx over TLS (-k: origin cert isn't in the local trust store)
+# API through nginx over TLS (-k: self-signed cert isn't in curl's trust store)
 curl -sk https://localhost/api/v1/health     # → {"status":"ok"}
 
 # HTTP redirects to HTTPS
 curl -sI http://localhost/ | head -1         # → HTTP/1.1 301 Moved Permanently
 ```
 
-Then from your own machine: open **https://finance.your-domain.com** and log in with
-`ADMIN_EMAIL` / `ADMIN_PASSWORD`.
+Then from your own machine: open **`https://<public-ip>`**. Expect the browser's
+self-signed-certificate warning → *Advanced* → *Proceed* (a one-time acknowledgment per
+browser). Log in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.
 
-## Part 5 — Updating the app
+To remove the warning for good (optional): copy the cert down —
+`scp ubuntu@<public-ip>:/etc/ssl/finance/cert.pem .` — and import it into your OS trust
+store (Windows: double-click → Install Certificate → Local Machine → *Trusted Root
+Certification Authorities*).
+
+## Part 4 — Updating the app
 
 ```bash
 cd ~/personal-finance-dashboard
@@ -289,23 +304,23 @@ the backend container's IP within ~10 s of a backend-only redeploy (the `resolve
 variable `proxy_pass` in `nginx.conf`) — if API calls ever 502 after a redeploy anyway,
 `docker compose -f docker-compose.prod.yml restart frontend` clears it.
 
-## Part 6 — Nightly backups to OCI Object Storage
+## Part 5 — Nightly backups to OCI Object Storage
 
-### 6.1 Create the bucket
+### 5.1 Create the bucket
 
 ☰ → **Storage → Buckets** → **Create Bucket** → name `finance-db-backups`, keep defaults
 (private visibility). On the bucket details page, note the **Namespace** value.
 
-### 6.2 Create S3-compatible credentials
+### 5.2 Create S3-compatible credentials
 
 Console top-right profile icon → **My profile** → under Resources: **Customer secret
 keys** → **Generate secret key**. Copy the **Access Key** and the **Secret Key** (shown
 only once).
 
-### 6.3 Configure and test
+### 5.3 Configure and test
 
 On the server, fill the `OCI_*` block in `.env`: the two keys, `OCI_BUCKET_NAME`,
-`OCI_NAMESPACE` (from 6.1), and `OCI_REGION` (your region's identifier, e.g.
+`OCI_NAMESPACE` (from 5.1), and `OCI_REGION` (your region's identifier, e.g.
 `us-sanjose-1`, shown in the console's region picker).
 
 ```bash
@@ -318,7 +333,7 @@ Expected output ends with `Backup complete.`; the object
 `backups/finance_<date>.sql.gz` appears in the bucket. The script keeps 30 days of
 backups (each run deletes the dump from 30 days prior).
 
-### 6.4 Schedule
+### 5.4 Schedule
 
 ```bash
 crontab -e
@@ -328,7 +343,7 @@ crontab -e
 0 3 * * * /home/ubuntu/personal-finance-dashboard/backend/scripts/backup_db.sh >> /home/ubuntu/finance-backup.log 2>&1
 ```
 
-### 6.5 Restore drill (do this once now, and after any schema change you care about)
+### 5.5 Restore drill (do this once now, and after any schema change you care about)
 
 ```bash
 # Download a backup: bucket → object → Download (or scp it to the server)
@@ -349,6 +364,36 @@ docker compose -f docker-compose.prod.yml start backend
 sudo -u postgres dropdb finance_restore
 ```
 
+## Part 6 — Optional: put a domain in front (Cloudflare)
+
+Worth doing if you get tired of typing an IP, want a browser-trusted padlock, or want
+Cloudflare's proxy shielding the origin. Prerequisite: a domain whose DNS is managed by
+Cloudflare. On [dash.cloudflare.com](https://dash.cloudflare.com), select the zone:
+
+1. **DNS record**: DNS → Records → Add record → Type `A`, Name `finance` (→
+   `finance.your-domain.com`), IPv4 address = the instance's public IP,
+   **Proxy status: Proxied** (orange cloud).
+2. **Origin certificate** (replaces the self-signed pair; Cloudflare-signed, valid up to
+   15 years, trusted *through* the Cloudflare proxy): SSL/TLS → **Origin Server** →
+   Create Certificate → keep the default hostnames → Create. On the server, paste the
+   **Origin Certificate** over `/etc/ssl/finance/cert.pem` and the **Private Key** over
+   `/etc/ssl/finance/key.pem` (the key is shown only once; keep the same file
+   permissions), then reload nginx:
+   ```bash
+   docker compose -f docker-compose.prod.yml restart frontend
+   ```
+3. **TLS mode**: SSL/TLS → Overview → **Full (strict)**. (Zone-wide setting — fine if
+   your other proxied hosts also have origin certs.)
+4. **Backend origin check**: in `.env`, set
+   `CORS_ORIGINS=https://finance.your-domain.com` (comma-add the old
+   `https://<public-ip>` origin if you want both to keep working), then
+   `docker compose -f docker-compose.prod.yml up -d` to recreate the backend.
+5. Optional: enable **HSTS** (SSL/TLS → Edge Certificates) — careful: it applies
+   zone-wide to every proxied site on the domain.
+
+Direct `https://<public-ip>` visits will show cert warnings after this (the origin cert
+only names the domain) — expected; use the domain.
+
 ## Troubleshooting
 
 **Backend unhealthy / compose up fails** — `docker compose -f docker-compose.prod.yml
@@ -356,7 +401,7 @@ logs backend`. Alembic or seed errors print there; the healthcheck exists precis
 these fail the deploy instead of 502ing.
 
 **`no pg_hba.conf entry for host "172.x.y.z"`** — the container's subnet isn't covered.
-The `172.16.0.0/12` line in 3.3 covers all Docker bridges; check it was added and
+The `172.16.0.0/12` line in 2.3 covers all Docker bridges; check it was added and
 `sudo systemctl restart postgresql`.
 
 **Backend can't reach Postgres at all** — confirm the bridge gateway:
@@ -369,16 +414,22 @@ before Docker creates the bridge. `sudo systemctl restart postgresql` fixes it; 
 recurs, set `listen_addresses = '*'` (safe here: pg_hba + the iptables DROP still deny
 outside access).
 
-**Site unreachable (Cloudflare 521/522)** — Cloudflare can't reach the origin: security
-list missing 80/443 (1.3), containers down (`docker compose ps`), or the DNS record
-points at the wrong IP.
+**Site unreachable at `https://<public-ip>`** — security list missing 80/443 (1.3),
+containers down (`docker compose ps`), or the frontend container crash-looping on an
+nginx config/cert-path error (`docker compose logs frontend`).
 
-**Cloudflare 526** — TLS mode is Full (strict) but the origin cert doesn't cover the
-subdomain or isn't installed at `/etc/ssl/cloudflare/` (3.5).
+**Browser cert warning** — expected in IP mode (self-signed; see 3.4 to silence). In
+domain mode via the domain it is *not* expected — re-check Part 6 step 2.
 
 **Login fails with a CORS error in the browser console** — `CORS_ORIGINS` must exactly
-match `https://finance.your-domain.com` (scheme included, no trailing slash). Edit
-`.env`, then `docker compose -f docker-compose.prod.yml up -d` to recreate the backend.
+match the origin in the address bar (scheme included, no trailing slash). Edit `.env`,
+then `docker compose -f docker-compose.prod.yml up -d` to recreate the backend.
+
+**(Domain mode) Cloudflare 521/522** — Cloudflare can't reach the origin: security list,
+containers down, or DNS record pointing at the wrong IP.
+
+**(Domain mode) Cloudflare 526** — TLS mode is Full (strict) but the origin cert wasn't
+installed correctly (Part 6 step 2).
 
 **`start.sh: not found` or exec format errors in the backend container** — CRLF line
 endings sneaked into a checkout. Verify on the server: `od -c backend/start.sh | head -2`
@@ -396,7 +447,9 @@ docker`.
   build context).
 - Postgres: bound to localhost + Docker bridge, scram auth, iptables DROP on 5432, OCI
   security list closed. Only 22/80/443 are reachable from outside.
-- All traffic is HTTPS end-to-end (Cloudflare edge cert → origin cert), HSTS enabled.
+- All traffic is TLS-encrypted. The self-signed cert doesn't prove the server's identity
+  to a first-time browser (trust-on-first-use) — import it into your trust store, or use
+  domain mode (Part 6), to close that gap.
 - The whole app sits behind JWT auth; only `/login` and `/api/v1/health` are public.
 - Backups live in a private bucket under scoped S3 credentials. (Optional hardening:
   pipe the dump through `gpg --symmetric` before upload.)

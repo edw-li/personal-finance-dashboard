@@ -31,4 +31,4 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - /etc/ssl/cloudflare:/etc/ssl/cloudflare:ro
+      - /etc/ssl/finance:/etc/ssl/finance:ro
