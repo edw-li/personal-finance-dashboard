@@ -56,6 +56,7 @@ jobs:
       - run: npm ci
       # No --max-warnings 0: the react-refresh warning on useAuth is plan-sanctioned (warn).
       - run: npm run lint
+      - run: npm test
       - run: npm run build
 
   docker-build:
