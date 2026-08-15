@@ -2192,9 +2192,12 @@ def test_default_cron_fires_on_weekdays_not_tue_sat():
     assert trigger.get_next_fire_time(None, saturday).weekday() == 0  # skips the weekend
 
 
-def test_build_trigger_falls_back_on_garbage():
-    trigger = build_trigger("not a cron at all")
-    assert isinstance(trigger, CronTrigger)  # falls back to the default, never raises
+def test_build_trigger_falls_back_to_the_default_schedule():
+    garbage = build_trigger("not a cron at all")
+    default = build_trigger(DEFAULT_PRICE_REFRESH_CRON)
+    anchor = datetime(2026, 8, 10, 9, 0, tzinfo=ZoneInfo(SCHEDULER_TIMEZONE))
+    # Same resolved schedule, not merely "some CronTrigger" (Task 7 review I3).
+    assert garbage.get_next_fire_time(None, anchor) == default.get_next_fire_time(None, anchor)
 
 
 async def test_read_cron_setting_envelope_and_fallbacks(db):
@@ -2204,6 +2207,12 @@ async def test_read_cron_setting_envelope_and_fallbacks(db):
     assert await read_cron_setting(db) == "0 6 * * *"
     setting = await db.get(AppSetting, "price_refresh_cron")
     setting.value = {"value": 123}  # envelope holds a non-string — fall back
+    await db.commit()
+    assert await read_cron_setting(db) == DEFAULT_PRICE_REFRESH_CRON
+    setting.value = "10 13 * * mon-fri"  # bare scalar — envelope is convention-only
+    await db.commit()
+    assert await read_cron_setting(db) == DEFAULT_PRICE_REFRESH_CRON
+    setting.value = {"value": "   "}  # whitespace-only cron
     await db.commit()
     assert await read_cron_setting(db) == DEFAULT_PRICE_REFRESH_CRON
 ```
@@ -2282,6 +2291,9 @@ async def start_scheduler() -> AsyncIOScheduler:
         id="price_refresh",
         coalesce=True,
         max_instances=1,
+        # NOTE: with the in-memory job store, next_run_time is recomputed from *now*
+        # at every boot — a restart spanning 13:10 skips that day's refresh entirely;
+        # misfire_grace_time only covers a busy loop within one process (Task 7 review).
         misfire_grace_time=3600,
     )
     scheduler.start()
@@ -2294,6 +2306,8 @@ async def start_scheduler() -> AsyncIOScheduler:
 Replace the app construction with:
 
 ```python
+import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -2305,17 +2319,32 @@ from app.api import auth, import_, net_worth, spending
 from app.config import settings
 from app.rate_limit import limiter
 
+# uvicorn configures only its own loggers — application records (scheduler boots, price
+# refresh results) otherwise fall through to logging.lastResort at WARNING and all INFO
+# is silently dropped (Task 7 review I1). basicConfig is a no-op if a root handler
+# already exists, so this never fights an outer logging config.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler = None
     if settings.scheduler_enabled:
         from app.services.scheduler import start_scheduler
 
-        scheduler = await start_scheduler()
-    yield
-    if scheduler is not None:
-        scheduler.shutdown(wait=False)
+        try:
+            scheduler = await start_scheduler()
+        except Exception:
+            # A background nicety must never veto the API (Task 7 review I2): serve
+            # without refreshes and say so — ERROR is visible even unconfigured.
+            logging.getLogger(__name__).exception("scheduler failed to start — API continues")
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            # Async under the hood: shutdown() only schedules the real stop on the
+            # loop; uvicorn keeps the loop alive past this return (Task 7 review M2).
+            scheduler.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -2339,6 +2368,20 @@ modules that don't exist yet.
 # Dev-box only: PEM bundle for yfinance behind a TLS-intercepting proxy (see README/plan).
 # YFINANCE_CA_BUNDLE=
 ```
+
+- [ ] **Step 4c: Fix the seeded cron to day names** — in `backend/app/seed.py`
+`DEFAULT_SETTINGS`, the value becomes `"10 13 * * mon-fri"` (comment unchanged), and any
+already-seeded DB row needs the one-row UPDATE (see the forward notes' prod gotcha).
+
+- [ ] **Step 4d: Pin the no-scheduler invariant in `backend/tests/conftest.py`** —
+session-scoped autouse fixture setting `settings.scheduler_enabled = False` (ASGITransport
+never runs the lifespan today; this pins it for any future TestClient/LifespanManager
+use — Task 7 review M7).
+
+- [ ] **Step 4e: Idempotent cron-repair data migration** — `alembic revision -m "repair
+numeric price refresh cron"`; upgrade() executes the guarded UPDATE (only the exact
+mis-seeded `10 13 * * 1-5` value → `mon-fri`; user edits untouched); downgrade() is a
+no-op (one-way repair). Apply to the dev DB; `alembic check` stays clean.
 
 - [ ] **Step 5: Run the scheduler tests + full suite** — expected: PASS (the suite proves
 app import still works with the lifespan in place).
@@ -2364,7 +2407,7 @@ Expected: `price refresh scheduled: '10 13 * * mon-fri' (America/Los_Angeles)` l
 - [ ] **Step 7: Full gate + commit**
 
 ```bash
-git add backend/app/services/scheduler.py backend/app/main.py backend/.env.example backend/tests/test_scheduler.py
+git add backend/app/services/scheduler.py backend/app/main.py backend/.env.example backend/app/seed.py backend/tests/test_scheduler.py backend/tests/conftest.py backend/alembic/versions/*repair_numeric_price_refresh_cron*
 git commit -m "feat: APScheduler price-refresh cron wired into app lifespan"
 ```
 
@@ -5265,11 +5308,18 @@ with execution findings):
 - The scheduler reads price_refresh_cron ONCE at boot — changing the setting requires a
   backend restart (Plan 6 settings UI should say so, or Plan 6 adds re-scheduling).
 - PROD GOTCHA (Task 7 escalation): prod's app_settings row was seeded with the numeric
-  cron `10 13 * * 1-5`, which APScheduler reads as Tue-Sat (0=Mon numbering). Seed +
-  dev DB fixed to `10 13 * * mon-fri`; the seed is insert-only, so PROD needs the same
-  one-row UPDATE at the Plan 4/6 deploy:
-  UPDATE app_settings SET value = '{"value": "10 13 * * mon-fri"}'
-  WHERE key = 'price_refresh_cron' AND value->>'value' = '10 13 * * 1-5';
+  cron `10 13 * * 1-5`, which APScheduler reads as Tue-Sat (0=Mon numbering). Fixed
+  three ways: seed uses day names, dev DB updated, and an idempotent Alembic data
+  migration repairs any DB still holding the exact mis-seeded value at deploy (guarded
+  WHERE — never touches a user edit).
+- Scheduler operational notes (Task 7 review, accepted): a restart spanning 13:10 skips
+  that day's refresh (in-memory job store recomputes next_run_time from now; misfire
+  grace only covers a busy loop) — the manual refresh button is the recovery; an
+  in-flight job cancelled by shutdown logs a scary CancelledError traceback (whole-run
+  atomic, no corruption); `* * * * *` would hammer Yahoo — Plan 6's settings UI needs a
+  minimum-interval guard; start.sh must NEVER gain `--workers N` without a scheduler
+  singleton guard (N workers = N schedulers); scheduler start failure no longer vetoes
+  the API (serves without refreshes, logs ERROR).
 - quoted_at = the BAR date (UTC midnight), not fetch time — freshness reads honest but
   "today 00:00Z" can look ~a day old to naive comparisons; UI compares dates only.
 - refresh_prices commits its own session; the POST endpoint passes the request session —
