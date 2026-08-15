@@ -94,6 +94,8 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
       '2026-08-01',
       expect.objectContaining({
         balances: [{ account_id: 1, balance: '1600.00' }],
+        notes: null, // blank notes field CLEARS server-side — load-bearing contract
+        recorded_on: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       }),
     )
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
@@ -111,4 +113,31 @@ it('blocks Next while a balance is not a number', async () => {
   expect(
     (screen.getByRole('button', { name: /next: spending/i }) as HTMLButtonElement).disabled,
   ).toBe(true)
+})
+
+it('resets notes/date on month switch and survives same-month clicks', async () => {
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-08-01',
+    recorded_on: month === '2026-08-01' ? '2026-08-05' : null,
+    notes: month === '2026-08-01' ? 'august note' : null,
+    balances: month === '2026-08-01' ? [{ account_id: 1, balance: '1500.00' }] : [],
+  }))
+  renderWizard()
+  const notesInput = (await screen.findByLabelText(/notes/i)) as HTMLInputElement
+  expect(notesInput.value).toBe('august note')
+
+  // Clicking the already-selected month must NOT blank the wizard (the [month]
+  // effect never re-runs, so nothing would ever clear an unconditional loading flip).
+  fireEvent.click(screen.getByRole('button', { name: 'Aug 2026 — no data' }))
+  expect(screen.getByLabelText('Checking')).toBeDefined()
+
+  // Switching months must reset notes/date — never leak them into the new month.
+  fireEvent.click(screen.getByRole('button', { name: 'Jun 2026 — no data' }))
+  await waitFor(() => {
+    expect((screen.getByLabelText(/notes/i) as HTMLInputElement).value).toBe('')
+  })
+  expect(
+    (screen.getByLabelText(/recorded on/i) as HTMLInputElement).value,
+  ).not.toBe('2026-08-05')
 })

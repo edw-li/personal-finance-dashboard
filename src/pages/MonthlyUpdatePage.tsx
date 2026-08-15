@@ -106,8 +106,12 @@ export default function MonthlyUpdatePage() {
         setBalances(
           Object.fromEntries(activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
         )
-        if (thisMonth.exists && thisMonth.recorded_on) setRecordedOn(thisMonth.recorded_on)
-        if (thisMonth.exists && thisMonth.notes) setNotes(thisMonth.notes)
+        // Reset on EVERY month load — stale notes/date must never leak into another
+        // month's save (the next PUT would silently write them there).
+        setRecordedOn(
+          thisMonth.exists && thisMonth.recorded_on ? thisMonth.recorded_on : todayIso(),
+        )
+        setNotes(thisMonth.exists && thisMonth.notes ? thisMonth.notes : '')
 
         const prevSum = priorMonth.exists
           ? priorMonth.balances.reduce((acc, b) => {
@@ -195,6 +199,9 @@ export default function MonthlyUpdatePage() {
           filledMonths={coveredMonths}
           selected={month}
           onSelect={(m) => {
+            // Same-month click: the [month] effect would never re-run, so an
+            // unconditional setLoading(true) would blank the wizard forever.
+            if (m === month) return
             // Month change refetches via the [month] dep — flip the fetch state here,
             // in the event handler, never in the effect (react-hooks/set-state-in-effect).
             setLoading(true)
@@ -298,7 +305,7 @@ export default function MonthlyUpdatePage() {
             <span />
             <button
               className="button button-primary"
-              disabled={!balancesValid}
+              disabled={loading || accounts.length === 0 || !balancesValid}
               onClick={() => setStep('spending')}
             >
               Next: spending
@@ -392,9 +399,14 @@ export default function MonthlyUpdatePage() {
             <button className="button" onClick={() => setStep('spending')}>
               Back
             </button>
+            {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
+                failed load both validity flags are vacuously true, and a meta-only PUT
+                to an existing month would clear its saved note. */}
             <button
               className="button button-primary"
-              disabled={saving || !balancesValid || !amountsValid}
+              disabled={
+                saving || loading || accounts.length === 0 || !balancesValid || !amountsValid
+              }
               onClick={() => void save()}
             >
               {saving ? 'Saving…' : 'Save month'}
