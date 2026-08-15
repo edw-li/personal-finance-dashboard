@@ -2,7 +2,6 @@
 // 'echarts' directly (the full bundle is ~1MB; this registers only what the app draws).
 import { BarChart, HeatmapChart, LineChart } from 'echarts/charts'
 import {
-  DataZoomComponent,
   GridComponent,
   LegendComponent,
   MarkLineComponent,
@@ -17,7 +16,6 @@ import type {
   LineSeriesOption,
 } from 'echarts/charts'
 import type {
-  DataZoomComponentOption,
   GridComponentOption,
   LegendComponentOption,
   TooltipComponentOption,
@@ -35,7 +33,6 @@ echarts.use([
   LegendComponent,
   VisualMapComponent,
   MarkLineComponent,
-  DataZoomComponent,
   CanvasRenderer,
 ])
 
@@ -49,7 +46,6 @@ export type EChartsOption = ComposeOption<
   | TooltipComponentOption
   | LegendComponentOption
   | VisualMapComponentOption
-  | DataZoomComponentOption
 >
 
 export { echarts }
