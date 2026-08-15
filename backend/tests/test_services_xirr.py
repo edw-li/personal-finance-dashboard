@@ -53,3 +53,9 @@ def test_unordered_input_is_sorted_internally():
 def test_xnpv_at_zero_rate_is_plain_sum():
     flows = [(date(2020, 1, 1), -1000.0), (date(2021, 6, 1), 400.0)]
     assert abs(xnpv(0.0, flows) - (-600.0)) < 1e-9
+
+
+def test_root_outside_domain_returns_none():
+    # +1,000,000% return in a year: the root lies above RATE_HI, and lo/hi NPVs share
+    # a sign, so the bisection guard bails rather than fabricating a clamped rate.
+    assert xirr([(date(2020, 1, 1), Decimal("-1")), (date(2021, 1, 1), Decimal("10000"))]) is None
