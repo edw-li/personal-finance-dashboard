@@ -905,7 +905,8 @@ class AccountUpdate(BaseModel):
 
 
 class BalanceEntry(BaseModel):
-    account_id: int
+    # int32-bounded so a garbage id 422s instead of surfacing asyncpg's DataError.
+    account_id: int = Field(ge=1, le=2_147_483_647)
     balance: Decimal
 
 
@@ -1369,6 +1370,13 @@ async def test_put_month_validation(auth_client, db):
     assert unknown.status_code == 422
     assert "999" in unknown.json()["detail"]
 
+    # Out-of-int32 ids are stopped by pydantic, not asyncpg.
+    assert (
+        await auth_client.put(put, json={"balances": [
+            {"account_id": 10**12, "balance": "1"},
+        ]})
+    ).status_code == 422
+
     too_big = await auth_client.put(put, json={"balances": [
         {"account_id": account.id, "balance": "1000000000000"},
     ]})
@@ -1664,7 +1672,9 @@ class CategoryUpdate(BaseModel):
 
 
 class AmountEntry(BaseModel):
-    category_id: int
+    # int32-bounded so a garbage id 422s instead of surfacing asyncpg's DataError.
+    category_id: int = Field(ge=1, le=2_147_483_647)
+    # Signed on purpose: refunds/credits can make a category month negative.
     amount: Decimal
 
 
@@ -2149,6 +2159,12 @@ async def test_put_spending_month_validation(auth_client, db):
     assert (
         await auth_client.put(put, json={"amounts": [
             {"category_id": 999, "amount": "1"},
+        ]})
+    ).status_code == 422
+    # Out-of-int32 ids are stopped by pydantic, not asyncpg.
+    assert (
+        await auth_client.put(put, json={"amounts": [
+            {"category_id": 10**12, "amount": "1"},
         ]})
     ).status_code == 422
     assert (
