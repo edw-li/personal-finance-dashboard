@@ -421,6 +421,29 @@ async def test_create_buy_sell_validation(auth_client):
     negative_fees = await auth_client.post(TRANSACTIONS, json=_buy(security["id"], fees="-0.01"))
     assert negative_fees.status_code == 422
 
+    negative_price = await auth_client.post(TRANSACTIONS, json=_buy(security["id"], price="-100"))
+    assert negative_price.status_code == 422
+    assert "price" in negative_price.json()["detail"]
+
+    negative_factor = await auth_client.post(
+        TRANSACTIONS,
+        json={"security_id": security["id"], "account": "A", "type": "split", "split_factor": "-2"},
+    )
+    assert negative_factor.status_code == 422
+
+    fees_on_split = await auth_client.post(
+        TRANSACTIONS,
+        json={
+            "security_id": security["id"],
+            "account": "A",
+            "type": "split",
+            "split_factor": "2",
+            "fees": "1",
+        },
+    )
+    assert fees_on_split.status_code == 422
+    assert "fees" in fees_on_split.json()["detail"]
+
     factor_on_buy = await auth_client.post(
         TRANSACTIONS, json=_buy(security["id"], split_factor="2")
     )
@@ -496,6 +519,13 @@ async def test_patch_transaction_validates_merged_row(auth_client):
     noop = await auth_client.patch(f"{TRANSACTIONS}/{buy['id']}", json={"type": None})
     assert noop.status_code == 200, noop.text
     assert noop.json()["type"] == "buy"
+
+    noted = await auth_client.patch(f"{TRANSACTIONS}/{buy['id']}", json={"notes": "backfilled"})
+    assert noted.status_code == 200
+    assert noted.json()["notes"] == "backfilled"
+    cleared = await auth_client.patch(f"{TRANSACTIONS}/{buy['id']}", json={"notes": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["notes"] is None
 
     split = (
         await auth_client.post(
@@ -634,6 +664,33 @@ async def test_dividend_crud_roundtrip(auth_client):
     assert body["amount"] == "12.35"  # 2 dp, HALF_UP
     assert body["account"] == "Fidelity Taxable"  # stored trimmed, like every other text field
     assert body["notes"] == "Q2"
+
+    # Blank/whitespace account collapses to None — never '' (Task 9 review I1).
+    blank_account = await auth_client.post(
+        DIVIDENDS,
+        json={
+            "security_id": security["id"],
+            "account": "   ",
+            "pay_date": "2026-06-30",
+            "amount": "1",
+        },
+    )
+    assert blank_account.status_code == 201
+    assert blank_account.json()["account"] is None
+    trimmed = await auth_client.patch(
+        f"{DIVIDENDS}/{blank_account.json()['id']}", json={"account": "  Fidelity  "}
+    )
+    assert trimmed.status_code == 200
+    assert trimmed.json()["account"] == "Fidelity"
+    blanked = await auth_client.patch(
+        f"{DIVIDENDS}/{blank_account.json()['id']}", json={"account": "  "}
+    )
+    assert blanked.status_code == 200
+    assert blanked.json()["account"] is None
+    # Remove the probe row so the ordering assertions below see the original id set.
+    assert (
+        await auth_client.delete(f"{DIVIDENDS}/{blank_account.json()['id']}")
+    ).status_code == 204
 
     older = await auth_client.post(
         DIVIDENDS, json={"security_id": security["id"], "pay_date": "2026-03-31", "amount": "10"}

@@ -349,7 +349,9 @@ async def create_dividend(
     require_reasonable_date(body.pay_date, "pay_date")
     dividend = DividendPayment(
         security_id=body.security_id,
-        account=body.account.strip() if body.account else None,
+        # Blank/whitespace collapse to None — never persist '' as a second spelling
+        # of "no account" (Task 9 review I1).
+        account=(body.account or "").strip() or None,
         pay_date=body.pay_date,
         amount=_validated_dividend_amount(body.amount),
         notes=body.notes,
@@ -383,7 +385,7 @@ async def update_dividend(
     if "pay_date" in provided:
         validated["pay_date"] = require_reasonable_date(provided["pay_date"], "pay_date")
     if "account" in provided:
-        validated["account"] = provided["account"].strip() if provided["account"] else None
+        validated["account"] = (provided["account"] or "").strip() or None
     for field_name, value in validated.items():
         setattr(dividend, field_name, value)
     await db.commit()
