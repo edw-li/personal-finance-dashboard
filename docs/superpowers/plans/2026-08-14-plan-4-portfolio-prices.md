@@ -2695,10 +2695,10 @@ style — the CONTRACT above is binding, the phrasing is not.
 
 ```python
 import re
-from datetime import date
-from decimal import Decimal
-from typing import Literal
 
+# NOTE: `from datetime import date`, `from decimal import ROUND_HALF_UP, Decimal` and
+# `from typing import Literal` join this header in Tasks 9-10 when first used (F401
+# forbids importing them early — Task 8 execution note).
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
