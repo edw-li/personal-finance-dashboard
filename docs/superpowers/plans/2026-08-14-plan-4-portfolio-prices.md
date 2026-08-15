@@ -2866,8 +2866,7 @@ git commit -m "feat: portfolio schemas + securities CRUD"
 
 **Files:**
 - Modify: `backend/app/api/portfolio.py`
-- Modify: `backend/app/services/money.py` (+require_reasonable_date)
-- Test: `backend/tests/test_portfolio_api.py` (append sections), `backend/tests/test_services_money.py` (+1)
+- Test: `backend/tests/test_portfolio_api.py` (append sections)
 
 `require_reasonable_date` (+ DATE_MIN/DATE_MAX + its unit test) ALREADY LANDED in
 Task 8's fix round (it guards securities.ex_div_date there). This task only APPLIES it:
@@ -5316,6 +5315,14 @@ with execution findings):
 - DB-direct rows can still fold nonsense the API forbids (e.g. a negative-shares sell
   INFLATES the position silently — no warning; API rejects shares<=0 so unreachable
   through supported paths). Accepted posture (Task 4 quality review M6).
+- Securities API accepted residuals (Task 8 review): duplicate-create TOCTOU can 500
+  instead of 409 (double-submit only; accounts router has the identical window — fix
+  both together or neither); literal "-0" dividend slips the >=0 guard (unreachable from
+  a browser; response shows -0.0000, DB stores 0); a whitespace-only `industry` becomes
+  its own blank allocation slice instead of folding to "Uncategorized" (normalize blank
+  optional text → None if it ever bites); PATCH returns 200 for typo'd unknown keys
+  (extra="ignore" is what makes the sanctioned ticker-ignore work — the frontend must
+  not read 200 as proof of change).
 - Price refresh rewrites annual_dividend/ex_div_date from Yahoo TTM events for
   non-manual securities — manual edits to those two fields don't survive a refresh.
 - The scheduler reads price_refresh_cron ONCE at boot — changing the setting requires a
