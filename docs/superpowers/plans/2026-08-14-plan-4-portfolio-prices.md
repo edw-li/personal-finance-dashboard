@@ -3326,7 +3326,9 @@ async def realized(db: AsyncSession = Depends(get_db)) -> RealizedOut:
     positions = fold_transactions(txns)
     per_security: dict[int, Decimal] = {}
     for pos in positions.values():
-        per_security[pos.security_id] = per_security.get(pos.security_id, Decimal("0")) + pos.realized_gl
+        per_security[pos.security_id] = (
+            per_security.get(pos.security_id, Decimal("0")) + pos.realized_gl
+        )
     rows = [
         RealizedRow(
             security_id=sec_id,
@@ -5337,6 +5339,14 @@ with execution findings):
   the /portfolio/dividends log is the reconciliation view (Task 4 spec review obs).
   Same family: fold WARNINGS on fully-exited positions vanish (no holding row carries
   them) — /realized doesn't surface warnings either (Task 4 quality review M4).
+- totals.unrealized_gl is total_mv − priced_cost (unpriced rows keep their cost in
+  totals.cost_basis but contribute no MV) — the frontend must render totals.unrealized_gl
+  directly, NEVER re-derive it as market_value − cost_basis (phantom loss otherwise;
+  Task 10 execution note). totals.day_change_pct is a mixed-basis ratio while some priced
+  rows lack a prior bar (transitional pre/post first refresh only).
+- Test-seeding gotcha: the shared-session fixture serves the exact ORM objects a test
+  adds (expire_on_commit=False) — seed prices AT COLUMN SCALE (Decimal("550.0000"), not
+  "550") or wire strings come out unquantized (Task 10 execution note; bites Task 11 too).
 - /allocation?by=account quantizes per position while holdings quantize per security —
   a multi-account security can disagree with the holdings total by ±1¢/account (exact
   $0.00 on today's data). Cosmetic; don't chase cent-parity between donut and header
