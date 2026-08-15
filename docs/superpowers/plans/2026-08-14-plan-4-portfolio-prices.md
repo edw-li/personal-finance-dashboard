@@ -992,11 +992,13 @@ class TestHoldings:
 
     def test_xirr_null_when_any_cash_flow_txn_is_dateless(self):
         # Mid-backfill state: a dated buy plus a dateless buy — dated_flows exist,
-        # but the dateless flag must still veto XIRR (spec Risk #1).
+        # but the dateless flag must still veto XIRR (spec Risk #1). The dateless leg
+        # lives in a DIFFERENT account: any-account dateless-ness must veto the whole
+        # security (all() would compute a wrong XIRR from one account's flows).
         securities = {1: sec(1, "VOO")}
         positions = fold_transactions([
             txn(1, shares="10", price="400", sort_index=10, txn_date=date(2025, 8, 14)),
-            txn(2, shares="1", price="400", sort_index=20),
+            txn(2, account="Schwab", shares="1", price="400", sort_index=20),
         ])
         (h,) = build_holdings(positions, securities, {1: lp(1, "500")}, {}, [],
                               today=date(2026, 8, 14))
@@ -1005,8 +1007,10 @@ class TestHoldings:
     def test_multi_account_positions_collapse_to_one_holding(self):
         securities = {1: sec(1, "VOO")}
         positions = fold_transactions([
-            txn(1, account="Robinhood", shares="10", price="400", sort_index=10),
-            txn(2, account="Schwab", shares="5", price="440", sort_index=20),
+            # Schwab folds FIRST (lower sort_index) so the sorted-accounts
+            # assertion pins sorting, not fold order.
+            txn(1, account="Robinhood", shares="10", price="400", sort_index=20),
+            txn(2, account="Schwab", shares="5", price="440", sort_index=10),
         ])
         (h,) = build_holdings(positions, securities, {1: lp(1, "500")}, {}, [],
                               today=date(2026, 8, 14))
