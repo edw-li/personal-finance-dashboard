@@ -2153,6 +2153,8 @@ git commit -m "feat: price refresh service (history backfill, TTM dividends, man
 - Modify: `backend/app/main.py`
 - Modify: `backend/.env.example` (document the two new env vars)
 - Modify: `backend/app/seed.py` (cron day-name fix — Task 7 escalation)
+- Modify: `backend/tests/conftest.py` (no-scheduler autouse pin)
+- Create: `backend/alembic/versions/<generated>_repair_numeric_price_refresh_cron.py`
 - Test: `backend/tests/test_scheduler.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -2275,7 +2277,9 @@ async def _refresh_job() -> None:
         result = await refresh_prices(db, provider)
     logger.info(
         "scheduled price refresh: %d updated, %d failed, %d manual-skipped",
-        len(result.updated), len(result.failed), len(result.skipped_manual),
+        len(result.updated),
+        len(result.failed),
+        len(result.skipped_manual),
     )
 
 
@@ -2401,8 +2405,8 @@ asyncio.run(main())
 "
 ```
 
-Expected: `price refresh scheduled: '10 13 * * mon-fri' (America/Los_Angeles)` log +
-`lifespan entered OK` (dev DB must be up — the cron is read from it).
+Expected: `INFO:app.services.scheduler:price refresh scheduled: '10 13 * * mon-fri' (America/Los_Angeles)` +
+`lifespan entered OK` (main.py's basicConfig supplies the handler/format) (dev DB must be up — the cron is read from it).
 
 - [ ] **Step 7: Full gate + commit**
 
@@ -5214,8 +5218,8 @@ probe 2 — script it in the scratchpad), then restart uvicorn with
 false}` (stops refetching a delisted ticker; recorded as a user-visible decision).
 Confirm a follow-up refresh no longer lists ZI in `failed`.
 - [ ] **Step 6: Scheduler smoke.** With uvicorn running (scheduler enabled by default),
-confirm the boot log line `price refresh scheduled: '10 13 * * mon-fri'
-(America/Los_Angeles)`. No need to wait for a firing — the job body is the same
+confirm the boot log line `INFO:app.services.scheduler:price refresh scheduled:
+'10 13 * * mon-fri' (America/Los_Angeles)`. No need to wait for a firing — the job body is the same
 `refresh_prices` the endpoint just exercised live.
 - [ ] **Step 7: Frontend smoke.** `npm run dev` + the dev proxy (targets 127.0.0.1:8000
 — Plan 3 fix). Load `/portfolio` logged in: tiles populated, holdings table sorted by
