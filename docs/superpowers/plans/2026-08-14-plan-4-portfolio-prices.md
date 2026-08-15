@@ -1672,10 +1672,9 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
-
-from app.models import LatestPrice, PriceHistory, Security
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.models import LatestPrice, PriceHistory, Security
 from app.services.price_provider import DailyBar
 from app.services.price_service import refresh_prices, set_manual_price
 
@@ -1880,6 +1879,47 @@ async def test_refresh_commits_durably(db, engine):
     async with factory() as other:
         latest = await other.get(LatestPrice, sec.id)
         assert latest is not None and latest.price == D("5.0000")
+
+
+async def test_per_ticker_db_failure_does_not_abort_the_batch(db):
+    await seed_security(db, "AAA")
+    await seed_security(db, "BAD")
+    await seed_security(db, "ZZZ")
+    provider = FakeProvider(
+        {
+            "AAA": [bar(TODAY, "11")],
+            # passes the 0 < close < 10^10 bound but overflows Numeric(14,4) at the DB
+            "BAD": [bar(TODAY, "9999999999.99999")],
+            "ZZZ": [bar(TODAY, "99")],
+        }
+    )
+    result = await refresh_prices(db, provider, today=TODAY)
+    assert result.updated == ["AAA", "ZZZ"]
+    assert "BAD" in result.failed
+    assert [c[0] for c in provider.calls] == ["AAA", "BAD", "ZZZ"]  # ZZZ still attempted
+    history = (await db.execute(select(PriceHistory))).scalars().all()
+    assert len(history) == 2  # BAD's savepoint rolled back; AAA and ZZZ persisted
+
+
+async def test_backdated_manual_price_does_not_move_import_seeded_latest(db):
+    # Import seeding leaves latest_prices populated while price_history is EMPTY —
+    # the guard must respect the seeded quote too (Task 6 review I1).
+    sec = await seed_security(db, "FIGR", manual=True)
+    db.add(
+        LatestPrice(
+            security_id=sec.id,
+            price=D("2500"),
+            quoted_at=datetime(2026, 8, 13, tzinfo=UTC),
+            source="manual",
+        )
+    )
+    await db.commit()
+    await set_manual_price(db, sec, D("1"), as_of=date(2024, 1, 1))
+    await db.commit()
+    latest = await db.get(LatestPrice, sec.id)
+    assert latest.price == D("2500.0000")
+    assert latest.quoted_at.date() == date(2026, 8, 13)
+    assert len((await db.execute(select(PriceHistory))).scalars().all()) == 1
 ```
 
 - [ ] **Step 2: Run to verify failure** — expected: ModuleNotFoundError.
@@ -2045,9 +2085,12 @@ async def set_manual_price(
 ) -> None:
     """Manual quote for is_manual_priced securities. Always writes a price_history row
     for `as_of` (sparkline backfill); updates latest_prices ONLY when `as_of` is not
-    older than the newest history bar — a backdated entry must never move the latest
-    quote backwards, or day-Δ (which reads bars[-2] against the latest price) would
-    compare the quote against itself forever (Task 4 review). Caller commits."""
+    older than the newest known quote (history bars OR the import-seeded latest) — a
+    backdated entry must never move the latest quote backwards, or day-Δ (which reads
+    bars[-2] against the latest price) would compare the quote against itself forever
+    (Task 4 review). Caller commits. Expired rows: callers must re-read LatestPrice/
+    PriceHistory with `await db.get(...)` after this call — a previously-held instance's
+    plain attribute access raises MissingGreenlet (Task 6 re-review)."""
     history_stmt = pg_insert(PriceHistory).values(
         security_id=security.id, price_date=as_of, close=price
     )
@@ -2063,13 +2106,13 @@ async def set_manual_price(
         )
     ).scalar_one()
     existing = await db.get(LatestPrice, security.id)
-    # The as_of row itself is already in history, so newest_bar >= as_of always holds
-    # for the same-day path; the guard fires only when something NEWER exists in either
-    # history or the (possibly import-seeded) latest quote.
+    # The as_of row itself was just inserted above, so newest_bar is never None and
+    # newest_bar >= as_of always holds for the same-day path; the guard fires only when
+    # something NEWER exists in either history or the (import-seeded) latest quote.
     newest_known = newest_bar
     if existing is not None:
         newest_known = max(newest_known, existing.quoted_at.date())
-    if newest_known is not None and as_of < newest_known:
+    if as_of < newest_known:
         return
     latest_stmt = pg_insert(LatestPrice).values(
         security_id=security.id, price=price, quoted_at=_bar_datetime(as_of), source="manual"
