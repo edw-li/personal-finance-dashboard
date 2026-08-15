@@ -812,7 +812,7 @@ session) — realistic objects, zero DB. Set ids explicitly.
 Create `backend/tests/test_portfolio_calc.py`:
 
 ```python
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from app.models import DividendPayment, LatestPrice, PositionTransaction, PriceHistory, Security
@@ -843,7 +843,7 @@ def sec(id, ticker, industry="Tech", holding_type="stock", annual_dividend=None)
 def lp(sec_id, price, day=14):
     return LatestPrice(
         security_id=sec_id, price=D(price),
-        quoted_at=datetime(2026, 8, day, tzinfo=timezone.utc), source="yfinance",
+        quoted_at=datetime(2026, 8, day, tzinfo=UTC), source="yfinance",
     )
 
 
@@ -1036,7 +1036,7 @@ txn_date is mostly NULL (Plan 1 forward note) and must never drive order.
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1161,35 +1161,35 @@ def build_holdings(
         security = securities_by_id.get(sec_id)
         if security is None:
             continue  # orphaned txn row; unreachable through the API (FK), defensive
-        shares = sum((p.shares for p in folded), ZERO).quantize(SHARE_Q)
+        shares = sum((p.shares for p in folded), ZERO).quantize(SHARE_Q, rounding=ROUND_HALF_UP)
         if shares == 0:
             continue
-        cost_basis = sum((p.cost_basis for p in folded), ZERO).quantize(MONEY_Q)
-        realized = sum((p.realized_gl for p in folded), ZERO).quantize(MONEY_Q)
+        cost_basis = sum((p.cost_basis for p in folded), ZERO).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+        realized = sum((p.realized_gl for p in folded), ZERO).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
         warnings = [w for p in folded for w in p.warnings]
         has_dateless = any(p.has_dateless_txn for p in folded)
         dated_flows = [flow for p in folded for flow in p.dated_flows]
         accounts = sorted({p.account for p in folded})
-        collected = div_total.get(sec_id, ZERO).quantize(MONEY_Q)
+        collected = div_total.get(sec_id, ZERO).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
 
         latest = latest_by_sec.get(sec_id)
         price = latest.price if latest is not None else None
         bars = history_by_sec.get(sec_id, [])
         prev_close = bars[-2].close if len(bars) >= 2 else None
 
-        market_value = (shares * price).quantize(MONEY_Q) if price is not None else None
+        market_value = (shares * price).quantize(MONEY_Q, rounding=ROUND_HALF_UP) if price is not None else None
         day_pct = day_amt = None
         if price is not None and prev_close is not None and prev_close != 0:
             day_pct = quantize_pct((price - prev_close) / prev_close)
-            day_amt = (shares * (price - prev_close)).quantize(MONEY_Q)
+            day_amt = (shares * (price - prev_close)).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
         unrealized = unrealized_pct = None
         if market_value is not None:
             unrealized = market_value - cost_basis
             if cost_basis > 0:
                 unrealized_pct = quantize_pct(unrealized / cost_basis)
-        avg_cost = (cost_basis / shares).quantize(PRICE_Q) if shares > 0 else None
+        avg_cost = (cost_basis / shares).quantize(PRICE_Q, rounding=ROUND_HALF_UP) if shares > 0 else None
         annual = security.annual_dividend
-        annual_income = (annual * shares).quantize(MONEY_Q) if annual is not None else None
+        annual_income = (annual * shares).quantize(MONEY_Q, rounding=ROUND_HALF_UP) if annual is not None else None
         yield_pct = (
             quantize_pct(annual / price)
             if annual is not None and price is not None and price != 0
@@ -1236,9 +1236,9 @@ def allocation(
     if by == "account":
         for pos in positions.values():
             latest = latest_by_sec.get(pos.security_id)
-            if latest is None or pos.shares.quantize(SHARE_Q) == 0:
+            if latest is None or pos.shares.quantize(SHARE_Q, rounding=ROUND_HALF_UP) == 0:
                 continue
-            value = (pos.shares * latest.price).quantize(MONEY_Q)
+            value = (pos.shares * latest.price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
             buckets[pos.account] = buckets.get(pos.account, ZERO) + value
             members.setdefault(pos.account, set()).add(pos.security_id)
     else:
@@ -1248,10 +1248,10 @@ def allocation(
         for sec_id, shares in shares_by_sec.items():
             security = securities_by_id.get(sec_id)
             latest = latest_by_sec.get(sec_id)
-            if security is None or latest is None or shares.quantize(SHARE_Q) == 0:
+            if security is None or latest is None or shares.quantize(SHARE_Q, rounding=ROUND_HALF_UP) == 0:
                 continue
             key = security.holding_type if by == "type" else (security.industry or "Uncategorized")
-            value = (shares * latest.price).quantize(MONEY_Q)
+            value = (shares * latest.price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
             buckets[key] = buckets.get(key, ZERO) + value
             members.setdefault(key, set()).add(sec_id)
     return sorted(
@@ -1516,7 +1516,7 @@ Create `backend/tests/test_price_service.py` (uses the `db` fixture; seed helper
 to the file):
 
 ```python
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -1582,7 +1582,7 @@ async def test_refresh_upserts_history_latest_and_dividend_metadata(db):
     ]
     latest = await db.get(LatestPrice, sec.id)
     assert latest.price == D("225.5000") and latest.source == "yfinance"
-    assert latest.quoted_at == datetime(2026, 8, 14, tzinfo=timezone.utc)
+    assert latest.quoted_at == datetime(2026, 8, 14, tzinfo=UTC)
     await db.refresh(sec)
     assert sec.annual_dividend == D("1.0000")  # TTM sum replaces the stale 99
     assert sec.ex_div_date == TODAY
@@ -1603,7 +1603,7 @@ async def test_refresh_is_idempotent_and_updates_existing_rows(db):
 async def test_refresh_failure_keeps_last_good_price(db):
     sec = await seed_security(db, "ZI")
     db.add(LatestPrice(security_id=sec.id, price=D("10"),
-                       quoted_at=datetime(2026, 1, 1, tzinfo=timezone.utc), source="manual"))
+                       quoted_at=datetime(2026, 1, 1, tzinfo=UTC), source="manual"))
     await db.commit()
     provider = FakeProvider(errors={"ZI": RuntimeError("boom")})
     result = await refresh_prices(db, provider, today=TODAY)
@@ -1654,7 +1654,7 @@ async def test_set_manual_price_upserts_latest_and_history(db):
     await db.commit()
     latest = await db.get(LatestPrice, sec.id)
     assert latest.price == D("31.8900") and latest.source == "manual"
-    assert latest.quoted_at == datetime(2026, 8, 10, tzinfo=timezone.utc)
+    assert latest.quoted_at == datetime(2026, 8, 10, tzinfo=UTC)
     await set_manual_price(db, sec, D("32.00"), as_of=date(2026, 8, 10))
     await db.commit()
     history = (await db.execute(select(PriceHistory))).scalars().all()
@@ -1679,7 +1679,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -1788,7 +1788,7 @@ def _update_dividend_metadata(security: Security, bars: list[DailyBar], today: d
     ttm = sum((b.dividend for b in events), Decimal("0"))
     if ttm >= DIVIDEND_MAX_ABS:
         return  # absurd feed value; keep the previous metadata
-    security.annual_dividend = ttm.quantize(Decimal("0.0001"))
+    security.annual_dividend = ttm.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     security.ex_div_date = max((b.bar_date for b in events), default=None)
 
 
@@ -2868,17 +2868,17 @@ async def holdings(db: AsyncSession = Depends(get_db)) -> HoldingsOut:
     all_realized = sum((p.realized_gl for p in positions.values()), Decimal("0"))
     all_dividends = sum((d.amount for d in dividends), Decimal("0"))
     totals = HoldingsTotals(
-        market_value=total_mv.quantize(Decimal("0.01")),
-        cost_basis=total_cost.quantize(Decimal("0.01")),
-        unrealized_gl=unrealized_total.quantize(Decimal("0.01")),
+        market_value=total_mv.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        cost_basis=total_cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        unrealized_gl=unrealized_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         unrealized_gl_pct=quantize_pct(unrealized_total / priced_cost) if priced_cost > 0 else None,
         day_change_amount=day_amount,
         day_change_pct=day_pct,
-        realized_gl=all_realized.quantize(Decimal("0.01")),
-        dividends_collected=all_dividends.quantize(Decimal("0.01")),
+        realized_gl=all_realized.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        dividends_collected=all_dividends.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         annual_income=sum(
             (h.annual_income for h in rows if h.annual_income is not None), Decimal("0")
-        ).quantize(Decimal("0.01")),
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         unpriced_count=sum(1 for h in rows if h.market_value is None),
     )
     as_of = min((h.quoted_at for h in rows if h.quoted_at is not None), default=None)
@@ -2896,7 +2896,7 @@ async def allocation_view(
     total = sum((value for _key, value, _count in buckets), Decimal("0"))
     return AllocationOut(
         by=by,
-        total_market_value=total.quantize(Decimal("0.01")),
+        total_market_value=total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         slices=[
             AllocationSlice(
                 key=key,
@@ -2921,20 +2921,21 @@ async def realized(db: AsyncSession = Depends(get_db)) -> RealizedOut:
             security_id=sec_id,
             ticker=securities[sec_id].ticker,
             name=securities[sec_id].name,
-            realized_gl=value.quantize(Decimal("0.01")),
+            realized_gl=value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         )
         for sec_id, value in sorted(per_security.items(), key=lambda kv: kv[1])
         if value != 0 and sec_id in securities
     ]
     total = sum((v for v in per_security.values()), Decimal("0"))
-    return RealizedOut(total=total.quantize(Decimal("0.01")), rows=rows)
+    return RealizedOut(total=total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), rows=rows)
 ```
 
 Extend imports: `from app.schemas.portfolio import (..., AllocationOut, AllocationSlice,
 HoldingOut, HoldingsOut, HoldingsTotals, RealizedOut, RealizedRow)`, `from
 app.services.money import ... quantize_pct` (note quantize_pct lives in money.py), `from
 app.services.portfolio_calc import allocation, build_holdings, fold_transactions,
-load_portfolio`. Rename collision: the service function `allocation` vs endpoint — the
+load_portfolio`, and widen the decimal import to `from decimal import ROUND_HALF_UP,
+Decimal` (every quantize in this file passes `rounding=ROUND_HALF_UP` — Global rules). Rename collision: the service function `allocation` vs endpoint — the
 endpoint is `allocation_view` as shown.
 
 - [ ] **Step 4: Run the tests** — expected: PASS.
@@ -2994,7 +2995,7 @@ async def test_manual_price_put_guard_and_write(client, db): ...
 ```python
 import time as time_module
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -3088,7 +3089,7 @@ async def sparklines(
     held_ids = {
         pos.security_id
         for pos in fold_transactions(txns).values()
-        if pos.shares.quantize(Decimal("0.000001")) != 0
+        if pos.shares.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP) != 0
     }
     if not held_ids:
         return {}
