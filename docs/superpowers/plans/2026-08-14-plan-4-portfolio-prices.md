@@ -2458,7 +2458,33 @@ git commit -m "feat: portfolio schemas + securities CRUD"
 
 **Files:**
 - Modify: `backend/app/api/portfolio.py`
-- Test: `backend/tests/test_portfolio_api.py` (append sections)
+- Modify: `backend/app/services/money.py` (+require_reasonable_date)
+- Test: `backend/tests/test_portfolio_api.py` (append sections), `backend/tests/test_services_money.py` (+1)
+
+First, extend the shared 422 vocabulary in `backend/app/services/money.py` (Task 3 review:
+`txn_date`/`pay_date` have no range validation anywhere, and downstream consumers — XIRR
+spans, day-Δ, refresh windows — should never see a mistyped year):
+
+```python
+DATE_MIN = date(1900, 1, 1)
+DATE_MAX = date(2100, 12, 31)
+
+
+def require_reasonable_date(value: date, field: str) -> date:
+    """Century-bounded sanity guard: a mistyped year (1026, 3026) must 422 at the API
+    boundary, not surface as absurd spans in XIRR/day-Δ/refresh windows downstream."""
+    if not DATE_MIN <= value <= DATE_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field}: date must be between {DATE_MIN} and {DATE_MAX}",
+        )
+    return value
+```
+
+with a unit test in `test_services_money.py` (1900-01-01 and 2100-12-31 pass; 1899-12-31
+and 2101-01-01 raise 422 naming the field). Then apply it in this task's endpoints:
+`create_transaction`/`update_transaction` validate a non-null `txn_date`;
+`create_dividend`/`update_dividend` validate `pay_date`.
 
 - [ ] **Step 1: Write the failing tests** (append `# --- transactions ---` and
 `# --- dividends ---` sections; same house style). Cover exactly:
@@ -2505,6 +2531,10 @@ async def test_dividend_crud_roundtrip(client, db): ...
 async def test_dividend_validation(client, db): ...
     # amount "0" -> 422; amount "-5" -> 422; unknown security_id -> 422;
     # account longer than 80 chars -> 422 (schema max_length)
+
+async def test_transaction_and_dividend_dates_must_be_reasonable(client, db): ...
+    # txn_date "1026-08-15" -> 422 naming txn_date; dividend pay_date "3026-01-01" ->
+    # 422 naming pay_date (require_reasonable_date; PATCH paths covered too)
 ```
 
 - [ ] **Step 2: Run to verify failure.**
@@ -2585,6 +2615,8 @@ async def create_transaction(
     if await db.get(Security, body.security_id) is None:
         raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
     fields = _validated_txn_fields(body.type, body.shares, body.price, body.fees, body.split_factor)
+    if body.txn_date is not None:
+        require_reasonable_date(body.txn_date, "txn_date")
     max_index = (
         await db.execute(select(func.coalesce(func.max(PositionTransaction.sort_index), 0)))
     ).scalar_one()
@@ -2632,6 +2664,8 @@ async def update_transaction(
             raise HTTPException(status_code=422, detail="account cannot be null")
         txn.account = provided["account"].strip()
     if "txn_date" in provided:
+        if provided["txn_date"] is not None:
+            require_reasonable_date(provided["txn_date"], "txn_date")
         txn.txn_date = provided["txn_date"]
     if "notes" in provided:
         txn.notes = provided["notes"]
@@ -2679,6 +2713,7 @@ async def create_dividend(
 ) -> DividendPayment:
     if await db.get(Security, body.security_id) is None:
         raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
+    require_reasonable_date(body.pay_date, "pay_date")
     dividend = DividendPayment(
         security_id=body.security_id,
         account=body.account.strip() if body.account else None,
@@ -2706,7 +2741,7 @@ async def update_dividend(
     if "pay_date" in provided:
         if provided["pay_date"] is None:
             raise HTTPException(status_code=422, detail="pay_date cannot be null")
-        dividend.pay_date = provided["pay_date"]
+        dividend.pay_date = require_reasonable_date(provided["pay_date"], "pay_date")
     if "account" in provided:
         dividend.account = provided["account"].strip() if provided["account"] else None
     if "notes" in provided:
@@ -2726,14 +2761,15 @@ async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) 
 ```
 
 (Extend the money import line: `from app.services.money import MONEY_MAX_ABS_10_2,
-MONEY_MAX_ABS_10_4, MONEY_MAX_ABS_12_2, quantize_money, quantize_price, quantize_shares`.)
+MONEY_MAX_ABS_10_4, MONEY_MAX_ABS_12_2, quantize_money, quantize_price, quantize_shares,
+require_reasonable_date`.)
 
 - [ ] **Step 4: Run the tests** — expected: PASS.
 - [ ] **Step 5: Full gate + commit**
 
 ```bash
-git add backend/app/api/portfolio.py backend/tests/test_portfolio_api.py
-git commit -m "feat: transactions + dividends CRUD with type-shape validation"
+git add backend/app/api/portfolio.py backend/app/services/money.py backend/tests/test_portfolio_api.py backend/tests/test_services_money.py
+git commit -m "feat: transactions + dividends CRUD with type-shape and date-range validation"
 ```
 
 ---
@@ -4857,6 +4893,15 @@ with execution findings):
   mutant).
 - XIRR is null until txn_dates are backfilled via the ledger UI (sheet's XIRR column was
   dead — probe 5). If the user backfills, per-security XIRR lights up automatically.
+- XIRR shows "—" for legitimately-out-of-domain holdings: a position bought yesterday and
+  up 1% annualizes to +3,678%, outside RATE_HI=10.0 (~3% of plausible fresh positions in
+  the Task 3 review sweep: 62/150 Nones at 1-day spans). Honest behavior, not a bug —
+  don't re-litigate; a tooltip is the fix if the user asks.
+- test_services_xirr imports the private _dxnpv to pin the analytic derivative against a
+  central difference — renaming/refactoring _dxnpv breaks that test by design.
+- require_reasonable_date (money.py, Task 9) bounds txn_date/pay_date to 1900..2100 at
+  the API; the importer path is unguarded by it (sheet has no dates today) and xirr's
+  MAX_SPAN_DAYS is the backstop.
 - Price refresh rewrites annual_dividend/ex_div_date from Yahoo TTM events for
   non-manual securities — manual edits to those two fields don't survive a refresh.
 - The scheduler reads price_refresh_cron ONCE at boot — changing the setting requires a
