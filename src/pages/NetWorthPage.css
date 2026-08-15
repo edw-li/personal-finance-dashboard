@@ -1,0 +1,8 @@
+/* drill-hint and loading-dim are shared utilities — they live in panels.css. */
+
+.networth-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}

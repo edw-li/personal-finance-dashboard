@@ -3530,7 +3530,7 @@ No RTL test for the page (spec §9: charts verified visually; Task 15 is the vis
 
 **Design contract (from the frozen chart rules):** one stacked area of the six ASSET groups (validated palette adjacency, entity colors from `GROUP_COLORS`), liabilities as their own negative area (NOT in the stack), NET WORTH as a 2.5px ink line with a selective end label — one $ axis, legend present, axis-trigger tooltip with currency formatting. Table = the chart's data twin. Drill-down = up to 3 accounts (all-pairs-validated slots 1–3), colors assigned by selection order, survivors keep their color.
 
-- [ ] **Step 1: Write the page**
+- [x] **Step 1: Write the page**
 
 `src/pages/NetWorthPage.css`:
 
@@ -3889,11 +3889,11 @@ export default function NetWorthPage() {
 
 Note: this page uses no HTML-string tooltip formatters (only `valueFormatter`, which is text-only), so `escapeHtml` is intentionally not imported here — it becomes load-bearing in Task 13's heatmap formatter.
 
-- [ ] **Step 2: Wire the route**
+- [x] **Step 2: Wire the route**
 
 In `src/App.tsx`: `import NetWorthPage from './pages/NetWorthPage'` and change the net-worth route to `<Route path="/net-worth" element={<NetWorthPage />} />`. Leave the other placeholders alone (Tasks 13/14 replace theirs).
 
-- [ ] **Step 3: Gate + visual smoke + commit**
+- [x] **Step 3: Gate + visual smoke + commit** (gate green: 19 vitest / lint 1 sanctioned warning / build clean, main chunk 855.22 kB raw · 284.79 kB gzip plus the expected >500 kB vite notice. Visual smoke deferred to Task 15 per this step's own instruction to implementer subagents.)
 
 ```bash
 npm test && npm run lint && npm run build

@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
+import NetWorthPage from './pages/NetWorthPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 
 export default function App() {
@@ -14,7 +15,7 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
               <Route path="/" element={<PlaceholderPage title="Overview" />} />
-              <Route path="/net-worth" element={<PlaceholderPage title="Net Worth" />} />
+              <Route path="/net-worth" element={<NetWorthPage />} />
               <Route path="/spending" element={<PlaceholderPage title="Spending" />} />
               <Route path="/portfolio" element={<PlaceholderPage title="Portfolio" />} />
               <Route path="/taxes" element={<PlaceholderPage title="Taxes" />} />
