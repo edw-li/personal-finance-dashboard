@@ -10,3 +10,6 @@ bcrypt==5.0.0
 slowapi==0.1.10
 python-multipart==0.0.32
 openpyxl==3.1.5
+yfinance==1.6.0
+APScheduler==3.11.3
+tzdata==2025.2

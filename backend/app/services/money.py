@@ -16,9 +16,15 @@ PCT_QUANTUM = Decimal("0.000001")
 # Numeric(14,2) keeps 12 integer digits, Numeric(12,2) keeps only 10.
 MONEY_MAX_ABS = Decimal(10) ** 12  # Numeric(14,2): account balances
 MONEY_MAX_ABS_12_2 = Decimal(10) ** 10  # Numeric(12,2): spending amounts, net_pay
+SHARE_QUANTUM = Decimal("0.000001")
+PRICE_QUANTUM = Decimal("0.0001")
+MONEY_MAX_ABS_10_2 = Decimal(10) ** 8  # Numeric(10,2): transaction fees
+MONEY_MAX_ABS_16_6 = Decimal(10) ** 10  # Numeric(16,6): transaction shares
+MONEY_MAX_ABS_14_4 = Decimal(10) ** 10  # Numeric(14,4): prices
+MONEY_MAX_ABS_10_4 = Decimal(10) ** 6  # Numeric(10,4): split factors, annual dividends
 
 
-def quantize_money(value: Decimal, field: str, max_abs: Decimal = MONEY_MAX_ABS) -> Decimal:
+def _quantize_bounded(value: Decimal, field: str, quantum: Decimal, max_abs: Decimal) -> Decimal:
     # Pre-check BEFORE quantize: pydantic accepts huge finite Decimals ("1e26") whose
     # quantize() raises InvalidOperation, and NaN comparisons raise too — either would
     # surface as a 500 instead of this module's promised 422.
@@ -27,13 +33,25 @@ def quantize_money(value: Decimal, field: str, max_abs: Decimal = MONEY_MAX_ABS)
             status_code=422,
             detail=f"{field}: |value| must be below 10^{max_abs.adjusted()}",
         )
-    quantized = value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    quantized = value.quantize(quantum, rounding=ROUND_HALF_UP)
     if quantized.copy_abs() >= max_abs:  # rounding can cross the bound
         raise HTTPException(
             status_code=422,
             detail=f"{field}: |value| must be below 10^{max_abs.adjusted()}",
         )
     return quantized
+
+
+def quantize_money(value: Decimal, field: str, max_abs: Decimal = MONEY_MAX_ABS) -> Decimal:
+    return _quantize_bounded(value, field, MONEY_QUANTUM, max_abs)
+
+
+def quantize_shares(value: Decimal, field: str) -> Decimal:
+    return _quantize_bounded(value, field, SHARE_QUANTUM, MONEY_MAX_ABS_16_6)
+
+
+def quantize_price(value: Decimal, field: str, max_abs: Decimal = MONEY_MAX_ABS_14_4) -> Decimal:
+    return _quantize_bounded(value, field, PRICE_QUANTUM, max_abs)
 
 
 def quantize_pct(value: Decimal) -> Decimal:

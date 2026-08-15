@@ -12,6 +12,7 @@ from app.models import (
     PriceHistory,
     Security,
 )
+from app.models.portfolio import TRANSACTION_SOURCES
 
 
 async def test_security_and_transaction_roundtrip(db):
@@ -61,6 +62,23 @@ async def test_ticker_unique(db):
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
+
+
+async def test_position_transaction_source_defaults_to_ui(db):
+    security = Security(ticker="TSRC", name="Source Test", holding_type="stock")
+    db.add(security)
+    await db.flush()
+    txn = PositionTransaction(
+        security_id=security.id,
+        account="Test",
+        type="buy",
+        shares=Decimal("1"),
+        price=Decimal("10"),
+    )
+    db.add(txn)
+    await db.commit()
+    assert txn.source == "ui"
+    assert TRANSACTION_SOURCES == ("import", "ui")
 
 
 async def test_one_close_per_day(db):

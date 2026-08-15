@@ -5,9 +5,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.services.money import (
+    MONEY_MAX_ABS_10_4,
     MONEY_MAX_ABS_12_2,
     mom_pct,
     quantize_money,
+    quantize_price,
+    quantize_shares,
     require_first_of_month,
 )
 
@@ -42,6 +45,37 @@ def test_quantize_money_bounds():
     with pytest.raises(HTTPException) as exc:
         quantize_money(Decimal("10000000000"), "net_pay", max_abs=MONEY_MAX_ABS_12_2)
     assert "10^10" in exc.value.detail
+
+
+def test_quantize_shares_rounds_half_up_to_6dp():
+    assert quantize_shares(Decimal("1.0000005"), "shares") == Decimal("1.000001")
+
+
+def test_quantize_shares_rejects_out_of_bounds():
+    with pytest.raises(HTTPException) as exc:
+        quantize_shares(Decimal("1e10"), "shares")
+    assert exc.value.status_code == 422
+    assert "shares" in exc.value.detail
+
+
+def test_quantize_price_rounds_half_up_to_4dp():
+    assert quantize_price(Decimal("710.17005"), "price") == Decimal("710.1701")
+    # rounding may cross the bound — still 422
+    with pytest.raises(HTTPException):
+        quantize_price(Decimal("9999999999.99999"), "price")
+
+
+def test_quantize_price_honors_custom_bound():
+    with pytest.raises(HTTPException):
+        quantize_price(Decimal("1000000"), "split_factor", max_abs=MONEY_MAX_ABS_10_4)
+    assert quantize_price(Decimal("3"), "split_factor", max_abs=MONEY_MAX_ABS_10_4) == Decimal(
+        "3.0000"
+    )
+
+
+def test_quantize_shares_rejects_non_finite():
+    with pytest.raises(HTTPException):
+        quantize_shares(Decimal("NaN"), "shares")
 
 
 def test_require_first_of_month():

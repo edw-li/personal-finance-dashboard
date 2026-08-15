@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     admin_email: str = "admin@example.com"
     admin_password: str = DEV_ADMIN_PASSWORD
+    # Path to a PEM bundle for yfinance's curl_cffi session. Needed ONLY behind
+    # TLS-intercepting proxies (this dev box — see plan probe 2); prod leaves it unset.
+    yfinance_ca_bundle: str | None = None
+    scheduler_enabled: bool = True
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -8,6 +8,7 @@ from app.database import Base
 
 HOLDING_TYPES = ("etf", "mutual_fund", "stock", "private")
 TRANSACTION_TYPES = ("buy", "sell", "split")
+TRANSACTION_SOURCES = ("import", "ui")
 PRICE_SOURCES = ("yfinance", "manual")
 
 
@@ -40,6 +41,9 @@ class PositionTransaction(Base):
     # Preserves spreadsheet row order — cost-basis folding must process transactions in
     # this order because most rows have no date. Order by (sort_index, id) for stability.
     sort_index: Mapped[int] = mapped_column(default=0)
+    # Ownership contract (supersedes Plan 2's sort_index-0 rule): the importer keys and
+    # sync-deletes ONLY source='import' rows; UI rows are invisible to re-imports.
+    source: Mapped[str] = mapped_column(String(10), default="ui", server_default="ui")
     notes: Mapped[str | None] = mapped_column(Text)
 
 
