@@ -48,7 +48,8 @@ class AccountUpdate(BaseModel):
 
 
 class BalanceEntry(BaseModel):
-    account_id: int
+    # int32-bounded so a garbage id 422s instead of surfacing asyncpg's DataError.
+    account_id: int = Field(ge=1, le=2_147_483_647)
     balance: Decimal
 
 

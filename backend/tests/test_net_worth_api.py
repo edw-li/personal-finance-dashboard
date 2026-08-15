@@ -326,6 +326,18 @@ async def test_put_month_validation(auth_client, db):
     assert unknown.status_code == 422
     assert "999" in unknown.json()["detail"]
 
+    # Out-of-int32 ids are stopped by pydantic, not asyncpg.
+    assert (
+        await auth_client.put(
+            put,
+            json={
+                "balances": [
+                    {"account_id": 10**12, "balance": "1"},
+                ]
+            },
+        )
+    ).status_code == 422
+
     too_big = await auth_client.put(
         put,
         json={

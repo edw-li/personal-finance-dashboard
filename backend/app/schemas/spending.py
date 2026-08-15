@@ -27,7 +27,9 @@ class CategoryUpdate(BaseModel):
 
 
 class AmountEntry(BaseModel):
-    category_id: int
+    # int32-bounded so a garbage id 422s instead of surfacing asyncpg's DataError.
+    category_id: int = Field(ge=1, le=2_147_483_647)
+    # Signed on purpose: refunds/credits can make a category month negative.
     amount: Decimal
 
 

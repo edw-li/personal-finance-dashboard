@@ -239,6 +239,17 @@ async def test_put_spending_month_validation(auth_client, db):
             },
         )
     ).status_code == 422
+    # Out-of-int32 ids are stopped by pydantic, not asyncpg.
+    assert (
+        await auth_client.put(
+            put,
+            json={
+                "amounts": [
+                    {"category_id": 10**12, "amount": "1"},
+                ]
+            },
+        )
+    ).status_code == 422
     assert (await auth_client.put("/api/v1/spending/months/2026-03-15", json={})).status_code == 422
     # Take-home pay can't be negative (savings-rate denominator sanity).
     assert (await auth_client.put(put, json={"net_pay": "-1", "amounts": []})).status_code == 422
