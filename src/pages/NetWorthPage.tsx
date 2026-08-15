@@ -43,6 +43,9 @@ export default function NetWorthPage() {
   // Drill-down: selection order assigns the lowest free palette slot; removing one
   // never repaints the survivors (dataviz: color follows the entity, not its rank).
   const [drill, setDrill] = useState<{ accountId: number; slot: number }[]>([])
+  // Ribbon coverage is captured ONLY from monthly responses — the quarterly fetch
+  // filters months server-side and must not make covered months read as missing.
+  const [coverageMonths, setCoverageMonths] = useState<string[]>([])
 
   // Promise callbacks rather than async/await, and no setState before the fetch starts:
   // every state update has to land in an async continuation, never in the synchronous
@@ -54,6 +57,7 @@ export default function NetWorthPage() {
         setData(ts)
         setSummary(sum)
         setError(null)
+        if (granularity === 'monthly') setCoverageMonths(ts.months)
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')
@@ -72,12 +76,12 @@ export default function NetWorthPage() {
     load()
   }, [load])
 
-  const filledMonths = useMemo(() => new Set(data?.months ?? []), [data])
+  const filledMonths = useMemo(() => new Set(coverageMonths), [coverageMonths])
   const anchor = useMemo(() => {
     const cur = currentMonthIso()
-    const latest = data?.months.at(-1)
+    const latest = coverageMonths.at(-1)
     return latest && latest > cur ? latest : cur
-  }, [data])
+  }, [coverageMonths])
 
   const stackedOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.months.length === 0) return null
@@ -270,7 +274,8 @@ export default function NetWorthPage() {
           {stackedOption ? (
             <EChart option={stackedOption} height={360} />
           ) : (
-            !loading && (
+            !loading &&
+            !error && (
               <div className="empty-note">
                 No snapshots yet — enter your first month to start the chart.
               </div>
@@ -307,7 +312,17 @@ export default function NetWorthPage() {
                     style={{ cursor: 'pointer', background: selected ? 'var(--surface-2)' : undefined }}
                   >
                     <td>
-                      {account.name}
+                      <button
+                        type="button"
+                        className="row-toggle"
+                        aria-pressed={selected}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleDrill(account.id)
+                        }}
+                      >
+                        {account.name}
+                      </button>
                       {account.is_component && <span className="badge">component</span>}
                       {!account.is_active && <span className="badge">inactive</span>}
                     </td>
