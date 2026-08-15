@@ -37,6 +37,7 @@ export default function MonthRibbon({
             className={classes}
             title={label}
             aria-label={label}
+            aria-pressed={month === selected}
             onClick={() => onSelect(month)}
           >
             <span className="month-chip-dot" aria-hidden="true" />
