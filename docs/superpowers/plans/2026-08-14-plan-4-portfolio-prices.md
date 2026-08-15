@@ -274,6 +274,7 @@ frontend panel is self-contained (own state + api calls, page passes refetch cal
 - Modify: `backend/requirements.txt`
 - Modify: `backend/app/config.py`
 - Modify: `backend/app/models/portfolio.py`
+- Modify: `backend/app/models/__init__.py` (re-export)
 - Create: `backend/alembic/versions/<generated>_add_position_transaction_source.py`
 - Modify: `backend/app/services/money.py`
 - Test: `backend/tests/test_models_portfolio.py`, `backend/tests/test_services_money.py`
@@ -328,7 +329,8 @@ async def test_position_transaction_source_defaults_to_ui(db):
     assert TRANSACTION_SOURCES == ("import", "ui")
 ```
 
-Import `TRANSACTION_SOURCES` from `app.models.portfolio` (add to the file's imports).
+Import `TRANSACTION_SOURCES` via the existing `from app.models import (...)` block —
+Step 5 adds the package re-export (models/__init__.py re-exports every sibling tuple).
 
 - [ ] **Step 4: Run it to make sure it fails**
 
@@ -351,6 +353,10 @@ and inside `PositionTransaction`, after `sort_index`:
     source: Mapped[str] = mapped_column(String(10), default="ui", server_default="ui")
 ```
 
+Also add `TRANSACTION_SOURCES` to `backend/app/models/__init__.py`: the
+`from app.models.portfolio import (...)` block (alphabetical) and `__all__` (immediately
+before `"TRANSACTION_TYPES"`) — the package re-exports every sibling tuple.
+
 - [ ] **Step 6: Run the test again** — expected: PASS (create_all picks up the column).
 
 - [ ] **Step 7: Write the migration**
@@ -367,7 +373,10 @@ def upgrade() -> None:
         "position_transactions",
         sa.Column("source", sa.String(length=10), server_default="ui", nullable=False),
     )
-    # Existing rows: importer-owned rows are exactly those with sheet-assigned sort_index.
+    # One-time backfill for pre-Plan-4 data: at migration time, rows with a
+    # sheet-assigned sort_index are exactly the importer's. NOT a durable rule —
+    # UI rows created later also get sort_index > 0, so this heuristic (and this
+    # migration's downgrade) must not be re-run once UI rows exist.
     op.execute("UPDATE position_transactions SET source = 'import' WHERE sort_index > 0")
 
 
@@ -476,7 +485,7 @@ from `backend/`. Expected: all pass (169 + new).
 - [ ] **Step 13: Commit**
 
 ```bash
-git add backend/requirements.txt backend/app/config.py backend/app/models/portfolio.py backend/alembic/versions/*add_position_transaction_source* backend/app/services/money.py backend/tests/test_models_portfolio.py backend/tests/test_services_money.py
+git add backend/requirements.txt backend/app/config.py backend/app/models/portfolio.py backend/app/models/__init__.py backend/alembic/versions/*add_position_transaction_source* backend/app/services/money.py backend/tests/test_models_portfolio.py backend/tests/test_services_money.py
 git commit -m "feat: position transaction source column + share/price money vocabulary + price deps"
 ```
 
@@ -1383,7 +1392,10 @@ def build_session(ca_bundle: str | None):
     TLS-intercepting proxies (dev box); None uses curl_cffi's default trust."""
     from curl_cffi import requests as curl_requests
 
-    return curl_requests.Session(impersonate="chrome", verify=ca_bundle or True)
+    # A whitespace-only env value would pass `or True` truthiness and hand curl a
+    # bogus CA path — normalize to None first (Task 1 review).
+    normalized = ca_bundle.strip() if ca_bundle else None
+    return curl_requests.Session(impersonate="chrome", verify=normalized or True)
 
 
 class YFinanceProvider:
@@ -1763,6 +1775,7 @@ git commit -m "feat: price refresh service (history backfill, TTM dividends, man
 **Files:**
 - Create: `backend/app/services/scheduler.py`
 - Modify: `backend/app/main.py`
+- Modify: `backend/.env.example` (document the two new env vars)
 - Test: `backend/tests/test_scheduler.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1922,6 +1935,15 @@ NOTE: the router import line above is exactly the CURRENT set — Task 8 adds `p
 and Task 11 adds `prices` to it (plus their `include_router` lines). Do not pre-import
 modules that don't exist yet.
 
+- [ ] **Step 4b: Document the new env vars in `backend/.env.example`** — append after
+`# CORS_ORIGINS=...`, matching the file's commented-defaults style:
+
+```
+# SCHEDULER_ENABLED=true
+# Dev-box only: PEM bundle for yfinance behind a TLS-intercepting proxy (see README/plan).
+# YFINANCE_CA_BUNDLE=
+```
+
 - [ ] **Step 5: Run the scheduler tests + full suite** — expected: PASS (the suite proves
 app import still works with the lifespan in place).
 
@@ -1946,7 +1968,7 @@ Expected: `price refresh scheduled: '10 13 * * 1-5' (America/Los_Angeles)` log +
 - [ ] **Step 7: Full gate + commit**
 
 ```bash
-git add backend/app/services/scheduler.py backend/app/main.py backend/tests/test_scheduler.py
+git add backend/app/services/scheduler.py backend/app/main.py backend/.env.example backend/tests/test_scheduler.py
 git commit -m "feat: APScheduler price-refresh cron wired into app lifespan"
 ```
 
