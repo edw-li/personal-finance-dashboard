@@ -3594,22 +3594,32 @@ export default function NetWorthPage() {
   // never repaints the survivors (dataviz: color follows the entity, not its rank).
   const [drill, setDrill] = useState<{ accountId: number; slot: number }[]>([])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [ts, sum] = await Promise.all([fetchTimeseries(granularity), fetchSummary()])
-      setData(ts)
-      setSummary(sum)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')
-    } finally {
-      setLoading(false)
-    }
+  // Promise callbacks rather than async/await, and no setState before the fetch starts:
+  // every state update has to land in an async continuation, never in the synchronous
+  // body of the effect below (react-hooks/set-state-in-effect — the same constraint
+  // AuthContext documents; the rule reads `await` continuations as synchronous).
+  const load = useCallback(() => {
+    Promise.all([fetchTimeseries(granularity), fetchSummary()])
+      .then(([ts, sum]) => {
+        setData(ts)
+        setSummary(sum)
+        setError(null)
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')
+      })
+      .finally(() => setLoading(false))
   }, [granularity])
 
+  // The "we're fetching" flip therefore lives in the event handlers that cause a fetch —
+  // the mount fetch is covered by useState's initial `true`.
+  const beginLoad = () => {
+    setLoading(true)
+    setError(null)
+  }
+
   useEffect(() => {
-    void load()
+    load()
   }, [load])
 
   const filledMonths = useMemo(() => new Set(data?.months ?? []), [data])
@@ -3738,7 +3748,13 @@ export default function NetWorthPage() {
       {error && (
         <div className="error-banner" role="alert">
           {error}{' '}
-          <button className="button" onClick={() => void load()}>
+          <button
+            className="button"
+            onClick={() => {
+              beginLoad()
+              load()
+            }}
+          >
             Retry
           </button>
         </div>
@@ -3790,7 +3806,11 @@ export default function NetWorthPage() {
                   key={g}
                   type="button"
                   className={granularity === g ? 'active' : ''}
-                  onClick={() => setGranularity(g)}
+                  onClick={() => {
+                    if (g === granularity) return
+                    beginLoad()
+                    setGranularity(g)
+                  }}
                 >
                   {g === 'monthly' ? 'Monthly' : 'Quarterly'}
                 </button>
@@ -4005,32 +4025,39 @@ export default function SpendingPage() {
   const [error, setError] = useState<string | null>(null)
   const [trend, setTrend] = useState<{ categoryId: number; slot: number }[]>([])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [m, y] = await Promise.all([fetchMatrix(), fetchYearly()])
-      setMatrix(m)
-      setYearly(y)
-      setTrend((current) => {
-        if (current.length > 0 || m.categories.length === 0) return current
-        // Default: the single biggest all-time category, slot 1.
-        const totals = m.series.map((s) => ({
-          id: s.category_id,
-          total: s.values.reduce((acc, v) => acc + (v === null ? 0 : Number(v)), 0),
-        }))
-        totals.sort((a, b) => b.total - a.total)
-        return [{ categoryId: totals[0].id, slot: 0 }]
+  // Promise callbacks, no setState in the effect's synchronous body
+  // (react-hooks/set-state-in-effect) — same shape as NetWorthPage.
+  const load = useCallback(() => {
+    Promise.all([fetchMatrix(), fetchYearly()])
+      .then(([m, y]) => {
+        setMatrix(m)
+        setYearly(y)
+        setError(null)
+        setTrend((current) => {
+          if (current.length > 0 || m.categories.length === 0) return current
+          // Default: the single biggest all-time category, slot 1.
+          const totals = m.series.map((s) => ({
+            id: s.category_id,
+            total: s.values.reduce((acc, v) => acc + (v === null ? 0 : Number(v)), 0),
+          }))
+          totals.sort((a, b) => b.total - a.total)
+          return [{ categoryId: totals[0].id, slot: 0 }]
+        })
       })
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load spending data')
-    } finally {
-      setLoading(false)
-    }
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : 'Failed to load spending data')
+      })
+      .finally(() => setLoading(false))
   }, [])
 
+  // Mount fetch is covered by useState's initial `true`; Retry flips these itself.
+  const beginLoad = () => {
+    setLoading(true)
+    setError(null)
+  }
+
   useEffect(() => {
-    void load()
+    load()
   }, [load])
 
   const monthLabels = useMemo(() => matrix?.months.map(formatMonth) ?? [], [matrix])
@@ -4301,7 +4328,13 @@ export default function SpendingPage() {
       {error && (
         <div className="error-banner" role="alert">
           {error}{' '}
-          <button className="button" onClick={() => void load()}>
+          <button
+            className="button"
+            onClick={() => {
+              beginLoad()
+              load()
+            }}
+          >
             Retry
           </button>
         </div>
@@ -4777,62 +4810,64 @@ export default function MonthlyUpdatePage() {
       return copy
     })
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    setSaved(null)
-    try {
-      const [accountList, categoryList, thisMonth, priorMonth, spendMonth, timeseries] =
-        await Promise.all([
-          fetchAccounts(),
-          fetchCategories(),
-          fetchMonthBalances(month),
-          fetchMonthBalances(addMonths(month, -1)),
-          fetchSpendingMonth(month),
-          fetchTimeseries(),
-        ])
-      const activeAccounts = accountList.filter((a) => a.is_active)
-      setAccounts(activeAccounts)
-      setCategories(categoryList.filter((c) => c.is_active))
-      setMonthExisted(thisMonth.exists)
-      setCoveredMonths(new Set(timeseries.months))
+  // Promise callbacks, no setState in the effect's synchronous body
+  // (react-hooks/set-state-in-effect) — same shape as the module pages. The
+  // loading/saved/error flips for a MONTH CHANGE live in the ribbon's onSelect
+  // handler; the mount fetch is covered by the initial state values.
+  const load = useCallback(() => {
+    Promise.all([
+      fetchAccounts(),
+      fetchCategories(),
+      fetchMonthBalances(month),
+      fetchMonthBalances(addMonths(month, -1)),
+      fetchSpendingMonth(month),
+      fetchTimeseries(),
+    ])
+      .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, timeseries]) => {
+        setError(null)
+        setSaved(null)
+        const activeAccounts = accountList.filter((a) => a.is_active)
+        setAccounts(activeAccounts)
+        setCategories(categoryList.filter((c) => c.is_active))
+        setMonthExisted(thisMonth.exists)
+        setCoveredMonths(new Set(timeseries.months))
 
-      // Pre-fill: the month's own values win; otherwise the prior month's (the sheet
-      // ritual starts from last month's numbers); otherwise 0.00.
-      const source = thisMonth.exists ? thisMonth.balances : priorMonth.balances
-      const byId = new Map(source.map((b) => [b.account_id, b.balance]))
-      setBalances(
-        Object.fromEntries(activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
-      )
-      if (thisMonth.exists && thisMonth.recorded_on) setRecordedOn(thisMonth.recorded_on)
-      if (thisMonth.exists && thisMonth.notes) setNotes(thisMonth.notes)
+        // Pre-fill: the month's own values win; otherwise the prior month's (the sheet
+        // ritual starts from last month's numbers); otherwise 0.00.
+        const source = thisMonth.exists ? thisMonth.balances : priorMonth.balances
+        const byId = new Map(source.map((b) => [b.account_id, b.balance]))
+        setBalances(
+          Object.fromEntries(activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
+        )
+        if (thisMonth.exists && thisMonth.recorded_on) setRecordedOn(thisMonth.recorded_on)
+        if (thisMonth.exists && thisMonth.notes) setNotes(thisMonth.notes)
 
-      const prevSum = priorMonth.exists
-        ? priorMonth.balances.reduce((acc, b) => {
-            const account = accountList.find((a) => a.id === b.account_id)
-            return account && !account.is_component ? acc + Number(b.balance) : acc
-          }, 0)
-        : null
-      setPrevNetWorth(prevSum)
+        const prevSum = priorMonth.exists
+          ? priorMonth.balances.reduce((acc, b) => {
+              const account = accountList.find((a) => a.id === b.account_id)
+              return account && !account.is_component ? acc + Number(b.balance) : acc
+            }, 0)
+          : null
+        setPrevNetWorth(prevSum)
 
-      const spendById = new Map(spendMonth.amounts.map((a) => [a.category_id, a.amount]))
-      setAmounts(
-        Object.fromEntries(
-          categoryList
-            .filter((c) => c.is_active)
-            .map((c) => [c.id, spendById.get(c.id) ?? '0.00']),
-        ),
-      )
-      setNetPay(spendMonth.net_pay ?? '')
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load month data')
-    } finally {
-      setLoading(false)
-    }
+        const spendById = new Map(spendMonth.amounts.map((a) => [a.category_id, a.amount]))
+        setAmounts(
+          Object.fromEntries(
+            categoryList
+              .filter((c) => c.is_active)
+              .map((c) => [c.id, spendById.get(c.id) ?? '0.00']),
+          ),
+        )
+        setNetPay(spendMonth.net_pay ?? '')
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : 'Failed to load month data')
+      })
+      .finally(() => setLoading(false))
   }, [month])
 
   useEffect(() => {
-    void load()
+    load()
   }, [load])
 
   const balancesValid = accounts.every((a) => isNumeric(balances[a.id] ?? ''))
@@ -4896,9 +4931,14 @@ export default function MonthlyUpdatePage() {
           anchor={currentMonthIso()}
           filledMonths={coveredMonths}
           selected={month}
-          onSelect={(m) =>
+          onSelect={(m) => {
+            // Month change refetches via the [month] dep — flip the fetch state here,
+            // in the event handler, never in the effect (react-hooks/set-state-in-effect).
+            setLoading(true)
+            setError(null)
+            setSaved(null)
             setParams(() => new URLSearchParams({ month: m, step: 'balances' }))
-          }
+          }}
         />
       </div>
 
