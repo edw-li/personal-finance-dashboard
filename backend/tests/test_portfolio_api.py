@@ -6,6 +6,8 @@ from sqlalchemy import select
 from app.models import DividendPayment, LatestPrice, PositionTransaction, PriceHistory, Security
 
 SECURITIES = "/api/v1/portfolio/securities"
+TRANSACTIONS = "/api/v1/portfolio/transactions"
+DIVIDENDS = "/api/v1/portfolio/dividends"
 
 
 async def _create_security(auth_client, **fields) -> dict:
@@ -338,3 +340,406 @@ async def test_securities_require_auth(client):
     ).status_code == 401
     assert (await client.patch(f"{SECURITIES}/1", json={"name": "X"})).status_code == 401
     assert (await client.delete(f"{SECURITIES}/1")).status_code == 401
+
+
+# --- transactions ---
+
+
+def _buy(security_id: int, **overrides) -> dict:
+    """Minimal valid buy payload; overrides (or a `del`) shape each validation case."""
+    return {
+        "security_id": security_id,
+        "account": "Fidelity Taxable",
+        "type": "buy",
+        "shares": "5",
+        "price": "100",
+        **overrides,
+    }
+
+
+async def test_create_buy_assigns_source_ui_and_max_plus_10_sort_index(auth_client, db):
+    security = await _create_security(auth_client)
+    first = await auth_client.post(TRANSACTIONS, json=_buy(security["id"]))
+    assert first.status_code == 201, first.text
+    assert first.json()["source"] == "ui"
+    assert first.json()["sort_index"] == 10  # empty table: coalesce(max, 0) + 10
+
+    db.add(
+        PositionTransaction(
+            security_id=security["id"],
+            account="Fidelity Taxable",
+            type="buy",
+            shares=Decimal("1"),
+            price=Decimal("1"),
+            sort_index=260,  # sheet row 26 x 10
+            source="import",
+        )
+    )
+    await db.commit()
+
+    after_import = await auth_client.post(TRANSACTIONS, json=_buy(security["id"]))
+    assert after_import.status_code == 201, after_import.text
+    body = after_import.json()
+    assert body["source"] == "ui"  # UI rows are invisible to re-imports
+    assert body["sort_index"] == 270  # max(ALL rows) + 10 -> folds chronologically LAST
+    second = await auth_client.post(TRANSACTIONS, json=_buy(security["id"]))
+    assert second.json()["sort_index"] == 280  # each UI row lands after the previous one
+
+
+async def test_create_buy_quantizes_shares_price_fees(auth_client):
+    security = await _create_security(auth_client)
+    resp = await auth_client.post(
+        TRANSACTIONS,
+        json=_buy(security["id"], shares="1.0000005", price="10.00005", fees="1.005"),
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # Column scales at HALF_UP (Python's default banker's rounding would give 1.000000/1.00).
+    assert body["shares"] == "1.000001"
+    assert body["price"] == "10.0001"
+    assert body["fees"] == "1.01"
+    assert body["split_factor"] is None
+    assert body["txn_date"] is None  # dateless rows are legal — XIRR just goes null
+
+
+async def test_create_buy_sell_validation(auth_client):
+    security = await _create_security(auth_client)
+    no_shares = _buy(security["id"])
+    del no_shares["shares"]
+    missing = await auth_client.post(TRANSACTIONS, json=no_shares)
+    assert missing.status_code == 422
+    assert "shares" in missing.json()["detail"]  # buy/sell rows carry BOTH legs
+
+    no_price = _buy(security["id"])
+    del no_price["price"]
+    assert (await auth_client.post(TRANSACTIONS, json=no_price)).status_code == 422
+
+    zero_shares = await auth_client.post(TRANSACTIONS, json=_buy(security["id"], shares="0"))
+    assert zero_shares.status_code == 422
+    assert "positive" in zero_shares.json()["detail"]
+
+    negative_fees = await auth_client.post(TRANSACTIONS, json=_buy(security["id"], fees="-0.01"))
+    assert negative_fees.status_code == 422
+
+    factor_on_buy = await auth_client.post(
+        TRANSACTIONS, json=_buy(security["id"], split_factor="2")
+    )
+    assert factor_on_buy.status_code == 422  # only split rows carry a factor
+    assert "split_factor" in factor_on_buy.json()["detail"]
+
+    # Sells store POSITIVE shares (locked convention — folding subtracts).
+    sell = await auth_client.post(TRANSACTIONS, json=_buy(security["id"], type="sell"))
+    assert sell.status_code == 201, sell.text
+    assert sell.json()["shares"] == "5.000000"
+    negative_sell = await auth_client.post(
+        TRANSACTIONS, json=_buy(security["id"], type="sell", shares="-5")
+    )
+    assert negative_sell.status_code == 422
+
+    assert (await auth_client.get(TRANSACTIONS)).json() == [sell.json()]  # no partial writes
+
+
+async def test_create_split_forces_dummy_shares_price(auth_client):
+    security = await _create_security(auth_client)
+
+    def split_payload(**overrides) -> dict:
+        payload = _buy(security["id"], type="split")
+        del payload["shares"]  # a split row carries the factor and nothing else ...
+        del payload["price"]
+        return {**payload, "split_factor": "3", **overrides}
+
+    created = await auth_client.post(TRANSACTIONS, json=split_payload())
+    assert created.status_code == 201, created.text
+    body = created.json()
+    # Plan 1 dummy convention: folding reads ONLY the factor off a split row.
+    assert body["shares"] == "0.000000"
+    assert body["price"] == "0.0000"
+    assert body["fees"] is None
+    assert body["split_factor"] == "3.0000"
+
+    no_factor = split_payload()
+    del no_factor["split_factor"]
+    rejected = await auth_client.post(TRANSACTIONS, json=no_factor)
+    assert rejected.status_code == 422
+    assert "split_factor" in rejected.json()["detail"]
+
+    with_shares = await auth_client.post(TRANSACTIONS, json=split_payload(shares="5"))
+    assert with_shares.status_code == 422  # dummy 0s only
+    zero_factor = await auth_client.post(TRANSACTIONS, json=split_payload(split_factor="0"))
+    assert zero_factor.status_code == 422  # a 0x split would erase the position
+
+    explicit_zeros = await auth_client.post(TRANSACTIONS, json=split_payload(shares="0", price="0"))
+    assert explicit_zeros.status_code == 201, explicit_zeros.text  # spelling the dummies is fine
+
+
+async def test_create_transaction_unknown_security_422(auth_client):
+    resp = await auth_client.post(TRANSACTIONS, json=_buy(999))
+    assert resp.status_code == 422  # a bare FK violation would surface as a 500
+    assert "999" in resp.json()["detail"]
+    assert (await auth_client.get(TRANSACTIONS)).json() == []
+
+
+async def test_patch_transaction_validates_merged_row(auth_client):
+    security = await _create_security(auth_client)
+    buy = (await auth_client.post(TRANSACTIONS, json=_buy(security["id"]))).json()
+
+    repriced = await auth_client.patch(f"{TRANSACTIONS}/{buy['id']}", json={"price": "10.00005"})
+    assert repriced.status_code == 200, repriced.text
+    assert repriced.json()["price"] == "10.0001"  # PATCH requantizes exactly like create
+    assert repriced.json()["shares"] == "5.000000"  # untouched legs survive the merge
+
+    flipped = await auth_client.patch(f"{TRANSACTIONS}/{buy['id']}", json={"type": "split"})
+    assert flipped.status_code == 422  # the MERGED row would be a split with no factor
+    assert "split_factor" in flipped.json()["detail"]
+
+    # An explicit null on the NOT NULL type column is a no-op request, never a NULL write.
+    noop = await auth_client.patch(f"{TRANSACTIONS}/{buy['id']}", json={"type": None})
+    assert noop.status_code == 200, noop.text
+    assert noop.json()["type"] == "buy"
+
+    split = (
+        await auth_client.post(
+            TRANSACTIONS,
+            json={
+                "security_id": security["id"],
+                "account": "Fidelity Taxable",
+                "type": "split",
+                "split_factor": "2",
+            },
+        )
+    ).json()
+    refactored = await auth_client.patch(
+        f"{TRANSACTIONS}/{split['id']}", json={"split_factor": "4"}
+    )
+    assert refactored.status_code == 200, refactored.text
+    assert refactored.json()["split_factor"] == "4.0000"
+    assert refactored.json()["shares"] == "0.000000"  # the dummies survive the merge
+
+    assert (await auth_client.patch(f"{TRANSACTIONS}/999", json={"price": "1"})).status_code == 404
+
+
+async def test_patch_transaction_never_touches_source_or_sort_index(auth_client, db):
+    security = await _create_security(auth_client)
+    imported = PositionTransaction(
+        security_id=security["id"],
+        account="Fidelity Taxable",
+        type="buy",
+        shares=Decimal("2.000000"),
+        price=Decimal("50.0000"),
+        sort_index=130,
+        source="import",
+    )
+    db.add(imported)
+    await db.commit()
+
+    resp = await auth_client.patch(
+        f"{TRANSACTIONS}/{imported.id}",
+        json={"price": "51.5", "source": "ui", "sort_index": 0, "id": 999},
+    )
+    assert resp.status_code == 200, resp.text  # editing an import-owned row is legal ...
+    body = resp.json()
+    assert body["price"] == "51.5000"
+    # ... but ownership metadata is not in TransactionUpdate at all, so pydantic drops
+    # those keys and the next re-import still reverts the row (sheet wins).
+    assert body["source"] == "import"
+    assert body["sort_index"] == 130
+    assert body["id"] == imported.id
+
+
+async def test_delete_transaction_hard_deletes(auth_client, db):
+    security = await _create_security(auth_client)
+    ui_row = (await auth_client.post(TRANSACTIONS, json=_buy(security["id"]))).json()
+    import_row = PositionTransaction(
+        security_id=security["id"],
+        account="Fidelity Taxable",
+        type="buy",
+        shares=Decimal("1.000000"),
+        price=Decimal("1.0000"),
+        sort_index=90,
+        source="import",
+    )
+    db.add(import_row)
+    await db.commit()
+
+    # Both sources delete hard — import-owned rows simply resurrect on the next re-import.
+    assert (await auth_client.delete(f"{TRANSACTIONS}/{ui_row['id']}")).status_code == 204
+    assert (await auth_client.delete(f"{TRANSACTIONS}/{import_row.id}")).status_code == 204
+    assert (await auth_client.get(TRANSACTIONS)).json() == []
+    remaining = (await db.execute(select(PositionTransaction))).scalars().all()
+    assert remaining == []  # gone from the table, not merely filtered out of the list
+    assert (await auth_client.delete(f"{TRANSACTIONS}/{ui_row['id']}")).status_code == 404
+
+
+async def test_list_transactions_filters_and_orders(auth_client, db):
+    voo = await _create_security(auth_client)
+    nvda = await _create_security(auth_client, ticker="NVDA", name="NVIDIA", holding_type="stock")
+    rows = [
+        PositionTransaction(
+            security_id=voo["id"],
+            account="Fidelity Taxable",
+            type="buy",
+            shares=Decimal("1"),
+            price=Decimal("1"),
+            sort_index=30,
+        ),
+        PositionTransaction(
+            security_id=voo["id"],
+            account="Fidelity Taxable",
+            type="buy",
+            shares=Decimal("2"),
+            price=Decimal("2"),
+            sort_index=10,
+        ),
+        PositionTransaction(
+            security_id=nvda["id"],
+            account="Fidelity Taxable",
+            type="buy",
+            shares=Decimal("3"),
+            price=Decimal("3"),
+            sort_index=10,
+        ),
+    ]
+    db.add_all(rows)
+    await db.commit()
+    ids = [row.id for row in rows]
+    assert ids[1] < ids[2]  # ... so the pair sharing sort_index 10 has a knowable id order
+
+    listed = await auth_client.get(TRANSACTIONS)
+    assert listed.status_code == 200, listed.text
+    # (sort_index, id) — the folding order. NEVER txn_date, which is mostly NULL.
+    assert [t["id"] for t in listed.json()] == [ids[1], ids[2], ids[0]]
+
+    filtered = await auth_client.get(TRANSACTIONS, params={"security_id": nvda["id"]})
+    assert [t["id"] for t in filtered.json()] == [ids[2]]
+    assert (await auth_client.get(TRANSACTIONS, params={"security_id": 999})).json() == []
+
+
+# --- dividends ---
+
+
+async def test_dividend_crud_roundtrip(auth_client):
+    security = await _create_security(auth_client)
+    created = await auth_client.post(
+        DIVIDENDS,
+        json={
+            "security_id": security["id"],
+            "account": " Fidelity Taxable ",
+            "pay_date": "2026-06-30",
+            "amount": "12.345",
+            "notes": "Q2",
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["amount"] == "12.35"  # 2 dp, HALF_UP
+    assert body["account"] == "Fidelity Taxable"  # stored trimmed, like every other text field
+    assert body["notes"] == "Q2"
+
+    older = await auth_client.post(
+        DIVIDENDS, json={"security_id": security["id"], "pay_date": "2026-03-31", "amount": "10"}
+    )
+    assert older.status_code == 201, older.text
+    assert older.json()["account"] is None  # account is optional on a dividend
+    same_day = await auth_client.post(
+        DIVIDENDS, json={"security_id": security["id"], "pay_date": "2026-06-30", "amount": "1"}
+    )
+    assert same_day.status_code == 201, same_day.text
+
+    listed = await auth_client.get(DIVIDENDS)
+    assert listed.status_code == 200, listed.text
+    # newest first; id desc breaks same-day ties so the newest entry still leads
+    assert [d["id"] for d in listed.json()] == [
+        same_day.json()["id"],
+        body["id"],
+        older.json()["id"],
+    ]
+    assert (await auth_client.get(DIVIDENDS, params={"security_id": 999})).json() == []
+
+    patched = await auth_client.patch(
+        f"{DIVIDENDS}/{body['id']}", json={"amount": "20.005", "notes": None}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["amount"] == "20.01"
+    assert patched.json()["notes"] is None
+    assert patched.json()["pay_date"] == "2026-06-30"  # a PATCH is never a PUT
+
+    assert (await auth_client.delete(f"{DIVIDENDS}/{body['id']}")).status_code == 204
+    assert [d["id"] for d in (await auth_client.get(DIVIDENDS)).json()] == [
+        same_day.json()["id"],
+        older.json()["id"],
+    ]
+    assert (await auth_client.delete(f"{DIVIDENDS}/{body['id']}")).status_code == 404
+    assert (await auth_client.patch(f"{DIVIDENDS}/999", json={"amount": "1"})).status_code == 404
+
+
+async def test_dividend_validation(auth_client):
+    security = await _create_security(auth_client)
+
+    def dividend(**overrides) -> dict:
+        return {
+            "security_id": security["id"],
+            "pay_date": "2026-06-30",
+            "amount": "5",
+            **overrides,
+        }
+
+    zero = await auth_client.post(DIVIDENDS, json=dividend(amount="0"))
+    assert zero.status_code == 422
+    assert "amount" in zero.json()["detail"]
+    assert (await auth_client.post(DIVIDENDS, json=dividend(amount="-5"))).status_code == 422
+    unknown = await auth_client.post(DIVIDENDS, json=dividend(security_id=999))
+    assert unknown.status_code == 422  # a bare FK violation would surface as a 500
+    assert "999" in unknown.json()["detail"]
+    long_account = await auth_client.post(DIVIDENDS, json=dividend(account="A" * 81))
+    assert long_account.status_code == 422  # schema max_length, not a String(80) truncation
+    too_big = await auth_client.post(DIVIDENDS, json=dividend(amount="10000000000"))
+    assert too_big.status_code == 422  # Numeric(12,2) holds ten integer digits
+    assert (await auth_client.get(DIVIDENDS)).json() == []  # no partial writes
+
+    live = (await auth_client.post(DIVIDENDS, json=dividend())).json()
+    for bad in ({"amount": None}, {"pay_date": None}, {"amount": "0"}, {"amount": "-5"}):
+        resp = await auth_client.patch(f"{DIVIDENDS}/{live['id']}", json=bad)
+        assert resp.status_code == 422, bad  # PATCH enforces create's rules
+    assert (await auth_client.get(DIVIDENDS)).json() == [live]  # rejected PATCHes change nothing
+
+
+async def test_transaction_and_dividend_dates_must_be_reasonable(auth_client):
+    security = await _create_security(auth_client)
+    # A mistyped year must 422 at the boundary, not travel into XIRR/day-Δ spans later.
+    typo = await auth_client.post(TRANSACTIONS, json=_buy(security["id"], txn_date="1026-08-15"))
+    assert typo.status_code == 422
+    assert "txn_date" in typo.json()["detail"]
+
+    dated = await auth_client.post(TRANSACTIONS, json=_buy(security["id"], txn_date="2026-08-15"))
+    assert dated.status_code == 201, dated.text
+    assert dated.json()["txn_date"] == "2026-08-15"
+    txn_id = dated.json()["id"]
+
+    patched_typo = await auth_client.patch(
+        f"{TRANSACTIONS}/{txn_id}", json={"account": "Moved", "txn_date": "3026-01-01"}
+    )
+    assert patched_typo.status_code == 422
+    assert "txn_date" in patched_typo.json()["detail"]
+    # Validate-then-mutate: a 422 midway through a PATCH leaves NOTHING dirty for the
+    # next autoflush — this GET would otherwise report account "Moved".
+    assert (await auth_client.get(TRANSACTIONS)).json() == [dated.json()]
+
+    cleared = await auth_client.patch(f"{TRANSACTIONS}/{txn_id}", json={"txn_date": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["txn_date"] is None  # clearing a date is legal; XIRR just goes null
+
+    absurd = await auth_client.post(
+        DIVIDENDS, json={"security_id": security["id"], "pay_date": "3026-01-01", "amount": "5"}
+    )
+    assert absurd.status_code == 422
+    assert "pay_date" in absurd.json()["detail"]
+    live = await auth_client.post(
+        DIVIDENDS, json={"security_id": security["id"], "pay_date": "2026-06-30", "amount": "5"}
+    )
+    assert live.status_code == 201, live.text
+    patched_div = await auth_client.patch(
+        f"{DIVIDENDS}/{live.json()['id']}", json={"amount": "9", "pay_date": "1026-01-01"}
+    )
+    assert patched_div.status_code == 422
+    assert "pay_date" in patched_div.json()["detail"]
+    assert (await auth_client.get(DIVIDENDS)).json() == [live.json()]  # amount stayed at 5.00

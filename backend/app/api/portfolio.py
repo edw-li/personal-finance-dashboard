@@ -9,11 +9,25 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import DividendPayment, PositionTransaction, Security
 from app.schemas.portfolio import (
+    DividendCreate,
+    DividendOut,
+    DividendUpdate,
     SecurityCreate,
     SecurityOut,
     SecurityUpdate,
+    TransactionCreate,
+    TransactionOut,
+    TransactionUpdate,
 )
-from app.services.money import MONEY_MAX_ABS_10_4, quantize_price, require_reasonable_date
+from app.services.money import (
+    MONEY_MAX_ABS_10_2,
+    MONEY_MAX_ABS_10_4,
+    MONEY_MAX_ABS_12_2,
+    quantize_money,
+    quantize_price,
+    quantize_shares,
+    require_reasonable_date,
+)
 
 router = APIRouter(
     prefix="/portfolio", tags=["portfolio"], dependencies=[Depends(get_current_user)]
@@ -145,5 +159,229 @@ async def delete_security(security_id: int, db: AsyncSession = Depends(get_db)) 
             ),
         )
     await db.delete(security)  # latest/history price rows CASCADE — derived data
+    await db.commit()
+    return Response(status_code=204)
+
+
+def _validated_txn_fields(
+    type_: str,
+    shares: Decimal | None,
+    price: Decimal | None,
+    fees: Decimal | None,
+    split_factor: Decimal | None,
+) -> dict:
+    """Type-shape law: buy/sell carry shares>0 + price>=0 (+ optional fees>=0, no
+    split_factor); split carries split_factor>0 ONLY — shares/price stored as the
+    Plan 1 dummy 0s so folding reads only the factor."""
+    if type_ == "split":
+        if split_factor is None:
+            raise HTTPException(status_code=422, detail="split requires split_factor")
+        factor = quantize_price(split_factor, "split_factor", max_abs=MONEY_MAX_ABS_10_4)
+        if factor <= 0:
+            raise HTTPException(status_code=422, detail="split_factor must be positive")
+        if shares not in (None, Decimal("0")) or price not in (None, Decimal("0")):
+            raise HTTPException(
+                status_code=422, detail="split rows carry no shares/price (dummy 0s)"
+            )
+        if fees is not None:
+            raise HTTPException(status_code=422, detail="split rows carry no fees")
+        return {
+            # Scale-explicit dummies: every numeric crosses the wire at its column scale.
+            "shares": Decimal("0.000000"),
+            "price": Decimal("0.0000"),
+            "fees": None,
+            "split_factor": factor,
+        }
+    if split_factor is not None:
+        raise HTTPException(status_code=422, detail=f"{type_} rows carry no split_factor")
+    if shares is None or price is None:
+        raise HTTPException(status_code=422, detail=f"{type_} requires shares and price")
+    quantized_shares = quantize_shares(shares, "shares")
+    if quantized_shares <= 0:
+        raise HTTPException(status_code=422, detail="shares must be positive")
+    quantized_price = quantize_price(price, "price")
+    if quantized_price < 0:
+        raise HTTPException(status_code=422, detail="price must be >= 0")
+    quantized_fees = None
+    if fees is not None:
+        quantized_fees = quantize_money(fees, "fees", max_abs=MONEY_MAX_ABS_10_2)
+        if quantized_fees < 0:
+            raise HTTPException(status_code=422, detail="fees must be >= 0")
+    return {
+        "shares": quantized_shares,
+        "price": quantized_price,
+        "fees": quantized_fees,
+        "split_factor": None,
+    }
+
+
+@router.get("/transactions", response_model=list[TransactionOut])
+async def list_transactions(
+    security_id: int | None = None, db: AsyncSession = Depends(get_db)
+) -> list[PositionTransaction]:
+    query = select(PositionTransaction).order_by(
+        PositionTransaction.sort_index, PositionTransaction.id
+    )
+    if security_id is not None:
+        query = query.where(PositionTransaction.security_id == security_id)
+    return list((await db.execute(query)).scalars())
+
+
+@router.post("/transactions", response_model=TransactionOut, status_code=201)
+async def create_transaction(
+    body: TransactionCreate, db: AsyncSession = Depends(get_db)
+) -> PositionTransaction:
+    if await db.get(Security, body.security_id) is None:
+        raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
+    fields = _validated_txn_fields(body.type, body.shares, body.price, body.fees, body.split_factor)
+    if body.txn_date is not None:
+        require_reasonable_date(body.txn_date, "txn_date")
+    max_index = (
+        await db.execute(select(func.coalesce(func.max(PositionTransaction.sort_index), 0)))
+    ).scalar_one()
+    # UI rows fold chronologically LAST (locked decision). A later sheet import may mint
+    # the same sort_index for a new row — folding tie-breaks on id; accepted.
+    txn = PositionTransaction(
+        security_id=body.security_id,
+        account=body.account.strip(),
+        type=body.type,
+        txn_date=body.txn_date,
+        sort_index=max_index + 10,
+        source="ui",
+        notes=body.notes,
+        **fields,
+    )
+    db.add(txn)
+    await db.commit()
+    return txn
+
+
+async def _get_transaction(db: AsyncSession, txn_id: int) -> PositionTransaction:
+    txn = await db.get(PositionTransaction, txn_id)
+    if txn is None:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    return txn
+
+
+@router.patch("/transactions/{txn_id}", response_model=TransactionOut)
+async def update_transaction(
+    txn_id: int, body: TransactionUpdate, db: AsyncSession = Depends(get_db)
+) -> PositionTransaction:
+    txn = await _get_transaction(db, txn_id)
+    provided = body.model_dump(exclude_unset=True)
+    # Validate the MERGED row so a type flip can't leave an inconsistent shape. An explicit
+    # null on the NOT NULL type column reads as a no-op request (update_security posture).
+    merged_type = provided.get("type") or txn.type
+    merged = _validated_txn_fields(
+        merged_type,
+        provided.get("shares", txn.shares),
+        provided.get("price", txn.price),
+        provided.get("fees", txn.fees),
+        provided.get("split_factor", txn.split_factor),
+    )
+    if "account" in provided and provided["account"] is None:
+        raise HTTPException(status_code=422, detail="account cannot be null")
+    if "txn_date" in provided and provided["txn_date"] is not None:
+        require_reasonable_date(provided["txn_date"], "txn_date")
+    # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
+    # PATCH would leave part of the row dirty for the next autoflush.
+    if "account" in provided:
+        txn.account = provided["account"].strip()
+    if "txn_date" in provided:
+        txn.txn_date = provided["txn_date"]
+    if "notes" in provided:
+        txn.notes = provided["notes"]
+    txn.type = merged_type
+    txn.shares = merged["shares"]
+    txn.price = merged["price"]
+    txn.fees = merged["fees"]
+    txn.split_factor = merged["split_factor"]
+    # source/sort_index are ownership metadata — never PATCHable. Edits to
+    # source='import' rows are legal but the next re-import reverts them (sheet wins).
+    await db.commit()
+    return txn
+
+
+@router.delete("/transactions/{txn_id}", status_code=204)
+async def delete_transaction(txn_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+    txn = await _get_transaction(db, txn_id)
+    await db.delete(txn)  # import-owned rows resurrect on the next re-import — documented
+    await db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/dividends", response_model=list[DividendOut])
+async def list_dividends(
+    security_id: int | None = None, db: AsyncSession = Depends(get_db)
+) -> list[DividendPayment]:
+    query = select(DividendPayment).order_by(
+        DividendPayment.pay_date.desc(), DividendPayment.id.desc()
+    )
+    if security_id is not None:
+        query = query.where(DividendPayment.security_id == security_id)
+    return list((await db.execute(query)).scalars())
+
+
+def _validated_dividend_amount(amount: Decimal) -> Decimal:
+    quantized = quantize_money(amount, "amount", max_abs=MONEY_MAX_ABS_12_2)
+    if quantized <= 0:
+        raise HTTPException(status_code=422, detail="amount must be positive")
+    return quantized
+
+
+@router.post("/dividends", response_model=DividendOut, status_code=201)
+async def create_dividend(
+    body: DividendCreate, db: AsyncSession = Depends(get_db)
+) -> DividendPayment:
+    if await db.get(Security, body.security_id) is None:
+        raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
+    require_reasonable_date(body.pay_date, "pay_date")
+    dividend = DividendPayment(
+        security_id=body.security_id,
+        account=body.account.strip() if body.account else None,
+        pay_date=body.pay_date,
+        amount=_validated_dividend_amount(body.amount),
+        notes=body.notes,
+    )
+    db.add(dividend)
+    await db.commit()
+    return dividend
+
+
+async def _get_dividend(db: AsyncSession, dividend_id: int) -> DividendPayment:
+    dividend = await db.get(DividendPayment, dividend_id)
+    if dividend is None:
+        raise HTTPException(status_code=404, detail="dividend not found")
+    return dividend
+
+
+@router.patch("/dividends/{dividend_id}", response_model=DividendOut)
+async def update_dividend(
+    dividend_id: int, body: DividendUpdate, db: AsyncSession = Depends(get_db)
+) -> DividendPayment:
+    dividend = await _get_dividend(db, dividend_id)
+    provided = body.model_dump(exclude_unset=True)
+    # Validate EVERY field before touching the ORM object (update_security posture): a 422
+    # raised halfway through would leave part of the row dirty for the next autoflush.
+    validated: dict[str, object] = dict(provided)
+    for field_name in ("amount", "pay_date"):
+        if field_name in provided and provided[field_name] is None:
+            raise HTTPException(status_code=422, detail=f"{field_name} cannot be null")
+    if "amount" in provided:
+        validated["amount"] = _validated_dividend_amount(provided["amount"])
+    if "pay_date" in provided:
+        validated["pay_date"] = require_reasonable_date(provided["pay_date"], "pay_date")
+    if "account" in provided:
+        validated["account"] = provided["account"].strip() if provided["account"] else None
+    for field_name, value in validated.items():
+        setattr(dividend, field_name, value)
+    await db.commit()
+    return dividend
+
+
+@router.delete("/dividends/{dividend_id}", status_code=204)
+async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+    dividend = await _get_dividend(db, dividend_id)
+    await db.delete(dividend)
     await db.commit()
     return Response(status_code=204)
