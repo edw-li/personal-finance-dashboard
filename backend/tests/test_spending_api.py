@@ -242,3 +242,18 @@ async def test_put_spending_month_validation(auth_client, db):
     assert (await auth_client.put("/api/v1/spending/months/2026-03-15", json={})).status_code == 422
     # Take-home pay can't be negative (savings-rate denominator sanity).
     assert (await auth_client.put(put, json={"net_pay": "-1", "amounts": []})).status_code == 422
+    # Numeric(12,2) columns hold only 10 integer digits — bound enforced pre-write
+    # (10^10..10^12 would pass the 14,2 bound and then 500 as DBAPIError 22003).
+    assert (
+        await auth_client.put(
+            put,
+            json={
+                "amounts": [
+                    {"category_id": food.id, "amount": "10000000000"},
+                ]
+            },
+        )
+    ).status_code == 422
+    assert (
+        await auth_client.put(put, json={"net_pay": "10000000000", "amounts": []})
+    ).status_code == 422

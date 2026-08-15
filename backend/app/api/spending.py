@@ -23,7 +23,12 @@ from app.schemas.spending import (
     YearlyOut,
     YearRollup,
 )
-from app.services.money import quantize_money, quantize_pct, require_first_of_month
+from app.services.money import (
+    MONEY_MAX_ABS_12_2,
+    quantize_money,
+    quantize_pct,
+    require_first_of_month,
+)
 from app.services.net_worth_calc import get_swr_pct, investable_base
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
@@ -278,11 +283,19 @@ async def put_month(
     if len(set(ids)) != len(ids):
         raise HTTPException(status_code=422, detail="duplicate category_id in amounts")
     quantized: dict[int, Decimal] = {
-        entry.category_id: quantize_money(entry.amount, f"amount[category_id={entry.category_id}]")
+        entry.category_id: quantize_money(
+            entry.amount,
+            f"amount[category_id={entry.category_id}]",
+            max_abs=MONEY_MAX_ABS_12_2,  # Numeric(12,2): 10 integer digits, not 12
+        )
         for entry in body.amounts
     }
     net_pay_provided = "net_pay" in body.model_fields_set and body.net_pay is not None
-    net_pay_value = quantize_money(body.net_pay, "net_pay") if net_pay_provided else None
+    net_pay_value = (
+        quantize_money(body.net_pay, "net_pay", max_abs=MONEY_MAX_ABS_12_2)
+        if net_pay_provided
+        else None
+    )
     if net_pay_value is not None and net_pay_value < 0:
         # Take-home pay can't be negative; a typo'd minus sign would flip the
         # savings-rate denominator into flattering nonsense (Task 7 review).

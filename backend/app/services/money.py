@@ -11,20 +11,28 @@ from fastapi import HTTPException
 
 MONEY_QUANTUM = Decimal("0.01")
 PCT_QUANTUM = Decimal("0.000001")
-# Numeric(14,2) / Numeric(12,2): 12 integer digits is the shared safe bound (over-scale
-# values otherwise surface as bare DBAPIError sqlstate 22003 — Plan 1 forward note).
-MONEY_MAX_ABS = Decimal(10) ** 12
+# Per-column-family bounds (over-scale values otherwise surface as bare DBAPIError
+# sqlstate 22003 — Plan 1 forward note). NUMERIC precision counts TOTAL digits:
+# Numeric(14,2) keeps 12 integer digits, Numeric(12,2) keeps only 10.
+MONEY_MAX_ABS = Decimal(10) ** 12  # Numeric(14,2): account balances
+MONEY_MAX_ABS_12_2 = Decimal(10) ** 10  # Numeric(12,2): spending amounts, net_pay
 
 
-def quantize_money(value: Decimal, field: str) -> Decimal:
+def quantize_money(value: Decimal, field: str, max_abs: Decimal = MONEY_MAX_ABS) -> Decimal:
     # Pre-check BEFORE quantize: pydantic accepts huge finite Decimals ("1e26") whose
     # quantize() raises InvalidOperation, and NaN comparisons raise too — either would
     # surface as a 500 instead of this module's promised 422.
-    if not value.is_finite() or value.copy_abs() >= MONEY_MAX_ABS:
-        raise HTTPException(status_code=422, detail=f"{field}: |value| must be below 10^12")
+    if not value.is_finite() or value.copy_abs() >= max_abs:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field}: |value| must be below 10^{max_abs.adjusted()}",
+        )
     quantized = value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
-    if quantized.copy_abs() >= MONEY_MAX_ABS:  # rounding can cross the bound
-        raise HTTPException(status_code=422, detail=f"{field}: |value| must be below 10^12")
+    if quantized.copy_abs() >= max_abs:  # rounding can cross the bound
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field}: |value| must be below 10^{max_abs.adjusted()}",
+        )
     return quantized
 
 

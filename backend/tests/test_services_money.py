@@ -4,7 +4,12 @@ from decimal import Decimal
 import pytest
 from fastapi import HTTPException
 
-from app.services.money import mom_pct, quantize_money, require_first_of_month
+from app.services.money import (
+    MONEY_MAX_ABS_12_2,
+    mom_pct,
+    quantize_money,
+    require_first_of_month,
+)
 
 
 def test_quantize_money_half_up():
@@ -30,6 +35,13 @@ def test_quantize_money_bounds():
         quantize_money(Decimal("1e26"), "x")  # pydantic-accepted; quantize() would raise
     with pytest.raises(HTTPException):
         quantize_money(Decimal("NaN"), "x")  # comparisons on NaN raise without the guard
+    # Numeric(12,2) family (spending amounts, net_pay): only 10 integer digits fit.
+    assert quantize_money(Decimal("9999999999.99"), "x", max_abs=MONEY_MAX_ABS_12_2) == Decimal(
+        "9999999999.99"
+    )
+    with pytest.raises(HTTPException) as exc:
+        quantize_money(Decimal("10000000000"), "net_pay", max_abs=MONEY_MAX_ABS_12_2)
+    assert "10^10" in exc.value.detail
 
 
 def test_require_first_of_month():
