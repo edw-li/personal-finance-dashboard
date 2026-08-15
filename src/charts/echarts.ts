@@ -1,6 +1,6 @@
 // Tree-shaken echarts surface: everything chart-related imports from HERE, never from
 // 'echarts' directly (the full bundle is ~1MB; this registers only what the app draws).
-import { BarChart, HeatmapChart, LineChart } from 'echarts/charts'
+import { BarChart, HeatmapChart, LineChart, PieChart } from 'echarts/charts'
 import {
   GridComponent,
   LegendComponent,
@@ -9,11 +9,15 @@ import {
   VisualMapComponent,
 } from 'echarts/components'
 import * as echarts from 'echarts/core'
+// Bar-to-pie morph for the spending month drill-in; keys off series ids across
+// notMerge setOption calls. Inert when animation is off (reduced motion).
+import { UniversalTransition } from 'echarts/features'
 import { CanvasRenderer } from 'echarts/renderers'
 import type {
   BarSeriesOption,
   HeatmapSeriesOption,
   LineSeriesOption,
+  PieSeriesOption,
 } from 'echarts/charts'
 import type {
   GridComponentOption,
@@ -28,11 +32,13 @@ echarts.use([
   BarChart,
   LineChart,
   HeatmapChart,
+  PieChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
   VisualMapComponent,
   MarkLineComponent,
+  UniversalTransition,
   CanvasRenderer,
 ])
 
@@ -42,6 +48,7 @@ export type EChartsOption = ComposeOption<
   | BarSeriesOption
   | LineSeriesOption
   | HeatmapSeriesOption
+  | PieSeriesOption
   | GridComponentOption
   | TooltipComponentOption
   | LegendComponentOption

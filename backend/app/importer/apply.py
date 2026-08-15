@@ -201,19 +201,20 @@ async def apply_positions(
 # The five Net Worth source-bucket columns whose sums ALSO appear as their own sheet
 # columns (Fidelity Traditional 401(k) = employer match + reverse rollover + traditional;
 # Fidelity Roth 401(k) = roth basic + after-tax — exact at every snapshot). Counting both
-# sides double-counts pre/post-tax totals, so these import flagged out of the rollups.
-# Seeded at CREATION only: after that is_component is user-owned (accounts CRUD) and
-# re-imports never touch it. Migration f1b36c0cf33c backfilled the same five flags but is
-# a no-op on a fresh DB (migrations run at boot, before the accounts exist to flip).
-COMPONENT_SLUGS_AT_CREATE = frozenset(
-    {
-        "employer-match-401-k",
-        "reverse-rollover-401-k",
-        "traditional-401-k",
-        "roth-basic-401-k",
-        "after-tax-401-k",
-    }
-)
+# sides double-counts pre/post-tax totals, so these import flagged out of the rollups,
+# linked to their aggregate so the UI nests them under it (the sheet lists them BEFORE
+# the aggregate). Seeded at CREATION only: after that both fields are user-owned
+# (accounts CRUD) and re-imports never touch them. Migration f1b36c0cf33c backfilled the
+# same five flags but is a no-op on a fresh DB (migrations run at boot, before the
+# accounts exist to flip); e5b93d0a416f does the same for the parent links.
+COMPONENT_PARENT_SLUG_AT_CREATE: dict[str, str] = {
+    "employer-match-401-k": "fidelity-traditional-401-k",
+    "reverse-rollover-401-k": "fidelity-traditional-401-k",
+    "traditional-401-k": "fidelity-traditional-401-k",
+    "roth-basic-401-k": "fidelity-roth-401-k",
+    "after-tax-401-k": "fidelity-roth-401-k",
+}
+COMPONENT_SLUGS_AT_CREATE = frozenset(COMPONENT_PARENT_SLUG_AT_CREATE)
 
 
 async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: SheetReport) -> None:
@@ -224,6 +225,7 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
     existing_accounts = {a.slug: a for a in (await db.execute(select(Account))).scalars()}
     accounts_by_name: dict[str, Account] = {}
     seen_slugs: set[str] = set()
+    created_component_slugs: list[str] = []
     for column in parsed.accounts:
         slug = slugify(column.name)
         if not slug:
@@ -247,11 +249,25 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
             account = Account(slug=slug, is_component=is_component, **fields)
             db.add(account)
             account_counts.creates += 1
+            if is_component:
+                created_component_slugs.append(slug)
             suffix = ", component" if is_component else ""
             report.add_sample(f"accounts[{slug}]: created ({column.group}{suffix})")
         else:
             _diff_update(account, fields, account_counts, report, f"accounts[{slug}]")
         accounts_by_name[column.name] = account
+
+    if created_component_slugs:
+        # Wire just-created components to their aggregate (create-time only, mirroring
+        # the flag). The parent may itself be new this pass — flush for ids first; a
+        # parent absent from both the sheet and the DB simply leaves the link unset.
+        await db.flush()
+        accounts_by_slug = {a.slug: a for a in existing_accounts.values()}
+        accounts_by_slug.update({a.slug: a for a in accounts_by_name.values()})
+        for slug in created_component_slugs:
+            parent = accounts_by_slug.get(COMPONENT_PARENT_SLUG_AT_CREATE[slug])
+            if parent is not None:
+                accounts_by_slug[slug].parent_account_id = parent.id
 
     sheet_slugs = {slugify(column.name) for column in parsed.accounts}
     for slug, account in existing_accounts.items():

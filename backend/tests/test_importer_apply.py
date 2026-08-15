@@ -607,6 +607,9 @@ async def test_fresh_import_flags_known_component_accounts_at_create(db):
             ParsedAccountColumn(
                 name="Fidelity Traditional 401(k)", group="pre_tax", sort_order=9, column=9
             ),
+            ParsedAccountColumn(
+                name="Fidelity Roth 401(k)", group="post_tax", sort_order=10, column=10
+            ),
         ],
         snapshots=[],
         issues=CellIssues(),
@@ -618,6 +621,39 @@ async def test_fresh_import_flags_known_component_accounts_at_create(db):
     accounts = {a.slug: a for a in (await db.execute(select(Account))).scalars()}
     for slug in COMPONENT_SLUGS_AT_CREATE:
         assert accounts[slug].is_component is True, slug
-    # The aggregate stays counted — only its source buckets fold in.
+    # The aggregate stays counted — only its source buckets fold in — and each component
+    # links to its aggregate even though the sheet creates the aggregate LAST.
     assert accounts["fidelity-traditional-401-k"].is_component is False
+    trad_id = accounts["fidelity-traditional-401-k"].id
+    roth_id = accounts["fidelity-roth-401-k"].id
+    assert accounts["employer-match-401-k"].parent_account_id == trad_id
+    assert accounts["reverse-rollover-401-k"].parent_account_id == trad_id
+    assert accounts["traditional-401-k"].parent_account_id == trad_id
+    assert accounts["roth-basic-401-k"].parent_account_id == roth_id
+    assert accounts["after-tax-401-k"].parent_account_id == roth_id
+    assert accounts["fidelity-traditional-401-k"].parent_account_id is None
     assert any("employer-match-401-k]: created (pre_tax, component)" in s for s in report.samples)
+
+
+async def test_component_without_aggregate_in_sheet_gets_no_parent(db):
+    """A known component whose aggregate column is absent still imports flagged,
+    with the parent link simply unset — never an error."""
+    from app.importer.cells import CellIssues
+    from app.importer.parsers import ParsedAccountColumn, ParsedNetWorth
+
+    parsed = ParsedNetWorth(
+        accounts=[
+            ParsedAccountColumn(name="After-Tax 401(k)", group="post_tax", sort_order=3, column=3)
+        ],
+        snapshots=[],
+        issues=CellIssues(),
+    )
+    report = SheetReport()
+    await apply_net_worth(db, parsed, report)
+    await db.commit()
+
+    account = (
+        await db.execute(select(Account).where(Account.slug == "after-tax-401-k"))
+    ).scalar_one()
+    assert account.is_component is True
+    assert account.parent_account_id is None

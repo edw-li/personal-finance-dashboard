@@ -22,6 +22,7 @@ class AccountOut(BaseModel):
     sort_order: int
     is_active: bool
     is_component: bool
+    parent_account_id: int | None
 
 
 class AccountCreate(BaseModel):

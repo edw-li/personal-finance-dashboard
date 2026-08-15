@@ -24,6 +24,7 @@ export interface AccountOut {
   sort_order: number
   is_active: boolean
   is_component: boolean
+  parent_account_id: number | null
 }
 
 export interface AccountCreate {
