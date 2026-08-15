@@ -4,13 +4,28 @@ Nothing else in the app may import yfinance or curl_cffi, and both are imported 
 inside functions: tests inject fakes via sys.modules, and app/pytest startup never pays
 the pandas import. Verified against yfinance 1.6.0 (plan probes 1-3)."""
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
-PRICE_QUANTUM = Decimal("0.0001")
+logger = logging.getLogger(__name__)
+# yfinance logs delisted-ticker noise ("$ZI: possibly delisted") via its own logger on
+# every fetch — quiet it once here, at the sole touchpoint.
+logging.getLogger("yfinance").setLevel(logging.ERROR)
+
+PRICE_QUANTUM = Decimal("0.0001")  # deliberate duplicate of money.PRICE_QUANTUM:
+# money.py raises HTTPException 422 (request vocabulary); this module SKIPS bad bars
+# (background-fetch vocabulary) — importing it would drag the wrong layer in.
+# str(float) stays in plain notation below 1e16, and the 4dp quantize raises
+# InvalidOperation on non-finite or >=1e25 values — bound what a bar may carry.
+MAX_USABLE_ABS = 1e15
+
+
+def _is_usable(value) -> bool:
+    return isinstance(value, float) and math.isfinite(value) and abs(value) < MAX_USABLE_ABS
 
 
 def yahoo_symbol(ticker: str) -> str:
@@ -46,7 +61,8 @@ class YFinanceProvider:
 
     def fetch_daily(self, ticker: str, start: date) -> list[DailyBar]:
         """Daily bars from `start` through today (Close + dividend events). Raises on
-        transport errors (caller isolates per ticker); returns [] when Yahoo has no data."""
+        transport errors (caller isolates per ticker); returns [] when Yahoo has no data.
+        Malformed bars are SKIPPED, never abort the ticker (Task 5 review)."""
         import yfinance as yf
 
         frame = yf.Ticker(yahoo_symbol(ticker), session=self._session).history(
@@ -57,9 +73,14 @@ class YFinanceProvider:
         bars: list[DailyBar] = []
         for idx, row in frame.iterrows():
             close = row.get("Close")
-            if close is None or (isinstance(close, float) and math.isnan(close)):
+            if close is None or not _is_usable(close):
                 continue
             dividend = row.get("Dividends", 0.0) or 0.0
+            if not _is_usable(dividend):
+                # yfinance sanitizes NaN dividends to 0 today — don't let a third-party
+                # invariant be the only thing keeping NaN out of the TTM sum
+                # (money.py's is_finite pre-check is the prior art).
+                dividend = 0.0
             bars.append(
                 DailyBar(
                     bar_date=idx.date(),

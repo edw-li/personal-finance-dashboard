@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.services.price_provider import DailyBar, YFinanceProvider, yahoo_symbol
+from app.services.price_provider import DailyBar, YFinanceProvider, build_session, yahoo_symbol
 
 
 def test_yahoo_symbol_maps_dots_to_dashes():
@@ -98,3 +98,53 @@ def test_fetch_daily_empty_frame_returns_empty(monkeypatch):
     provider = YFinanceProvider.__new__(YFinanceProvider)
     provider._session = None
     assert provider.fetch_daily("ZI", date(2026, 8, 1)) == []
+
+
+def test_fetch_daily_rounds_ties_half_up(monkeypatch):
+    frame = FakeFrame(
+        [
+            (_ts(date(2026, 8, 14)), FakeRow({"Close": 1.00005, "Dividends": 0.00005})),
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "yfinance", _fake_yf(frame, {}))
+    provider = YFinanceProvider.__new__(YFinanceProvider)
+    provider._session = None
+    (bar,) = provider.fetch_daily("NVDA", date(2026, 8, 1))
+    assert bar.close == Decimal("1.0001")  # banker's rounding would give 1.0000
+    assert bar.dividend == Decimal("0.0001")
+
+
+def test_fetch_daily_skips_absurd_bars_and_zeroes_bad_dividends(monkeypatch):
+    frame = FakeFrame(
+        [
+            (_ts(date(2026, 8, 11)), FakeRow({"Close": float("inf"), "Dividends": 0.0})),
+            (_ts(date(2026, 8, 12)), FakeRow({"Close": 1e25, "Dividends": 0.0})),
+            (_ts(date(2026, 8, 13)), FakeRow({"Close": 100.0, "Dividends": float("nan")})),
+            (_ts(date(2026, 8, 14)), FakeRow({"Close": 101.0, "Dividends": 0.5})),
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "yfinance", _fake_yf(frame, {}))
+    provider = YFinanceProvider.__new__(YFinanceProvider)
+    provider._session = None
+    bars = provider.fetch_daily("NVDA", date(2026, 8, 1))
+    assert bars == [
+        DailyBar(bar_date=date(2026, 8, 13), close=Decimal("100.0000"), dividend=Decimal("0.0000")),
+        DailyBar(bar_date=date(2026, 8, 14), close=Decimal("101.0000"), dividend=Decimal("0.5000")),
+    ]
+
+
+def test_build_session_normalizes_bundle_and_impersonates(monkeypatch):
+    calls = {}
+
+    class FakeSession:
+        def __init__(self, impersonate=None, verify=None):
+            calls["impersonate"] = impersonate
+            calls["verify"] = verify
+
+    fake_requests = SimpleNamespace(Session=FakeSession)
+    monkeypatch.setitem(sys.modules, "curl_cffi", SimpleNamespace(requests=fake_requests))
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_requests)
+    build_session("   ")
+    assert calls == {"impersonate": "chrome", "verify": True}
+    build_session("  C:/certs/corp.pem  ")
+    assert calls == {"impersonate": "chrome", "verify": "C:/certs/corp.pem"}
