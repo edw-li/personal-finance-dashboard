@@ -1,6 +1,7 @@
 import {
   Banknote,
   Briefcase,
+  CalendarCheck,
   LayoutDashboard,
   LineChart,
   LogOut,
@@ -15,6 +16,7 @@ import './Layout.css'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Overview', icon: LayoutDashboard },
+  { to: '/update', label: 'Monthly update', icon: CalendarCheck },
   { to: '/net-worth', label: 'Net Worth', icon: TrendingUp },
   { to: '/spending', label: 'Spending', icon: Wallet },
   { to: '/portfolio', label: 'Portfolio', icon: LineChart },

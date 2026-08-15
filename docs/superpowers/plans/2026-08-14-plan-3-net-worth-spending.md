@@ -4541,6 +4541,10 @@ git commit -m "feat: spending page — folded stack, heatmap, savings rate, tren
 
 The spreadsheet ritual replacement — the most important UX in the app (spec §6). Three steps on one route: **Balances → Spending & net pay → Review & save**. Balances pre-fill from the month itself when it exists, else from the latest prior snapshot; spending pre-fills the month or `0.00` (the sheet stores explicit zeros). Component accounts are entered like any other (they're real sheet columns) and marked as excluded from totals. Client-side math is PREVIEW only — the server quantizes and is the source of truth.
 
+**Amended during execution (2026-08-14, ratifying the implementation — both blocks below already carry the change):**
+1. **Step chips carry terse labels** (`STEP_LABELS = {balances: 'Balances', spending: 'Spending', review: 'Review'}`), not the card headings verbatim. The stepper renders on every step, so a chip reading "Review & save" made the flow test's `findByText(/review & save/i)` match two nodes (chip + card heading) — and re-pointing that assertion at the chip would have made it vacuous (the chip is present on every step). The card headings keep the full titles.
+2. **The load chain lives inline in `useEffect`, not in a `useCallback`.** The module pages wrap it because their Retry button is a second caller; the wizard's effect is the only caller. With 13 state setters in its body, React Compiler cannot preserve the manual memoization (`react-hooks/preserve-manual-memoization` errors ×2, dropping the whole component from compilation — reproduced by bisection: the same shape lints clean with `useState`-sourced deps and small bodies, so it is the setter count, not `useSearchParams`). The binding constraint is unchanged and still honored: **no setState in the effect's synchronous body** — every flip lands in a `.then/.catch/.finally` continuation, and the loading/saved/error flips for a MONTH CHANGE live in the ribbon's `onSelect`.
+
 **Files:**
 - Create: `src/pages/MonthlyUpdatePage.tsx`
 - Create: `src/pages/MonthlyUpdatePage.css`
@@ -4548,7 +4552,7 @@ The spreadsheet ritual replacement — the most important UX in the app (spec §
 - Modify: `src/App.tsx` (add `/update`)
 - Modify: `src/components/Layout.tsx` (nav item)
 
-- [ ] **Step 1: Write the failing flow test**
+- [x] **Step 1: Write the failing flow test**
 
 `src/pages/MonthlyUpdatePage.test.tsx`:
 
@@ -4669,9 +4673,9 @@ it('blocks Next while a balance is not a number', async () => {
 })
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (`npm test` — module missing).
+- [x] **Step 2: Run — expect FAIL** (`npm test` — module missing).
 
-- [ ] **Step 3: Implement the wizard**
+- [x] **Step 3: Implement the wizard**
 
 `src/pages/MonthlyUpdatePage.css`:
 
@@ -4791,7 +4795,7 @@ it('blocks Next while a balance is not a number', async () => {
 `src/pages/MonthlyUpdatePage.tsx`:
 
 ```tsx
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarCheck } from 'lucide-react'
 import { ApiError } from '../api/client'
@@ -4812,6 +4816,16 @@ import './MonthlyUpdatePage.css'
 
 const STEPS = ['balances', 'spending', 'review'] as const
 type Step = (typeof STEPS)[number]
+
+// Terse chip labels — each step's card heading carries the full title ("Spending & net
+// pay", "Review & save — Aug 2026"). The chips must NOT repeat a heading verbatim: the
+// stepper renders on every step, so a duplicate makes "am I on the review step?" queries
+// ambiguous (two matching nodes) and any assertion written against the chip vacuous.
+const STEP_LABELS: Record<Step, string> = {
+  balances: 'Balances',
+  spending: 'Spending',
+  review: 'Review',
+}
 
 function isNumeric(raw: string): boolean {
   return raw.trim() !== '' && !Number.isNaN(Number(raw))
@@ -4845,6 +4859,8 @@ export default function MonthlyUpdatePage() {
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
 
+  // Both keys are always written together, so the step never loses the month (and any
+  // unrelated query param a deep link carried survives the copy).
   const setStep = (next: Step) =>
     setParams((current) => {
       const copy = new URLSearchParams(current)
@@ -4854,10 +4870,15 @@ export default function MonthlyUpdatePage() {
     })
 
   // Promise callbacks, no setState in the effect's synchronous body
-  // (react-hooks/set-state-in-effect) — same shape as the module pages. The
-  // loading/saved/error flips for a MONTH CHANGE live in the ribbon's onSelect
-  // handler; the mount fetch is covered by the initial state values.
-  const load = useCallback(() => {
+  // (react-hooks/set-state-in-effect) — same discipline as the module pages. Those
+  // pages park this chain in a useCallback because their Retry button is a second
+  // caller; here the effect is the only caller, so the chain lives inline: a
+  // useCallback with 13 setters in its body is manual memoization React Compiler
+  // cannot preserve (react-hooks/preserve-manual-memoization errors, and the whole
+  // component drops out of compilation). The loading/saved/error flips for a MONTH
+  // CHANGE live in the ribbon's onSelect handler; the mount fetch is covered by the
+  // initial state values.
+  useEffect(() => {
     Promise.all([
       fetchAccounts(),
       fetchCategories(),
@@ -4908,10 +4929,6 @@ export default function MonthlyUpdatePage() {
       })
       .finally(() => setLoading(false))
   }, [month])
-
-  useEffect(() => {
-    load()
-  }, [load])
 
   const balancesValid = accounts.every((a) => isNumeric(balances[a.id] ?? ''))
   const amountsValid =
@@ -4994,7 +5011,7 @@ export default function MonthlyUpdatePage() {
             onClick={() => setStep(s)}
           >
             <span className="step-index">{i + 1}</span>
-            {s === 'balances' ? 'Balances' : s === 'spending' ? 'Spending & net pay' : 'Review & save'}
+            {STEP_LABELS[s]}
           </button>
         ))}
       </div>
@@ -5185,13 +5202,13 @@ export default function MonthlyUpdatePage() {
 }
 ```
 
-- [ ] **Step 4: Wire route + nav**
+- [x] **Step 4: Wire route + nav**
 
 `src/App.tsx` — add `import MonthlyUpdatePage from './pages/MonthlyUpdatePage'` and, directly under the Overview route: `<Route path="/update" element={<MonthlyUpdatePage />} />`.
 
 `src/components/Layout.tsx` — add `CalendarCheck` to the lucide import and insert into `NAV_ITEMS` right after Overview: `{ to: '/update', label: 'Monthly update', icon: CalendarCheck },`.
 
-- [ ] **Step 5: Run tests — expect PASS; full gate; commit**
+- [x] **Step 5: Run tests — expect PASS; full gate; commit**
 
 ```bash
 npm test && npm run lint && npm run build
