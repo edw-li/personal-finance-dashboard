@@ -1351,6 +1351,7 @@ async def load_portfolio(
     dict[int, list[PriceHistory]],
     list[DividendPayment],
 ]:
+    """/allocation and /realized skip history+dividends they never read (Task 10 review I1)."""
     securities = {
         s.id: s for s in (await db.execute(select(Security))).scalars()
     }
@@ -1364,7 +1365,6 @@ async def load_portfolio(
         ).scalars()
     )
     latest = {p.security_id: p for p in (await db.execute(select(LatestPrice))).scalars()}
-    # /allocation and /realized skip history+dividends they never read (Task 10 review I1).
     history: dict[int, list[PriceHistory]] = {}
     if with_history:
         rows = (
@@ -3222,6 +3222,20 @@ async def test_allocation_by_each_dimension_weights_sum_to_one(client, db): ...
 async def test_realized_rows_only_for_nonzero(client, db): ...
     # buy+sell one security via API -> realized row present, total == row sum;
     # buy-only security absent from rows
+
+async def test_totals_include_fully_exited_positions(client, db): ...
+    # liquidated security: NO holdings row, but totals.realized_gl/dividends_collected
+    # still count it; /realized shows the row; by=account SKIPS the zero-share position
+
+async def test_zero_total_market_value_book(client, db): ...
+    # long +10 / oversold -10 at one price -> total MV 0; row weight_pct all None;
+    # allocation slices weight "0.000000" (6dp vocabulary)
+
+async def test_day_pct_none_when_prior_values_cancel(client, db): ...
+    # +-10 shares, same prev close -> day_amount "0.00", day_pct None (guard reachable)
+
+async def test_computed_views_require_auth(client): ...
+    # unauthenticated GET holdings/allocation/realized -> 401
 ```
 
 - [ ] **Step 2: Run to verify failure.**

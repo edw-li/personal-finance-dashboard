@@ -1199,6 +1199,12 @@ async def test_totals_include_fully_exited_positions(auth_client, db):
     ]
     assert realized_body["total"] == "200.00"
 
+    # by=account must SKIP the liquidated position entirely (zero-share filter) —
+    # only the live security's account appears (Task 10 re-review R2r).
+    by_account = (await auth_client.get(f"{ALLOCATION}?by=account")).json()
+    assert [s["key"] for s in by_account["slices"]] == ["Fidelity Taxable"]
+    assert by_account["total_market_value"] == "1000.00"
+
 
 async def test_zero_total_market_value_book(auth_client, db):
     # A long and an oversold short can cancel to a zero-value book. Weights are then
