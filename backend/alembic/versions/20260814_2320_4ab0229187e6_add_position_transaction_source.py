@@ -1,7 +1,7 @@
 """add position transaction source
 
 Revision ID: 4ab0229187e6
-Revises: f1b36c0cf33c
+Revises: c8a1f4d27b53
 Create Date: 2026-08-14 23:20:31.213794
 
 """
@@ -14,7 +14,10 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "4ab0229187e6"
-down_revision: str | Sequence[str] | None = "f1b36c0cf33c"
+# Re-chained from f1b36c0cf33c onto main's c8a1f4d27b53 (2026-08-15 prod hotfix) to keep
+# a single alembic head. Dev DB sits at 4ab0229187e6 with component flags already TRUE,
+# so treating c8a1f4d27b53 as applied is a no-op there (its backfill is guarded).
+down_revision: str | Sequence[str] | None = "c8a1f4d27b53"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
