@@ -367,6 +367,8 @@ export default function MonthlyUpdatePage() {
                 <div
                   className={`stat-delta ${preview.delta >= 0 ? 'stat-delta-positive' : 'stat-delta-negative'}`}
                 >
+                  {/* Glyph + color, never color alone (Global visual rule; StatTile's pattern). */}
+                  <span aria-hidden="true">{preview.delta >= 0 ? '▲ ' : '▼ '}</span>
                   {formatCurrency(preview.delta)} vs prior month
                 </div>
               )}
