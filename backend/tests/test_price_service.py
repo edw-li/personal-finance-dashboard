@@ -224,3 +224,44 @@ async def test_refresh_commits_durably(db, engine):
     async with factory() as other:
         latest = await other.get(LatestPrice, sec.id)
         assert latest is not None and latest.price == D("5.0000")
+
+
+async def test_per_ticker_db_failure_does_not_abort_the_batch(db):
+    await seed_security(db, "AAA")
+    await seed_security(db, "BAD")
+    await seed_security(db, "ZZZ")
+    provider = FakeProvider(
+        {
+            "AAA": [bar(TODAY, "11")],
+            # passes the 0 < close < 10^10 bound but overflows Numeric(14,4) at the DB
+            "BAD": [bar(TODAY, "9999999999.99999")],
+            "ZZZ": [bar(TODAY, "99")],
+        }
+    )
+    result = await refresh_prices(db, provider, today=TODAY)
+    assert result.updated == ["AAA", "ZZZ"]
+    assert "BAD" in result.failed
+    assert [c[0] for c in provider.calls] == ["AAA", "BAD", "ZZZ"]  # ZZZ still attempted
+    history = (await db.execute(select(PriceHistory))).scalars().all()
+    assert len(history) == 2  # BAD's savepoint rolled back; AAA and ZZZ persisted
+
+
+async def test_backdated_manual_price_does_not_move_import_seeded_latest(db):
+    # Import seeding leaves latest_prices populated while price_history is EMPTY —
+    # the guard must respect the seeded quote too (Task 6 review I1).
+    sec = await seed_security(db, "FIGR", manual=True)
+    db.add(
+        LatestPrice(
+            security_id=sec.id,
+            price=D("2500"),
+            quoted_at=datetime(2026, 8, 13, tzinfo=UTC),
+            source="manual",
+        )
+    )
+    await db.commit()
+    await set_manual_price(db, sec, D("1"), as_of=date(2024, 1, 1))
+    await db.commit()
+    latest = await db.get(LatestPrice, sec.id)
+    assert latest.price == D("2500.0000")
+    assert latest.quoted_at.date() == date(2026, 8, 13)
+    assert len((await db.execute(select(PriceHistory))).scalars().all()) == 1

@@ -156,9 +156,12 @@ async def set_manual_price(
 ) -> None:
     """Manual quote for is_manual_priced securities. Always writes a price_history row
     for `as_of` (sparkline backfill); updates latest_prices ONLY when `as_of` is not
-    older than the newest history bar — a backdated entry must never move the latest
-    quote backwards, or day-Δ (which reads bars[-2] against the latest price) would
-    compare the quote against itself forever (Task 4 review). Caller commits."""
+    older than the newest known quote (history bars OR the import-seeded latest) — a
+    backdated entry must never move the latest quote backwards, or day-Δ (which reads
+    bars[-2] against the latest price) would compare the quote against itself forever
+    (Task 4 review). Caller commits. Expired rows: callers must re-read LatestPrice/
+    PriceHistory with `await db.get(...)` after this call — a previously-held instance's
+    plain attribute access raises MissingGreenlet (Task 6 re-review)."""
     history_stmt = pg_insert(PriceHistory).values(
         security_id=security.id, price_date=as_of, close=price
     )
@@ -174,13 +177,13 @@ async def set_manual_price(
         )
     ).scalar_one()
     existing = await db.get(LatestPrice, security.id)
-    # The as_of row itself is already in history, so newest_bar >= as_of always holds
-    # for the same-day path; the guard fires only when something NEWER exists in either
-    # history or the (possibly import-seeded) latest quote.
+    # The as_of row itself was just inserted above, so newest_bar is never None and
+    # newest_bar >= as_of always holds for the same-day path; the guard fires only when
+    # something NEWER exists in either history or the (import-seeded) latest quote.
     newest_known = newest_bar
     if existing is not None:
         newest_known = max(newest_known, existing.quoted_at.date())
-    if newest_known is not None and as_of < newest_known:
+    if as_of < newest_known:
         return
     latest_stmt = pg_insert(LatestPrice).values(
         security_id=security.id, price=price, quoted_at=_bar_datetime(as_of), source="manual"
