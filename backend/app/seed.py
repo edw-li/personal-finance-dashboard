@@ -41,7 +41,7 @@ async def seed_tax_definitions(db: AsyncSession) -> None:
 DEFAULT_SETTINGS: dict[str, dict] = {
     "swr_pct": {"value": 0.04},
     "espp_ticker": {"value": "NVDA"},
-    "price_refresh_cron": {"value": "10 13 * * 1-5"},  # 13:10 PT weekdays, after US close
+    "price_refresh_cron": {"value": "10 13 * * mon-fri"},  # 13:10 PT weekdays, after US close
 }
 
 

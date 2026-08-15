@@ -15,7 +15,9 @@ from app.models import AppSetting
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PRICE_REFRESH_CRON = "10 13 * * 1-5"
+# Day NAMES, never numbers: APScheduler's from_crontab numbers days 0=Mon (not UNIX
+# 0=Sun), so numeric "1-5" silently means Tue-Sat (Task 7 escalation, measured).
+DEFAULT_PRICE_REFRESH_CRON = "10 13 * * mon-fri"
 SCHEDULER_TIMEZONE = "America/Los_Angeles"
 
 
