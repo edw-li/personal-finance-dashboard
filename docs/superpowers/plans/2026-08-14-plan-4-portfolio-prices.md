@@ -102,7 +102,8 @@ Facts below were verified during planning. Do NOT re-derive them; trust and buil
   LAST (the old sort_index-0 rule made UI rows fold FIRST — wrong for sells). A future
   sheet row can collide with a UI row's sort_index; folding tie-breaks on id — accepted.
 - **XIRR dateless rule** (spec Risk #1 decision): XIRR is computed per security only when
-  EVERY transaction of that security has a `txn_date` (dividends always have pay_date);
+  EVERY cash-flow transaction of that security has a `txn_date` (splits carry no flow, so
+  a dateless split never blocks XIRR; dividends always have pay_date);
   otherwise null (UI shows —). No approximation. All 26 imported rows are dateless today,
   so XIRR starts null everywhere — matching the sheet, whose XIRR column is dead (probe 5).
   Backfill path: PATCH a transaction's txn_date via the ledger UI.
@@ -4903,6 +4904,9 @@ with execution findings):
 - require_reasonable_date (money.py, Task 9) bounds txn_date/pay_date to 1900..2100 at
   the API; the importer path is unguarded by it (sheet has no dates today) and xirr's
   MAX_SPAN_DAYS is the backstop.
+- Dividends on fully-exited securities appear in totals.dividends_collected but have no
+  holdings row (zero shares) — row-sums ≠ total by design once a sold-out payer exists;
+  the /portfolio/dividends log is the reconciliation view (Task 4 spec review obs).
 - Price refresh rewrites annual_dividend/ex_div_date from Yahoo TTM events for
   non-manual securities — manual edits to those two fields don't survive a refresh.
 - The scheduler reads price_refresh_cron ONCE at boot — changing the setting requires a
