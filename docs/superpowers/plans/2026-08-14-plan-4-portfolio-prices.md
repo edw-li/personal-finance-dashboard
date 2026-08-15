@@ -4775,7 +4775,22 @@ with execution findings):
 
 - position_transactions.source is the ownership contract: importer syncs ONLY
   source='import'; UI rows get max+10 sort_index and fold LAST. A sheet re-import can
-  mint a colliding sort_index (fold tie-breaks on id) — cosmetic, accepted.
+  mint a colliding sort_index (fold tie-breaks on id) — cosmetic, accepted. At such a
+  collision the UI row folds FIRST (lower id), degrading the folds-last guarantee for
+  exactly that pair (Task 2 review probe; oversell path warns, never 500s).
+- Importer preload keys import rows by sort_index in a dict: two import rows sharing a
+  sort_index would silently orphan one (never updated/deleted) and duplicate a holding.
+  Unreachable via supported paths (importer writes unique rnum*10; UI writes source='ui';
+  dev DB verified duplicate-free) — reachable only by re-running the Task 1 migration's
+  down/up after a collision exists, which its comment forbids (Task 2 review Minor 1).
+- Import report samples key on position_transactions[sort_index] — ambiguous once a
+  UI/import collision exists; add source or id to the sample string if it ever confuses
+  (Task 2 review Minor 3).
+- Test-hardening batch for a later importer touch (Task 2 review Minor 2 + mutation
+  gaps): give the stray-deletion test's UI row an explicit non-zero sort_index (e.g.
+  1000); optionally seed an import row at sort_index=0 (assert deleted — kills the
+  over-filter mutant) and a source='legacy' row (assert survives — kills the != 'ui'
+  mutant).
 - XIRR is null until txn_dates are backfilled via the ledger UI (sheet's XIRR column was
   dead — probe 5). If the user backfills, per-security XIRR lights up automatically.
 - Price refresh rewrites annual_dividend/ex_div_date from Yahoo TTM events for
