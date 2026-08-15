@@ -1,5 +1,7 @@
 import re
-from decimal import Decimal
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
@@ -9,9 +11,16 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import DividendPayment, PositionTransaction, Security
 from app.schemas.portfolio import (
+    AllocationOut,
+    AllocationSlice,
     DividendCreate,
     DividendOut,
     DividendUpdate,
+    HoldingOut,
+    HoldingsOut,
+    HoldingsTotals,
+    RealizedOut,
+    RealizedRow,
     SecurityCreate,
     SecurityOut,
     SecurityUpdate,
@@ -24,9 +33,16 @@ from app.services.money import (
     MONEY_MAX_ABS_10_4,
     MONEY_MAX_ABS_12_2,
     quantize_money,
+    quantize_pct,
     quantize_price,
     quantize_shares,
     require_reasonable_date,
+)
+from app.services.portfolio_calc import (
+    allocation,
+    build_holdings,
+    fold_transactions,
+    load_portfolio,
 )
 
 router = APIRouter(
@@ -398,3 +414,121 @@ async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) 
     await db.delete(dividend)
     await db.commit()
     return Response(status_code=204)
+
+
+@router.get("/holdings", response_model=HoldingsOut)
+async def holdings(db: AsyncSession = Depends(get_db)) -> HoldingsOut:
+    securities, txns, latest, history, dividends = await load_portfolio(db)
+    positions = fold_transactions(txns)
+    rows = build_holdings(positions, securities, latest, history, dividends, today=date.today())
+
+    total_mv = sum((h.market_value for h in rows if h.market_value is not None), Decimal("0"))
+    total_cost = sum((h.cost_basis for h in rows), Decimal("0"))
+    total_day = [h.day_change_amount for h in rows if h.day_change_amount is not None]
+    day_amount = sum(total_day, Decimal("0")) if total_day else None
+    day_pct = None
+    if day_amount is not None and total_mv - day_amount != 0:
+        day_pct = quantize_pct(day_amount / (total_mv - day_amount))
+    priced_cost = sum((h.cost_basis for h in rows if h.market_value is not None), Decimal("0"))
+    unrealized_total = total_mv - priced_cost
+    out_rows = [
+        HoldingOut(
+            security_id=h.security.id,
+            ticker=h.security.ticker,
+            name=h.security.name,
+            industry=h.security.industry,
+            holding_type=h.security.holding_type,
+            is_manual_priced=h.security.is_manual_priced,
+            shares=h.shares,
+            avg_cost=h.avg_cost,
+            cost_basis=h.cost_basis,
+            price=h.price,
+            quoted_at=h.quoted_at,
+            price_source=h.price_source,
+            day_change_pct=h.day_change_pct,
+            day_change_amount=h.day_change_amount,
+            market_value=h.market_value,
+            weight_pct=(
+                quantize_pct(h.market_value / total_mv)
+                if h.market_value is not None and total_mv > 0
+                else None
+            ),
+            unrealized_gl=h.unrealized_gl,
+            unrealized_gl_pct=h.unrealized_gl_pct,
+            realized_gl=h.realized_gl,
+            dividends_collected=h.dividends_collected,
+            annual_dividend=h.security.annual_dividend,
+            annual_income=h.annual_income,
+            yield_pct=h.yield_pct,
+            yoc_pct=h.yoc_pct,
+            xirr_pct=h.xirr_pct,
+            accounts=h.accounts,
+            warnings=h.warnings,
+        )
+        for h in rows
+    ]
+    all_realized = sum((p.realized_gl for p in positions.values()), Decimal("0"))
+    all_dividends = sum((d.amount for d in dividends), Decimal("0"))
+    totals = HoldingsTotals(
+        market_value=total_mv.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        cost_basis=total_cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        unrealized_gl=unrealized_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        unrealized_gl_pct=quantize_pct(unrealized_total / priced_cost) if priced_cost > 0 else None,
+        day_change_amount=day_amount,
+        day_change_pct=day_pct,
+        realized_gl=all_realized.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        dividends_collected=all_dividends.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        annual_income=sum(
+            (h.annual_income for h in rows if h.annual_income is not None), Decimal("0")
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        unpriced_count=sum(1 for h in rows if h.market_value is None),
+    )
+    as_of = min((h.quoted_at for h in rows if h.quoted_at is not None), default=None)
+    return HoldingsOut(as_of=as_of, totals=totals, holdings=out_rows)
+
+
+@router.get("/allocation", response_model=AllocationOut)
+async def allocation_view(
+    by: Literal["industry", "type", "account"] = "industry",
+    db: AsyncSession = Depends(get_db),
+) -> AllocationOut:
+    securities, txns, latest, _history, _dividends = await load_portfolio(db)
+    positions = fold_transactions(txns)
+    buckets = allocation(positions, securities, latest, by)
+    total = sum((value for _key, value, _count in buckets), Decimal("0"))
+    return AllocationOut(
+        by=by,
+        total_market_value=total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        slices=[
+            AllocationSlice(
+                key=key,
+                market_value=value,
+                weight_pct=quantize_pct(value / total) if total > 0 else Decimal("0"),
+                holdings=count,
+            )
+            for key, value, count in buckets
+        ],
+    )
+
+
+@router.get("/realized", response_model=RealizedOut)
+async def realized(db: AsyncSession = Depends(get_db)) -> RealizedOut:
+    securities, txns, _latest, _history, _dividends = await load_portfolio(db)
+    positions = fold_transactions(txns)
+    per_security: dict[int, Decimal] = {}
+    for pos in positions.values():
+        per_security[pos.security_id] = (
+            per_security.get(pos.security_id, Decimal("0")) + pos.realized_gl
+        )
+    rows = [
+        RealizedRow(
+            security_id=sec_id,
+            ticker=securities[sec_id].ticker,
+            name=securities[sec_id].name,
+            realized_gl=value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        )
+        for sec_id, value in sorted(per_security.items(), key=lambda kv: kv[1])
+        if value != 0 and sec_id in securities
+    ]
+    total = sum((v for v in per_security.values()), Decimal("0"))
+    return RealizedOut(total=total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), rows=rows)

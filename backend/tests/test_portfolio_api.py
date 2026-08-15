@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -8,6 +8,9 @@ from app.models import DividendPayment, LatestPrice, PositionTransaction, PriceH
 SECURITIES = "/api/v1/portfolio/securities"
 TRANSACTIONS = "/api/v1/portfolio/transactions"
 DIVIDENDS = "/api/v1/portfolio/dividends"
+HOLDINGS = "/api/v1/portfolio/holdings"
+ALLOCATION = "/api/v1/portfolio/allocation"
+REALIZED = "/api/v1/portfolio/realized"
 
 
 async def _create_security(auth_client, **fields) -> dict:
@@ -818,3 +821,336 @@ async def test_blank_account_rejected_on_transactions(auth_client, db):
         f"/api/v1/portfolio/transactions/{txn_id}", json={"account": "  "}
     )
     assert patched.status_code == 422
+
+
+# --- computed views ---
+
+
+def _latest(security_id: int, price: str, day: int) -> LatestPrice:
+    """Seed a quote directly (no prices API yet). Prices are spelled at COLUMN scale: the
+    shared test session hands the endpoint these very objects, not rows re-read from PG,
+    so `550` would cross the wire as "550" instead of "550.0000". Only the relative order
+    of `day` matters — as_of reports the OLDEST quote."""
+    return LatestPrice(
+        security_id=security_id,
+        price=Decimal(price),
+        quoted_at=datetime(2026, 8, day, tzinfo=UTC),
+        source="yfinance",
+    )
+
+
+async def test_holdings_end_to_end_math(auth_client, db):
+    # Dates are relative to today so XIRR is deterministic: the flow SPANS (365d, 180d) are
+    # fixed, so the solved rate never depends on the day the suite runs.
+    today = date.today()
+    voo = await _create_security(auth_client, industry="Index Funds", annual_dividend="6")
+    nvda = await _create_security(
+        auth_client, ticker="NVDA", name="NVIDIA", industry="Technology", holding_type="stock"
+    )
+    dated = await auth_client.post(
+        TRANSACTIONS,
+        json=_buy(voo["id"], shares="10", price="500", txn_date=str(today - timedelta(days=365))),
+    )
+    assert dated.status_code == 201, dated.text
+    dateless = await auth_client.post(TRANSACTIONS, json=_buy(nvda["id"], shares="5", price="100"))
+    assert dateless.status_code == 201, dateless.text
+    paid = await auth_client.post(
+        DIVIDENDS,
+        json={
+            "security_id": voo["id"],
+            "pay_date": str(today - timedelta(days=180)),
+            "amount": "25",
+        },
+    )
+    assert paid.status_code == 201, paid.text
+    db.add_all(
+        [
+            _latest(voo["id"], "550.0000", day=13),
+            _latest(nvda["id"], "200.0000", day=14),
+            # Day Δ reads the close STRICTLY BEFORE the latest bar's date — 500, not 550.
+            PriceHistory(
+                security_id=voo["id"], price_date=date(2026, 8, 12), close=Decimal("500.0000")
+            ),
+            PriceHistory(
+                security_id=voo["id"], price_date=date(2026, 8, 13), close=Decimal("550.0000")
+            ),
+        ]
+    )
+    await db.commit()
+
+    resp = await auth_client.get(HOLDINGS)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [h["ticker"] for h in body["holdings"]] == ["VOO", "NVDA"]  # market value desc
+    assert body["holdings"][0] == {
+        "security_id": voo["id"],
+        "ticker": "VOO",
+        "name": "Vanguard S&P 500 ETF",
+        "industry": "Index Funds",
+        "holding_type": "etf",
+        "is_manual_priced": False,
+        "shares": "10.000000",
+        "avg_cost": "500.0000",
+        "cost_basis": "5000.00",
+        "price": "550.0000",
+        "quoted_at": body["as_of"],  # the oldest quote in the book is this row's
+        "price_source": "yfinance",
+        "day_change_pct": "0.100000",  # (550 - 500) / 500
+        "day_change_amount": "500.00",  # 10 shares x 50
+        "market_value": "5500.00",
+        "weight_pct": "0.846154",  # 5500 / 6500
+        "unrealized_gl": "500.00",
+        "unrealized_gl_pct": "0.100000",
+        "realized_gl": "0.00",
+        "dividends_collected": "25.00",
+        "annual_dividend": "6.0000",
+        "annual_income": "60.00",
+        "yield_pct": "0.010909",  # 6 / 550
+        "yoc_pct": "0.012000",  # 6 / 500 (yield on the cost actually paid)
+        "xirr_pct": "0.105253",  # -5000 @ -365d, +25 @ -180d, +5500 today
+        "accounts": ["Fidelity Taxable"],
+        "warnings": [],
+    }
+    # Money crosses the wire as STRINGS — Number()'s precision loss never touches the ledger.
+    assert all(
+        isinstance(body["holdings"][0][field], str)
+        for field in ("shares", "cost_basis", "price", "market_value", "weight_pct")
+    )
+    # as_of is the OLDEST quote (conservative staleness), not the newest.
+    assert datetime.fromisoformat(body["as_of"]) == datetime(2026, 8, 13, tzinfo=UTC)
+    second = body["holdings"][1]
+    assert datetime.fromisoformat(second["quoted_at"]) == datetime(2026, 8, 14, tzinfo=UTC)
+    assert second["market_value"] == "1000.00"
+    assert second["weight_pct"] == "0.153846"  # 1000 / 6500
+    assert second["day_change_pct"] is None  # fewer than two bars -> no day Δ
+    assert second["day_change_amount"] is None
+    assert second["xirr_pct"] is None  # one dateless transaction gates XIRR off entirely
+    assert second["yield_pct"] is None  # no annual_dividend on the security
+    assert second["annual_income"] is None
+    weights = sum(Decimal(h["weight_pct"]) for h in body["holdings"])
+    assert abs(weights - 1) < Decimal("0.000002")  # quantization slack only
+
+    assert body["totals"] == {
+        "market_value": "6500.00",
+        "cost_basis": "5500.00",
+        "unrealized_gl": "1000.00",
+        "unrealized_gl_pct": "0.181818",  # 1000 / 5500
+        "day_change_amount": "500.00",  # NVDA contributes nothing — it has no prior bar
+        "day_change_pct": "0.083333",  # 500 / (6500 - 500), i.e. against yesterday's value
+        "realized_gl": "0.00",
+        "dividends_collected": "25.00",
+        "annual_income": "60.00",
+        "unpriced_count": 0,
+    }
+    assert Decimal(body["totals"]["market_value"]) == sum(
+        Decimal(h["market_value"]) for h in body["holdings"]
+    )
+    assert Decimal(body["totals"]["unrealized_gl"]) == Decimal(
+        body["totals"]["market_value"]
+    ) - Decimal(body["totals"]["cost_basis"])
+
+
+async def test_holdings_empty_portfolio(auth_client, db):
+    # A priced security with no transactions must still produce nothing: rows come from
+    # FOLDED positions, and as_of is read off those rows — never off the price table.
+    security = await _create_security(auth_client)
+    db.add(_latest(security["id"], "550.0000", day=14))
+    await db.commit()
+
+    resp = await auth_client.get(HOLDINGS)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "as_of": None,
+        "totals": {
+            "market_value": "0.00",
+            "cost_basis": "0.00",
+            "unrealized_gl": "0.00",
+            "unrealized_gl_pct": None,  # no priced cost -> no ratio, never a ZeroDivisionError
+            "day_change_amount": None,
+            "day_change_pct": None,
+            "realized_gl": "0.00",
+            "dividends_collected": "0.00",
+            "annual_income": "0.00",
+            "unpriced_count": 0,
+        },
+        "holdings": [],
+    }
+
+
+async def test_holdings_unpriced_holding_flagged(auth_client, db):
+    priced = await _create_security(auth_client)
+    unpriced = await _create_security(
+        auth_client, ticker="PRIV", name="Private Fund", holding_type="private"
+    )
+    for security, shares, price in ((priced, "10", "100"), (unpriced, "5", "50")):
+        created = await auth_client.post(
+            TRANSACTIONS, json=_buy(security["id"], shares=shares, price=price)
+        )
+        assert created.status_code == 201, created.text
+    db.add(_latest(priced["id"], "120.0000", day=14))
+    await db.commit()
+
+    resp = await auth_client.get(HOLDINGS)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [h["ticker"] for h in body["holdings"]] == ["VOO", "PRIV"]  # unpriced rows sort last
+    assert datetime.fromisoformat(body["as_of"]) == datetime(2026, 8, 14, tzinfo=UTC)
+    ghost = body["holdings"][1]
+    assert ghost["shares"] == "5.000000"
+    assert ghost["cost_basis"] == "250.00"  # cost is known even when value is not
+    assert ghost["price"] is None
+    assert ghost["quoted_at"] is None
+    assert ghost["price_source"] is None
+    assert ghost["market_value"] is None
+    assert ghost["weight_pct"] is None  # an unpriced row cannot claim a share of the pie
+    assert ghost["unrealized_gl"] is None
+    assert body["holdings"][0]["weight_pct"] == "1.000000"  # weights span the PRICED book
+
+    assert body["totals"] == {
+        "market_value": "1200.00",  # excludes the unpriced row
+        "cost_basis": "1250.00",  # ... but cost basis counts it
+        "unrealized_gl": "200.00",  # 1200 - 1000, the PRICED cost only
+        "unrealized_gl_pct": "0.200000",  # 200 / 1000
+        "day_change_amount": None,
+        "day_change_pct": None,
+        "realized_gl": "0.00",
+        "dividends_collected": "0.00",
+        "annual_income": "0.00",
+        "unpriced_count": 1,
+    }
+    # Pinned asymmetry: unrealized is MV minus PRICED cost, so it deliberately does NOT
+    # equal market_value - cost_basis (which would read -50.00, a phantom loss).
+    assert Decimal(body["totals"]["unrealized_gl"]) != Decimal(
+        body["totals"]["market_value"]
+    ) - Decimal(body["totals"]["cost_basis"])
+
+
+async def test_allocation_by_each_dimension_weights_sum_to_one(auth_client, db):
+    voo = await _create_security(auth_client, industry="Index Funds")
+    nvda = await _create_security(
+        auth_client, ticker="NVDA", name="NVIDIA", industry="Technology", holding_type="stock"
+    )
+    priv = await _create_security(  # industry None -> the "Uncategorized" bucket
+        auth_client, ticker="PRIV", name="Private Fund", holding_type="private"
+    )
+    ghost = await _create_security(
+        auth_client, ticker="ZI", name="ZoomInfo", industry="Technology", holding_type="stock"
+    )
+    for security, account, shares, price in (
+        (voo, "Fidelity Taxable", "10", "300"),
+        (nvda, "Fidelity Taxable", "4", "200"),
+        (nvda, "Robinhood", "8", "200"),
+        (priv, "Robinhood", "1", "400"),
+        (ghost, "Robinhood", "9", "10"),  # never priced -> invisible to allocation
+    ):
+        created = await auth_client.post(
+            TRANSACTIONS,
+            json=_buy(security["id"], account=account, shares=shares, price=price),
+        )
+        assert created.status_code == 201, created.text
+    db.add_all(
+        [
+            _latest(voo["id"], "500.0000", day=14),
+            _latest(nvda["id"], "250.0000", day=14),
+            _latest(priv["id"], "500.0000", day=14),
+        ]
+    )
+    await db.commit()
+
+    expected = {
+        # VOO 10x500 = 5000 | NVDA 12x250 = 3000 (4 Fidelity, 8 Robinhood) | PRIV 1x500 = 500
+        "industry": [
+            {
+                "key": "Index Funds",
+                "market_value": "5000.00",
+                "weight_pct": "0.588235",
+                "holdings": 1,
+            },
+            {
+                "key": "Technology",
+                "market_value": "3000.00",
+                "weight_pct": "0.352941",
+                "holdings": 1,
+            },
+            {
+                "key": "Uncategorized",
+                "market_value": "500.00",
+                "weight_pct": "0.058824",
+                "holdings": 1,
+            },
+        ],
+        "type": [
+            {"key": "etf", "market_value": "5000.00", "weight_pct": "0.588235", "holdings": 1},
+            {"key": "stock", "market_value": "3000.00", "weight_pct": "0.352941", "holdings": 1},
+            {"key": "private", "market_value": "500.00", "weight_pct": "0.058824", "holdings": 1},
+        ],
+        # account is per-POSITION grain: NVDA counts in both buckets, VOO only in one.
+        "account": [
+            {
+                "key": "Fidelity Taxable",
+                "market_value": "6000.00",
+                "weight_pct": "0.705882",
+                "holdings": 2,
+            },
+            {
+                "key": "Robinhood",
+                "market_value": "2500.00",
+                "weight_pct": "0.294118",
+                "holdings": 2,
+            },
+        ],
+    }
+    for by, slices in expected.items():
+        resp = await auth_client.get(ALLOCATION, params={"by": by})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["by"] == by
+        # 8500, not 8590: the priceless ZI position is skipped, not valued at cost.
+        assert body["total_market_value"] == "8500.00"
+        assert body["slices"] == slices  # market-value DESC
+        assert abs(sum(Decimal(s["weight_pct"]) for s in body["slices"]) - 1) < Decimal("0.000002")
+
+    default = await auth_client.get(ALLOCATION)
+    assert default.status_code == 200, default.text
+    assert default.json()["by"] == "industry"  # the default dimension
+    bad = await auth_client.get(ALLOCATION, params={"by": "banana"})
+    assert bad.status_code == 422  # Literal query param, not free text
+
+
+async def test_realized_rows_only_for_nonzero(auth_client):
+    winner = await _create_security(auth_client)
+    loser = await _create_security(
+        auth_client, ticker="ZM", name="Zoom Video", holding_type="stock"
+    )
+    held = await _create_security(auth_client, ticker="SGOV", name="iShares 0-3 Month T-Bill")
+    # Post order IS fold order: every UI row takes sort_index = max + 10, so buys land first.
+    for payload in (
+        _buy(winner["id"], shares="10", price="100"),
+        _buy(loser["id"], shares="10", price="100"),
+        _buy(held["id"], shares="10", price="100"),
+        _buy(winner["id"], type="sell", shares="4", price="150"),
+        _buy(loser["id"], type="sell", shares="5", price="80"),
+    ):
+        created = await auth_client.post(TRANSACTIONS, json=payload)
+        assert created.status_code == 201, created.text
+
+    resp = await auth_client.get(REALIZED)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["rows"] == [
+        # ascending: the worst loss leads. Buy-only SGOV folds to 0 and is omitted entirely.
+        {
+            "security_id": loser["id"],
+            "ticker": "ZM",
+            "name": "Zoom Video",
+            "realized_gl": "-100.00",  # 5 x (80 - 100)
+        },
+        {
+            "security_id": winner["id"],
+            "ticker": "VOO",
+            "name": "Vanguard S&P 500 ETF",
+            "realized_gl": "200.00",  # 4 x (150 - 100)
+        },
+    ]
+    assert body["total"] == "100.00"
+    assert Decimal(body["total"]) == sum(Decimal(row["realized_gl"]) for row in body["rows"])
