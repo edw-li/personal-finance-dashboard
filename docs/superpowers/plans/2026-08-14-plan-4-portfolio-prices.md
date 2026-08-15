@@ -5347,6 +5347,18 @@ with execution findings):
 - Test-seeding gotcha: the shared-session fixture serves the exact ORM objects a test
   adds (expire_on_commit=False) — seed prices AT COLUMN SCALE (Decimal("550.0000"), not
   "550") or wire strings come out unquantized (Task 10 execution note; bites Task 11 too).
+- Chart-input hazards for Tasks 14/15 (Task 10 review M2/M3/M4): oversold books emit
+  NEGATIVE and >100% weight_pct on holdings rows AND allocation slices (slices carry no
+  warning field — the positiveSlices filter in AllocationPanel is the guard); /holdings
+  (net-shares grain) and /allocation?by=account (per-position grain) can disagree on
+  membership when a security nets to zero across accounts; a row-level "-0.00"
+  day_change_amount is reachable (Intl renders "-$0.00") — cosmetic.
+- Until the first refresh, totals.annual_income (~$53k on real data) and yield/YOC come
+  from the sheet's broken GOOGLEFINANCE leftovers — nonsense numbers are EXPECTED on the
+  tile pre-refresh; Task 16 runs the refresh before the visual pass (Task 10 review).
+- Output-side money quantizes are spelled literally (~17 sites across calc+endpoints);
+  a money.quantize_money_out() helper would DRY them if anyone touches that vocabulary
+  again (Task 10 review M6 — cosmetic).
 - /allocation?by=account quantizes per position while holdings quantize per security —
   a multi-account security can disagree with the holdings total by ±1¢/account (exact
   $0.00 on today's data). Cosmetic; don't chase cent-parity between donut and header
