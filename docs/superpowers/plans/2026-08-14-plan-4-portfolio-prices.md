@@ -3120,7 +3120,9 @@ async def create_dividend(
     require_reasonable_date(body.pay_date, "pay_date")
     dividend = DividendPayment(
         security_id=body.security_id,
-        account=body.account.strip() if body.account else None,
+        # Blank/whitespace collapse to None — never persist '' as a second spelling
+        # of "no account" (Task 9 review I1).
+        account=(body.account or "").strip() or None,
         pay_date=body.pay_date,
         amount=_validated_dividend_amount(body.amount),
         notes=body.notes,
@@ -3154,7 +3156,7 @@ async def update_dividend(
     if "pay_date" in provided:
         validated["pay_date"] = require_reasonable_date(provided["pay_date"], "pay_date")
     if "account" in provided:
-        validated["account"] = provided["account"].strip() if provided["account"] else None
+        validated["account"] = (provided["account"] or "").strip() or None
     for field_name, value in validated.items():
         setattr(dividend, field_name, value)
     await db.commit()
@@ -5306,6 +5308,14 @@ with execution findings):
 - Import report samples key on position_transactions[sort_index] — ambiguous once a
   UI/import collision exists; add source or id to the sample string if it ever confuses
   (Task 2 review Minor 3).
+- Transaction type FLIPS via PATCH must send the full type-appropriate shape (e.g.
+  buy→split needs split_factor + explicit shares:0/price:0/fees:null) — the merged-row
+  law 422s partial flips BY DESIGN (silently zeroing user shares would destroy data).
+  Task 14's edit form sends the complete shape on any type change (Task 9 review M2).
+- sort_index reuse: deleting the max UI row lets the next create (or a later import row)
+  reuse that index — fold stays deterministic via the id tie-break; same accepted class
+  as the import collision. Concurrent double-submits can also mint duplicate UI indexes
+  (TOCTOU on max+10) — benign, ties fold in insertion order (Task 9 review M1/M5).
 - Test-hardening batch for a later importer touch (Task 2 review Minor 2 + mutation
   gaps): give the stray-deletion test's UI row an explicit non-zero sort_index (e.g.
   1000); optionally seed an import row at sort_index=0 (assert deleted — kills the
