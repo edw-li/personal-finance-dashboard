@@ -194,6 +194,24 @@ async def apply_positions(
             report.add_sample(f"position_transactions[{sort_index}]: deleted (row left sheet)")
 
 
+# The five Net Worth source-bucket columns whose sums ALSO appear as their own sheet
+# columns (Fidelity Traditional 401(k) = employer match + reverse rollover + traditional;
+# Fidelity Roth 401(k) = roth basic + after-tax — exact at every snapshot). Counting both
+# sides double-counts pre/post-tax totals, so these import flagged out of the rollups.
+# Seeded at CREATION only: after that is_component is user-owned (accounts CRUD) and
+# re-imports never touch it. Migration f1b36c0cf33c backfilled the same five flags but is
+# a no-op on a fresh DB (migrations run at boot, before the accounts exist to flip).
+COMPONENT_SLUGS_AT_CREATE = frozenset(
+    {
+        "employer-match-401-k",
+        "reverse-rollover-401-k",
+        "traditional-401-k",
+        "roth-basic-401-k",
+        "after-tax-401-k",
+    }
+)
+
+
 async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: SheetReport) -> None:
     account_counts = report.counts("accounts")
     snapshot_counts = report.counts("net_worth_snapshots")
@@ -220,10 +238,13 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
         account = existing_accounts.get(slug)
         fields = {"name": column.name, "group": column.group, "sort_order": column.sort_order}
         if account is None:
-            account = Account(slug=slug, **fields)  # is_active default True, user-owned after
+            is_component = slug in COMPONENT_SLUGS_AT_CREATE
+            # is_active default True; both flags are user-owned after creation
+            account = Account(slug=slug, is_component=is_component, **fields)
             db.add(account)
             account_counts.creates += 1
-            report.add_sample(f"accounts[{slug}]: created ({column.group})")
+            suffix = ", component" if is_component else ""
+            report.add_sample(f"accounts[{slug}]: created ({column.group}{suffix})")
         else:
             _diff_update(account, fields, account_counts, report, f"accounts[{slug}]")
         accounts_by_name[column.name] = account

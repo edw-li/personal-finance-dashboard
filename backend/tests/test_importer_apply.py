@@ -498,3 +498,49 @@ async def test_reimport_preserves_user_owned_is_component(db):
         await db.execute(select(Account).where(Account.slug == "traditional-401-k"))
     ).scalar_one()
     assert account.is_component is True  # importer diff-fields are {name, group, sort_order} only
+
+
+async def test_fresh_import_flags_known_component_accounts_at_create(db):
+    """Fresh DB: the five 401(k) source buckets import flagged, their aggregate does not.
+
+    Without create-time seeding a fresh deploy double-counts them — migration
+    f1b36c0cf33c's backfill runs at boot, before the accounts exist to flip.
+    """
+    from app.importer.apply import COMPONENT_SLUGS_AT_CREATE
+    from app.importer.cells import CellIssues, slugify
+    from app.importer.parsers import ParsedAccountColumn, ParsedNetWorth
+
+    sheet_names = [
+        "Employer Match 401(k)",
+        "Reverse Rollover 401(k)",
+        "Traditional 401(k)",
+        "Roth Basic 401(k)",
+        "After-Tax 401(k)",
+    ]
+    # Pin the sheet-name -> slug -> constant chain: slugify() drift would silently
+    # un-flag every bucket on the next fresh import.
+    assert {slugify(name) for name in sheet_names} == COMPONENT_SLUGS_AT_CREATE
+
+    parsed = ParsedNetWorth(
+        accounts=[
+            *(
+                ParsedAccountColumn(name=name, group="pre_tax", sort_order=i, column=i)
+                for i, name in enumerate(sheet_names, start=3)
+            ),
+            ParsedAccountColumn(
+                name="Fidelity Traditional 401(k)", group="pre_tax", sort_order=9, column=9
+            ),
+        ],
+        snapshots=[],
+        issues=CellIssues(),
+    )
+    report = SheetReport()
+    await apply_net_worth(db, parsed, report)
+    await db.commit()
+
+    accounts = {a.slug: a for a in (await db.execute(select(Account))).scalars()}
+    for slug in COMPONENT_SLUGS_AT_CREATE:
+        assert accounts[slug].is_component is True, slug
+    # The aggregate stays counted — only its source buckets fold in.
+    assert accounts["fidelity-traditional-401-k"].is_component is False
+    assert any("employer-match-401-k]: created (pre_tax, component)" in s for s in report.samples)
