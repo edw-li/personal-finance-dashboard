@@ -12,9 +12,11 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
-# yfinance logs delisted-ticker noise ("$ZI: possibly delisted") via its own logger on
-# every fetch — quiet it once here, at the sole touchpoint.
-logging.getLogger("yfinance").setLevel(logging.ERROR)
+# yfinance logs delisted-ticker noise ("$ZI: possibly delisted") AT ERROR level via its
+# own logger on every fetch — an expected condition must not page anyone once uvicorn
+# wires root handlers. Quiet it once here, at the sole touchpoint (CRITICAL, not ERROR:
+# the notice itself is logger.error — Task 5 re-review).
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 PRICE_QUANTUM = Decimal("0.0001")  # deliberate duplicate of money.PRICE_QUANTUM:
 # money.py raises HTTPException 422 (request vocabulary); this module SKIPS bad bars
@@ -71,9 +73,11 @@ class YFinanceProvider:
         if frame is None or frame.empty:
             return []
         bars: list[DailyBar] = []
+        skipped = 0
         for idx, row in frame.iterrows():
             close = row.get("Close")
             if close is None or not _is_usable(close):
+                skipped += 1
                 continue
             dividend = row.get("Dividends", 0.0) or 0.0
             if not _is_usable(dividend):
@@ -92,4 +96,6 @@ class YFinanceProvider:
                     ),
                 )
             )
+        if skipped:
+            logger.debug("%s: skipped %d malformed bars", ticker, skipped)
         return bars
