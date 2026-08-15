@@ -17,7 +17,7 @@ from app.schemas.portfolio import (
     PricePoint,
     RefreshOut,
 )
-from app.services.money import quantize_price
+from app.services.money import quantize_price, require_reasonable_date
 from app.services.portfolio_calc import fold_transactions
 from app.services.price_service import refresh_prices, set_manual_price
 
@@ -134,7 +134,7 @@ async def put_manual_price(
     price = quantize_price(body.price, "price")
     if price <= 0:
         raise HTTPException(status_code=422, detail="price must be positive")
-    as_of = body.as_of or date.today()
+    as_of = require_reasonable_date(body.as_of or date.today(), "as_of")
     if as_of > date.today():
         raise HTTPException(status_code=422, detail="as_of cannot be in the future")
     await set_manual_price(db, security, price, as_of)
