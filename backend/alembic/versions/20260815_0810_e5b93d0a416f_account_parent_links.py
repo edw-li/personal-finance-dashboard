@@ -1,7 +1,7 @@
 """account parent links
 
 Revision ID: e5b93d0a416f
-Revises: c8a1f4d27b53
+Revises: 5fbe696d5a10
 Create Date: 2026-08-15 08:10:00.000000
 
 """
@@ -14,7 +14,10 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "e5b93d0a416f"
-down_revision: str | Sequence[str] | None = "c8a1f4d27b53"
+# Re-chained from c8a1f4d27b53 onto Plan 4's 5fbe696d5a10 at the wave-2 merge (both
+# branches had grown from c8a1; the shared dev DB already sits past Plan 4's pair, so
+# this ordering lets every environment upgrade linearly: c8a1 -> 4ab -> 5fbe -> e5b9).
+down_revision: str | Sequence[str] | None = "5fbe696d5a10"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
