@@ -297,3 +297,20 @@
   padding: 1.5rem 0;
   text-align: center;
 }
+
+/* Shared across all three pages (kept here, not per-page, so no page relies on
+   another page's stylesheet happening to be in the global bundle). */
+
+.drill-hint {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 0 0 0.5rem;
+}
+
+.loading-dim {
+  transition: opacity 0.15s ease;
+}
+
+.loading-dim.is-loading {
+  opacity: 0.55;
+}

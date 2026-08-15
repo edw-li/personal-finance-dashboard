@@ -30,6 +30,8 @@ export default function MonthRibbon({
           .filter(Boolean)
           .join(' ')
         const label = `${formatMonth(month)}${filled ? '' : ' — no data'}`
+        // aria-pressed only when a selection model exists (the wizard); the module
+        // pages' ribbons are pure navigation and must not announce a dead toggle.
         return (
           <button
             key={month}
@@ -37,7 +39,7 @@ export default function MonthRibbon({
             className={classes}
             title={label}
             aria-label={label}
-            aria-pressed={month === selected}
+            aria-pressed={selected === undefined ? undefined : month === selected}
             onClick={() => onSelect(month)}
           >
             <span className="month-chip-dot" aria-hidden="true" />
