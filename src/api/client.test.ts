@@ -38,3 +38,42 @@ it('falls back to statusText on non-JSON error bodies', async () => {
   const error = (await api('/anything').catch((e: unknown) => e)) as ApiError
   expect(error.message).toBe('Boom')
 })
+
+it('maps fetch rejections to ApiError instead of raw TypeError', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+  const error = (await api('/anything').catch((e: unknown) => e)) as ApiError
+  expect(error).toBeInstanceOf(ApiError)
+  expect(error.status).toBe(0)
+  expect(error.message).toBe('Network error — is the server reachable?')
+})
+
+it('maps timeout aborts to a timed-out ApiError', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockRejectedValue(new DOMException('The operation timed out.', 'TimeoutError'))
+  )
+  const error = (await api('/anything').catch((e: unknown) => e)) as ApiError
+  expect(error).toBeInstanceOf(ApiError)
+  expect(error.status).toBe(0)
+  expect(error.message).toBe('Request timed out')
+})
+
+it('passes a default timeout signal to fetch but honors a caller signal', async () => {
+  const spy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) })
+  vi.stubGlobal('fetch', spy)
+  await api('/x')
+  expect(spy.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  const own = new AbortController().signal
+  await api('/y', { signal: own })
+  expect(spy.mock.calls[1][1].signal).toBe(own)
+})
+
+it('rethrows caller-initiated aborts untouched', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockRejectedValue(new DOMException('Aborted', 'AbortError'))
+  )
+  const error = (await api('/anything').catch((e: unknown) => e)) as DOMException
+  expect(error).toBeInstanceOf(DOMException)
+  expect(error.name).toBe('AbortError')
+})

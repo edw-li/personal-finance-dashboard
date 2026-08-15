@@ -2321,7 +2321,7 @@ Frontend commands run from the worktree ROOT (`cd .worktrees/plan-3-net-worth-sp
 - Create: `src/api/netWorth.ts`
 - Create: `src/api/spending.ts`
 
-- [ ] **Step 1: Append failing client tests**
+- [x] **Step 1: Append failing client tests**
 
 Append to `src/api/client.test.ts`:
 
@@ -2366,9 +2366,9 @@ it('rethrows caller-initiated aborts untouched', async () => {
 })
 ```
 
-- [ ] **Step 2: Run — expect the new tests FAIL** (`npm test`): raw TypeError propagates today.
+- [x] **Step 2: Run — expect the new tests FAIL** (`npm test`): raw TypeError propagates today.
 
-- [ ] **Step 3: Implement in `src/api/client.ts`**
+- [x] **Step 3: Implement in `src/api/client.ts`**
 
 Replace the single `const res = await fetch(...)` line with:
 
@@ -2396,9 +2396,9 @@ and add near the top of the file:
 const DEFAULT_TIMEOUT_MS = 15_000
 ```
 
-- [ ] **Step 4: Run — expect PASS** (`npm test`; the three pre-existing client tests must still pass).
+- [x] **Step 4: Run — expect PASS** (`npm test`; the three pre-existing client tests must still pass).
 
-- [ ] **Step 5: Append Plan 3 payload types**
+- [x] **Step 5: Append Plan 3 payload types**
 
 Append to `src/types/api.ts` — all money/percent fields are **strings** (pydantic v2 Decimal serialization), nullables as emitted:
 
@@ -2528,7 +2528,7 @@ export interface SpendingYearly {
 }
 ```
 
-- [ ] **Step 6: Create the typed fetchers**
+- [x] **Step 6: Create the typed fetchers**
 
 `src/api/netWorth.ts`:
 
@@ -2629,7 +2629,7 @@ export function putSpendingMonth(
 }
 ```
 
-- [ ] **Step 7: Gate + commit**
+- [x] **Step 7: Gate + commit**
 
 ```bash
 npm test && npm run lint && npm run build
