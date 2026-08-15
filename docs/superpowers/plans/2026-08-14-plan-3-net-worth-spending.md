@@ -5206,6 +5206,11 @@ Seed list — extend with anything learned during execution:
   upserts make retry safe). Acceptable for a single user; revisit only if it ever bites.
 - client.ts now has a 15s default timeout and maps network failures to ApiError(0);
   caller-supplied AbortSignals are honored (and AbortError passes through untouched).
+  A caller-supplied signal REPLACES the timeout — switch to AbortSignal.any when the
+  first abort-on-unmount caller appears. Mid-save 401 in the wizard loses in-progress
+  spending entries (balances committed; re-save converges) and login has no return-URL;
+  the ribbon reads "filled" from balance coverage alone. Fix via sessionStorage draft +
+  login return-to only if it ever bites (Task 9 review).
 - UI renames of accounts/categories are REVERTED by a sheet re-import (importer keys on
   slug; sheet wins on name) — by design, import report shows it. A both-sides rename to
   colliding values 500s on UNIQUE(name) with full rollback (accepted; accounts have the
