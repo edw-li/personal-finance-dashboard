@@ -3051,7 +3051,7 @@ git commit -m "feat: echarts foundation — validated dark theme, wrapper, forma
 - Create: `src/components/MonthRibbon.tsx`
 - Create: `src/components/MonthRibbon.test.tsx`
 
-- [ ] **Step 1: Write the failing MonthRibbon test**
+- [x] **Step 1: Write the failing MonthRibbon test**
 
 `src/components/MonthRibbon.test.tsx`:
 
@@ -3085,9 +3085,9 @@ it('renders a chip per month, marks coverage and selection, and fires onSelect',
 })
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (`npm test`).
+- [x] **Step 2: Run — expect FAIL** (`npm test`).
 
-- [ ] **Step 3: Implement MonthRibbon**
+- [x] **Step 3: Implement MonthRibbon**
 
 `src/components/MonthRibbon.tsx`:
 
@@ -3143,7 +3143,7 @@ export default function MonthRibbon({
 }
 ```
 
-- [ ] **Step 4: Implement StatTile**
+- [x] **Step 4: Implement StatTile**
 
 `src/components/StatTile.tsx`:
 
@@ -3181,7 +3181,7 @@ export default function StatTile({
 }
 ```
 
-- [ ] **Step 5: The shared panel stylesheet**
+- [x] **Step 5: The shared panel stylesheet**
 
 `src/components/panels.css` — the whole Plan 3 visual layer lives here + per-page css; tokens come from `index.css` (unchanged):
 
@@ -3487,7 +3487,7 @@ export default function StatTile({
 }
 ```
 
-- [ ] **Step 6: Gate + commit**
+- [x] **Step 6: Gate + commit**
 
 ```bash
 npm test && npm run lint && npm run build
