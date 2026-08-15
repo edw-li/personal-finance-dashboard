@@ -3979,7 +3979,7 @@ git commit -m "feat: net worth page — stacked groups, account table, drill-dow
 
 **Design contract:** four cards — (1) stacked monthly bars folded to **top-7 categories + gray "Other"** with the net-pay ink line and the dashed muted 4%-rule threshold (all $, one axis); (2) the month × category **heatmap** (full 19-category detail, sequential blue dark→light, HTML tooltip built with `escapeHtml`); (3) **savings rate** as its own % chart (never a second axis on the bars), y clamped to ±100% with true values in the tooltip; (4) **category trends** with chip-select ≤3 (slots 1–3, survivors keep colors). Yearly rollup table = the data twin. The savings-rate chart is labeled "actual" (the sheet's column was a planned rate — Verified rollup semantics).
 
-- [ ] **Step 1: Write the page**
+- [x] **Step 1: Write the page**
 
 `src/pages/SpendingPage.css`:
 
@@ -4514,9 +4514,11 @@ export default function SpendingPage() {
 
 TypeScript note: if `yAxis.min`/`max` as functions or the `visualMap.formatter` signature fight the strict `ComposeOption` types under the installed echarts major, prefer the narrowest legal cast (`as unknown as number` is NOT acceptable; use the option type's documented callback form or widen only that property) — the reviewer checks that no `any` sneaks in.
 
-- [ ] **Step 2: Wire the route** (`/spending` → `<SpendingPage />` in `src/App.tsx`).
+**Execution note (echarts 6.1.0, actual):** `yAxis.min`/`max` callbacks and `visualMap.formatter` both typechecked as written — no widening needed. The one real conflict was the heatmap `tooltip.formatter`: `TopLevelFormatterParams` is `CallbackDataParams | CallbackDataParams[]`, so `params as { value: [number, number, number] }` is TS2352 (the array arm has no `value`). Fixed by narrowing the union first (`Array.isArray(params) ? params[0] : params`) and asserting only `p.value as [number, number, number]` — legal because `CallbackDataParams['value']` is already `OptionDataItem | OptionDataValue`. No `any`, no `as unknown as`, no ts-ignore. Also: the code block's three `itemStyle.borderColor: '#171a21'` literals ship as the theme's exported `SURFACE` — Global rules / File-structure responsibilities forbid pages hardcoding hex, and `SURFACE` is that exact value.
 
-- [ ] **Step 3: Gate + visual smoke + commit**
+- [x] **Step 2: Wire the route** (`/spending` → `<SpendingPage />` in `src/App.tsx`).
+
+- [x] **Step 3: Gate + visual smoke + commit** — gate green (19 vitest, 1 sanctioned react-refresh warning, build clean: main chunk 864.07 kB raw · 286.93 kB gzip, plus the expected >500 kB vite notice). That is +8.85 kB raw / +2.14 kB gzip over Task 12's 855.22 kB — page code only, since `HeatmapChart`/`VisualMapComponent` were already registered in Task 10. **Dev-server visual smoke deferred to Task 15** (real-data verification runs the servers).
 
 ```bash
 npm test && npm run lint && npm run build

@@ -5,6 +5,7 @@ import { AuthProvider } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
 import NetWorthPage from './pages/NetWorthPage'
 import PlaceholderPage from './pages/PlaceholderPage'
+import SpendingPage from './pages/SpendingPage'
 
 export default function App() {
   return (
@@ -16,7 +17,7 @@ export default function App() {
             <Route element={<Layout />}>
               <Route path="/" element={<PlaceholderPage title="Overview" />} />
               <Route path="/net-worth" element={<NetWorthPage />} />
-              <Route path="/spending" element={<PlaceholderPage title="Spending" />} />
+              <Route path="/spending" element={<SpendingPage />} />
               <Route path="/portfolio" element={<PlaceholderPage title="Portfolio" />} />
               <Route path="/taxes" element={<PlaceholderPage title="Taxes" />} />
               <Route path="/espp" element={<PlaceholderPage title="ESPP" />} />
