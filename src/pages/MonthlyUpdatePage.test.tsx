@@ -17,6 +17,8 @@ vi.mock('../api/spending', () => ({
 
 import * as netWorthApi from '../api/netWorth'
 import * as spendingApi from '../api/spending'
+import { formatMonth } from '../utils/format'
+import { addMonths, currentMonthIso } from '../utils/months'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
@@ -140,4 +142,44 @@ it('resets notes/date on month switch and survives same-month clicks', async () 
   expect(
     (screen.getByLabelText(/recorded on/i) as HTMLInputElement).value,
   ).not.toBe('2026-08-05')
+})
+
+it('offers starting the month after the latest covered month', async () => {
+  // Date-independent: months derive from the SAME clock the component reads, so this
+  // holds whenever the run happens. Coverage through the current month = the state
+  // where the old current-month-anchored ribbon offered no way to add a new month.
+  const current = currentMonthIso()
+  const next = addMonths(current, 1)
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === current,
+    recorded_on: null,
+    notes: null,
+    balances: month === current ? [{ account_id: 1, balance: '1500.00' }] : [],
+  }))
+  vi.mocked(netWorthApi.fetchTimeseries).mockResolvedValue({
+    months: [current],
+    accounts: [account],
+    series: [{ account_id: 1, values: ['1500.00'] }],
+    group_totals: {
+      cash: ['1500.00'], pre_tax: ['0.00'], post_tax: ['0.00'], taxable: ['0.00'],
+      equity: ['0.00'], other: ['0.00'], liability: ['0.00'],
+    },
+    net_worth: ['1500.00'],
+    mom_pct: [null],
+  })
+  render(
+    <MemoryRouter initialEntries={[`/update?month=${current}`]}>
+      <MonthlyUpdatePage />
+    </MemoryRouter>,
+  )
+  await screen.findByText(/edit balances/i) // current month exists -> edit mode
+
+  fireEvent.click(
+    await screen.findByRole('button', { name: new RegExp(`start ${formatMonth(next)}`, 'i') }),
+  )
+  // New month: create mode, pre-filled from the just-covered current month.
+  await screen.findByText(/enter balances \(pre-filled from last month\)/i)
+  expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
+  expect(netWorthApi.fetchMonthBalances).toHaveBeenCalledWith(next)
 })

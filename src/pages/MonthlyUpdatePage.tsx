@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CalendarCheck } from 'lucide-react'
+import { CalendarCheck, CalendarPlus } from 'lucide-react'
 import { ApiError } from '../api/client'
 import {
   fetchAccounts,
@@ -189,6 +189,26 @@ export default function MonthlyUpdatePage() {
 
   const stepIndex = STEPS.indexOf(step)
 
+  // Month change refetches via the [month] dep — flip the fetch state here, in the
+  // event handler, never in the effect (react-hooks/set-state-in-effect). Same-month
+  // click: the [month] effect would never re-run, so an unconditional setLoading(true)
+  // would blank the wizard forever.
+  const selectMonth = (m: string) => {
+    if (m === month) return
+    setLoading(true)
+    setError(null)
+    setSaved(null)
+    setParams(() => new URLSearchParams({ month: m, step: 'balances' }))
+  }
+
+  // The ribbon anchors one month PAST the latest covered month once the current month
+  // is filled: chips end at the anchor, so otherwise "add next month" is impossible
+  // until the calendar rolls over (the sheet's next-empty-row affordance, ported).
+  const current = currentMonthIso()
+  const latestCovered = [...coveredMonths].sort().at(-1)
+  const nextEntryMonth = latestCovered === undefined ? current : addMonths(latestCovered, 1)
+  const anchor = nextEntryMonth > current ? nextEntryMonth : current
+
   return (
     <div className="page">
       <div className="page-header">
@@ -198,21 +218,16 @@ export default function MonthlyUpdatePage() {
         </h1>
         <div className="spacer" />
         <MonthRibbon
-          anchor={currentMonthIso()}
+          anchor={anchor}
           filledMonths={coveredMonths}
           selected={month}
-          onSelect={(m) => {
-            // Same-month click: the [month] effect would never re-run, so an
-            // unconditional setLoading(true) would blank the wizard forever.
-            if (m === month) return
-            // Month change refetches via the [month] dep — flip the fetch state here,
-            // in the event handler, never in the effect (react-hooks/set-state-in-effect).
-            setLoading(true)
-            setError(null)
-            setSaved(null)
-            setParams(() => new URLSearchParams({ month: m, step: 'balances' }))
-          }}
+          onSelect={selectMonth}
         />
+        {!coveredMonths.has(anchor) && month !== anchor && (
+          <button className="button" onClick={() => selectMonth(anchor)}>
+            <CalendarPlus size={15} /> Start {formatMonth(anchor)}
+          </button>
+        )}
       </div>
 
       <div className="wizard-steps">
