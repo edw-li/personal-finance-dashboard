@@ -3126,6 +3126,8 @@ export default function MonthRibbon({
           .filter(Boolean)
           .join(' ')
         const label = `${formatMonth(month)}${filled ? '' : ' — no data'}`
+        // aria-pressed only when a selection model exists (the wizard); the module
+        // pages' ribbons are pure navigation and must not announce a dead toggle.
         return (
           <button
             key={month}
@@ -3133,7 +3135,7 @@ export default function MonthRibbon({
             className={classes}
             title={label}
             aria-label={label}
-            aria-pressed={month === selected}
+            aria-pressed={selected === undefined ? undefined : month === selected}
             onClick={() => onSelect(month)}
           >
             <span className="month-chip-dot" aria-hidden="true" />
@@ -3488,6 +3490,23 @@ export default function StatTile({
   padding: 1.5rem 0;
   text-align: center;
 }
+
+/* Shared across all three pages (kept here, not per-page, so no page relies on
+   another page's stylesheet happening to be in the global bundle). */
+
+.drill-hint {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 0 0 0.5rem;
+}
+
+.loading-dim {
+  transition: opacity 0.15s ease;
+}
+
+.loading-dim.is-loading {
+  opacity: 0.55;
+}
 ```
 
 - [x] **Step 6: Gate + commit**
@@ -3516,25 +3535,13 @@ No RTL test for the page (spec §9: charts verified visually; Task 15 is the vis
 `src/pages/NetWorthPage.css`:
 
 ```css
+/* drill-hint and loading-dim are shared utilities — they live in panels.css. */
+
 .networth-chart-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-}
-
-.drill-hint {
-  color: var(--muted);
-  font-size: 0.75rem;
-  margin: 0 0 0.5rem;
-}
-
-.loading-dim {
-  transition: opacity 0.15s ease;
-}
-
-.loading-dim.is-loading {
-  opacity: 0.55;
 }
 ```
 
