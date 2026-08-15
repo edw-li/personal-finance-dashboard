@@ -2921,7 +2921,6 @@ export const FINANCE_THEME = {
 // 'echarts' directly (the full bundle is ~1MB; this registers only what the app draws).
 import { BarChart, HeatmapChart, LineChart } from 'echarts/charts'
 import {
-  DataZoomComponent,
   GridComponent,
   LegendComponent,
   MarkLineComponent,
@@ -2936,7 +2935,6 @@ import type {
   LineSeriesOption,
 } from 'echarts/charts'
 import type {
-  DataZoomComponentOption,
   GridComponentOption,
   LegendComponentOption,
   TooltipComponentOption,
@@ -2954,7 +2952,6 @@ echarts.use([
   LegendComponent,
   VisualMapComponent,
   MarkLineComponent,
-  DataZoomComponent,
   CanvasRenderer,
 ])
 
@@ -2968,7 +2965,6 @@ export type EChartsOption = ComposeOption<
   | TooltipComponentOption
   | LegendComponentOption
   | VisualMapComponentOption
-  | DataZoomComponentOption
 >
 
 export { echarts }
@@ -5191,8 +5187,14 @@ Seed list — extend with anything learned during execution:
   treemap/donut are ALL-PAIRS forms: ≤3 hues or fold/facet. Sequential blue ramp is
   the shared magnitude scale. Never add hex outside theme.ts.
 - The `<EChart>` wrapper + registration module are the only echarts touchpoints; add
-  new chart types to `src/charts/echarts.ts` `use([...])`, nowhere else. echarts
-  version installed: record here (^6.1 expected; ^5.6 fallback if types fought).
+  new chart types to `src/charts/echarts.ts` `use([...])`, nowhere else. **echarts
+  6.1.0 landed** (no type fights; lockfile adds echarts+zrender+tslib). Measured cost
+  once a page imports EChart: main chunk 243.69→881.87 kB raw (77.41→292.62 kB gzip) —
+  trips vite's 500 kB warning; Plan 6 should add manualChunks or lazy-load chart routes.
+  DataZoom was dropped from use([]) as unused. jsdom CANNOT mount <EChart> (canvas
+  getContext null) — any future RTL test rendering a chart page must mock
+  HTMLCanvasElement.getContext or add the canvas package; Plan 3's RTL tests avoid
+  chart pages by design. REDUCED_MOTION is sampled at module load (reload to apply).
 - `app/services/money.py` is the shared 422 vocabulary — Plan 4/5 endpoints reuse
   `quantize_money`/`require_first_of_month` instead of re-implementing.
 - `investable_base()` (net_worth_calc) is what the 4% line uses: latest snapshot ≤
