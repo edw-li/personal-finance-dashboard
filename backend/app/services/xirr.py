@@ -15,9 +15,15 @@ MAX_BISECT_ITERATIONS = 200
 # Search domain: -99.99%..+1000% annualized covers any sane personal-portfolio flow.
 RATE_LO = -0.9999
 RATE_HI = 10.0
+# Beyond ~80 years the (1 + RATE_LO)**t discount factor underflows to exactly 0.0
+# (ZeroDivisionError) and huge future spans overflow (1 + RATE_HI)**t — a mistyped
+# txn_date year must never 500 /holdings. 70 years bounds every real portfolio.
+MAX_SPAN_DAYS = 25550
 
 
 def xnpv(rate: float, flows: list[tuple[date, float]]) -> float:
+    """NPV at `rate`. Reference date is flows[0][0] — pass date-sorted, non-empty
+    flows (rescaling by the reference date never moves the root)."""
     t0 = flows[0][0]
     return sum(amount / (1.0 + rate) ** ((d - t0).days / 365.0) for d, amount in flows)
 
@@ -36,13 +42,22 @@ def _finish(rate: float) -> Decimal:
 
 
 def xirr(flows: list[tuple[date, Decimal]]) -> Decimal | None:
-    """Annualized IRR of dated flows; None when underdetermined or no root in domain."""
+    """Annualized IRR of dated flows.
+
+    None when underdetermined, when the span exceeds MAX_SPAN_DAYS, or when NPV does
+    not change sign across the search domain (no root there, or an even number of
+    them — with sells the sequence can have multiple sign changes and multiple IRRs;
+    Newton from 0.1 returns the root nearest a plausible rate, like Excel's
+    guess-based XIRR).
+    """
     if len(flows) < 2:
         return None
     ordered = sorted(((d, float(a)) for d, a in flows), key=lambda f: f[0])
     if not any(a > 0 for _, a in ordered) or not any(a < 0 for _, a in ordered):
         return None
     if ordered[0][0] == ordered[-1][0]:
+        return None
+    if (ordered[-1][0] - ordered[0][0]).days > MAX_SPAN_DAYS:
         return None
     tol = sum(abs(a) for _, a in ordered) * 1e-9
 
