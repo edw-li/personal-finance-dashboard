@@ -20,7 +20,7 @@ PRICE_QUANTUM = Decimal("0.0001")  # deliberate duplicate of money.PRICE_QUANTUM
 # money.py raises HTTPException 422 (request vocabulary); this module SKIPS bad bars
 # (background-fetch vocabulary) — importing it would drag the wrong layer in.
 # str(float) stays in plain notation below 1e16, and the 4dp quantize raises
-# InvalidOperation on non-finite or >=1e25 values — bound what a bar may carry.
+# InvalidOperation on non-finite or ~1e24+ values — bound what a bar may carry.
 MAX_USABLE_ABS = 1e15
 
 

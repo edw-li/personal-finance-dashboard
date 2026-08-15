@@ -1409,7 +1409,7 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.services.price_provider import DailyBar, YFinanceProvider, yahoo_symbol
+from app.services.price_provider import DailyBar, YFinanceProvider, build_session, yahoo_symbol
 
 
 def test_yahoo_symbol_maps_dots_to_dashes():
@@ -1492,6 +1492,52 @@ def test_fetch_daily_empty_frame_returns_empty(monkeypatch):
     provider = YFinanceProvider.__new__(YFinanceProvider)
     provider._session = None
     assert provider.fetch_daily("ZI", date(2026, 8, 1)) == []
+
+
+def test_fetch_daily_rounds_ties_half_up(monkeypatch):
+    frame = FakeFrame([
+        (_ts(date(2026, 8, 14)), FakeRow({"Close": 1.00005, "Dividends": 0.00005})),
+    ])
+    monkeypatch.setitem(sys.modules, "yfinance", _fake_yf(frame, {}))
+    provider = YFinanceProvider.__new__(YFinanceProvider)
+    provider._session = None
+    (bar,) = provider.fetch_daily("NVDA", date(2026, 8, 1))
+    assert bar.close == Decimal("1.0001")  # banker's rounding would give 1.0000
+    assert bar.dividend == Decimal("0.0001")
+
+
+def test_fetch_daily_skips_absurd_bars_and_zeroes_bad_dividends(monkeypatch):
+    frame = FakeFrame([
+        (_ts(date(2026, 8, 11)), FakeRow({"Close": float("inf"), "Dividends": 0.0})),
+        (_ts(date(2026, 8, 12)), FakeRow({"Close": 1e25, "Dividends": 0.0})),
+        (_ts(date(2026, 8, 13)), FakeRow({"Close": 100.0, "Dividends": float("nan")})),
+        (_ts(date(2026, 8, 14)), FakeRow({"Close": 101.0, "Dividends": 0.5})),
+    ])
+    monkeypatch.setitem(sys.modules, "yfinance", _fake_yf(frame, {}))
+    provider = YFinanceProvider.__new__(YFinanceProvider)
+    provider._session = None
+    bars = provider.fetch_daily("NVDA", date(2026, 8, 1))
+    assert bars == [
+        DailyBar(bar_date=date(2026, 8, 13), close=Decimal("100.0000"), dividend=Decimal("0.0000")),
+        DailyBar(bar_date=date(2026, 8, 14), close=Decimal("101.0000"), dividend=Decimal("0.5000")),
+    ]
+
+
+def test_build_session_normalizes_bundle_and_impersonates(monkeypatch):
+    calls = {}
+
+    class FakeSession:
+        def __init__(self, impersonate=None, verify=None):
+            calls["impersonate"] = impersonate
+            calls["verify"] = verify
+
+    fake_requests = SimpleNamespace(Session=FakeSession)
+    monkeypatch.setitem(sys.modules, "curl_cffi", SimpleNamespace(requests=fake_requests))
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_requests)
+    build_session("   ")
+    assert calls == {"impersonate": "chrome", "verify": True}
+    build_session("  C:/certs/corp.pem  ")
+    assert calls == {"impersonate": "chrome", "verify": "C:/certs/corp.pem"}
 ```
 
 - [ ] **Step 2: Run to verify failure** — expected: ModuleNotFoundError.
@@ -1505,13 +1551,27 @@ Nothing else in the app may import yfinance or curl_cffi, and both are imported 
 inside functions: tests inject fakes via sys.modules, and app/pytest startup never pays
 the pandas import. Verified against yfinance 1.6.0 (plan probes 1-3)."""
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
-PRICE_QUANTUM = Decimal("0.0001")
+# yfinance logs delisted-ticker noise ("$ZI: possibly delisted") via its own logger on
+# every fetch — quiet it once here, at the sole touchpoint.
+logging.getLogger("yfinance").setLevel(logging.ERROR)
+
+PRICE_QUANTUM = Decimal("0.0001")  # deliberate duplicate of money.PRICE_QUANTUM:
+# money.py raises HTTPException 422 (request vocabulary); this module SKIPS bad bars
+# (background-fetch vocabulary) — importing it would drag the wrong layer in.
+# str(float) stays in plain notation below 1e16, and the 4dp quantize raises
+# InvalidOperation on non-finite or ~1e24+ values — bound what a bar may carry.
+MAX_USABLE_ABS = 1e15
+
+
+def _is_usable(value) -> bool:
+    return isinstance(value, float) and math.isfinite(value) and abs(value) < MAX_USABLE_ABS
 
 
 def yahoo_symbol(ticker: str) -> str:
@@ -1547,7 +1607,8 @@ class YFinanceProvider:
 
     def fetch_daily(self, ticker: str, start: date) -> list[DailyBar]:
         """Daily bars from `start` through today (Close + dividend events). Raises on
-        transport errors (caller isolates per ticker); returns [] when Yahoo has no data."""
+        transport errors (caller isolates per ticker); returns [] when Yahoo has no
+        data. Malformed bars are SKIPPED, never abort the ticker (Task 5 review)."""
         import yfinance as yf
 
         frame = yf.Ticker(yahoo_symbol(ticker), session=self._session).history(
@@ -1558,9 +1619,14 @@ class YFinanceProvider:
         bars: list[DailyBar] = []
         for idx, row in frame.iterrows():
             close = row.get("Close")
-            if close is None or (isinstance(close, float) and math.isnan(close)):
+            if close is None or not _is_usable(close):
                 continue
             dividend = row.get("Dividends", 0.0) or 0.0
+            if not _is_usable(dividend):
+                # yfinance sanitizes NaN dividends to 0 today — don't let a third-party
+                # invariant be the only thing keeping NaN out of the TTM sum
+                # (money.py's is_finite pre-check is the prior art).
+                dividend = 0.0
             bars.append(
                 DailyBar(
                     bar_date=idx.date(),
@@ -5048,6 +5114,14 @@ with execution findings):
 - refresh_prices commits its own session; the POST endpoint passes the request session —
   don't call it mid-transaction elsewhere.
 - ZI (ZoomInfo) deactivated during Task 16 (delisted). Reactivating resumes refresh.
+  LIVE-VERIFIED (Task 5 review): a delisted ticker returns an EMPTY frame, not an
+  exception — refresh_prices' explicit empty-bars branch is the one that catches it.
+- Provider residuals (Task 5 review, accepted): YFinanceProvider holds a curl_cffi
+  Session with per-thread libcurl handles and no close() — fine as an app-lifetime
+  object, don't construct per-request; nothing statically pins YFinanceProvider to the
+  PriceProvider Protocol; a dividend event on a NaN-close row is dropped with its bar
+  (yfinance acknowledges the shape exists; vanishingly rare). A yfinance column rename
+  would surface as silent empty fetches — Task 16's live gate is the detector.
 - Plan 6 Overview: reuse GET /portfolio/holdings totals (value + day Δ) and
   /net-worth/summary — do NOT re-derive; investable_base stays the 4%-line source.
 - Plan 6 prod import order gotcha still stands (is_component five-slug UPDATE) — now ALSO
