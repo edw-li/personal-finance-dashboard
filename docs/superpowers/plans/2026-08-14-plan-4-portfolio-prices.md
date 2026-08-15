@@ -1405,11 +1405,9 @@ Create `backend/tests/test_price_provider.py`:
 sys.modules before fetch_daily's lazy import runs."""
 
 import sys
-from datetime import date, datetime, timezone
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
-
-import pytest
 
 from app.services.price_provider import DailyBar, YFinanceProvider, yahoo_symbol
 
