@@ -4036,6 +4036,7 @@ import {
   OTHER_SERIES_COLOR,
   PALETTE,
   SEQUENTIAL_BLUE,
+  SURFACE,
 } from '../charts/theme'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import {
@@ -4145,7 +4146,7 @@ export default function SpendingPage() {
           stack: 'spend',
           barMaxWidth: 22,
           color: PALETTE[slot],
-          itemStyle: { borderColor: '#171a21', borderWidth: 1 },
+          itemStyle: { borderColor: SURFACE, borderWidth: 1 },
           data: (valuesById.get(id) ?? []).map((v) => (v === null ? 0 : Number(v))),
         })),
         {
@@ -4154,7 +4155,7 @@ export default function SpendingPage() {
           stack: 'spend',
           barMaxWidth: 22,
           color: OTHER_SERIES_COLOR,
-          itemStyle: { borderColor: '#171a21', borderWidth: 1 },
+          itemStyle: { borderColor: SURFACE, borderWidth: 1 },
           data: otherPerMonth,
         },
         {
@@ -4203,8 +4204,10 @@ export default function SpendingPage() {
       tooltip: {
         // HTML formatter: category names are user text — escapeHtml is mandatory.
         formatter: (params) => {
-          const p = params as { value: [number, number, number] }
-          const [col, row, value] = p.value
+          // TopLevelFormatterParams is a union with an array arm (TS2352 on a direct
+          // object cast under echarts 6.1) — narrow the union first, assert only value.
+          const p = Array.isArray(params) ? params[0] : params
+          const [col, row, value] = p.value as [number, number, number]
           const name = nameById.get(order[row]) ?? ''
           return `<strong>${formatCurrency(value)}</strong><br/>${escapeHtml(name)} · ${escapeHtml(monthLabels[col] ?? '')}`
         },
@@ -4231,7 +4234,7 @@ export default function SpendingPage() {
         {
           type: 'heatmap' as const,
           data: cells,
-          itemStyle: { borderColor: '#171a21', borderWidth: 1 },
+          itemStyle: { borderColor: SURFACE, borderWidth: 1 },
           emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } },
         },
       ],
