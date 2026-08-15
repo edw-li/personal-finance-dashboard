@@ -2926,12 +2926,20 @@ async def test_transaction_and_dividend_dates_must_be_reasonable(client, db): ..
 
 - [ ] **Step 2: Run to verify failure.**
 
-- [ ] **Step 3: Implement.** Append to `backend/app/api/portfolio.py` (extend imports:
-`TransactionCreate/TransactionUpdate/TransactionOut/DividendCreate/DividendUpdate/
-DividendOut` from schemas, `MONEY_MAX_ABS_10_2`, `MONEY_MAX_ABS_12_2`, `quantize_money`,
-`quantize_shares` from money):
+- [ ] **Step 3: Implement.** Append to `backend/app/api/portfolio.py` (final
+post-review form — includes `_validated_account`, scale-explicit split dummies,
+explicit-null-type no-op, validate-then-mutate PATCHes, `_get_dividend`):
 
 ```python
+def _validated_account(raw: str) -> str:
+    # A whitespace-only label passes min_length=1 and would fold a position under the
+    # empty string (Task 9 review) — same posture as _validated_name.
+    account = raw.strip()
+    if not account:
+        raise HTTPException(status_code=422, detail="account must not be blank")
+    return account
+
+
 def _validated_txn_fields(
     type_: str,
     shares: Decimal | None,
@@ -2955,8 +2963,9 @@ def _validated_txn_fields(
         if fees is not None:
             raise HTTPException(status_code=422, detail="split rows carry no fees")
         return {
-            "shares": Decimal("0"),
-            "price": Decimal("0"),
+            # Scale-explicit dummies: every numeric crosses the wire at its column scale.
+            "shares": Decimal("0.000000"),
+            "price": Decimal("0.0000"),
             "fees": None,
             "split_factor": factor,
         }
@@ -3011,7 +3020,7 @@ async def create_transaction(
     # the same sort_index for a new row — folding tie-breaks on id; accepted.
     txn = PositionTransaction(
         security_id=body.security_id,
-        account=body.account.strip(),
+        account=_validated_account(body.account),
         type=body.type,
         txn_date=body.txn_date,
         sort_index=max_index + 10,
@@ -3037,8 +3046,9 @@ async def update_transaction(
 ) -> PositionTransaction:
     txn = await _get_transaction(db, txn_id)
     provided = body.model_dump(exclude_unset=True)
-    # Validate the MERGED row so a type flip can't leave an inconsistent shape.
-    merged_type = provided.get("type", txn.type)
+    # Validate the MERGED row so a type flip can't leave an inconsistent shape. An explicit
+    # null on the NOT NULL type column reads as a no-op request (update_security posture).
+    merged_type = provided.get("type") or txn.type
     merged = _validated_txn_fields(
         merged_type,
         provided.get("shares", txn.shares),
@@ -3049,10 +3059,14 @@ async def update_transaction(
     if "account" in provided:
         if provided["account"] is None:
             raise HTTPException(status_code=422, detail="account cannot be null")
-        txn.account = provided["account"].strip()
+        provided["account"] = _validated_account(provided["account"])
+    if "txn_date" in provided and provided["txn_date"] is not None:
+        require_reasonable_date(provided["txn_date"], "txn_date")
+    # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
+    # PATCH would leave part of the row dirty for the next autoflush.
+    if "account" in provided:
+        txn.account = provided["account"]
     if "txn_date" in provided:
-        if provided["txn_date"] is not None:
-            require_reasonable_date(provided["txn_date"], "txn_date")
         txn.txn_date = provided["txn_date"]
     if "notes" in provided:
         txn.notes = provided["notes"]
@@ -3113,35 +3127,40 @@ async def create_dividend(
     return dividend
 
 
+async def _get_dividend(db: AsyncSession, dividend_id: int) -> DividendPayment:
+    dividend = await db.get(DividendPayment, dividend_id)
+    if dividend is None:
+        raise HTTPException(status_code=404, detail="dividend not found")
+    return dividend
+
+
 @router.patch("/dividends/{dividend_id}", response_model=DividendOut)
 async def update_dividend(
     dividend_id: int, body: DividendUpdate, db: AsyncSession = Depends(get_db)
 ) -> DividendPayment:
-    dividend = await db.get(DividendPayment, dividend_id)
-    if dividend is None:
-        raise HTTPException(status_code=404, detail="dividend not found")
+    dividend = await _get_dividend(db, dividend_id)
     provided = body.model_dump(exclude_unset=True)
+    # Validate EVERY field before touching the ORM object (update_security posture): a 422
+    # raised halfway through would leave part of the row dirty for the next autoflush.
+    validated: dict[str, object] = dict(provided)
+    for field_name in ("amount", "pay_date"):
+        if field_name in provided and provided[field_name] is None:
+            raise HTTPException(status_code=422, detail=f"{field_name} cannot be null")
     if "amount" in provided:
-        if provided["amount"] is None:
-            raise HTTPException(status_code=422, detail="amount cannot be null")
-        dividend.amount = _validated_dividend_amount(provided["amount"])
+        validated["amount"] = _validated_dividend_amount(provided["amount"])
     if "pay_date" in provided:
-        if provided["pay_date"] is None:
-            raise HTTPException(status_code=422, detail="pay_date cannot be null")
-        dividend.pay_date = require_reasonable_date(provided["pay_date"], "pay_date")
+        validated["pay_date"] = require_reasonable_date(provided["pay_date"], "pay_date")
     if "account" in provided:
-        dividend.account = provided["account"].strip() if provided["account"] else None
-    if "notes" in provided:
-        dividend.notes = provided["notes"]
+        validated["account"] = provided["account"].strip() if provided["account"] else None
+    for field_name, value in validated.items():
+        setattr(dividend, field_name, value)
     await db.commit()
     return dividend
 
 
 @router.delete("/dividends/{dividend_id}", status_code=204)
 async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) -> Response:
-    dividend = await db.get(DividendPayment, dividend_id)
-    if dividend is None:
-        raise HTTPException(status_code=404, detail="dividend not found")
+    dividend = await _get_dividend(db, dividend_id)
     await db.delete(dividend)
     await db.commit()
     return Response(status_code=204)
