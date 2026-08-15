@@ -4653,6 +4653,8 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
       '2026-08-01',
       expect.objectContaining({
         balances: [{ account_id: 1, balance: '1600.00' }],
+        notes: null, // blank notes field CLEARS server-side — load-bearing contract
+        recorded_on: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       }),
     )
     expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
@@ -4670,6 +4672,33 @@ it('blocks Next while a balance is not a number', async () => {
   expect(
     (screen.getByRole('button', { name: /next: spending/i }) as HTMLButtonElement).disabled,
   ).toBe(true)
+})
+
+it('resets notes/date on month switch and survives same-month clicks', async () => {
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-08-01',
+    recorded_on: month === '2026-08-01' ? '2026-08-05' : null,
+    notes: month === '2026-08-01' ? 'august note' : null,
+    balances: month === '2026-08-01' ? [{ account_id: 1, balance: '1500.00' }] : [],
+  }))
+  renderWizard()
+  const notesInput = (await screen.findByLabelText(/notes/i)) as HTMLInputElement
+  expect(notesInput.value).toBe('august note')
+
+  // Clicking the already-selected month must NOT blank the wizard (the [month]
+  // effect never re-runs, so nothing would ever clear an unconditional loading flip).
+  fireEvent.click(screen.getByRole('button', { name: 'Aug 2026 — no data' }))
+  expect(screen.getByLabelText('Checking')).toBeDefined()
+
+  // Switching months must reset notes/date — never leak them into the new month.
+  fireEvent.click(screen.getByRole('button', { name: 'Jun 2026 — no data' }))
+  await waitFor(() => {
+    expect((screen.getByLabelText(/notes/i) as HTMLInputElement).value).toBe('')
+  })
+  expect(
+    (screen.getByLabelText(/recorded on/i) as HTMLInputElement).value,
+  ).not.toBe('2026-08-05')
 })
 ```
 
@@ -4903,8 +4932,12 @@ export default function MonthlyUpdatePage() {
         setBalances(
           Object.fromEntries(activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
         )
-        if (thisMonth.exists && thisMonth.recorded_on) setRecordedOn(thisMonth.recorded_on)
-        if (thisMonth.exists && thisMonth.notes) setNotes(thisMonth.notes)
+        // Reset on EVERY month load — stale notes/date must never leak into another
+        // month's save (the next PUT would silently write them there).
+        setRecordedOn(
+          thisMonth.exists && thisMonth.recorded_on ? thisMonth.recorded_on : todayIso(),
+        )
+        setNotes(thisMonth.exists && thisMonth.notes ? thisMonth.notes : '')
 
         const prevSum = priorMonth.exists
           ? priorMonth.balances.reduce((acc, b) => {
@@ -4992,6 +5025,9 @@ export default function MonthlyUpdatePage() {
           filledMonths={coveredMonths}
           selected={month}
           onSelect={(m) => {
+            // Same-month click: the [month] effect would never re-run, so an
+            // unconditional setLoading(true) would blank the wizard forever.
+            if (m === month) return
             // Month change refetches via the [month] dep — flip the fetch state here,
             // in the event handler, never in the effect (react-hooks/set-state-in-effect).
             setLoading(true)
@@ -5095,7 +5131,7 @@ export default function MonthlyUpdatePage() {
             <span />
             <button
               className="button button-primary"
-              disabled={!balancesValid}
+              disabled={loading || accounts.length === 0 || !balancesValid}
               onClick={() => setStep('spending')}
             >
               Next: spending
@@ -5189,9 +5225,14 @@ export default function MonthlyUpdatePage() {
             <button className="button" onClick={() => setStep('spending')}>
               Back
             </button>
+            {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
+                failed load both validity flags are vacuously true, and a meta-only PUT
+                to an existing month would clear its saved note. */}
             <button
               className="button button-primary"
-              disabled={saving || !balancesValid || !amountsValid}
+              disabled={
+                saving || loading || accounts.length === 0 || !balancesValid || !amountsValid
+              }
               onClick={() => void save()}
             >
               {saving ? 'Saving…' : 'Save month'}
@@ -5350,6 +5391,12 @@ Seed list — extend with anything learned during execution:
   counts in net worth (correct — real money), but the wizard only writes rows for
   active accounts, so a deactivated account with a non-zero last balance silently
   contributes zero to the NEXT wizard-created month. Deactivate only zeroed accounts.
+  Related: editing an EXISTING month that holds a since-deactivated account's row —
+  the wizard's preview (active-only) understates vs the server total (row persists).
+- Wizard a11y polish batch for a later pass (Task 14 review): aria-current="step" on
+  the active chip, role="status" live region on the saved panel, aria-invalid on
+  invalid inputs. Back-button month changes skip onSelect's loading flip — stale grid
+  visible briefly without dim (same accepted race family as the seqRef note above).
 - Placeholder pages remaining: /portfolio /taxes /espp /paycheck /comp /settings + Overview.
 ```
 
