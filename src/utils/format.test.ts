@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { escapeHtml, formatCurrency, formatCurrencyCompact, formatMonth, formatPct } from './format'
+import {
+  escapeHtml,
+  formatCurrency,
+  formatCurrencyCompact,
+  formatDate,
+  formatMonth,
+  formatPct,
+  formatShares,
+} from './format'
 
 describe('formatCurrency', () => {
   it('formats server decimal strings', () => {
@@ -35,5 +43,29 @@ describe('formatMonth', () => {
 describe('escapeHtml', () => {
   it('escapes the five HTML specials', () => {
     expect(escapeHtml(`<b>&"'`)).toBe('&lt;b&gt;&amp;&quot;&#39;')
+  })
+})
+
+describe('formatPct decimals option', () => {
+  it('renders 2dp unsigned', () => {
+    expect(formatPct('0.013', { signed: false, decimals: 2 })).toBe('1.30%')
+  })
+  it('keeps the 1dp signed default', () => {
+    expect(formatPct('0.25')).toBe('+25.0%')
+  })
+})
+
+describe('formatShares', () => {
+  it('trims trailing zeros up to 6dp', () => {
+    expect(formatShares('169.704000')).toBe('169.704')
+    expect(formatShares('1108.000000')).toBe('1,108')
+    expect(formatShares(null)).toBe('—')
+  })
+})
+
+describe('formatDate', () => {
+  it('formats ISO dates without UTC shift', () => {
+    expect(formatDate('2026-08-14')).toBe('Aug 14, 2026')
+    expect(formatDate(null)).toBe('—')
   })
 })
