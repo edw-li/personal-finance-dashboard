@@ -6,13 +6,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.models import (
+    TRANSACTION_SOURCES,
     DividendPayment,
     LatestPrice,
     PositionTransaction,
     PriceHistory,
     Security,
 )
-from app.models.portfolio import TRANSACTION_SOURCES
 
 
 async def test_security_and_transaction_roundtrip(db):

@@ -4,6 +4,7 @@ from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWor
 from app.models.portfolio import (
     HOLDING_TYPES,
     PRICE_SOURCES,
+    TRANSACTION_SOURCES,
     TRANSACTION_TYPES,
     DividendPayment,
     LatestPrice,
@@ -35,6 +36,7 @@ __all__ = [
     "PriceHistory",
     "Security",
     "SpendingCategory",
+    "TRANSACTION_SOURCES",
     "TRANSACTION_TYPES",
     "TaxBracket",
     "TaxInput",

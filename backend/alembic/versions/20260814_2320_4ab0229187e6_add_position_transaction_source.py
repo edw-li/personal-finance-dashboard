@@ -25,7 +25,10 @@ def upgrade() -> None:
         "position_transactions",
         sa.Column("source", sa.String(length=10), server_default="ui", nullable=False),
     )
-    # Existing rows: importer-owned rows are exactly those with sheet-assigned sort_index.
+    # One-time backfill for pre-Plan-4 data: at migration time, rows with a
+    # sheet-assigned sort_index are exactly the importer's. NOT a durable rule —
+    # UI rows created later also get sort_index > 0, so this heuristic (and this
+    # migration's downgrade) must not be re-run once UI rows exist.
     op.execute("UPDATE position_transactions SET source = 'import' WHERE sort_index > 0")
 
 
