@@ -2,14 +2,11 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models import LatestPrice, PriceHistory, Security
 from app.services.price_provider import DailyBar
-from app.services.price_service import (
-    HISTORY_WINDOW_DAYS,
-    refresh_prices,
-    set_manual_price,
-)
+from app.services.price_service import refresh_prices, set_manual_price
 
 D = Decimal
 TODAY = date(2026, 8, 14)
@@ -60,7 +57,7 @@ async def test_refresh_upserts_history_latest_and_dividend_metadata(db):
     result = await refresh_prices(db, provider, today=TODAY)
     assert result.updated == ["NVDA"]
     assert result.failed == {} and result.skipped_manual == []
-    assert provider.calls == [("NVDA", TODAY - timedelta(days=HISTORY_WINDOW_DAYS))]
+    assert provider.calls == [("NVDA", date(2025, 8, 9))]  # TODAY - 370 days, pinned literally
     history = (
         (await db.execute(select(PriceHistory).order_by(PriceHistory.price_date))).scalars().all()
     )
@@ -81,6 +78,7 @@ async def test_refresh_is_idempotent_and_updates_existing_rows(db):
     sec = await seed_security(db, "VOO")
     provider = FakeProvider({"VOO": [bar(TODAY, "500")]})
     await refresh_prices(db, provider, today=TODAY)
+    assert (await db.get(LatestPrice, sec.id)).price == D("500.0000")
     provider.data["VOO"] = [bar(TODAY, "501")]
     result = await refresh_prices(db, provider, today=TODAY)
     assert result.updated == ["VOO"]
@@ -156,6 +154,7 @@ async def test_set_manual_price_upserts_latest_and_history(db):
     await db.commit()
     history = (await db.execute(select(PriceHistory))).scalars().all()
     assert len(history) == 1 and history[0].close == D("32.0000")
+    assert (await db.get(LatestPrice, sec.id)).price == D("32.0000")
 
 
 async def test_set_manual_price_backdated_updates_history_only(db):
@@ -176,3 +175,52 @@ async def test_set_manual_price_backdated_updates_history_only(db):
         (date(2026, 8, 10), D("30.0000")),
         (date(2026, 8, 14), D("32.0000")),
     ]
+
+
+async def test_ttm_window_excludes_old_and_boundary_dividends(db):
+    sec = await seed_security(db, "KO")
+    provider = FakeProvider(
+        {
+            "KO": [
+                bar(TODAY - timedelta(days=368), "50", "9"),  # in fetch window, outside TTM
+                # exactly at boundary: excluded (strict >)
+                bar(TODAY - timedelta(days=365), "51", "7"),
+                bar(TODAY - timedelta(days=364), "52", "0.2375"),
+                bar(TODAY, "53"),
+            ]
+        }
+    )
+    await refresh_prices(db, provider, today=TODAY)
+    await db.refresh(sec)
+    assert sec.annual_dividend == D("0.2375")
+    assert sec.ex_div_date == TODAY - timedelta(days=364)
+
+
+async def test_absurd_ttm_keeps_previous_metadata(db):
+    sec = await seed_security(db, "WOW", annual_dividend=D("2.5"))
+    result = await refresh_prices(
+        db, FakeProvider({"WOW": [bar(TODAY, "10", "1000000")]}), today=TODAY
+    )
+    assert result.updated == ["WOW"]
+    await db.refresh(sec)
+    assert sec.annual_dividend == D("2.5000")
+
+
+async def test_duplicate_bar_dates_deduped_last_wins(db):
+    sec = await seed_security(db, "DUP")
+    result = await refresh_prices(
+        db, FakeProvider({"DUP": [bar(TODAY, "5"), bar(TODAY, "6")]}), today=TODAY
+    )
+    assert result.updated == ["DUP"]
+    history = (await db.execute(select(PriceHistory))).scalars().all()
+    assert len(history) == 1 and history[0].close == D("6.0000")
+    assert (await db.get(LatestPrice, sec.id)).price == D("6.0000")
+
+
+async def test_refresh_commits_durably(db, engine):
+    sec = await seed_security(db, "DUR")
+    await refresh_prices(db, FakeProvider({"DUR": [bar(TODAY, "5")]}), today=TODAY)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as other:
+        latest = await other.get(LatestPrice, sec.id)
+        assert latest is not None and latest.price == D("5.0000")
