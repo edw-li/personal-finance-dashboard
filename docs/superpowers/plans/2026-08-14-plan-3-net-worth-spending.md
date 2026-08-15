@@ -5397,6 +5397,10 @@ Seed list — extend with anything learned during execution:
   the active chip, role="status" live region on the saved panel, aria-invalid on
   invalid inputs. Back-button month changes skip onSelect's loading flip — stale grid
   visible briefly without dim (same accepted race family as the seqRef note above).
+- Wizard residuals (Task 14 re-review): a FAILED month-switch leaves the previous
+  month's data editable under the new heading (banner shows; a loadedMonth===month
+  sentinel closes it — pair with the no-Retry banner revisit). The wizard's third RTL
+  test anchors chips to real dates and goes stale ~May 2027 (fix: vi.setSystemTime).
 - Placeholder pages remaining: /portfolio /taxes /espp /paycheck /comp /settings + Overview.
 ```
 
