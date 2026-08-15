@@ -263,7 +263,7 @@ def allocation(
 
 
 async def load_portfolio(
-    db: AsyncSession,
+    db: AsyncSession, *, with_history: bool = True, with_dividends: bool = True
 ) -> tuple[
     dict[int, Security],
     list[PositionTransaction],
@@ -271,6 +271,7 @@ async def load_portfolio(
     dict[int, list[PriceHistory]],
     list[DividendPayment],
 ]:
+    """/allocation and /realized skip history+dividends they never read (Task 10 review I1)."""
     securities = {s.id: s for s in (await db.execute(select(Security))).scalars()}
     txns = list(
         (
@@ -283,12 +284,15 @@ async def load_portfolio(
     )
     latest = {p.security_id: p for p in (await db.execute(select(LatestPrice))).scalars()}
     history: dict[int, list[PriceHistory]] = {}
-    rows = (
-        await db.execute(
-            select(PriceHistory).order_by(PriceHistory.security_id, PriceHistory.price_date)
-        )
-    ).scalars()
-    for row in rows:
-        history.setdefault(row.security_id, []).append(row)
-    dividends = list((await db.execute(select(DividendPayment))).scalars())
+    if with_history:
+        rows = (
+            await db.execute(
+                select(PriceHistory).order_by(PriceHistory.security_id, PriceHistory.price_date)
+            )
+        ).scalars()
+        for row in rows:
+            history.setdefault(row.security_id, []).append(row)
+    dividends = (
+        list((await db.execute(select(DividendPayment))).scalars()) if with_dividends else []
+    )
     return securities, txns, latest, history, dividends

@@ -936,7 +936,10 @@ async def test_holdings_end_to_end_math(auth_client, db):
         "unrealized_gl": "1000.00",
         "unrealized_gl_pct": "0.181818",  # 1000 / 5500
         "day_change_amount": "500.00",  # NVDA contributes nothing — it has no prior bar
-        "day_change_pct": "0.083333",  # 500 / (6500 - 500), i.e. against yesterday's value
+        # ... so NVDA's 1000 is out of the BASIS too: 500 / (5500 - 500), yesterday's value
+        # of the rows that have day data. Diluting by the whole priced book read 0.083333
+        # here and understated the header far worse on a mostly-barless book (review I2).
+        "day_change_pct": "0.100000",
         "realized_gl": "0.00",
         "dividends_collected": "25.00",
         "annual_income": "60.00",
@@ -1154,3 +1157,126 @@ async def test_realized_rows_only_for_nonzero(auth_client):
     ]
     assert body["total"] == "100.00"
     assert Decimal(body["total"]) == sum(Decimal(row["realized_gl"]) for row in body["rows"])
+
+
+async def test_totals_include_fully_exited_positions(auth_client, db):
+    # A liquidated security has no holdings ROW (zero shares) but its realized gain and
+    # dividends are still real money — totals read the whole book, not the visible rows.
+    exited = await _create_security(auth_client)
+    live = await _create_security(auth_client, ticker="NVDA", name="NVIDIA", holding_type="stock")
+    for payload in (
+        _buy(exited["id"], shares="10", price="100"),
+        _buy(exited["id"], type="sell", shares="10", price="120"),
+        _buy(live["id"], shares="5", price="100"),
+    ):
+        created = await auth_client.post(TRANSACTIONS, json=payload)
+        assert created.status_code == 201, created.text
+    paid = await auth_client.post(
+        DIVIDENDS,
+        json={"security_id": exited["id"], "pay_date": "2026-06-30", "amount": "30"},
+    )
+    assert paid.status_code == 201, paid.text
+    db.add(_latest(live["id"], "200.0000", day=14))
+    await db.commit()
+
+    body = (await auth_client.get(HOLDINGS)).json()
+    assert [h["ticker"] for h in body["holdings"]] == ["NVDA"]  # the exited row is gone ...
+    assert body["holdings"][0]["realized_gl"] == "0.00"
+    assert body["holdings"][0]["dividends_collected"] == "0.00"
+    # ... yet the header still reports what it earned: 10 x (120 - 100) and the payment.
+    assert body["totals"]["realized_gl"] == "200.00"
+    assert body["totals"]["dividends_collected"] == "30.00"
+    assert body["totals"]["market_value"] == "1000.00"
+
+    realized_body = (await auth_client.get(REALIZED)).json()
+    assert realized_body["rows"] == [
+        {
+            "security_id": exited["id"],
+            "ticker": "VOO",
+            "name": "Vanguard S&P 500 ETF",
+            "realized_gl": "200.00",
+        }
+    ]
+    assert realized_body["total"] == "200.00"
+
+
+async def test_zero_total_market_value_book(auth_client, db):
+    # A long and an oversold short can cancel to a zero-value book. Weights are then
+    # undefined (never a ZeroDivisionError, never a fabricated 100%).
+    long_sec = await _create_security(auth_client)
+    short_sec = await _create_security(
+        auth_client, ticker="NVDA", name="NVIDIA", holding_type="stock"
+    )
+    for payload in (
+        _buy(long_sec["id"], shares="10", price="100"),
+        _buy(short_sec["id"], shares="10", price="100"),
+    ):
+        created = await auth_client.post(TRANSACTIONS, json=payload)
+        assert created.status_code == 201, created.text
+    oversell = await auth_client.post(
+        TRANSACTIONS, json=_buy(short_sec["id"], type="sell", shares="20", price="100")
+    )
+    assert oversell.status_code == 201, oversell.text  # bad data folds, it never 500s
+    db.add_all(
+        [_latest(long_sec["id"], "100.0000", day=14), _latest(short_sec["id"], "100.0000", day=14)]
+    )
+    await db.commit()
+
+    body = (await auth_client.get(HOLDINGS)).json()
+    assert body["totals"]["market_value"] == "0.00"
+    assert [h["market_value"] for h in body["holdings"]] == ["1000.00", "-1000.00"]
+    assert all(h["weight_pct"] is None for h in body["holdings"])  # 0 total -> no weights
+    oversold = body["holdings"][1]
+    assert oversold["shares"] == "-10.000000"
+    assert oversold["warnings"] == [f"txn {oversell.json()['id']}: sell exceeds held shares"]
+
+    resp = await auth_client.get(ALLOCATION, params={"by": "type"})
+    assert resp.status_code == 200, resp.text
+    allocation_body = resp.json()
+    assert allocation_body["total_market_value"] == "0.00"
+    # The zero-total fallback speaks the same 6dp vocabulary as a real weight (review M1).
+    assert [s["weight_pct"] for s in allocation_body["slices"]] == ["0.000000", "0.000000"]
+    assert [s["key"] for s in allocation_body["slices"]] == ["etf", "stock"]
+
+
+async def test_day_pct_none_when_prior_values_cancel(auth_client, db):
+    # Day Δ divides by YESTERDAY's value of the day-data rows; long and short prior values
+    # can cancel to zero, so the guard is reachable with a non-null day amount above it.
+    long_sec = await _create_security(auth_client)
+    short_sec = await _create_security(
+        auth_client, ticker="NVDA", name="NVIDIA", holding_type="stock"
+    )
+    for payload in (
+        _buy(long_sec["id"], shares="10", price="100"),
+        _buy(short_sec["id"], shares="10", price="100"),
+        _buy(short_sec["id"], type="sell", shares="20", price="100"),  # oversell -> -10
+    ):
+        created = await auth_client.post(TRANSACTIONS, json=payload)
+        assert created.status_code == 201, created.text
+    for security in (long_sec, short_sec):
+        db.add_all(
+            [
+                _latest(security["id"], "110.0000", day=14),
+                PriceHistory(
+                    security_id=security["id"],
+                    price_date=date(2026, 8, 12),
+                    close=Decimal("100.0000"),
+                ),
+                PriceHistory(
+                    security_id=security["id"],
+                    price_date=date(2026, 8, 13),
+                    close=Decimal("110.0000"),
+                ),
+            ]
+        )
+    await db.commit()
+
+    body = (await auth_client.get(HOLDINGS)).json()
+    assert [h["day_change_amount"] for h in body["holdings"]] == ["100.00", "-100.00"]
+    assert body["totals"]["day_change_amount"] == "0.00"  # a real, quantized zero ...
+    assert body["totals"]["day_change_pct"] is None  # ... over a zero basis: no percentage
+
+
+async def test_computed_views_require_auth(client):
+    for url in (HOLDINGS, ALLOCATION, REALIZED):
+        assert (await client.get(url)).status_code == 401, url

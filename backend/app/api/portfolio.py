@@ -424,11 +424,23 @@ async def holdings(db: AsyncSession = Depends(get_db)) -> HoldingsOut:
 
     total_mv = sum((h.market_value for h in rows if h.market_value is not None), Decimal("0"))
     total_cost = sum((h.cost_basis for h in rows), Decimal("0"))
-    total_day = [h.day_change_amount for h in rows if h.day_change_amount is not None]
-    day_amount = sum(total_day, Decimal("0")) if total_day else None
+    day_rows = [h for h in rows if h.day_change_amount is not None]
+    day_amount = (
+        sum((h.day_change_amount for h in day_rows), Decimal("0")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        if day_rows
+        else None
+    )
     day_pct = None
-    if day_amount is not None and total_mv - day_amount != 0:
-        day_pct = quantize_pct(day_amount / (total_mv - day_amount))
+    if day_amount is not None:
+        # Denominator = yesterday's value of the rows that HAVE day data — using all
+        # priced MV understated the header pct 3x when only part of the book carried
+        # a prior bar (Task 10 review I2). Can still zero out when long/short prior
+        # values cancel — guard stays.
+        day_basis = sum((h.market_value for h in day_rows), Decimal("0"))
+        if day_basis - day_amount != 0:
+            day_pct = quantize_pct(day_amount / (day_basis - day_amount))
     priced_cost = sum((h.cost_basis for h in rows if h.market_value is not None), Decimal("0"))
     unrealized_total = total_mv - priced_cost
     out_rows = [
@@ -492,7 +504,9 @@ async def allocation_view(
     by: Literal["industry", "type", "account"] = "industry",
     db: AsyncSession = Depends(get_db),
 ) -> AllocationOut:
-    securities, txns, latest, _history, _dividends = await load_portfolio(db)
+    securities, txns, latest, _history, _dividends = await load_portfolio(
+        db, with_history=False, with_dividends=False
+    )
     positions = fold_transactions(txns)
     buckets = allocation(positions, securities, latest, by)
     total = sum((value for _key, value, _count in buckets), Decimal("0"))
@@ -503,7 +517,7 @@ async def allocation_view(
             AllocationSlice(
                 key=key,
                 market_value=value,
-                weight_pct=quantize_pct(value / total) if total > 0 else Decimal("0"),
+                weight_pct=quantize_pct(value / total) if total > 0 else quantize_pct(Decimal("0")),
                 holdings=count,
             )
             for key, value, count in buckets
@@ -513,7 +527,9 @@ async def allocation_view(
 
 @router.get("/realized", response_model=RealizedOut)
 async def realized(db: AsyncSession = Depends(get_db)) -> RealizedOut:
-    securities, txns, _latest, _history, _dividends = await load_portfolio(db)
+    securities, txns, _latest, _history, _dividends = await load_portfolio(
+        db, with_history=False, with_dividends=False
+    )
     positions = fold_transactions(txns)
     per_security: dict[int, Decimal] = {}
     for pos in positions.values():
@@ -527,7 +543,10 @@ async def realized(db: AsyncSession = Depends(get_db)) -> RealizedOut:
             name=securities[sec_id].name,
             realized_gl=value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         )
-        for sec_id, value in sorted(per_security.items(), key=lambda kv: kv[1])
+        for sec_id, value in sorted(
+            per_security.items(),
+            key=lambda kv: (kv[1], securities[kv[0]].ticker if kv[0] in securities else ""),
+        )
         if value != 0 and sec_id in securities
     ]
     total = sum((v for v in per_security.values()), Decimal("0"))
