@@ -3507,6 +3507,26 @@ export default function StatTile({
 .loading-dim.is-loading {
   opacity: 0.55;
 }
+
+/* Keyboard-reachable row selection: a native button wrapping the row's label keeps
+   table semantics intact while giving Enter/Space/focus for free. */
+
+.row-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.row-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 ```
 
 - [x] **Step 6: Gate + commit**
@@ -3593,6 +3613,9 @@ export default function NetWorthPage() {
   // Drill-down: selection order assigns the lowest free palette slot; removing one
   // never repaints the survivors (dataviz: color follows the entity, not its rank).
   const [drill, setDrill] = useState<{ accountId: number; slot: number }[]>([])
+  // Ribbon coverage is captured ONLY from monthly responses — the quarterly fetch
+  // filters months server-side and must not make covered months read as missing.
+  const [coverageMonths, setCoverageMonths] = useState<string[]>([])
 
   // Promise callbacks rather than async/await, and no setState before the fetch starts:
   // every state update has to land in an async continuation, never in the synchronous
@@ -3604,6 +3627,7 @@ export default function NetWorthPage() {
         setData(ts)
         setSummary(sum)
         setError(null)
+        if (granularity === 'monthly') setCoverageMonths(ts.months)
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')
@@ -3622,12 +3646,12 @@ export default function NetWorthPage() {
     load()
   }, [load])
 
-  const filledMonths = useMemo(() => new Set(data?.months ?? []), [data])
+  const filledMonths = useMemo(() => new Set(coverageMonths), [coverageMonths])
   const anchor = useMemo(() => {
     const cur = currentMonthIso()
-    const latest = data?.months.at(-1)
+    const latest = coverageMonths.at(-1)
     return latest && latest > cur ? latest : cur
-  }, [data])
+  }, [coverageMonths])
 
   const stackedOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.months.length === 0) return null
@@ -3820,7 +3844,8 @@ export default function NetWorthPage() {
           {stackedOption ? (
             <EChart option={stackedOption} height={360} />
           ) : (
-            !loading && (
+            !loading &&
+            !error && (
               <div className="empty-note">
                 No snapshots yet — enter your first month to start the chart.
               </div>
@@ -3857,7 +3882,17 @@ export default function NetWorthPage() {
                     style={{ cursor: 'pointer', background: selected ? 'var(--surface-2)' : undefined }}
                   >
                     <td>
-                      {account.name}
+                      <button
+                        type="button"
+                        className="row-toggle"
+                        aria-pressed={selected}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleDrill(account.id)
+                        }}
+                      >
+                        {account.name}
+                      </button>
                       {account.is_component && <span className="badge">component</span>}
                       {!account.is_active && <span className="badge">inactive</span>}
                     </td>
@@ -4362,7 +4397,8 @@ export default function SpendingPage() {
           {barsOption ? (
             <EChart option={barsOption} height={340} />
           ) : (
-            !loading && (
+            !loading &&
+            !error && (
               <div className="empty-note">No spending recorded yet — enter a month to begin.</div>
             )
           )}
@@ -5262,6 +5298,10 @@ Seed list — extend with anything learned during execution:
 - Savings rate = actual (net_pay − total)/net_pay; the sheet's column was a planned
   step-constant (documented divergence). If the user ever wants the planned-rate line,
   it needs a new data home (maybe paycheck profiles, Plan 5) — do not overload this one.
+- Module pages have a theoretical stale-response race on rapid refetch triggers (no
+  ignore flag). Accepted; if it ever bites, the recorded fix is a useRef sequence
+  counter: `const seq = ++seqRef.current` at load start, early-return in then/catch
+  when `seq !== seqRef.current`, and guard the finally's setLoading the same way.
 - Wizard PUTs are two sequential requests (balances, then spending); a failure between
   them leaves balances saved and spending not — the error banner says retry (idempotent
   upserts make retry safe). Acceptable for a single user; revisit only if it ever bites.
