@@ -3465,7 +3465,7 @@ from app.schemas.portfolio import (
     PricePoint,
     RefreshOut,
 )
-from app.services.money import quantize_price
+from app.services.money import quantize_price, require_reasonable_date
 from app.services.portfolio_calc import fold_transactions
 from app.services.price_service import refresh_prices, set_manual_price
 
@@ -3584,7 +3584,7 @@ async def put_manual_price(
     price = quantize_price(body.price, "price")
     if price <= 0:
         raise HTTPException(status_code=422, detail="price must be positive")
-    as_of = body.as_of or date.today()
+    as_of = require_reasonable_date(body.as_of or date.today(), "as_of")
     if as_of > date.today():
         raise HTTPException(status_code=422, detail="as_of cannot be in the future")
     await set_manual_price(db, security, price, as_of)
@@ -5249,7 +5249,10 @@ live refresh (step 4) — the refresh overwrites the seeded, sheet-vintage price
 
 - [ ] **Step 1: Dev servers up.** Docker Desktop + `docker compose up -d db` (from repo
 root of the WORKTREE), `alembic upgrade head` confirmed at Task 1, then backend:
-`cd backend && .venv/Scripts/python.exe -m uvicorn app.main:app --port 8000` (background;
+`cd backend && SCHEDULER_ENABLED=false .venv/Scripts/python.exe -m uvicorn app.main:app --port 8000`
+(SCHEDULER_ENABLED=false until reconciliation is DONE — the cron would otherwise fire at
+13:10 PT mid-reconcile and overwrite the seeded, sheet-vintage prices; re-enable for the
+scheduler smoke in Step 6) (background;
 note: killing it later requires killing BOTH the python PID and the uvicorn.exe wrapper —
 machine note). Login via `POST /api/v1/auth/login` (admin@example.com / changeme123) →
 capture the token for curl.
@@ -5454,6 +5457,17 @@ with execution findings):
   skipped_manual will be [] in prod and ALL 37 tickers (incl. FIGR/VCX/VIA/RVI) go to
   Yahoo — the ±25% price-sanity check in Task 16 is the wrong-symbol detector; 33
   securities carry stale annual_dividend that the first refresh TTM-overwrites broadly.
+- Prices-router contract facts (Task 11 review): sparklines OMITS held securities with
+  no bars (key absent, not empty) — {} on the whole book pre-refresh; a backdated manual
+  PUT returns 200 with the UNCHANGED latest quote (the 200 means the history row landed,
+  NOT that the quote moved); RefreshOut.failed values carry up to 200 chars of raw
+  exception text — escapeHtml on render; aborting the client's 120s signal does not stop
+  the server-side sweep; ?days=N returns N+1 calendar days and short windows collapse to
+  ~1 weekly point; sparklines' held-set uses per-position grain (can disagree with
+  /holdings' net-shares grain in cross-account-zero states).
+- DELETE /portfolio/securities on a transaction-less security CASCADE-drops its SEEDED
+  price (guard counts only txns/dividends — 15 such securities exist pre-refresh). Don't
+  delete securities before Task 16's reconciliation reads the seeded prices.
 - ZI (ZoomInfo) deactivated during Task 16 (delisted). Reactivating resumes refresh.
   LIVE-VERIFIED (Task 5 review): a delisted ticker returns an EMPTY frame, not an
   exception — refresh_prices' explicit empty-bars branch is the one that catches it.
