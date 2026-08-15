@@ -2136,6 +2136,10 @@ async def test_put_spending_month_validation(auth_client, db):
     assert (
         await auth_client.put("/api/v1/spending/months/2026-03-15", json={})
     ).status_code == 422
+    # Take-home pay can't be negative (savings-rate denominator sanity).
+    assert (
+        await auth_client.put(put, json={"net_pay": "-1", "amounts": []})
+    ).status_code == 422
 ```
 
 - [ ] **Step 2: Run — expect FAIL.**
@@ -2184,6 +2188,10 @@ async def put_month(
     net_pay_value = (
         quantize_money(body.net_pay, "net_pay") if net_pay_provided else None
     )
+    if net_pay_value is not None and net_pay_value < 0:
+        # Take-home pay can't be negative; a typo'd minus sign would flip the
+        # savings-rate denominator into flattering nonsense (Task 7 review).
+        raise HTTPException(status_code=422, detail="net_pay must be non-negative")
     if ids:
         known = set(
             (
