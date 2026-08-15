@@ -2922,6 +2922,9 @@ async def test_dividend_validation(client, db): ...
 async def test_transaction_and_dividend_dates_must_be_reasonable(client, db): ...
     # txn_date "1026-08-15" -> 422 naming txn_date; dividend pay_date "3026-01-01" ->
     # 422 naming pay_date (require_reasonable_date; PATCH paths covered too)
+
+async def test_blank_account_rejected_on_transactions(client, db): ...
+    # "   " -> 422 on create AND PATCH; " Robinhood " -> stored "Robinhood"
 ```
 
 - [ ] **Step 2: Run to verify failure.**
@@ -3174,7 +3177,7 @@ require_reasonable_date`.)
 - [ ] **Step 5: Full gate + commit**
 
 ```bash
-git add backend/app/api/portfolio.py backend/app/services/money.py backend/tests/test_portfolio_api.py backend/tests/test_services_money.py
+git add backend/app/api/portfolio.py backend/tests/test_portfolio_api.py
 git commit -m "feat: transactions + dividends CRUD with type-shape and date-range validation"
 ```
 
