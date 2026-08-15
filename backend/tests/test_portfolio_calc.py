@@ -94,16 +94,63 @@ class TestFolding:
         assert pos.cost_basis == D("1000")
 
     def test_fold_order_is_sort_index_then_id_not_input_order(self):
-        # sell arrives FIRST in the list but folds SECOND by sort_index
+        # ids ANTI-correlated with sort_index: sorting by id (or input order) would
+        # fold the sell first and warn — only (sort_index, id) folds clean.
         positions = fold_transactions(
             [
-                txn(2, type="sell", shares="5", price="20", sort_index=20),
+                txn(1, type="sell", shares="5", price="20", sort_index=20),
+                txn(2, shares="10", price="10", sort_index=10),
+            ]
+        )
+        pos = positions[(1, "Acct")]
+        assert pos.realized_gl == D("50")
+        assert pos.warnings == []
+
+    def test_fold_ties_on_sort_index_break_by_id(self):
+        # The accepted UI/import sort_index collision: lower id folds first.
+        positions = fold_transactions(
+            [
+                txn(2, type="sell", shares="5", price="20", sort_index=10),
                 txn(1, shares="10", price="10", sort_index=10),
             ]
         )
         pos = positions[(1, "Acct")]
         assert pos.realized_gl == D("50")
         assert pos.warnings == []
+
+    def test_partial_oversell_resets_basis_and_warns_exceeds(self):
+        positions = fold_transactions(
+            [
+                txn(1, shares="10", price="100", sort_index=10),
+                txn(2, type="sell", shares="15", price="150", sort_index=20),
+            ]
+        )
+        pos = positions[(1, "Acct")]
+        assert pos.shares == D("-5")
+        assert pos.cost_basis == 0  # liquidation floor — a live row must never go negative
+        assert pos.realized_gl == D("750")  # 15*(150-100)
+        assert any("exceeds held shares" in w for w in pos.warnings)
+
+    def test_dated_sell_flow_is_positive_net_of_fees(self):
+        positions = fold_transactions(
+            [
+                txn(1, shares="10", price="100", sort_index=10, txn_date=date(2025, 1, 1)),
+                txn(
+                    2,
+                    type="sell",
+                    shares="4",
+                    price="150",
+                    fees="2",
+                    sort_index=20,
+                    txn_date=date(2025, 6, 1),
+                ),
+            ]
+        )
+        pos = positions[(1, "Acct")]
+        assert pos.dated_flows == [
+            (date(2025, 1, 1), D("-1000")),
+            (date(2025, 6, 1), D("598")),
+        ]
 
     def test_oversell_and_orphan_sell_warn_but_never_raise(self):
         positions = fold_transactions(
@@ -196,6 +243,58 @@ class TestHoldings:
         (h2,) = self._one_holding(txn_date=date(2025, 8, 14))
         assert h2.xirr_pct is not None
         assert h2.xirr_pct == D("0.250000")  # 4000 -> 5000 in exactly 365 days
+
+    def test_xirr_null_when_any_cash_flow_txn_is_dateless(self):
+        # Mid-backfill state: a dated buy plus a dateless buy — dated_flows exist,
+        # but the dateless flag must still veto XIRR (spec Risk #1).
+        securities = {1: sec(1, "VOO")}
+        positions = fold_transactions(
+            [
+                txn(1, shares="10", price="400", sort_index=10, txn_date=date(2025, 8, 14)),
+                txn(2, shares="1", price="400", sort_index=20),
+            ]
+        )
+        (h,) = build_holdings(
+            positions, securities, {1: lp(1, "500")}, {}, [], today=date(2026, 8, 14)
+        )
+        assert h.xirr_pct is None
+
+    def test_multi_account_positions_collapse_to_one_holding(self):
+        securities = {1: sec(1, "VOO")}
+        positions = fold_transactions(
+            [
+                txn(1, account="Robinhood", shares="10", price="400", sort_index=10),
+                txn(2, account="Schwab", shares="5", price="440", sort_index=20),
+            ]
+        )
+        (h,) = build_holdings(
+            positions, securities, {1: lp(1, "500")}, {}, [], today=date(2026, 8, 14)
+        )
+        assert h.shares == D("15.000000")
+        assert h.cost_basis == D("6200.00")
+        assert h.accounts == ["Robinhood", "Schwab"]
+
+    def test_money_quantization_rounds_half_up(self):
+        # 1 share x $0.1250 -> $0.13 (HALF_EVEN/DOWN would give $0.12) — pins the
+        # Global rules rounding mode at the cost-basis quantize.
+        securities = {1: sec(1, "PENNY")}
+        positions = fold_transactions([txn(1, shares="1", price="0.1250", sort_index=10)])
+        (h,) = build_holdings(
+            positions, securities, {1: lp(1, "0.1250")}, {}, [], today=date(2026, 8, 14)
+        )
+        assert h.cost_basis == D("0.13")
+
+    def test_shares_quantize_to_6dp_half_up(self):
+        positions = fold_transactions(
+            [
+                txn(1, shares="1.0000005", price="10", sort_index=10),
+            ]
+        )
+        securities = {1: sec(1, "FRAC")}
+        (h,) = build_holdings(
+            positions, securities, {1: lp(1, "10")}, {}, [], today=date(2026, 8, 14)
+        )
+        assert h.shares == D("1.000001")
 
     def test_dividends_collected_feeds_xirr_flows(self):
         div = DividendPayment(
