@@ -10,11 +10,15 @@ from app.database import get_db
 from app.importer.cells import slugify
 from app.models import MonthlyCashflow, MonthlySpending, SpendingCategory
 from app.schemas.spending import (
+    AmountEntry,
     CategoryCreate,
     CategoryOut,
     CategorySeries,
     CategoryUpdate,
     MatrixOut,
+    SpendingMonthOut,
+    SpendingMonthUpsert,
+    SpendingUpsertResult,
     YearCategoryTotal,
     YearlyOut,
     YearRollup,
@@ -240,3 +244,87 @@ async def yearly(db: AsyncSession = Depends(get_db)) -> YearlyOut:
             )
         )
     return YearlyOut(years=rollups)
+
+
+@router.get("/months/{month}", response_model=SpendingMonthOut)
+async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> SpendingMonthOut:
+    require_first_of_month(month)
+    rows = list(
+        (
+            await db.execute(
+                select(MonthlySpending)
+                .where(MonthlySpending.month == month)
+                .order_by(MonthlySpending.category_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cashflow = await db.get(MonthlyCashflow, month)
+    return SpendingMonthOut(
+        month=month,
+        exists=bool(rows) or cashflow is not None,
+        net_pay=None if cashflow is None else cashflow.net_pay,
+        amounts=[AmountEntry(category_id=r.category_id, amount=r.amount) for r in rows],
+    )
+
+
+@router.put("/months/{month}", response_model=SpendingUpsertResult)
+async def put_month(
+    month: date, body: SpendingMonthUpsert, db: AsyncSession = Depends(get_db)
+) -> SpendingUpsertResult:
+    require_first_of_month(month)
+    ids = [entry.category_id for entry in body.amounts]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(status_code=422, detail="duplicate category_id in amounts")
+    quantized: dict[int, Decimal] = {
+        entry.category_id: quantize_money(entry.amount, f"amount[category_id={entry.category_id}]")
+        for entry in body.amounts
+    }
+    net_pay_provided = "net_pay" in body.model_fields_set and body.net_pay is not None
+    net_pay_value = quantize_money(body.net_pay, "net_pay") if net_pay_provided else None
+    if net_pay_value is not None and net_pay_value < 0:
+        # Take-home pay can't be negative; a typo'd minus sign would flip the
+        # savings-rate denominator into flattering nonsense (Task 7 review).
+        raise HTTPException(status_code=422, detail="net_pay must be non-negative")
+    if ids:
+        known = set(
+            (
+                await db.execute(select(SpendingCategory.id).where(SpendingCategory.id.in_(ids)))
+            ).scalars()
+        )
+        missing = sorted(set(ids) - known)
+        if missing:
+            raise HTTPException(status_code=422, detail=f"unknown category_id(s): {missing}")
+
+    existing = {
+        row.category_id: row
+        for row in (
+            await db.execute(select(MonthlySpending).where(MonthlySpending.month == month))
+        ).scalars()
+    }
+    created = updated = unchanged = 0
+    for category_id, value in quantized.items():
+        row = existing.get(category_id)
+        if row is None:
+            db.add(MonthlySpending(month=month, category_id=category_id, amount=value))
+            created += 1
+        elif row.amount != value:
+            row.amount = value
+            updated += 1
+        else:
+            unchanged += 1
+    if net_pay_provided:
+        cashflow = await db.get(MonthlyCashflow, month)
+        if cashflow is None:
+            db.add(MonthlyCashflow(month=month, net_pay=net_pay_value))
+        else:
+            cashflow.net_pay = net_pay_value
+    await db.commit()
+    return SpendingUpsertResult(
+        month=month,
+        created=created,
+        updated=updated,
+        unchanged=unchanged,
+        net_pay_set=net_pay_provided,
+    )

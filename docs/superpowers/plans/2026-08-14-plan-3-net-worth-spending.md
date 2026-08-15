@@ -2069,7 +2069,7 @@ cd .. && git add backend/app/api/spending.py backend/tests/test_spending_api.py 
 - Modify: `backend/app/api/spending.py` (append)
 - Modify: `backend/tests/test_spending_api.py` (append)
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 async def test_get_spending_month(auth_client, db):
@@ -2142,9 +2142,9 @@ async def test_put_spending_month_validation(auth_client, db):
     ).status_code == 422
 ```
 
-- [ ] **Step 2: Run — expect FAIL.**
+- [x] **Step 2: Run — expect FAIL.**
 
-- [ ] **Step 3: Append endpoints**
+- [x] **Step 3: Append endpoints**
 
 ```python
 @router.get("/months/{month}", response_model=SpendingMonthOut)
@@ -2241,7 +2241,7 @@ async def put_month(
     )
 ```
 
-- [ ] **Step 4: Run — expect PASS; full backend gate; boot smoke; commit**
+- [x] **Step 4: Run — expect PASS; full backend gate; boot smoke; commit**
 
 ```bash
 .venv/Scripts/python -m pytest tests/test_spending_api.py -q -W error

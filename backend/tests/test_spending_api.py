@@ -152,3 +152,93 @@ async def test_yearly_rollups(auth_client, db):
     assert y26["total"] == "2500.00"  # 400 + 0 + 2100
     assert y26["net_pay_total"] == "0.00"
     assert y26["savings_rate"] is None  # zero net pay -> undefined, not -inf
+
+
+async def test_get_spending_month(auth_client, db):
+    food, rent = await _seed_spending(db)
+    body = (await auth_client.get("/api/v1/spending/months/2025-12-01")).json()
+    assert body["exists"] is True
+    assert body["net_pay"] == "10000.00"
+    assert {a["category_id"]: a["amount"] for a in body["amounts"]} == {
+        food.id: "500.00",
+        rent.id: "2000.00",
+    }
+    empty = (await auth_client.get("/api/v1/spending/months/2030-01-01")).json()
+    assert empty == {
+        "month": "2030-01-01",
+        "exists": False,
+        "net_pay": None,
+        "amounts": [],
+    }
+    assert (await auth_client.get("/api/v1/spending/months/2030-01-02")).status_code == 422
+
+
+async def test_put_spending_month_upserts_and_net_pay_optional(auth_client, db):
+    food, rent = await _seed_spending(db)
+    put = "/api/v1/spending/months/2026-03-01"
+    resp = await auth_client.put(
+        put,
+        json={
+            "net_pay": "9000.005",
+            "amounts": [
+                {"category_id": food.id, "amount": "123.456"},
+                {"category_id": rent.id, "amount": "2100.00"},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "month": "2026-03-01",
+        "created": 2,
+        "updated": 0,
+        "unchanged": 0,
+        "net_pay_set": True,
+    }
+    read = (await auth_client.get(put)).json()
+    assert read["net_pay"] == "9000.01"  # HALF_UP
+    assert {a["category_id"]: a["amount"] for a in read["amounts"]}[food.id] == "123.46"
+
+    # Omitting net_pay leaves it untouched; identical amount counts unchanged.
+    resp = await auth_client.put(
+        put,
+        json={
+            "amounts": [{"category_id": food.id, "amount": "123.46"}],
+        },
+    )
+    assert resp.json() == {
+        "month": "2026-03-01",
+        "created": 0,
+        "updated": 0,
+        "unchanged": 1,
+        "net_pay_set": False,
+    }
+    assert (await auth_client.get(put)).json()["net_pay"] == "9000.01"
+
+
+async def test_put_spending_month_validation(auth_client, db):
+    food, rent = await _seed_spending(db)
+    put = "/api/v1/spending/months/2026-03-01"
+    assert (
+        await auth_client.put(
+            put,
+            json={
+                "amounts": [
+                    {"category_id": food.id, "amount": "1"},
+                    {"category_id": food.id, "amount": "2"},
+                ]
+            },
+        )
+    ).status_code == 422
+    assert (
+        await auth_client.put(
+            put,
+            json={
+                "amounts": [
+                    {"category_id": 999, "amount": "1"},
+                ]
+            },
+        )
+    ).status_code == 422
+    assert (await auth_client.put("/api/v1/spending/months/2026-03-15", json={})).status_code == 422
+    # Take-home pay can't be negative (savings-rate denominator sanity).
+    assert (await auth_client.put(put, json={"net_pay": "-1", "amounts": []})).status_code == 422
