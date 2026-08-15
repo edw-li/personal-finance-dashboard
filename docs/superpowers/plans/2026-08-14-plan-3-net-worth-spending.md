@@ -2649,14 +2649,14 @@ git commit -m "feat: api client timeout + typed net-worth/spending fetchers"
 - Create: `src/utils/format.ts`, `src/utils/format.test.ts`
 - Create: `src/utils/months.ts`, `src/utils/months.test.ts`
 
-- [ ] **Step 1: Install echarts**
+- [x] **Step 1: Install echarts**
 
 ```bash
 npm install echarts@^6.1.0
 ```
 Expected: lockfile gains echarts + zrender only. (echarts 6 keeps the v5 `echarts/core` API; if the wrapper's types fail to compile under 6.x, fall back to `npm install echarts@^5.6.0` and record it — the code below is valid for both.)
 
-- [ ] **Step 2: Write failing util tests**
+- [x] **Step 2: Write failing util tests**
 
 `src/utils/format.test.ts`:
 
@@ -2729,9 +2729,9 @@ describe('currentMonthIso', () => {
 })
 ```
 
-- [ ] **Step 3: Run — expect FAIL** (`npm test` — modules missing).
+- [x] **Step 3: Run — expect FAIL** (`npm test` — modules missing).
 
-- [ ] **Step 4: Implement the utils**
+- [x] **Step 4: Implement the utils**
 
 `src/utils/format.ts`:
 
@@ -2813,9 +2813,9 @@ export function currentMonthIso(): string {
 }
 ```
 
-- [ ] **Step 5: Run — expect PASS.**
+- [x] **Step 5: Run — expect PASS.**
 
-- [ ] **Step 6: Chart registration + theme + wrapper**
+- [x] **Step 6: Chart registration + theme + wrapper**
 
 `src/charts/theme.ts`:
 
@@ -3025,7 +3025,7 @@ export default function EChart({
 }
 ```
 
-- [ ] **Step 7: Full frontend gate + commit**
+- [x] **Step 7: Full frontend gate + commit**
 
 ```bash
 npm test && npm run lint && npm run build
