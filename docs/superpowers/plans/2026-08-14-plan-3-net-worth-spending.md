@@ -2911,6 +2911,9 @@ export const FINANCE_THEME = {
     textStyle: { color: INK, fontSize: 12 },
     extraCssText: 'box-shadow: 0 4px 16px rgba(0,0,0,0.4); border-radius: 8px;',
   },
+  // echarts 6's default visualMap label token (#54555a) is ~2.3:1 on our surface and
+  // does not follow textStyle — pin it here so heatmaps don't compensate per-page.
+  visualMap: { textStyle: { color: MUTED } },
 }
 ```
 
@@ -3014,7 +3017,12 @@ export default function EChart({
 
   useEffect(() => {
     // notMerge: pages always send complete options; merging stale series causes ghosts.
-    chartRef.current?.setOption({ animation: !REDUCED_MOTION, ...option }, { notMerge: true })
+    // Reduced-motion is forced AFTER the spread — a page option must never re-enable
+    // animation against the user's OS preference (Global rules a11y promise).
+    chartRef.current?.setOption(
+      { ...option, ...(REDUCED_MOTION ? { animation: false } : {}) },
+      { notMerge: true },
+    )
   }, [option])
 
   return <div ref={containerRef} style={{ height, width: '100%' }} />
@@ -5191,6 +5199,7 @@ Seed list — extend with anything learned during execution:
   6.1.0 landed** (no type fights; lockfile adds echarts+zrender+tslib). Measured cost
   once a page imports EChart: main chunk 243.69→881.87 kB raw (77.41→292.62 kB gzip) —
   trips vite's 500 kB warning; Plan 6 should add manualChunks or lazy-load chart routes.
+  (881.87 was measured WITH DataZoom; post-drop probe = 846.23 kB raw / 281.40 gzip.)
   DataZoom was dropped from use([]) as unused. jsdom CANNOT mount <EChart> (canvas
   getContext null) — any future RTL test rendering a chart page must mock
   HTMLCanvasElement.getContext or add the canvas package; Plan 3's RTL tests avoid
