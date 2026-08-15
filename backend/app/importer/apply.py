@@ -153,7 +153,9 @@ async def apply_positions(
     existing = {
         t.sort_index: t
         for t in (
-            await db.execute(select(PositionTransaction).where(PositionTransaction.sort_index > 0))
+            await db.execute(
+                select(PositionTransaction).where(PositionTransaction.source == "import")
+            )
         ).scalars()
     }
     incoming_indexes: set[int] = set()
@@ -171,7 +173,7 @@ async def apply_positions(
         }
         row = existing.get(txn.sort_index)
         if row is None:
-            db.add(PositionTransaction(sort_index=txn.sort_index, **fields))
+            db.add(PositionTransaction(sort_index=txn.sort_index, source="import", **fields))
             txn_counts.creates += 1
             report.add_sample(
                 f"position_transactions[{txn.sort_index}]: {txn.type} "
@@ -185,8 +187,10 @@ async def apply_positions(
                 report,
                 f"position_transactions[{txn.sort_index}]",
             )
-    # Sync: importer-owned rows (sort_index > 0) whose sheet row disappeared are deleted;
-    # UI-created rows keep the default sort_index 0 and are never touched (Plan 4 contract).
+    # Sync: importer-owned rows (source='import') whose sheet row disappeared are deleted.
+    # UI-created rows (source='ui') are invisible to the sync at ANY sort_index (Plan 4
+    # contract, superseding Plan 2's sort_index-0 rule) — so a sheet row may land on a UI
+    # row's sort_index; both survive and cost-basis folding tie-breaks the pair on id.
     for sort_index, row in existing.items():
         if sort_index not in incoming_indexes:
             await db.delete(row)

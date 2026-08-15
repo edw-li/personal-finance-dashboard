@@ -27,7 +27,7 @@ from app.models import (
     Security,
     SpendingCategory,
 )
-from tests.workbook_builder import build_workbook, load_readonly
+from tests.workbook_builder import build_workbook, default_positions_rows, load_readonly
 
 
 def sheets(**overrides):
@@ -129,15 +129,17 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
             shares=Decimal("1"),
             price=Decimal("1"),
             sort_index=990,
+            source="import",
         )
     )
-    db.add(  # UI-owned row: sort_index 0 default — never touched by the sync
+    db.add(  # UI-owned row: source 'ui' keeps it out of the sync's view entirely
         PositionTransaction(
             security_id=acme_id,
             account="Manual",
             type="buy",
             shares=Decimal("2"),
             price=Decimal("2"),
+            source="ui",
         )
     )
     await db.commit()
@@ -149,6 +151,81 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
     assert report2.entities["position_transactions"].deletes == 1
     remaining = (await db.execute(select(PositionTransaction.account))).scalars().all()
     assert "Manual" in remaining and "Old" not in remaining
+
+
+async def test_apply_positions_preserves_ui_rows_any_sort_index(db):
+    """UI-created rows (source='ui') survive re-import even at import-like sort_index."""
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await db.commit()
+    acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+    db.add(
+        PositionTransaction(
+            security_id=acme_id,
+            account="UI Acct",
+            type="buy",
+            shares=Decimal("1"),
+            price=Decimal("5"),
+            sort_index=990,  # the Plan 4 API assigns max(all) + 10 — deep in importer territory
+            source="ui",
+        )
+    )
+    await db.commit()
+    empty = sheets(positions=default_positions_rows()[:1])  # header only: sheet lost every row
+    report2 = SheetReport()
+    await apply_positions(db, parse_positions(empty["Positions"]), by_name, report2)
+    await db.commit()
+    # a sync that deletes strays must NOT delete (or even load) the UI row
+    assert report2.entities["position_transactions"].deletes == 0
+    remaining = (await db.execute(select(PositionTransaction))).scalars().all()
+    assert [t.source for t in remaining] == ["ui"]
+
+
+async def test_apply_positions_marks_created_rows_import(db):
+    """Created rows are stamped source='import' — the key the sync owns them by."""
+    wb = sheets(positions=default_positions_rows()[:2])  # header + one Acme buy
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    row = (await db.execute(select(PositionTransaction))).scalar_one()
+    assert row.source == "import"
+    assert row.sort_index > 0  # sheet row order preserved; no longer an ownership signal
+
+
+async def test_apply_positions_sort_index_collision_leaves_ui_row_alone(db):
+    """An incoming sheet row whose sort_index equals a UI row's must create a NEW
+    import row, not adopt/mutate the UI row."""
+    wb = sheets(positions=default_positions_rows()[:2])  # header + one row -> sort_index 20
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await db.commit()
+    acme_id = (await db.execute(select(Security).where(Security.ticker == "ACME"))).scalar_one().id
+    db.add(
+        PositionTransaction(
+            security_id=acme_id,
+            account="UI Acct",
+            type="sell",
+            shares=Decimal("3"),
+            price=Decimal("7"),
+            sort_index=20,  # collides with the incoming sheet row (folding tie-breaks on id)
+            source="ui",
+        )
+    )
+    await db.commit()
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    rows = (
+        (await db.execute(select(PositionTransaction).order_by(PositionTransaction.id)))
+        .scalars()
+        .all()
+    )
+    assert sorted(r.source for r in rows) == ["import", "ui"]
+    assert [r.sort_index for r in rows] == [20, 20]
+    assert report.entities["position_transactions"].creates == 1
+    ui_row = next(r for r in rows if r.source == "ui")
+    assert (ui_row.account, ui_row.type, ui_row.shares) == ("UI Acct", "sell", Decimal("3.000000"))
 
 
 async def test_apply_net_worth_accounts_snapshots_balances(db):
