@@ -4316,9 +4316,10 @@ git commit -m "feat: holdings table with SVG sparklines (sortable, jsdom-tested)
 - Create: `src/components/portfolio/SecuritiesPanel.tsx`
 
 - [ ] **Step 1: Register the new chart types** in `src/charts/echarts.ts`: add
-`PieChart, TreemapChart` to the `echarts/charts` import and the `use([...])` list, and
-`PieSeriesOption, TreemapSeriesOption` to the type import + `EChartsOption` union.
-This is the ONLY file that may touch echarts registration (Plan 3 note).
+`TreemapChart` to the `echarts/charts` import and the `use([...])` list, and
+`TreemapSeriesOption` to the type import + `EChartsOption` union. (`PieChart` is ALREADY
+registered — main's wave-2 merge brought a spending drill-in pie.) This is the ONLY file
+that may touch echarts registration (Plan 3 note).
 
 - [ ] **Step 2: Implement `AllocationPanel.tsx`**
 
