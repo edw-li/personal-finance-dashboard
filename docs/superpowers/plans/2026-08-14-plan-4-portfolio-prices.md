@@ -639,9 +639,7 @@ def test_xnpv_at_zero_rate_is_plain_sum():
 def test_root_outside_domain_returns_none():
     # +1,000,000% return in a year: the root lies above RATE_HI, and lo/hi NPVs share
     # a sign, so the bisection guard bails rather than fabricating a clamped rate.
-    assert (
-        xirr([(date(2020, 1, 1), Decimal("-1")), (date(2021, 1, 1), Decimal("10000"))]) is None
-    )
+    assert xirr([(date(2020, 1, 1), Decimal("-1")), (date(2021, 1, 1), Decimal("10000"))]) is None
 ```
 
 - [ ] **Step 2: Run to verify failure** — expected: `ModuleNotFoundError: app.services.xirr`.
