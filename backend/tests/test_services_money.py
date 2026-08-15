@@ -12,6 +12,7 @@ from app.services.money import (
     quantize_price,
     quantize_shares,
     require_first_of_month,
+    require_reasonable_date,
 )
 
 
@@ -83,6 +84,16 @@ def test_require_first_of_month():
     with pytest.raises(HTTPException) as exc:
         require_first_of_month(date(2026, 8, 14))
     assert exc.value.status_code == 422
+
+
+def test_require_reasonable_date_bounds():
+    assert require_reasonable_date(date(1900, 1, 1), "d") == date(1900, 1, 1)
+    assert require_reasonable_date(date(2100, 12, 31), "d") == date(2100, 12, 31)
+    for bad in (date(1899, 12, 31), date(2101, 1, 1)):
+        with pytest.raises(HTTPException) as exc:
+            require_reasonable_date(bad, "ex_div_date")
+        assert exc.value.status_code == 422
+        assert "ex_div_date" in exc.value.detail
 
 
 def test_mom_pct():

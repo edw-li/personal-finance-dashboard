@@ -80,6 +80,32 @@ async def test_create_security_rejects_bad_ticker_and_type(auth_client):
     assert (await auth_client.get(SECURITIES)).json() == []  # no partial writes
 
 
+async def test_ticker_must_start_alphanumeric(auth_client):
+    # Leading dot/dash tickers are degenerate: the provider maps '.' -> '-' for Yahoo, so
+    # ".NVDA" and "-NVDA" would collide on one symbol while occupying two rows.
+    for degenerate in (".", "-NVDA", ".BRK"):
+        resp = await auth_client.post(
+            SECURITIES, json={"ticker": degenerate, "name": "Nope", "holding_type": "stock"}
+        )
+        assert resp.status_code == 422, degenerate
+    ok = await _create_security(auth_client, ticker="BRK.B", name="Berkshire Hathaway B")
+    assert ok["ticker"] == "BRK.B"  # interior dots/dashes stay legal
+
+
+async def test_blank_name_rejected(auth_client):
+    blank = await auth_client.post(
+        SECURITIES, json={"ticker": "BLNK", "name": "   ", "holding_type": "stock"}
+    )
+    assert blank.status_code == 422  # survives min_length, dies after strip()
+    assert "name" in blank.json()["detail"]
+    created = await _create_security(auth_client, ticker="GOOD", name="Good Name")
+    patched_blank = await auth_client.patch(f"{SECURITIES}/{created['id']}", json={"name": "   "})
+    assert patched_blank.status_code == 422  # PATCH enforces create's rule
+    renamed = await auth_client.patch(f"{SECURITIES}/{created['id']}", json={"name": " Real Name "})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Real Name"  # stored trimmed, like create
+
+
 async def test_create_security_bounds_annual_dividend(auth_client):
     # Numeric(10,4) holds six integer digits — 10^6 must 422, never a bare DBAPIError 500.
     too_big = await auth_client.post(
@@ -103,8 +129,56 @@ async def test_create_security_bounds_annual_dividend(auth_client):
         },
     )
     assert negative.status_code == 422
+    sub_quantum = await auth_client.post(
+        SECURITIES,
+        json={
+            "ticker": "TINY",
+            "name": "Barely Negative",
+            "holding_type": "stock",
+            "annual_dividend": "-0.00001",  # quantizes to -0.0000, which compares == 0
+        },
+    )
+    assert sub_quantum.status_code == 422
     ok = await _create_security(auth_client, ticker="SCHD", annual_dividend="1.23456")
     assert ok["annual_dividend"] == "1.2346"  # 4 dp, HALF_UP
+
+    # PATCH runs the identical guard.
+    for bad in ("-1", "-0.00001", "1000000"):
+        resp = await auth_client.patch(f"{SECURITIES}/{ok['id']}", json={"annual_dividend": bad})
+        assert resp.status_code == 422, bad
+    # A rejected PATCH must leave the row untouched — validate everything, then apply.
+    rejected = await auth_client.patch(
+        f"{SECURITIES}/{ok['id']}", json={"name": "Mutated", "annual_dividend": "-1"}
+    )
+    assert rejected.status_code == 422
+    stored = (await auth_client.get(SECURITIES)).json()
+    assert [s for s in stored if s["id"] == ok["id"]] == [ok]
+
+
+async def test_ex_div_date_must_be_reasonable(auth_client):
+    # A mistyped year must 422 at the boundary, not travel into XIRR/day-Δ spans later.
+    absurd = await auth_client.post(
+        SECURITIES,
+        json={
+            "ticker": "FUTR",
+            "name": "Far Future",
+            "holding_type": "stock",
+            "ex_div_date": "9999-12-31",
+        },
+    )
+    assert absurd.status_code == 422
+    assert "ex_div_date" in absurd.json()["detail"]
+    created = await _create_security(auth_client, ticker="NOW", name="Present Day")
+    patched = await auth_client.patch(
+        f"{SECURITIES}/{created['id']}", json={"ex_div_date": "9999-12-31"}
+    )
+    assert patched.status_code == 422
+    assert "ex_div_date" in patched.json()["detail"]
+    fine = await auth_client.patch(
+        f"{SECURITIES}/{created['id']}", json={"ex_div_date": "2026-08-14"}
+    )
+    assert fine.status_code == 200, fine.text
+    assert fine.json()["ex_div_date"] == "2026-08-14"
 
 
 async def test_patch_security_updates_fields_never_ticker(auth_client):
@@ -176,6 +250,26 @@ async def test_patch_security_null_clears_nullable_only(auth_client):
     assert body["is_active"] is True
 
 
+async def test_patch_single_field_leaves_others_untouched(auth_client):
+    created = await _create_security(
+        auth_client,
+        ticker="JEPI",
+        name="JPMorgan Equity Premium",
+        industry="ETF",
+        annual_dividend="4.5",
+        ex_div_date="2026-06-01",
+    )
+    resp = await auth_client.patch(f"{SECURITIES}/{created['id']}", json={"is_active": False})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["is_active"] is False
+    # exclude_unset: omitted fields keep their stored values — a PATCH is never a PUT.
+    assert body["name"] == "JPMorgan Equity Premium"
+    assert body["industry"] == "ETF"
+    assert body["annual_dividend"] == "4.5000"
+    assert body["ex_div_date"] == "2026-06-01"
+
+
 async def test_delete_security_guarded_when_referenced(auth_client, db):
     held = await _create_security(auth_client, ticker="SGOV", name="iShares 0-3 Month T-Bill")
     db.add(
@@ -223,6 +317,16 @@ async def test_delete_security_guarded_when_referenced(auth_client, db):
     assert leftovers == []  # ... they CASCADE away with it
 
     assert (await auth_client.delete(f"{SECURITIES}/999")).status_code == 404
+
+
+async def test_delete_guard_fires_for_dividend_only_security(auth_client, db):
+    paid = await _create_security(auth_client, ticker="O", name="Realty Income")
+    db.add(DividendPayment(security_id=paid["id"], pay_date=date(2026, 1, 1), amount=Decimal("5")))
+    await db.commit()
+    guarded = await auth_client.delete(f"{SECURITIES}/{paid['id']}")
+    assert guarded.status_code == 409  # zero transactions must not disarm the guard
+    assert "1 dividends" in guarded.json()["detail"]
+    assert (await db.get(Security, paid["id"])) is not None
 
 
 async def test_securities_require_auth(client):

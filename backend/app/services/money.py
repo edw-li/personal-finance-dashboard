@@ -66,6 +66,21 @@ def require_first_of_month(month: date) -> date:
     return month
 
 
+DATE_MIN = date(1900, 1, 1)
+DATE_MAX = date(2100, 12, 31)
+
+
+def require_reasonable_date(value: date, field: str) -> date:
+    """Century-bounded sanity guard: a mistyped year (1026, 3026) must 422 at the API
+    boundary, not surface as absurd spans in XIRR/day-Δ/refresh windows downstream."""
+    if not DATE_MIN <= value <= DATE_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field}: date must be between {DATE_MIN} and {DATE_MAX}",
+        )
+    return value
+
+
 def mom_pct(curr: Decimal, prev: Decimal | None) -> Decimal | None:
     """(curr - prev) / |prev|; None when prev is missing or zero.
 
