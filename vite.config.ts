@@ -8,7 +8,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8000',
+      // 127.0.0.1, not localhost: Node >=17 resolves localhost to ::1 first, but
+      // uvicorn binds IPv4 only — every dev API call would 500 with ECONNREFUSED ::1.
+      '/api': 'http://127.0.0.1:8000',
     },
   },
   test: {

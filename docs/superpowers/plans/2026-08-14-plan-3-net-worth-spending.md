@@ -5267,7 +5267,7 @@ Run by the controller directly (like Plan 2's Task 15), not a subagent — it to
 
 **Prereqs:** dev DB up; migration applied (Task 1 did it); backend on :8000 from the worktree venv; `npm run dev` on :5173.
 
-- [ ] **Step 1: Net-worth identity reconciliation — all 37 months**
+- [x] **Step 1: Net-worth identity reconciliation — all 37 months**
 
 Write `reconcile_plan3.py` in the session scratchpad (NOT the repo). It must:
 1. Log in via `httpx` (`POST /api/v1/auth/login`, admin@example.com / changeme123) and fetch `/api/v1/net-worth/timeseries`.
@@ -5278,14 +5278,14 @@ Write `reconcile_plan3.py` in the session scratchpad (NOT the repo). It must:
 
 Expected: **37/37 within tolerance.** Any miss = stop, debug (superpowers:systematic-debugging), fix, amend the plan.
 
-- [ ] **Step 2: Spending spot-checks**
+- [x] **Step 2: Spending spot-checks**
 
 Same script or a second one:
 1. `/api/v1/spending/matrix`: assert 29 months (2023-08…2025-12); assert the 2025-12 total equals the sheet's TOTAL cell for that row (read c21 of the Spending sheet) to the cent; assert `savings_rate` for 2025-12 equals `(net_pay − total)/net_pay` computed from the sheet's own c22/c21 to 6 dp.
 2. Print sheet `4% Portfolio` (c23) vs API `four_pct_rule` for the last 6 populated months with % deviation — **record the typical deviation in the Task 15 results block** (expected: within a few %; the sheet column is unreproducible — Verified rollup semantics).
 3. `/api/v1/spending/yearly`: assert 2024's total equals the sheet's 2024 yearly rollup row TOTAL (the row where c1 is numeric `2024`).
 
-- [ ] **Step 3: Browser walkthrough (the visual gate)**
+- [x] **Step 3: Browser walkthrough (the visual gate)** — adapted, see results
 
 With both servers up, in the browser (use the claude-in-chrome skill if driving programmatically; screenshots at each stop):
 1. `/net-worth`: stacked chart bands ordered cash→other with liabilities below zero and the ink NW line + end label; quarterly toggle drops to quarter-end months; component rows indented + badged; drill-down caps at 3 and survivors keep colors when one is removed; tooltips show currency at every x.
@@ -5296,7 +5296,7 @@ With both servers up, in the browser (use the claude-in-chrome skill if driving 
 4. Keyboard pass: tab through ribbon chips / segmented control / wizard inputs — focus visible everywhere; wizard is fully operable without a mouse.
 5. Anti-pattern sweep (dataviz `anti-patterns.md`): no dual axis, no >8 hues, no dashed gridlines, no value-on-every-point, axis bands not clipped by card heights.
 
-- [ ] **Step 4: Record results in this doc**
+- [x] **Step 4: Record results in this doc**
 
 Append a `### Task 15 results` block below this task: reconciliation pass counts, the 4%-line deviation summary (percentages only, no dollar values), walkthrough findings, screenshots taken (paths stay in the session, not the repo). Commit:
 
@@ -5304,6 +5304,40 @@ Append a `### Task 15 results` block below this task: reconciliation pass counts
 git add docs/superpowers/plans/2026-08-14-plan-3-net-worth-spending.md
 git commit -m "docs: record Plan 3 real-data reconciliation results"
 ```
+
+### Task 15 results (executed 2026-08-14; workbook + dev DB unmodified net of cleanup)
+
+- **Step 1 — NW identity: PASS 37/37 months** (api NW + after-tax-401-k == sheet NET
+  WORTH), worst |diff| $0.008 — pure 0.001-sentinel normalization cents, far inside
+  the $0.05 tolerance. API months == sheet months exactly (37, same order).
+- **Step 2 — spending: PASS.** 29 months (2023-08..2025-12); 2025-12 total cent-exact
+  vs the sheet TOTAL cell; savings rate == (net_pay−total)/net_pay at 6dp; yearly 2024
+  total cent-exact vs the sheet rollup row. 4%-line deviation vs the sheet column over
+  the last 6 populated months: −1.35% .. +0.94% (matches the planning expectation for
+  the unreproducible mid-month sheet base; no gate).
+- **Step 3 — adapted: browser automation unavailable this session** (extension not
+  connected; user declined install mid-run). Executed instead:
+  - **Wizard-shaped API E2E (2026-10 round trip) against the real dev DB: PASS** —
+    prefill from month−1 (2026-09) for all 25 accounts, sequential PUTs exactly as the
+    page sends them (recorded_on + notes:null; 19 zero amounts + net_pay): snapshot
+    created, NW copied exactly (MoM delta 0.00 in /summary), matrix row present with
+    savings 1.000000; idempotent retry all-unchanged; cleanup deleted the 3 row-sets
+    and the full reconciliation re-ran **PASS 37/37** (dataset pristine).
+  - **SPA + proxy smoke: PASS after one fix.** Discovered a latent Plan-1 dev-proxy
+    bug: vite's `'/api': 'http://localhost:8000'` resolves localhost→::1 on Node ≥17
+    while uvicorn binds IPv4 → every dev API call 500s (ECONNREFUSED ::1:8000). Fixed
+    to `http://127.0.0.1:8000` (dev-only; prod is nginx). Verified: shell serves,
+    SPA routes 200, authenticated login→timeseries→matrix all 200 through :5173.
+  - The RTL suites already pin the wizard's UI wiring (3 tests incl. month-switch
+    resets); chart options were review-verified against the frozen dataviz rules.
+  - **REMAINING FOR THE USER (visual-only):** interactive click-through of
+    /net-worth, /spending, /update (chart rendering, label density, tooltips,
+    keyboard walk). Servers: `uvicorn app.main:app --port 8000` (worktree venv) +
+    `npm run dev`; login admin@example.com / changeme123. No screenshots taken.
+- **Spec-text correction noted:** this task's Step 3 text said a far-future month
+  "pre-fills from 2026-09 (latest prior)" — the wizard (per Task 14's spec) fetches
+  exactly month−1, so far jumps pre-fill 0.00. Correct for the real ritual (next
+  month's minus-one IS the latest snapshot); text expectation was wrong, not the code.
 
 ---
 
