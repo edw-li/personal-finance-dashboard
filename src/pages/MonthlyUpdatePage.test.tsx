@@ -20,7 +20,7 @@ import * as spendingApi from '../api/spending'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
-  sort_order: 1, is_active: true, is_component: false,
+  sort_order: 1, is_active: true, is_component: false, parent_account_id: null,
 }
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 

@@ -19,6 +19,7 @@ async def test_create_and_list_accounts(auth_client):
     assert body["slug"] == "fidelity-hsa"
     assert body["is_active"] is True
     assert body["is_component"] is False
+    assert body["parent_account_id"] is None
 
     resp = await auth_client.get("/api/v1/net-worth/accounts")
     assert resp.status_code == 200

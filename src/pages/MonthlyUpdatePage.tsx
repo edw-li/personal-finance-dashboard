@@ -12,6 +12,7 @@ import { fetchCategories, fetchSpendingMonth, putSpendingMonth } from '../api/sp
 import MonthRibbon from '../components/MonthRibbon'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
 import type { AccountOut, CategoryOut } from '../types/api'
+import { nestComponents } from '../utils/accounts'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import '../components/panels.css'
@@ -93,7 +94,9 @@ export default function MonthlyUpdatePage() {
       .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, timeseries]) => {
         setError(null)
         setSaved(null)
-        const activeAccounts = accountList.filter((a) => a.is_active)
+        // Nested order: component inputs sit right after their aggregate's input
+        // (the group filter below preserves it — components share the parent's group).
+        const activeAccounts = nestComponents(accountList.filter((a) => a.is_active))
         setAccounts(activeAccounts)
         setCategories(categoryList.filter((c) => c.is_active))
         setMonthExisted(thisMonth.exists)

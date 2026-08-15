@@ -21,6 +21,13 @@ class Account(Base):
     # Source-bucket columns the sheet tracks inside an aggregate account (the two Fidelity
     # 401(k)s). Excluded from every computed rollup; user-owned (the importer never diffs it).
     is_component: Mapped[bool] = mapped_column(default=False)
+    # The aggregate a component folds into. Presentation-only (rollups key off
+    # is_component alone): the UI lists components under their parent instead of at
+    # their sheet-column position. Set at import-create / migration backfill; user-owned
+    # after, like is_component.
+    parent_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL"), default=None
+    )
 
 
 class NetWorthSnapshot(Base):

@@ -177,7 +177,9 @@ export default function SpendingPage() {
       })
     }
     return {
-      grid: { left: 130, right: 24, top: 8, bottom: 64 },
+      // bottom must clear BOTH the 45°-rotated month labels (~48px) and the visualMap
+      // bar parked at bottom: 0 (~30px) — 64 made them overlap.
+      grid: { left: 130, right: 24, top: 8, bottom: 96 },
       tooltip: {
         // HTML formatter: category names are user text — escapeHtml is mandatory.
         formatter: (params) => {
@@ -390,7 +392,7 @@ export default function SpendingPage() {
           {heatmapOption && (
             <EChart
               option={heatmapOption}
-              height={Math.max(300, (matrix?.categories.length ?? 0) * 24 + 110)}
+              height={Math.max(332, (matrix?.categories.length ?? 0) * 24 + 142)}
             />
           )}
         </div>

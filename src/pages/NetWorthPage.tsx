@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
@@ -15,6 +15,7 @@ import {
   PALETTE,
 } from '../charts/theme'
 import type { AccountGroup, NetWorthSummary, NetWorthTimeseries } from '../types/api'
+import { nestComponents } from '../utils/accounts'
 import {
   formatCurrency,
   formatCurrencyCompact,
@@ -26,7 +27,8 @@ import '../components/panels.css'
 import './NetWorthPage.css'
 
 const ASSET_GROUPS = GROUP_ORDER.filter((g): g is AccountGroup => g !== 'liability')
-const MAX_DRILL = 3
+// One slot per validated palette hue (theme.ts: never cycle past 8).
+const MAX_DRILL = PALETTE.length
 
 function pctChange(curr: string | null, prev: string | null): number | null {
   if (curr === null || prev === null || Number(prev) === 0) return null
@@ -43,6 +45,9 @@ export default function NetWorthPage() {
   // Drill-down: selection order assigns the lowest free palette slot; removing one
   // never repaints the survivors (dataviz: color follows the entity, not its rank).
   const [drill, setDrill] = useState<{ accountId: number; slot: number }[]>([])
+  // Seed the drill-down once per visit so the card is never an empty box by default;
+  // a deliberate clear-all afterwards must stay cleared across refetches.
+  const seededDrillRef = useRef(false)
   // Ribbon coverage is captured ONLY from monthly responses — the quarterly fetch
   // filters months server-side and must not make covered months read as missing.
   const [coverageMonths, setCoverageMonths] = useState<string[]>([])
@@ -58,6 +63,23 @@ export default function NetWorthPage() {
         setSummary(sum)
         setError(null)
         if (granularity === 'monthly') setCoverageMonths(ts.months)
+        if (!seededDrillRef.current && ts.months.length > 0) {
+          seededDrillRef.current = true
+          // Default: the single biggest account by latest balance (signed, so
+          // liabilities never win; components skipped — their aggregate represents them).
+          const last = ts.months.length - 1
+          const valueById = new Map(ts.series.map((s) => [s.account_id, s.values[last]]))
+          const best = ts.accounts
+            .filter((a) => !a.is_component)
+            .map((a) => ({ id: a.id, value: Number(valueById.get(a.id) ?? 0) }))
+            .filter((c) => Number.isFinite(c.value))
+            .sort((a, b) => b.value - a.value)[0]
+          if (best) {
+            setDrill((current) =>
+              current.length > 0 ? current : [{ accountId: best.id, slot: 0 }],
+            )
+          }
+        }
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')
@@ -175,10 +197,14 @@ export default function NetWorthPage() {
       if (existing) return current.filter((d) => d.accountId !== accountId)
       if (current.length >= MAX_DRILL) return current
       const used = new Set(current.map((d) => d.slot))
-      const slot = [0, 1, 2].find((s) => !used.has(s)) ?? 0
+      const slot = Array.from({ length: MAX_DRILL }, (_, i) => i).find((s) => !used.has(s)) ?? 0
       return [...current, { accountId, slot }]
     })
   }
+
+  // Components sit under their parent aggregate (table indent + chip adjacency),
+  // not at their raw sheet-column sort position.
+  const orderedAccounts = useMemo(() => (data ? nestComponents(data.accounts) : []), [data])
 
   const months = data?.months ?? []
   const lastIndex = months.length - 1
@@ -284,10 +310,38 @@ export default function NetWorthPage() {
         </div>
 
         <div className="card span-12">
-          <h2 className="eyebrow">Accounts — latest {granularity === 'quarterly' ? 'quarter' : 'month'}</h2>
+          <h2 className="eyebrow">Account drill-down</h2>
           <p className="drill-hint">
-            Select up to {MAX_DRILL} accounts to compare their history below.
+            Pick up to {MAX_DRILL} accounts to compare their history. Clicking rows in the
+            accounts table below toggles them here too.
           </p>
+          <div className="chip-row">
+            {orderedAccounts.map((account) => {
+              const active = drill.find((d) => d.accountId === account.id)
+              // Slot hue goes on the BORDER, never the text (SpendingPage's chip rule).
+              return (
+                <button
+                  key={account.id}
+                  type="button"
+                  className={active ? 'chip active' : 'chip'}
+                  style={active ? { borderColor: PALETTE[active.slot] } : undefined}
+                  aria-pressed={!!active}
+                  onClick={() => toggleDrill(account.id)}
+                >
+                  {account.name}
+                </button>
+              )
+            })}
+          </div>
+          {drillOption ? (
+            <EChart option={drillOption} height={280} />
+          ) : (
+            !loading && <div className="empty-note">No accounts selected.</div>
+          )}
+        </div>
+
+        <div className="card span-12">
+          <h2 className="eyebrow">Accounts — latest {granularity === 'quarterly' ? 'quarter' : 'month'}</h2>
           <table className="data-table">
             <thead>
               <tr>
@@ -298,8 +352,8 @@ export default function NetWorthPage() {
               </tr>
             </thead>
             <tbody>
-              {data?.accounts.map((account) => {
-                const values = data.series.find((s) => s.account_id === account.id)?.values ?? []
+              {orderedAccounts.map((account) => {
+                const values = data?.series.find((s) => s.account_id === account.id)?.values ?? []
                 const curr = lastIndex >= 0 ? values[lastIndex] : null
                 const prev = lastIndex >= 1 ? values[lastIndex - 1] : null
                 const pct = pctChange(curr, prev)
@@ -359,13 +413,6 @@ export default function NetWorthPage() {
             from group totals and net worth.
           </p>
         </div>
-
-        {drillOption && (
-          <div className="card span-12">
-            <h2 className="eyebrow">Account drill-down</h2>
-            <EChart option={drillOption} height={280} />
-          </div>
-        )}
       </div>
     </div>
   )
