@@ -743,3 +743,21 @@ async def test_transaction_and_dividend_dates_must_be_reasonable(auth_client):
     assert patched_div.status_code == 422
     assert "pay_date" in patched_div.json()["detail"]
     assert (await auth_client.get(DIVIDENDS)).json() == [live.json()]  # amount stayed at 5.00
+
+
+async def test_blank_account_rejected_on_transactions(auth_client, db):
+    sec = await _create_security(auth_client, ticker="BLNK")
+    base = {"security_id": sec["id"], "type": "buy", "shares": "1", "price": "5"}
+    resp = await auth_client.post("/api/v1/portfolio/transactions", json={**base, "account": "   "})
+    assert resp.status_code == 422
+    assert "account" in resp.json()["detail"]
+    created = await auth_client.post(
+        "/api/v1/portfolio/transactions", json={**base, "account": " Robinhood "}
+    )
+    assert created.status_code == 201
+    assert created.json()["account"] == "Robinhood"
+    txn_id = created.json()["id"]
+    patched = await auth_client.patch(
+        f"/api/v1/portfolio/transactions/{txn_id}", json={"account": "  "}
+    )
+    assert patched.status_code == 422

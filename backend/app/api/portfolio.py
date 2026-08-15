@@ -55,6 +55,15 @@ def _validated_name(raw: str) -> str:
     return name
 
 
+def _validated_account(raw: str) -> str:
+    # A whitespace-only label passes min_length=1 and would fold a position under the
+    # empty string (Task 9 review) — same posture as _validated_name.
+    account = raw.strip()
+    if not account:
+        raise HTTPException(status_code=422, detail="account must not be blank")
+    return account
+
+
 def _validated_annual_dividend(value: Decimal) -> Decimal:
     quantized = quantize_price(value, "annual_dividend", max_abs=MONEY_MAX_ABS_10_4)
     # Check the RAW value too: "-0.00001" quantizes to -0.0000 which compares == 0.
@@ -243,7 +252,7 @@ async def create_transaction(
     # the same sort_index for a new row — folding tie-breaks on id; accepted.
     txn = PositionTransaction(
         security_id=body.security_id,
-        account=body.account.strip(),
+        account=_validated_account(body.account),
         type=body.type,
         txn_date=body.txn_date,
         sort_index=max_index + 10,
@@ -279,14 +288,16 @@ async def update_transaction(
         provided.get("fees", txn.fees),
         provided.get("split_factor", txn.split_factor),
     )
-    if "account" in provided and provided["account"] is None:
-        raise HTTPException(status_code=422, detail="account cannot be null")
+    if "account" in provided:
+        if provided["account"] is None:
+            raise HTTPException(status_code=422, detail="account cannot be null")
+        provided["account"] = _validated_account(provided["account"])
     if "txn_date" in provided and provided["txn_date"] is not None:
         require_reasonable_date(provided["txn_date"], "txn_date")
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
     if "account" in provided:
-        txn.account = provided["account"].strip()
+        txn.account = provided["account"]
     if "txn_date" in provided:
         txn.txn_date = provided["txn_date"]
     if "notes" in provided:
