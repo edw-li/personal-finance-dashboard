@@ -5346,7 +5346,7 @@ git commit -m "docs: record Plan 3 real-data reconciliation results"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-08-14-plan-3-net-worth-spending.md`
 
-- [ ] **Step 1: Full verification suite (both stacks, from the worktree)**
+- [x] **Step 1: Full verification suite (both stacks, from the worktree)** — 169 pytest -W error + ruff + format + alembic check; 22 vitest + lint (1 sanctioned) + build
 
 ```bash
 cd backend && .venv/Scripts/ruff check . && .venv/Scripts/ruff format --check . && .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/alembic check
@@ -5354,14 +5354,14 @@ cd .. && npm run lint && npm test && npm run build
 ```
 Expected: backend ≥ 165 tests green (130 inherited + ~35 new); frontend ≥ 13 vitest tests green (5 inherited + ~8 new); lint carries only the one sanctioned warning; build clean.
 
-- [ ] **Step 2: Boot smoke**
+- [x] **Step 2: Boot smoke** — ok + 401 + 401
 
 ```bash
 cd backend && (.venv/Scripts/uvicorn app.main:app --port 8000 &) && curl --retry 15 --retry-connrefused --retry-delay 1 -s http://127.0.0.1:8000/api/v1/health && curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/api/v1/net-worth/timeseries && curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/api/v1/spending/matrix
 ```
 Expected: `{"status":"ok"}`, then `401`, `401`. Kill the server (both PIDs).
 
-- [ ] **Step 3: Append "Forward notes for Plans 4+" to this doc**
+- [x] **Step 3: Append "Forward notes for Plans 4+" to this doc** — finalized section appended at doc end
 
 Seed list — extend with anything learned during execution:
 
@@ -5438,7 +5438,7 @@ Seed list — extend with anything learned during execution:
 - Placeholder pages remaining: /portfolio /taxes /espp /paycheck /comp /settings + Overview.
 ```
 
-- [ ] **Step 4: Self-review the branch diff, then commit**
+- [x] **Step 4: Self-review the branch diff, then commit**
 
 ```bash
 git add docs/superpowers/plans/2026-08-14-plan-3-net-worth-spending.md
@@ -5468,3 +5468,35 @@ Expected: ~16 scoped commits.
 
 
 
+
+## Forward notes for Plans 4+ (from Plan 3 execution, finalized 2026-08-14)
+
+The seed list inside Task 16 Step 3 accumulated review-driven amendments throughout
+execution and is authoritative as written there (is_component semantics + Plan 6
+prod-import gotcha; frozen chart palette + echarts touchpoints/bundle numbers/jsdom
+canvas limits; money.py 422 vocabulary incl. per-column bounds; investable_base reuse;
+savings-rate divergence; accepted races with the seqRef recipe; wizard PUT sequencing +
+mid-save-401 notes; rename-vs-reimport interplay; group CHECK constraint; deactivation
+nuances; wizard a11y batch + residuals; remaining placeholders). Execution-final
+additions beyond that list:
+
+- **Dev-proxy IPv4 fix (Task 15):** vite proxy target is now `http://127.0.0.1:8000` —
+  `localhost` resolves to ::1 on Node >=17 while uvicorn binds IPv4, which 500'd every
+  dev API call since Plan 1 (never caught: the Plan 1 browser click-through was never
+  done). Dev-only; prod nginx path unaffected.
+- **react-hooks 7 constraints are load-bearing house patterns now:**
+  `set-state-in-effect` forbids setState in an effect's synchronous body → all page
+  loads use promise callbacks with flips in event handlers (beginLoad pattern);
+  `preserve-manual-memoization` rejects useCallback loads in many-setter components
+  (the wizard inlines its chain in the effect) — Plan 6's Overview page will hit the
+  same wall; budget for it.
+- **Wizard month−1 prefill semantics:** jumping to a far-future month pre-fills zeros
+  (the wizard fetches exactly month−1, not "latest prior") — correct for the monthly
+  ritual; surprising for far jumps. Revisit only if the user actually jumps.
+- **Suite sizes at Plan 3 close:** backend 169 pytest `-W error` + ruff + alembic
+  check; frontend 22 vitest + lint (1 sanctioned warning) + build (main chunk
+  ~864 kB raw / ~287 kB gzip with charts — Plan 6 code-splitting note stands).
+- **OPEN USER ITEM: the interactive visual pass** (Task 15 Step 3 could not be
+  browser-automated this session): click through /net-worth, /spending, /update
+  against the dev servers and eyeball chart rendering, label density, tooltips, and
+  the keyboard walk. Everything data-level is machine-verified (37/37 identity etc.).
