@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m *)",
+      "Bash(git worktree *)",
+      "Bash(git rev-list *)",
+      "Bash(npm test)",
+      "Bash(npm test *)",
+      "Bash(npm run lint)",
+      "Bash(npm run build)",
+      "Bash(npm run lint *)",
+      "Bash(npm run build *)",
+      "Bash(npm install --no-audit --no-fund)",
+      "Bash(./.venv/Scripts/ruff *)",
+      "Bash(.venv/Scripts/ruff *)",
+      "Bash(backend/.venv/Scripts/ruff *)",
+      "Bash(./.venv/Scripts/python -m pytest *)",
+      "Bash(.venv/Scripts/python -m pytest *)",
+      "Bash(backend/.venv/Scripts/python -m pytest *)",
+      "Bash(./.venv/Scripts/alembic check)",
+      "Bash(backend/.venv/Scripts/alembic check)",
+      "Bash(docker compose -f backend/docker-compose.yml up -d --wait db)",
+      "Bash(docker exec finance-dashboard-db-1 psql *)",
+      "Bash(tasklist *)",
+      "Bash(taskkill //F //IM uvicorn.exe)",
+      "Bash(taskkill //F //PID *)",
+      "Bash(curl -s http://127.0.0.1:8000/*)",
+      "Bash(curl -s http://localhost:5173/*)",
+      "Bash(ping -n *)",
+      "Bash(powershell -Command \"Start-Process 'C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe'\")"
+    ]
+  }
+}
