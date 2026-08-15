@@ -880,14 +880,48 @@ class TestFolding:
         assert pos.cost_basis == D("1000")
 
     def test_fold_order_is_sort_index_then_id_not_input_order(self):
-        # sell arrives FIRST in the list but folds SECOND by sort_index
+        # ids ANTI-correlated with sort_index: sorting by id (or input order) would
+        # fold the sell first and warn — only (sort_index, id) folds clean.
         positions = fold_transactions([
-            txn(2, type="sell", shares="5", price="20", sort_index=20),
+            txn(1, type="sell", shares="5", price="20", sort_index=20),
+            txn(2, shares="10", price="10", sort_index=10),
+        ])
+        pos = positions[(1, "Acct")]
+        assert pos.realized_gl == D("50")
+        assert pos.warnings == []
+
+    def test_fold_ties_on_sort_index_break_by_id(self):
+        # The accepted UI/import sort_index collision: lower id folds first.
+        positions = fold_transactions([
+            txn(2, type="sell", shares="5", price="20", sort_index=10),
             txn(1, shares="10", price="10", sort_index=10),
         ])
         pos = positions[(1, "Acct")]
         assert pos.realized_gl == D("50")
         assert pos.warnings == []
+
+    def test_partial_oversell_resets_basis_and_warns_exceeds(self):
+        positions = fold_transactions([
+            txn(1, shares="10", price="100", sort_index=10),
+            txn(2, type="sell", shares="15", price="150", sort_index=20),
+        ])
+        pos = positions[(1, "Acct")]
+        assert pos.shares == D("-5")
+        assert pos.cost_basis == 0  # liquidation floor — a live row must never go negative
+        assert pos.realized_gl == D("750")  # 15*(150-100)
+        assert any("exceeds held shares" in w for w in pos.warnings)
+
+    def test_dated_sell_flow_is_positive_net_of_fees(self):
+        positions = fold_transactions([
+            txn(1, shares="10", price="100", sort_index=10, txn_date=date(2025, 1, 1)),
+            txn(2, type="sell", shares="4", price="150", fees="2", sort_index=20,
+                txn_date=date(2025, 6, 1)),
+        ])
+        pos = positions[(1, "Acct")]
+        assert pos.dated_flows == [
+            (date(2025, 1, 1), D("-1000")),
+            (date(2025, 6, 1), D("598")),
+        ]
 
     def test_oversell_and_orphan_sell_warn_but_never_raise(self):
         positions = fold_transactions([
@@ -955,6 +989,48 @@ class TestHoldings:
         (h2,) = self._one_holding(txn_date=date(2025, 8, 14))
         assert h2.xirr_pct is not None
         assert h2.xirr_pct == D("0.250000")  # 4000 -> 5000 in exactly 365 days
+
+    def test_xirr_null_when_any_cash_flow_txn_is_dateless(self):
+        # Mid-backfill state: a dated buy plus a dateless buy — dated_flows exist,
+        # but the dateless flag must still veto XIRR (spec Risk #1).
+        securities = {1: sec(1, "VOO")}
+        positions = fold_transactions([
+            txn(1, shares="10", price="400", sort_index=10, txn_date=date(2025, 8, 14)),
+            txn(2, shares="1", price="400", sort_index=20),
+        ])
+        (h,) = build_holdings(positions, securities, {1: lp(1, "500")}, {}, [],
+                              today=date(2026, 8, 14))
+        assert h.xirr_pct is None
+
+    def test_multi_account_positions_collapse_to_one_holding(self):
+        securities = {1: sec(1, "VOO")}
+        positions = fold_transactions([
+            txn(1, account="Robinhood", shares="10", price="400", sort_index=10),
+            txn(2, account="Schwab", shares="5", price="440", sort_index=20),
+        ])
+        (h,) = build_holdings(positions, securities, {1: lp(1, "500")}, {}, [],
+                              today=date(2026, 8, 14))
+        assert h.shares == D("15.000000")
+        assert h.cost_basis == D("6200.00")
+        assert h.accounts == ["Robinhood", "Schwab"]
+
+    def test_money_quantization_rounds_half_up(self):
+        # 1 share x $0.1250 -> $0.13 (HALF_EVEN/DOWN would give $0.12) — pins the
+        # Global rules rounding mode at the cost-basis quantize.
+        securities = {1: sec(1, "PENNY")}
+        positions = fold_transactions([txn(1, shares="1", price="0.1250", sort_index=10)])
+        (h,) = build_holdings(positions, securities, {1: lp(1, "0.1250")}, {}, [],
+                              today=date(2026, 8, 14))
+        assert h.cost_basis == D("0.13")
+
+    def test_shares_quantize_to_6dp_half_up(self):
+        positions = fold_transactions([
+            txn(1, shares="1.0000005", price="10", sort_index=10),
+        ])
+        securities = {1: sec(1, "FRAC")}
+        (h,) = build_holdings(positions, securities, {1: lp(1, "10")}, {}, [],
+                              today=date(2026, 8, 14))
+        assert h.shares == D("1.000001")
 
     def test_dividends_collected_feeds_xirr_flows(self):
         div = DividendPayment(id=1, security_id=1, account="Acct",
@@ -1660,6 +1736,26 @@ async def test_set_manual_price_upserts_latest_and_history(db):
     await db.commit()
     history = (await db.execute(select(PriceHistory))).scalars().all()
     assert len(history) == 1 and history[0].close == D("32.0000")
+
+
+async def test_set_manual_price_backdated_updates_history_only(db):
+    # A backdated manual entry must never move the latest quote backwards — day-Δ
+    # reads bars[-2] against the latest price (Task 4 review guard).
+    sec = await seed_security(db, "PRIV", manual=True)
+    await set_manual_price(db, sec, D("32.00"), as_of=date(2026, 8, 14))
+    await db.commit()
+    await set_manual_price(db, sec, D("30.00"), as_of=date(2026, 8, 10))
+    await db.commit()
+    latest = await db.get(LatestPrice, sec.id)
+    assert latest.price == D("32.0000")
+    assert latest.quoted_at == datetime(2026, 8, 14, tzinfo=UTC)
+    history = (
+        (await db.execute(select(PriceHistory).order_by(PriceHistory.price_date))).scalars().all()
+    )
+    assert [(h.price_date, h.close) for h in history] == [
+        (date(2026, 8, 10), D("30.0000")),
+        (date(2026, 8, 14), D("32.0000")),
+    ]
 ```
 
 - [ ] **Step 2: Run to verify failure** — expected: ModuleNotFoundError.
@@ -1682,7 +1778,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1796,8 +1892,29 @@ def _update_dividend_metadata(security: Security, bars: list[DailyBar], today: d
 async def set_manual_price(
     db: AsyncSession, security: Security, price: Decimal, as_of: date
 ) -> None:
-    """Manual quote for is_manual_priced securities. Writes BOTH latest_prices and a
-    price_history row so private assets accrue sparkline points. Caller commits."""
+    """Manual quote for is_manual_priced securities. Always writes a price_history row
+    for `as_of` (sparkline backfill); updates latest_prices ONLY when `as_of` is not
+    older than the newest history bar — a backdated entry must never move the latest
+    quote backwards, or day-Δ (which reads bars[-2] against the latest price) would
+    compare the quote against itself forever (Task 4 review). Caller commits."""
+    history_stmt = pg_insert(PriceHistory).values(
+        security_id=security.id, price_date=as_of, close=price
+    )
+    await db.execute(
+        history_stmt.on_conflict_do_update(
+            index_elements=["security_id", "price_date"],
+            set_={"close": history_stmt.excluded.close},
+        )
+    )
+    newest_bar = (
+        await db.execute(
+            select(func.max(PriceHistory.price_date)).where(
+                PriceHistory.security_id == security.id
+            )
+        )
+    ).scalar_one()
+    if newest_bar is not None and as_of < newest_bar:
+        return
     latest_stmt = pg_insert(LatestPrice).values(
         security_id=security.id, price=price, quoted_at=_bar_datetime(as_of), source="manual"
     )
@@ -1809,15 +1926,6 @@ async def set_manual_price(
                 "quoted_at": latest_stmt.excluded.quoted_at,
                 "source": latest_stmt.excluded.source,
             },
-        )
-    )
-    history_stmt = pg_insert(PriceHistory).values(
-        security_id=security.id, price_date=as_of, close=price
-    )
-    await db.execute(
-        history_stmt.on_conflict_do_update(
-            index_elements=["security_id", "price_date"],
-            set_={"close": history_stmt.excluded.close},
         )
     )
 ```
@@ -2986,7 +3094,10 @@ async def test_manual_price_put_guard_and_write(client, db): ...
     # PUT /prices/NVDA (is_manual_priced=False) -> 409;
     # flip to manual -> PUT {"price": "31.89"} -> 200 LatestPriceOut source "manual";
     # a price_history row exists for today; PUT with as_of tomorrow -> 422;
-    # price "0" -> 422; unknown ticker -> 404
+    # price "0" -> 422; unknown ticker -> 404;
+    # a BACKDATED PUT (as_of older than the newest history bar) -> 200 whose body is
+    # the UNCHANGED newest latest_price, and the history row for as_of exists
+    # (set_manual_price's backdate guard — Task 4 review)
 ```
 
 - [ ] **Step 2: Run to verify failure.**
@@ -3884,8 +3995,15 @@ const TYPE_LABELS: Record<string, string> = {
 
 // Treemap encodes MAGNITUDE on the shared sequential ramp — an all-pairs form must not
 // hand out identity hues at this cardinality (frozen dataviz rule, Plan 3 note).
+// Oversold (negative-MV) slices cannot render in area-encoded forms — filter them out;
+// the holdings table still shows the row with its warning (Task 4 review M5).
+function positiveSlices(data: AllocationResponse) {
+  return data.slices.filter((s) => Number(s.market_value) > 0)
+}
+
 function treemapOption(data: AllocationResponse): EChartsOption {
-  const max = Math.max(...data.slices.map((s) => Number(s.market_value)), 1)
+  const slices = positiveSlices(data)
+  const max = Math.max(...slices.map((s) => Number(s.market_value)), 1)
   return {
     tooltip: {
       formatter: (params) => {
@@ -3901,7 +4019,7 @@ function treemapOption(data: AllocationResponse): EChartsOption {
         breadcrumb: { show: false },
         label: { show: true, formatter: '{b}', fontSize: 11 },
         itemStyle: { borderColor: '#171a21', borderWidth: 2, gapWidth: 2 },
-        data: data.slices.map((s) => ({
+        data: slices.map((s) => ({
           name: s.key,
           value: Number(s.market_value),
           itemStyle: {
@@ -3917,7 +4035,7 @@ function treemapOption(data: AllocationResponse): EChartsOption {
 // Donut: top-3 slices wear palette slots 1-3, the rest fold into a gray Other
 // (all-pairs ≤3 hued selections — frozen rule).
 function donutOption(data: AllocationResponse, labels: boolean): EChartsOption {
-  const named = data.slices.map((s) => ({
+  const named = positiveSlices(data).map((s) => ({
     name: labels ? (TYPE_LABELS[s.key] ?? s.key) : s.key,
     value: Number(s.market_value),
   }))
@@ -4907,6 +5025,18 @@ with execution findings):
 - Dividends on fully-exited securities appear in totals.dividends_collected but have no
   holdings row (zero shares) — row-sums ≠ total by design once a sold-out payer exists;
   the /portfolio/dividends log is the reconciliation view (Task 4 spec review obs).
+  Same family: fold WARNINGS on fully-exited positions vanish (no holding row carries
+  them) — /realized doesn't surface warnings either (Task 4 quality review M4).
+- /allocation?by=account quantizes per position while holdings quantize per security —
+  a multi-account security can disagree with the holdings total by ±1¢/account (exact
+  $0.00 on today's data). Cosmetic; don't chase cent-parity between donut and header
+  (Task 4 quality review M2).
+- load_portfolio loads ALL price history for every caller (~45 ms at the post-refresh
+  steady state, 9.4k rows) — sanctioned full-load strategy; a with_history flag is the
+  2-line fix if Overview page latency ever matters (Task 4 quality review M3).
+- DB-direct rows can still fold nonsense the API forbids (e.g. a negative-shares sell
+  INFLATES the position silently — no warning; API rejects shares<=0 so unreachable
+  through supported paths). Accepted posture (Task 4 quality review M6).
 - Price refresh rewrites annual_dividend/ex_div_date from Yahoo TTM events for
   non-manual securities — manual edits to those two fields don't survive a refresh.
 - The scheduler reads price_refresh_cron ONCE at boot — changing the setting requires a
