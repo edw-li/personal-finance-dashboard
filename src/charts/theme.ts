@@ -89,4 +89,7 @@ export const FINANCE_THEME = {
     textStyle: { color: INK, fontSize: 12 },
     extraCssText: 'box-shadow: 0 4px 16px rgba(0,0,0,0.4); border-radius: 8px;',
   },
+  // echarts 6's default visualMap label token (#54555a) is ~2.3:1 on our surface and
+  // does not follow textStyle — pin it here so heatmaps don't compensate per-page.
+  visualMap: { textStyle: { color: MUTED } },
 }

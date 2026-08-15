@@ -46,7 +46,12 @@ export default function EChart({
 
   useEffect(() => {
     // notMerge: pages always send complete options; merging stale series causes ghosts.
-    chartRef.current?.setOption({ animation: !REDUCED_MOTION, ...option }, { notMerge: true })
+    // Reduced-motion is forced AFTER the spread — a page option must never re-enable
+    // animation against the user's OS preference (Global rules a11y promise).
+    chartRef.current?.setOption(
+      { ...option, ...(REDUCED_MOTION ? { animation: false } : {}) },
+      { notMerge: true },
+    )
   }, [option])
 
   return <div ref={containerRef} style={{ height, width: '100%' }} />
