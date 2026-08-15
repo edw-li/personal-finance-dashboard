@@ -75,9 +75,10 @@ Facts below were verified during planning. Do NOT re-derive them; trust and buil
    vintage; VOO 710.17 verified) → reconcile computed market values against the sheet
    BEFORE running the first live refresh.
 6. **APScheduler 3.11.3 imports warning-free under `-W error`** on py3.12, and
-   `CronTrigger.from_crontab('10 13 * * 1-5', timezone='America/Los_Angeles')` parses;
-   invalid strings raise `ValueError`. `app_settings['price_refresh_cron']` is already
-   seeded (`{"value": "10 13 * * 1-5"}`).
+   `CronTrigger.from_crontab(..., timezone='America/Los_Angeles')` parses; invalid
+   strings raise `ValueError`. EXECUTION FINDING (Task 7): APScheduler numbers days
+   0=Mon (not UNIX 0=Sun) — numeric `1-5` fires Tue-Sat! Day NAMES (`mon-fri`) are the
+   convention-proof form; the seed + dev DB were switched to `10 13 * * mon-fri`.
 7. Conftest uses httpx `ASGITransport`, which **never runs the FastAPI lifespan** → a
    lifespan-started scheduler cannot leak into the pytest suite.
 8. pip installs work on this box (yfinance 1.6.0 + APScheduler 3.11.3 + tzdata installed
@@ -2151,6 +2152,7 @@ git commit -m "feat: price refresh service (history backfill, TTM dividends, man
 - Create: `backend/app/services/scheduler.py`
 - Modify: `backend/app/main.py`
 - Modify: `backend/.env.example` (document the two new env vars)
+- Modify: `backend/app/seed.py` (cron day-name fix — Task 7 escalation)
 - Test: `backend/tests/test_scheduler.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -2158,19 +2160,36 @@ git commit -m "feat: price refresh service (history backfill, TTM dividends, man
 Create `backend/tests/test_scheduler.py`:
 
 ```python
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
 from apscheduler.triggers.cron import CronTrigger
 
 from app.models import AppSetting
 from app.services.scheduler import (
     DEFAULT_PRICE_REFRESH_CRON,
+    SCHEDULER_TIMEZONE,
     build_trigger,
     read_cron_setting,
 )
 
 
 def test_build_trigger_parses_valid_cron():
-    trigger = build_trigger("10 13 * * 1-5")
+    trigger = build_trigger("10 13 * * mon-fri")
     assert isinstance(trigger, CronTrigger)
+
+
+def test_default_cron_fires_on_weekdays_not_tue_sat():
+    # APScheduler's crontab numbering is 0=Mon: numeric "1-5" means Tue-Sat. The
+    # default uses day NAMES so the spec's "weekdays" survives any numbering scheme.
+    trigger = build_trigger(DEFAULT_PRICE_REFRESH_CRON)
+    tz = ZoneInfo(SCHEDULER_TIMEZONE)
+    monday_morning = datetime(2026, 8, 10, 9, 0, tzinfo=tz)
+    next_fire = trigger.get_next_fire_time(None, monday_morning)
+    assert next_fire is not None
+    assert next_fire.weekday() == 0 and next_fire.date() == date(2026, 8, 10)
+    saturday = datetime(2026, 8, 15, 9, 0, tzinfo=tz)
+    assert trigger.get_next_fire_time(None, saturday).weekday() == 0  # skips the weekend
 
 
 def test_build_trigger_falls_back_on_garbage():
@@ -2211,7 +2230,9 @@ from app.models import AppSetting
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PRICE_REFRESH_CRON = "10 13 * * 1-5"
+# Day NAMES, never numbers: APScheduler's from_crontab numbers days 0=Mon (not UNIX
+# 0=Sun), so numeric "1-5" silently means Tue-Sat (Task 7 escalation, measured).
+DEFAULT_PRICE_REFRESH_CRON = "10 13 * * mon-fri"
 SCHEDULER_TIMEZONE = "America/Los_Angeles"
 
 
@@ -2337,7 +2358,7 @@ asyncio.run(main())
 "
 ```
 
-Expected: `price refresh scheduled: '10 13 * * 1-5' (America/Los_Angeles)` log +
+Expected: `price refresh scheduled: '10 13 * * mon-fri' (America/Los_Angeles)` log +
 `lifespan entered OK` (dev DB must be up — the cron is read from it).
 
 - [ ] **Step 7: Full gate + commit**
@@ -5150,7 +5171,7 @@ probe 2 — script it in the scratchpad), then restart uvicorn with
 false}` (stops refetching a delisted ticker; recorded as a user-visible decision).
 Confirm a follow-up refresh no longer lists ZI in `failed`.
 - [ ] **Step 6: Scheduler smoke.** With uvicorn running (scheduler enabled by default),
-confirm the boot log line `price refresh scheduled: '10 13 * * 1-5'
+confirm the boot log line `price refresh scheduled: '10 13 * * mon-fri'
 (America/Los_Angeles)`. No need to wait for a firing — the job body is the same
 `refresh_prices` the endpoint just exercised live.
 - [ ] **Step 7: Frontend smoke.** `npm run dev` + the dev proxy (targets 127.0.0.1:8000
@@ -5243,6 +5264,12 @@ with execution findings):
   non-manual securities — manual edits to those two fields don't survive a refresh.
 - The scheduler reads price_refresh_cron ONCE at boot — changing the setting requires a
   backend restart (Plan 6 settings UI should say so, or Plan 6 adds re-scheduling).
+- PROD GOTCHA (Task 7 escalation): prod's app_settings row was seeded with the numeric
+  cron `10 13 * * 1-5`, which APScheduler reads as Tue-Sat (0=Mon numbering). Seed +
+  dev DB fixed to `10 13 * * mon-fri`; the seed is insert-only, so PROD needs the same
+  one-row UPDATE at the Plan 4/6 deploy:
+  UPDATE app_settings SET value = '{"value": "10 13 * * mon-fri"}'
+  WHERE key = 'price_refresh_cron' AND value->>'value' = '10 13 * * 1-5';
 - quoted_at = the BAR date (UTC midnight), not fetch time — freshness reads honest but
   "today 00:00Z" can look ~a day old to naive comparisons; UI compares dates only.
 - refresh_prices commits its own session; the POST endpoint passes the request session —
