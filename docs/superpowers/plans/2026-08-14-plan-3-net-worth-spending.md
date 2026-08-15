@@ -307,7 +307,12 @@ from decimal import Decimal
 import pytest
 from fastapi import HTTPException
 
-from app.services.money import mom_pct, quantize_money, require_first_of_month
+from app.services.money import (
+    MONEY_MAX_ABS_12_2,
+    mom_pct,
+    quantize_money,
+    require_first_of_month,
+)
 
 
 def test_quantize_money_half_up():
@@ -333,6 +338,13 @@ def test_quantize_money_bounds():
         quantize_money(Decimal("1e26"), "x")  # pydantic-accepted; quantize() would raise
     with pytest.raises(HTTPException):
         quantize_money(Decimal("NaN"), "x")  # comparisons on NaN raise without the guard
+    # Numeric(12,2) family (spending amounts, net_pay): only 10 integer digits fit.
+    assert quantize_money(
+        Decimal("9999999999.99"), "x", max_abs=MONEY_MAX_ABS_12_2
+    ) == Decimal("9999999999.99")
+    with pytest.raises(HTTPException) as exc:
+        quantize_money(Decimal("10000000000"), "net_pay", max_abs=MONEY_MAX_ABS_12_2)
+    assert "10^10" in exc.value.detail
 
 
 def test_require_first_of_month():
@@ -378,23 +390,29 @@ from fastapi import HTTPException
 
 MONEY_QUANTUM = Decimal("0.01")
 PCT_QUANTUM = Decimal("0.000001")
-# Numeric(14,2) / Numeric(12,2): 12 integer digits is the shared safe bound (over-scale
-# values otherwise surface as bare DBAPIError sqlstate 22003 — Plan 1 forward note).
-MONEY_MAX_ABS = Decimal(10) ** 12
+# Per-column-family bounds (over-scale values otherwise surface as bare DBAPIError
+# sqlstate 22003 — Plan 1 forward note). NUMERIC precision counts TOTAL digits:
+# Numeric(14,2) keeps 12 integer digits, Numeric(12,2) keeps only 10.
+MONEY_MAX_ABS = Decimal(10) ** 12  # Numeric(14,2): account balances
+MONEY_MAX_ABS_12_2 = Decimal(10) ** 10  # Numeric(12,2): spending amounts, net_pay
 
 
-def quantize_money(value: Decimal, field: str) -> Decimal:
+def quantize_money(
+    value: Decimal, field: str, max_abs: Decimal = MONEY_MAX_ABS
+) -> Decimal:
     # Pre-check BEFORE quantize: pydantic accepts huge finite Decimals ("1e26") whose
     # quantize() raises InvalidOperation, and NaN comparisons raise too — either would
     # surface as a 500 instead of this module's promised 422.
-    if not value.is_finite() or value.copy_abs() >= MONEY_MAX_ABS:
+    if not value.is_finite() or value.copy_abs() >= max_abs:
         raise HTTPException(
-            status_code=422, detail=f"{field}: |value| must be below 10^12"
+            status_code=422,
+            detail=f"{field}: |value| must be below 10^{max_abs.adjusted()}",
         )
     quantized = value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
-    if quantized.copy_abs() >= MONEY_MAX_ABS:  # rounding can cross the bound
+    if quantized.copy_abs() >= max_abs:  # rounding can cross the bound
         raise HTTPException(
-            status_code=422, detail=f"{field}: |value| must be below 10^12"
+            status_code=422,
+            detail=f"{field}: |value| must be below 10^{max_abs.adjusted()}",
         )
     return quantized
 
@@ -2140,11 +2158,25 @@ async def test_put_spending_month_validation(auth_client, db):
     assert (
         await auth_client.put(put, json={"net_pay": "-1", "amounts": []})
     ).status_code == 422
+    # Numeric(12,2) columns hold only 10 integer digits — bound enforced pre-write
+    # (10^10..10^12 would pass the 14,2 bound and then 500 as DBAPIError 22003).
+    assert (
+        await auth_client.put(put, json={"amounts": [
+            {"category_id": food.id, "amount": "10000000000"},
+        ]})
+    ).status_code == 422
+    assert (
+        await auth_client.put(put, json={"net_pay": "10000000000", "amounts": []})
+    ).status_code == 422
 ```
 
 - [x] **Step 2: Run — expect FAIL.**
 
 - [x] **Step 3: Append endpoints**
+
+Merge `MONEY_MAX_ABS_12_2` into the router's `app.services.money` import (the month
+schemas may also need merging into the schemas import if Task 6's trimmed set lacked
+them). Then append:
 
 ```python
 @router.get("/months/{month}", response_model=SpendingMonthOut)
@@ -2180,13 +2212,17 @@ async def put_month(
         raise HTTPException(status_code=422, detail="duplicate category_id in amounts")
     quantized: dict[int, Decimal] = {
         entry.category_id: quantize_money(
-            entry.amount, f"amount[category_id={entry.category_id}]"
+            entry.amount,
+            f"amount[category_id={entry.category_id}]",
+            max_abs=MONEY_MAX_ABS_12_2,  # Numeric(12,2): 10 integer digits, not 12
         )
         for entry in body.amounts
     }
     net_pay_provided = "net_pay" in body.model_fields_set and body.net_pay is not None
     net_pay_value = (
-        quantize_money(body.net_pay, "net_pay") if net_pay_provided else None
+        quantize_money(body.net_pay, "net_pay", max_abs=MONEY_MAX_ABS_12_2)
+        if net_pay_provided
+        else None
     )
     if net_pay_value is not None and net_pay_value < 0:
         # Take-home pay can't be negative; a typo'd minus sign would flip the
