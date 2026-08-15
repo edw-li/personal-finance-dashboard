@@ -261,7 +261,7 @@ export default function SpendingPage() {
   }, [matrix, monthLabels])
 
   const trendOption = useMemo<EChartsOption | null>(() => {
-    if (!matrix || trend.length === 0) return null
+    if (!matrix || matrix.months.length === 0 || trend.length === 0) return null
     const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
     return {
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
@@ -367,7 +367,6 @@ export default function SpendingPage() {
           <StatTile
             label="Savings rate (actual)"
             value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
-            tone={kpis.savings !== null && Number(kpis.savings) >= 0 ? 'positive' : 'negative'}
           />
           <StatTile label="Net pay" value={formatCurrency(kpis.netPay)} />
         </div>
@@ -410,12 +409,15 @@ export default function SpendingPage() {
           <div className="chip-row">
             {matrix?.categories.map((category) => {
               const active = trend.find((t) => t.categoryId === category.id)
+              // Slot hue goes on the BORDER, never the text (text stays --text via
+              // .chip.active) — series color marks identity beside text, not in it.
               return (
                 <button
                   key={category.id}
                   type="button"
                   className={active ? 'chip active' : 'chip'}
-                  style={active ? { color: PALETTE[active.slot] } : undefined}
+                  style={active ? { borderColor: PALETTE[active.slot] } : undefined}
+                  aria-pressed={!!active}
                   onClick={() => toggleTrend(category.id)}
                 >
                   {category.name}
