@@ -7,7 +7,7 @@ txn_date is mostly NULL (Plan 1 forward note) and must never drive order.
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,35 +132,49 @@ def build_holdings(
         security = securities_by_id.get(sec_id)
         if security is None:
             continue  # orphaned txn row; unreachable through the API (FK), defensive
-        shares = sum((p.shares for p in folded), ZERO).quantize(SHARE_Q)
+        shares = sum((p.shares for p in folded), ZERO).quantize(SHARE_Q, rounding=ROUND_HALF_UP)
         if shares == 0:
             continue
-        cost_basis = sum((p.cost_basis for p in folded), ZERO).quantize(MONEY_Q)
-        realized = sum((p.realized_gl for p in folded), ZERO).quantize(MONEY_Q)
+        cost_basis = sum((p.cost_basis for p in folded), ZERO).quantize(
+            MONEY_Q, rounding=ROUND_HALF_UP
+        )
+        realized = sum((p.realized_gl for p in folded), ZERO).quantize(
+            MONEY_Q, rounding=ROUND_HALF_UP
+        )
         warnings = [w for p in folded for w in p.warnings]
         has_dateless = any(p.has_dateless_txn for p in folded)
         dated_flows = [flow for p in folded for flow in p.dated_flows]
         accounts = sorted({p.account for p in folded})
-        collected = div_total.get(sec_id, ZERO).quantize(MONEY_Q)
+        collected = div_total.get(sec_id, ZERO).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
 
         latest = latest_by_sec.get(sec_id)
         price = latest.price if latest is not None else None
         bars = history_by_sec.get(sec_id, [])
         prev_close = bars[-2].close if len(bars) >= 2 else None
 
-        market_value = (shares * price).quantize(MONEY_Q) if price is not None else None
+        market_value = (
+            (shares * price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+            if price is not None
+            else None
+        )
         day_pct = day_amt = None
         if price is not None and prev_close is not None and prev_close != 0:
             day_pct = quantize_pct((price - prev_close) / prev_close)
-            day_amt = (shares * (price - prev_close)).quantize(MONEY_Q)
+            day_amt = (shares * (price - prev_close)).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
         unrealized = unrealized_pct = None
         if market_value is not None:
             unrealized = market_value - cost_basis
             if cost_basis > 0:
                 unrealized_pct = quantize_pct(unrealized / cost_basis)
-        avg_cost = (cost_basis / shares).quantize(PRICE_Q) if shares > 0 else None
+        avg_cost = (
+            (cost_basis / shares).quantize(PRICE_Q, rounding=ROUND_HALF_UP) if shares > 0 else None
+        )
         annual = security.annual_dividend
-        annual_income = (annual * shares).quantize(MONEY_Q) if annual is not None else None
+        annual_income = (
+            (annual * shares).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+            if annual is not None
+            else None
+        )
         yield_pct = (
             quantize_pct(annual / price)
             if annual is not None and price is not None and price != 0
@@ -220,9 +234,9 @@ def allocation(
     if by == "account":
         for pos in positions.values():
             latest = latest_by_sec.get(pos.security_id)
-            if latest is None or pos.shares.quantize(SHARE_Q) == 0:
+            if latest is None or pos.shares.quantize(SHARE_Q, rounding=ROUND_HALF_UP) == 0:
                 continue
-            value = (pos.shares * latest.price).quantize(MONEY_Q)
+            value = (pos.shares * latest.price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
             buckets[pos.account] = buckets.get(pos.account, ZERO) + value
             members.setdefault(pos.account, set()).add(pos.security_id)
     else:
@@ -232,10 +246,14 @@ def allocation(
         for sec_id, shares in shares_by_sec.items():
             security = securities_by_id.get(sec_id)
             latest = latest_by_sec.get(sec_id)
-            if security is None or latest is None or shares.quantize(SHARE_Q) == 0:
+            if (
+                security is None
+                or latest is None
+                or shares.quantize(SHARE_Q, rounding=ROUND_HALF_UP) == 0
+            ):
                 continue
             key = security.holding_type if by == "type" else (security.industry or "Uncategorized")
-            value = (shares * latest.price).quantize(MONEY_Q)
+            value = (shares * latest.price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
             buckets[key] = buckets.get(key, ZERO) + value
             members.setdefault(key, set()).add(sec_id)
     return sorted(
