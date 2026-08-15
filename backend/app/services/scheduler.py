@@ -69,6 +69,9 @@ async def start_scheduler() -> AsyncIOScheduler:
         id="price_refresh",
         coalesce=True,
         max_instances=1,
+        # NOTE: with the in-memory job store, next_run_time is recomputed from *now*
+        # at every boot — a restart spanning 13:10 skips that day's refresh entirely;
+        # misfire_grace_time only covers a busy loop within one process (Task 7 review).
         misfire_grace_time=3600,
     )
     scheduler.start()

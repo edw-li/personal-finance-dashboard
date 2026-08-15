@@ -1,3 +1,5 @@
+import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,17 +11,32 @@ from app.api import auth, import_, net_worth, spending
 from app.config import settings
 from app.rate_limit import limiter
 
+# uvicorn configures only its own loggers — application records (scheduler boots, price
+# refresh results) otherwise fall through to logging.lastResort at WARNING and all INFO
+# is silently dropped (Task 7 review I1). basicConfig is a no-op if a root handler
+# already exists, so this never fights an outer logging config.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler = None
     if settings.scheduler_enabled:
         from app.services.scheduler import start_scheduler
 
-        scheduler = await start_scheduler()
-    yield
-    if scheduler is not None:
-        scheduler.shutdown(wait=False)
+        try:
+            scheduler = await start_scheduler()
+        except Exception:
+            # A background nicety must never veto the API (Task 7 review I2): serve
+            # without refreshes and say so — ERROR is visible even unconfigured.
+            logging.getLogger(__name__).exception("scheduler failed to start — API continues")
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            # Async under the hood: shutdown() only schedules the real stop on the
+            # loop; uvicorn keeps the loop alive past this return (Task 7 review M2).
+            scheduler.shutdown(wait=False)
 
 
 app = FastAPI(

@@ -64,6 +64,13 @@ async def client(db):
     app.dependency_overrides.pop(get_db, None)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_scheduler_in_tests():
+    # ASGITransport never runs the lifespan today; pin the invariant for any future
+    # TestClient/LifespanManager use (Task 7 review M7).
+    settings.scheduler_enabled = False
+
+
 @pytest.fixture(autouse=True)
 def reset_rate_limiter():
     limiter.reset()
