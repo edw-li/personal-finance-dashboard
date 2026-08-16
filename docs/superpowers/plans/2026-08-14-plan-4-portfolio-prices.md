@@ -5883,6 +5883,9 @@ with execution findings):
 - Importer dividend-metadata posture (final review I1, FIXED on-branch): securities'
   annual_dividend/ex_div_date seed on CREATE only — re-imports never revert the
   refresh's TTM values (test-pinned; mirrors latest_prices' insert-only posture).
+  Corollary: for MANUAL-priced securities (refresh skips them too) those two fields are
+  frozen at create-time and editable only via PATCH /portfolio/securities — zero such
+  securities exist today.
 - /prices/history/{ticker} ships with no frontend consumer or TS model (like
   /portfolio/realized); HoldingOut.accounts is shipped but unrendered; spec §5's
   OPTIONAL midday second cron tick was consciously skipped (final review M1-M3).
