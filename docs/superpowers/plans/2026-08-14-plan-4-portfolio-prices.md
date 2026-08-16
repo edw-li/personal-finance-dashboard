@@ -5866,8 +5866,16 @@ with execution findings):
   /net-worth/summary — do NOT re-derive; investable_base stays the 4%-line source.
 - Plan 6 prod import order gotcha still stands (is_component five-slug UPDATE) — now ALSO
   run the first prod price refresh + re-verify ZI/inactive flags after importing.
-- Bundle: treemap+pie grew the main chunk to <record from Task 15> — Plan 6
-  code-splitting note stands.
+- Bundle: wave-2 pie + treemap + page grew the main chunk to 977.61 kB raw / 325.01 kB
+  gzip — Plan 6 code-splitting note stands.
+- Sheet quirk frozen (Task 16): the Portfolio tab's Unrealized column is internally
+  inconsistent with its own MV−Cost on the four private-ish rows (FIGR +25 / VIA +46 /
+  RVI +2000 / VCX +1000 — stale hardcoded formulas). OUR unrealized = MV−cost is the
+  correct quantity; do not chase the $3,071 totals gap in any later reconciliation.
+- The live dev DB is now POST-REFRESH: latest_prices all yfinance, ~200-day histories,
+  real TTM dividends, ZI inactive. Prod (at deploy) starts pre-refresh: empty history,
+  seeded manual prices, numeric cron until the repair migration runs — the first prod
+  refresh reproduces this state.
 ```
 
 - [ ] **Step 3: Definition-of-done audit + commit**
