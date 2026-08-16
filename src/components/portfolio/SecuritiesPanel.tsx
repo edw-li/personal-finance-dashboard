@@ -104,7 +104,15 @@ export default function SecuritiesPanel({
   const remove = (security: SecurityOut) => {
     if (!window.confirm(`Delete ${security.ticker}?`)) return
     deleteSecurity(security.id)
-      .then(onChanged)
+      .then(() => {
+        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
+        // (Task 14 review I3). Reset on SUCCESS only: a 409 leaves the row in place.
+        if (security.id === editingId) {
+          setEditingId(null)
+          setForm(EMPTY)
+        }
+        onChanged()
+      })
       .catch((err: unknown) => {
         // A referenced security answers 409 "…— deactivate it instead": show it verbatim.
         setError(err instanceof ApiError ? err.message : 'Delete failed')
@@ -137,7 +145,9 @@ export default function SecuritiesPanel({
         Deactivating a security stops its price refresh and leaves every transaction,
         dividend and price bar in place — that is the way to retire a delisted ticker.
         Deleting is refused while transactions or dividends reference it. Manual-priced
-        securities are never touched by a refresh; set their price by hand below.
+        securities are never touched by a refresh; set their price by hand below. Annual
+        dividend and ex-div date are rewritten by every price refresh for auto-priced
+        securities — edit the dividend only on manual-priced ones.
       </p>
       {error && <div className="error-banner" role="alert">{error}</div>}
       <form
@@ -179,7 +189,11 @@ export default function SecuritiesPanel({
             ))}
           </select>
         </label>
-        {editingId !== null && (
+        {/* Refresh owns annual_dividend/ex_div_date for auto-priced securities (it
+            rewrites both from Yahoo TTM events), so the field is offered only where the
+            edit survives — the same reasoning that keeps ex_div_date out entirely
+            (Task 14 review I2). */}
+        {editingId !== null && form.is_manual_priced && (
           <label>
             Annual dividend
             <input

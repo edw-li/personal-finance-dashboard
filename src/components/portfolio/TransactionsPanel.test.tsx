@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecurityOut, TransactionOut } from '../../types/api'
 import TransactionsPanel from './TransactionsPanel'
 
@@ -11,6 +11,9 @@ vi.mock('../../api/portfolio', () => ({
 import { createTransaction } from '../../api/portfolio'
 
 afterEach(cleanup)
+// Call counts are per-test: the "not called" assertion below would otherwise see the
+// create from an earlier test. clearAllMocks keeps the factory's mockResolvedValue.
+beforeEach(() => vi.clearAllMocks())
 
 const securities: SecurityOut[] = [{
   id: 1, ticker: 'NVDA', name: 'NVIDIA', industry: 'Semis', holding_type: 'stock',
@@ -63,5 +66,30 @@ describe('TransactionsPanel', () => {
     expect(vi.mocked(createTransaction).mock.calls[0][0]).toMatchObject({
       security_id: 1, account: 'Robinhood', type: 'buy', shares: '2', price: '150',
     })
+  })
+
+  it('deleting the row being edited resets the form', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const onChanged = vi.fn()
+    render(
+      <TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={onChanged} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    // Back to create mode: a stale editingId would PATCH the deleted id on the next save.
+    expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
+  })
+
+  it('split without a factor is refused client-side', () => {
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={() => {}} />)
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/type/i), 'split')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    expect(screen.getByText(/split factor is required/i)).toBeTruthy()
+    expect(createTransaction).not.toHaveBeenCalled()
   })
 })

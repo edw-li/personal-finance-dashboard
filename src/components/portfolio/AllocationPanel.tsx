@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import EChart from '../EChart'
 import type { EChartsOption } from '../../charts/echarts'
-import { OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
+import { INK, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { AllocationResponse } from '../../types/api'
 import { escapeHtml, formatCurrencyCompact, formatPct } from '../../utils/format'
 
@@ -37,14 +37,18 @@ function treemapOption(data: AllocationResponse): EChartsOption {
         breadcrumb: { show: false },
         label: { show: true, formatter: '{b}', fontSize: 11 },
         itemStyle: { borderColor: SURFACE, borderWidth: 2, gapWidth: 2 },
-        data: slices.map((s) => ({
-          name: s.key,
-          value: Number(s.market_value),
-          itemStyle: {
-            color:
-              SEQUENTIAL_BLUE[3 + Math.round((Number(s.market_value) / max) * 8)],
-          },
-        })),
+        data: slices.map((s) => {
+          const idx = 3 + Math.round((Number(s.market_value) / max) * 8)
+          return {
+            name: s.key,
+            value: Number(s.market_value),
+            // Light ramp end needs a dark label: #fff on SEQUENTIAL_BLUE[11] is 1.32:1,
+            // violating the theme's >=3:1 promise. SURFACE clears 3:1 from idx 6 up;
+            // INK covers the dark half (Task 14 review I1).
+            label: { color: idx >= 6 ? SURFACE : INK },
+            itemStyle: { color: SEQUENTIAL_BLUE[idx] },
+          }
+        }),
       },
     ],
   }
@@ -108,12 +112,27 @@ export default function AllocationPanel({
 }) {
   const [donutDim, setDonutDim] = useState<'type' | 'account'>('type')
   const donutData = donutDim === 'type' ? byType : byAccount
+  // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object per
+  // render replays entry animations on unrelated state flips (Task 14 review I4). The
+  // guards use the FILTERED count — an all-oversold book must show the note, not an
+  // empty chart (M1).
+  const treemap = useMemo(
+    () => (industry && positiveSlices(industry).length > 0 ? treemapOption(industry) : null),
+    [industry],
+  )
+  const donut = useMemo(
+    () =>
+      donutData && positiveSlices(donutData).length > 0
+        ? donutOption(donutData, donutDim === 'type')
+        : null,
+    [donutData, donutDim],
+  )
   return (
     <div className="allocation-grid">
       <section className="panel">
         <h2 className="panel-title">Allocation by industry</h2>
-        {industry && industry.slices.length > 0 ? (
-          <EChart option={treemapOption(industry)} height={300} />
+        {treemap ? (
+          <EChart option={treemap} height={300} />
         ) : (
           <p className="empty-note">No priced holdings yet.</p>
         )}
@@ -138,8 +157,8 @@ export default function AllocationPanel({
             </button>
           </div>
         </div>
-        {donutData && donutData.slices.length > 0 ? (
-          <EChart option={donutOption(donutData, donutDim === 'type')} height={300} />
+        {donut ? (
+          <EChart option={donut} height={300} />
         ) : (
           <p className="empty-note">No priced holdings yet.</p>
         )}

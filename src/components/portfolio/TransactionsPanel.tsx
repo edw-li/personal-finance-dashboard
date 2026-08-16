@@ -41,7 +41,7 @@ function toPayload(form: FormState) {
   }
   if (form.type === 'split') {
     // Plan 1 dummy convention: split rows store shares/price 0 and carry no fees.
-    return { ...base, split_factor: form.split_factor, shares: '0', price: '0', fees: null }
+    return { ...base, split_factor: form.split_factor.trim(), shares: '0', price: '0', fees: null }
   }
   return {
     ...base,
@@ -91,6 +91,12 @@ export default function TransactionsPanel({
       setError('Security and account are required')
       return
     }
+    // Type-appropriate numeric guard: an empty string reaches the API as `""`, which
+    // 422s as an opaque pydantic decimal-parse error (Task 14 review M2).
+    if (form.type === 'split' ? !form.split_factor.trim() : !(form.shares.trim() && form.price.trim())) {
+      setError(form.type === 'split' ? 'Split factor is required' : 'Shares and price are required')
+      return
+    }
     setBusy(true)
     setError(null)
     const payload = toPayload(form)
@@ -113,7 +119,15 @@ export default function TransactionsPanel({
   const remove = (txn: TransactionOut) => {
     if (!window.confirm(`Delete this ${txn.type} of ${tickers.get(txn.security_id) ?? '?'}?`)) return
     deleteTransaction(txn.id)
-      .then(onChanged)
+      .then(() => {
+        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
+        // (Task 14 review I3). Reset on SUCCESS only: a failed delete leaves the row.
+        if (txn.id === editingId) {
+          setEditingId(null)
+          setForm(EMPTY)
+        }
+        onChanged()
+      })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Delete failed')
       })
