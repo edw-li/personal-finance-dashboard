@@ -5149,14 +5149,16 @@ git commit -m "feat: allocation charts + transactions/dividends/securities panel
 ## Task 15: Portfolio page assembly, route, CSS
 
 **Files:**
-- Create: `src/pages/PortfolioPage.tsx`, `src/pages/PortfolioPage.css`
+- Create: `src/pages/PortfolioPage.tsx`, `src/pages/PortfolioPage.css`,
+  `src/components/portfolio/portfolio.css` (component-shared rules — Task 15 review I2;
+  imported by the five components + the page)
 - Create: `src/components/portfolio/SecuritiesPanel.test.tsx` (Task 14 re-review ask)
 - Modify: `src/App.tsx`
 
 - [ ] **Step 1: Implement `PortfolioPage.tsx`**
 
 ```tsx
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ApiError } from '../api/client'
 import {
@@ -5177,15 +5179,49 @@ import type {
   AllocationResponse,
   DividendOut,
   HoldingsResponse,
+  RefreshResult,
   SecurityOut,
   SparklinesResponse,
   TransactionOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatPct } from '../utils/format'
 import '../components/panels.css'
+import '../components/portfolio/portfolio.css'
 import './PortfolioPage.css'
 
 type Tab = 'transactions' | 'dividends' | 'securities'
+
+// A whole-book failure would otherwise paste ~37 tickers into the header note.
+const MAX_FAILED_SHOWN = 5
+
+interface RefreshNote {
+  text: string
+  detail: string
+  failed: number
+}
+
+const NO_NOTE: RefreshNote = { text: '', detail: '', failed: 0 }
+
+function describeRefresh(result: RefreshResult): RefreshNote {
+  const failed = Object.entries(result.failed)
+  const shown = failed.slice(0, MAX_FAILED_SHOWN).map(([ticker]) => ticker)
+  const more = failed.length - shown.length
+  return {
+    text:
+      `${result.updated.length} updated` +
+      (failed.length > 0
+        ? `, ${failed.length} failed (${shown.join(', ')}${more > 0 ? `, +${more} more` : ''})`
+        : '') +
+      (result.skipped_manual.length > 0
+        ? `, ${result.skipped_manual.length} manual skipped`
+        : '') +
+      ` in ${Math.round(result.duration_ms / 1000)}s`,
+    // Per-ticker reasons ride in the title attribute — React escapes attribute values, so
+    // provider error text cannot inject markup (the RefreshOut.failed escaping note).
+    detail: failed.map(([ticker, reason]) => `${ticker}: ${reason}`).join('\n'),
+    failed: failed.length,
+  }
+}
 
 function toneFor(value: string | null | undefined): 'positive' | 'negative' | 'neutral' {
   if (value === null || value === undefined) return 'neutral'
@@ -5204,15 +5240,21 @@ export default function PortfolioPage() {
   const [sparklines, setSparklines] = useState<SparklinesResponse>({})
   const [tab, setTab] = useState<Tab>('transactions')
   const [loading, setLoading] = useState(true)
+  const [reloading, setReloading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
-  const [refreshNote, setRefreshNote] = useState<string | null>(null)
+  const [refreshNote, setRefreshNote] = useState<RefreshNote>(NO_NOTE)
   const [error, setError] = useState<string | null>(null)
+  // Four things trigger a load (mount, refresh, three panels' onChanged) and the eight
+  // requests are not ordered — a slow earlier load must never overwrite a later one.
+  const seqRef = useRef(0)
 
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
   // law (see NetWorthPage). One load() refetches EVERYTHING: eight cheap local queries,
-  // and every mutation path (panels' onChanged, refresh) converges through it.
+  // and every mutation path (panels' onChanged, refresh) converges through it. Returns
+  // the chain so callers can keep their own busy flag up until the data is on screen.
   const load = () => {
-    Promise.all([
+    const seq = ++seqRef.current
+    return Promise.all([
       fetchHoldings(),
       fetchSecurities(),
       fetchTransactions(),
@@ -5223,6 +5265,7 @@ export default function PortfolioPage() {
       fetchSparklines(),
     ])
       .then(([h, secs, txns, divs, ind, typ, acct, spark]) => {
+        if (seq !== seqRef.current) return
         setHoldings(h)
         setSecurities(secs)
         setTransactions(txns)
@@ -5234,9 +5277,19 @@ export default function PortfolioPage() {
         setError(null)
       })
       .catch((err: unknown) => {
+        if (seq !== seqRef.current) return
         setError(err instanceof ApiError ? err.message : 'Failed to load portfolio data')
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (seq === seqRef.current) setLoading(false)
+      })
+  }
+
+  // Panel mutations refetch WITHOUT unmounting the panels (a spinner swap would throw
+  // away the form the user is typing in) — the body dims instead.
+  const reload = () => {
+    setReloading(true)
+    load().finally(() => setReloading(false))
   }
 
   // Mount-only fetch. react-hooks 7 reports nothing here (load is re-created per render
@@ -5248,19 +5301,14 @@ export default function PortfolioPage() {
 
   const onRefresh = () => {
     setRefreshing(true)
-    setRefreshNote(null)
+    setRefreshNote(NO_NOTE)
     setError(null)
     refreshPrices()
       .then((result) => {
-        const failed = Object.keys(result.failed)
-        setRefreshNote(
-          `${result.updated.length} updated` +
-            (failed.length > 0 ? `, ${failed.length} failed (${failed.join(', ')})` : '') +
-            (result.skipped_manual.length > 0
-              ? `, ${result.skipped_manual.length} manual skipped`
-              : ''),
-        )
-        load()
+        setRefreshNote(describeRefresh(result))
+        // Returned, not fired-and-forgotten: the button re-enables only once the fresh
+        // prices are actually on screen.
+        return load()
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Price refresh failed')
@@ -5276,26 +5324,40 @@ export default function PortfolioPage() {
       <header className="page-header">
         <h1>Portfolio</h1>
         <div className="header-actions">
-          {asOf && <span className="as-of">prices as of {formatDate(asOf.slice(0, 10))}</span>}
+          {asOf ? (
+            <span className="as-of">prices as of {formatDate(asOf)}</span>
+          ) : (
+            <span className="as-of">prices never refreshed</span>
+          )}
           <button type="button" className="refresh-btn" onClick={onRefresh} disabled={refreshing}>
             <RefreshCw size={14} className={refreshing ? 'spin' : undefined} />
             {refreshing ? 'Refreshing…' : 'Refresh prices'}
           </button>
         </div>
       </header>
-      {refreshNote && <div className="hint" role="status">{refreshNote}</div>}
+      {/* One element, always mounted: a live region added at announce-time is not read.
+          Partial failures are an alert, not a status — they need the user's attention. */}
+      <div
+        className={refreshNote.failed > 0 ? 'hint refresh-note-bad' : 'hint'}
+        role={refreshNote.failed > 0 ? 'alert' : 'status'}
+        title={refreshNote.detail || undefined}
+      >
+        {refreshNote.text}
+      </div>
       {error && <div className="error-banner" role="alert">{error}</div>}
       {loading ? (
         <p className="empty-note">Loading…</p>
-      ) : (
-        <>
+      ) : holdings ? (
+        // A failed FIRST load leaves holdings null: show the error banner alone rather
+        // than a page of empty tables that read as "you own nothing".
+        <div className={`loading-dim${reloading ? ' is-loading' : ''}`}>
           {totals && (
             <div className="tiles-row">
               <StatTile
                 label="Portfolio value"
                 value={formatCurrency(totals.market_value)}
                 delta={
-                  totals.day_change_amount !== null
+                  totals.day_change_amount !== null || totals.day_change_pct !== null
                     ? `${formatCurrency(totals.day_change_amount)} today (${formatPct(totals.day_change_pct)})`
                     : undefined
                 }
@@ -5325,25 +5387,34 @@ export default function PortfolioPage() {
                 a manual price in Securities.
               </p>
             )}
-            <HoldingsTable holdings={holdings?.holdings ?? []} sparklines={sparklines} />
+            <HoldingsTable holdings={holdings.holdings} sparklines={sparklines} />
           </section>
           <AllocationPanel industry={industry} byType={byType} byAccount={byAccount} />
-          <div className="tab-row" role="tablist" aria-label="Portfolio records">
+          {/* group, not tablist: these buttons toggle panels below rather than owning
+              tabpanels, and the aria-labels keep "Dividends" from colliding with the
+              holdings table's sort header of the same name. */}
+          <div className="tab-row" role="group" aria-label="Portfolio records">
             {(['transactions', 'dividends', 'securities'] as const).map((t) => (
-              <button key={t} type="button" aria-pressed={tab === t} onClick={() => setTab(t)}>
+              <button
+                key={t}
+                type="button"
+                aria-label={`Show ${t}`}
+                aria-pressed={tab === t}
+                onClick={() => setTab(t)}
+              >
                 {t[0].toUpperCase() + t.slice(1)}
               </button>
             ))}
           </div>
           {tab === 'transactions' && (
-            <TransactionsPanel securities={securities} transactions={transactions} onChanged={load} />
+            <TransactionsPanel securities={securities} transactions={transactions} onChanged={reload} />
           )}
           {tab === 'dividends' && (
-            <DividendsPanel securities={securities} dividends={dividends} onChanged={load} />
+            <DividendsPanel securities={securities} dividends={dividends} onChanged={reload} />
           )}
-          {tab === 'securities' && <SecuritiesPanel securities={securities} onChanged={load} />}
-        </>
-      )}
+          {tab === 'securities' && <SecuritiesPanel securities={securities} onChanged={reload} />}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -5356,23 +5427,28 @@ NetWorthPage `useCallback` + `[load]` idiom — whatever the linter accepts WITH
 - [ ] **Step 2: Create `src/pages/PortfolioPage.css`** — read `NetWorthPage.css` and
 `panels.css` FIRST and reuse their tokens/classes; define only what's new:
 
-```css
-/* Portfolio page + the five components it mounts. panels.css owns the shared vocabulary
-   (.page, .page-header, .stat-tile, .badge, .error-banner, .empty-note, .button, …) —
-   nothing it already defines is redefined here (the plan's dedupe rule). Colors use the
-   index.css :root variables wherever one exists; the remaining literal (#c98500) is
-   theme.ts PALETTE[3], which has no CSS variable. */
+Component-shared rules live in `src/components/portfolio/portfolio.css`, imported by
+all five portfolio components AND the page (which renders .panel/.hint itself):
 
-/* .panel / .panel-title are used by all four ledger panels and the holdings section but
-   are defined NOWHERE in panels.css (the plan's dedupe note assumed otherwise), so they
-   live here, built from the same tokens as .card / .eyebrow. */
+```css
+/* Styles for the portfolio components — the holdings table, the allocation panel and the
+   three ledger panels. Every one of those files imports this stylesheet, so none of them
+   depends on PortfolioPage.css happening to be in the bundle (the same reasoning that
+   keeps shared utilities in panels.css). panels.css owns the app-wide vocabulary
+   (.badge, .error-banner, .empty-note, .button, .loading-dim, .data-table …) and nothing
+   it defines is redefined here. Colors come from the index.css :root variables wherever
+   one exists; the remaining literal (#c98500) is theme.ts PALETTE[3], which has none. */
+
+/* .panel / .panel-title are used by all four panels (and by the page's holdings section)
+   but are defined NOWHERE in panels.css — built here from the same tokens as .card. */
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem 1.25rem; min-width: 0; margin-bottom: 16px; }
 .panel-title { margin: 0 0 0.75rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.panel-title-row { display: flex; justify-content: space-between; align-items: center; }
 
-.portfolio-page .page-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-.portfolio-page .header-actions { display: flex; align-items: center; gap: 12px; }
-.portfolio-page .as-of { color: var(--muted); font-size: 12px; }
-.tiles-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 16px; }
+/* AllocationPanel's own two-up layout travels with the component that renders it. */
+.allocation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+@media (max-width: 900px) { .allocation-grid { grid-template-columns: 1fr; } }
+
 .holdings-scroll { overflow-x: auto; }
 .port-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .port-table th, .port-table td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--surface-2); }
@@ -5385,17 +5461,19 @@ NetWorthPage `useCallback` + `[load]` idiom — whatever the linter accepts WITH
 /* Long free text must not stretch the row past the viewport (.port-table td already
    pins white-space: nowrap, so ellipsis needs only a bound + overflow). */
 .notes-cell { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.chart-col { width: 120px; } /* the 110px sparkline + cell padding: no reflow per row */
 .sparkline { display: block; } /* inline SVG baseline gap otherwise inflates row height */
+.sparkline-empty { color: var(--muted); } /* the "no bars yet" dash reads as absence */
 .warn-icon { color: #c98500; display: inline-flex; }
-.stale { color: #c98500; }
 .pos { color: var(--positive); }
 .neg { color: var(--negative); }
-.allocation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
-@media (max-width: 900px) { .allocation-grid { grid-template-columns: 1fr; } }
-.panel-title-row { display: flex; justify-content: space-between; align-items: center; }
-.toggle-row button, .tab-row button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 4px 12px; cursor: pointer; }
-.toggle-row button[aria-pressed='true'], .tab-row button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); }
-.tab-row { display: flex; gap: 8px; margin: 16px 0 8px; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+
+/* Toggle buttons (AllocationPanel's donut dimension). The page's .tab-row repeats these
+   declarations in PortfolioPage.css — the two live in different stylesheets by design. */
+.toggle-row button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 4px 12px; cursor: pointer; }
+.toggle-row button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); }
+
 .entry-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; align-items: end; }
 .entry-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .entry-form input, .entry-form select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 6px; }
@@ -5404,13 +5482,52 @@ NetWorthPage `useCallback` + `[load]` idiom — whatever the linter accepts WITH
 .entry-form .notes-field { grid-column: span 2; }
 .form-actions { display: flex; gap: 8px; }
 .row-actions button { margin-right: 6px; }
-/* The page/panel action buttons carry no shared .button class, and a native control
-   renders as light chrome on the dark surface — same tokens as panels.css .button. */
-.refresh-btn, .form-actions button, .row-actions button { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-size: 0.85rem; padding: 0.35rem 0.75rem; cursor: pointer; }
-.refresh-btn:hover, .form-actions button:hover, .row-actions button:hover { border-color: var(--muted); }
-.refresh-btn:disabled, .form-actions button:disabled, .row-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
-.hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
-.refresh-btn { display: inline-flex; align-items: center; gap: 6px; }
+/* The panel action buttons carry no shared .button class, and a native control renders
+   as light chrome on the dark surface — same tokens as panels.css .button. */
+.form-actions button, .row-actions button { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-size: 0.85rem; padding: 0.35rem 0.75rem; cursor: pointer; }
+.form-actions button:hover, .row-actions button:hover { border-color: var(--muted); }
+.form-actions button:disabled, .row-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Keyboard reachability: these controls all suppress or replace the UA chrome, so the
+   focus ring has to be stated (panels.css .button:focus-visible idiom). */
+.th-sort:focus-visible,
+.entry-form button:focus-visible,
+.form-actions button:focus-visible,
+.row-actions button:focus-visible,
+.toggle-row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+```
+
+Page-scoped rules stay in `src/pages/PortfolioPage.css`:
+
+```css
+/* Page-scoped rules ONLY. Everything the five portfolio components consume lives in
+   src/components/portfolio/portfolio.css (imported by each of them); the app-wide
+   vocabulary (.page, .page-header, .stat-tile, .error-banner, .empty-note, .loading-dim)
+   lives in panels.css. Nothing either file defines is redefined here. */
+
+.portfolio-page .page-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.portfolio-page .header-actions { display: flex; align-items: center; gap: 12px; }
+.portfolio-page .as-of { color: var(--muted); font-size: 12px; }
+.tiles-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 16px; }
+
+/* The refresh note keeps ONE element mounted so a live region exists before the first
+   refresh — collapse its margin while it is empty. */
+.portfolio-page .hint:empty { margin: 0; }
+.refresh-note-bad { color: var(--negative); }
+
+/* Same declarations as portfolio.css's .toggle-row button: the tab row is page furniture,
+   the toggle row is AllocationPanel's, and neither stylesheet reaches into the other. */
+.tab-row { display: flex; gap: 8px; margin: 16px 0 8px; }
+.tab-row button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 4px 12px; cursor: pointer; }
+.tab-row button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); }
+
+/* The refresh button carries no shared .button class — same tokens as panels.css .button. */
+.refresh-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-size: 0.85rem; padding: 0.35rem 0.75rem; cursor: pointer; }
+.refresh-btn:hover { border-color: var(--muted); }
+.refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.refresh-btn:focus-visible,
+.tab-row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 @media (prefers-reduced-motion: no-preference) {
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
