@@ -11,7 +11,7 @@
 /* The refresh note keeps ONE element mounted so a live region exists before the first
    refresh — collapse its margin while it is empty. */
 .portfolio-page .hint:empty { margin: 0; }
-.refresh-note-bad { color: var(--negative); }
+.hint.refresh-note-bad { color: var(--negative); }
 
 /* Same declarations as portfolio.css's .toggle-row button: the tab row is page furniture,
    the toggle row is AllocationPanel's, and neither stylesheet reaches into the other. */

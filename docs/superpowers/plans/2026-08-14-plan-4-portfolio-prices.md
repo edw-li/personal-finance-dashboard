@@ -5513,7 +5513,7 @@ Page-scoped rules stay in `src/pages/PortfolioPage.css`:
 /* The refresh note keeps ONE element mounted so a live region exists before the first
    refresh — collapse its margin while it is empty. */
 .portfolio-page .hint:empty { margin: 0; }
-.refresh-note-bad { color: var(--negative); }
+.hint.refresh-note-bad { color: var(--negative); }
 
 /* Same declarations as portfolio.css's .toggle-row button: the tab row is page furniture,
    the toggle row is AllocationPanel's, and neither stylesheet reaches into the other. */
@@ -5730,6 +5730,13 @@ with execution findings):
   law (e.g. negative shares — importer only warns) 422s on ANY edit with a raw message;
   the sequential ramp collapses to ~3 dark blues on power-law books (area is the real
   encoding); DividendsPanel inlines its delete handler (cosmetic).
+- Page residuals accepted (Task 15 re-review): the reload dim can clear early when an
+  older overlapping load settles first (indicator-only; data is seq-guarded); a
+  failure→success note flip may swallow one polite announcement; "in 0s" renders for
+  sub-second refreshes; every load() replays chart entry animations (reduced-motion
+  users unaffected); a failed FIRST load's only recovery affordance is the full price
+  refresh. fetchRealized/totals.realized_gl ship with no UI consumer — Plan 5 has a
+  realized-P&L endpoint waiting.
 - Testing-law refinement (Task 14 review): the house rule should read "don't RENDER
   echarts in jsdom", not "don't test chart-bearing components" — vi.mock('../EChart')
   mounts them fine, and exporting option builders as pure functions tests the math with
