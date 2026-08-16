@@ -3634,8 +3634,8 @@ describe('formatPct decimals option', () => {
 
 describe('formatShares', () => {
   it('trims trailing zeros up to 6dp', () => {
-    expect(formatShares('169.704000')).toBe('169.704')
-    expect(formatShares('1108.000000')).toBe('1,108')
+    expect(formatShares('123.456000')).toBe('123.456')
+    expect(formatShares('2500.000000')).toBe('2,500')
     expect(formatShares(null)).toBe('—')
   })
 })
@@ -5872,6 +5872,23 @@ with execution findings):
   inconsistent with its own MV−Cost on the four private-ish rows (FIGR +25 / VIA +46 /
   RVI +2000 / VCX +1000 — stale hardcoded formulas). OUR unrealized = MV−cost is the
   correct quantity; do not chase the $3,071 totals gap in any later reconciliation.
+- MERGE/DEPLOY SEQUENCING CONSTRAINT (final review C1 — the one hard-outage risk):
+  origin/main carries e5b93d0a416f chained on c8a1f4d27b53, while this branch RE-CHAINS
+  the same revision id onto 5fbe696d5a10. Deploying main to prod BEFORE merging Plan 4
+  stamps alembic_version=e5b93d0a416f and permanently orphans 4ab0229187e6 (the source
+  column!) and 5fbe696d5a10 (cron repair) — every /portfolio query then 500s on the
+  missing column, recoverable only by alembic stamp surgery. MERGE PLAN 4 INTO MAIN
+  FIRST; then one `upgrade head` walks c8a1 → 4ab → 5fbe → e5b9 correctly. (The merge
+  itself is a clean fast-forward — main is an ancestor of this branch.)
+- Importer dividend-metadata posture (final review I1, FIXED on-branch): securities'
+  annual_dividend/ex_div_date seed on CREATE only — re-imports never revert the
+  refresh's TTM values (test-pinned; mirrors latest_prices' insert-only posture).
+- /prices/history/{ticker} ships with no frontend consumer or TS model (like
+  /portfolio/realized); HoldingOut.accounts is shipped but unrendered; spec §5's
+  OPTIONAL midday second cron tick was consciously skipped (final review M1-M3).
+- Importer seeds a latest_prices row with quoted_at=NOW for securities lacking one —
+  a sheet-vintage price wears a fresh timestamp in the staleness UI (pre-existing
+  Plan 2 behavior, newly visible; final review M6).
 - The live dev DB is now POST-REFRESH: latest_prices all yfinance, ~200-day histories,
   real TTM dividends, ZI inactive. Prod (at deploy) starts pre-refresh: empty history,
   seeded manual prices, numeric cron until the repair migration runs — the first prod
