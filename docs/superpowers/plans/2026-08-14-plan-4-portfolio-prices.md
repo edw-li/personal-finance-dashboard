@@ -3645,6 +3645,11 @@ describe('formatDate', () => {
     expect(formatDate('2026-08-14')).toBe('Aug 14, 2026')
     expect(formatDate(null)).toBe('—')
   })
+
+  it('tolerates full ISO datetimes and unpadded days', () => {
+    expect(formatDate('2026-08-14T00:00:00Z')).toBe('Aug 14, 2026')
+    expect(formatDate('2026-03-01')).toBe('Mar 1, 2026')
+  })
 })
 ```
 
@@ -3846,7 +3851,9 @@ export interface PricePoint {
   c: string
 }
 
-export type SparklinesResponse = Record<string, PricePoint[]>
+// Partial: a held security with no bars is ABSENT (not []) — consumers must `?? []`
+// (Task 12 review M1).
+export type SparklinesResponse = Partial<Record<string, PricePoint[]>>
 
 export interface LatestPriceOut {
   security_id: number
@@ -5457,6 +5464,9 @@ with execution findings):
   skipped_manual will be [] in prod and ALL 37 tickers (incl. FIGR/VCX/VIA/RVI) go to
   Yahoo — the ±25% price-sanity check in Task 16 is the wrong-symbol detector; 33
   securities carry stale annual_dividend that the first refresh TTM-overwrites broadly.
+- formatCurrency renders "-$0.00" for the reachable "-0.00" wire value (sub-half-cent
+  negative day amounts) and formatPct "-0.0%" similarly — cosmetic, note before chasing
+  it as a bug (Task 12 review M2).
 - Prices-router contract facts (Task 11 review): sparklines OMITS held securities with
   no bars (key absent, not empty) — {} on the whole book pre-refresh; a backdated manual
   PUT returns 200 with the UNCHANGED latest quote (the 200 means the history row landed,
