@@ -5509,6 +5509,18 @@ with execution findings):
 - Test-seeding gotcha: the shared-session fixture serves the exact ORM objects a test
   adds (expire_on_commit=False) — seed prices AT COLUMN SCALE (Decimal("550.0000"), not
   "550") or wire strings come out unquantized (Task 10 execution note; bites Task 11 too).
+- Panel residuals accepted (Task 14 review M3-M7): SecuritiesPanel shares one busy flag
+  between the entry form and the price mini-form (single-flight; a hung price request
+  locks the panel); dividends are create/delete-only in the UI while the backend PATCH
+  exists unwrapped (typo = delete+re-add); an import-owned row violating the type-shape
+  law (e.g. negative shares — importer only warns) 422s on ANY edit with a raw message;
+  the sequential ramp collapses to ~3 dark blues on power-law books (area is the real
+  encoding); DividendsPanel inlines its delete handler (cosmetic).
+- Testing-law refinement (Task 14 review): the house rule should read "don't RENDER
+  echarts in jsdom", not "don't test chart-bearing components" — vi.mock('../EChart')
+  mounts them fine, and exporting option builders as pure functions tests the math with
+  no mock at all. The unconditional full-shape PATCH payload also REPAIRS import rows
+  that carry fees on splits (every edit would otherwise 422) — worth keeping documented.
 - Chart-input hazards for Tasks 14/15 (Task 10 review M2/M3/M4): oversold books emit
   NEGATIVE and >100% weight_pct on holdings rows AND allocation slices (slices carry no
   warning field — the positiveSlices filter in AllocationPanel is the guard); /holdings
