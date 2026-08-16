@@ -4,6 +4,7 @@ import type { EChartsOption } from '../../charts/echarts'
 import { INK, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { AllocationResponse } from '../../types/api'
 import { escapeHtml, formatCurrencyCompact, formatPct } from '../../utils/format'
+import './portfolio.css'
 
 const TYPE_LABELS: Record<string, string> = {
   etf: 'ETF', mutual_fund: 'Mutual fund', stock: 'Stock', private: 'Private',

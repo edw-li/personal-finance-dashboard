@@ -1,0 +1,64 @@
+/* Styles for the portfolio components — the holdings table, the allocation panel and the
+   three ledger panels. Every one of those files imports this stylesheet, so none of them
+   depends on PortfolioPage.css happening to be in the bundle (the same reasoning that
+   keeps shared utilities in panels.css). panels.css owns the app-wide vocabulary
+   (.badge, .error-banner, .empty-note, .button, .loading-dim, .data-table …) and nothing
+   it defines is redefined here. Colors come from the index.css :root variables wherever
+   one exists; the remaining literal (#c98500) is theme.ts PALETTE[3], which has none. */
+
+/* .panel / .panel-title are used by all four panels (and by the page's holdings section)
+   but are defined NOWHERE in panels.css — built here from the same tokens as .card. */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem 1.25rem; min-width: 0; margin-bottom: 16px; }
+.panel-title { margin: 0 0 0.75rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.panel-title-row { display: flex; justify-content: space-between; align-items: center; }
+
+/* AllocationPanel's own two-up layout travels with the component that renders it. */
+.allocation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+@media (max-width: 900px) { .allocation-grid { grid-template-columns: 1fr; } }
+
+.holdings-scroll { overflow-x: auto; }
+.port-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.port-table th, .port-table td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--surface-2); }
+.port-table th.num, .port-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.port-table .th-sort { background: none; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0; }
+.ticker-cell { display: flex; flex-direction: column; }
+.ticker-cell .ticker { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.port-table .sub, .ticker-cell .sub { color: var(--muted); font-size: 11px; }
+.port-table .sub.stale { color: #c98500; } /* must outrank .port-table .sub (Task 13 review) */
+/* Long free text must not stretch the row past the viewport (.port-table td already
+   pins white-space: nowrap, so ellipsis needs only a bound + overflow). */
+.notes-cell { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.chart-col { width: 120px; } /* the 110px sparkline + cell padding: no reflow per row */
+.sparkline { display: block; } /* inline SVG baseline gap otherwise inflates row height */
+.sparkline-empty { color: var(--muted); } /* the "no bars yet" dash reads as absence */
+.warn-icon { color: #c98500; display: inline-flex; }
+.pos { color: var(--positive); }
+.neg { color: var(--negative); }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+
+/* Toggle buttons (AllocationPanel's donut dimension). The page's .tab-row repeats these
+   declarations in PortfolioPage.css — the two live in different stylesheets by design. */
+.toggle-row button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 4px 12px; cursor: pointer; }
+.toggle-row button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); }
+
+.entry-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; align-items: end; }
+.entry-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.entry-form input, .entry-form select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 6px; }
+/* Column-flex labels stretch their control: a checkbox has to opt out. */
+.entry-form input[type='checkbox'] { width: 16px; height: 16px; padding: 0; align-self: start; }
+.entry-form .notes-field { grid-column: span 2; }
+.form-actions { display: flex; gap: 8px; }
+.row-actions button { margin-right: 6px; }
+/* The panel action buttons carry no shared .button class, and a native control renders
+   as light chrome on the dark surface — same tokens as panels.css .button. */
+.form-actions button, .row-actions button { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-size: 0.85rem; padding: 0.35rem 0.75rem; cursor: pointer; }
+.form-actions button:hover, .row-actions button:hover { border-color: var(--muted); }
+.form-actions button:disabled, .row-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Keyboard reachability: these controls all suppress or replace the UA chrome, so the
+   focus ring has to be stated (panels.css .button:focus-visible idiom). */
+.th-sort:focus-visible,
+.entry-form button:focus-visible,
+.form-actions button:focus-visible,
+.row-actions button:focus-visible,
+.toggle-row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

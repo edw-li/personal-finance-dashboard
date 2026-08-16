@@ -3,6 +3,7 @@ import { ApiError } from '../../api/client'
 import { createDividend, deleteDividend } from '../../api/portfolio'
 import type { DividendOut, SecurityOut } from '../../types/api'
 import { formatCurrency, formatDate } from '../../utils/format'
+import './portfolio.css'
 
 export default function DividendsPanel({
   securities,

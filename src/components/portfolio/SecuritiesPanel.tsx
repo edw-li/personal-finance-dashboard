@@ -4,6 +4,7 @@ import { createSecurity, deleteSecurity, updateSecurity } from '../../api/portfo
 import { putManualPrice } from '../../api/prices'
 import type { HoldingType, SecurityOut } from '../../types/api'
 import { formatCurrency, formatDate } from '../../utils/format'
+import './portfolio.css'
 
 const HOLDING_TYPES: HoldingType[] = ['etf', 'mutual_fund', 'stock', 'private']
 

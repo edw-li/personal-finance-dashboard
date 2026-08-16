@@ -7,6 +7,7 @@ import {
 } from '../../api/portfolio'
 import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
+import './portfolio.css'
 
 interface FormState {
   security_id: string

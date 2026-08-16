@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react'
 import type { HoldingOut, SparklinesResponse } from '../../types/api'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
 import Sparkline from './Sparkline'
+import './portfolio.css'
 
 type SortKey =
   | 'ticker' | 'shares' | 'price' | 'day_change_pct' | 'market_value' | 'weight_pct'
