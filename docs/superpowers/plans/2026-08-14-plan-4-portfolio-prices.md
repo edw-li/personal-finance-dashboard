@@ -5239,9 +5239,11 @@ export default function PortfolioPage() {
       .finally(() => setLoading(false))
   }
 
+  // Mount-only fetch. react-hooks 7 reports nothing here (load is re-created per render
+  // but reads no reactive value beyond the setters), so an exhaustive-deps suppression
+  // would be an unused directive — which ESLint 9 flat config warns about by default.
   useEffect(() => {
     load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only fetch; load is stable by construction
   }, [])
 
   const onRefresh = () => {
@@ -5355,40 +5357,59 @@ NetWorthPage `useCallback` + `[load]` idiom — whatever the linter accepts WITH
 `panels.css` FIRST and reuse their tokens/classes; define only what's new:
 
 ```css
+/* Portfolio page + the five components it mounts. panels.css owns the shared vocabulary
+   (.page, .page-header, .stat-tile, .badge, .error-banner, .empty-note, .button, …) —
+   nothing it already defines is redefined here (the plan's dedupe rule). Colors use the
+   index.css :root variables wherever one exists; the remaining literal (#c98500) is
+   theme.ts PALETTE[3], which has no CSS variable. */
+
+/* .panel / .panel-title are used by all four ledger panels and the holdings section but
+   are defined NOWHERE in panels.css (the plan's dedupe note assumed otherwise), so they
+   live here, built from the same tokens as .card / .eyebrow. */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem 1.25rem; min-width: 0; margin-bottom: 16px; }
+.panel-title { margin: 0 0 0.75rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+
 .portfolio-page .page-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .portfolio-page .header-actions { display: flex; align-items: center; gap: 12px; }
-.portfolio-page .as-of { color: var(--muted, #8b93a3); font-size: 12px; }
+.portfolio-page .as-of { color: var(--muted); font-size: 12px; }
 .tiles-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .holdings-scroll { overflow-x: auto; }
 .port-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.port-table th, .port-table td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid #1e222c; }
+.port-table th, .port-table td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--surface-2); }
 .port-table th.num, .port-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .port-table .th-sort { background: none; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0; }
 .ticker-cell { display: flex; flex-direction: column; }
 .ticker-cell .ticker { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.port-table .sub, .ticker-cell .sub { color: #8b93a3; font-size: 11px; }
+.port-table .sub, .ticker-cell .sub { color: var(--muted); font-size: 11px; }
 .port-table .sub.stale { color: #c98500; } /* must outrank .port-table .sub (Task 13 review) */
+/* Long free text must not stretch the row past the viewport (.port-table td already
+   pins white-space: nowrap, so ellipsis needs only a bound + overflow). */
+.notes-cell { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .sparkline { display: block; } /* inline SVG baseline gap otherwise inflates row height */
-.badge { background: #1e222c; border: 1px solid #262b36; border-radius: 4px; padding: 0 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #8b93a3; }
 .warn-icon { color: #c98500; display: inline-flex; }
 .stale { color: #c98500; }
-.pos { color: #3fb968; }
-.neg { color: #e05252; }
+.pos { color: var(--positive); }
+.neg { color: var(--negative); }
 .allocation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
 @media (max-width: 900px) { .allocation-grid { grid-template-columns: 1fr; } }
 .panel-title-row { display: flex; justify-content: space-between; align-items: center; }
-.toggle-row button, .tab-row button { background: #1e222c; color: #8b93a3; border: 1px solid #262b36; padding: 4px 12px; cursor: pointer; }
-.toggle-row button[aria-pressed='true'], .tab-row button[aria-pressed='true'] { color: #e6e9ef; border-color: #3987e5; }
+.toggle-row button, .tab-row button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 4px 12px; cursor: pointer; }
+.toggle-row button[aria-pressed='true'], .tab-row button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); }
 .tab-row { display: flex; gap: 8px; margin: 16px 0 8px; }
 .entry-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; align-items: end; }
-.entry-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #8b93a3; }
-.entry-form input, .entry-form select { background: #1e222c; border: 1px solid #262b36; color: #e6e9ef; padding: 6px 8px; border-radius: 6px; }
+.entry-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.entry-form input, .entry-form select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 6px; }
+/* Column-flex labels stretch their control: a checkbox has to opt out. */
+.entry-form input[type='checkbox'] { width: 16px; height: 16px; padding: 0; align-self: start; }
 .entry-form .notes-field { grid-column: span 2; }
 .form-actions { display: flex; gap: 8px; }
 .row-actions button { margin-right: 6px; }
-.hint { color: #8b93a3; font-size: 12px; margin: 4px 0 10px; }
-.empty-note { color: #8b93a3; }
-.error-banner { background: rgba(224, 82, 82, 0.12); border: 1px solid #e05252; color: #e6e9ef; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; }
+/* The page/panel action buttons carry no shared .button class, and a native control
+   renders as light chrome on the dark surface — same tokens as panels.css .button. */
+.refresh-btn, .form-actions button, .row-actions button { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-size: 0.85rem; padding: 0.35rem 0.75rem; cursor: pointer; }
+.refresh-btn:hover, .form-actions button:hover, .row-actions button:hover { border-color: var(--muted); }
+.refresh-btn:disabled, .form-actions button:disabled, .row-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
 .refresh-btn { display: inline-flex; align-items: center; gap: 6px; }
 @media (prefers-reduced-motion: no-preference) {
   .spin { animation: spin 1s linear infinite; }
@@ -5396,10 +5417,12 @@ NetWorthPage `useCallback` + `[load]` idiom — whatever the linter accepts WITH
 }
 ```
 
-Deduplicate against `panels.css`: any class it ALREADY defines (`.panel`,
-`.panel-title`, `.error-banner`, `.hint`, …) must NOT be redefined here — delete the
-duplicate from this file and rely on the shared one. Colors above are theme.ts values;
-if `panels.css` exposes CSS variables for them, use the variables instead.
+EXECUTION FINDINGS (d61e42b): panels.css defines `.badge`/`.error-banner`/`.empty-note`
+(deduped out of this file) but NOT `.panel`/`.panel-title` — those had to be ADDED here
+(the dedupe premise was wrong); `.notes-cell`, button chrome for
+refresh/form-actions/row-actions, and checkbox sizing were also added ("used but
+undefined" class). All hex swapped to panels.css CSS variables except #c98500
+(stale/warning — no variable exists). The block above is the final file.
 
 - [ ] **Step 2b: SecuritiesPanel tests** (Task 14 re-review: the panel is jsdom-testable
 — no chart imports — and its two highest-consequence fixes shipped untested). Create
