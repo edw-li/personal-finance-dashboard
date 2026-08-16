@@ -13,6 +13,12 @@ line and Plan 4's Unrealized column shipped the principled formula the same way.
 
 Stored input values are authoritative for the breakdown; `derive_suggestions` is advisory
 only (the UI offers a chip, nothing is ever auto-applied server-side).
+
+Outputs are full-precision and UNBOUNDED: a product of two API-bounded inputs (treasuries ×
+exempt-pct, each up to 10^10) reaches ~10^20, and an effective rate over a near-zero base
+~10^24. So the schema layer must quantize money with a plain `Decimal.quantize` — never
+money.py's bounded `quantize_money` — and range-guard rates before `quantize_pct`; with
+either guard skipped, a GET raises on data the API itself accepted.
 """
 
 from dataclasses import dataclass, field
@@ -135,9 +141,12 @@ def stack(brackets: list[Bracket], base: Decimal, amount: Decimal) -> Decimal:
 
 @dataclass
 class JurisdictionResult:
-    """One tax family's line. Fields a family does not have stay None: income taxes carry
-    agi/taxable_income, wage taxes carry w2_income/taxable_wages, and capital gains carry
-    taxable_income (the ordinary income the gains stack on top of) + gains_amount."""
+    """One tax family's line; the fields that family does not have stay None.
+
+    Income taxes carry agi/taxable_income, wage taxes carry w2_income/taxable_wages, and
+    capital gains carry taxable_income (the ordinary income the gains stack on top of)
+    plus gains_amount.
+    """
 
     tax: Decimal
     effective_rate: Decimal | None = None
@@ -171,10 +180,14 @@ class TaxBreakdown:
 
 
 def _rate(tax: Decimal, base: Decimal) -> Decimal | None:
-    """Effective rate at full precision; None when the base is 0 (the sheet's #DIV/0!)."""
+    """Effective rate at full precision; None when the base is 0 (the sheet's #DIV/0!).
+
+    A negative base still divides — the sign semantics are the sheet's — but `0 / -base` is
+    Decimal("-0"), which would serialize as "-0.000000"; adding ZERO collapses it to +0.
+    """
     if base == 0:
         return None
-    return tax / base
+    return (tax / base) + ZERO
 
 
 def niit_advisory(fed_agi: Decimal, cg_brackets: list[Bracket]) -> str | None:
@@ -192,9 +205,11 @@ def niit_advisory(fed_agi: Decimal, cg_brackets: list[Bracket]) -> str | None:
     expected = NIIT_RATES if above else BASE_CG_RATES
     if stored == expected:
         return None
+    # Stored rates arrive at the column's Numeric(7,4) scale, so normalize before rendering:
+    # 0.1500 and a hand-typed 0.15 are the same rate and must produce the same message.
     return NIIT_WARNING.format(
-        stored=stored[0],
-        stored_top=stored[1],
+        stored=stored[0].normalize(),
+        stored_top=stored[1].normalize(),
         side="above" if above else "at or below",
         threshold=NIIT_AGI_THRESHOLD,
         expected=expected[0],

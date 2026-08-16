@@ -22,6 +22,7 @@ from app.services.tax_service import (
     ENGINE_INPUT_KEYS,
     JURISDICTION_WARN_MISSING,
     NEGATIVE_STATE_TAX_WARNING,
+    SUGGESTION_KEYS,
     compute_breakdown,
     derive_suggestions,
     niit_advisory,
@@ -287,8 +288,12 @@ def test_stack_spans_brackets():
 
 
 def test_stack_negative_base_clamps():
-    gains = stack(YEAR_BRACKETS[2023]["capital_gains"], Decimal("-5000"), Decimal("1000"))
-    assert gains == Decimal("0")
+    capital_gains = YEAR_BRACKETS[2023]["capital_gains"]
+    assert stack(capital_gains, Decimal("-5000"), Decimal("1000")) == Decimal("0")
+    # The clamp is load-bearing here: the gains occupy [0, 50000], so 44625 of them are at
+    # 0% and (50000-44625)×.15 = 806.25 is taxed. Sliding the interval down to
+    # [-5000, 45000] instead would tax only 375 × .15 = 56.25.
+    assert stack(capital_gains, Decimal("-5000"), Decimal("50000")) == Decimal("806.25")
 
 
 def test_stack_zero_amount():
@@ -389,6 +394,39 @@ def test_effective_rates_are_full_precision_ratios():
     )
 
 
+def test_effective_rate_never_serializes_negative_zero():
+    """0 / negative-base is Decimal("-0"), which would render as "-0.000000" downstream."""
+    breakdown = compute_breakdown(
+        2024, {"trad_401k_contributions": Decimal("23000")}, YEAR_BRACKETS[2024]
+    )
+    assert breakdown.federal.agi == Decimal("-23000")
+    assert breakdown.federal.tax == Decimal("0")
+    assert breakdown.federal.effective_rate == Decimal("0")
+    assert not breakdown.federal.effective_rate.is_signed()
+    assert not breakdown.state.effective_rate.is_signed()
+
+    # Only a base of exactly 0 is the sheet's #DIV/0! — no wages here, so no wage rates.
+    assert breakdown.medicare.w2_income == Decimal("0")
+    assert breakdown.medicare.effective_rate is None
+    assert breakdown.social_security.effective_rate is None
+    assert breakdown.disability.effective_rate is None
+    assert breakdown.totals.gross_income == Decimal("0")
+    assert breakdown.totals.effective_rate is None
+
+
+def test_effective_rate_over_a_negative_base_is_computed_not_none():
+    """A negative base divides; only base == 0 is None. The sign semantics are the sheet's:
+    a negative tax over a negative base reads as a positive rate, exactly as Excel would."""
+    inputs = {
+        "trad_401k_contributions": Decimal("10000"),
+        "state_exemption_credits": Decimal("500"),
+    }
+    breakdown = compute_breakdown(2024, inputs, YEAR_BRACKETS[2024])
+    assert breakdown.state.agi == Decimal("-10000")
+    assert breakdown.state.tax == Decimal("-500")  # credits with no tax to offset
+    assert breakdown.state.effective_rate == Decimal("0.05")
+
+
 def test_capital_loss_deductions_never_reach_agi():
     """r27 is a modelled line the sheet never wires into any output formula."""
     inputs = dict(YEAR_INPUTS[2024]) | {"capital_loss_deductions": Decimal("-3000")}
@@ -404,6 +442,7 @@ def test_capital_loss_deductions_never_reach_agi():
         ("536.38", "719.81", "11", "1267.19"),  # gain: everything nets
         ("-100", "500", "0", "400"),  # loss, net still positive: nets
         ("-670", "129", "0", "129"),  # loss, net negative: loss is dropped
+        ("-129", "129", "0", "129"),  # loss, net EXACTLY 0: dropped too, not netted to 0
         ("0", "179.13", "0", "179.13"),  # no LTCG line at all
     ],
 )
@@ -415,6 +454,23 @@ def test_capital_gains_amount_branches(ltcg, qualified, other, expected):
     }
     breakdown = compute_breakdown(2025, inputs, YEAR_BRACKETS[2025])
     assert breakdown.capital_gains.gains_amount == Decimal(expected)
+
+
+def test_capital_gains_stack_clamps_a_negative_taxable_income():
+    """A deduction larger than AGI drives taxable income negative; the gains must then stack
+    from 0 (the first CG bracket), never from the negative floor."""
+    inputs = {
+        "latest_w2_income": Decimal("20000"),
+        "standard_deduction": Decimal("100000"),
+        "ltcg_total": Decimal("80000"),
+    }
+    breakdown = compute_breakdown(2023, inputs, YEAR_BRACKETS[2023])
+    assert breakdown.federal.taxable_income == Decimal("-80000")
+    assert breakdown.federal.tax == Decimal("0")  # the walker never taxes a loss
+    assert breakdown.capital_gains.gains_amount == Decimal("80000")
+    # 44625 at 0%, then (80000 - 44625) × .15. Unclamped, the whole 80000 would sit below
+    # 44625 and be taxed at 0.
+    assert breakdown.capital_gains.tax == Decimal("5306.25")
 
 
 # --------------------------------------------------------------------------------------
@@ -523,6 +579,7 @@ def test_suggestion_salt_cap_2024_vs_2025():
     ("standard", "espp", "ltcg", "expected"),
     [
         ("754", "0", "-670", "84"),  # loss nets, net still positive
+        ("670", "0", "-670", "0"),  # loss nets EXACTLY to 0: the netted 0, not the 670
         ("8040.08", "0", "536.38", "8040.08"),  # LTCG gain never touches the STCG line
         ("951.93", "0", "0", "951.93"),  # no LTCG line
         ("100", "0", "-500", "0"),  # loss swamps the gain: STCG floors at 0
@@ -591,6 +648,10 @@ def test_engine_keys_are_defined_tax_keys():
     assert list(ENGINE_INPUT_KEYS) == [key for key in defined if key in set(ENGINE_INPUT_KEYS)]
 
 
+def test_suggestion_keys_are_defined_tax_keys():
+    assert set(SUGGESTION_KEYS) <= {key for key, *_ in TAX_INPUT_DEFINITIONS}
+
+
 def test_missing_inputs_warning():
     inputs = dict(YEAR_INPUTS[2024])
     del inputs["interest_total"]
@@ -633,12 +694,18 @@ def test_negative_state_tax_warning():
 def test_niit_advisory_flags_mismatch():
     base_rates = YEAR_BRACKETS[2023]["capital_gains"]  # .15/.20
     niit_rates = YEAR_BRACKETS[2024]["capital_gains"]  # .188/.238
+    # The DB stores rates at Numeric(7,4), so the SAME table also arrives as 0.1500/0.2000;
+    # the advisory normalizes, so scale must never change a word of the message.
+    stored_scale = _table(("0.0000", "0.1500", "0.2000"), _CG_THRESHOLDS[2023])
 
-    assert niit_advisory(Decimal("250000"), base_rates) == (
-        "capital-gains rates 0.15/0.20 contradict the sheet's NIIT rule for this AGI "
+    flagged = (
+        "capital-gains rates 0.15/0.2 contradict the sheet's NIIT rule for this AGI "
         "(above 200000 implies 0.188/0.238)"
     )
+    assert niit_advisory(Decimal("250000"), base_rates) == flagged
+    assert niit_advisory(Decimal("250000"), stored_scale) == flagged
     assert niit_advisory(Decimal("150000"), base_rates) is None
+    assert niit_advisory(Decimal("150000"), stored_scale) is None
     assert niit_advisory(Decimal("250000"), niit_rates) is None
     assert niit_advisory(Decimal("150000"), niit_rates) == (
         "capital-gains rates 0.188/0.238 contradict the sheet's NIIT rule for this AGI "
@@ -656,7 +723,7 @@ def test_niit_advisory_reaches_the_breakdown_warnings():
     mismatched = dict(YEAR_BRACKETS[2024]) | {"capital_gains": YEAR_BRACKETS[2023]["capital_gains"]}
     breakdown = compute_breakdown(2024, YEAR_INPUTS[2024], mismatched)
     assert breakdown.warnings == [
-        "capital-gains rates 0.15/0.20 contradict the sheet's NIIT rule for this AGI "
+        "capital-gains rates 0.15/0.2 contradict the sheet's NIIT rule for this AGI "
         "(above 200000 implies 0.188/0.238)"
     ]
     # The engine still walks the STORED rates verbatim — the advisory never edits them.
