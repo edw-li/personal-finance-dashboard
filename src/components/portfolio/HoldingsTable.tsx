@@ -34,7 +34,11 @@ function sortValue(h: HoldingOut, key: SortKey): number | string {
 
 function isStale(quotedAt: string | null): boolean {
   if (!quotedAt) return false
-  return Date.now() - new Date(quotedAt).getTime() > STALE_AFTER_DAYS * 86_400_000
+  // Bar-date vs today's DATE (forward note: "UI compares dates only") — an instant
+  // comparison flags a Friday bar early on Monday evening.
+  const bar = Date.parse(`${quotedAt.slice(0, 10)}T00:00:00Z`)
+  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`)
+  return today - bar > STALE_AFTER_DAYS * 86_400_000
 }
 
 function tone(value: string | null): string {
@@ -71,7 +75,7 @@ export default function HoldingsTable({
       setDescending((d) => !d)
     } else {
       setSortKey(key)
-      setDescending(true)
+      setDescending(COLUMNS.find((c) => c.key === key)!.numeric)
     }
   }
 
@@ -109,8 +113,13 @@ export default function HoldingsTable({
                     {h.ticker}
                     {h.is_manual_priced && <span className="badge">manual</span>}
                     {h.warnings.length > 0 && (
-                      <span title={h.warnings.join('; ')} className="warn-icon">
-                        <AlertTriangle size={13} aria-label="data warning" />
+                      <span
+                        title={h.warnings.join('; ')}
+                        role="img"
+                        aria-label={h.warnings.join('; ')}
+                        className="warn-icon"
+                      >
+                        <AlertTriangle size={13} aria-hidden="true" />
                       </span>
                     )}
                   </span>
@@ -121,7 +130,7 @@ export default function HoldingsTable({
               <td className="num">
                 {formatCurrency(h.price)}
                 {h.quoted_at && isStale(h.quoted_at) && (
-                  <span className="sub stale"> as of {formatDate(h.quoted_at.slice(0, 10))}</span>
+                  <span className="sub stale"> as of {formatDate(h.quoted_at)}</span>
                 )}
               </td>
               <td className={`num ${tone(h.day_change_pct)}`}>{formatPct(h.day_change_pct)}</td>

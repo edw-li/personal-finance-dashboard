@@ -21,6 +21,8 @@ describe('Sparkline', () => {
     const line = container.querySelector('polyline')
     expect(line).not.toBeNull()
     expect(line!.getAttribute('stroke')).toBe(POSITIVE)
+    // Geometry pin (default 110x30): the low sits at y=28, the high at y=2.
+    expect(line!.getAttribute('points')).toBe('0.0,28.0 110.0,2.0')
   })
 
   it('draws a falling line in the negative color and survives a flat series', () => {
@@ -31,6 +33,9 @@ describe('Sparkline', () => {
     const flat = render(
       <Sparkline points={[pt('2026-01-01', '10'), pt('2026-06-01', '10')]} />,
     )
-    expect(flat.container.querySelector('polyline')).not.toBeNull() // no NaN coords
+    const flatLine = flat.container.querySelector('polyline')
+    expect(flatLine).not.toBeNull() // no NaN coords
+    // A flat series pins to MID-height — the bottom edge would read "at its 52-week low".
+    expect(flatLine!.getAttribute('points')).toBe('0.0,15.0 110.0,15.0')
   })
 })

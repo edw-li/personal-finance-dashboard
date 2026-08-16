@@ -16,10 +16,14 @@ export default function Sparkline({
   if (points.length < 2) return <span className="sparkline-empty">—</span>
   const values = points.map((p) => Number(p.c))
   const min = Math.min(...values)
-  const span = Math.max(...values) - min || 1
+  const span = Math.max(...values) - min
   const step = width / (values.length - 1)
   const coords = values
-    .map((v, i) => `${(i * step).toFixed(1)},${(height - 2 - ((v - min) / span) * (height - 4)).toFixed(1)}`)
+    .map((v, i) => {
+      // A flat series pins to mid-height — bottom-edge would read "at its 52-week low".
+      const y = span === 0 ? height / 2 : height - 2 - ((v - min) / span) * (height - 4)
+      return `${(i * step).toFixed(1)},${y.toFixed(1)}`
+    })
     .join(' ')
   const rising = values[values.length - 1] >= values[0]
   return (

@@ -1,9 +1,10 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HoldingOut } from '../../types/api'
 import HoldingsTable from './HoldingsTable'
 
 afterEach(cleanup)
+afterEach(() => vi.useRealTimers())
 
 function holding(overrides: Partial<HoldingOut>): HoldingOut {
   return {
@@ -52,6 +53,67 @@ describe('HoldingsTable', () => {
     expect(screen.getAllByText('—').length).toBeGreaterThan(0)
     // Plain attribute assert — this project doesn't install jest-dom matchers, so
     // getByTitle (which throws when absent) carries the presence assertion.
-    expect(screen.getByTitle(/sell with no held shares/).className).toContain('warn-icon')
+    const marker = screen.getByTitle(/sell with no held shares/)
+    expect(marker.className).toContain('warn-icon')
+    // Hover-free access: the marker names itself to assistive tech.
+    expect(marker.getAttribute('role')).toBe('img')
+    expect(marker.getAttribute('aria-label')).toBe('sell with no held shares')
+  })
+
+  it('nulls sort to the bottom when descending and first when ascending', () => {
+    render(
+      <HoldingsTable
+        holdings={[
+          holding({ security_id: 1, ticker: 'AAA', name: 'AAA Inc', xirr_pct: '0.2' }),
+          holding({ security_id: 2, ticker: 'BBB', name: 'BBB Inc', xirr_pct: null }),
+          holding({ security_id: 3, ticker: 'CCC', name: 'CCC Inc', xirr_pct: '0.1' }),
+        ]}
+        sparklines={{}}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /xirr/i })) // numeric -> starts DESC
+    const desc = tickerColumn()
+    expect(desc[0]).toContain('AAA')
+    expect(desc[1]).toContain('CCC')
+    expect(desc[2]).toContain('BBB') // null last
+    fireEvent.click(screen.getByRole('button', { name: /xirr/i })) // toggle -> ASC
+    expect(tickerColumn()[0]).toContain('BBB') // null first
+  })
+
+  it('the string column starts ascending', () => {
+    // Distinct names on purpose: the shared `rows` fixture gives every row the name
+    // "AAA Inc", so a toContain('AAA') assert would pass on the BBB row too.
+    render(
+      <HoldingsTable
+        holdings={[
+          holding({ security_id: 1, ticker: 'AAA', name: 'AAA Inc' }),
+          holding({ security_id: 2, ticker: 'BBB', name: 'BBB Inc' }),
+        ]}
+        sparklines={{}}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /ticker/i }))
+    expect(tickerColumn()[0]).toContain('AAA')
+    expect(tickerColumn()[1]).toContain('BBB')
+  })
+
+  it('flags stale quotes by bar DATE, not instant', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T12:00:00Z'))
+    render(
+      <HoldingsTable
+        holdings={[
+          holding({ security_id: 1, ticker: 'AAA', name: 'AAA Inc', quoted_at: '2026-08-14T00:00:00Z' }),
+          holding({ security_id: 2, ticker: 'BBB', name: 'BBB Inc', quoted_at: '2026-08-17T00:00:00Z' }),
+          holding({ security_id: 3, ticker: 'CCC', name: 'CCC Inc', quoted_at: '2026-08-16T00:00:00Z' }),
+        ]}
+        sparklines={{}}
+      />,
+    )
+    expect(screen.getByText(/as of Aug 14, 2026/)).toBeTruthy() // 6 days by date -> stale
+    expect(screen.queryByText(/as of Aug 17, 2026/)).toBeNull() // 3 days by date -> fresh
+    // THE discriminating row: exactly 4 days back by DATE but 4.5 days by instant, so an
+    // instant comparison (the bug) flags it and a date comparison does not.
+    expect(screen.queryByText(/as of Aug 16, 2026/)).toBeNull()
   })
 })
