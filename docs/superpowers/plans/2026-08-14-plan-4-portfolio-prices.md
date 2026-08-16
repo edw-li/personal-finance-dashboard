@@ -5190,6 +5190,8 @@ NetWorthPage `useCallback` + `[load]` idiom — whatever the linter accepts WITH
 .ticker-cell { display: flex; flex-direction: column; }
 .ticker-cell .ticker { font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .port-table .sub, .ticker-cell .sub { color: #8b93a3; font-size: 11px; }
+.port-table .sub.stale { color: #c98500; } /* must outrank .port-table .sub (Task 13 review) */
+.sparkline { display: block; } /* inline SVG baseline gap otherwise inflates row height */
 .badge { background: #1e222c; border: 1px solid #262b36; border-radius: 4px; padding: 0 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #8b93a3; }
 .warn-icon { color: #c98500; display: inline-flex; }
 .stale { color: #c98500; }
