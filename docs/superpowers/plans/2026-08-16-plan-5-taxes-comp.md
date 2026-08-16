@@ -95,7 +95,9 @@ Notes frozen from the formulas:
 - Medicare/SS wages do NOT subtract trad-401k (FICA treatment) — only HSA(±employer)+dental/
   vision. SDI subtracts only dental/vision.
 - The SS wage base is modeled as the bracket-2 threshold with rate 0; r109's `min()` makes the
-  cap explicit. Engine: `ss_wages = min(medicare_wages, max(threshold))`, then walk.
+  cap explicit. Engine: `ss_wages = min(medicare_wages, max(threshold))`, then walk — the cap
+  applies only when the table has >1 row AND the top rate is 0 (the sheet's wage-base shape;
+  single-row or progressive-top tables walk uncapped — tax-neutral for every real table).
 - CG bracket rates 2/3 in the sheet are formulas `IF(agi > 200000, 18.8%, 15%)` /
   `IF(agi > 200000, 23.8%, 20%)` (NIIT folded in). The DB imported their cached VALUES
   (2023: .15/.20; 2024–26: .188/.238). The engine walks stored rates verbatim; the summary
@@ -537,9 +539,9 @@ def compute_breakdown(year: int, inputs: dict[str, Decimal],
     the dataclass carries full precision."""
 
 def derive_suggestions(year: int, inputs: dict[str, Decimal]) -> dict[str, Decimal]:
-    """The 10 suggestion formulas (Workbook reference), quantized 4dp HALF_UP. Only returns
-    keys whose referenced inputs exist (missing refs default 0 like the engine — simpler and
-    sheet-faithful: empty cells are 0)."""
+    """The 10 suggestion formulas (Workbook reference), quantized 4dp HALF_UP. Always
+    returns all 10 keys; referenced inputs missing from the dict default to 0, like the
+    engine (sheet-faithful: empty cells are 0)."""
 
 def niit_advisory(fed_agi: Decimal, cg_brackets: list[tuple[Decimal, Decimal]]) -> str | None:
     """Sheet models bracket-2/3 CG rates as IF(agi>200000, .188/.238, .15/.20). Return a
@@ -579,7 +581,8 @@ State tax may be negative after exemption credits → keep the value, append war
     135000, other_w2 141176.78, stcg_total 8040.08, unq_div 1653.14, interest 62.87,
     cap_loss 0, other_pretax 300, itemized 27213.282, ltcg 536.38);
     `test_suggestion_salt_cap_2024_vs_2025` (salt 17488.59 → 2024 cap 10000: 10016;
-    2025 formula with the same items under the 40000 cap: 17510.59);
+    2025 formula with the same items under the 40000 cap: 17504.59 — the 2024 non-salt
+    items sum to exactly 16);
     `test_suggestion_stcg_netting_branches` (3 branches + the 0 fallthrough),
     `test_suggestion_capital_loss_negative` (L=-5000, s=1000 → -4000).
   - Warnings: `test_missing_inputs_warning`, `test_missing_jurisdiction_zero_and_warning`
