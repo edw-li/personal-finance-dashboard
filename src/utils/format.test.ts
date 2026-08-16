@@ -68,4 +68,9 @@ describe('formatDate', () => {
     expect(formatDate('2026-08-14')).toBe('Aug 14, 2026')
     expect(formatDate(null)).toBe('—')
   })
+
+  it('tolerates full ISO datetimes and unpadded days', () => {
+    expect(formatDate('2026-08-14T00:00:00Z')).toBe('Aug 14, 2026')
+    expect(formatDate('2026-03-01')).toBe('Mar 1, 2026')
+  })
 })

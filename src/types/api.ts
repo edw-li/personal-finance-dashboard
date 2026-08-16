@@ -295,7 +295,9 @@ export interface PricePoint {
   c: string
 }
 
-export type SparklinesResponse = Record<string, PricePoint[]>
+// Partial: a held security with no bars is ABSENT (not []) — consumers must `?? []`
+// (Task 12 review M1).
+export type SparklinesResponse = Partial<Record<string, PricePoint[]>>
 
 export interface LatestPriceOut {
   security_id: number

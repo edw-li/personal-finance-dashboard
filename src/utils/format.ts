@@ -47,8 +47,10 @@ export function formatMonth(iso: string): string {
 
 export function formatDate(iso: string | null | undefined): string {
   // Same rule as formatMonth: never `new Date(iso)` (UTC parsing shifts a day back).
+  // slice(0, 10) makes full ISO datetimes safe — "…T00:00:00Z" would otherwise
+  // render "Aug NaN" (Task 12 review I1).
   if (!iso) return '—'
-  const [year, month, day] = iso.split('-')
+  const [year, month, day] = iso.slice(0, 10).split('-')
   return `${MONTH_NAMES[Number(month) - 1]} ${Number(day)}, ${year}`
 }
 
