@@ -5150,6 +5150,7 @@ git commit -m "feat: allocation charts + transactions/dividends/securities panel
 
 **Files:**
 - Create: `src/pages/PortfolioPage.tsx`, `src/pages/PortfolioPage.css`
+- Create: `src/components/portfolio/SecuritiesPanel.test.tsx` (Task 14 re-review ask)
 - Modify: `src/App.tsx`
 
 - [ ] **Step 1: Implement `PortfolioPage.tsx`**
@@ -5399,6 +5400,15 @@ Deduplicate against `panels.css`: any class it ALREADY defines (`.panel`,
 `.panel-title`, `.error-banner`, `.hint`, …) must NOT be redefined here — delete the
 duplicate from this file and rely on the shared one. Colors above are theme.ts values;
 if `panels.css` exposes CSS variables for them, use the variables instead.
+
+- [ ] **Step 2b: SecuritiesPanel tests** (Task 14 re-review: the panel is jsdom-testable
+— no chart imports — and its two highest-consequence fixes shipped untested). Create
+`src/components/portfolio/SecuritiesPanel.test.tsx` with vi.mock of '../../api/portfolio'
+and '../../api/prices', TransactionsPanel.test idioms (fireEvent, clearAllMocks), two
+cases: (1) editing an AUTO-priced security hides the Annual dividend field yet the PATCH
+payload still carries the original annual_dividend string (round-trip identity of the
+hidden field); (2) confirm-deleting the row being edited resets the form to create mode
+(/add security/i button returns).
 
 - [ ] **Step 3: Swap the route in `src/App.tsx`** — import PortfolioPage, replace
 `<Route path="/portfolio" element={<PlaceholderPage title="Portfolio" />} />` with
