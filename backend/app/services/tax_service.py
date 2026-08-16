@@ -206,14 +206,16 @@ def niit_advisory(fed_agi: Decimal, cg_brackets: list[Bracket]) -> str | None:
     if stored == expected:
         return None
     # Stored rates arrive at the column's Numeric(7,4) scale, so normalize before rendering:
-    # 0.1500 and a hand-typed 0.15 are the same rate and must produce the same message.
+    # 0.1500 and a hand-typed 0.15 are the same rate and must produce the same message. The
+    # EXPECTED pair is normalized identically — otherwise the constants' own scale leaks
+    # into the text and the message reads "0.15/0.2 ... implies 0.15/0.20".
     return NIIT_WARNING.format(
         stored=stored[0].normalize(),
         stored_top=stored[1].normalize(),
         side="above" if above else "at or below",
         threshold=NIIT_AGI_THRESHOLD,
-        expected=expected[0],
-        expected_top=expected[1],
+        expected=expected[0].normalize(),
+        expected_top=expected[1].normalize(),
     )
 
 

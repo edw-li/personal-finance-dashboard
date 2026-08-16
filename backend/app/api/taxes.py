@@ -40,6 +40,7 @@ from app.schemas.taxes import (
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
+    MONEY_QUANTUM,
     quantize_money,
     quantize_pct,
     quantize_price,
@@ -63,27 +64,21 @@ YearPath = Annotated[int, Path(ge=YEAR_MIN, le=YEAR_MAX)]
 
 MAX_BRACKETS = 12
 ZERO = Decimal("0")
-MONEY_QUANTUM = Decimal("0.01")
 # Above this the ratio is nonsense anyway (near-zero denominator), and quantize_pct would
 # need more digits than the Decimal context has.
 RATE_MAX_ABS = Decimal("1e12")
 
 
-async def _require_year(db: AsyncSession, year: int) -> TaxYear:
-    row = await db.get(TaxYear, year)
-    if row is None:
+async def _require_year(db: AsyncSession, year: int) -> None:
+    if await db.get(TaxYear, year) is None:
         raise HTTPException(status_code=404, detail=f"tax year {year} not found")
-    return row
 
 
-async def _ensure_year(db: AsyncSession, year: int) -> TaxYear:
+async def _ensure_year(db: AsyncSession, year: int) -> None:
     """Auto-create the parent row so the editors never need a separate "add year" call."""
-    row = await db.get(TaxYear, year)
-    if row is None:
-        row = TaxYear(year=year)
-        db.add(row)
+    if await db.get(TaxYear, year) is None:
+        db.add(TaxYear(year=year))
         await db.flush()  # the inputs/brackets FK to it inside this same transaction
-    return row
 
 
 async def _stored_inputs(db: AsyncSession, year: int) -> dict[str, Decimal]:
@@ -175,11 +170,14 @@ async def put_inputs(
         raise HTTPException(status_code=422, detail=f"unknown input key(s): {unknown}")
     # Quantize EVERY value before the first write: a 422 raised halfway through a bulk
     # upsert would otherwise leave the year half-edited (portfolio PATCH posture).
+    # `+ ZERO` is tax_service._rate's trick: -0.00004 quantizes to Decimal("-0.0000"), and
+    # this session keeps the written object (expire_on_commit=False), so without the
+    # collapse the PUT echoes "-0.0000" where a later GET reads Postgres's plain "0.0000".
     quantized = {
         key: (
             None
             if value is None
-            else quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4)
+            else quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
         )
         for key, value in body.values.items()
     }
@@ -215,11 +213,17 @@ def _validated_table(name: str, table: list[BracketIn]) -> list[Bracket]:
     previous: Decimal | None = None
     for index, row in enumerate(table, start=1):
         field = f"jurisdictions.{name}[{index}]"
-        rate = quantize_price(row.rate, f"{field}.rate")
+        # `+ ZERO` on both (tax_service._rate's collapse): a "-0.00004" rate / "-0.004"
+        # threshold quantizes to a SIGNED zero, which renders "-0.0000"/"-0.00". Postgres
+        # has no signed zero, so today the replaced rows are re-read clean anyway — this
+        # keeps the written value itself out of the -0 vocabulary, like PUT inputs.
+        rate = quantize_price(row.rate, f"{field}.rate") + ZERO
         if not 0 <= rate <= 1:
             # The Plan 1 mis-scale guard: a 37.43 meant as 37.43% must never reach a walk.
             raise HTTPException(status_code=422, detail=f"{field}.rate must be between 0 and 1")
-        threshold = quantize_money(row.threshold, f"{field}.threshold", max_abs=MONEY_MAX_ABS_12_2)
+        threshold = (
+            quantize_money(row.threshold, f"{field}.threshold", max_abs=MONEY_MAX_ABS_12_2) + ZERO
+        )
         if previous is None:
             if threshold != 0:
                 raise HTTPException(
@@ -324,8 +328,12 @@ def _money(value: Decimal | None) -> Decimal:
     ~10^20 state AGI, so a bounded quantizer would 422 a GET on data this very API
     accepted. The reachable maximum is ~10^21 (that product walked through 12 brackets),
     which still fits the 28-digit Decimal context at cents.
+
+    `+ ZERO` mirrors tax_service._rate: a tiny negative (a state tax of -0.001 after
+    exemption credits) quantizes to Decimal("-0.00"), which would serialize as "-0.00".
     """
-    return (ZERO if value is None else value).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    quantized = (ZERO if value is None else value).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    return quantized + ZERO
 
 
 def _effective_rate(
@@ -419,8 +427,15 @@ async def get_all_summaries(db: AsyncSession = Depends(get_db)) -> TaxSummariesO
     for row in (await db.execute(select(TaxInput))).scalars():
         inputs_by_year.setdefault(row.year, {})[row.key] = row.value
     brackets_by_year: dict[int, dict[str, list[Bracket]]] = {}
+    # The full key order, not just bracket_index: the per-year GET orders the same way, and
+    # `walk`/`stack` sort defensively, so this pins ONE table order across both endpoints
+    # rather than leaving it to whatever the planner returns.
     bracket_rows = (
-        await db.execute(select(TaxBracket).order_by(TaxBracket.bracket_index))
+        await db.execute(
+            select(TaxBracket).order_by(
+                TaxBracket.year, TaxBracket.jurisdiction, TaxBracket.bracket_index
+            )
+        )
     ).scalars()
     for row in bracket_rows:
         year_tables = brackets_by_year.setdefault(row.year, {})

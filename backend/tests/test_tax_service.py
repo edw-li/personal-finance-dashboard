@@ -707,9 +707,10 @@ def test_niit_advisory_flags_mismatch():
     assert niit_advisory(Decimal("150000"), base_rates) is None
     assert niit_advisory(Decimal("150000"), stored_scale) is None
     assert niit_advisory(Decimal("250000"), niit_rates) is None
+    # Both sides normalize, so the 0.20 constant renders as 0.2 exactly like a stored 0.2000.
     assert niit_advisory(Decimal("150000"), niit_rates) == (
         "capital-gains rates 0.188/0.238 contradict the sheet's NIIT rule for this AGI "
-        "(at or below 200000 implies 0.15/0.20)"
+        "(at or below 200000 implies 0.15/0.2)"
     )
     assert niit_advisory(Decimal("200000"), base_rates) is None  # the rule is strictly >
 

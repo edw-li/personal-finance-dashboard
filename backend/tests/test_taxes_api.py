@@ -172,6 +172,23 @@ async def test_put_inputs_rejects_unknown_key_without_partial_write(auth_client,
     assert (await auth_client.get(YEARS)).json() == []  # not even the year row
 
 
+async def test_put_inputs_never_stores_a_signed_zero(auth_client, definitions):
+    """A value that rounds to -0.0000 must echo as "0.0000", the way a later GET reads it.
+
+    The UPDATE path is where it showed: the session keeps the written object
+    (expire_on_commit=False), so the PUT echoes the API's own Decimal rather than
+    Postgres's, and Postgres has no signed zero to hand back.
+    """
+    await put_inputs(auth_client, 2032, {"annual_salary": "1000"})  # seed, then UPDATE it
+    body = await put_inputs(
+        auth_client, 2032, {"annual_salary": "-0.00004", "pay_periods": "-0.00004"}
+    )
+    items = items_by_key(body)
+    assert items["annual_salary"]["value"] == "0.0000"  # updated row
+    assert items["pay_periods"]["value"] == "0.0000"  # inserted row
+    assert (await auth_client.get(f"{YEARS}/2032/inputs")).json() == body  # byte-for-byte
+
+
 async def test_put_inputs_bounds_the_year(auth_client, definitions):
     for year in (1800, 2200):
         resp = await auth_client.put(f"{YEARS}/{year}/inputs", json={"values": {}})
@@ -249,29 +266,103 @@ async def test_put_brackets_empty_list_deletes_that_jurisdiction(auth_client, de
 
 
 async def test_put_brackets_validation_rejects_bad_tables(auth_client, definitions):
+    # Each case pins the DETAIL too: every guard here answers 422, so a body that trips the
+    # wrong one would otherwise pass silently.
     cases = {
-        "mis-scaled rate (37.43 meant as 37.43%)": {"federal": rows(("37.43", "0"))},
-        "negative rate": {"federal": rows(("-0.01", "0"))},
-        "first threshold not 0": {"federal": rows(("0.10", "100"))},
-        "thresholds not ascending": {"federal": rows(("0.10", "0"), ("0.20", "0"))},
-        "13 rows": {
-            "federal": [{"rate": "0.10", "threshold": str(index * 1000)} for index in range(13)]
-        },
-        "unknown jurisdiction": {"martian": rows(("0.10", "0"))},
-        "absurd threshold": {"federal": rows(("0.10", "0"), ("0.20", "10000000000"))},
+        "mis-scaled rate (37.43 meant as 37.43%)": (
+            {"federal": rows(("37.43", "0"))},
+            "jurisdictions.federal[1].rate must be between 0 and 1",
+        ),
+        "negative rate": (
+            {"federal": rows(("-0.01", "0"))},
+            "jurisdictions.federal[1].rate must be between 0 and 1",
+        ),
+        "first threshold not 0": (
+            {"federal": rows(("0.10", "100"))},
+            "federal: the first bracket threshold must be 0",
+        ),
+        "thresholds not ascending": (
+            {"federal": rows(("0.10", "0"), ("0.20", "0"))},
+            "federal: thresholds must be strictly ascending",
+        ),
+        # Equal thresholds away from the first row: the ascending guard, not the "first
+        # threshold must be 0" one, has to be the one that fires.
+        "equal thresholds mid-table": (
+            {"federal": rows(("0.10", "0"), ("0.20", "1000"), ("0.30", "1000"))},
+            "federal: thresholds must be strictly ascending",
+        ),
+        "13 rows": (
+            {"federal": [{"rate": "0.10", "threshold": str(i * 1000)} for i in range(13)]},
+            "federal: at most 12 brackets per jurisdiction",
+        ),
+        "unknown jurisdiction": (
+            {"martian": rows(("0.10", "0"))},
+            "unknown jurisdiction(s): ['martian']",
+        ),
+        "absurd threshold": (
+            {"federal": rows(("0.10", "0"), ("0.20", "10000000000"))},
+            "jurisdictions.federal[2].threshold: |value| must be below 10^10",
+        ),
     }
-    for label, jurisdictions in cases.items():
+    for label, (jurisdictions, detail) in cases.items():
         resp = await auth_client.put(
             f"{YEARS}/2031/brackets", json={"jurisdictions": jurisdictions}
         )
         assert resp.status_code == 422, label
+        assert detail in resp.json()["detail"], label
     # A valid jurisdiction alongside an invalid one writes nothing at all.
     mixed = await auth_client.put(
         f"{YEARS}/2031/brackets",
         json={"jurisdictions": {"federal": rows(("0.10", "0")), "state": rows(("0.10", "5"))}},
     )
     assert mixed.status_code == 422
+    assert "state: the first bracket threshold must be 0" in mixed.json()["detail"]
     assert (await auth_client.get(YEARS)).json() == []
+
+
+async def test_put_brackets_rejects_a_mixed_body_on_its_first_table(auth_client, definitions):
+    """All-or-nothing in BOTH orders: the mixed case above fails on the second jurisdiction,
+    this one on the first — neither writes a bracket row, nor the year row itself."""
+    resp = await auth_client.put(
+        f"{YEARS}/2031/brackets",
+        json={"jurisdictions": {"federal": rows(("0.10", "5")), "state": rows(("0.05", "0"))}},
+    )
+    assert resp.status_code == 422
+    assert "federal: the first bracket threshold must be 0" in resp.json()["detail"]
+    assert (await auth_client.get(YEARS)).json() == []
+    assert (await auth_client.get(f"{YEARS}/2031/brackets")).status_code == 404
+
+
+async def test_put_brackets_accepts_the_inclusive_boundaries(auth_client, definitions):
+    """Both guards are inclusive: a rate of exactly 1 and exactly MAX_BRACKETS rows pass."""
+    body = await put_brackets(
+        auth_client,
+        2031,
+        {
+            "federal": rows(("1", "0")),
+            "state": [{"rate": "0.01", "threshold": str(index * 1000)} for index in range(12)],
+        },
+    )
+    assert body["jurisdictions"]["federal"] == [
+        {"bracket_index": 1, "rate": "1.0000", "threshold": "0.00"}
+    ]
+    assert len(body["jurisdictions"]["state"]) == 12
+    assert body["jurisdictions"]["state"][-1]["bracket_index"] == 12
+    assert (await auth_client.get(f"{YEARS}/2031/brackets")).json() == body
+
+
+async def test_put_brackets_never_serializes_a_signed_zero(auth_client, definitions):
+    """A rate/threshold that rounds to a signed zero renders as the GET renders it.
+
+    Unlike the inputs UPDATE path, this one already survived the round trip — the ORM
+    re-reads the replaced rows, and Postgres has no signed zero. The pin keeps the PUT
+    echo tied to the GET so a future in-memory echo cannot reintroduce "-0.0000".
+    """
+    body = await put_brackets(auth_client, 2031, {"federal": rows(("-0.00004", "-0.004"))})
+    assert body["jurisdictions"]["federal"] == [
+        {"bracket_index": 1, "rate": "0.0000", "threshold": "0.00"}
+    ]
+    assert (await auth_client.get(f"{YEARS}/2031/brackets")).json() == body
 
 
 # --- clone ---
@@ -303,6 +394,36 @@ async def test_clone_brackets_conflicts_and_missing_source(auth_client, definiti
     missing = await auth_client.post(f"{YEARS}/2026/clone-brackets-from/2029")
     assert missing.status_code == 404
     assert "2029" in missing.json()["detail"]
+
+
+async def test_clone_brackets_self_clone_is_never_a_no_op(auth_client, definitions):
+    """Source == target hits the same two guards, so it can only 404 or 409 — never
+    duplicate a year's own rows onto itself."""
+    empty = await auth_client.post(f"{YEARS}/2029/clone-brackets-from/2029")
+    assert empty.status_code == 404  # nothing to clone; the source check runs first
+    assert "2029" in empty.json()["detail"]
+
+    await put_brackets(auth_client, 2024, {"federal": rows(("0.10", "0"))})
+    conflict = await auth_client.post(f"{YEARS}/2024/clone-brackets-from/2024")
+    assert conflict.status_code == 409
+    assert "2024" in conflict.json()["detail"]
+    assert (await auth_client.get(YEARS)).json()[0]["bracket_count"] == 1  # still one row
+
+
+async def test_clone_brackets_from_a_partial_source(auth_client, definitions):
+    """Only the source's populated jurisdictions travel; the other five arrive as empty
+    tables, not as absent keys."""
+    await put_brackets(auth_client, 2024, {"state": rows(("0.05", "0"), ("0.09", "1000"))})
+
+    resp = await auth_client.post(f"{YEARS}/2025/clone-brackets-from/2024")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["jurisdictions"]["state"] == [
+        {"bracket_index": 1, "rate": "0.0500", "threshold": "0.00"},
+        {"bracket_index": 2, "rate": "0.0900", "threshold": "1000.00"},
+    ]
+    assert list(body["jurisdictions"]) == list(JURISDICTIONS)
+    assert [name for name, table in body["jurisdictions"].items() if table] == ["state"]
 
 
 # --- summaries ---
@@ -354,6 +475,36 @@ async def test_summary_2024_matches_the_sheet(auth_client, definitions):
         "take_home": "165234.00",
         "effective_rate": "0.305661",
     }
+
+
+async def test_summary_2026_has_no_gains_so_no_capital_gains_rate(auth_client, definitions):
+    """2026 is the pinned year with zero gains: the CG rate is the sheet's #DIV/0!, i.e.
+    null rather than 0.000000. Its two headline canonical figures ride along."""
+    await put_inputs(auth_client, 2026, inputs_payload(2026))
+    await put_brackets(auth_client, 2026, brackets_payload(2026)["jurisdictions"])
+
+    body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert body["warnings"] == []
+    assert body["capital_gains"] == {
+        "taxable_income": "250304.21",
+        "gains_amount": "0.00",
+        "tax": "0.00",
+        "effective_rate": None,
+    }
+    assert body["federal"]["tax"] == "57160.35"
+    assert body["totals"]["total_tax"] == "98584.56"
+
+
+async def test_summary_never_serializes_a_signed_zero(auth_client, definitions):
+    """Exemption credits with no tax to offset drive state tax to -0.001, which quantizes
+    to Decimal("-0.00") — "-0.00" on the wire unless the serializer collapses the sign."""
+    await put_inputs(auth_client, 2033, {"state_exemption_credits": "0.001"})
+
+    body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
+    assert body["state"]["tax"] == "0.00"
+    assert body["totals"]["total_tax"] == "0.00"
+    assert body["totals"]["take_home"] == "0.00"
+    assert (await auth_client.get(ALL_SUMMARY)).json()["years"] == [body]
 
 
 async def test_summary_404_when_year_missing(auth_client, definitions):
