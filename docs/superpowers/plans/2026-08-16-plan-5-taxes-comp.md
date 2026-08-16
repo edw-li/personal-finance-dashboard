@@ -631,7 +631,14 @@ Router prefix `/taxes`, all auth-required. Endpoints (spec §5):
 - `GET /taxes/years/{year}/summary` → TaxSummaryOut: the TaxBreakdown serialized — money
   fields quantized 2dp, effective rates 6dp (`quantize_pct`), `capital_gains.effective_rate`
   null when gains == 0; plus `warnings: [str]`. Loads inputs + brackets for the year (404 when
-  year row missing).
+  year row missing). SERIALIZATION GUARDS (Task 1 quality review I3 — engine outputs are
+  UNBOUNDED; API-legal inputs can produce ~10^20 money values and ~10^24 rates): money fields
+  use plain `.quantize(Decimal("0.01"), ROUND_HALF_UP)` (NEVER money.py's bounded
+  quantize_money — a GET must not 422/500 on stored data); effective rates use quantize_pct
+  ONLY when `rate.copy_abs() < Decimal("1e12")`, else serialize null and append warning
+  `"<jurisdiction> effective rate out of range"`. One test seeds absurd-but-bound-legal
+  inputs (e.g. unq_div_us_treasuries_etf 9999999999.9999 × unq_div_state_exempt_pct
+  -9999999999.9999) and asserts the summary returns 200 with nulled rates + warning.
 - `GET /taxes/summary` → `{years: [TaxSummaryOut...]}` for every tax_years row having ≥1
   input, ordered asc (trend feed).
 
@@ -843,8 +850,9 @@ taxChartOptions.ts exports PURE builders (no React):
 
 SummaryPanel: current-year waterfall (from the year's summary) + all-years trend (GET
 /taxes/summary once per visit; seqRef; skeleton/empty states per house patterns) + a
-warnings strip rendering summary.warnings (escape via React text nodes) + stat tiles
-(StatTile) for total tax / take-home / overall effective rate.
+warnings strip rendering summary.warnings (escape via React text nodes; note: a freshly
+created sparse year carries a long 21-key missing-inputs warning — render as-is, wrapped) +
+stat tiles (StatTile) for total tax / take-home / overall effective rate.
 
 - [ ] **Step 1: failing tests** — taxChartOptions: waterfall placeholder arithmetic pinned
   (placeholder[i] = running take from gross downward — assert exact arrays for the 2024
