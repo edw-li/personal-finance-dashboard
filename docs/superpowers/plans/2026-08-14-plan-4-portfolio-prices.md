@@ -4027,6 +4027,8 @@ describe('Sparkline', () => {
     const line = container.querySelector('polyline')
     expect(line).not.toBeNull()
     expect(line!.getAttribute('stroke')).toBe(POSITIVE)
+    // Geometry pin (default 110x30): the low sits at y=28, the high at y=2.
+    expect(line!.getAttribute('points')).toBe('0.0,28.0 110.0,2.0')
   })
 
   it('draws a falling line in the negative color and survives a flat series', () => {
@@ -4037,7 +4039,10 @@ describe('Sparkline', () => {
     const flat = render(
       <Sparkline points={[pt('2026-01-01', '10'), pt('2026-06-01', '10')]} />,
     )
-    expect(flat.container.querySelector('polyline')).not.toBeNull() // no NaN coords
+    const flatLine = flat.container.querySelector('polyline')
+    expect(flatLine).not.toBeNull() // no NaN coords
+    // A flat series pins to MID-height — the bottom edge would read "at its 52-week low".
+    expect(flatLine!.getAttribute('points')).toBe('0.0,15.0 110.0,15.0')
   })
 })
 ```
@@ -4063,10 +4068,14 @@ export default function Sparkline({
   if (points.length < 2) return <span className="sparkline-empty">—</span>
   const values = points.map((p) => Number(p.c))
   const min = Math.min(...values)
-  const span = Math.max(...values) - min || 1
+  const span = Math.max(...values) - min
   const step = width / (values.length - 1)
   const coords = values
-    .map((v, i) => `${(i * step).toFixed(1)},${(height - 2 - ((v - min) / span) * (height - 4)).toFixed(1)}`)
+    .map((v, i) => {
+      // A flat series pins to mid-height — bottom-edge would read "at its 52-week low".
+      const y = span === 0 ? height / 2 : height - 2 - ((v - min) / span) * (height - 4)
+      return `${(i * step).toFixed(1)},${y.toFixed(1)}`
+    })
     .join(' ')
   const rising = values[values.length - 1] >= values[0]
   return (
@@ -4090,11 +4099,12 @@ Run the tests — expected: PASS.
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HoldingOut } from '../../types/api'
 import HoldingsTable from './HoldingsTable'
 
 afterEach(cleanup)
+afterEach(() => vi.useRealTimers())
 
 function holding(overrides: Partial<HoldingOut>): HoldingOut {
   return {
@@ -4126,6 +4136,8 @@ describe('HoldingsTable', () => {
   })
 
   it('clicking a header toggles sort direction', () => {
+    // fireEvent, not user-event: @testing-library/user-event is not a devDependency here
+    // (plan Task 13 sanctions this substitution; zero lockfile churn).
     render(<HoldingsTable holdings={rows} sparklines={{}} />)
     fireEvent.click(screen.getByRole('button', { name: /market value/i }))
     expect(tickerColumn()[0]).toContain('AAA') // now ascending
@@ -4139,8 +4151,70 @@ describe('HoldingsTable', () => {
       />,
     )
     expect(screen.getAllByText('—').length).toBeGreaterThan(0)
-    // getByTitle throws when absent; this repo installs no jest-dom matchers.
-    expect(screen.getByTitle(/sell with no held shares/).className).toContain('warn-icon')
+    // Plain attribute assert — this project doesn't install jest-dom matchers, so
+    // getByTitle (which throws when absent) carries the presence assertion.
+    const marker = screen.getByTitle(/sell with no held shares/)
+    expect(marker.className).toContain('warn-icon')
+    // Hover-free access: the marker names itself to assistive tech.
+    expect(marker.getAttribute('role')).toBe('img')
+    expect(marker.getAttribute('aria-label')).toBe('sell with no held shares')
+  })
+
+  it('nulls sort to the bottom when descending and first when ascending', () => {
+    render(
+      <HoldingsTable
+        holdings={[
+          holding({ security_id: 1, ticker: 'AAA', name: 'AAA Inc', xirr_pct: '0.2' }),
+          holding({ security_id: 2, ticker: 'BBB', name: 'BBB Inc', xirr_pct: null }),
+          holding({ security_id: 3, ticker: 'CCC', name: 'CCC Inc', xirr_pct: '0.1' }),
+        ]}
+        sparklines={{}}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /xirr/i })) // numeric -> starts DESC
+    const desc = tickerColumn()
+    expect(desc[0]).toContain('AAA')
+    expect(desc[1]).toContain('CCC')
+    expect(desc[2]).toContain('BBB') // null last
+    fireEvent.click(screen.getByRole('button', { name: /xirr/i })) // toggle -> ASC
+    expect(tickerColumn()[0]).toContain('BBB') // null first
+  })
+
+  it('the string column starts ascending', () => {
+    // Distinct names on purpose: the shared `rows` fixture gives every row the name
+    // "AAA Inc", so a toContain('AAA') assert would pass on the BBB row too.
+    render(
+      <HoldingsTable
+        holdings={[
+          holding({ security_id: 1, ticker: 'AAA', name: 'AAA Inc' }),
+          holding({ security_id: 2, ticker: 'BBB', name: 'BBB Inc' }),
+        ]}
+        sparklines={{}}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /ticker/i }))
+    expect(tickerColumn()[0]).toContain('AAA')
+    expect(tickerColumn()[1]).toContain('BBB')
+  })
+
+  it('flags stale quotes by bar DATE, not instant', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T12:00:00Z'))
+    render(
+      <HoldingsTable
+        holdings={[
+          holding({ security_id: 1, ticker: 'AAA', name: 'AAA Inc', quoted_at: '2026-08-14T00:00:00Z' }),
+          holding({ security_id: 2, ticker: 'BBB', name: 'BBB Inc', quoted_at: '2026-08-17T00:00:00Z' }),
+          holding({ security_id: 3, ticker: 'CCC', name: 'CCC Inc', quoted_at: '2026-08-16T00:00:00Z' }),
+        ]}
+        sparklines={{}}
+      />,
+    )
+    expect(screen.getByText(/as of Aug 14, 2026/)).toBeTruthy() // 6 days by date -> stale
+    expect(screen.queryByText(/as of Aug 17, 2026/)).toBeNull() // 3 days by date -> fresh
+    // THE discriminating row: exactly 4 days back by DATE but 4.5 days by instant, so an
+    // instant comparison (the bug) flags it and a date comparison does not.
+    expect(screen.queryByText(/as of Aug 16, 2026/)).toBeNull()
   })
 })
 ```
@@ -4187,7 +4261,11 @@ function sortValue(h: HoldingOut, key: SortKey): number | string {
 
 function isStale(quotedAt: string | null): boolean {
   if (!quotedAt) return false
-  return Date.now() - new Date(quotedAt).getTime() > STALE_AFTER_DAYS * 86_400_000
+  // Bar-date vs today's DATE (forward note: "UI compares dates only") — an instant
+  // comparison flags a Friday bar early on Monday evening.
+  const bar = Date.parse(`${quotedAt.slice(0, 10)}T00:00:00Z`)
+  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`)
+  return today - bar > STALE_AFTER_DAYS * 86_400_000
 }
 
 function tone(value: string | null): string {
@@ -4224,7 +4302,7 @@ export default function HoldingsTable({
       setDescending((d) => !d)
     } else {
       setSortKey(key)
-      setDescending(true)
+      setDescending(COLUMNS.find((c) => c.key === key)!.numeric)
     }
   }
 
@@ -4262,8 +4340,13 @@ export default function HoldingsTable({
                     {h.ticker}
                     {h.is_manual_priced && <span className="badge">manual</span>}
                     {h.warnings.length > 0 && (
-                      <span title={h.warnings.join('; ')} className="warn-icon">
-                        <AlertTriangle size={13} aria-label="data warning" />
+                      <span
+                        title={h.warnings.join('; ')}
+                        role="img"
+                        aria-label={h.warnings.join('; ')}
+                        className="warn-icon"
+                      >
+                        <AlertTriangle size={13} aria-hidden="true" />
                       </span>
                     )}
                   </span>
@@ -4274,7 +4357,7 @@ export default function HoldingsTable({
               <td className="num">
                 {formatCurrency(h.price)}
                 {h.quoted_at && isStale(h.quoted_at) && (
-                  <span className="sub stale"> as of {formatDate(h.quoted_at.slice(0, 10))}</span>
+                  <span className="sub stale"> as of {formatDate(h.quoted_at)}</span>
                 )}
               </td>
               <td className={`num ${tone(h.day_change_pct)}`}>{formatPct(h.day_change_pct)}</td>
