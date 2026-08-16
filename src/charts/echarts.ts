@@ -1,6 +1,6 @@
 // Tree-shaken echarts surface: everything chart-related imports from HERE, never from
 // 'echarts' directly (the full bundle is ~1MB; this registers only what the app draws).
-import { BarChart, HeatmapChart, LineChart, PieChart } from 'echarts/charts'
+import { BarChart, HeatmapChart, LineChart, PieChart, TreemapChart } from 'echarts/charts'
 import {
   GridComponent,
   LegendComponent,
@@ -18,6 +18,7 @@ import type {
   HeatmapSeriesOption,
   LineSeriesOption,
   PieSeriesOption,
+  TreemapSeriesOption,
 } from 'echarts/charts'
 import type {
   GridComponentOption,
@@ -33,6 +34,7 @@ echarts.use([
   LineChart,
   HeatmapChart,
   PieChart,
+  TreemapChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -49,6 +51,7 @@ export type EChartsOption = ComposeOption<
   | LineSeriesOption
   | HeatmapSeriesOption
   | PieSeriesOption
+  | TreemapSeriesOption
   | GridComponentOption
   | TooltipComponentOption
   | LegendComponentOption
