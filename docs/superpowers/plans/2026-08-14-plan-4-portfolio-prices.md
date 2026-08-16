@@ -4414,10 +4414,10 @@ that may touch echarts registration (Plan 3 note).
 - [ ] **Step 2: Implement `AllocationPanel.tsx`**
 
 ```tsx
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import EChart from '../EChart'
 import type { EChartsOption } from '../../charts/echarts'
-import { OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
+import { INK, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { AllocationResponse } from '../../types/api'
 import { escapeHtml, formatCurrencyCompact, formatPct } from '../../utils/format'
 
@@ -4453,14 +4453,18 @@ function treemapOption(data: AllocationResponse): EChartsOption {
         breadcrumb: { show: false },
         label: { show: true, formatter: '{b}', fontSize: 11 },
         itemStyle: { borderColor: SURFACE, borderWidth: 2, gapWidth: 2 },
-        data: slices.map((s) => ({
-          name: s.key,
-          value: Number(s.market_value),
-          itemStyle: {
-            color:
-              SEQUENTIAL_BLUE[3 + Math.round((Number(s.market_value) / max) * 8)],
-          },
-        })),
+        data: slices.map((s) => {
+          const idx = 3 + Math.round((Number(s.market_value) / max) * 8)
+          return {
+            name: s.key,
+            value: Number(s.market_value),
+            // Light ramp end needs a dark label: #fff on SEQUENTIAL_BLUE[11] is 1.32:1,
+            // violating the theme's >=3:1 promise. SURFACE clears 3:1 from idx 6 up;
+            // INK covers the dark half (Task 14 review I1).
+            label: { color: idx >= 6 ? SURFACE : INK },
+            itemStyle: { color: SEQUENTIAL_BLUE[idx] },
+          }
+        }),
       },
     ],
   }
@@ -4524,12 +4528,27 @@ export default function AllocationPanel({
 }) {
   const [donutDim, setDonutDim] = useState<'type' | 'account'>('type')
   const donutData = donutDim === 'type' ? byType : byAccount
+  // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object per
+  // render replays entry animations on unrelated state flips (Task 14 review I4). The
+  // guards use the FILTERED count — an all-oversold book must show the note, not an
+  // empty chart (M1).
+  const treemap = useMemo(
+    () => (industry && positiveSlices(industry).length > 0 ? treemapOption(industry) : null),
+    [industry],
+  )
+  const donut = useMemo(
+    () =>
+      donutData && positiveSlices(donutData).length > 0
+        ? donutOption(donutData, donutDim === 'type')
+        : null,
+    [donutData, donutDim],
+  )
   return (
     <div className="allocation-grid">
       <section className="panel">
         <h2 className="panel-title">Allocation by industry</h2>
-        {industry && industry.slices.length > 0 ? (
-          <EChart option={treemapOption(industry)} height={300} />
+        {treemap ? (
+          <EChart option={treemap} height={300} />
         ) : (
           <p className="empty-note">No priced holdings yet.</p>
         )}
@@ -4554,8 +4573,8 @@ export default function AllocationPanel({
             </button>
           </div>
         </div>
-        {donutData && donutData.slices.length > 0 ? (
-          <EChart option={donutOption(donutData, donutDim === 'type')} height={300} />
+        {donut ? (
+          <EChart option={donut} height={300} />
         ) : (
           <p className="empty-note">No priced holdings yet.</p>
         )}
@@ -4573,7 +4592,7 @@ component must import from `'../../api/portfolio'` exactly):
 
 ```tsx
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecurityOut, TransactionOut } from '../../types/api'
 import TransactionsPanel from './TransactionsPanel'
 
@@ -4585,6 +4604,9 @@ vi.mock('../../api/portfolio', () => ({
 import { createTransaction } from '../../api/portfolio'
 
 afterEach(cleanup)
+// Call counts are per-test: the "not called" assertion below would otherwise see the
+// create from an earlier test. clearAllMocks keeps the factory's mockResolvedValue.
+beforeEach(() => vi.clearAllMocks())
 
 const securities: SecurityOut[] = [{
   id: 1, ticker: 'NVDA', name: 'NVIDIA', industry: 'Semis', holding_type: 'stock',
@@ -4638,6 +4660,31 @@ describe('TransactionsPanel', () => {
       security_id: 1, account: 'Robinhood', type: 'buy', shares: '2', price: '150',
     })
   })
+
+  it('deleting the row being edited resets the form', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const onChanged = vi.fn()
+    render(
+      <TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={onChanged} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    // Back to create mode: a stale editingId would PATCH the deleted id on the next save.
+    expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
+  })
+
+  it('split without a factor is refused client-side', () => {
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={() => {}} />)
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/type/i), 'split')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    expect(screen.getByText(/split factor is required/i)).toBeTruthy()
+    expect(createTransaction).not.toHaveBeenCalled()
+  })
 })
 ```
 
@@ -4687,7 +4734,7 @@ function toPayload(form: FormState) {
   }
   if (form.type === 'split') {
     // Plan 1 dummy convention: split rows store shares/price 0 and carry no fees.
-    return { ...base, split_factor: form.split_factor, shares: '0', price: '0', fees: null }
+    return { ...base, split_factor: form.split_factor.trim(), shares: '0', price: '0', fees: null }
   }
   return {
     ...base,
@@ -4737,6 +4784,12 @@ export default function TransactionsPanel({
       setError('Security and account are required')
       return
     }
+    // Type-appropriate numeric guard: an empty string reaches the API as `""`, which
+    // 422s as an opaque pydantic decimal-parse error (Task 14 review M2).
+    if (form.type === 'split' ? !form.split_factor.trim() : !(form.shares.trim() && form.price.trim())) {
+      setError(form.type === 'split' ? 'Split factor is required' : 'Shares and price are required')
+      return
+    }
     setBusy(true)
     setError(null)
     const payload = toPayload(form)
@@ -4759,7 +4812,15 @@ export default function TransactionsPanel({
   const remove = (txn: TransactionOut) => {
     if (!window.confirm(`Delete this ${txn.type} of ${tickers.get(txn.security_id) ?? '?'}?`)) return
     deleteTransaction(txn.id)
-      .then(onChanged)
+      .then(() => {
+        // The edited row is gone — a stale editingId would PATCH a 404 on the next save
+        // (Task 14 review I3). Reset on SUCCESS only: a failed delete leaves the row.
+        if (txn.id === editingId) {
+          setEditingId(null)
+          setForm(EMPTY)
+        }
+        onChanged()
+      })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Delete failed')
       })
@@ -5071,6 +5132,9 @@ optional text sent as explicit null (clears the column; dodges the blank-industr
 allocation-slice residual); delete 409 message rendered verbatim via ApiError; manual
 "Set price" mini-form inline in the row's actions cell, gated on is_manual_priced,
 calling putManualPrice(ticker, { price }) then onChanged(); as_of not exposed.
+Fix-round pins (1dca7fc): Annual dividend field gated on edit-mode AND is_manual_priced
+(refresh owns it otherwise — hint says so); remove() resets editingId/form on success
+when deleting the edited row (both panels).
 
 - [ ] **Step 7: Gates + commit**
 
