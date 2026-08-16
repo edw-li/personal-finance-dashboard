@@ -602,7 +602,9 @@ State tax may be negative after exemption credits → keep the value, append war
 `backend/tests/test_taxes_api.py`. Modify `backend/app/main.py` (register router),
 `backend/app/schemas/__init__.py` if the package re-exports (follow the existing pattern).
 
-Router prefix `/taxes`, all auth-required. Endpoints (spec §5):
+Router prefix `/taxes`, all auth-required. `{year}`/`{source_year}` path params carry
+`Path(ge=1900, le=2100)` on EVERY route (int4 overflow on a raw GET would otherwise 500;
+out-of-bounds years 422 instead of 404 — no legal year is excluded). Endpoints (spec §5):
 
 - `GET /taxes/years` → `[{year, notes, input_count, bracket_count}]` ordered asc.
 - `GET /taxes/years/{year}/inputs` → `{year, sections: [{section, items: [{key, label,
