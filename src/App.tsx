@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage'
 import MonthlyUpdatePage from './pages/MonthlyUpdatePage'
 import NetWorthPage from './pages/NetWorthPage'
 import PlaceholderPage from './pages/PlaceholderPage'
+import PortfolioPage from './pages/PortfolioPage'
 import SpendingPage from './pages/SpendingPage'
 
 export default function App() {
@@ -20,7 +21,7 @@ export default function App() {
               <Route path="/update" element={<MonthlyUpdatePage />} />
               <Route path="/net-worth" element={<NetWorthPage />} />
               <Route path="/spending" element={<SpendingPage />} />
-              <Route path="/portfolio" element={<PlaceholderPage title="Portfolio" />} />
+              <Route path="/portfolio" element={<PortfolioPage />} />
               <Route path="/taxes" element={<PlaceholderPage title="Taxes" />} />
               <Route path="/espp" element={<PlaceholderPage title="ESPP" />} />
               <Route path="/paycheck" element={<PlaceholderPage title="Paycheck" />} />
