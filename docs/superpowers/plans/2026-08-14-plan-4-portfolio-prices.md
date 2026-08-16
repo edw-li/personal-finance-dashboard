@@ -4089,8 +4089,7 @@ Run the tests — expected: PASS.
 - [ ] **Step 3: Write the failing HoldingsTable tests**
 
 ```tsx
-import { cleanup, render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { HoldingOut } from '../../types/api'
 import HoldingsTable from './HoldingsTable'
@@ -4126,10 +4125,9 @@ describe('HoldingsTable', () => {
     expect(tickerColumn()[0]).toContain('BBB')
   })
 
-  it('clicking a header toggles sort direction', async () => {
-    const user = userEvent.setup()
+  it('clicking a header toggles sort direction', () => {
     render(<HoldingsTable holdings={rows} sparklines={{}} />)
-    await user.click(screen.getByRole('button', { name: /market value/i }))
+    fireEvent.click(screen.getByRole('button', { name: /market value/i }))
     expect(tickerColumn()[0]).toContain('AAA') // now ascending
   })
 
@@ -4141,21 +4139,21 @@ describe('HoldingsTable', () => {
       />,
     )
     expect(screen.getAllByText('—').length).toBeGreaterThan(0)
-    expect(screen.getByTitle(/sell with no held shares/)).toBeInTheDocument()
+    // getByTitle throws when absent; this repo installs no jest-dom matchers.
+    expect(screen.getByTitle(/sell with no held shares/).className).toContain('warn-icon')
   })
 })
 ```
 
-(If `@testing-library/user-event` is not already a devDependency, use
-`fireEvent.click` from @testing-library/react instead — check package.json FIRST and
-keep the lockfile churn zero.)
+(EXECUTION NOTE: `@testing-library/user-event` is NOT a devDependency and jest-dom is
+not installed — the block above already carries the fireEvent + matcher-free forms.)
 
 - [ ] **Step 4: Run to verify failure**, then implement `HoldingsTable.tsx`:
 
 ```tsx
 import { useMemo, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
-import type { HoldingOut, PricePoint } from '../../types/api'
+import type { HoldingOut, SparklinesResponse } from '../../types/api'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
 import Sparkline from './Sparkline'
 
@@ -4203,7 +4201,9 @@ export default function HoldingsTable({
   sparklines,
 }: {
   holdings: HoldingOut[]
-  sparklines: Record<string, PricePoint[]>
+  // Partial record (Task 12 review M1): a held security with no bars is ABSENT, so the
+  // `?? []` at the call site below is type-required, not defensive.
+  sparklines: SparklinesResponse
 }) {
   const [sortKey, setSortKey] = useState<SortKey>('market_value')
   const [descending, setDescending] = useState(true)
