@@ -4417,7 +4417,7 @@ that may touch echarts registration (Plan 3 note).
 import { useState } from 'react'
 import EChart from '../EChart'
 import type { EChartsOption } from '../../charts/echarts'
-import { OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE } from '../../charts/theme'
+import { OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { AllocationResponse } from '../../types/api'
 import { escapeHtml, formatCurrencyCompact, formatPct } from '../../utils/format'
 
@@ -4439,8 +4439,10 @@ function treemapOption(data: AllocationResponse): EChartsOption {
   return {
     tooltip: {
       formatter: (params) => {
-        const p = params as { name: string; value: number }
-        return `${escapeHtml(p.name)}: ${formatCurrencyCompact(p.value)}`
+        // `TopLevelFormatterParams` is `CallbackDataParams | CallbackDataParams[]`;
+        // item-trigger only ever passes the single form (SpendingPage's idiom).
+        const p = Array.isArray(params) ? params[0] : params
+        return `${escapeHtml(p.name ?? '')}: ${formatCurrencyCompact(p.value as number)}`
       },
     },
     series: [
@@ -4450,7 +4452,7 @@ function treemapOption(data: AllocationResponse): EChartsOption {
         nodeClick: false,
         breadcrumb: { show: false },
         label: { show: true, formatter: '{b}', fontSize: 11 },
-        itemStyle: { borderColor: '#171a21', borderWidth: 2, gapWidth: 2 },
+        itemStyle: { borderColor: SURFACE, borderWidth: 2, gapWidth: 2 },
         data: slices.map((s) => ({
           name: s.key,
           value: Number(s.market_value),
@@ -4489,9 +4491,10 @@ function donutOption(data: AllocationResponse, labels: boolean): EChartsOption {
   return {
     tooltip: {
       formatter: (params) => {
-        const p = params as { name: string; value: number }
-        return `${escapeHtml(p.name)}: ${formatCurrencyCompact(p.value)} (${formatPct(
-          total > 0 ? p.value / total : 0,
+        const p = Array.isArray(params) ? params[0] : params
+        const value = p.value as number
+        return `${escapeHtml(p.name ?? '')}: ${formatCurrencyCompact(value)} (${formatPct(
+          total > 0 ? value / total : 0,
           { signed: false },
         )})`
       },
@@ -4569,8 +4572,7 @@ wrapper takes a style/className instead, adapt the two call sites, not the wrapp
 component must import from `'../../api/portfolio'` exactly):
 
 ```tsx
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SecurityOut, TransactionOut } from '../../types/api'
 import TransactionsPanel from './TransactionsPanel'
@@ -4595,32 +4597,42 @@ const importTxn: TransactionOut = {
   sort_index: 20, source: 'import', notes: null,
 }
 
+// fireEvent, not user-event: @testing-library/user-event is not a devDependency here
+// (plan Task 13 sanctions this substitution; zero lockfile churn). Same reason there are
+// no jest-dom matchers — getBy* throws when absent, so it carries the presence assertion.
+function change(el: HTMLElement, value: string): void {
+  fireEvent.change(el, { target: { value } })
+}
+
 describe('TransactionsPanel', () => {
   it('marks import-owned rows and shows the re-import caveat', () => {
     render(
       <TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={() => {}} />,
     )
-    expect(screen.getByText('sheet')).toBeInTheDocument()
-    expect(screen.getByText(/re-import/i)).toBeInTheDocument()
+    // Scoped to the table: the hint's legend badge carries the same word, so an
+    // unscoped getByText('sheet') matches two nodes and throws.
+    expect(within(screen.getByRole('table')).getByText('sheet')).toBeTruthy()
+    expect(screen.getByText(/re-import/i)).toBeTruthy()
   })
 
-  it('split type swaps shares/price inputs for a factor input', async () => {
-    const user = userEvent.setup()
+  it('split type swaps shares/price inputs for a factor input', () => {
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={() => {}} />)
-    expect(screen.getByLabelText(/shares/i)).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText(/type/i), 'split')
+    expect(screen.getByLabelText(/shares/i)).toBeTruthy()
+    change(screen.getByLabelText(/type/i), 'split')
     expect(screen.queryByLabelText(/shares/i)).toBeNull()
-    expect(screen.getByLabelText(/factor/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/factor/i)).toBeTruthy()
   })
 
   it('submits a buy with the typed values and calls onChanged', async () => {
-    const user = userEvent.setup()
     const onChanged = vi.fn()
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
-    await user.type(screen.getByLabelText(/account/i), 'Robinhood')
-    await user.type(screen.getByLabelText(/shares/i), '2')
-    await user.type(screen.getByLabelText(/price/i), '150')
-    await user.click(screen.getByRole('button', { name: /add transaction/i }))
+    // The plan's snippet skipped the security select; submit() refuses without it, so
+    // the security_id assertion below needs the selection to happen.
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/shares/i), '2')
+    change(screen.getByLabelText(/price/i), '150')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(vi.mocked(createTransaction).mock.calls[0][0]).toMatchObject({
       security_id: 1, account: 'Robinhood', type: 'buy', shares: '2', price: '150',
@@ -4659,6 +4671,13 @@ const EMPTY: FormState = {
   shares: '', price: '', fees: '', split_factor: '', notes: '',
 }
 
+// PATCH validates the MERGED row, so a type flip must carry the COMPLETE type-appropriate
+// shape or the stored other-type fields 422 it (buy→split trips "split rows carry no
+// shares/price"; split→buy trips "buy rows carry no split_factor"). Partial flips are
+// rejected BY DESIGN — silently zeroing user shares would destroy data (Task 9 review M2
+// forward note). The full shape is therefore emitted unconditionally: POST accepts the
+// same explicit dummies/nulls, so one builder serves both verbs and no pre-edit type has
+// to be tracked.
 function toPayload(form: FormState) {
   const base = {
     account: form.account.trim(),
@@ -4667,13 +4686,15 @@ function toPayload(form: FormState) {
     notes: form.notes.trim() || null,
   }
   if (form.type === 'split') {
-    return { ...base, split_factor: form.split_factor }
+    // Plan 1 dummy convention: split rows store shares/price 0 and carry no fees.
+    return { ...base, split_factor: form.split_factor, shares: '0', price: '0', fees: null }
   }
   return {
     ...base,
     shares: form.shares,
     price: form.price,
     fees: form.fees.trim() ? form.fees : null,
+    split_factor: null,
   }
 }
 
@@ -5042,6 +5063,14 @@ rows — an inline "Set price" mini-form calling `putManualPrice(ticker, { price
 a security stops its price refresh). Columns: Ticker, Name, Industry, Type,
 Annual div, Ex-div, Manual ✓, Active ✓, actions. Keep it a single self-contained
 component; no new patterns.
+
+EXECUTION PINS (final implementation, commit afc3241): one form doubles as create/edit
+(editingId idiom); ticker input DISABLED while editing (natural key); Annual dividend +
+Active fields render only in edit mode; edit submits the full six-field shape with blank
+optional text sent as explicit null (clears the column; dodges the blank-industry
+allocation-slice residual); delete 409 message rendered verbatim via ApiError; manual
+"Set price" mini-form inline in the row's actions cell, gated on is_manual_priced,
+calling putManualPrice(ticker, { price }) then onChanged(); as_of not exposed.
 
 - [ ] **Step 7: Gates + commit**
 
