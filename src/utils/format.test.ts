@@ -57,8 +57,8 @@ describe('formatPct decimals option', () => {
 
 describe('formatShares', () => {
   it('trims trailing zeros up to 6dp', () => {
-    expect(formatShares('169.704000')).toBe('169.704')
-    expect(formatShares('1108.000000')).toBe('1,108')
+    expect(formatShares('123.456000')).toBe('123.456')
+    expect(formatShares('2500.000000')).toBe('2,500')
     expect(formatShares(null)).toBe('—')
   })
 })

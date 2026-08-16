@@ -71,13 +71,18 @@ async def apply_reference_data(
             "name": row.name,
             "industry": row.industry,
             "holding_type": row.holding_type,
+        }
+        # annual_dividend/ex_div_date seed on CREATE only — post-Plan-4 the price
+        # refresh owns them (Yahoo TTM), same insert-only posture as latest_prices
+        # below; a re-import must not revert live metadata to sheet leftovers.
+        seed_only = {
             "annual_dividend": row.annual_dividend,
             "ex_div_date": row.ex_div_date,
         }
         security = existing.get(row.ticker)
         if security is None:
             # is_manual_priced/is_active stay user-owned after creation
-            security = Security(ticker=row.ticker, **fields)
+            security = Security(ticker=row.ticker, **fields, **seed_only)
             db.add(security)
             security_counts.creates += 1
             report.add_sample(f"securities[{row.ticker}]: created")

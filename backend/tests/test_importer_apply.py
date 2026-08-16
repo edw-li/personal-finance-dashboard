@@ -57,6 +57,27 @@ async def test_apply_reference_data_creates_then_skips(db):
     assert report2.entities["latest_prices"].skips == 2  # insert-only: never updated
 
 
+async def test_apply_reference_data_never_reverts_refresh_owned_dividend_metadata(db):
+    # Post-Plan-4 the price refresh owns annual_dividend/ex_div_date (Yahoo TTM) —
+    # a re-import must seed them on CREATE only, never revert live values to the
+    # sheet's GOOGLEFINANCE leftovers (same insert-only posture as latest_prices).
+    report = SheetReport()
+    await apply_reference_data(db, parse_reference_data(sheets()["ReferenceData"]), report)
+    await db.commit()
+    divc = (await db.execute(select(Security).where(Security.ticker == "DIVC"))).scalar_one()
+    assert divc.annual_dividend is not None  # seeded at create
+    divc.annual_dividend = Decimal("9.9999")  # simulate a refresh-written TTM value
+    divc.ex_div_date = date(2026, 6, 1)
+    await db.commit()
+
+    report2 = SheetReport()
+    await apply_reference_data(db, parse_reference_data(sheets()["ReferenceData"]), report2)
+    await db.commit()
+    await db.refresh(divc)
+    assert divc.annual_dividend == Decimal("9.9999")
+    assert divc.ex_div_date == date(2026, 6, 1)
+
+
 async def test_apply_reference_data_updates_changed_metadata_only(db):
     report = SheetReport()
     await apply_reference_data(db, parse_reference_data(sheets()["ReferenceData"]), report)
