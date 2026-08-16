@@ -5647,16 +5647,44 @@ git add docs/superpowers/plans/2026-08-14-plan-4-portfolio-prices.md
 git commit -m "docs: record Plan 4 reconciliation + live refresh results (Task 16)"
 ```
 
-### Task 16 results (filled during execution)
+### Task 16 results (filled 2026-08-16, controller-driven)
 
-- Pre-refresh holdings/allocation/realized sanity: _pending_
-- Reconciliation vs sheet (per-column max |diff|, row counts): _pending_
-- Live refresh (updated/failed counts, duration, worst mover vs seeded): _pending_
-- Second-refresh idempotency: _pending_
-- ZI deactivation: _pending_
-- Scheduler boot log: _pending_
-- Frontend smoke + remaining user-visual items: _pending_
-- Task 15 bundle size: _pending_
+- Pre-refresh sanity: 22 holdings / 0 unpriced; totals mv 768033.30 cost 441930.04
+  unrealized 326103.26 realized 0.00 dividends 0.00; day/xirr null 22/22 as predicted;
+  weights sum 0.999999; allocation 8/3/6 slices, each total == holdings total, weight
+  sums 1.000000; realized [] 0.00; sparklines {}; txn round-trip source=ui
+  sort_index=350 (max 340 + 10), holdings bumped then byte-restored on delete.
+- Reconciliation vs sheet Portfolio tab (SEEDED prices): 25 sheet rows = 22 held + 3
+  zero-share watchlist (AMD/FSMDX/FSSNX); held-set EXACT match. Worst |diff|: shares
+  2e-7 (VIEIX), weight 5e-7, price 0 (EXACT all 22), cost $0.01 (VTIAX), mv $0.0045
+  (AMZN), realized/dividends exact-0. Totals: cost + mv match to the cent.
+  UNREALIZED CARVE-OUT: the sheet's own Unrealized column contradicts its own MV−Cost
+  on exactly FIGR(+25)/VIA(+46)/RVI(+2000)/VCX(+1000) — stale hardcoded formulas on the
+  four private-ish rows (VOO checks internally to 3e-4). Ours = MV−cost, internally
+  consistent; the other 18 rows pass at worst $0.0045. Same family as the sheet's dead
+  XIRR and broken dividend columns. ALL GATES PASS with this documented quirk.
+- Live refresh #1: 36 updated, failed {ZI: "no data returned"}, 0 manual-skipped,
+  9.66s server-side (11.8s wall). day_change 22/22 non-null; as_of = 2026-08-14 (Friday
+  bar — honest on a Sunday); BRK.B 504.03 (dot→dash live), VFFSX 381.32 / VIEIX 190.05
+  (spec risk closed live); sparklines 22 tickers, 22-52 weekly points; TTM dividends on
+  23 payers (VOO 7.3450, SCHD 1.0480, NVDA 0.2800, MSFT 3.5600) replacing the broken
+  GOOGLEFINANCE leftovers; price_history 36 tickers × 103-255 bars.
+- Refresh #2: idempotent (36/ZI again, 5.5s, history counts byte-identical 103-255).
+  Worst mover vs seeded: VCX +7.87%, then VIA +4.55%, FIGR +2.44% — none near ±25%
+  (no wrong-symbol hazards).
+- ZI deactivated via PATCH (delisted); refresh #3: 36 updated, failed {} — clean.
+- Scheduler boot log (re-enabled after reconciliation):
+  INFO:app.services.scheduler:price refresh scheduled: '10 13 * * mon-fri'
+  (America/Los_Angeles) — the I1 logging fix + day-name cron both live-proven.
+- Frontend smoke: vite 6.4.3 serves /portfolio (SPA shell), proxy round-trips live data
+  (mv 772599.68, day -0.14%); dividend create→totals 12.34→delete restored; manual-price
+  flow (flip SGOV manual → PUT 99.99 source=manual → flip back → refresh restores
+  yfinance 100.55). REMAINING USER ITEM: the interactive visual pass (charts, label
+  density, tooltips, keyboard walk) — no browser automation available, consistent with
+  Plan 3.
+- Task 15 bundle: index-DLjj1Ul_.js 977.61 kB raw / 325.01 kB gzip (+ ~113 kB raw vs
+  Plan 3 close: wave-2 pie + treemap + page); CSS 12.77 kB. Plan 6 code-splitting note
+  stands.
 
 ---
 
