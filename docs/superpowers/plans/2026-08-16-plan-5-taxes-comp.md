@@ -787,6 +787,10 @@ are `string`, nullables `| null`, matching Tasks 2–4 response shapes EXACTLY).
 `src/api/portfolio.ts` (typed thin wrappers over `client.ts`; query-string helpers for the
 modeler params; no react-query).
 
+Note (Task 2 review M8): brackets serialize as `Record<string, Bracket[]>` (importer-written
+extra jurisdictions survive reads) — export a frontend `JURISDICTIONS` order const in
+`src/api/taxes.ts` to drive render order; `BracketIn` ignores a round-tripped `bracket_index`.
+
 - [ ] **Step 1:** write types + clients (every endpoint from Tasks 2–4, including
   clone-brackets and modeler params). **Step 2:** `npx tsc --noEmit` via `npm run build`
   (build runs tsc) + `npm run lint` + `npm test` (existing 52 still green).
@@ -813,7 +817,9 @@ order; each row = label + text input (controlled, string state; blank = null) + 
 button (fills the input locally — save still explicit). Save button per section or one for
 the form (one for the form; disabled while saving) → PUT only CHANGED keys (diff against
 loaded values; blank→null deletes). 422 surfaces the detail string inline (house error-note
-pattern). aria: inputs labelled via htmlFor/id.
+pattern) — note a `suggested` value can exceed the input bound 10^10 (unbounded engine
+outputs), so Apply-then-save can legitimately 422; the inline error covers it (Task 2
+review M8). aria: inputs labelled via htmlFor/id.
 
 BracketsEditor: six jurisdiction sections; each a small table (rows: index, rate as %
 string, threshold) + add/remove row + per-jurisdiction Save (PUT with ONLY that jurisdiction
@@ -960,7 +966,12 @@ NOT involved — plain script, GET-only):
   is_component UPDATE + first refresh + ZI flags) stands for the Plan 6 deploy; taxes
   re-import clobbers UI-edited sheet-years (cutover order); paycheck Percentages/Monthly
   Budget block consciously skipped; /prices/history & /portfolio/realized still
-  frontend-unconsumed.
+  frontend-unconsumed; taxes router joins the accounts/securities accepted TOCTOU class
+  (concurrent writes can 500-then-retry; on_conflict_do_* is the batch fix for all three);
+  every taxes write auto-creates the year row and nothing deletes one — phantom years from
+  typos need a Plan 6 DELETE /taxes/years/{year} (empty-PUT-creates is test-pinned, don't
+  just remove it); money.py quantizers preserve Decimal("-0") house-wide (writers/readers
+  that care must collapse with + ZERO).
 - [ ] **Step 3:** Definition-of-done audit against the checklist below; fix or document any
   miss; final commit `docs: Plan 5 final gates + forward notes`.
 
