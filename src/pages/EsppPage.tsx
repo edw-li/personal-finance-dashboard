@@ -235,7 +235,8 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
       <p className="drill-hint">
         Leave the purchase price blank and the server derives it — 85% of the lower of
         subscription price and purchase FMV. Sold date and sold price travel together:
-        set both to realize a lot, clear both to un-sell it.
+        set both to realize a lot, clear both to un-sell it. A sold lot is measured
+        against its sale price; every other row against the quote above.
       </p>
       {error && (
         <div className="error-banner" role="alert">
