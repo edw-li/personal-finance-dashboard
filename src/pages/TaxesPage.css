@@ -41,26 +41,3 @@
   margin: 0;
 }
 
-/* The stand-in totals line — Task 7's SummaryPanel replaces this block. */
-.tax-totals {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 1rem;
-  margin: 0;
-}
-
-.tax-totals dt {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 0.35rem;
-}
-
-.tax-totals dd {
-  margin: 0;
-  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
-  font-size: 1.15rem;
-  font-weight: 600;
-}
