@@ -1016,6 +1016,31 @@ NOT involved — plain script, GET-only):
   systematic-debugging posture before touching code.
 - [ ] **Step 3:** commit `docs: Plan 5 reconciliation results vs sheet` (plan doc only).
 
+### Task 10 results (executed 2026-08-17, controller-supervised; read-only, in-process ASGI vs the live dev DB)
+
+**ALL 130 CHECKS PASS** (script exits 0; the only POST was the app's own login; no lifespan
+→ no scheduler; no writes).
+
+- **Tax years:** exactly 2023–2026, 43 inputs + 25 brackets each.
+- **Summaries vs the canonical table:** all 56 pinned money cells match at cents for all
+  four years (AGI/TI/tax per jurisdiction, gains, gross, total, take-home).
+- **Sheet-drift reconciliation (sheet − ours, cents-rounded):** 2023 federal −31.20 (D1),
+  2024 0.00 / 0.00 (clean year), 2025 federal +405.50 + state +117.85 (D2), 2026 federal
+  +4918.92 (D3; 4918.93 at full precision). Every delta equals its documented drift exactly.
+- **ESPP modeler (sheet params 170.79/171/0):** the full golden chain — 78/68 shares,
+  11324.04/9872.24 costs, 15.96 carry, 534.87 refund, totals 24935.34 / 21196.28 /
+  24966.00, remaining 64.66, price_source "params".
+- **ESPP lots:** 4 lots, cost bases 10720.49 / 10514.33 / 11297.75 / 9937.07. Runtime
+  (recorded, not pinned): NVDA 225.1600 @ 2026-08-14 bar; lots 1–3 qualified; lot 4
+  qualifies in 12 days (2026-08-29); market values 58541.60 / 57415.80 / 61693.84 /
+  54263.56.
+- **Paycheck breakdown (server-default profile, effective 2026-01-01):** all 12 lines at
+  the golden cents (gross 7872.08 → net 3384.16, monthly 6768.33), warnings [].
+- **Comp events — FIRST real-data pass through comp_calc** (test fixtures had used
+  synthetic RSU counts): all 28 cells of the pinned 4-row table reproduce from the REAL
+  stored inputs, incl. 2026's 333882.96 / 0.236734 (⚠D4) / 601854.46 and 2027's null
+  cascade with tc 188930.00.
+
 ### Task 11: Final gates + forward notes + DoD audit
 
 - [ ] **Step 1:** full gates in the worktree: backend pytest -W error / ruff check / format
