@@ -17,6 +17,7 @@ it('posts the workbook as multipart with the dry-run flag on', async () => {
   await importXlsx(file, true)
   const [path, options] = vi.mocked(api).mock.calls[0]
   expect(path).toBe('/import/xlsx?dry_run=true')
+  expect(options?.method).toBe('POST')
   // FormData, not JSON: client.ts then leaves Content-Type to the browser.
   expect(options?.body).toBeInstanceOf(FormData)
   // Field name 'file' is what the backend's UploadFile parameter is called.

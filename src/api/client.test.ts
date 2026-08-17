@@ -65,8 +65,7 @@ it('maps timeout aborts to a timed-out ApiError', async () => {
 })
 
 it('passes a default timeout signal to fetch but honors a caller signal', async () => {
-  const spy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) })
-  vi.stubGlobal('fetch', spy)
+  const spy = mockFetchOk()
   await api('/x')
   expect(spy.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
   const own = new AbortController().signal
