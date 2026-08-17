@@ -63,7 +63,13 @@ sanctioned warning) + build (single 1,034.68 kB raw / 338.41 kB gzip chunk + the
    this honestly); rate-limiting `change-password` (already requires a valid JWT); upload
    progress reporting on the import card; save-vs-delete resurrect: an editor save committing
    after `DELETE /taxes/years/{year}` recreates the year (`_ensure_year`; not a tombstone) —
-   accepted TOCTOU class, commented at the delete door (Task 4 review).
+   accepted TOCTOU class, commented at the delete door (Task 4 review);
+   `spendStats.avg12` counts cashflow-only "0.00" months at full weight (server can't
+   distinguish absent from zero; display-side I1 guard only) — ratified Task 8 review,
+   server-side absent/zero distinction is the real fix if it ever matters; NetWorthPage has
+   NO test file, so its tiles' switch to the shared `toneOf` (zero-MoM now neutral/grey
+   instead of positive/green — Task 8 review I1) is unpinned by any test, as is the rest of
+   that page's rendering.
 4. **Prod actions are the USER's** (standing instruction): nothing in this plan pushes,
    deploys, or writes to any non-test database. The cutover work product is the runbook
    (Task 11) + the verified import UI.

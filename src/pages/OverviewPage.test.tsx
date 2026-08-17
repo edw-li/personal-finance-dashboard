@@ -542,7 +542,9 @@ describe('OverviewPage on an empty database', () => {
     expect(screen.getByText('No priced holdings yet.')).toBeTruthy()
     expect(screen.getByText('No spending months yet.')).toBeTruthy()
 
-    expect(screen.getByText('prices never refreshed')).toBeTruthy()
+    // Capitalized (unlike PortfolioPage's lowercase note): three peer clauses in one row,
+    // and the other two start with a capital.
+    expect(screen.getByText('Prices never refreshed')).toBeTruthy()
     expect(screen.getByText('Net worth — no snapshots')).toBeTruthy()
     expect(screen.getByText('Spending — no months')).toBeTruthy()
   })

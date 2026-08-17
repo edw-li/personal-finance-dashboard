@@ -25,6 +25,7 @@ import type {
   TransactionOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatPct } from '../utils/format'
+import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import '../components/portfolio/portfolio.css'
 import './PortfolioPage.css'
@@ -61,12 +62,6 @@ function describeRefresh(result: RefreshResult): RefreshNote {
     detail: failed.map(([ticker, reason]) => `${ticker}: ${reason}`).join('\n'),
     failed: failed.length,
   }
-}
-
-function toneFor(value: string | null | undefined): 'positive' | 'negative' | 'neutral' {
-  if (value === null || value === undefined) return 'neutral'
-  const n = Number(value)
-  return n > 0 ? 'positive' : n < 0 ? 'negative' : 'neutral'
 }
 
 export default function PortfolioPage() {
@@ -201,14 +196,14 @@ export default function PortfolioPage() {
                     ? `${formatCurrency(totals.day_change_amount)} today (${formatPct(totals.day_change_pct)})`
                     : undefined
                 }
-                tone={toneFor(totals.day_change_amount)}
+                tone={toneOf(totals.day_change_amount)}
                 hero
               />
               <StatTile
                 label="Unrealized gain"
                 value={formatCurrency(totals.unrealized_gl)}
                 delta={totals.unrealized_gl_pct !== null ? formatPct(totals.unrealized_gl_pct) : undefined}
-                tone={toneFor(totals.unrealized_gl)}
+                tone={toneOf(totals.unrealized_gl)}
               />
               <StatTile label="Cost basis" value={formatCurrency(totals.cost_basis)} />
               <StatTile

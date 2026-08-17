@@ -24,6 +24,7 @@ import type {
 } from '../types/api'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../utils/format'
 import { isStaleQuote } from '../utils/staleness'
+import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
 
@@ -37,12 +38,6 @@ interface OverviewData {
   matrix: SpendingMatrix
   taxes: TaxSummariesOut
 }
-
-// Direction × colour for a signed money string, asked four times by the tiles below.
-// Number() is display-only here (src/utils/format.ts's rule) — nothing derived from it is
-// ever rendered as a figure or sent back to the API.
-const toneOf = (v: string | null | undefined) =>
-  v == null ? ('neutral' as const) : Number(v) < 0 ? ('negative' as const) : ('positive' as const)
 
 export default function OverviewPage() {
   const [data, setData] = useState<OverviewData | null>(null)
@@ -123,26 +118,22 @@ export default function OverviewPage() {
     stats.avg12 !== null &&
     stats.avg12 > 0
 
-  // Spending up is BAD: the tone is the inverse of the direction here (StatTile's contract
-  // puts "whether up is good" on the caller).
-  const spendTone =
-    stats === null || stats.aboveAvg === null || cashflowOnly
-      ? undefined
-      : stats.aboveAvg
-        ? ('negative' as const)
-        : ('positive' as const)
-
-  // …which is exactly why this tile hands StatTile an explicit direction: left to derive
-  // the glyph from the tone, an over-average month would render ▼ on a number that went UP.
-  // Glyph = direction, colour = good/bad, "over"/"under" = the judgment in words; the same
-  // fact three ways, and none of them wrong. Suppressed alongside the tone (and the delta),
-  // so the two consts are always defined or undefined together.
-  const spendDirection =
-    stats === null || stats.aboveAvg === null || cashflowOnly
-      ? undefined
-      : stats.aboveAvg
-        ? ('up' as const)
-        : ('down' as const)
+  // ONE object, three channels: the words, the colour and the glyph are either all present
+  // or all absent, which is the invariant a comment used to assert across three separate
+  // predicates. Spending up is BAD, so tone is the INVERSE of direction here — and that is
+  // exactly why the tile hands StatTile an explicit direction: left to derive the glyph
+  // from the tone, an over-average month would render ▼ on a number that went UP. Glyph =
+  // direction, colour = good/bad, "over"/"under" = the judgment in words; the same fact
+  // three ways, and none of them wrong. (avg12 and aboveAvg are null together — spendStats
+  // — but both are named so the narrowing is the compiler's job, not a reader's memory.)
+  const spendDelta =
+    stats && stats.avg12 !== null && stats.aboveAvg !== null && !cashflowOnly
+      ? {
+          text: `${stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} 12-mo avg`,
+          tone: stats.aboveAvg ? ('negative' as const) : ('positive' as const),
+          direction: stats.aboveAvg ? ('up' as const) : ('down' as const),
+        }
+      : null
 
   const taxLabel =
     tax === null
@@ -212,13 +203,9 @@ export default function OverviewPage() {
             <StatTile
               label={stats?.month ? `Spending — ${formatMonth(stats.month)}` : 'Spending'}
               value={cashflowOnly ? '—' : formatCurrency(stats?.total)}
-              delta={
-                !cashflowOnly && stats?.avg12 != null
-                  ? `${stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} 12-mo avg`
-                  : undefined
-              }
-              tone={spendTone}
-              direction={spendDirection}
+              delta={spendDelta?.text}
+              tone={spendDelta?.tone}
+              direction={spendDelta?.direction}
             />
             {/* A rate is a level, not a movement: no delta, no arrow. */}
             <StatTile
@@ -268,7 +255,11 @@ export default function OverviewPage() {
               hand-entered. The page says which date each half of it is standing on. */}
           <div className="overview-freshness">
             <span className={isStaleQuote(asOf) ? 'freshness stale' : 'freshness'}>
-              {asOf ? `Prices as of ${formatDate(asOf)}` : 'prices never refreshed'}
+              {/* Capitalized, a deliberate departure from PortfolioPage's lowercase pair
+                  ("prices as of …" / "prices never refreshed" — a note tucked beside its
+                  Refresh button). This row is three PEER clauses separated by dots, and
+                  its other two capitalize; a lowercase third would read as a fragment. */}
+              {asOf ? `Prices as of ${formatDate(asOf)}` : 'Prices never refreshed'}
             </span>
             <span aria-hidden="true">·</span>
             <span className="freshness">

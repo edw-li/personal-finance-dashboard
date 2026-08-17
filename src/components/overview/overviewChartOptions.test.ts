@@ -87,6 +87,14 @@ function valueFormatterOf(option: EChartsOption | null): (v: number) => string {
     .valueFormatter
 }
 
+function tooltipOf(option: EChartsOption | null): {
+  trigger?: string
+  axisPointer?: { type?: string }
+} {
+  return (option as unknown as { tooltip: { trigger?: string; axisPointer?: { type?: string } } })
+    .tooltip
+}
+
 describe('netWorthSparkOption', () => {
   it('draws one blue line with the axes hidden and the tooltip kept', () => {
     const option = netWorthSparkOption({
@@ -112,6 +120,12 @@ describe('netWorthSparkOption', () => {
     // Zero-anchoring a net-worth spark flattens it: scale lets the frame follow the line.
     expect(yAxisOf(option).scale).toBe(true)
     expect(valueFormatterOf(option)(1234.5)).toBe('$1,234.50')
+    // Axis trigger keeps the hover target the whole column (a 1.5px line is unhittable),
+    // but the pointer RULE is off: with both axes hidden it has nothing to point AT, so it
+    // reads as a stray vertical stroke across the card. Pinned — echarts' default for an
+    // axis-triggered tooltip is a visible line, so this is an explicit opt-out.
+    expect(tooltipOf(option).trigger).toBe('axis')
+    expect(tooltipOf(option).axisPointer?.type).toBe('none')
   })
 
   it('returns null under two months — one point is not a trend', () => {
@@ -164,6 +178,9 @@ describe('recentSpendOption', () => {
     // Compact ticks, exact tooltip: the axis is a scale, the tooltip is a figure.
     expect(yAxisOf(option).axisLabel?.formatter?.(1500)).toBe('$1.5K')
     expect(valueFormatterOf(option)(1234.5)).toBe('$1,234.50')
+    // The counterpart to the spark's `axisPointer: 'none'`: this chart HAS labeled axes, so
+    // echarts' default pointer rule points at something and stays.
+    expect(tooltipOf(option).axisPointer).toBeUndefined()
     expect(recentSpendOption({ months: [], totals: [] })).toBeNull()
   })
 })

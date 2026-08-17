@@ -22,7 +22,13 @@ export function netWorthSparkOption(
     grid: { left: 8, right: 8, top: 10, bottom: 8 },
     xAxis: { type: 'category', data: ts.months.map(formatMonth), show: false, boundaryGap: false },
     yAxis: { type: 'value', show: false, scale: true },
-    tooltip: { trigger: 'axis', valueFormatter: (v) => formatCurrency(v as number) },
+    tooltip: {
+      trigger: 'axis',
+      // No axis pointer: with both axes hidden there is nothing for a vertical rule to
+      // anchor to, so it reads as noise crossing a bare line (the axis-free form's price).
+      axisPointer: { type: 'none' },
+      valueFormatter: (v) => formatCurrency(v as number),
+    },
     series: [
       {
         type: 'line',
@@ -78,6 +84,13 @@ export interface SpendStats {
 export function spendStats(matrix: Pick<SpendingMatrix, 'months' | 'totals'>): SpendStats {
   if (matrix.months.length === 0) return { month: null, total: null, avg12: null, aboveAvg: null }
   const idx = matrix.months.length - 1
+  // RATIFIED (Task 8 review): a cashflow-only month — net pay entered, spending not — comes
+  // back as an explicit "0.00" and counts here at FULL WEIGHT. The server cannot distinguish
+  // absent from genuinely zero, and filtering zeros would bias the average UP for households
+  // that really do have zero-spend months; the wizard also enters spending and net pay
+  // together, so persistent gaps are unlikely. The cashflowOnly guard on OverviewPage
+  // handles the DISPLAY case only (it suppresses the tile's delta, not this mean). A
+  // server-side absent/zero distinction is the real fix if it ever matters.
   const prior = matrix.totals.slice(Math.max(0, idx - 12), idx).map(Number)
   const avg12 = prior.length > 0 ? prior.reduce((a, b) => a + b, 0) / prior.length : null
   const total = matrix.totals[idx]

@@ -23,6 +23,7 @@ import {
   formatPct,
 } from '../utils/format'
 import { currentMonthIso } from '../utils/months'
+import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './NetWorthPage.css'
 
@@ -251,13 +252,10 @@ export default function NetWorthPage() {
                 ? undefined
                 : `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) vs prior month`
             }
-            tone={
-              summary.mom_delta === null
-                ? 'neutral'
-                : Number(summary.mom_delta) >= 0
-                  ? 'positive'
-                  : 'negative'
-            }
+            // Shared rule (src/utils/tone.ts): a flat month is NEUTRAL. This tile used to
+            // fold zero into positive; ratified Plan 6 Task 8 review — a green "▲ $0.00"
+            // congratulates the user for standing still.
+            tone={toneOf(summary.mom_delta)}
           />
           {(['taxable', 'pre_tax', 'liability'] as AccountGroup[]).map((group) => {
             const entry = summary.groups.find((g) => g.group === group)
@@ -269,7 +267,7 @@ export default function NetWorthPage() {
                 label={GROUP_LABELS[group]}
                 value={formatCurrency(entry.total)}
                 delta={delta === null ? undefined : `${formatCurrency(delta)} vs prior`}
-                tone={delta === null ? 'neutral' : Number(delta) >= 0 ? 'positive' : 'negative'}
+                tone={toneOf(delta)}
               />
             )
           })}
