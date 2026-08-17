@@ -976,6 +976,17 @@ stacked-bar conventions from SpendingPage), line overlay of tc_after. Label the 
   or number per client typing — pin whichever the client sends; body uses strings for pcts);
   profile switch refetches breakdown. comp: table renders computed cols with "—" nulls;
   add-form posts; tcTrajectoryOption pinned for the four golden events (2027 equity 0).
+Ratified implementer decisions (Task 9): shiftPoint promoted to src/utils/percent.ts (its
+own commit; both prior copies now import it — forward-note dedup done); TC chart uses the
+identity palette slots PALETTE[0]/[1] (two identity categories, not a positional ramp) +
+INK line; paycheck blank pct/money boxes send "0" (explicit-null is a no-op server-side, so
+clearing a box is the only way to say "stop contributing"); paycheck bodies carry all 11
+keys on BOTH verbs; breakdown keeps-previous on reload failure (panel heading self-identifies
+its profile) but a 404 DROPS it with branched sentences (no profiles vs profile not found);
+row selection lights from the breakdown payload's own profile.id; post-write form reset
+seeds from whichever row is now newest; comp orphan-pair warning derives at render
+(advisory, never a gate).
+
 - [ ] **Step 2:** implement + routes. **Step 3:** npm gates. **Step 4:** commit
   `feat: paycheck + comp pages with TC trajectory`.
 
