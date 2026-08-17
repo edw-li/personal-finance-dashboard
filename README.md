@@ -339,10 +339,10 @@ verify the real schema by hand on both sides of it; restoring a backup (5.5) is 
 
 ### 4.4 After a deploy: stale tabs and the shell-cache check
 
-Frontend assets are content-hashed, so every deploy changes their filenames. A tab left open
+Frontend assets are content-hashed, so a deploy changes the filenames of every asset it rebuilt. A tab left open
 across a deploy still holds the old shell, and the first time it needs a route chunk it has
-not already loaded, that request 404s — the app catches it and renders **"This page failed to
-load"** with a **Reload** button. That is designed behavior, not an outage; reloading clears
+not already loaded, that request 404s — the app catches it and renders **"This page failed to load.
+Reloading usually fixes it."** with a **Reload** button. That is designed behavior, not an outage; reloading clears
 it.
 
 Reload only helps if the browser re-fetches `index.html` rather than replaying a cached copy,
@@ -493,8 +493,8 @@ Non-zero always means nothing was written; read the output.
 
 ### 7.3 Verify the five component accounts (fresh database)
 
-Five 401(k) source buckets roll up into a parent account and carry `is_component` so that net
-worth counts the parent instead of both. The importer **seeds those five flags at account
+Five 401(k) source buckets roll up into two parent accounts (the Fidelity Traditional and
+Roth 401(k)s) and carry `is_component` so that net worth counts each parent instead of both. The importer **seeds those five flags at account
 creation** (`backend/app/importer/apply.py`, shipped 2026-08-15 and pinned by a test), so a
 fresh import lands correctly flagged and this step is a **check, not a repair** — the two
 migrations that backfill the flag (`f1b36c0cf33c`, then `c8a1f4d27b53`'s guarded re-run) both
@@ -507,8 +507,10 @@ sudo -u postgres psql -d finance -tAc "SELECT slug FROM accounts WHERE is_compon
 
 That must list exactly those five slugs and nothing else. If it doesn't, repair and re-check —
 the flags are **yours after creation** (re-imports never touch them), so a wrong answer means
-either a database imported by a pre-2026-08-15 importer or a flag edited by hand since. The
-UPDATE is belt-and-braces and idempotent:
+either a database imported by a pre-2026-08-15 importer or a flag edited by hand since. A
+MISSING flag is repaired by the belt-and-braces, idempotent UPDATE below; an EXTRA flagged
+slug goes the other way — `PATCH /net-worth/accounts/{id}` with `{"is_component": false}`
+(the UPDATE can only add flags):
 
 ```bash
 sudo -u postgres psql -d finance -c "UPDATE accounts SET is_component = TRUE WHERE slug IN ('employer-match-401-k','reverse-rollover-401-k','traditional-401-k','roth-basic-401-k','after-tax-401-k')"

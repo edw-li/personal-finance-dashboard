@@ -1469,7 +1469,8 @@ dev DB, read-only):**
 - `GET /settings` (NEW): effective trio exactly as designed — swr `0.04`, ticker `NVDA`,
   cron `10 13 * * mon-fri`. No writes issued (PUT covered by the 18-test suite only).
 - Overview source endpoints, all 200 on real data: net-worth summary (latest month
-  2026-09-01, net worth ~$799.4k, MoM +5.5%); timeseries 37 months; holdings totals
+  2026-09-01, totals + MoM fields present and plausible — values redacted per the DoD
+  privacy line, final-review I1); timeseries 37 months; holdings totals
   complete with `as_of` 2026-08-14 (Fri bar, 3 days back → correctly NOT stale under the
   4-day date-only rule); allocation `by=type` = exactly 3 slices (etf/mutual_fund/stock —
   the Overview donut gets 3 identity hues, no Other fold on today's data); spending
@@ -1603,8 +1604,106 @@ Plan 3 migration.
   Task 10); settings PUT round-trips; cron guard rejects sub-hourly + numeric-DOW; password
   change and import dry-run/apply work end-to-end (tests + Task 10 real dry-run).
 - `DELETE /taxes/years/{year}` shipped with UI affordance; empty-PUT-creates pin intact.
-- README Part 7 exists with the verbatim five-slug UPDATE; no real workbook path or
-  financial values in any committed artifact; `src/charts/` diff vs main is EMPTY.
+- README Part 7 exists with the verbatim five-slug UPDATE; no real workbook path, and no
+  NEW financial values in any committed artifact (the four pinned sheet-drift constants
+  D1–D3 are re-ratified — they are spec-§9-mandated golden values already committed to
+  main in the Plan 2–5 docs; final-review I1 amendment); `src/charts/` diff vs main is
+  EMPTY.
 - Every deferral declared in this doc; execution table + Task 10 results + DoD audit
   recorded. NOT merged, NOT pushed — branch left for the user's morning review with exact
   merge/deploy steps in the final report.
+
+---
+
+## Execution status (COMPLETE 2026-08-17 — all 12 tasks; ready for the user's merge decision)
+
+(The per-step `- [ ]` checkboxes above were superseded by this table as the tracking
+record.) Every task ran implement → spec review → quality review → fix → re-review, ALL
+subagents Opus 5. **Final whole-branch review verdict: READY** (gates re-certified by the
+reviewer; its I1 doc-privacy fix and I2 runbook one-liners applied in the closing commit).
+
+| Task | Landed at | Review fix rounds |
+|---|---|---|
+| 1 taxes DELETE year | 2c325d3 + f6e8278 | WHERE-clause pin via neighbor-year survival (mutant-verified) |
+| 2 app-settings API | 843a99b + fc3b14e | update-branch/asymmetry/partial-write pins, −0 collapse |
+| 3 FE plumbing | 0a2dea9 (+63d29d7) | POST-verb pin (carried) |
+| 4 delete-year UI | 33550c9 + 347936e | stale-echo ref timing + echo test + resurrect posture |
+| 5 settings page core | 5812ba4 (+76b215f) | round-trip/boundary/gate-order pins, inputs disabled while saving |
+| 6 import card | 415bbb1 + a1eb924 (+7df7a9d) | failed-apply disarm, counts thead, stale-file hint, family sheet, unknown-sheet tail |
+| 7 builders + lifts | faeb24b + b6862fa (+57d7c49) | spark-fill/window pins, latest-future pick pin, boundary notes |
+| 8 overview page | 073504c + d4fb831 + b0ae92e | glyph/tone decoupling + over/under wording; single toneOf (zero=neutral, ruled); avg12 ratified; spendDelta collapse; axisPointer none; StatTile suite |
+| 9 code-splitting | 4cc2c68 + bbcc3f3 + ad389b8 | first attempt wedged on a non-allowlisted dist command (killed, reset, redispatched); styled entry fallback + RouteBoundary; per-pathname reset + honest copy |
+| 10 controller verification | cbc569c | — (read-only; results above) |
+| 11 cutover runbook | b3aa81e + 84da7d3 | 7.3 corrected repair→verify (the forward notes' "importer creates unflagged" gotcha was STALE — apply.py has seeded the five flags at create since Plan 3's 5c2823e, test-pinned; the note propagated uncorrected through Plans 3→4→5) |
+| 12 final gates + closing record | (this commit) | final-review I1 (NW figure redacted from Task 10 notes; drift-constant line re-ratified + DoD amended) and I2 (two parents; un-flag repair direction) folded |
+
+**Final gates (controller-run, re-certified independently by the final reviewer):** backend
+**540 pytest `-W error`** + ruff check + format --check + `alembic check` (single head
+`e5b93d0a416f`, ZERO new migration files; `git diff main -- backend/alembic` empty);
+frontend **304 vitest** + lint (exactly 1 sanctioned warning) + build warning-free —
+**entry 249.06 kB raw / 79.47 kB gzip** (was 1,050.01/342.35 — −76 %), echarts isolated in
+a lazy **674.33 kB raw / 229.72 kB gzip** chunk (advisory limit 700, documented; the plan's
+450–560 kB estimate was stale), 22 small page/shared chunks. `src/charts` diff vs main
+EMPTY. Branch: **26 linear conventional commits** on `plan-6-overview-settings` over
+main@d57f807, tree clean. NOT merged, NOT pushed (user decides — Plans 1–5 precedent).
+
+## Post-roadmap notes (the 6-plan roadmap is COMPLETE; these are v2 candidates + residuals)
+
+**Deferred candidates (unchanged from the deviations list, still open):** ESPP modeler
+`?year=` selector; /comp refresh-grant timeline viz; `on_conflict_do_*` batch TOCTOU fix
+(accounts/securities/taxes); money.py public 5dp/9dp quantizer promotion + espp/paycheck/
+comp router-validator dedup; JWT rotation / forced logout on password change (settings UI
+states the posture); change-password rate limit; import upload progress; save-vs-delete
+year resurrect (commented at the delete door); `spendStats.avg12` counts cashflow-only
+zeros at full weight (server-side absent/zero distinction is the real fix).
+
+**New residuals from Plan 6 reviews (all declared, none blocking):**
+- Tone rule: `src/utils/tone.ts` is canonical (zero = neutral, ruled Task 8). Last copies
+  outside it: NetWorthPage:387's `delta-positive/negative` class ternary (needs a
+  `.delta-neutral` CSS addition to align), MonthlyUpdatePage:393's hand-rolled
+  `stat-delta-*` classes, HoldingsTable's private `tone()` returning class fragments.
+- Overview is deliberately all-or-nothing (`Promise.all`): one failing feed darkens the
+  page on cold start (keep-previous + Refresh covers reloads). `Promise.allSettled`
+  per-slot degradation is the v2 shape if it ever bites.
+- `importXlsx` takes no caller AbortSignal (plan-specified); `AbortSignal.any` variant is
+  the fix if a Cancel affordance is ever wanted. `AppSettingsUpdate = AppSettingsOut`
+  alias: switch to `Pick<>` if Out ever gains read-only fields. client.ts stamps JSON
+  Content-Type for every non-FormData body — revisit as body-type-driven when a second
+  non-JSON body appears.
+- Settings legacy-value trap: the CRON half is documented (README 7.5) and test-pinned;
+  the espp_ticker half (GET echoes a malformed stored ticker, PUT refuses it) is the same
+  class, undocumented — no live exposure (dev/prod trios verified clean).
+- Dead hooks: `.freshness` (plan's own class) and `.import-report` carry no CSS rules;
+  `scheduler.validate_cron` lift candidate if a second cron writer appears;
+  `deferred<T>()` test helper now duplicated in 6 test files (`src/test/deferred.ts` lift);
+  the form-label CSS block is duplicated in EsppPage.css + SettingsPage.css (panels.css
+  lift candidate); vite's `chunkSizeWarningLimit: 700` is GLOBAL — the entry's real guard
+  is the recorded 249.06 kB, not the advisory.
+- The `## File structure` section above is stale vs review-driven additions
+  (RouteBoundary(.test), StatTile.test, utils/tone(.test), components/settings/
+  settings.css, Layout.css, NetWorthPage/PortfolioPage tone-helper swaps) — all declared
+  in the deferrals/rulings, none unrecorded.
+
+**For the user's morning pass (browser-only, never verifiable in jsdom):** the standing
+visual pass now also covers `/` (Overview) and `/settings` — specifically: donut legend
+room in the 1000–1250 px viewport band; the spark's hover (axisPointer set to `none` —
+confirm it reads clean); first COLD post-login paint (styled `route-fallback` + the
+EChart-chunk download window); the import card end-to-end against a real file; delete-year
+button flow on /taxes. Data-level everything is machine-verified (Task 10). Also note: the
+dev DB holds a FUTURE-dated net-worth snapshot (2026-09-01) — the Overview hero reads
+"Net worth — Sep 2026"; verify that month entry is intended. Security items unchanged and
+now also in README 7.7: revoke the origin-remote PAT, optional .env rotation.
+
+## Definition-of-done audit (2026-08-17, from the final whole-branch review's walk)
+
+Every DoD bullet verified: gates (all eight, re-run independently — PASS); placeholders
+gone from `/` and `/settings`, PlaceholderPage only on the 404 route (sole usage,
+App.tsx:40 — PASS); Overview↔module-endpoint parity by construction + real-data endpoint
+sweep (PASS at the endpoint level; the rendered-page eyeball belongs to the visual pass);
+settings PUT round-trip, cron guards (sub-hourly + numeric-DOW), password change, import
+dry-run/apply all test-pinned + the real-workbook dry-run 100 % idempotent (PASS); DELETE
+year + UI door + empty-PUT-creates pin intact (PASS); README Part 7 with the verbatim
+five-slug UPDATE, no workbook path, no NEW financial values (PASS after the I1 redaction/
+re-ratification above); `src/charts` diff empty (PASS); every deferral declared (PASS —
+all 11 walked against the tree); NOT merged / NOT pushed (PASS — no upstream, not an
+ancestor of main).
