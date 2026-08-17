@@ -21,6 +21,7 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   putTaxInputs: vi.fn(),
   putTaxBrackets: vi.fn(),
   cloneBrackets: vi.fn(),
+  deleteTaxYear: vi.fn(),
 }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law), so the wrapper
 // the summary panel mounts is a marker div here. What the charts actually DRAW is pinned
@@ -40,6 +41,7 @@ vi.mock('../components/EChart', async () => {
 })
 import {
   cloneBrackets,
+  deleteTaxYear,
   fetchAllTaxSummaries,
   fetchTaxBrackets,
   fetchTaxInputs,
@@ -134,6 +136,11 @@ const MISSING_21 =
 
 const salary = () => screen.getByLabelText('Annual Salary') as HTMLInputElement
 const saveInputs = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
+const deleteYearButton = () =>
+  screen.getByRole('button', { name: /delete year/i }) as HTMLButtonElement
+// The one question the delete door asks — worded for a row of tables nobody can get back.
+const DELETE_2024_CONFIRM =
+  'Delete tax year 2024 and all of its inputs and brackets? This cannot be undone.'
 // The trend is the SECOND chart on the page — the selected year's own waterfall is the
 // first — and its x-axis categories are the years of whichever feed drew it.
 const trendCategories = () => screen.getAllByTestId('echart')[1]?.getAttribute('data-categories')
@@ -153,6 +160,7 @@ beforeEach(() => {
   vi.mocked(cloneBrackets).mockImplementation(async (year: number) => bracketsFor(year))
   vi.mocked(putTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
   vi.mocked(putTaxBrackets).mockImplementation(async (year: number) => bracketsFor(year))
+  vi.mocked(deleteTaxYear).mockResolvedValue(undefined)
   confirmSpy.mockReturnValue(true)
 })
 
@@ -579,5 +587,84 @@ describe('TaxesPage', () => {
     // Different request, still on screen: the year's own totals are unaffected.
     expect(screen.getByText('$123,456.78')).toBeTruthy()
     expect(screen.getAllByTestId('echart')).toHaveLength(1)
+  })
+
+  // --- deleting a year (Task 4) ---------------------------------------------------------
+
+  it('offers a delete affordance that is shut until a year is selected', async () => {
+    // A fresh database has nothing to delete — and the button still has to be THERE, or
+    // its disabled state would be indistinguishable from a missing feature.
+    vi.mocked(fetchTaxYears).mockResolvedValue([])
+    render(<TaxesPage />)
+    await screen.findByText(/no tax years yet/i)
+
+    // The exact label, pinned once: every other test here finds it by pattern.
+    expect(screen.getByRole('button', { name: 'Delete year…' })).toBeTruthy()
+    expect(deleteYearButton().disabled).toBe(true)
+    // A shut door asks nothing and sends nothing.
+    fireEvent.click(deleteYearButton())
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
+  })
+
+  it('asks ONE question before deleting — the delete confirm subsumes the discard one', async () => {
+    confirmSpy.mockReturnValue(false)
+    render(<TaxesPage />)
+    await screen.findByLabelText('Annual Salary')
+    // Unsaved work, so the discard gate would fire too if the page stacked them.
+    fireEvent.change(salary(), { target: { value: '999' } })
+
+    fireEvent.click(deleteYearButton())
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    // And it is the STRONGER question: deleting the year throws away the saved rows as
+    // well as the typed ones, so "discard unsaved changes?" has nothing left to ask.
+    expect(confirmSpy).toHaveBeenCalledWith(DELETE_2024_CONFIRM)
+    // Declined: no request, and the typed work is still there.
+    expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
+    expect(salary().value).toBe('999')
+  })
+
+  it('deletes the selected year, then reloads the list and clears the detail panel', async () => {
+    vi.mocked(fetchTaxYears)
+      .mockResolvedValueOnce([year2023, year2024])
+      .mockResolvedValueOnce([year2023])
+    render(<TaxesPage />)
+    await screen.findByLabelText('Annual Salary')
+    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
+
+    fireEvent.click(deleteYearButton())
+    expect(confirmSpy).toHaveBeenCalledWith(DELETE_2024_CONFIRM)
+    await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
+
+    // The list is reloaded and the deleted year is gone from the chips...
+    await waitFor(() => expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByRole('button', { name: '2024' })).toBeNull())
+    expect(screen.getByRole('button', { name: '2023' })).toBeTruthy()
+    // ...and nothing is selected, so the editors and the totals went with it rather than
+    // sitting there as a year the server no longer has.
+    expect(await screen.findByText(/select a tax year/i)).toBeTruthy()
+    expect(screen.queryByLabelText('Annual Salary')).toBeNull()
+    expect(screen.queryByText('$123,456.78')).toBeNull()
+    expect(deleteYearButton().disabled).toBe(true)
+    // Nothing was refetched for the year that is gone.
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('surfaces a delete failure verbatim and keeps the year on screen', async () => {
+    vi.mocked(deleteTaxYear).mockRejectedValue(new ApiError('tax year 2024 not found', 404))
+    render(<TaxesPage />)
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(deleteYearButton())
+    expect(await screen.findByText('tax year 2024 not found')).toBeTruthy()
+    // Nothing was dropped: the list was never reloaded and the year is still the page's.
+    expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: '2023' })).toBeTruthy()
+    expect(salary().value).toBe('200000.0000')
+    // The door is open again for a second try.
+    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
   })
 })

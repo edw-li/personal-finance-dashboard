@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import {
   cloneBrackets,
+  deleteTaxYear,
   fetchTaxBrackets,
   fetchTaxInputs,
   fetchTaxSummary,
@@ -267,6 +268,60 @@ export default function TaxesPage() {
       .finally(() => setCreating(false))
   }
 
+  // The FOURTH reload door (chips, Retry, create, delete), and the only one that asks its
+  // own question instead of confirmDiscard()'s: deleting the year throws away the SAVED
+  // inputs and brackets as well as the typed ones, so "discard unsaved changes?" is a
+  // weaker question with nothing left to add. One confirm, never two.
+  const deleteYear = () => {
+    if (selectedYear === null) return
+    const year = selectedYear
+    const ok = window.confirm(
+      `Delete tax year ${year} and all of its inputs and brackets? This cannot be undone.`,
+    )
+    if (!ok) return
+    // Everything still in flight belongs to a year that is going away: the detail seq (a
+    // load that would repopulate the editors from a 404) and the totals seq (a refresh
+    // whose only possible outcome is a banner about a year nobody can look at).
+    const seq = ++seqRef.current
+    summarySeqRef.current += 1
+    setBusy(true)
+    setError(null)
+    deleteTaxYear(year)
+      .then(() => {
+        // Gone on the server whoever is looking at the page by now, so the chip goes
+        // unguarded — the create path's optimistic list edit, inverted.
+        setYears((current) => current.filter((y) => y.year !== year))
+        if (seq !== seqRef.current) return
+        // No year is selected any more, and nothing may echo into one: an editor unmounted
+        // by the lines below can still resolve a save for the year that was deleted.
+        currentYearRef.current = null
+        setSelection(null)
+        setDetail(null)
+        setInputsDirty(false)
+        setBracketsDirty(false)
+        // The create sentence may have been ABOUT this year ("already has 42 brackets") —
+        // an answer the delete just made false.
+        setCreateError(null)
+        // The panel unmounts with the selection and refetches when a year is next selected,
+        // so this is the counter staying honest rather than the thing that redraws it.
+        setTrendRefresh((n) => n + 1)
+        // The year EXISTS no more from here on, so nothing past this point may be reported
+        // as a delete failure: the main banner owns it, because the main banner has Retry.
+        return reconcileYears().catch((err: unknown) => {
+          setError(err instanceof ApiError ? err.message : 'Failed to load tax years')
+        })
+      })
+      .catch((err: unknown) => {
+        if (seq !== seqRef.current) return
+        // A 404 (someone deleted it first) lands here verbatim. The selection is untouched,
+        // so Retry still means "reload the year I am looking at".
+        setError(err instanceof ApiError ? err.message : `Failed to delete tax year ${year}`)
+      })
+      .finally(() => {
+        if (seq === seqRef.current) setBusy(false)
+      })
+  }
+
   const retry = () => {
     if (!confirmDiscard()) return
     setError(null)
@@ -355,6 +410,18 @@ export default function TaxesPage() {
           <button type="submit" className="button" disabled={creating || loading}>
             {creating ? 'Creating…' : 'Create year'}
           </button>
+          {/* The other end of this row's job — Create makes the year in the box, Delete
+              throws away the SELECTED one — and the one control row that renders even with
+              no years, so its shut state is visible rather than absent. type="button", so
+              the form's submit stays the create path's alone. */}
+          <button
+            type="button"
+            className="button"
+            disabled={selectedYear === null || busy || creating}
+            onClick={deleteYear}
+          >
+            Delete year…
+          </button>
           <span className="drill-hint">
             Copies the newest year&apos;s bracket tables; the values are then edited below.
           </span>
@@ -368,6 +435,13 @@ export default function TaxesPage() {
 
       {(loading || (busy && detail === null && years.length > 0)) && (
         <p className="empty-note">Loading…</p>
+      )}
+
+      {/* Only a delete gets here: every other path either selects a year or has no years to
+          select. Without it the page ends at the form with nothing saying the chips above
+          are waiting for a click. Mutually exclusive with the note above, by !busy. */}
+      {!loading && !busy && selection === null && years.length > 0 && (
+        <p className="empty-note">Select a tax year above.</p>
       )}
 
       {detail !== null && (
