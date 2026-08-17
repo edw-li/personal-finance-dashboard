@@ -14,6 +14,7 @@ import { Suspense } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import './Layout.css'
+import RouteBoundary from './RouteBoundary'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Overview', icon: LayoutDashboard },
@@ -48,10 +49,15 @@ export default function Layout() {
         </button>
       </aside>
       <main className="content">
-        {/* Route chunks resolve here — the sidebar must not unmount while one loads. */}
-        <Suspense fallback={<p className="empty-note">Loading…</p>}>
-          <Outlet />
-        </Suspense>
+        {/* Route chunks resolve here — the sidebar must not unmount while one loads, and a
+            chunk that never arrives must not blank the app (RouteBoundary). The fallback's
+            class is .route-fallback, not panels.css's .empty-note: panels.css now ships with
+            the first PAGE chunk, so it is absent from the very paint this fallback owns. */}
+        <RouteBoundary>
+          <Suspense fallback={<p className="route-fallback">Loading…</p>}>
+            <Outlet />
+          </Suspense>
+        </RouteBoundary>
       </main>
     </div>
   )

@@ -65,3 +65,25 @@
   flex: 1;
   min-width: 0;
 }
+
+/* Suspense fallback for lazy route chunks — must live in ENTRY css (this file), not
+   panels.css, which now arrives lazily with the first page chunk (Task 9 review). */
+.route-fallback {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 1.5rem 0;
+  text-align: center;
+}
+
+/* RouteBoundary's Reload button carries its own styling for the same reason: in the worst
+   case (the FIRST route chunk 404s) panels.css never loaded, and the app's only recovery
+   affordance would render as a browser default. Wins on specificity when .button IS loaded. */
+.route-fallback .button {
+  margin-left: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}

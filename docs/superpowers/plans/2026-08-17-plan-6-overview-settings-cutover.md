@@ -69,7 +69,10 @@ sanctioned warning) + build (single 1,034.68 kB raw / 338.41 kB gzip chunk + the
    server-side absent/zero distinction is the real fix if it ever matters; NetWorthPage has
    NO test file, so its tiles' switch to the shared `toneOf` (zero-MoM now neutral/grey
    instead of positive/green — Task 8 review I1) is unpinned by any test, as is the rest of
-   that page's rendering.
+   that page's rendering; code-splitting introduced the rejected-route-chunk failure mode —
+   RouteBoundary (the app's only error boundary) catches it with a Reload affordance;
+   fallback styling lives in Layout.css because panels.css left the entry (Task 9 review).
+   README Part 4 should note post-deploy stale tabs (Task 11).
 4. **Prod actions are the USER's** (standing instruction): nothing in this plan pushes,
    deploys, or writes to any non-test database. The cutover work product is the runbook
    (Task 11) + the verified import UI.
