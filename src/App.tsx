@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
+import EsppPage from './pages/EsppPage'
 import LoginPage from './pages/LoginPage'
 import MonthlyUpdatePage from './pages/MonthlyUpdatePage'
 import NetWorthPage from './pages/NetWorthPage'
@@ -24,7 +25,7 @@ export default function App() {
               <Route path="/spending" element={<SpendingPage />} />
               <Route path="/portfolio" element={<PortfolioPage />} />
               <Route path="/taxes" element={<TaxesPage />} />
-              <Route path="/espp" element={<PlaceholderPage title="ESPP" />} />
+              <Route path="/espp" element={<EsppPage />} />
               <Route path="/paycheck" element={<PlaceholderPage title="Paycheck" />} />
               <Route path="/comp" element={<PlaceholderPage title="Comp" />} />
               <Route path="/settings" element={<PlaceholderPage title="Settings" />} />

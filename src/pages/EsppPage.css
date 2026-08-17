@@ -1,0 +1,132 @@
+/* Page-scoped rules ONLY (PortfolioPage.css / TaxesPage.css structure). The app-wide
+   vocabulary (.page, .card, .eyebrow, .data-table, .badge, .field-input, .button,
+   .kpi-row, .stat-tile, .error-banner, .empty-note, .drill-hint, .loading-dim) lives in
+   panels.css and is not redefined here. The form/row-action rules below are deliberate
+   near-twins of portfolio.css's .entry-form/.row-actions: that stylesheet travels with the
+   portfolio panels, and this page must not depend on it happening to be in the bundle. */
+
+.espp-page .card {
+  margin-bottom: 1rem;
+}
+
+/* The dim covers live forms here, and a dimmed input that still takes keystrokes takes
+   typing the arriving payload is about to replace (TaxesPage.css's reasoning). */
+.espp-page .loading-dim.is-loading {
+  pointer-events: none;
+}
+
+.espp-page .drill-hint {
+  max-width: 78ch;
+}
+
+/* Twelve numeric columns on the lots table: scroll the table, never the page. */
+.espp-scroll {
+  overflow-x: auto;
+}
+
+.espp-scroll .data-table {
+  white-space: nowrap;
+}
+
+/* ── Forms ─────────────────────────────────────────────────────────── */
+
+.espp-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+  margin-bottom: 0.9rem;
+}
+
+.espp-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.espp-form .span-2 {
+  grid-column: span 2;
+}
+
+/* Free text, not a number: the monospaced right-aligned .field-input is for the figures. */
+.espp-form .span-2 .field-input {
+  text-align: left;
+  font-family: inherit;
+}
+
+.espp-form-actions {
+  display: flex;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+/* The knobs are three fields and a button, not a dense entry grid. */
+.espp-knobs {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  max-width: 720px;
+}
+
+.espp-page .row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.espp-page .row-actions .button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.espp-page tr.is-editing td {
+  background: var(--surface-2);
+}
+
+.espp-page .disposition .badge {
+  margin-left: 0;
+}
+
+.espp-page .disposition .drill-hint {
+  margin: 0;
+}
+
+.espp-notes-cell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── $25k gauge ────────────────────────────────────────────────────── */
+
+.gauge {
+  margin: 0.25rem 0 1rem;
+  max-width: 720px;
+}
+
+.gauge-track {
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.gauge-fill {
+  height: 100%;
+  background: var(--accent);
+  /* The width is a rendered quantity, not an animation: reduced-motion users get the
+     same bar without a sweep, so no transition is declared at all. */
+}
+
+.gauge-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
