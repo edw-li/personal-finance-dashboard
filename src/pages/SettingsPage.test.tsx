@@ -87,6 +87,9 @@ describe('SettingsPage — app settings', () => {
     expect(tickerBox().value).toBe('NVDA')
     expect(cronBox().value).toBe('10 13 * * mon-fri')
     expect(screen.getByText(CRON_HINT)).toBeTruthy()
+    // The other consequence-bearing hint: an empty box is a real setting (the ESPP page
+    // then says so), not a box the user forgot to fill in.
+    expect(screen.getByText("Blank = ESPP page shows 'no ticker configured'.")).toBeTruthy()
     expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(1)
   })
 
@@ -129,6 +132,24 @@ describe('SettingsPage — app settings', () => {
     expect(Object.keys(body)).toContain('espp_ticker')
     expect(body.espp_ticker).toBeNull()
     expect(JSON.parse(JSON.stringify(body)).espp_ticker).toBeNull()
+    // The untouched rate rides along, and the load→save round trip must not move it:
+    // "0.045000" seeded the box as "4.5" and shiftPoint hands the same value back.
+    expect(body.swr_pct).toBe('0.045')
+  })
+
+  it('re-saves the inclusive top of the range: 100 % goes back as the fraction 1', async () => {
+    vi.mocked(fetchAppSettings).mockResolvedValue({ ...SETTINGS, swr_pct: '1.000000' })
+    render(<SettingsPage />)
+    await screen.findByLabelText('Withdrawal rate (% / year)')
+
+    // The stored fraction 1 IS 100 %, and the client gate is `n > 100` — inclusive. A row
+    // already holding it must be re-savable untouched, or the form would refuse to echo a
+    // value the database is currently serving.
+    expect(swrBox().value).toBe('100')
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(vi.mocked(putAppSettings)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(putAppSettings).mock.calls[0][0].swr_pct).toBe('1')
   })
 
   it('re-seeds the boxes from the PUT RESPONSE, not from what was typed', async () => {
@@ -158,16 +179,19 @@ describe('SettingsPage — app settings', () => {
     render(<SettingsPage />)
     await screen.findByLabelText('Withdrawal rate (% / year)')
 
-    type(swrBox(), '1e-3')
+    // Exponent AND out of range (1e3 is 1000): the two gates disagree about this one box,
+    // so the message names which ran FIRST. Only plain-decimal-before-Number() is correct —
+    // swapped, the answer would be 'Must be between 0 and 100.'
+    type(swrBox(), '1e3')
     fireEvent.click(saveButton())
 
-    // No 422 is behind this gate: shiftPoint hands "1e-3" back untouched and
-    // Decimal("1e-3") is a perfectly legal 0.001, so a box that said a thousandth of a
-    // percent would be stored as a tenth of one (src/utils/percent.ts).
+    // No 422 is behind this gate for the values that matter: shiftPoint hands "1e-3" back
+    // untouched and Decimal("1e-3") is a perfectly legal 0.001, so a box that said a
+    // thousandth of a percent would be stored as a tenth of one (src/utils/percent.ts).
     expect(await screen.findByText('Enter a plain decimal (no exponents).')).toBeTruthy()
     expect(vi.mocked(putAppSettings)).not.toHaveBeenCalled()
 
-    // The same digits as a plain decimal are converted, not refused.
+    // Plain notation is converted, not refused — this gate is about the TEXT, not the size.
     type(swrBox(), '0.001')
     fireEvent.click(saveButton())
     await waitFor(() => expect(vi.mocked(putAppSettings)).toHaveBeenCalledTimes(1))
@@ -244,6 +268,11 @@ describe('SettingsPage — password', () => {
       expect(vi.mocked(changePassword)).toHaveBeenCalledWith('old-pw', 'new-pw-12345'),
     )
     expect(await screen.findByText('Password changed.')).toBeTruthy()
+    // The declared deferral, said out loud on the page: no token rotation, so a stolen
+    // session is not what a password change ends (single-user app, 24 h expiry).
+    expect(
+      screen.getByText('Existing sessions stay signed in until their token expires (~24 h).'),
+    ).toBeTruthy()
     // Nothing typed here may stay on screen after it has been used.
     expect(currentPwBox().value).toBe('')
     expect(newPwBox().value).toBe('')

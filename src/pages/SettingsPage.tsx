@@ -201,12 +201,17 @@ export default function SettingsPage() {
                 save()
               }}
             >
+              {/* All three boxes go read-only for the in-flight window, because the PUT
+                  response RE-SEEDS them: text typed while saving would be overwritten by the
+                  echo of the older values, next to a fresh "Saved" — which is exactly the
+                  claim this page's every-keystroke-retires-the-note rule exists to prevent. */}
               <label>
                 Withdrawal rate (% / year)
                 <input
                   className="field-input"
                   inputMode="decimal"
                   value={swrPctBox}
+                  disabled={saving}
                   onChange={(e) => editSetting(setSwrPctBox)(e.target.value)}
                 />
               </label>
@@ -215,6 +220,7 @@ export default function SettingsPage() {
                 <input
                   className="field-input"
                   value={tickerBox}
+                  disabled={saving}
                   onChange={(e) => editSetting(setTickerBox)(e.target.value)}
                 />
               </label>
@@ -228,6 +234,7 @@ export default function SettingsPage() {
                 <input
                   className="field-input"
                   value={cronBox}
+                  disabled={saving}
                   onChange={(e) => editSetting(setCronBox)(e.target.value)}
                 />
               </label>

@@ -2,7 +2,7 @@
    vocabulary (.page, .page-header, .card, .card-grid, .span-6, .eyebrow, .field-input,
    .button, .button-primary, .error-banner, .empty-note, .loading-dim) lives in panels.css
    and is not redefined here. The field stack below is a deliberate near-twin of
-   espp.css's .espp-form label rules: that stylesheet travels with its own page, and this
+   EsppPage.css's .espp-form label rules: that stylesheet travels with its own page, and this
    one must not depend on it happening to be in the bundle. */
 
 /* Free text and passwords, not figures: the shared class is right-aligned for numbers.
