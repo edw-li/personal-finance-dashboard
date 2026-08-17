@@ -9,17 +9,19 @@
   margin-bottom: 1rem;
 }
 
-/* The dim covers live forms here, and a dimmed input that still takes keystrokes takes
-   typing the arriving payload is about to replace (TaxesPage.css's reasoning). */
-.espp-page .loading-dim.is-loading {
-  pointer-events: none;
-}
+/* No `pointer-events: none` on this page's .loading-dim.is-loading, deliberately.
+   TaxesPage takes that guard because its arriving payload REPLACES the editors, so a
+   keystroke landing during the fetch is typing thrown away. Here every load keeps the
+   payload it is refreshing and the panels own their form state, so a half-typed row
+   survives the reload — the dim is a visual cue only, and the forms stay usable (a
+   half-filled lot must remain finishable while the modeler is re-running). */
 
 .espp-page .drill-hint {
   max-width: 78ch;
 }
 
-/* Twelve numeric columns on the lots table: scroll the table, never the page. */
+/* Thirteen columns on the lots table (nine of them numeric): scroll the table, never
+   the page. */
 .espp-scroll {
   overflow-x: auto;
 }

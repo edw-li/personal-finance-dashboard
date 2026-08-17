@@ -26,7 +26,9 @@ import '../components/panels.css'
 import './EsppPage.css'
 
 // The IRS §423 ceiling the chain is modeled against (backend espp_calc: unused_25k starts
-// here). It is the gauge's denominator ONLY — "remaining" is the server's own number.
+// here). Nothing on the page is DERIVED from it: it feeds the gauge's denominator (the
+// fill width) and the meter's aria-valuemax/aria-label/aria-valuetext, and that is all —
+// "remaining" is the server's own number.
 const LIMIT_25K = 25000
 
 /**
@@ -135,6 +137,13 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
       setError('Purchase date, qualifying date, shares, subscription and FMV are required')
       return
     }
+    if (form.qualifying_date < form.purchase_date) {
+      // The server's own sentence, and it is already date-phrased — it reads fine on
+      // screen. Both boxes are <input type="date">, so these are ISO strings and a string
+      // compare IS the date compare (no Date parsing, no timezone to get wrong).
+      setError('qualifying_date must be on or after purchase_date')
+      return
+    }
     const soldDate = form.sold_date.trim()
     const soldPrice = form.sold_price.trim()
     if ((soldDate === '') !== (soldPrice === '')) {
@@ -196,6 +205,9 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
   const remove = (lot: EsppLotOut) => {
     if (!window.confirm(`Delete the lot purchased ${formatDate(lot.purchase_date)}?`)) return
     setBusy(true)
+    // Cleared on entry like submit's: a delete that succeeds must not leave the previous
+    // save's 409 sitting over the panel as if it still described the table.
+    setError(null)
     deleteLot(lot.id)
       .then(() => {
         // The edited row is gone — a stale editingId would PATCH a 404 on the next save
@@ -394,7 +406,12 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
                       <span className="drill-hint"> {formatDate(lot.sold_date)}</span>
                     )}
                   </td>
-                  <td className="espp-notes-cell">{lot.notes ?? ''}</td>
+                  {/* The cell ellipsises a long note (EsppPage.css), so the full text is
+                      the hover title — `undefined`, never null, or React would render a
+                      literal title="null" on every unnoted row. */}
+                  <td className="espp-notes-cell" title={lot.notes ?? undefined}>
+                    {lot.notes ?? ''}
+                  </td>
                   <td className="row-actions">
                     <button
                       type="button"
@@ -441,10 +458,17 @@ function ModelerCard({
 }: {
   data: EsppModelerOut | null
   knobs: Knobs
-  onKnobChange: (knobs: Knobs) => void
+  onKnobChange: (update: (current: Knobs) => Knobs) => void
   onRecalculate: () => void
   busy: boolean
 }) {
+  // An UPDATER, never `{ ...knobs, field: value }`: the seed below lands through the same
+  // setter, and React batches. A keystroke built from the props' `knobs` snapshot would
+  // resurrect the pre-seed siblings it spread — the panels' `set` helper, one field at a
+  // time, is the same shape for the same reason.
+  const setKnob = (field: keyof Knobs) => (value: string) =>
+    onKnobChange((current) => ({ ...current, [field]: value }))
+
   return (
     <section className="card">
       <h2 className="eyebrow">Purchase modeler{data === null ? '' : ` — ${data.year}`}</h2>
@@ -466,7 +490,7 @@ function ModelerCard({
             className="field-input"
             inputMode="decimal"
             value={knobs.subscription}
-            onChange={(e) => onKnobChange({ ...knobs, subscription: e.target.value })}
+            onChange={(e) => setKnob('subscription')(e.target.value)}
           />
         </label>
         <label>
@@ -475,7 +499,7 @@ function ModelerCard({
             className="field-input"
             inputMode="decimal"
             value={knobs.fmv}
-            onChange={(e) => onKnobChange({ ...knobs, fmv: e.target.value })}
+            onChange={(e) => setKnob('fmv')(e.target.value)}
           />
         </label>
         <label>
@@ -484,7 +508,7 @@ function ModelerCard({
             className="field-input"
             inputMode="decimal"
             value={knobs.carry}
-            onChange={(e) => onKnobChange({ ...knobs, carry: e.target.value })}
+            onChange={(e) => setKnob('carry')(e.target.value)}
           />
         </label>
         <div className="espp-form-actions">
@@ -629,6 +653,23 @@ function PeriodsPanel({
       setError('Label, both dates, the base and the contribution % are required')
       return
     }
+    if (form.period_end <= form.period_start) {
+      // The server's own sentence — already date-phrased, so it reads on screen. ISO
+      // strings from two <input type="date">, so the string compare IS the date compare.
+      setError('period_end must be after period_start')
+      return
+    }
+    const pctNumber = Number(pct)
+    if (Number.isFinite(pctNumber) && (pctNumber < 0 || pctNumber > 100)) {
+      // NOT the server's "contribution_pct must be between 0 and 1": that sentence is in
+      // the STORED fraction's vocabulary, and this box is labelled "Contribution %" and
+      // holds 14 for 14%. Quoting it verbatim would tell the user their 14 was too big
+      // and their 0.5 was fine — the opposite of what this form means.
+      // Text that is not a number at all falls through on purpose: shiftPoint hands it
+      // back untouched and the server's 422 is the backstop (no conversion guesses here).
+      setError('contribution % must be between 0 and 100')
+      return
+    }
     setBusy(true)
     setError(null)
     // The FULL row on both verbs (Task 4 review M6's binding): the router validates the
@@ -656,6 +697,8 @@ function PeriodsPanel({
   const remove = (period: EsppPeriodOut) => {
     if (!window.confirm(`Delete the ${period.label} period?`)) return
     setBusy(true)
+    // Cleared on entry like submit's (LotsPanel.remove's note).
+    setError(null)
     deletePeriod(period.id)
       .then(() => {
         if (period.id === editingId) {
@@ -861,7 +904,9 @@ export default function EsppPage() {
         if (seq !== lotsSeq.current) return
         // The previous payload is KEPT: unlike TaxesPage's year switch, a failed reload
         // here describes the same lots, and dropping them would also destroy a half-typed
-        // row in the panel's form. The banner says the table may be behind.
+        // row in the panel's form. The banner below appends the stale cue whenever a
+        // table is still on screen — on a FIRST load there is none, so it says only the
+        // server's sentence.
         setLotsError(message(err, 'Failed to load ESPP lots'))
       })
       .finally(() => {
@@ -941,6 +986,11 @@ export default function EsppPage() {
   const runModeler = () => {
     setModelerBusy(true)
     setModelerError(null)
+    // Cleared TOGETHER with the error it is a flavour of: the 404 empty state renders
+    // `modelerError` as prose, so leaving `missing` up with the error gone would print a
+    // literal "null — add one below…" for the whole of the re-run that adding the first
+    // period just caused. Both are re-derived when this load answers.
+    setModelerMissing(false)
     loadModeler({
       subscriptionPrice: knobs.subscription.trim(),
       purchaseFmv: knobs.fmv.trim(),
@@ -970,7 +1020,9 @@ export default function EsppPage() {
 
       {lotsError && (
         <div className="error-banner" role="alert">
-          {lotsError}{' '}
+          {/* The stale cue only when there IS something stale: a reload failure leaves the
+              previous table up, a first-load failure leaves nothing to be behind. */}
+          {lots === null ? lotsError : `${lotsError} — the table may be showing earlier data.`}{' '}
           <button className="button" aria-label="Retry loading lots" onClick={reloadLots}>
             Retry
           </button>
@@ -999,8 +1051,9 @@ export default function EsppPage() {
           <h2 className="eyebrow">Purchase modeler</h2>
           {/* The server's sentence, plus where to go next. No knobs: with no periods there
               is nothing for them to model. */}
-          {/* "$25,000" as prose: formatCurrency is for SERVER values, and the cents on a
-              statutory ceiling in the middle of a sentence read as a number to check. */}
+          {/* "$25,000" is written out rather than formatCurrency(LIMIT_25K): the ceiling is
+              a client constant in a sentence, not a figure the server sent, and the
+              "$25,000.00" the formatter would give reads as a number to go check. */}
           <p className="empty-note">
             {`${modelerError} — add one below to run the $25,000 model.`}
           </p>
@@ -1010,6 +1063,8 @@ export default function EsppPage() {
           <ModelerCard
             data={modeler}
             knobs={knobs}
+            // The setter itself: the card hands back an updater, so a keystroke that
+            // batches with the echo seed cannot spread a stale sibling over it.
             onKnobChange={setKnobs}
             onRecalculate={runModeler}
             busy={modelerBusy}
@@ -1019,7 +1074,9 @@ export default function EsppPage() {
 
       {periodsError && (
         <div className="error-banner" role="alert">
-          {periodsError}{' '}
+          {periods === null
+            ? periodsError
+            : `${periodsError} — the table may be showing earlier data.`}{' '}
           <button className="button" aria-label="Retry loading periods" onClick={reloadPeriods}>
             Retry
           </button>
