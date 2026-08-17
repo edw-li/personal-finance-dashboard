@@ -2,7 +2,7 @@ import { api } from './client'
 import type { CompEventCreate, CompEventOut, CompEventUpdate } from '../types/api'
 
 // Ascending by focal_year — the page reads as a trajectory.
-export function getEvents(): Promise<CompEventOut[]> {
+export function fetchEvents(): Promise<CompEventOut[]> {
   return api<CompEventOut[]>('/comp/events')
 }
 

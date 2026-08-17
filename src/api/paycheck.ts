@@ -7,7 +7,7 @@ import type {
 } from '../types/api'
 
 // Newest effective_date first — the page opens on the profile in force.
-export function getProfiles(): Promise<PaycheckProfileOut[]> {
+export function fetchProfiles(): Promise<PaycheckProfileOut[]> {
   return api<PaycheckProfileOut[]>('/paycheck/profiles')
 }
 
@@ -35,7 +35,7 @@ export function deleteProfile(id: number): Promise<void> {
 
 // No id = the profile in force today (the latest one effective now or earlier, falling
 // back to the earliest future one); 404 when there are no profiles at all.
-export function getBreakdown(profileId?: number): Promise<PaycheckBreakdownOut> {
+export function fetchBreakdown(profileId?: number): Promise<PaycheckBreakdownOut> {
   const qs = profileId === undefined ? '' : `?profile_id=${profileId}`
   return api<PaycheckBreakdownOut>(`/paycheck/breakdown${qs}`)
 }

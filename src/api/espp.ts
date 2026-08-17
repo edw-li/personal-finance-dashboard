@@ -12,7 +12,7 @@ import type {
 
 // --- lots ---
 
-export function getLots(): Promise<EsppLotsResponse> {
+export function fetchLots(): Promise<EsppLotsResponse> {
   return api<EsppLotsResponse>('/espp/lots')
 }
 
@@ -33,7 +33,7 @@ export function deleteLot(id: number): Promise<void> {
 
 // --- periods ---
 
-export function getPeriods(): Promise<EsppPeriodOut[]> {
+export function fetchPeriods(): Promise<EsppPeriodOut[]> {
   return api<EsppPeriodOut[]>('/espp/periods')
 }
 
@@ -63,7 +63,7 @@ export interface ModelerParams {
   year?: number
 }
 
-export function getModeler(params: ModelerParams = {}): Promise<EsppModelerOut> {
+export function fetchModeler(params: ModelerParams = {}): Promise<EsppModelerOut> {
   const query = new URLSearchParams()
   if (params.subscriptionPrice !== undefined) {
     query.set('subscription_price', params.subscriptionPrice)

@@ -24,11 +24,11 @@ export const JURISDICTIONS = [
 
 export type Jurisdiction = (typeof JURISDICTIONS)[number]
 
-export function getTaxYears(): Promise<TaxYearOut[]> {
+export function fetchTaxYears(): Promise<TaxYearOut[]> {
   return api<TaxYearOut[]>('/taxes/years')
 }
 
-export function getTaxInputs(year: number): Promise<TaxInputsOut> {
+export function fetchTaxInputs(year: number): Promise<TaxInputsOut> {
   return api<TaxInputsOut>(`/taxes/years/${year}/inputs`)
 }
 
@@ -41,7 +41,7 @@ export function putTaxInputs(year: number, body: TaxInputsUpdate): Promise<TaxIn
   })
 }
 
-export function getTaxBrackets(year: number): Promise<TaxBracketsOut> {
+export function fetchTaxBrackets(year: number): Promise<TaxBracketsOut> {
   return api<TaxBracketsOut>(`/taxes/years/${year}/brackets`)
 }
 
@@ -61,11 +61,11 @@ export function cloneBrackets(year: number, sourceYear: number): Promise<TaxBrac
   })
 }
 
-export function getTaxSummary(year: number): Promise<TaxSummaryOut> {
+export function fetchTaxSummary(year: number): Promise<TaxSummaryOut> {
   return api<TaxSummaryOut>(`/taxes/years/${year}/summary`)
 }
 
 // The trend feed: one summary per year that has at least one stored input.
-export function getAllTaxSummaries(): Promise<TaxSummariesOut> {
+export function fetchAllTaxSummaries(): Promise<TaxSummariesOut> {
   return api<TaxSummariesOut>('/taxes/summary')
 }
