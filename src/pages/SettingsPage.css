@@ -1,0 +1,44 @@
+/* Page-scoped rules ONLY (TaxesPage.css / EsppPage.css structure). The app-wide
+   vocabulary (.page, .page-header, .card, .card-grid, .span-6, .eyebrow, .field-input,
+   .button, .button-primary, .error-banner, .empty-note, .loading-dim) lives in panels.css
+   and is not redefined here. The field stack below is a deliberate near-twin of
+   espp.css's .espp-form label rules: that stylesheet travels with its own page, and this
+   one must not depend on it happening to be in the bundle. */
+
+/* Free text and passwords, not figures: the shared class is right-aligned for numbers.
+   The monospace stays — a cron expression and a ticker both want it. */
+.settings-page .field-input {
+  text-align: left;
+}
+
+/* One column, so nothing in here is ever a "wide" element needing a grid-column span
+   (and `span 2` is banned house-wide — `1 / -1` is the form when it comes up). */
+.settings-form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 420px;
+}
+
+.settings-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Keeps the primary button its own width inside the single-column stack. */
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}

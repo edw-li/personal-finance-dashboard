@@ -10,6 +10,7 @@ import NetWorthPage from './pages/NetWorthPage'
 import PaycheckPage from './pages/PaycheckPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 import PortfolioPage from './pages/PortfolioPage'
+import SettingsPage from './pages/SettingsPage'
 import SpendingPage from './pages/SpendingPage'
 import TaxesPage from './pages/TaxesPage'
 
@@ -30,7 +31,7 @@ export default function App() {
               <Route path="/espp" element={<EsppPage />} />
               <Route path="/paycheck" element={<PaycheckPage />} />
               <Route path="/comp" element={<CompPage />} />
-              <Route path="/settings" element={<PlaceholderPage title="Settings" />} />
+              <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<PlaceholderPage title="Not Found" />} />
             </Route>
           </Route>
