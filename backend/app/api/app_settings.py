@@ -25,6 +25,7 @@ from app.services.scheduler import SCHEDULER_TIMEZONE, read_cron_setting
 
 router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(get_current_user)])
 
+ZERO = Decimal("0")
 # Hourly is the floor: the scheduler exists for one post-close refresh (+ the spec's
 # optional midday tick) — anything faster is a Yahoo-rate mistake, not a use case.
 MIN_FIRE_GAP = timedelta(minutes=60)
@@ -48,10 +49,12 @@ async def _read_espp_ticker(db: AsyncSession) -> str | None:
 
 def _validated_swr(value: Decimal) -> Decimal:
     # get_swr_pct's fallback bounds as HARD validation: what the reader silently
-    # discards, the writer refuses.
+    # discards, the writer refuses. The `+ ZERO` is the house signed-zero collapse
+    # (taxes.py's trick): "-0" clears the `< 0` check — it compares EQUAL to zero — and
+    # would otherwise be stored and echoed as "-0.000000".
     if not value.is_finite() or value < 0 or value > 1:
         raise HTTPException(status_code=422, detail="swr_pct: must be a fraction between 0 and 1")
-    return quantize_pct(value)
+    return quantize_pct(value) + ZERO
 
 
 def _validated_cron(value: str) -> str:
@@ -78,7 +81,10 @@ def _validated_cron(value: str) -> str:
     now = _PROBE_ANCHOR
     for _ in range(_PROBE_FIRES):
         nxt = trigger.get_next_fire_time(previous, now)
-        if nxt is None:  # finite schedule (e.g. "0 0 29 2 *") — no more fires to compare
+        # Live defensive branch for impossible date combinations: "0 0 30 2 *" PARSES
+        # (day 30 and month 2 are each in range) but can never fire, so there is no next
+        # time to compare. NOT the same as "0 0 29 2 *", which does fire — in leap years.
+        if nxt is None:
             break
         if previous is not None and nxt - previous < MIN_FIRE_GAP:
             raise HTTPException(
