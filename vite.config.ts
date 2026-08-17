@@ -8,7 +8,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     // The echarts subset is one indivisible LAZY chunk (674.33 kB raw / 229.72 kB gzip),
-    // reached only from the six chart routes — the entry is 248.57 kB and never loads it.
+    // reached only from the six chart routes — the entry is 249.06 kB and never loads it.
     // Raising the advisory limit documents that it is deliberate, not forgotten; the
     // headroom is small on purpose, so pulling more echarts modules in trips it again.
     chunkSizeWarningLimit: 700,

@@ -77,8 +77,10 @@
 
 /* RouteBoundary's Reload button carries its own styling for the same reason: in the worst
    case (the FIRST route chunk 404s) panels.css never loaded, and the app's only recovery
-   affordance would render as a browser default. Wins on specificity when .button IS loaded. */
-.route-fallback .button {
+   affordance would render as a browser default. Its own class name, not .button: panels.css
+   may or may not be present in this state, and reusing the design-system name would
+   partially shadow it whenever it IS — a private name never fights the cascade. */
+.route-fallback-button {
   margin-left: 0.35rem;
   padding: 0.35rem 0.75rem;
   border: 1px solid var(--border);

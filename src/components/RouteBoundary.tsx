@@ -19,9 +19,16 @@ export default class RouteBoundary extends Component<Props, State> {
   render() {
     if (this.state.failed) {
       return (
+        // The copy stays generic because the boundary catches ANY render-time throw, not
+        // just a chunk 404 — claiming "the app may have been updated" would be a guess in
+        // every other case. The chunk-load story lives in the comment above, where it is
+        // true of the design rather than of whatever the user just hit.
+        // .route-fallback-button, deliberately NOT .button: panels.css may or may not have
+        // loaded in this state, and a same-name rule would partially shadow the design
+        // system exactly when it IS loaded.
         <div className="route-fallback" role="alert">
-          This page failed to load — the app may have been updated.{' '}
-          <button className="button" onClick={() => window.location.reload()}>
+          This page failed to load. Reloading usually fixes it.{' '}
+          <button className="route-fallback-button" onClick={() => location.reload()}>
             Reload
           </button>
         </div>

@@ -47,13 +47,34 @@ it('swaps in an alert with a Reload affordance when a child throws', () => {
   expect(errorLog).toHaveBeenCalled()
 })
 
+// Layout passes key={pathname}; this pins the half of that contract the component owns —
+// a failed boundary must not survive its own remount. (React.lazy's memoized rejection is
+// what makes the key necessary at all: only a DIFFERENT payload can actually be retried.)
+it('clears the failed state when remounted under a new key', () => {
+  silenceReactErrorLog()
+  const { rerender } = render(
+    <RouteBoundary key="/spending">
+      <Bomb />
+    </RouteBoundary>
+  )
+  screen.getByRole('alert')
+  rerender(
+    <RouteBoundary key="/taxes">
+      <p>page content</p>
+    </RouteBoundary>
+  )
+  expect(screen.getByText('page content').tagName).toBe('P')
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
 it('reloads the document on Reload — the only recovery from stale hashed filenames', () => {
   silenceReactErrorLog()
   const reload = vi.fn()
-  // Same idiom client.test.ts uses for fetch: stubGlobal + unstubAllGlobals. It reaches
-  // window.location because under vitest's jsdom env `window === globalThis` and the global
-  // `location` is configurable, unlike jsdom's own unforgeable Location — vi.spyOn(
-  // window.location, 'reload') throws "Cannot redefine property: reload" there.
+  // Same idiom client.test.ts uses for fetch: stubGlobal + unstubAllGlobals. The component
+  // calls bare `location.reload()`, so this stub IS the object it resolves — no `window.`
+  // prefix to route around it. That works because the global `location` binding is
+  // configurable, unlike jsdom's own unforgeable window.location: vi.spyOn(window.location,
+  // 'reload') throws "Cannot redefine property: reload".
   vi.stubGlobal('location', { ...window.location, reload })
   render(
     <RouteBoundary>
