@@ -630,6 +630,31 @@ describe('SettingsPage — xlsx import', () => {
     expect(fileBox().disabled).toBe(false)
   })
 
+  it('keeps the standing diff when a DRY RUN fails — that pass wrote nothing', async () => {
+    vi.mocked(importXlsx)
+      .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
+      .mockRejectedValueOnce(new ApiError('import failed: sheet "Spending" is missing', 400))
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+    expect(await screen.findByText('Dry run — nothing was written.')).toBeTruthy()
+
+    fireEvent.click(dryButton())
+    expect(await screen.findByText('import failed: sheet "Spending" is missing')).toBeTruthy()
+
+    // The mirror of the failed APPLY above, and the reason that clear is conditional: a dry
+    // run writes NOTHING, so the diff already on screen still describes the same database
+    // and is still a true preview. Dropping it here would throw away a good answer over a
+    // request that changed nothing — and leave Apply disarmed for no reason.
+    expect(screen.getByText('Dry run — nothing was written.')).toBeTruthy()
+    expect(screen.getByText('+2')).toBeTruthy()
+    expect(applyButton().disabled).toBe(false)
+    // Every failure carries it, the recoverable ones included.
+    expect(screen.getByText(STALE_FILE_HINT)).toBeTruthy()
+  })
+
   it('shuts every import door while a request is in flight', async () => {
     const run = deferred<ImportReport>()
     vi.mocked(importXlsx).mockReturnValue(run.promise)
