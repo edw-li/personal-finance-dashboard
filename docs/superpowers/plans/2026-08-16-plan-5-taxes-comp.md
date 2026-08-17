@@ -737,6 +737,12 @@ STRINGS ("78" not 78) — Task 5/8 type them as strings; `PATCH /espp/lots` with
 `purchase_price: null` RE-DERIVES the 85% default from the merged sub/fmv pair (useful
 divergence from the explicit-null-is-no-op convention; test-pinned); `price_source` is
 "params" only when BOTH prices came from the query; `?year=` with no periods → 404.
+Quality-review ratifications: Numeric(10,9) fields serialize via a plain-format
+`PlainSerializer` (`format(v, "f")`) so `0` never reaches the wire as `"0E-9"` — the SAME
+pattern is MANDATORY for Task 4's five paycheck 9dp fields; modeler param bound is 10^10
+(matches the latest_prices Numeric(14,4) source, so a stored quote can never 422 a
+no-param GET); `ModelerOut` additionally carries `quoted_at` (null when price_source is
+"params") for Task 8's provenance line; `price_source` typed as a Literal.
 
 - [ ] **Step 3:** implement to green. **Step 4:** full gates. **Step 5:** commit
   `feat: ESPP lots/periods API + chained 25k modeler`.
@@ -774,7 +780,9 @@ Router `/comp`:
 
 - [ ] **Step 1: failing tests** (`test_paycheck_comp_api.py`):
   - paycheck_calc unit: the real-profile golden (all 11 lines at the pinned cents); a 26-period
-    profile (monthly = net×26/12); zero-pct profile (net == post_tax).
+    profile (monthly = net×26/12); zero-pct profile (net == post_tax). The five Numeric(10,9)
+    pct fields on ProfileOut MUST use the Task-3 plain-format PlainSerializer pattern (no
+    "0E-9" on the wire) — pin `"0.000000000"` for a zero pct in a test.
   - paycheck API: CRUD + every validation (pay_periods 0 → 422 is MANDATORY); breakdown
     default-profile selection (two profiles: effective 2026-01-01 and 2027-01-01 with
     frozen... use dates relative to `date.today()` — one past, one future → past wins; only
@@ -796,6 +804,10 @@ modeler params; no react-query).
 Note (Task 2 review M8): brackets serialize as `Record<string, Bracket[]>` (importer-written
 extra jurisdictions survive reads) — export a frontend `JURISDICTIONS` order const in
 `src/api/taxes.ts` to drive render order; `BracketIn` ignores a round-tripped `bracket_index`.
+Note (Task 3 review M2/M6): EsppPage's modeler `price_source` is `'params' | 'latest_price'`
+— a DIFFERENT union than HoldingOut's same-named field; `espp_ticker` types as
+`string | null` (any stored string echoes through), and `ModelerOut.quoted_at` is
+`string | null`.
 
 - [ ] **Step 1:** write types + clients (every endpoint from Tasks 2–4, including
   clone-brackets and modeler params). **Step 2:** `npx tsc --noEmit` via `npm run build`
