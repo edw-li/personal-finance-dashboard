@@ -11,8 +11,17 @@ this module one type on the frontend. They are always whole numbers (the sheet's
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
+
+# A zero at Numeric(10,9) scale comes back from the driver as Decimal("0E-9"), and
+# pydantic's JSON encoder renders `str(...)` verbatim — so a 0% period would hit the wire
+# as `"0E-9"`, which no JS decimal parser reads as a number. `format(v, "f")` forces plain
+# notation, and `when_used="json"` keeps python-mode dumps on the real Decimal.
+Pct9 = Annotated[
+    Decimal, PlainSerializer(lambda v: format(v, "f"), return_type=str, when_used="json")
+]
 
 
 class LotIn(BaseModel):
@@ -92,13 +101,15 @@ class PeriodUpdate(BaseModel):
 
 
 class PeriodOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     label: str
     period_start: date
     period_end: date
     semi_annual_base: Decimal
     additional_payments: Decimal
-    contribution_pct: Decimal
+    contribution_pct: Pct9
 
 
 class ModelerPeriodOut(BaseModel):
@@ -109,7 +120,7 @@ class ModelerPeriodOut(BaseModel):
     period_end: date
     semi_annual_base: Decimal
     additional_payments: Decimal
-    contribution_pct: Decimal
+    contribution_pct: Pct9
     # --- computed chain (espp_calc.run_modeler)
     eligible_earnings: Decimal
     contribution: Decimal
@@ -138,7 +149,10 @@ class ModelerOut(BaseModel):
     espp_ticker: str | None
     # "params" only when BOTH prices came from the query string; any fallback to the
     # ticker's latest quote reports "latest_price".
-    price_source: str
+    price_source: Literal["params", "latest_price"]
+    # The quote the fallback prices came from — null whenever price_source is "params",
+    # because then no stored quote is behind the numbers (Task 8's provenance line).
+    quoted_at: datetime | None
     subscription_price: Decimal
     purchase_fmv: Decimal
     carry_forward: Decimal

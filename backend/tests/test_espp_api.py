@@ -174,6 +174,36 @@ async def test_lots_envelope_degrades_at_every_break_in_the_soft_link(auth_clien
     assert (await auth_client.get(LOTS)).json()["espp_ticker"] is None
 
 
+async def test_espp_ticker_setting_is_normalized_before_the_lookup(auth_client, db):
+    # A hand-typed setting: padded and lowercase. portfolio.py's _normalize_ticker posture
+    # (strip + upper) is the only reason it finds the securities row at all.
+    db.add(AppSetting(key="espp_ticker", value={"value": "  nvda  "}))
+    security = Security(ticker="NVDA", name="NVIDIA", holding_type="stock")
+    db.add(security)
+    await db.flush()
+    db.add(
+        LatestPrice(
+            security_id=security.id,
+            price=D("174.1800"),
+            quoted_at=datetime(2026, 8, 14, 20, 30, tzinfo=UTC),
+            source="yfinance",
+        )
+    )
+    await db.commit()
+    await create_lot(auth_client)
+
+    body = (await auth_client.get(LOTS)).json()
+    assert body["espp_ticker"] == "NVDA"  # echoed NORMALIZED, not as it was typed
+    assert body["current_price"] == "174.1800"
+    assert body["lots"][0]["market_value"] == "45286.80"
+
+    # A whitespace-only value normalizes to nothing at all, which is "no ticker".
+    setting = await db.get(AppSetting, "espp_ticker")
+    setting.value = {"value": "   "}
+    await db.commit()
+    assert (await auth_client.get(LOTS)).json()["espp_ticker"] is None
+
+
 async def test_lots_list_is_empty_before_anything_is_stored(auth_client):
     assert (await auth_client.get(LOTS)).json() == {
         "espp_ticker": None,
@@ -329,6 +359,21 @@ async def test_patch_lot_nulling_purchase_price_re_derives_the_default(auth_clie
     assert resp.json()["purchase_price"] == "41.23265"
 
 
+async def test_explicit_null_is_a_no_op_on_a_not_null_column(auth_client):
+    # The house PATCH convention (portfolio.py's update_security): absent keeps the stored
+    # value, and an explicit null on a column that cannot hold one reads as "no change"
+    # rather than a 422. `purchase_price` is the one deliberate exception (it re-derives).
+    lot = await create_lot(auth_client)
+    resp = await auth_client.patch(f"{LOTS}/{lot['id']}", json={"shares": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["shares"] == "260.0000"
+
+    created = await create_period(auth_client)
+    patched = await auth_client.patch(f"{PERIODS}/{created['id']}", json={"label": None})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["label"] == "2026 H1"
+
+
 async def test_patch_lot_404_and_delete_roundtrip(auth_client, db):
     assert (await auth_client.patch(f"{LOTS}/999", json={"shares": "1"})).status_code == 404
     assert (await auth_client.delete(f"{LOTS}/999")).status_code == 404
@@ -369,6 +414,67 @@ async def test_periods_crud_roundtrip(auth_client, db):
     assert (await auth_client.delete(f"{PERIODS}/{second['id']}")).status_code == 204
     assert await db.get(EsppPeriod, second["id"]) is None
     assert len((await auth_client.get(PERIODS)).json()) == 1
+
+
+async def test_periods_sharing_a_period_end_fall_back_to_the_id_tiebreak(auth_client):
+    # ORDER BY period_end, id — without the id the two rows would come back in whatever
+    # order the planner picked, and the modeler's chain is ORDER-dependent.
+    zed = await create_period(auth_client, label="zed")
+    ace = await create_period(auth_client, label="ace")
+    assert zed["period_end"] == ace["period_end"] == "2026-02-27"
+
+    listed = (await auth_client.get(PERIODS)).json()
+    assert [row["id"] for row in listed] == [zed["id"], ace["id"]]  # insertion, not label
+
+    modeled = (
+        await auth_client.get(
+            MODELER, params={"subscription_price": "170.79", "purchase_fmv": "171"}
+        )
+    ).json()
+    assert [row["id"] for row in modeled["periods"]] == [zed["id"], ace["id"]]
+
+
+async def test_a_zero_contribution_pct_crosses_the_wire_in_plain_notation(auth_client):
+    # A Numeric(10,9) zero is Decimal("0E-9"), and pydantic renders a Decimal with str():
+    # without the schema's plain-format serializer this reaches the frontend as "0E-9",
+    # which no JS decimal parser reads as a number.
+    created = await create_period(auth_client, contribution_pct="0")
+    assert created["contribution_pct"] == "0.000000000"
+    assert (await auth_client.get(PERIODS)).json()[0]["contribution_pct"] == "0.000000000"
+
+    patched = await auth_client.patch(
+        f"{PERIODS}/{created['id']}", json={"contribution_pct": "0.0"}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["contribution_pct"] == "0.000000000"
+
+    body = (
+        await auth_client.get(
+            MODELER, params={"subscription_price": "170.79", "purchase_fmv": "171"}
+        )
+    ).json()
+    (row,) = body["periods"]
+    assert row["contribution_pct"] == "0.000000000"
+    # ... and the chain still models the period; it just buys nothing.
+    assert row["eligible_earnings"] == "81000.00"
+    assert row["contribution"] == "0.00"
+    assert row["available"] == "0.00"
+    assert row["purchase_price"] == "145.18"
+    assert row["shares_before_limit"] == "0"
+    assert row["unused_25k"] == "25000.00"
+    assert row["max_shares_25k"] == "146"  # the limit is untouched, the cash is the cap
+    assert row["over_limit"] is False
+    assert row["shares"] == "0"
+    assert row["cost"] == "0.00"
+    assert row["carry_forward_out"] == "0.00"
+    assert row["refund"] == "0.00"
+    assert row["value_25k"] == "0.00"
+    assert body["totals"] == {
+        "total_25k_value": "0.00",
+        "out_of_pocket_cost": "0.00",
+        "fmv_of_shares": "0.00",
+        "remaining_25k": "25000.00",
+    }
 
 
 async def test_create_period_omitting_additional_payments_stores_zero(auth_client):
@@ -450,6 +556,7 @@ async def test_modeler_golden_chain_over_the_two_real_periods(auth_client, price
     assert body["year"] == 2026
     assert body["espp_ticker"] == "NVDA"
     assert body["price_source"] == "params"  # explicit params beat the live quote
+    assert body["quoted_at"] is None  # ... so the stored quote is behind none of this
     assert body["subscription_price"] == "170.79000"
     assert body["purchase_fmv"] == "171.00000"
     assert body["carry_forward"] == "0.00"
@@ -500,6 +607,8 @@ async def test_modeler_defaults_both_prices_to_the_live_quote(auth_client, price
     await seed_real_periods(auth_client)
     body = (await auth_client.get(MODELER)).json()
     assert body["price_source"] == "latest_price"
+    # The provenance line: which quote these prices actually came from.
+    assert datetime.fromisoformat(body["quoted_at"]) == datetime(2026, 8, 14, 20, 30, tzinfo=UTC)
     assert body["subscription_price"] == "174.18000"  # re-scaled into the espp price family
     assert body["purchase_fmv"] == "174.18000"
     assert body["carry_forward"] == "0.00"
@@ -570,8 +679,8 @@ async def test_modeler_carry_forward_seeds_the_first_period(auth_client):
             "carry_forward must be >= 0",
         ),
         (
-            {"subscription_price": "1000000000", "purchase_fmv": "171"},
-            "subscription_price: |value| must be below 10^9",
+            {"subscription_price": "10000000000", "purchase_fmv": "171"},
+            "subscription_price: |value| must be below 10^10",
         ),
     ],
 )
@@ -580,6 +689,22 @@ async def test_modeler_param_validation(auth_client, params, message):
     resp = await auth_client.get(MODELER, params=params)
     assert resp.status_code == 422, resp.text
     assert message in resp.json()["detail"]
+
+
+async def test_modeler_prices_wear_the_quote_bound_not_the_lots_one(auth_client):
+    # These params are never stored, and a no-param GET feeds latest_prices.price —
+    # Numeric(14,4) — straight into them. Fencing them at the LOTS column's 10^9 would
+    # let the price job write a perfectly storable quote that then 422s a plain read.
+    await seed_real_periods(auth_client)
+    resp = await auth_client.get(
+        MODELER, params={"subscription_price": "9999999999.9999", "purchase_fmv": "171"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["subscription_price"] == "9999999999.99990"
+    # Lot prices keep 10^9, because that IS their Numeric(14,5) limit.
+    stored = await auth_client.post(LOTS, json=lot_payload(subscription_price="1000000000"))
+    assert stored.status_code == 422
+    assert "subscription_price: |value| must be below 10^9" in stored.json()["detail"]
 
 
 async def test_modeler_year_defaults_to_the_latest_year_with_periods(auth_client, db):

@@ -133,6 +133,9 @@ def run_modeler(
         # The 25k limit is valued at the SUBSCRIPTION price, never at the discounted
         # purchase price — that is what makes max_shares_25k bite before the cash does.
         value_25k = half_up2(Decimal(shares) * subscription_price)
+        # ONE expression for "what rolls into the next period": the reported
+        # carry_forward_out and the chained `carry` must never be able to drift apart.
+        carry_next = ZERO if over_limit else available - cost
         results.append(
             PeriodResult(
                 period=period,
@@ -146,13 +149,13 @@ def run_modeler(
                 over_limit=over_limit,
                 shares=shares,
                 cost=cost,
-                carry_forward_out=half_up2(ZERO if over_limit else available - cost),
+                carry_forward_out=half_up2(carry_next),
                 refund=half_up2(available - cost if over_limit else ZERO),
                 value_25k=value_25k,
             )
         )
         unused = unused - value_25k
-        carry = ZERO if over_limit else available - cost
+        carry = carry_next
 
     total_shares = sum(row.shares for row in results)
     total_value = half_up2(sum((row.value_25k for row in results), ZERO))
@@ -182,8 +185,14 @@ def lot_metrics(lot, current_price: Decimal | None, today: date) -> dict:
     dangles at any hop — the market fields degrade to null and the date-only fields keep
     working, so the page still renders.
 
-    Defensive on stored data (a GET must never 500): a half-filled sold row and a zero
-    purchase_price both degrade to nulls rather than raising.
+    Defensive on stored data (a GET must never 500), and each half-filled shape degrades
+    DIFFERENTLY — the API rejects all three, so this is only about what is already stored:
+      - sold_date set, sold_price null: still "sold", but unpriced — market_value,
+        gain_amount and gain_pct go null and the countdown stays stopped.
+      - sold_price set, sold_date null: read as UNSOLD (sold_date is the only flag), so
+        the stored sale price is IGNORED and the row is priced off the live quote.
+      - purchase_price == 0: only gain_pct goes null (its divisor); cost_basis,
+        market_value and gain_amount all still compute.
     """
     is_sold = lot.sold_date is not None
     price = lot.sold_price if is_sold else current_price

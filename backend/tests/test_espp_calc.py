@@ -251,6 +251,45 @@ def test_over_limit_triggers_on_equality_not_strict_excess():
     assert row.carry_forward_out == D("0.00")
 
 
+def test_an_over_limit_period_refunds_its_change_instead_of_funding_the_next_one():
+    # The one shape that tells `carry_forward_out` and the CHAINED carry apart: if the
+    # loop kept feeding `available - cost` forward regardless of the branch, the refund
+    # would be spent twice — once back to the employee, once in the next period.
+    result = run_modeler(
+        [
+            period(40, "over", "100000.00", "0.500000000", end=date(2026, 3, 31)),
+            period(41, "after", "10000.00", "0.100000000", end=date(2026, 9, 30)),
+        ],
+        subscription_price=D("100.00000"),
+        purchase_fmv=D("100.00000"),
+        carry_forward=D("0.00"),
+    )
+    over, after = result.periods
+    assert over.available == D("50000.00")
+    assert over.shares_before_limit == 588 and over.max_shares_25k == 250
+    assert over.over_limit is True
+    assert over.shares == 250
+    assert over.cost == D("21250.00")
+    assert over.refund == D("28750.00")
+    assert over.carry_forward_out == D("0.00")
+    assert over.value_25k == D("25000.00")
+
+    # The whole point: 1000.00 of fresh contribution and NOT a cent of the 28750 refund
+    # (a leaking chain would report 29750.00 here).
+    assert after.available == D("1000.00")
+    assert after.unused_25k == D("0.00")  # the limit is spent, so nothing may be bought
+    assert after.max_shares_25k == 0
+    assert after.shares_before_limit == 11  # the cash alone would buy 11
+    assert after.over_limit is True
+    assert after.shares == 0
+    assert after.cost == D("0.00")
+    assert after.refund == D("1000.00")  # ... so all of it comes straight back
+    assert after.carry_forward_out == D("0.00")
+    assert after.value_25k == D("0.00")
+    assert result.totals.out_of_pocket_cost == D("21250.00")
+    assert result.totals.remaining_25k == D("0.00")
+
+
 def test_purchase_price_takes_the_lower_of_subscription_and_fmv():
     lower_fmv = run_modeler(
         REAL_PERIODS[:1],

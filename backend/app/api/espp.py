@@ -10,7 +10,9 @@ value can never surface as a bare sqlstate 22003.
 Reads never reject stored data: `espp_calc` quantizes computed outputs with a plain
 `Decimal.quantize`, never money.py's bounded quantizers, and every hop of the espp_ticker
 soft link degrades to null instead of raising (Plan 1 note: a clean seed has the setting
-but no matching securities row).
+but no matching securities row). The modeler's price params carry the LATEST_PRICES bound
+(Numeric(14,4), 10^10) rather than the lot family's 10^9 for the same reason: those params
+default to a stored quote, and no quote the price job could have written may 422 a GET.
 """
 
 from datetime import date, datetime
@@ -41,6 +43,7 @@ from app.services.money import (
     DATE_MAX,
     DATE_MIN,
     MONEY_MAX_ABS_12_2,
+    MONEY_MAX_ABS_14_4,
     _quantize_bounded,
     quantize_money,
     quantize_price,
@@ -53,6 +56,10 @@ ZERO = Decimal("0")
 # espp_lots prices: Numeric(14,5) keeps 9 integer digits.
 ESPP_PRICE_QUANTUM = Decimal("0.00001")
 ESPP_PRICE_MAX_ABS = Decimal(10) ** 9
+# The modeler's price knobs are never stored, so they wear their SOURCE's bound instead:
+# latest_prices.price is Numeric(14,4) (10 integer digits), and a stored quote must never
+# be able to 422 the no-param GET that reads it.
+MODELER_PRICE_MAX_ABS = MONEY_MAX_ABS_14_4
 # espp_lots.shares: Numeric(12,4) keeps 8.
 SHARES_MAX_ABS = Decimal(10) ** 8
 PCT_QUANTUM_9 = Decimal("0.000000001")
@@ -66,16 +73,19 @@ PCT_INPUT_MAX_ABS = Decimal(10) ** 10
 YearQuery = Annotated[int | None, Query(ge=DATE_MIN.year, le=DATE_MAX.year)]
 
 
-def _quantize5(value: Decimal, field: str) -> Decimal:
+def _quantize5(value: Decimal, field: str, max_abs: Decimal = ESPP_PRICE_MAX_ABS) -> Decimal:
     """The espp price family. money.py owns the 422 vocabulary and the NaN / over-bound
     pre-checks; it just has no public 5dp quantizer, and its module is out of this task's
     scope — calling the shared helper beats minting a second phrasing for the same error.
-    `+ ZERO` collapses the signed zero a tiny negative would otherwise keep."""
-    return _quantize_bounded(value, field, ESPP_PRICE_QUANTUM, ESPP_PRICE_MAX_ABS) + ZERO
+    The `+ ZERO` is belt-and-braces, not load-bearing: collapsing the signed zero a tiny
+    negative would keep is the house convention for anything that reaches the wire, but no
+    current call order can reach one — `_positive_price` rejects <= 0 immediately after,
+    and the only other caller derives 0.85 x two already-positive prices."""
+    return _quantize_bounded(value, field, ESPP_PRICE_QUANTUM, max_abs) + ZERO
 
 
-def _positive_price(value: Decimal, field: str) -> Decimal:
-    quantized = _quantize5(value, field)
+def _positive_price(value: Decimal, field: str, max_abs: Decimal = ESPP_PRICE_MAX_ABS) -> Decimal:
+    quantized = _quantize5(value, field, max_abs)
     if quantized <= 0:
         raise HTTPException(status_code=422, detail=f"{field} must be positive")
     return quantized
@@ -439,7 +449,7 @@ async def modeler(
         # nothing in it is a missing resource, not an empty-but-valid model.
         raise HTTPException(status_code=404, detail=f"no espp periods in {target_year}")
 
-    ticker, latest_price, _quoted_at = await _espp_quote(db)
+    ticker, latest_price, quoted_at = await _espp_quote(db)
     from_params = subscription_price is not None and purchase_fmv is not None
     if not from_params and latest_price is None:
         raise HTTPException(
@@ -449,12 +459,18 @@ async def modeler(
                 "pass subscription_price and purchase_fmv"
             ),
         )
+    # MODELER_PRICE_MAX_ABS, not the lot family's 10^9: these values are never stored, and
+    # they DEFAULT to latest_prices.price — a 10^9 fence here would let the price job write
+    # a quote that 422s a no-param GET. Lots keep 10^9, which is their real column limit.
     subscription = _positive_price(
         subscription_price if subscription_price is not None else latest_price,
         "subscription_price",
+        MODELER_PRICE_MAX_ABS,
     )
     fmv = _positive_price(
-        purchase_fmv if purchase_fmv is not None else latest_price, "purchase_fmv"
+        purchase_fmv if purchase_fmv is not None else latest_price,
+        "purchase_fmv",
+        MODELER_PRICE_MAX_ABS,
     )
     carry = _non_negative_money(
         carry_forward if carry_forward is not None else ZERO, "carry_forward"
@@ -481,6 +497,9 @@ async def modeler(
         year=target_year,
         espp_ticker=ticker,
         price_source="params" if from_params else "latest_price",
+        # Provenance, not data: the quote is only behind these numbers when a price
+        # actually fell back to it.
+        quoted_at=None if from_params else quoted_at,
         subscription_price=result.subscription_price,
         purchase_fmv=result.purchase_fmv,
         carry_forward=result.carry_forward,
