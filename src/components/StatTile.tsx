@@ -1,21 +1,41 @@
 import './panels.css'
 
-// Stat-tile contract (dataviz): label · value · optional delta ("direction x whether up
-// is good" is the caller's job — pass `tone`). Deltas always pair a glyph with the color.
+// Stat-tile contract (dataviz): label · value · optional delta. A delta speaks on three
+// redundant channels, never on colour alone (CVD-safe): the GLYPH carries which way the
+// number moved, the COLOUR (`tone`) carries whether that move is good, and the caller's
+// own wording carries the judgment in words. "Direction × whether up is good" is still the
+// caller's job — pass `tone`.
+//
+// Direction defaults to the tone, which is right whenever up is good. But a delta measured
+// against a REFERENCE can have the two disagree — spending above its 12-month average went
+// UP and that is BAD — and a tone-derived glyph would then point the wrong way and lie
+// about the number. Pass `direction` explicitly in that case; it overrides the default and
+// leaves colour and wording to carry the judgment.
 export default function StatTile({
   label,
   value,
   delta,
   tone,
+  direction,
   hero = false,
 }: {
   label: string
   value: string
   delta?: string
   tone?: 'positive' | 'negative' | 'neutral'
+  direction?: 'up' | 'down'
   hero?: boolean
 }) {
-  const glyph = tone === 'positive' ? '▲' : tone === 'negative' ? '▼' : ''
+  const glyph =
+    direction === 'up'
+      ? '▲'
+      : direction === 'down'
+        ? '▼'
+        : tone === 'positive'
+          ? '▲'
+          : tone === 'negative'
+            ? '▼'
+            : ''
   return (
     <div className={hero ? 'stat-tile stat-tile-hero' : 'stat-tile'}>
       <div className="stat-label">{label}</div>

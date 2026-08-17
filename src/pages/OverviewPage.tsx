@@ -114,7 +114,7 @@ export default function OverviewPage() {
 
   // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
   // paycheck is entered but whose spending is not comes back with an explicit "0.00". A
-  // green "$0.00 vs $5,000.00 12-mo avg" would congratulate the user for a month they have
+  // green "▼ under $5,000.00 12-mo avg" would congratulate the user for a month they have
   // not entered yet, so the tile keeps its label and says nothing else.
   const cashflowOnly =
     stats !== null &&
@@ -131,6 +131,18 @@ export default function OverviewPage() {
       : stats.aboveAvg
         ? ('negative' as const)
         : ('positive' as const)
+
+  // …which is exactly why this tile hands StatTile an explicit direction: left to derive
+  // the glyph from the tone, an over-average month would render ▼ on a number that went UP.
+  // Glyph = direction, colour = good/bad, "over"/"under" = the judgment in words; the same
+  // fact three ways, and none of them wrong. Suppressed alongside the tone (and the delta),
+  // so the two consts are always defined or undefined together.
+  const spendDirection =
+    stats === null || stats.aboveAvg === null || cashflowOnly
+      ? undefined
+      : stats.aboveAvg
+        ? ('up' as const)
+        : ('down' as const)
 
   const taxLabel =
     tax === null
@@ -202,10 +214,11 @@ export default function OverviewPage() {
               value={cashflowOnly ? '—' : formatCurrency(stats?.total)}
               delta={
                 !cashflowOnly && stats?.avg12 != null
-                  ? `vs ${formatCurrency(stats.avg12)} 12-mo avg`
+                  ? `${stats.aboveAvg ? 'over' : 'under'} ${formatCurrency(stats.avg12)} 12-mo avg`
                   : undefined
               }
               tone={spendTone}
+              direction={spendDirection}
             />
             {/* A rate is a level, not a movement: no delta, no arrow. */}
             <StatTile

@@ -281,17 +281,47 @@ describe('OverviewPage tiles', () => {
     expect(deltaOf(portfolio)?.textContent).toBe('▼ -$2,500.00 (-0.3%) today')
     expect(deltaOf(portfolio)?.className).toContain('stat-delta-negative')
 
-    // Spending up is BAD: 6,000 against a 5,000 average is a negative-tone tile even though
-    // the number went up. (Direction × whether-up-is-good is the caller's job — StatTile.)
+    // Spending up is BAD, and glyph and tone are DECOUPLED so that both can be true at once:
+    // 6,000 against a 5,000 average went UP (▲, honest about the number) and that is BAD
+    // (red, plus the word "over"). A tone-derived glyph would have printed ▼ on a month that
+    // rose. Direction × whether-up-is-good is the caller's job — StatTile.
     const spending = tileFor('Spending — Jul 2026')
     expect(valueOf(spending)).toBe('$6,000.00')
-    expect(deltaOf(spending)?.textContent).toBe('▼ vs $5,000.00 12-mo avg')
+    expect(deltaOf(spending)?.textContent).toBe('▲ over $5,000.00 12-mo avg')
     expect(deltaOf(spending)?.className).toContain('stat-delta-negative')
 
     const tax = tileFor(`Effective tax — ${CURRENT_YEAR} (est.)`)
     expect(valueOf(tax)).toBe('24.7%')
     // A rate is a level, not a movement: no delta, no arrow.
     expect(deltaOf(tax)).toBeNull()
+  })
+
+  // RATIFIED (spec review): both halves of a delta or neither. A bare amount with no rate
+  // beside it reads as a total rather than as a change, so a half-served delta is dropped
+  // whole rather than printed half-dressed. The two tiles that pair an amount with a
+  // percent each get a pin, because "one field is null" is a shape the server really sends.
+  it('drops the hero delta when the server sends an amount with no rate', async () => {
+    serve({ summary: summaryOut({ mom_delta: '100.00', mom_pct: null }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+
+    const hero = tileFor('Net worth — Aug 2026')
+    expect(valueOf(hero)).toBe('$1,234,567.00')
+    expect(deltaOf(hero)).toBeNull()
+    // Not the amount alone, either — the whole delta node is gone.
+    expect(screen.queryByText(/MoM/)).toBeNull()
+  })
+
+  it('drops the portfolio delta when the day change has an amount but no rate', async () => {
+    const totals = { ...holdingsOut().totals, day_change_amount: '-5.00', day_change_pct: null }
+    serve({ holdings: holdingsOut({ totals }) })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+
+    const portfolio = tileFor('Portfolio')
+    expect(valueOf(portfolio)).toBe('$812,345.67')
+    expect(deltaOf(portfolio)).toBeNull()
+    expect(screen.queryByText(/today/)).toBeNull()
   })
 
   it('tones the spending tile positive when the month came in under the average', async () => {
@@ -301,14 +331,16 @@ describe('OverviewPage tiles', () => {
     const spending = await screen.findByText('Spending — Jul 2026')
     const tile = spending.closest('.stat-tile') as HTMLElement
     expect(valueOf(tile)).toBe('$4,000.00')
-    expect(deltaOf(tile)?.textContent).toBe('▲ vs $5,000.00 12-mo avg')
+    // The mirror of the case above: the number went DOWN (▼) and that is GOOD (green,
+    // "under"). Same decoupling, opposite signs — here glyph and tone happen to agree.
+    expect(deltaOf(tile)?.textContent).toBe('▼ under $5,000.00 12-mo avg')
     expect(deltaOf(tile)?.className).toContain('stat-delta-positive')
   })
 
   it('says nothing about a cashflow-only trailing month', async () => {
     // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
     // paycheck is entered but whose spending is not comes back with an explicit "0.00".
-    // A green "$0.00 vs $5,000.00 avg" would congratulate the user for an unentered month.
+    // A green "▼ under $5,000.00 avg" would congratulate the user for an unentered month.
     serve({ matrix: matrixOut({ totals: [...Array<string>(11).fill('5000.00'), '0.00'] }) })
     renderPage()
     await screen.findByText('Spending — Jul 2026')
@@ -317,6 +349,38 @@ describe('OverviewPage tiles', () => {
     expect(valueOf(tile)).toBe('—')
     expect(deltaOf(tile)).toBeNull()
     expect(screen.queryByText(/12-mo avg/)).toBeNull()
+  })
+
+  // The two edges of that guard, pinned so a later widening of it cannot swallow a real
+  // month. The guard fires only when there is an average ABOVE zero to be measured against
+  // — that is what makes a $0.00 month suspicious rather than merely quiet.
+  it('shows a first-ever month of zero rather than swallowing it', async () => {
+    // Month one: nothing before it, so avg12 is null and there is nothing to compare to.
+    // The tile is not suppressed — the user entered this month, it really was $0.00, and a
+    // dash here would look like a load failure.
+    serve({ matrix: matrixOut({ months: [SPEND_MONTHS[0]], totals: ['0.00'] }) })
+    renderPage()
+    await screen.findByText('Spending — Aug 2025')
+
+    const tile = tileFor('Spending — Aug 2025')
+    expect(valueOf(tile)).toBe('$0.00')
+    expect(deltaOf(tile)).toBeNull()
+  })
+
+  it('states the degenerate zero-against-zero case rather than suppressing it', async () => {
+    // A whole history of zeros: avg12 is 0, so the `avg12 > 0` guard does NOT fire and the
+    // delta is spoken. 0 > 0 is false, so the month reads as "under" its average, ▼, green.
+    // Degenerate but honest — an all-zero database is not the case the guard exists for,
+    // and inventing a third phrasing for it would cost more than it explains. Pinned so the
+    // reading is a decision rather than an accident.
+    serve({ matrix: matrixOut({ totals: Array<string>(12).fill('0.00') }) })
+    renderPage()
+    await screen.findByText('Spending — Jul 2026')
+
+    const tile = tileFor('Spending — Jul 2026')
+    expect(valueOf(tile)).toBe('$0.00')
+    expect(deltaOf(tile)?.textContent).toBe('▼ under $0.00 12-mo avg')
+    expect(deltaOf(tile)?.className).toContain('stat-delta-positive')
   })
 
   it('marks a past tax year as the latest one on file', async () => {
@@ -346,6 +410,52 @@ describe('OverviewPage tiles', () => {
     expect(valueOf(tile)).toBe('—')
     // No year in the label, no crash reaching into a summary that is not there.
     expect(screen.queryByText(/Effective tax — /)).toBeNull()
+  })
+
+  it('dashes the tax rate when the year exists but has no computed rate', async () => {
+    // A year row exists the moment anything is entered against it, and the server sends a
+    // null effective_rate until there is income to divide by. The label still names the
+    // year (there IS a year on file) while the value admits it cannot state a rate — the
+    // formatter's dash, not a 0.0% that would read as a tax-free year.
+    serve({ taxes: { years: [taxSummaryOut(CURRENT_YEAR, null)] } })
+    renderPage()
+    await screen.findByText(`Effective tax — ${CURRENT_YEAR} (est.)`)
+
+    const tile = tileFor(`Effective tax — ${CURRENT_YEAR} (est.)`)
+    expect(valueOf(tile)).toBe('—')
+    expect(deltaOf(tile)).toBeNull()
+  })
+})
+
+describe('OverviewPage snapshot fan-out', () => {
+  it('asks each client for the shape the page actually draws', async () => {
+    // The mocked EChart cannot tell a monthly series from a quarterly one, nor an
+    // allocation by type from one by sector, so the request arguments are pinned here: a
+    // silent swap would still render three charts and pass every other test in this file.
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+
+    expect(fetchTimeseries).toHaveBeenCalledWith('monthly')
+    expect(fetchAllocation).toHaveBeenCalledWith('type')
+  })
+
+  it('refetches all six clients on Refresh', async () => {
+    // One snapshot, one round trip per client: Refresh re-reads the WHOLE page rather than
+    // topping up a tile, which is what keeps the tiles and the charts on the same instant.
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(fetchSummary).toHaveBeenCalledTimes(2))
+
+    for (const client of [
+      fetchSummary, fetchTimeseries, fetchHoldings, fetchAllocation, fetchMatrix,
+      fetchAllTaxSummaries,
+    ]) {
+      expect(client).toHaveBeenCalledTimes(2)
+    }
   })
 })
 
