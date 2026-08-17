@@ -158,6 +158,9 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
         name: 'placeholder',
         type: 'bar',
         stack: 'waterfall',
+        // 'all', not echarts' default 'samesign': samesign un-floats a segment whose base has
+        // gone negative (total_tax > gross, a mid-data-entry year), flattening the walk.
+        stackStrategy: 'all',
         // Silent + transparent: it exists only to lift the visible segment off the floor.
         silent: true,
         itemStyle: { color: 'transparent' },
@@ -169,6 +172,7 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
         name: 'Amount',
         type: 'bar',
         stack: 'waterfall',
+        stackStrategy: 'all', // both halves of one stack must agree — see the placeholder's note.
         barMaxWidth: 46,
         itemStyle: { borderColor: SURFACE, borderWidth: 1 },
         emphasis: { itemStyle: { borderColor: INK } },

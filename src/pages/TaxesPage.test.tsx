@@ -1,7 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { TaxBracketsOut, TaxInputsOut, TaxSummaryOut, TaxYearOut } from '../types/api'
+import type {
+  TaxBracketsOut,
+  TaxInputsOut,
+  TaxSummariesOut,
+  TaxSummaryOut,
+  TaxYearOut,
+} from '../types/api'
 import TaxesPage from './TaxesPage'
 
 // JURISDICTIONS (render order) stays real; every request is stubbed.
@@ -19,11 +25,18 @@ vi.mock('../api/taxes', async (importOriginal) => ({
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law), so the wrapper
 // the summary panel mounts is a marker div here. What the charts actually DRAW is pinned
 // against the golden summaries in src/components/taxes/taxChartOptions.test.ts; this file
-// only asks whether a chart is on screen at all. The async factory + dynamic import keeps
-// the JSX runtime out of vi.mock's hoisted scope.
+// only asks whether a chart is on screen — and, via the x-axis categories the marker
+// carries, WHICH feed drew it. The async factory + dynamic import keeps the JSX runtime
+// out of vi.mock's hoisted scope.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
-  return { default: () => createElement('div', { 'data-testid': 'echart' }) }
+  return {
+    default: ({ option }: { option: { xAxis?: { data?: unknown[] } } }) =>
+      createElement('div', {
+        'data-testid': 'echart',
+        'data-categories': (option.xAxis?.data ?? []).join(','),
+      }),
+  }
 })
 import {
   cloneBrackets,
@@ -121,6 +134,9 @@ const MISSING_21 =
 
 const salary = () => screen.getByLabelText('Annual Salary') as HTMLInputElement
 const saveInputs = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
+// The trend is the SECOND chart on the page — the selected year's own waterfall is the
+// first — and its x-axis categories are the years of whichever feed drew it.
+const trendCategories = () => screen.getAllByTestId('echart')[1]?.getAttribute('data-categories')
 
 // The unsaved-work guard is a window.confirm; "yes" is the default so only the tests that
 // are ABOUT the guard have to think about it.
@@ -524,6 +540,35 @@ describe('TaxesPage', () => {
     fireEvent.change(salary(), { target: { value: '210000' } })
     fireEvent.click(saveInputs())
     await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(2))
+  })
+
+  it('lets only the newest trend feed land', async () => {
+    // The panel keeps a sequence of its own: the page's `summarySeqRef` guards the
+    // per-year totals, and nothing there can speak for an ALL-years feed.
+    const slow = deferred<TaxSummariesOut>()
+    const fast = deferred<TaxSummariesOut>()
+    vi.mocked(fetchAllTaxSummaries)
+      .mockReturnValueOnce(slow.promise) // the mount feed
+      .mockReturnValueOnce(fast.promise) // the one the save's refreshKey bump starts
+    render(<TaxesPage />)
+    await screen.findByLabelText('Annual Salary')
+    await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
+
+    // A save bumps refreshKey while the mount feed is still open — two feeds in flight.
+    fireEvent.change(salary(), { target: { value: '210000' } })
+    fireEvent.click(saveInputs())
+    await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(2))
+
+    await act(async () => {
+      fast.resolve({ years: [summaryFor(2025), summaryFor(2026)] })
+    })
+    await waitFor(() => expect(trendCategories()).toBe('2025,2026'))
+
+    // The mount feed answers LAST, carrying years the save has already superseded.
+    await act(async () => {
+      slow.resolve({ years: [summaryFor(2021), summaryFor(2022)] })
+    })
+    expect(trendCategories()).toBe('2025,2026')
   })
 
   it('notes a trend-feed failure without disturbing the selected year', async () => {

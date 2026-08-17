@@ -160,6 +160,7 @@ interface SeriesLike {
   name?: string
   type?: string
   stack?: string
+  stackStrategy?: string
   yAxisIndex?: number
   color?: string
   data?: unknown[]
@@ -167,6 +168,14 @@ interface SeriesLike {
 interface BarPoint {
   value: number
   itemStyle?: { color?: string }
+}
+// The two formatters carry logic of their own (a ÷100 each), so the tests call them
+// directly rather than trusting that a chart nobody renders in jsdom would show it.
+interface TooltipParam {
+  name?: string
+  seriesName?: string
+  value?: number | null
+  marker?: string
 }
 
 function seriesOf(option: EChartsOption | null): SeriesLike[] {
@@ -184,6 +193,16 @@ function yAxesOf(option: EChartsOption | null): { min?: number }[] {
 
 function points(series: SeriesLike): BarPoint[] {
   return (series.data ?? []) as BarPoint[]
+}
+
+function tooltipFormatterOf(option: EChartsOption | null): (params: TooltipParam[]) => string {
+  return (option as unknown as { tooltip: { formatter: (p: TooltipParam[]) => string } }).tooltip
+    .formatter
+}
+
+function rateAxisLabelOf(option: EChartsOption | null): (value: number) => string {
+  return (option as unknown as { yAxis: { axisLabel: { formatter: (v: number) => string } }[] })
+    .yAxis[1].axisLabel.formatter
 }
 
 describe('waterfallOption', () => {
@@ -246,8 +265,46 @@ describe('waterfallOption', () => {
     expect(remainders[6]).toBe(Number(summary.totals.take_home))
   })
 
+  it('keeps the walk stacked when the remainder crosses zero', () => {
+    // Half-entered year: the wage figures are in but the income that pays them is not, so
+    // total_tax (72739.17) is larger than gross and the remainder goes NEGATIVE partway
+    // down. echarts' default stackStrategy 'samesign' refuses to stack a value on a base
+    // of the other sign — every segment past the crossing would drop back to the axis and
+    // the walk would read as a row of floor bars.
+    const summary = summaryFixture(2024)
+    summary.totals.gross_income = '50000.00'
+    summary.totals.take_home = '-22739.17'
+    const [placeholder, visible] = seriesOf(waterfallOption(summary))
+    expect(placeholder.stackStrategy).toBe('all')
+    expect(visible.stackStrategy).toBe('all')
+    // The chain itself is unchanged, negatives and all: 50000 - 40782.88 = 9217.12,
+    // - 15884.46 = -6667.34, - 3634.95 = -10302.29, …
+    expect(placeholder.data).toEqual([
+      0, 9217.12, -6667.34, -10302.29, -20755.49, -22705.49, -22739.17, 0,
+    ])
+    expect(points(visible).map((p) => p.value)).toEqual([
+      50000, 40782.88, 15884.46, 3634.95, 10453.2, 1950, 33.68, -22739.17,
+    ])
+    // And it still lands on the server's take-home — which is itself negative here.
+    expect((placeholder.data as number[])[6]).toBe(Number(summary.totals.take_home))
+  })
+
   it('returns null for a year with nothing in it', () => {
     expect(waterfallOption(emptySummary(2026))).toBeNull()
+  })
+})
+
+describe('TAX_COLORS', () => {
+  it('walks UP one ramp from the first slot that clears the contrast floor', () => {
+    const slots = TAX_COLORS.map((c) => (SEQUENTIAL_BLUE as readonly string[]).indexOf(c))
+    // Index 4 is where the ramp starts clearing 3:1 on #171a21 (index 1 is 1.8:1), so the
+    // six taxes start there and never reach below it.
+    expect(TAX_COLORS[0]).toBe(SEQUENTIAL_BLUE[4])
+    expect(slots.every((slot) => slot >= 4)).toBe(true)
+    // Strictly ascending: the ramp encodes POSITION in TAX_LABELS order, which is what
+    // lets a waterfall step and a stack segment for the same tax wear one color — and it
+    // puts the lightest slots on the smallest taxes, whose slivers need the contrast.
+    expect(slots.slice(1).every((slot, i) => slot > slots[i])).toBe(true)
   })
 })
 
@@ -288,6 +345,33 @@ describe('trendOption', () => {
     const option = trendOption([2025, 2023, 2026, 2024].map(summaryFixture))
     expect(categoriesOf(option)).toEqual(['2023', '2024', '2025', '2026'])
     expect(seriesOf(option)[0].data).toEqual([18330.39, 40782.88, 51355.09, 57160.35])
+  })
+
+  it('sorts a COPY, leaving the array the caller handed it untouched', () => {
+    const feed = [2025, 2023, 2026, 2024].map(summaryFixture)
+    expect(categoriesOf(trendOption(feed))).toEqual(['2023', '2024', '2025', '2026'])
+    // Array.prototype.sort mutates in place: without the [...years] copy this call would
+    // reorder the panel's own useState array behind React's back.
+    expect(feed.map((y) => y.year)).toEqual([2025, 2023, 2026, 2024])
+  })
+
+  it('divides the rate back out in BOTH places that render it', () => {
+    const option = trendOption([summaryFixture(2024)])
+    // Two units in one tooltip: money for the stacked bars, percent for the rate line.
+    // The line's value rides the axis in PERCENT units, so it divides by 100 before
+    // formatPct multiplies by 100 again — without the divisor this reads "3056.6%".
+    expect(
+      tooltipFormatterOf(option)([
+        { name: '2024', seriesName: 'Federal', value: 40782.88, marker: '[m]' },
+        { name: '2024', seriesName: 'Effective rate', value: 30.5661, marker: '[r]' },
+      ]),
+    ).toBe('<strong>2024</strong><br/>[m]Federal: $40,782.88<br/>[r]Effective rate: 30.6%')
+    // The percent AXIS is handed the same ×100 units and divides them back out too, at
+    // whole percents; without the divisor this tick would read "3057%".
+    const label = rateAxisLabelOf(option)
+    expect(label(30.5661)).toBe('31%')
+    expect(label(30)).toBe('30%')
+    expect(label(0)).toBe('0%')
   })
 
   it('breaks the rate line where a year has no rate, and still stacks its zeros', () => {
