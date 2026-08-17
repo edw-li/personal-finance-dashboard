@@ -1,0 +1,112 @@
+/* Styles for the taxes components (inputs form + brackets editor). Both files import this
+   stylesheet, so neither depends on TaxesPage.css happening to be in the bundle — the same
+   reasoning that keeps portfolio.css next to its components. The app-wide vocabulary
+   (.card, .eyebrow, .chip, .badge, .field-input, .button, .data-table, .error-banner,
+   .empty-note, .drill-hint) lives in panels.css and is NOT redefined here. */
+
+.tax-section {
+  margin-bottom: 1.1rem;
+}
+
+.tax-section > .eyebrow {
+  margin-bottom: 0.5rem;
+  color: var(--text);
+}
+
+.tax-input-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 0.4rem 1.5rem;
+}
+
+.tax-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px minmax(0, 150px);
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tax-input-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.tax-input-label label {
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Same declaration as MonthlyUpdatePage.css's: the two stylesheets are scoped to
+   different screens and neither reaches into the other. */
+.field-input.invalid {
+  border-color: var(--negative);
+}
+
+.tax-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.tax-suggestion-value {
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tax-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.tax-form-actions .drill-hint {
+  margin: 0;
+}
+
+.bracket-block {
+  margin-bottom: 1.25rem;
+}
+
+.bracket-block > .eyebrow {
+  margin-bottom: 0.4rem;
+  color: var(--text);
+}
+
+.bracket-table {
+  max-width: 560px;
+}
+
+.bracket-table .field-input {
+  width: 110px;
+}
+
+.bracket-table .drill-hint {
+  display: block;
+  margin: 0.15rem 0 0;
+  font-size: 0.7rem;
+}
+
+.bracket-table .empty-note {
+  padding: 0.5rem 0;
+}
+
+.bracket-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.bracket-actions .button,
+.bracket-table .button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}

@@ -8,6 +8,7 @@ import NetWorthPage from './pages/NetWorthPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 import PortfolioPage from './pages/PortfolioPage'
 import SpendingPage from './pages/SpendingPage'
+import TaxesPage from './pages/TaxesPage'
 
 export default function App() {
   return (
@@ -22,7 +23,7 @@ export default function App() {
               <Route path="/net-worth" element={<NetWorthPage />} />
               <Route path="/spending" element={<SpendingPage />} />
               <Route path="/portfolio" element={<PortfolioPage />} />
-              <Route path="/taxes" element={<PlaceholderPage title="Taxes" />} />
+              <Route path="/taxes" element={<TaxesPage />} />
               <Route path="/espp" element={<PlaceholderPage title="ESPP" />} />
               <Route path="/paycheck" element={<PlaceholderPage title="Paycheck" />} />
               <Route path="/comp" element={<PlaceholderPage title="Comp" />} />

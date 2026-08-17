@@ -1,0 +1,59 @@
+/* Page-scoped rules ONLY (PortfolioPage.css's structure). The app-wide vocabulary
+   (.page, .page-header, .card, .eyebrow, .chip, .field-input, .button, .error-banner,
+   .empty-note, .loading-dim) lives in panels.css, and everything the two taxes components
+   consume lives in src/components/taxes/taxes.css — nothing either file defines is
+   redefined here. */
+
+.taxes-page .card {
+  margin-bottom: 1rem;
+}
+
+.taxes-page .chip-row {
+  margin-bottom: 0.75rem;
+}
+
+.new-year-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.new-year-form label {
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.new-year-form .field-input {
+  width: 110px;
+}
+
+.new-year-form .drill-hint {
+  margin: 0;
+}
+
+/* The stand-in totals line — Task 7's SummaryPanel replaces this block. */
+.tax-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 1rem;
+  margin: 0;
+}
+
+.tax-totals dt {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.tax-totals dd {
+  margin: 0;
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
