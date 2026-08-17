@@ -10,8 +10,8 @@ import {
 } from '../api/taxes'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import InputsForm from '../components/taxes/InputsForm'
+import SummaryPanel from '../components/taxes/SummaryPanel'
 import type { TaxBracketsOut, TaxInputsOut, TaxSummaryOut, TaxYearOut } from '../types/api'
-import { formatCurrency, formatPct } from '../utils/format'
 import '../components/panels.css'
 import './TaxesPage.css'
 
@@ -52,6 +52,11 @@ export default function TaxesPage() {
   // every path that reloads asks first.
   const [inputsDirty, setInputsDirty] = useState(false)
   const [bracketsDirty, setBracketsDirty] = useState(false)
+  // A save moves the engine's answer for one year, which moves that year's column in the
+  // panel's ALL-years trend too. The panel owns that feed, so the page just counts the
+  // saves whose totals actually landed and lets the panel refetch on the new value —
+  // cheaper than hoisting a second load chain into this component's eleven setters.
+  const [trendRefresh, setTrendRefresh] = useState(0)
   // Year chips can be clicked faster than three requests come back — a slow earlier year
   // must never overwrite a later one (PortfolioPage's guard).
   const seqRef = useRef(0)
@@ -177,6 +182,9 @@ export default function TaxesPage() {
             ? { ...current, summary }
             : current,
         )
+        // Only here: a refresh that the guards above dropped changed nothing on screen,
+        // and refetching the trend for it would be a request with nothing to show.
+        setTrendRefresh((n) => n + 1)
       })
       .catch((err: unknown) => {
         if (seq !== summarySeqRef.current) return
@@ -276,8 +284,6 @@ export default function TaxesPage() {
     })
   }
 
-  const totals = detail?.summary.totals
-
   return (
     <div className="page taxes-page">
       <div className="page-header">
@@ -366,30 +372,11 @@ export default function TaxesPage() {
 
       {detail !== null && (
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          {/* Task 7 replaces this block with <SummaryPanel/> (waterfall, trends, warnings
-              and stat tiles). Until then the raw server totals stand in — every number
-              here is the engine's, never re-derived on the client. */}
-          <section className="card">
-            <h2 className="eyebrow">Totals — {detail.summary.year}</h2>
-            <dl className="tax-totals">
-              <div>
-                <dt>Gross income</dt>
-                <dd>{formatCurrency(totals?.gross_income)}</dd>
-              </div>
-              <div>
-                <dt>Total tax</dt>
-                <dd>{formatCurrency(totals?.total_tax)}</dd>
-              </div>
-              <div>
-                <dt>Take-home</dt>
-                <dd>{formatCurrency(totals?.take_home)}</dd>
-              </div>
-              <div>
-                <dt>Effective rate</dt>
-                <dd>{formatPct(totals?.effective_rate, { signed: false })}</dd>
-              </div>
-            </dl>
-          </section>
+          {/* Deliberately NOT keyed by year: the panel's own feed is the all-years trend,
+              which a year switch does not move — remounting it would spend a request to
+              redraw the same chart. Its per-year half is a prop, so it follows the year
+              anyway. */}
+          <SummaryPanel summary={detail.summary} refreshKey={trendRefresh} />
           {/* Keyed by YEAR, not by load: a real switch remounts the editors (2023's typed
               rows must not carry into 2024), while a same-year reload — Retry, or the
               refresh after a save — leaves them mounted. Their state seeds from useState

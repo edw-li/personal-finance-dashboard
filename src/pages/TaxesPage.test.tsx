@@ -11,12 +11,23 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   fetchTaxInputs: vi.fn(),
   fetchTaxBrackets: vi.fn(),
   fetchTaxSummary: vi.fn(),
+  fetchAllTaxSummaries: vi.fn(),
   putTaxInputs: vi.fn(),
   putTaxBrackets: vi.fn(),
   cloneBrackets: vi.fn(),
 }))
+// echarts needs a real canvas and is NEVER rendered in jsdom (house law), so the wrapper
+// the summary panel mounts is a marker div here. What the charts actually DRAW is pinned
+// against the golden summaries in src/components/taxes/taxChartOptions.test.ts; this file
+// only asks whether a chart is on screen at all. The async factory + dynamic import keeps
+// the JSX runtime out of vi.mock's hoisted scope.
+vi.mock('../components/EChart', async () => {
+  const { createElement } = await import('react')
+  return { default: () => createElement('div', { 'data-testid': 'echart' }) }
+})
 import {
   cloneBrackets,
+  fetchAllTaxSummaries,
   fetchTaxBrackets,
   fetchTaxInputs,
   fetchTaxSummary,
@@ -96,6 +107,18 @@ function summaryFor(year: number): TaxSummaryOut {
   }
 }
 
+// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 21 of
+// them, in ONE line (backend/app/services/tax_service.py MISSING_INPUTS_WARNING). It is
+// rendered verbatim — the list IS the message.
+const MISSING_21 =
+  'missing inputs defaulted to 0: latest_w2_income, other_w2_income, stcg_total, ' +
+  'stcg_standard, unqualified_dividends, unq_div_us_treasuries_etf, ' +
+  'unq_div_state_exempt_pct, interest_total, other_income_1099, trad_401k_contributions, ' +
+  'hsa_contributions, hsa_contributions_employer, other_pretax_deductions, ' +
+  'standard_deduction, itemized_deduction, state_standard_deduction, ' +
+  'state_exemption_credits, ltcg_total, ltcg_brokerage, qualified_dividends, ' +
+  'other_capital_gains'
+
 const salary = () => screen.getByLabelText('Annual Salary') as HTMLInputElement
 const saveInputs = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
 
@@ -108,6 +131,9 @@ beforeEach(() => {
   vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
   vi.mocked(fetchTaxBrackets).mockImplementation(async (year: number) => bracketsFor(year))
   vi.mocked(fetchTaxSummary).mockImplementation(async (year: number) => summaryFor(year))
+  // The panel's own feed. Empty by default so no test's pins can collide with a trend
+  // year's numbers; the tests that are ABOUT the trend fill it in.
+  vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [] })
   vi.mocked(cloneBrackets).mockImplementation(async (year: number) => bracketsFor(year))
   vi.mocked(putTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
   vi.mocked(putTaxBrackets).mockImplementation(async (year: number) => bracketsFor(year))
@@ -129,8 +155,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
     expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024)
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledWith(2024)
-    // The raw totals line (Task 7 replaces it with the summary panel) renders SERVER
-    // numbers — nothing is re-derived here.
+    // The summary panel's tiles render SERVER numbers — nothing is re-derived here.
     expect(await screen.findByText('$123,456.78')).toBeTruthy()
     expect(screen.getByText('$376,543.22')).toBeTruthy()
   })
@@ -436,5 +461,78 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(thisYear, { values: {} }))
     expect(vi.mocked(cloneBrackets)).not.toHaveBeenCalled()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(thisYear))
+  })
+
+  // --- the summary panel (Task 7) ------------------------------------------------------
+
+  it('renders the totals as stat tiles beside the waterfall and the trend', async () => {
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
+      years: [summaryFor(2023), summaryFor(2024)],
+    })
+    render(<TaxesPage />)
+
+    expect(await screen.findByText('$123,456.78')).toBeTruthy() // total tax
+    expect(screen.getByText('Gross income')).toBeTruthy()
+    expect(screen.getByText('$500,000.00')).toBeTruthy()
+    expect(screen.getByText('Total tax')).toBeTruthy()
+    expect(screen.getByText('Take-home')).toBeTruthy()
+    expect(screen.getByText('$376,543.22')).toBeTruthy()
+    expect(screen.getByText('Effective rate')).toBeTruthy()
+    // The server's 6dp rate, rendered by format.ts and never recomputed from the tiles.
+    expect(screen.getByText('24.7%')).toBeTruthy()
+    // Two charts: this year's waterfall and the all-years trend.
+    await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(2))
+  })
+
+  it('renders every engine warning verbatim, including the 21-key sparse-year line', async () => {
+    const sparse = summaryFor(2024)
+    sparse.warnings = [MISSING_21, 'no state brackets for 2024: state tax computed as 0']
+    vi.mocked(fetchTaxSummary).mockResolvedValue(sparse)
+    render(<TaxesPage />)
+
+    // One text node, wrapped by CSS — not truncated, not summarised, not re-worded.
+    expect(await screen.findByText(MISSING_21)).toBeTruthy()
+    expect(screen.getByText('no state brackets for 2024: state tax computed as 0')).toBeTruthy()
+  })
+
+  it('offers a note instead of a waterfall for a year that computes to zeros', async () => {
+    const zeros = summaryFor(2024)
+    zeros.totals = {
+      gross_income: '0.00', total_income: '0.00', total_tax: '0.00',
+      take_home: '0.00', effective_rate: null,
+    }
+    vi.mocked(fetchTaxSummary).mockResolvedValue(zeros)
+    render(<TaxesPage />)
+
+    expect(await screen.findByText(/nothing to chart yet/i)).toBeTruthy()
+    // And an empty feed is an answer of its own, distinct from "still loading".
+    expect(await screen.findByText(/no years with stored inputs/i)).toBeTruthy()
+    expect(screen.queryByTestId('echart')).toBeNull()
+  })
+
+  it('loads the trend feed once per visit, and again after a save lands', async () => {
+    render(<TaxesPage />)
+    await screen.findByLabelText('Annual Salary')
+    await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
+
+    // A year switch cannot move an ALL-years feed, so it must not spend a request on it.
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1)
+
+    // A save does move it: this year's column just changed.
+    fireEvent.change(salary(), { target: { value: '210000' } })
+    fireEvent.click(saveInputs())
+    await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(2))
+  })
+
+  it('notes a trend-feed failure without disturbing the selected year', async () => {
+    vi.mocked(fetchAllTaxSummaries).mockRejectedValue(new ApiError('trend unavailable', 503))
+    render(<TaxesPage />)
+
+    expect(await screen.findByText('trend unavailable')).toBeTruthy()
+    // Different request, still on screen: the year's own totals are unaffected.
+    expect(screen.getByText('$123,456.78')).toBeTruthy()
+    expect(screen.getAllByTestId('echart')).toHaveLength(1)
   })
 })
