@@ -865,6 +865,12 @@ convert on load/save; keep 4dp) with inline errors; server 422 rendered verbatim
   sends single jurisdiction, percent→fraction conversion pinned ("37" → "0.37").
   TaxesPage: year chips render from mocked API; switching year reloads (mock call counts);
   clone flow calls POST then reloads years. (Mock `src/api/taxes`; no EChart here.)
+Ratified implementer decisions: fresh-DB bootstrap — clone source is the newest year with
+bracket_count>0; when NO year has brackets, "Create year" calls putTaxInputs(year, {values:{}})
+(the auto-create affordance) instead of a guaranteed-404 clone; selected year is component
+state (no URL param); percent↔fraction conversion is decimal-point string-shifting (no
+floats; mutation-verified against Number()*10**n).
+
 - [ ] **Step 2:** implement; swap `<Route path="/taxes">` to TaxesPage. **Step 3:**
   `npm test`, lint, build. **Step 4:** commit `feat: taxes page — inputs form + bracket editor`.
 
