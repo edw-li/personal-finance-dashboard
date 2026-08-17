@@ -1,10 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { AppSettingsOut } from '../types/api'
+import type { AppSettingsOut, ImportReport, ImportSheetReport } from '../types/api'
 import SettingsPage from './SettingsPage'
 
-// Two api modules, both stubbed. No EChart mock here: this page draws nothing, so the
+// Three api modules, all stubbed. No EChart mock here: this page draws nothing, so the
 // house's never-render-echarts-in-jsdom rule has nothing to catch.
 vi.mock('../api/settings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/settings')>()),
@@ -15,7 +15,12 @@ vi.mock('../api/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/auth')>()),
   changePassword: vi.fn(),
 }))
+vi.mock('../api/importer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/importer')>()),
+  importXlsx: vi.fn(),
+}))
 import { changePassword } from '../api/auth'
+import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 
 // A promise this file settles by hand — the only way to look at the page while a request
@@ -64,10 +69,76 @@ function fillPasswords(current: string, next: string, confirm: string) {
   type(confirmPwBox(), confirm)
 }
 
+// --- import card ---
+
+// The nine keys report.SHEET_KEYS always sends — every sheet is present even when clean,
+// which is exactly what the card's "list only what changed" filter has to survive.
+const SHEET_KEYS = [
+  'reference_data',
+  'positions',
+  'portfolio',
+  'net_worth',
+  'spending',
+  'taxes',
+  'espp',
+  'paycheck',
+  'focal_history',
+] as const
+
+const CLEAN_SHEET: ImportSheetReport = {
+  entities: {},
+  warnings: [],
+  errors: [],
+  samples: [],
+  samples_truncated: 0,
+}
+
+// `applied` picks the pair the server sends together: a dry run is (dry_run, !applied) and
+// a real one is (!dry_run, applied) — the card arms Apply off the FORMER only.
+function makeReport(
+  patches: Record<string, Partial<ImportSheetReport>> = {},
+  applied = false,
+): ImportReport {
+  const sheets: Record<string, ImportSheetReport> = {}
+  for (const key of SHEET_KEYS) sheets[key] = { ...CLEAN_SHEET }
+  for (const [key, patch] of Object.entries(patches)) sheets[key] = { ...CLEAN_SHEET, ...patch }
+  return { dry_run: !applied, applied, sheets }
+}
+
+const SPENDING_DIFF = {
+  spending: {
+    entities: { transaction: { creates: 2, updates: 1, skips: 3, deletes: 0 } },
+    warnings: ['row 12: unmapped category "Misc"'],
+    samples: ['2024-03-02 Groceries 84.20 -> 84.02', '2024-03-05 new: Gas 51.00'],
+    samples_truncated: 7,
+  },
+}
+
+const CLOBBER_WARNING =
+  'Apply this workbook to the live database? Sheet values overwrite imported rows — ' +
+  'taxes inputs and brackets you edited in the UI for sheet-covered years WILL be ' +
+  'reset to the sheet. This cannot be undone.'
+const APPLIED_NOTE = 'Other pages load the new data on their next visit.'
+
+const xlsx = (name = 'finances.xlsx') => new File(['xlsx bytes'], name)
+const fileBox = () => screen.getByLabelText('Workbook (.xlsx)') as HTMLInputElement
+// Prefix-stable like the two above, so the in-flight labels ('Dry run…', 'Applying…')
+// answer to the same query as the idle ones.
+const dryButton = () => screen.getByRole('button', { name: /^dry run/i }) as HTMLButtonElement
+const applyButton = () => screen.getByRole('button', { name: /^appl/i }) as HTMLButtonElement
+// jsdom has no file picker: the change event carries the File list itself.
+const pick = (file: File) => fireEvent.change(fileBox(), { target: { files: [file] } })
+
+// Default "yes" keeps jsdom's unimplemented window.confirm out of every other test in the
+// file; only the decline test flips it (BracketsEditor.test.tsx's arrangement).
+const confirmSpy = vi.spyOn(window, 'confirm')
+
 beforeEach(() => {
   vi.mocked(fetchAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(putAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(changePassword).mockResolvedValue(undefined)
+  vi.mocked(importXlsx).mockResolvedValue(makeReport())
+  confirmSpy.mockReturnValue(true)
 })
 
 afterEach(() => {
@@ -319,5 +390,180 @@ describe('SettingsPage — password', () => {
       change.resolve(undefined)
     })
     await waitFor(() => expect(pwButton().disabled).toBe(false))
+  })
+})
+
+describe('SettingsPage — xlsx import', () => {
+  it('arms Dry run with a chosen file, and Apply only with a clean dry-run report', async () => {
+    vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    expect(dryButton().disabled).toBe(true)
+    expect(applyButton().disabled).toBe(true)
+
+    pick(xlsx())
+    expect(dryButton().disabled).toBe(false)
+    // A file is not a permission: Apply waits on a REPORT, so nothing reaches the live
+    // database that has not been parsed and shown to the user first.
+    expect(applyButton().disabled).toBe(true)
+
+    fireEvent.click(dryButton())
+    await waitFor(() => expect(applyButton().disabled).toBe(false))
+  })
+
+  it('dry-runs the chosen file and renders the per-sheet diff', async () => {
+    vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    const file = xlsx()
+    pick(file)
+    fireEvent.click(dryButton())
+
+    await waitFor(() => expect(vi.mocked(importXlsx)).toHaveBeenCalledTimes(1))
+    // The File object itself, dry-run flag ON. The server keeps nothing between the two
+    // calls, so the same File is what Apply will upload again.
+    expect(vi.mocked(importXlsx).mock.calls[0]).toEqual([file, true])
+
+    expect(await screen.findByText('Dry run — nothing was written.')).toBeTruthy()
+    expect(screen.getByText('Spending')).toBeTruthy()
+    expect(screen.getByText('transaction')).toBeTruthy()
+    // creates / updates / skips / deletes, each in its own cell.
+    expect(screen.getByText('+2')).toBeTruthy()
+    expect(screen.getByText('~1')).toBeTruthy()
+    expect(screen.getByText('=3')).toBeTruthy()
+    expect(screen.getByText('−0')).toBeTruthy()
+    expect(screen.getByText('WARN: row 12: unmapped category "Misc"')).toBeTruthy()
+    // The server sends a capped sample list plus how many it dropped; the summary has to
+    // say both, or a 2-line preview would read as the whole change.
+    expect(screen.getByText('2 sample changes (+7 more)')).toBeTruthy()
+    expect(screen.getByText('2024-03-05 new: Gas 51.00')).toBeTruthy()
+    // All nine sheets come back on every report; the eight that changed nothing are not
+    // headings — a wall of empty sections would bury the one that did.
+    expect(screen.queryByText('Paycheck')).toBeNull()
+    expect(screen.queryByText(APPLIED_NOTE)).toBeNull()
+  })
+
+  it('renders sheet errors and leaves Apply disabled', async () => {
+    vi.mocked(importXlsx).mockResolvedValue(
+      makeReport({ taxes: { errors: ['2024: bracket rows overlap at 100000'] } }),
+    )
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+
+    expect(await screen.findByText('ERROR: 2024: bracket rows overlap at 100000')).toBeTruthy()
+    // A dry run that found errors is a REFUSAL, not a preview: the same workbook applied
+    // would write every sheet that parsed and leave this one half-imported.
+    expect(applyButton().disabled).toBe(true)
+  })
+
+  it('drops the report when another file is picked', async () => {
+    vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+    expect(await screen.findByText('Dry run — nothing was written.')).toBeTruthy()
+
+    pick(xlsx('last-week.xlsx'))
+    // The report described exactly one workbook. Left on screen it would be a diff of the
+    // OLD file arming Apply for the new one.
+    expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
+    expect(screen.queryByText('+2')).toBeNull()
+    expect(applyButton().disabled).toBe(true)
+  })
+
+  it('spends no request when the clobber warning is declined', async () => {
+    vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
+    confirmSpy.mockReturnValue(false)
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    fireEvent.click(applyButton())
+
+    expect(confirmSpy).toHaveBeenCalledWith(CLOBBER_WARNING)
+    // One call: the dry run. "No" means nothing was uploaded a second time.
+    expect(vi.mocked(importXlsx)).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Applied.')).toBeNull()
+  })
+
+  it('applies the same file once the clobber warning is accepted', async () => {
+    vi.mocked(importXlsx)
+      .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
+      .mockResolvedValueOnce(makeReport(SPENDING_DIFF, true))
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    const file = xlsx()
+    pick(file)
+    fireEvent.click(dryButton())
+    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    fireEvent.click(applyButton())
+
+    // The sentence names the one thing a dry run cannot show: sheet-covered years win, so
+    // taxes work done in the UI for those years is gone after this.
+    expect(confirmSpy).toHaveBeenCalledWith(CLOBBER_WARNING)
+    await waitFor(() => expect(vi.mocked(importXlsx)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(importXlsx).mock.calls[1]).toEqual([file, false])
+
+    expect(await screen.findByText('Applied.')).toBeTruthy()
+    expect(screen.getByText(APPLIED_NOTE)).toBeTruthy()
+    expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
+    // An applied report arms nothing: applying the same workbook twice means dry-running
+    // it again, which is also the only way to see what the second pass would do.
+    expect(applyButton().disabled).toBe(true)
+  })
+
+  it('renders a refused upload verbatim in the card error slot', async () => {
+    vi.mocked(importXlsx).mockRejectedValue(new ApiError('File too large (max 15 MB)', 413))
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+
+    // The router's own sentence: it names the limit, which no client-side paraphrase does.
+    expect(await screen.findByText('File too large (max 15 MB)')).toBeTruthy()
+    expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
+
+    // Anything that is not an ApiError never reached the router, so there is no detail to
+    // quote — the card says the one useful thing instead.
+    vi.mocked(importXlsx).mockRejectedValue(new TypeError('Failed to fetch'))
+    fireEvent.click(dryButton())
+    expect(await screen.findByText('Import failed — is the server reachable?')).toBeTruthy()
+    expect(screen.queryByText('File too large (max 15 MB)')).toBeNull()
+  })
+
+  it('shuts every import door while a request is in flight', async () => {
+    const run = deferred<ImportReport>()
+    vi.mocked(importXlsx).mockReturnValue(run.promise)
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+
+    await waitFor(() => expect(dryButton().disabled).toBe(true))
+    // Both buttons AND the file input: with all three shut there is no way to start a
+    // second upload behind the first, which is what buys this card its missing seq guard.
+    expect(applyButton().disabled).toBe(true)
+    expect(fileBox().disabled).toBe(true)
+    // Three cards, three flags — an import must not lock the two forms above it.
+    expect(saveButton().disabled).toBe(false)
+    expect(pwButton().disabled).toBe(false)
+
+    await act(async () => {
+      run.resolve(makeReport(SPENDING_DIFF))
+    })
+    await waitFor(() => expect(dryButton().disabled).toBe(false))
+    expect(fileBox().disabled).toBe(false)
   })
 })

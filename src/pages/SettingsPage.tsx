@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { changePassword } from '../api/auth'
 import { ApiError } from '../api/client'
+import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
-import type { AppSettingsOut } from '../types/api'
+import ImportReportView from '../components/settings/ImportReportView'
+import type { AppSettingsOut, ImportReport } from '../types/api'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 import './SettingsPage.css'
@@ -44,6 +46,12 @@ export default function SettingsPage() {
   const [pwError, setPwError] = useState<string | null>(null)
   const [pwBusy, setPwBusy] = useState(false)
   const [pwChanged, setPwChanged] = useState(false)
+  // Import card — the chosen File, the last report ABOUT that file, one busy flag for both
+  // requests (dry run and apply are the same upload with the flag flipped).
+  const [file, setFile] = useState<File | null>(null)
+  const [report, setReport] = useState<ImportReport | null>(null)
+  const [importBusy, setImportBusy] = useState<'dry' | 'apply' | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
   const seqRef = useRef(0)
 
   // ~15 setters: the load chain stays a PLAIN function called from the mount effect and
@@ -164,6 +172,56 @@ export default function SettingsPage() {
         setPwError(err instanceof ApiError ? err.message : 'Could not change the password.')
       })
       .finally(() => setPwBusy(false))
+  }
+
+  const pickFile = (chosen: File | null) => {
+    setFile(chosen)
+    // A report describes exactly ONE workbook. Left on screen it would be the previous
+    // file's diff, arming Apply for a file nobody has parsed.
+    setReport(null)
+    setImportError(null)
+  }
+
+  const reportHasErrors =
+    report !== null && Object.values(report.sheets).some((s) => s.errors.length > 0)
+  // Apply is armed only by a clean DRY-RUN of the currently chosen file (a fresh pick
+  // clears `report`; an applied report re-arms nothing — dry-run again to re-apply).
+  const canApply =
+    file !== null && report !== null && report.dry_run && !reportHasErrors && importBusy === null
+
+  const runImport = (dryRun: boolean) => {
+    if (file === null) return
+    setImportBusy(dryRun ? 'dry' : 'apply')
+    setImportError(null)
+    // No seq guard on this chain, unlike the load: the file input and BOTH buttons are the
+    // card's only doors and all three are disabled while `importBusy` is set, so a second
+    // upload cannot start behind the first one (TaxesPage's `creating` posture).
+    importXlsx(file, dryRun)
+      .then((r) => {
+        setReport(r)
+        setImportError(null)
+      })
+      .catch((err: unknown) => {
+        // Verbatim: the router's 413 names the 15 MB limit and its 400 names the file type,
+        // and the client's own timeout/network messages are already user-worthy. A failed
+        // request leaves the previous report standing, so a retry is still one click.
+        setImportError(
+          err instanceof ApiError ? err.message : 'Import failed — is the server reachable?',
+        )
+      })
+      .finally(() => setImportBusy(null))
+  }
+
+  const applyImport = () => {
+    // The one thing a dry run cannot show, said before the write: within a year the SHEET
+    // wins, so taxes work done in the UI for sheet-covered years is about to be replaced.
+    const ok = window.confirm(
+      'Apply this workbook to the live database? Sheet values overwrite imported rows — ' +
+        'taxes inputs and brackets you edited in the UI for sheet-covered years WILL be ' +
+        'reset to the sheet. This cannot be undone.',
+    )
+    if (!ok) return
+    runImport(false)
   }
 
   return (
@@ -320,6 +378,62 @@ export default function SettingsPage() {
                 Existing sessions stay signed in until their token expires (~24 h).
               </p>
             </form>
+          </section>
+
+          {/* Full width: a diff of nine sheets is a table, not a form field. It shares the
+              two forms' `loadedOnce` gate on purpose — a settings GET that failed means the
+              API is unreachable, and an upload card that could only fail is not worth
+              offering. */}
+          <section className="card span-12">
+            <h2 className="eyebrow">Import workbook</h2>
+            <div className="settings-form">
+              <label>
+                Workbook (.xlsx)
+                {/* Uncontrolled by design — a file input's value belongs to the browser;
+                    `file` state is what the change event handed us. */}
+                <input
+                  className="field-input"
+                  type="file"
+                  accept=".xlsx"
+                  disabled={importBusy !== null}
+                  onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              <p className="settings-note">
+                Dry run parses the workbook and shows what would change — nothing is written.
+                Applying overwrites imported rows: taxes inputs and brackets edited here for
+                sheet-covered years are reset to the sheet.
+              </p>
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={file === null || importBusy !== null}
+                  onClick={() => runImport(true)}
+                >
+                  {importBusy === 'dry' ? 'Dry run…' : 'Dry run'}
+                </button>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={!canApply}
+                  onClick={applyImport}
+                >
+                  {importBusy === 'apply' ? 'Applying…' : 'Apply import'}
+                </button>
+              </div>
+            </div>
+            {importError && (
+              <div className="error-banner" role="alert">
+                {importError}
+              </div>
+            )}
+            {report && <ImportReportView report={report} />}
+            {report?.applied && (
+              // Not a live region of its own: the report's own header announces (role=status)
+              // at the same moment, and two regions would read the news twice.
+              <p className="settings-note">Other pages load the new data on their next visit.</p>
+            )}
           </section>
         </div>
       )}

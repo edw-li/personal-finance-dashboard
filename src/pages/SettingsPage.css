@@ -42,3 +42,27 @@
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+/* The native "Choose file" button is the one control the shared .field-input frame cannot
+   reach — left alone it renders light-on-light against the dark surface. */
+.settings-page input[type='file']::file-selector-button {
+  margin-right: 0.6rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* One sheet's block in the import diff (heading + counts + its warnings/errors). */
+.import-sheet {
+  margin-top: 0.75rem;
+}
+
+.import-error {
+  margin: 0;
+  color: var(--negative);
+  font-size: 0.85rem;
+}
