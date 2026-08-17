@@ -1,19 +1,23 @@
+import { lazy } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
-import CompPage from './pages/CompPage'
-import EsppPage from './pages/EsppPage'
 import LoginPage from './pages/LoginPage'
-import MonthlyUpdatePage from './pages/MonthlyUpdatePage'
-import NetWorthPage from './pages/NetWorthPage'
-import OverviewPage from './pages/OverviewPage'
-import PaycheckPage from './pages/PaycheckPage'
 import PlaceholderPage from './pages/PlaceholderPage'
-import PortfolioPage from './pages/PortfolioPage'
-import SettingsPage from './pages/SettingsPage'
-import SpendingPage from './pages/SpendingPage'
-import TaxesPage from './pages/TaxesPage'
+
+// Route-level splitting (Plans 3-5 deferred it here): echarts + each page leave the entry
+// chunk; Login and the 404 placeholder stay eager (first paint must not wait on a chunk).
+const OverviewPage = lazy(() => import('./pages/OverviewPage'))
+const MonthlyUpdatePage = lazy(() => import('./pages/MonthlyUpdatePage'))
+const NetWorthPage = lazy(() => import('./pages/NetWorthPage'))
+const SpendingPage = lazy(() => import('./pages/SpendingPage'))
+const PortfolioPage = lazy(() => import('./pages/PortfolioPage'))
+const TaxesPage = lazy(() => import('./pages/TaxesPage'))
+const EsppPage = lazy(() => import('./pages/EsppPage'))
+const PaycheckPage = lazy(() => import('./pages/PaycheckPage'))
+const CompPage = lazy(() => import('./pages/CompPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 
 export default function App() {
   return (

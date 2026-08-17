@@ -6,6 +6,13 @@ import { configDefaults } from 'vitest/config'
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // The echarts subset is one indivisible LAZY chunk (674.33 kB raw / 229.72 kB gzip),
+    // reached only from the six chart routes — the entry is 248.57 kB and never loads it.
+    // Raising the advisory limit documents that it is deliberate, not forgotten; the
+    // headroom is small on purpose, so pulling more echarts modules in trips it again.
+    chunkSizeWarningLimit: 700,
+  },
   server: {
     proxy: {
       // 127.0.0.1, not localhost: Node >=17 resolves localhost to ::1 first, but

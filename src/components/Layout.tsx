@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Wallet,
 } from 'lucide-react'
+import { Suspense } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import './Layout.css'
@@ -47,7 +48,10 @@ export default function Layout() {
         </button>
       </aside>
       <main className="content">
-        <Outlet />
+        {/* Route chunks resolve here — the sidebar must not unmount while one loads. */}
+        <Suspense fallback={<p className="empty-note">Loading…</p>}>
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   )
