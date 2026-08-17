@@ -3,7 +3,13 @@
    .button, .button-primary, .error-banner, .empty-note, .loading-dim) lives in panels.css
    and is not redefined here. The field stack below is a deliberate near-twin of
    EsppPage.css's .espp-form label rules: that stylesheet travels with its own page, and this
-   one must not depend on it happening to be in the bundle. */
+   one must not depend on it happening to be in the bundle.
+
+   Anything a settings COMPONENT renders lives in components/settings/settings.css instead
+   (.settings-note, .import-sheet, .import-error) — ImportReportView imports that sheet, so
+   it must not depend on this page's being loaded. This page imports it too, for the notes
+   it renders itself. What is left here is page-only: the form stack, the actions row, the
+   .field-input override and the file-selector button. */
 
 /* Free text and passwords, not figures: the shared class is right-aligned for numbers.
    The monospace stays — a cron expression and a ticker both want it. */
@@ -37,12 +43,6 @@
   gap: 0.5rem;
 }
 
-.settings-note {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
 /* The native "Choose file" button is the one control the shared .field-input frame cannot
    reach — left alone it renders light-on-light against the dark surface. */
 .settings-page input[type='file']::file-selector-button {
@@ -54,15 +54,4 @@
   color: var(--text);
   font: inherit;
   cursor: pointer;
-}
-
-/* One sheet's block in the import diff (heading + counts + its warnings/errors). */
-.import-sheet {
-  margin-top: 0.75rem;
-}
-
-.import-error {
-  margin: 0;
-  color: var(--negative);
-  font-size: 0.85rem;
 }

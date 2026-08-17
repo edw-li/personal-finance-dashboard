@@ -114,6 +114,7 @@ const SPENDING_DIFF = {
   },
 }
 
+const STALE_FILE_HINT = 'If you changed the workbook after choosing it, pick the file again.'
 const CLOBBER_WARNING =
   'Apply this workbook to the live database? Sheet values overwrite imported rows — ' +
   'taxes inputs and brackets you edited in the UI for sheet-covered years WILL be ' +
@@ -394,6 +395,18 @@ describe('SettingsPage — password', () => {
 })
 
 describe('SettingsPage — xlsx import', () => {
+  it('offers no import card at all when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    render(<SettingsPage />)
+
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    // The card shares the two forms' `loadedOnce` gate on purpose: a settings GET that
+    // failed means the API is unreachable, and an upload card that could only fail —
+    // possibly after the user picked a 14 MB workbook — is not worth offering.
+    expect(screen.queryByLabelText('Workbook (.xlsx)')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^dry run/i })).toBeNull()
+  })
+
   it('arms Dry run with a chosen file, and Apply only with a clean dry-run report', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
     render(<SettingsPage />)
@@ -429,6 +442,13 @@ describe('SettingsPage — xlsx import', () => {
     expect(await screen.findByText('Dry run — nothing was written.')).toBeTruthy()
     expect(screen.getByText('Spending')).toBeTruthy()
     expect(screen.getByText('transaction')).toBeTruthy()
+    // A header row, unlike the plan's headerless skeleton: the glyphs alone say nothing
+    // about which of the importer's four verbs a number belongs to.
+    expect(screen.getByRole('columnheader', { name: 'Entity' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Created' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Updated' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Unchanged' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Deleted' })).toBeTruthy()
     // creates / updates / skips / deletes, each in its own cell.
     expect(screen.getByText('+2')).toBeTruthy()
     expect(screen.getByText('~1')).toBeTruthy()
@@ -445,6 +465,26 @@ describe('SettingsPage — xlsx import', () => {
     expect(screen.queryByText(APPLIED_NOTE)).toBeNull()
   })
 
+  it('lists a sheet whose only content is samples', async () => {
+    vi.mocked(importXlsx).mockResolvedValue(
+      makeReport({ paycheck: { samples: ['2024-06-14 gross 12500.00 -> 12750.00'] } }),
+    )
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+
+    // The fourth arm of the has-content filter: a sheet can change nothing countable and
+    // still have something to show. Dropped, its preview lines would vanish silently.
+    expect(await screen.findByText('Paycheck')).toBeTruthy()
+    // No "(+n more)" when nothing was dropped — the cap is news only when it bit.
+    expect(screen.getByText('1 sample changes')).toBeTruthy()
+    expect(screen.getByText('2024-06-14 gross 12500.00 -> 12750.00')).toBeTruthy()
+    // Samples are not a refusal: a clean sheet with a preview still arms Apply.
+    await waitFor(() => expect(applyButton().disabled).toBe(false))
+  })
+
   it('renders sheet errors and leaves Apply disabled', async () => {
     vi.mocked(importXlsx).mockResolvedValue(
       makeReport({ taxes: { errors: ['2024: bracket rows overlap at 100000'] } }),
@@ -458,6 +498,25 @@ describe('SettingsPage — xlsx import', () => {
     expect(await screen.findByText('ERROR: 2024: bracket rows overlap at 100000')).toBeTruthy()
     // A dry run that found errors is a REFUSAL, not a preview: the same workbook applied
     // would write every sheet that parsed and leave this one half-imported.
+    expect(applyButton().disabled).toBe(true)
+  })
+
+  it('renders a sheet key the view does not know about', async () => {
+    vi.mocked(importXlsx).mockResolvedValue(
+      makeReport({ crypto: { errors: ['row 3: unknown symbol "XBT"'] } }),
+    )
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+
+    // A tenth backend sheet must not be able to fail INVISIBLY. The card's own error scan
+    // walks every key of report.sheets — so a key the view's fixed order has not caught up
+    // with would disable Apply with nothing on screen to explain it.
+    expect(await screen.findByText('ERROR: row 3: unknown symbol "XBT"')).toBeTruthy()
+    // Labelled by its raw key: a guess would be worse than the server's own word.
+    expect(screen.getByText('crypto')).toBeTruthy()
     expect(applyButton().disabled).toBe(true)
   })
 
@@ -533,6 +592,10 @@ describe('SettingsPage — xlsx import', () => {
     // The router's own sentence: it names the limit, which no client-side paraphrase does.
     expect(await screen.findByText('File too large (max 15 MB)')).toBeTruthy()
     expect(screen.queryByText('Dry run — nothing was written.')).toBeNull()
+    // Under every failure: a File is a lazy handle on a disk offset, so re-saving the
+    // workbook from Excel invalidates it and the read fails at upload time looking like a
+    // network problem. The one cause a message from the server can never name.
+    expect(screen.getByText(STALE_FILE_HINT)).toBeTruthy()
 
     // Anything that is not an ApiError never reached the router, so there is no detail to
     // quote — the card says the one useful thing instead.
@@ -540,6 +603,31 @@ describe('SettingsPage — xlsx import', () => {
     fireEvent.click(dryButton())
     expect(await screen.findByText('Import failed — is the server reachable?')).toBeTruthy()
     expect(screen.queryByText('File too large (max 15 MB)')).toBeNull()
+  })
+
+  it('disarms Apply when the apply itself fails — the standing diff is now a guess', async () => {
+    vi.mocked(importXlsx)
+      .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
+      .mockRejectedValueOnce(new ApiError('import failed: database is locked', 500))
+    render(<SettingsPage />)
+    await screen.findByLabelText('Workbook (.xlsx)')
+
+    pick(xlsx())
+    fireEvent.click(dryButton())
+    await waitFor(() => expect(applyButton().disabled).toBe(false))
+    fireEvent.click(applyButton())
+
+    expect(await screen.findByText('import failed: database is locked')).toBeTruthy()
+    // A failed APPLY may still have written — the import is not one transaction. The
+    // dry-run diff on screen describes the database as it was BEFORE that half-write, so
+    // it is no longer a true preview and must not be left arming Apply for a second pass.
+    await waitFor(() => expect(screen.queryByText('Dry run — nothing was written.')).toBeNull())
+    expect(screen.queryByText('+2')).toBeNull()
+    expect(applyButton().disabled).toBe(true)
+    // Recovery is still one click: the file is still chosen, so a fresh dry run says where
+    // things actually stand.
+    expect(dryButton().disabled).toBe(false)
+    expect(fileBox().disabled).toBe(false)
   })
 
   it('shuts every import door while a request is in flight', async () => {

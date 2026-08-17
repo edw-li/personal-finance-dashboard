@@ -7,6 +7,9 @@ import ImportReportView from '../components/settings/ImportReportView'
 import type { AppSettingsOut, ImportReport } from '../types/api'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
+// The settings family sheet, not only the component's: this page renders .settings-note
+// itself, under half its controls.
+import '../components/settings/settings.css'
 import './SettingsPage.css'
 
 // The boxes a payload seeds, as pure string math at MODULE scope: the load chain and the
@@ -203,11 +206,16 @@ export default function SettingsPage() {
       })
       .catch((err: unknown) => {
         // Verbatim: the router's 413 names the 15 MB limit and its 400 names the file type,
-        // and the client's own timeout/network messages are already user-worthy. A failed
-        // request leaves the previous report standing, so a retry is still one click.
+        // and the client's own timeout/network messages are already user-worthy.
         setImportError(
           err instanceof ApiError ? err.message : 'Import failed — is the server reachable?',
         )
+        // A failed APPLY may still have WRITTEN — the import is not one transaction, and a
+        // request that died mid-flight (or timed out) leaves a database nobody has parsed.
+        // The standing dry-run diff describes the database as it was BEFORE that, so it
+        // must not be left arming Apply; dry-run again to see where things actually stand.
+        // A failed dry run wrote nothing, so the report before it is still true and stays.
+        if (!dryRun) setReport(null)
       })
       .finally(() => setImportBusy(null))
   }
@@ -424,9 +432,19 @@ export default function SettingsPage() {
               </div>
             </div>
             {importError && (
-              <div className="error-banner" role="alert">
-                {importError}
-              </div>
+              <>
+                <div className="error-banner" role="alert">
+                  {importError}
+                </div>
+                {/* Said under EVERY import failure, because the likeliest cause does not
+                    look like itself: a File is a lazy handle on a disk offset, and saving
+                    the workbook again from Excel invalidates it — the browser then fails to
+                    read the bytes at upload time and the message that surfaces is a
+                    network-looking one. Re-picking the file is the whole fix. */}
+                <p className="settings-note">
+                  If you changed the workbook after choosing it, pick the file again.
+                </p>
+              </>
             )}
             {report && <ImportReportView report={report} />}
             {report?.applied && (

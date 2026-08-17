@@ -1,0 +1,32 @@
+/* Styles for the settings components (the import report view, and the note/error text the
+   page shares with it). Every file in the family imports this stylesheet, so none of them
+   depends on SettingsPage.css happening to be in the bundle — the same reasoning that
+   keeps portfolio.css and taxes.css next to their components. The app-wide vocabulary
+   (.card, .eyebrow, .field-input, .button, .data-table, .error-banner, .empty-note) lives
+   in panels.css and is NOT redefined here. The page-only rules — the .settings-form field
+   stack, .settings-actions, the .settings-page .field-input override and the file-selector
+   button — stay in SettingsPage.css, which no component imports. */
+
+/* Quiet prose under a control or inside the report (hints, WARN lines, the "Saved" and
+   "Applied" notes). Lives here rather than on the page sheet because ImportReportView
+   renders it too. */
+.settings-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* --- import report --- */
+
+/* One sheet's block in the import diff (heading + counts + its warnings/errors). */
+.import-sheet {
+  margin-top: 0.75rem;
+}
+
+/* A per-sheet error line, not a banner: the card's .error-banner is for the REQUEST
+   failing, and a workbook that parsed and was refused is a different sentence. */
+.import-error {
+  margin: 0;
+  color: var(--negative);
+  font-size: 0.85rem;
+}
