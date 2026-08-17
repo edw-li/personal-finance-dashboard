@@ -1536,6 +1536,10 @@ Plan 3 migration.
   it; verified at all 37 snapshots). One `PATCH /net-worth/accounts/{id}`
   `{"is_component": false}` on `after-tax-401-k` reproduces the sheet exactly if ever
   preferred.
+  [CORRECTED during Task 11 review: the importer HAS seeded these five flags at create since
+  Plan 3's 5c2823e (test-pinned); the forward notes' "creates all accounts with
+  is_component=FALSE" gotcha was stale from plan-3/4/5 propagation. 7.3 shipped as
+  verify-first with the UPDATE as idempotent repair.]
 
   **7.4 First price refresh + ZI hygiene.** Trigger from /portfolio ("Refresh prices") or
   `POST /api/v1/prices/refresh`. Expect ~36 updated; ZI (ZoomInfo, delisted) fails with "no

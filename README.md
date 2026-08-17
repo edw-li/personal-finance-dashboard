@@ -18,10 +18,11 @@ Browser ── HTTPS ──[optional: Cloudflare proxy, Part 6]── Nginx cont
 ```
 
 This README is the full deployment runbook: OCI Always Free instance bring-up → server
-setup → deploy → verify → backups → updates → troubleshooting. The default setup is
-accessed directly at the instance's public IP over HTTPS with a self-signed certificate —
-no domain needed. Putting a real domain in front later is **Part 6**, and switching takes
-minutes (the configs are shared between both modes).
+setup → deploy → verify → backups → updates → production data, verification & cutover
+(**Part 7**) → troubleshooting. The default setup is accessed directly at the instance's
+public IP over HTTPS with a self-signed certificate — no domain needed. Putting a real
+domain in front later is **Part 6**, and switching takes minutes (the configs are shared
+between both modes).
 
 > **Why not plain HTTP?** Without TLS, your login password and all financial data cross
 > the internet in cleartext on every visit. The self-signed cert costs one extra command
@@ -469,8 +470,9 @@ Two paths, one importer — the app calls the same code the CLI does.
 
 **From the app**: **/settings** → *Import workbook* → choose `<path-to-workbook>.xlsx` →
 **Dry run** (parses the file and shows the diff it *would* apply; writes nothing) → review it
-→ **Apply import**. Apply stays disabled until a clean dry run of that exact file. The upload
-must be ≤ 15 MB (the app's cap; nginx's is 20 MB).
+→ **Apply import**. Apply is armed only by a clean dry run of the *current* selection: picking
+a file again, or an apply that fails, clears the report and disarms it. The upload must be
+≤ 15 MB (the app's cap; nginx's is 20 MB).
 
 **From the box**, with the workbook copied onto the server:
 
@@ -480,29 +482,39 @@ docker compose -f docker-compose.prod.yml exec backend python -m app.importer /p
 ```
 
 The CLI's default is **inverted** from the upload's: the CLI **applies** unless you pass
-`--dry-run`, while the app dry-runs unless you confirm. Exit codes — `0` applied/clean, `1`
-the report had errors and nothing was written, `2` the file could not be read.
+`--dry-run`, while the app dry-runs unless you confirm. Exit codes — `0` clean (a clean
+`--dry-run` included), `2` the file is missing or is not a readable `.xlsx`, `1` anything else.
+Non-zero always means nothing was written; read the output.
 
 > **ORDER LAW: import first, then edit in the UI.** Re-importing taxes is *sheet-wins* inside
 > the years the sheet covers — any UI edit to a sheet-covered year is clobbered by the next
 > Apply. (The import card repeats this warning before Apply.) Import once, then let the app be
 > the system of record.
 
-### 7.3 Re-flag the five component accounts (fresh database only)
+### 7.3 Verify the five component accounts (fresh database)
 
 Five 401(k) source buckets roll up into a parent account and carry `is_component` so that net
-worth counts the parent instead of both. **The importer always creates accounts with
-`is_component = FALSE`**, and the migration that backfilled the flag no-ops against a
-database that was empty when it ran — so on a fresh DB net worth silently **double-counts**
-those five until they are re-flagged:
+worth counts the parent instead of both. The importer **seeds those five flags at account
+creation** (`backend/app/importer/apply.py`, shipped 2026-08-15 and pinned by a test), so a
+fresh import lands correctly flagged and this step is a **check, not a repair** — the two
+migrations that backfill the flag (`f1b36c0cf33c`, then `c8a1f4d27b53`'s guarded re-run) both
+no-op here, because migrations run at container boot, before the accounts they would flip
+exist. Check it:
 
 ```bash
-sudo -u postgres psql -d finance -c "UPDATE accounts SET is_component = TRUE WHERE slug IN ('employer-match-401-k','reverse-rollover-401-k','traditional-401-k','roth-basic-401-k','after-tax-401-k')"
 sudo -u postgres psql -d finance -tAc "SELECT slug FROM accounts WHERE is_component ORDER BY sort_order"
 ```
 
-The second command must list exactly those five slugs and nothing else. (Adjust the `psql`
-invocation to however this host runs Postgres.)
+That must list exactly those five slugs and nothing else. If it doesn't, repair and re-check —
+the flags are **yours after creation** (re-imports never touch them), so a wrong answer means
+either a database imported by a pre-2026-08-15 importer or a flag edited by hand since. The
+UPDATE is belt-and-braces and idempotent:
+
+```bash
+sudo -u postgres psql -d finance -c "UPDATE accounts SET is_component = TRUE WHERE slug IN ('employer-match-401-k','reverse-rollover-401-k','traditional-401-k','roth-basic-401-k','after-tax-401-k')"
+```
+
+(Adjust the `psql` invocation to however this host runs Postgres.)
 
 > **Expected divergence**: with the five flagged, the dashboard's net worth equals the
 > sheet's **minus the After-Tax 401(k) bucket** — deliberate. The sheet double-counts that
@@ -525,7 +537,7 @@ on the first successful refresh.
 
 | Check | Where | Expected |
 |---|---|---|
-| Net worth identity | /net-worth totals vs the sheet's NET WORTH row | equal after 7.3, less the After-Tax component by design |
+| Net worth identity | /net-worth totals vs the sheet's NET WORTH row | equal with the five component flags set (7.3), less the After-Tax component by design |
 | Taxes | /taxes, year by year | 2024 matches the sheet **to the cent**; 2023 / 2025 / 2026 differ by four known drifts (below) |
 | Holdings | cost basis, per row | within ~$0.10 of the sheet (6dp shares × 4dp prices folding) |
 | Scheduler | /settings → price refresh cron | day **names** (`10 13 * * mon-fri`), never numbers |
@@ -574,7 +586,7 @@ Before calling it done, close out the security items:
   Revoke it on GitHub and re-point the remote at the plain URL (the next `git pull` will ask
   for credentials — issue a fresh short-lived token then):
   ```bash
-  git remote set-url origin https://github.com/<owner>/personal-finance-dashboard.git
+  git remote set-url origin https://github.com/edw-li/personal-finance-dashboard.git
   ```
 - **Optionally rotate the prod secrets** in `.env` — `SECRET_KEY`, `POSTGRES_PASSWORD`, the
   `OCI_*` pair. Rotating `SECRET_KEY` invalidates existing logins; expected.
