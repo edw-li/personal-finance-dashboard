@@ -1,0 +1,97 @@
+"""App-settings API: effective-value GET, full-form PUT, and the cron guard.
+
+The guard cases are the recorded failure modes, not hypotheticals: '* * * * *' would hammer
+Yahoo (plan-4 forward note), and numeric day-of-week is the 0=Mon prod mis-seed (APScheduler
+numbers days 0=Mon, so "1-5" silently means Tue-Sat).
+"""
+
+import pytest
+
+from app.models import AppSetting
+
+SETTINGS = "/api/v1/settings"
+
+VALID_BODY = {
+    "swr_pct": "0.045",
+    "espp_ticker": "nvda",
+    "price_refresh_cron": "10 13 * * mon-fri",
+}
+
+
+async def test_settings_require_auth(client):
+    assert (await client.get(SETTINGS)).status_code == 401
+
+
+async def test_get_returns_effective_defaults_on_an_empty_table(auth_client):
+    body = (await auth_client.get(SETTINGS)).json()
+    assert body == {
+        "swr_pct": "0.04",
+        "espp_ticker": None,
+        "price_refresh_cron": "10 13 * * mon-fri",
+    }
+
+
+async def test_get_falls_back_on_a_malformed_stored_value(auth_client, db):
+    db.add(AppSetting(key="swr_pct", value={"value": "garbage"}))
+    await db.commit()
+    body = (await auth_client.get(SETTINGS)).json()
+    assert body["swr_pct"] == "0.04"  # reader semantics: malformed == absent
+
+
+async def test_put_round_trips_and_stores_the_envelope(auth_client, db):
+    r = await auth_client.put(SETTINGS, json=VALID_BODY)
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "swr_pct": "0.045000",
+        "espp_ticker": "NVDA",
+        "price_refresh_cron": "10 13 * * mon-fri",
+    }
+    assert (await auth_client.get(SETTINGS)).json() == r.json()
+    stored = await db.get(AppSetting, "swr_pct")
+    assert stored.value == {"value": "0.045000"}  # plain-notation STRING (lossless re-read)
+    assert (await db.get(AppSetting, "espp_ticker")).value == {"value": "NVDA"}
+
+
+async def test_put_clears_the_ticker_with_null(auth_client):
+    body = dict(VALID_BODY, espp_ticker=None)
+    r = await auth_client.put(SETTINGS, json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["espp_ticker"] is None
+
+
+@pytest.mark.parametrize("bad", ["1.5", "-0.1"])
+async def test_put_rejects_out_of_range_swr(auth_client, bad):
+    r = await auth_client.put(SETTINGS, json=dict(VALID_BODY, swr_pct=bad))
+    assert r.status_code == 422
+    assert r.json()["detail"] == "swr_pct: must be a fraction between 0 and 1"
+
+
+async def test_put_rejects_a_malformed_ticker(auth_client):
+    r = await auth_client.put(SETTINGS, json=dict(VALID_BODY, espp_ticker="bad ticker!"))
+    assert r.status_code == 422  # portfolio's exact phrasing — assert the status only
+
+
+async def test_put_rejects_an_unparseable_cron(auth_client):
+    r = await auth_client.put(SETTINGS, json=dict(VALID_BODY, price_refresh_cron="not a cron"))
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("price_refresh_cron: not a valid 5-field cron")
+
+
+@pytest.mark.parametrize("fast", ["* * * * *", "10,40 13 * * mon-fri", "*/30 * * * *"])
+async def test_put_rejects_sub_hourly_crons(auth_client, fast):
+    r = await auth_client.put(SETTINGS, json=dict(VALID_BODY, price_refresh_cron=fast))
+    assert r.status_code == 422
+    assert r.json()["detail"] == "price_refresh_cron: must not fire more often than hourly"
+
+
+async def test_put_allows_an_exactly_hourly_cron(auth_client):
+    r = await auth_client.put(SETTINGS, json=dict(VALID_BODY, price_refresh_cron="0 * * * *"))
+    assert r.status_code == 200, r.text
+
+
+async def test_put_rejects_numeric_day_of_week(auth_client):
+    # APScheduler numbers days 0=Mon (not UNIX 0=Sun): numeric "1-5" silently means
+    # Tue-Sat — the recorded prod mis-seed. Day NAMES only.
+    r = await auth_client.put(SETTINGS, json=dict(VALID_BODY, price_refresh_cron="10 13 * * 1-5"))
+    assert r.status_code == 422
+    assert "day NAMES" in r.json()["detail"]
