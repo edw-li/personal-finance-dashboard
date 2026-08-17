@@ -316,6 +316,7 @@ describe('CompPage — orphaned equity operands', () => {
     render(<CompPage />)
     await screen.findByText('$601,854.46')
 
+    // The stored row has BOTH sides, so clearing one is this edit's own doing.
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
     type('Unvested price', '')
 
@@ -338,6 +339,7 @@ describe('CompPage — orphaned equity operands', () => {
     render(<CompPage />)
     await screen.findByText('$601,854.46')
 
+    // Both pairs are whole on the stored 2026 row, so either box cleared is a change.
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
     type('Unvested RSUs', '')
     expect(
@@ -370,6 +372,46 @@ describe('CompPage — orphaned equity operands', () => {
     // And the untouched second pair never spoke at all.
     expect(screen.queryByText(/equity delta will be cleared/)).toBeNull()
   })
+
+  it('says nothing when the row was ALREADY half-paired before it was opened', async () => {
+    // A grant whose price is not known yet is a legal, ordinary row: the table already
+    // shows the empty column, and greeting every open of it with a warning about a state
+    // this edit did not create is how a sentence stops being read.
+    const halfPaired = event({
+      id: 7, focal_year: 2025, current_base: '162000.00',
+      unvested_rsus: '2152.0000', tc_before: '162000.00', tc_after: '162000.00',
+    })
+    vi.mocked(fetchEvents).mockResolvedValue([halfPaired])
+    render(<CompPage />)
+    await screen.findByRole('button', { name: 'Edit the 2025 comp event' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the 2025 comp event' }))
+    expect(screen.queryByText(/will be cleared, not computed/)).toBeNull()
+
+    // ...and the moment THIS edit moves the pair to a different half, it speaks.
+    type('Unvested RSUs', '')
+    type('Unvested price', '190.0000')
+    expect(
+      screen.getByText(
+        'Unvested price is set but unvested RSUs is blank — unvested equity will be cleared, not computed.',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('names a half-filled pair typed into a NEW row, where there is nothing stored', async () => {
+    render(<CompPage />)
+    await screen.findByText('$601,854.46')
+
+    // Nothing is being edited, so the pair's stored state is "neither" — one side filled
+    // is a change, and the product the user is expecting will not be computed.
+    fillNewEvent()
+    type('Refresh RSUs', '610.0524')
+    expect(
+      screen.getByText(
+        'Refresh RSUs is set but grant price is blank — the equity delta will be cleared, not computed.',
+      ),
+    ).toBeTruthy()
+  })
 })
 
 describe('CompPage — loading', () => {
@@ -399,6 +441,32 @@ describe('CompPage — loading', () => {
     ).toBeTruthy()
     expect(screen.getByText('$601,854.46')).toBeTruthy()
     expect(field('Notes').value).toBe('half-typed event')
+  })
+
+  it('dims the chart card as well as the table while a reload is in flight', async () => {
+    const slow = deferred<CompEventOut[]>()
+    vi.mocked(fetchEvents).mockResolvedValueOnce(EVENTS).mockReturnValueOnce(slow.promise)
+    render(<CompPage />)
+    await screen.findByText('$601,854.46')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete the 2027 comp event' }))
+    await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
+
+    // The chart is drawn from the same payload the table is, so it goes dim with it: a
+    // bright chart over a table that says it may be stale is the one figure the eye is on
+    // claiming to be current.
+    await waitFor(() =>
+      expect(screen.getByTestId('echart').closest('.loading-dim')?.className).toContain(
+        'is-loading',
+      ),
+    )
+
+    await act(async () => {
+      slow.resolve(EVENTS)
+    })
+    expect(screen.getByTestId('echart').closest('.loading-dim')?.className).not.toContain(
+      'is-loading',
+    )
   })
 
   it('lets only the NEWEST of two overlapping loads land', async () => {

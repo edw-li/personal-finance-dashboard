@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shiftPoint } from './percent'
+import { isPlainDecimal, shiftPoint } from './percent'
 
 // The pins that travelled with the two copies this helper replaces (BracketsEditor's
 // bracket rates and EsppPage's contribution_pct): both suites still assert the same
@@ -71,7 +71,8 @@ describe('shiftPoint — why it is not division', () => {
 
 describe('shiftPoint — text no conversion should guess at', () => {
   it('hands back anything that is not a plain decimal, untouched', () => {
-    // The callers' validation and the server's 422 are the backstop.
+    // The callers' own `isPlainDecimal` gate is the backstop — NOT the server's 422, which
+    // never fires on the exponent forms (see the isPlainDecimal block below).
     expect(shiftPoint('', -2)).toBe('')
     expect(shiftPoint('.', -2)).toBe('.')
     expect(shiftPoint('abc', -2)).toBe('abc')
@@ -82,5 +83,45 @@ describe('shiftPoint — text no conversion should guess at', () => {
 
   it('trims the box’s own whitespace first', () => {
     expect(shiftPoint('  13  ', -2)).toBe('0.13')
+  })
+})
+
+describe('isPlainDecimal — the gate every percent box runs first', () => {
+  it('refuses exponent notation, which the server would have accepted', () => {
+    // The whole reason this is exported. "1e-3" is not converted by shiftPoint, so it
+    // travels verbatim, and Decimal("1e-3") is a legal 0.001 — a box that said a thousandth
+    // of a percent would be stored as a tenth of one, with no 422 to catch it.
+    expect(isPlainDecimal('1e-3')).toBe(false)
+    expect(isPlainDecimal('1E2')).toBe(false)
+  })
+
+  it('accepts every shape the forms really type', () => {
+    expect(isPlainDecimal('.5')).toBe(true) // half a percent
+    expect(isPlainDecimal('-0.5')).toBe(true)
+    expect(isPlainDecimal('5.')).toBe(true) // mid-keystroke, and still a number
+    expect(isPlainDecimal('33.4009167')).toBe(true)
+    expect(isPlainDecimal('  13  ')).toBe(true) // trimmed like shiftPoint's own input
+  })
+
+  it('refuses text with no digits in it at all', () => {
+    expect(isPlainDecimal('')).toBe(false)
+    expect(isPlainDecimal('abc')).toBe(false)
+    expect(isPlainDecimal('.')).toBe(false)
+    expect(isPlainDecimal('1,000')).toBe(false)
+    expect(isPlainDecimal('12%')).toBe(false)
+  })
+
+  it('answers exactly for the text shiftPoint converts', () => {
+    // One shape, two exports: anything shiftPoint hands back untouched is refused here,
+    // and anything it converts is accepted.
+    for (const text of ['', '.', 'abc', '1e3', '1,000', '12%']) {
+      expect(isPlainDecimal(text)).toBe(false)
+      expect(shiftPoint(text, -2)).toBe(text)
+    }
+    // ("0" is left out only because shifting it lands back on itself.)
+    for (const text of ['13', '.5', '5.', '-0.5', '100']) {
+      expect(isPlainDecimal(text)).toBe(true)
+      expect(shiftPoint(text, -2)).not.toBe(text)
+    }
   })
 })

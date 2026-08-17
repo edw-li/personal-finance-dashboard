@@ -806,6 +806,27 @@ describe('EsppPage — periods', () => {
     expect(vi.mocked(createPeriod).mock.calls[0][0].contribution_pct).toBe('1')
   })
 
+  it('refuses exponent notation in the contribution box, client-side', async () => {
+    render(<EsppPage />)
+    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
+
+    fillNewPeriod()
+    type('Contribution %', '1e-3')
+    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
+
+    // Not a case the server rescues: shiftPoint hands "1e-3" back untouched and
+    // Decimal("1e-3") is a perfectly legal 0.001, so a box that said a thousandth of a
+    // percent would be stored as a tenth of one, with no 422 on the round trip.
+    expect(await screen.findByText('contribution % must be a number')).toBeTruthy()
+    expect(vi.mocked(createPeriod)).not.toHaveBeenCalled()
+
+    // The same digits as a plain decimal are converted, not refused.
+    type('Contribution %', '0.001')
+    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
+    await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(createPeriod).mock.calls[0][0].contribution_pct).toBe('0.00001')
+  })
+
   it('deletes a period after a confirm and refetches the model', async () => {
     render(<EsppPage />)
     await screen.findByRole('button', { name: 'Edit period Feb 2026' })

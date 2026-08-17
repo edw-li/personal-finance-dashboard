@@ -142,6 +142,18 @@ describe('BracketsEditor', () => {
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
   })
 
+  it('refuses exponent notation in a rate, which the server would have accepted', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(rate('Federal', 2), { target: { value: '1e-3' } })
+    fireEvent.click(save('Federal'))
+
+    // 0.001 as a percent is in range and Decimal("1e-3") is a legal 0.001, so nothing
+    // downstream would have complained: the rate would simply have been stored as 0.1%.
+    // This gate is the only thing between that text and the column.
+    expect(screen.getByRole('alert').textContent).toContain('federal[2]: rate must be a number')
+    expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
+  })
+
   it('adds rows, saves them, and removes one', async () => {
     const echo = bracketsFixture()
     echo.jurisdictions.social_security = [

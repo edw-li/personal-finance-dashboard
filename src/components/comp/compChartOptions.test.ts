@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { INK, PALETTE } from '../../charts/theme'
 import type { CompEventOut } from '../../types/api'
-import { TC_COLORS, TC_LABELS, tcTrajectoryOption } from './compChartOptions'
+import { TC_CHART_LABEL, TC_COLORS, TC_LABELS, tcTrajectoryOption } from './compChartOptions'
 
 // --- the golden events ----------------------------------------------------------------
 // Wire shape of GET /comp/events. The computed columns are the plan's pinned Focal History
@@ -188,6 +188,20 @@ describe('tcTrajectoryOption', () => {
 
   it('returns null for an empty feed so the caller can render an empty note', () => {
     expect(tcTrajectoryOption([])).toBeNull()
+  })
+
+  it('names the equity segment for what it actually is, not for the table column', () => {
+    // The segment is tc_after - base, which on 2026 is 412,924.46 — the "Unvested equity"
+    // COLUMN of the table on the same page reads 333,882.96, because the refresh grant is
+    // in the segment and not in the column. One name for two figures on one screen is a
+    // reading error waiting to happen, so the legend carries the wider one.
+    const [, equity] = seriesOf(tcTrajectoryOption([EVENT_2026]))
+    expect(equity.name).toBe('Equity value (incl. refresh)')
+    expect(TC_LABELS[1]).toBe('Equity value (incl. refresh)')
+    expect(equity.data).toEqual([412924.46])
+    expect(EVENT_2026.unvested_equity).toBe('333882.96') // the column, deliberately not this
+    // The chart's own title still names the proxy in the sheet's words, unchanged.
+    expect(TC_CHART_LABEL).toBe('Base + unvested equity value')
   })
 
   it('stacks the two money series and rides the line above them', () => {

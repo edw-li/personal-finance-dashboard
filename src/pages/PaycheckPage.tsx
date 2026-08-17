@@ -14,7 +14,7 @@ import type {
   PaycheckProfileOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatPct } from '../utils/format'
-import { shiftPoint } from '../utils/percent'
+import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 import './PaycheckPage.css'
 
@@ -242,13 +242,26 @@ function ProfilesPanel({
       return
     }
     for (const { field, label } of PCT_FIELDS) {
-      const value = Number(form[field].trim())
-      if (Number.isFinite(value) && (value < 0 || value > 100)) {
+      const text = form[field].trim()
+      // Blank is a real zero on this form (see `pct` below), so an empty box is not text
+      // to refuse — but anything else that shiftPoint will not convert has to stop HERE.
+      // "1e-3" is the case that matters: it would travel verbatim, parse server-side as a
+      // perfectly legal Decimal 0.001, and store a tenth of a percent where the box said a
+      // thousandth of one. There is no 422 behind this gate (isPlainDecimal's note).
+      if (text !== '' && !isPlainDecimal(text)) {
+        // The InputsForm/BracketsEditor sentence, in this box's own vocabulary.
+        setError(`${label} must be a number`)
+        return
+      }
+      // Everything left is a plain decimal (or blank), so Number() is exact here — and an
+      // absurd 400-digit one that overflows to Infinity is caught by the range, not waved
+      // through by a finiteness test.
+      const value = Number(text)
+      if (value < 0 || value > 100) {
         // NOT the server's "espp_pct must be between 0 and 1": that sentence is in the
         // STORED fraction's vocabulary, and this box is labelled "ESPP %" and holds 11 for
         // 11%. Quoting it would call a perfectly good 11 out of range and wave a 0.5
-        // (half a percent) through. Text that is not a number at all falls through on
-        // purpose: shiftPoint hands it back untouched and the server's 422 is the backstop.
+        // (half a percent) through.
         setError(`${label} must be between 0 and 100`)
         return
       }
@@ -279,12 +292,14 @@ function ProfilesPanel({
     const request = editingId !== null ? updateProfile(editingId, body) : createProfile(body)
     request
       .then((echo) => {
-        // Back to "new profile", seeded from whichever row is now the newest: the echo
-        // when the write moved (or created) the latest one, the list's own latest
-        // otherwise — editing a historical row must not drag its old salary forward.
-        stopEditing(
-          latest === undefined || echo.effective_date >= latest.effective_date ? echo : latest,
-        )
+        // Back to "new profile", seeded from whichever row is newest NOW — the stored list
+        // with the echo standing in for its own row (a create is not in it yet, so it is
+        // appended). Comparing the echo against the OLD `latest` instead would reseed from
+        // a row that no longer exists as it was: moving the latest profile's date BACKWARD
+        // makes some other row the newest, and the form would carry the moved row's salary
+        // forward anyway (review M3). Editing a historical row still leaves the real latest
+        // in place, which is the case the comparison was written for.
+        stopEditing(latestOf([...profiles.filter((p) => p.id !== echo.id), echo]))
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
@@ -498,17 +513,20 @@ function ProfilesPanel({
               ))}
             </tbody>
           </table>
-          {pinnedId !== null && (
-            <button
-              type="button"
-              className="button paycheck-current"
-              aria-label="Show the current profile"
-              onClick={onShowCurrent}
-            >
-              Show the current profile
-            </button>
-          )}
         </div>
+      )}
+      {/* A SIBLING of the scroller, not a child of it: twelve columns overflow the strip,
+          and a control parked at the end of a horizontally scrolled one is a control the
+          user has to go looking for sideways. It belongs to the table as a whole. */}
+      {profiles.length > 0 && pinnedId !== null && (
+        <button
+          type="button"
+          className="button paycheck-current"
+          aria-label="Show the current profile"
+          onClick={onShowCurrent}
+        >
+          Show the current profile
+        </button>
       )}
     </section>
   )
@@ -599,15 +617,25 @@ export default function PaycheckPage() {
     loadProfiles()
   }
 
-  const reselect = (profileId: number | null) => {
+  /**
+   * Point the waterfall somewhere and start a load for it. `next` is handed the selection
+   * as it is AT THE MOMENT React applies it, never as it was when this was called — the
+   * only caller that can be stale is the one that runs from a write's promise, and a row
+   * pressed while that write was in flight must not be undone by it (review M1).
+   *
+   * Always a fresh object, so the load effect re-runs even when the id is unchanged.
+   */
+  const reselectWith = (next: (current: number | null) => number | null) => {
     setBreakdownBusy(true)
     setBreakdownError(null)
     // Cleared TOGETHER with the error it is a flavour of: the empty state renders
     // `breakdownError` as prose, so leaving `missing` up with the error gone would print a
     // literal "null — add one below…" for the whole of the next load (EsppPage's note).
     setBreakdownMissing(false)
-    setSelection({ profileId })
+    setSelection((current) => ({ profileId: next(current.profileId) }))
   }
+
+  const reselect = (profileId: number | null) => reselectWith(() => profileId)
 
   const selectProfile = (id: number) => {
     // Re-pressing the row that is already shown must not refetch (MonthlyUpdatePage's
@@ -626,8 +654,12 @@ export default function PaycheckPage() {
   // default rather than 404ing on an id that no longer exists).
   const onProfilesChanged = (deletedId?: number) => {
     reloadProfiles()
-    const pinned = selection.profileId
-    reselect(deletedId !== undefined && deletedId === pinned ? null : pinned)
+    // Decided on the CURRENT selection, not on the one this callback closed over when the
+    // save was submitted: a row pressed DURING the write is the user's latest word, and
+    // reading `selection.profileId` here would quietly revert it when the promise resolved.
+    reselectWith((current) =>
+      deletedId !== undefined && deletedId === current ? null : current,
+    )
   }
 
   return (

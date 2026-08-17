@@ -4,7 +4,7 @@ import { JURISDICTIONS, putTaxBrackets } from '../../api/taxes'
 import type { Jurisdiction } from '../../api/taxes'
 import type { TaxBracketOut, TaxBracketsOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
-import { shiftPoint } from '../../utils/percent'
+import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import './taxes.css'
 
 const LABELS: Record<string, string> = {
@@ -18,8 +18,6 @@ const LABELS: Record<string, string> = {
 
 // Mirrors the API's own ceiling (app/api/taxes.py MAX_BRACKETS).
 const MAX_BRACKETS = 12
-
-const PLAIN_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/
 
 interface RowState {
   rate: string // percent form — "37", never "0.3700"
@@ -40,8 +38,8 @@ function label(name: string): string {
  * "100.001" and "100.002" both land on 100.00 and are NOT ascending, while a first
  * threshold of "0.001" lands on 0.00 and IS legal. Same digits, same verdict.
  *
- * Anything that is not a plain decimal is handed back untouched — PLAIN_DECIMAL refuses it
- * first, so no rounding has to guess at it.
+ * Anything that is not a plain decimal is handed back untouched — `isPlainDecimal` refuses
+ * it first, so no rounding has to guess at it.
  */
 function quantize(raw: string, places: number): string {
   const text = raw.trim()
@@ -95,10 +93,13 @@ function validate(name: string, rows: RowState[]): string | null {
   let previous = 0
   for (const [index, row] of rows.entries()) {
     const position = `${name}[${index + 1}]`
-    if (!PLAIN_DECIMAL.test(row.rate.trim())) return `${position}: rate must be a number`
+    // The shape shiftPoint will actually convert, and the gate the server does NOT stand
+    // behind: Decimal("1e-3") is a legal 0.001, so an exponent-notation rate would be
+    // stored as 0.1% with no 422 anywhere (src/utils/percent.ts's isPlainDecimal).
+    if (!isPlainDecimal(row.rate)) return `${position}: rate must be a number`
     const rate = Number(quantize(row.rate, 2))
     if (rate < 0 || rate > 100) return `${position}: rate must be between 0% and 100%`
-    if (!PLAIN_DECIMAL.test(row.threshold.trim())) {
+    if (!isPlainDecimal(row.threshold)) {
       return `${position}: threshold must be a number`
     }
     const threshold = Number(quantize(row.threshold, 2))
@@ -287,9 +288,7 @@ export default function BracketsEditor({
                         {/* Money echo of what was typed — skipped while the text is not a
                             number yet, so a half-typed value never reads "$NaN". */}
                         <span className="drill-hint">
-                          {PLAIN_DECIMAL.test(row.threshold.trim())
-                            ? formatCurrency(row.threshold)
-                            : ''}
+                          {isPlainDecimal(row.threshold) ? formatCurrency(row.threshold) : ''}
                         </span>
                       </td>
                       <td>

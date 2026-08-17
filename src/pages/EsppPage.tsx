@@ -22,7 +22,7 @@ import type {
   EsppPeriodOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../utils/format'
-import { shiftPoint } from '../utils/percent'
+import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 import './EsppPage.css'
 
@@ -627,14 +627,21 @@ function PeriodsPanel({
       setError('period_end must be after period_start')
       return
     }
+    if (!isPlainDecimal(pct)) {
+      // Anything shiftPoint will not convert stops HERE, before the range check that
+      // Number() would happily pass it through: "1e-3" travels verbatim, parses on the
+      // server as a perfectly legal Decimal 0.001, and stores a tenth of a percent where
+      // the box said a thousandth of one. There is no 422 behind this gate — it is the
+      // only thing between that text and the column (src/utils/percent.ts).
+      setError('contribution % must be a number')
+      return
+    }
     const pctNumber = Number(pct)
-    if (Number.isFinite(pctNumber) && (pctNumber < 0 || pctNumber > 100)) {
+    if (pctNumber < 0 || pctNumber > 100) {
       // NOT the server's "contribution_pct must be between 0 and 1": that sentence is in
       // the STORED fraction's vocabulary, and this box is labelled "Contribution %" and
       // holds 14 for 14%. Quoting it verbatim would tell the user their 14 was too big
       // and their 0.5 was fine — the opposite of what this form means.
-      // Text that is not a number at all falls through on purpose: shiftPoint hands it
-      // back untouched and the server's 422 is the backstop (no conversion guesses here).
       setError('contribution % must be between 0 and 100')
       return
     }

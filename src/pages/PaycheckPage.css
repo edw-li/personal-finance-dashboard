@@ -103,7 +103,7 @@
 
 /* ── Profiles ──────────────────────────────────────────────────────── */
 
-/* Twelve columns, eight of them numeric: scroll the table, never the page. */
+/* Twelve columns, nine of them numeric: scroll the table, never the page. */
 .paycheck-scroll {
   overflow-x: auto;
 }

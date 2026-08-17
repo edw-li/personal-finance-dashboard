@@ -19,7 +19,13 @@ import { formatCurrency, formatCurrencyCompact } from '../../utils/format'
 export const TC_COLORS = [PALETTE[0], PALETTE[1]] as const
 
 // Series names, in series order: the two stack segments then the line over them.
-export const TC_LABELS = ['Base', 'Unvested equity', 'Total comp'] as const
+//
+// The second one is deliberately NOT "Unvested equity": that is a COLUMN of the table on
+// the same page, and it holds `unvested_equity` alone, while this segment is
+// `tc_after - base` — the same equity PLUS the year's refresh grant (2026: $412,924.46 in
+// the legend against $333,882.96 in the column). Two different figures may not answer to
+// one name on one screen, so the segment says which one it is.
+export const TC_LABELS = ['Base', 'Equity value (incl. refresh)', 'Total comp'] as const
 
 // The one sentence the chart is titled with, wherever it is mounted: TC here is a proxy
 // (the sheet has no TC column), and saying which proxy is the whole honesty of the chart.
@@ -44,8 +50,10 @@ function roundTo(value: number, places: number): number {
  *
  * Equity is `tc_after - base` rather than `unvested_equity + equity_delta` re-added here:
  * the server owns the total (global rule 9), so the stack is the total minus its own floor
- * and it closes on the line by construction. A year with no equity columns at all charts
- * base-only, with a zero segment — `tc_after` is never null, so nothing can go missing.
+ * and it closes on the line by construction. It is therefore BOTH equity figures together,
+ * which is what TC_LABELS[1] has to say out loud — the table's "Unvested equity" column is
+ * only the first of them. A year with no equity columns at all charts base-only, with a
+ * zero segment — `tc_after` is never null, so nothing can go missing.
  *
  * Returns null for an empty feed — the caller renders an empty note, the house pattern for
  * a builder with nothing to draw (taxChartOptions' `trendOption`).

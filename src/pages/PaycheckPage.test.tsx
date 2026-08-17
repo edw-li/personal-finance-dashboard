@@ -222,6 +222,22 @@ describe('PaycheckPage — the waterfall', () => {
     expect(vi.mocked(fetchBreakdown).mock.calls[2][0]).toBeUndefined()
   })
 
+  it('lights up the row the BREAKDOWN is about, not the one that was asked for', async () => {
+    // Nothing is pinned on arrival, so the SERVER chooses — and the highlight has to come
+    // from its answer. Here it answers with the 2025 profile while the page asked for no
+    // profile at all, which is exactly the case a `pinnedId` highlight would get wrong
+    // (it would light nothing up, or light up the wrong row after a delete).
+    vi.mocked(fetchBreakdown).mockResolvedValue(breakdown2025)
+    render(<PaycheckPage />)
+    await screen.findByText('$2,984.91')
+
+    expect(vi.mocked(fetchBreakdown).mock.calls[0][0]).toBeUndefined()
+    const pressed = (label: string) =>
+      screen.getByRole('button', { name: label }).getAttribute('aria-pressed')
+    expect(pressed('Show the breakdown for Jan 1, 2025')).toBe('true')
+    expect(pressed('Show the breakdown for Jan 1, 2026')).toBe('false')
+  })
+
   it('points at the form when there are no profiles at all', async () => {
     vi.mocked(fetchProfiles).mockResolvedValue([])
     vi.mocked(fetchBreakdown).mockRejectedValue(new ApiError('no paycheck profiles', 404))
@@ -254,9 +270,32 @@ describe('PaycheckPage — the waterfall', () => {
     vi.mocked(fetchBreakdown).mockRejectedValue(new ApiError('breakdown unavailable', 503))
     render(<PaycheckPage />)
 
+    // A FIRST-load failure: the bare sentence, with no stale cue, because there is no
+    // earlier waterfall for one to be about.
     expect(await screen.findByText('breakdown unavailable')).toBeTruthy()
     // Independent loads: the table answered and is untouched.
     expect(screen.getByText('$188,930.00')).toBeTruthy()
+  })
+
+  it('says the breakdown may be behind when a RELOAD fails, and keeps it on screen', async () => {
+    vi.mocked(fetchBreakdown)
+      .mockResolvedValueOnce(breakdownOf(profile2026))
+      .mockRejectedValueOnce(new ApiError('breakdown unavailable', 503))
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
+
+    // The other branch of the same banner: something IS still on screen, so the sentence
+    // says so rather than leaving the old figures passing for the ones just asked for.
+    expect(
+      await screen.findByText(
+        'breakdown unavailable — this breakdown may be showing earlier data.',
+      ),
+    ).toBeTruthy()
+    // Kept, and still named — which is what makes keeping it honest.
+    expect(screen.getByText('$3,384.16')).toBeTruthy()
+    expect(screen.getByText('Per-check breakdown — effective Jan 1, 2026')).toBeTruthy()
   })
 })
 
@@ -445,6 +484,52 @@ describe('PaycheckPage — the profile form', () => {
     expect(vi.mocked(createProfile).mock.calls[0][0].espp_pct).toBe('1')
   })
 
+  it('refuses exponent notation in a percent box, client-side', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    type('Effective date', '2026-07-01')
+    type('Traditional 401(k) %', '1e-3')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+
+    // NOT a case the server rescues: shiftPoint hands "1e-3" back untouched, Decimal reads
+    // it as a perfectly legal 0.001, and a box that said a thousandth of a percent would be
+    // stored as a tenth of one. No request may leave with it.
+    expect(await screen.findByText('Traditional 401(k) % must be a number')).toBeTruthy()
+    expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
+
+    // ...and the plain decimal that follows is converted, not refused.
+    type('Traditional 401(k) %', '0.001')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(createProfile).mock.calls[0][0].trad_401k_pct).toBe('0.00001')
+  })
+
+  it('reseeds the form from the row that is newest AFTER the save', async () => {
+    // The latest profile's date moves BACKWARD, behind the 2025 row. The echo is no longer
+    // the newest thing in the table, so the next new profile must copy the 2025 row —
+    // seeding from the echo would carry a salary that is no longer the current one.
+    vi.mocked(updateProfile).mockResolvedValue({ ...profile2026, effective_date: '2024-06-01' })
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Edit the profile effective Jan 1, 2026' }),
+    )
+    type('Effective date', '2024-06-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }))
+
+    await waitFor(() => expect(vi.mocked(updateProfile)).toHaveBeenCalledTimes(1))
+    // The 2025 row's numbers, in the new-profile form: salary, and its own 10% traditional.
+    await waitFor(() => expect(field('Annual salary').value).toBe('162000.00'))
+    expect(field('Traditional 401(k) %').value).toBe('10')
+    expect(field('ESPP %').value).toBe('15')
+    // The two things a new profile never inherits.
+    expect(field('Effective date').value).toBe('')
+    expect(field('Notes').value).toBe('')
+    expect(screen.getByRole('button', { name: 'Add profile' })).toBeTruthy()
+  })
+
   it('renders a 409 verbatim and keeps the typed row', async () => {
     vi.mocked(createProfile).mockRejectedValue(
       new ApiError('a paycheck profile for 2026-07-01 already exists', 409),
@@ -506,6 +591,36 @@ describe('PaycheckPage — loading', () => {
     ).toBeTruthy()
     expect(screen.getByText('$188,930.00')).toBeTruthy()
     expect(field('Notes').value).toBe('half-typed profile')
+  })
+
+  it('keeps a row chosen DURING a save when the save lands', async () => {
+    const save = deferred<PaycheckProfileOut>()
+    vi.mocked(createProfile).mockReturnValueOnce(save.promise)
+    vi.mocked(fetchBreakdown)
+      .mockResolvedValueOnce(breakdownOf(profile2026)) // the mount
+      .mockResolvedValueOnce(breakdown2025) // the row pressed mid-save
+      .mockResolvedValueOnce(breakdown2025) // the write's own refetch
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    type('Effective date', '2026-07-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+
+    // The user does not wait for the write: this row is pressed while it is still in flight.
+    fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
+    await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(fetchBreakdown).mock.calls[1][0]).toBe(2)
+
+    await act(async () => {
+      save.resolve(profile2026)
+    })
+
+    await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(3))
+    // The write refetches the selection as it is NOW, not the one it closed over when it
+    // was submitted — otherwise the resolving promise silently undoes the row press.
+    expect(vi.mocked(fetchBreakdown).mock.calls[2][0]).toBe(2)
+    expect(await screen.findByText('$2,984.91')).toBeTruthy()
   })
 
   it('lets only the NEWEST of two overlapping breakdowns land', async () => {

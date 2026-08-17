@@ -37,6 +37,9 @@ const EMPTY_EVENT: EventFormState = {
   unvested_price: '', refresh_rsus: '', grant_price: '', notes: '',
 }
 
+/** The four columns that travel in pairs — a subset of both the form and the wire row. */
+type EquityField = 'unvested_rsus' | 'unvested_price' | 'refresh_rsus' | 'grant_price'
+
 /**
  * The two products the server multiplies out of this form, and the operands behind them:
  * `unvested_equity = unvested_rsus x unvested_price` and
@@ -48,7 +51,7 @@ const EMPTY_EVENT: EventFormState = {
  * dollars of charted equity and says nothing about it.
  */
 const EQUITY_PAIRS: {
-  fields: [keyof EventFormState, keyof EventFormState]
+  fields: [EquityField, EquityField]
   names: [string, string]
   product: string
 }[] = [
@@ -65,18 +68,26 @@ const EQUITY_PAIRS: {
 ]
 
 /**
- * One sentence per pair with exactly one side filled, naming the operand left ORPHANED.
+ * One sentence per pair THIS EDIT left half-filled, naming the operand orphaned by it.
  *
  * Advisory, never a gate (Task 9 binding): half a pair is a legal row — a grant whose
  * price is not known yet is a real state of the world — so this is said, not enforced. It
  * is derived from the form on every render rather than raised on submit, because the
  * damage is done at the moment the box is cleared and the user is looking at the box.
+ *
+ * Which is also why it is compared against `stored`, the row as the server has it: a row
+ * that arrived half-paired already reads that way in the table, and greeting every open of
+ * it with a warning about a state the user did not just create is how a sentence stops
+ * being read (review M9). `stored` is undefined for a new row, so the first half-filled
+ * pair typed into one does differ — from nothing at all — and is named.
  */
-function orphanWarnings(form: EventFormState): string[] {
+function orphanWarnings(form: EventFormState, stored: CompEventOut | undefined): string[] {
   const warnings: string[] = []
   for (const { fields, names, product } of EQUITY_PAIRS) {
     const filled = fields.map((field) => form[field].trim() !== '')
     if (filled[0] === filled[1]) continue // whole, or gone entirely — nothing orphaned
+    const was = fields.map((field) => (stored?.[field] ?? '') !== '')
+    if (was[0] === filled[0] && was[1] === filled[1]) continue // not this edit's doing
     const kept = filled[0] ? 0 : 1
     const gone = 1 - kept
     const subject = `${names[kept].charAt(0).toUpperCase()}${names[kept].slice(1)}`
@@ -192,7 +203,9 @@ function EventsPanel({
       .finally(() => setBusy(false))
   }
 
-  const orphans = orphanWarnings(form)
+  // The row being edited, as the SERVER has it — looked up in the current feed, so a
+  // reload that replaces the array keeps answering for the same id.
+  const orphans = orphanWarnings(form, events.find((e) => e.id === editingId))
 
   return (
     <section className="card">
@@ -460,19 +473,24 @@ export default function CompPage() {
         </div>
       )}
 
-      <section className="card">
-        <h2 className="eyebrow">{TC_CHART_LABEL}</h2>
-        <p className="drill-hint">
-          Total comp as this app defines it: the base the year landed on, stacked under the
-          value of the unvested equity behind it (the sheet has no TC column — this is the
-          proxy, and the line is the server&apos;s own total).
-        </p>
-        {trajectory ? (
-          <EChart option={trajectory} height={320} />
-        ) : (
-          events !== null && <p className="empty-note">No comp events yet — add one below.</p>
-        )}
-      </section>
+      {/* Dimmed by the SAME flag as the table below it: both are drawn from one payload,
+          and a chart left bright while the table under it says "may be showing earlier
+          data" would be the one thing the eye is on claiming to be current. */}
+      <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
+        <section className="card">
+          <h2 className="eyebrow">{TC_CHART_LABEL}</h2>
+          <p className="drill-hint">
+            Total comp as this app defines it: the base the year landed on, stacked under
+            the value of the unvested equity behind it (the sheet has no TC column — this is
+            the proxy, and the line is the server&apos;s own total).
+          </p>
+          {trajectory ? (
+            <EChart option={trajectory} height={320} />
+          ) : (
+            events !== null && <p className="empty-note">No comp events yet — add one below.</p>
+          )}
+        </section>
+      </div>
 
       {events === null ? (
         busy && <p className="empty-note">Loading comp events…</p>
