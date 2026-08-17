@@ -943,7 +943,8 @@ about cross-year confusion) while the modeler drops its chain on failure; period
 PATCH the full row (Task 4 M6 binding); blank purchase_price = omit on POST / explicit
 null on PATCH; sold rows show sold_price in the Price column; three components in one
 page file (react-refresh constraint; nothing non-component exported); shiftPoint copied
-from BracketsEditor with attribution (dedup → forward note).
+from BracketsEditor with attribution (dedup → forward note; SUPERSEDED by Task 9, which
+promoted the single copy to src/utils/percent.ts).
 
 - [ ] **Step 2:** implement + route swap. **Step 3:** npm gates. **Step 4:** commit
   `feat: ESPP page — lots, disposition countdown, 25k modeler`.
@@ -1064,8 +1065,8 @@ NOT involved — plain script, GET-only):
   is next touched, and fold in the Task-4 review M5 dedup then too (identical
   _validated_pct/_merged/IdPath vocabulary now lives in espp+paycheck+comp routers;
   "share both or neither" — currently split because schemas share Pct9 while routers
-  duplicate validators); frontend twin: shiftPoint (string percent⇄fraction) now lives in
-  BracketsEditor AND EsppPage — promote to src/utils when either is next touched; EsppPage
+  duplicate validators); frontend twin: shiftPoint (string percent⇄fraction) — promotion
+  DONE in Task 9 (src/utils/percent.ts is the single copy); EsppPage
   next-touch nits (Task 8 re-review N-items): the three .finally seq guards are unpinned
   (cosmetic-only survivor — a stale run can lift the dim early), no periods-load-failure
   test exists (the stale-cue branch there is an unpinned twin of the pinned lots one),
@@ -1115,6 +1116,13 @@ NOT involved — plain script, GET-only):
   '0' is sent (truthy string) while '' is omitted — the documented client contract.
 - /prices/history & /portfolio/realized remain frontend-unconsumed; HoldingOut.accounts
   still unrendered (Plan 4 notes stand).
+- SANCTIONED DEVIATIONS vs spec §5/§6, declared here (final-review catch): (1) spec §6's
+  /comp "refresh-grant timeline" is NOT shipped as its own visualization — refresh RSUs +
+  grant price are table columns and the TC chart's equity segment includes the refresh;
+  build a dedicated timeline in Plan 6 if the user wants it (same class as the paycheck
+  Percentages block cut). (2) spec §5's `GET current/breakdown` shipped as
+  `GET /paycheck/breakdown?profile_id=` — a functional superset (server default = the
+  profile in force), plan-prescribed; recording the path departure explicitly.
 
 **Frontend house-law additions this plan:**
 - shiftPoint + isPlainDecimal live in src/utils/percent.ts (single copy; one regex shared
@@ -1152,6 +1160,10 @@ NOT involved — plain script, GET-only):
 
 ## Execution status (COMPLETE 2026-08-17 — all 11 tasks; ready for the user's merge decision)
 
+(The per-step `- [ ]` checkboxes above were superseded by this table as the tracking
+record — final whole-branch review verdict: **READY**, with its four doc findings folded
+into this doc; the refresh-grant-timeline deferral is declared in the forward notes.)
+
 Tasks 1–8 COMPLETE, each through implement → spec review → quality review → fix →
 re-review (all subagents Opus 5; every verdict SPEC_PASS / QUALITY_APPROVED at close):
 
@@ -1180,7 +1192,7 @@ tree clean. NOT merged, NOT pushed (user decides — Plans 1–4 precedent).
 canonical engine reproduces the pinned table (Task 1 tests), 2024 matches the sheet to the
 cent on every quantity (test + Task 10), D1–D4 each reproduced/explained to the cent
 (drift-pin tests + Task 10 drift table). Pages render real data with placeholders remaining
-only on /settings and the 404 route (by design); inputs/brackets/lots/periods/profiles/
+only on / (Overview — explicit Plan 6 scope), /settings, and the 404 route (by design); inputs/brackets/lots/periods/profiles/
 events all editable through the UI; suggestion chips, clone-year, modeler knobs all
 test-verified. Every derived value computed at request time; no schema changes; the real
 workbook path/filename appears NOWHERE in Plan 5's additions (pre-existing Plan 2–4 docs
