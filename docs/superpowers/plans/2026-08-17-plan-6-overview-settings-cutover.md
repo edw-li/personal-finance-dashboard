@@ -1461,6 +1461,32 @@ path).
   Plan 2 machine note), record results in the execution-status section of this doc.
   NO commit unless the doc changed.
 
+**Task 10 RESULTS (controller-run 2026-08-17, worktree backend @ ad389b8 against the real
+dev DB, read-only):**
+- Backend up on :8000 (worktree venv uvicorn, dev-default config — no .env in either
+  checkout; the dev DB user is the dev-default admin). Health OK; clean shutdown after,
+  zero orphan processes.
+- `GET /settings` (NEW): effective trio exactly as designed — swr `0.04`, ticker `NVDA`,
+  cron `10 13 * * mon-fri`. No writes issued (PUT covered by the 18-test suite only).
+- Overview source endpoints, all 200 on real data: net-worth summary (latest month
+  2026-09-01, net worth ~$799.4k, MoM +5.5%); timeseries 37 months; holdings totals
+  complete with `as_of` 2026-08-14 (Fri bar, 3 days back → correctly NOT stale under the
+  4-day date-only rule); allocation `by=type` = exactly 3 slices (etf/mutual_fund/stock —
+  the Overview donut gets 3 identity hues, no Other fold on today's data); spending
+  matrix months end 2025-12 (no 2026 wizard entries yet → the Overview spending tile
+  reads "Spending — Dec 2025", honestly labeled); tax summaries years 2023–2026 → tax
+  tile picks 2026 "(est.)". Tile parity with module pages holds by construction (same
+  GETs).
+- **Real-workbook dry-run through the NEW upload path** (`POST /import/xlsx?dry_run=true`,
+  multipart, workbook at its Plan-2-recorded location): **HTTP 200 in 0.66 s,
+  `dry_run:true, applied:false`, ZERO sheet errors, and every one of the 17 entity
+  classes is 100 % skips — 1,982 rows identical, 0 creates / 0 updates / 0 deletes.**
+  Full idempotency of DB-vs-sheet proven end-to-end through the endpoint the settings
+  page now drives; the ZI deactivation and all Plan 4/5 UI edits live outside importer
+  diff-fields, exactly as the forward notes predicted.
+- Not exercised against the dev DB (by rule 13): settings PUT, taxes DELETE, import
+  apply — all covered by the test suites against `finance_test`.
+
 ---
 
 ### Task 11: Cutover runbook — README Part 7 (+ Part 4 addendum)
