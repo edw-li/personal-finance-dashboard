@@ -944,6 +944,10 @@ prefilled from the latest profile — the monthly comp-change ritual); breakdown
 SELECTED profile (default = server default): the 11-line waterfall as a definition list
 (label/value rows, net_pay emphasized, monthly_net tile) + warnings strip. Percent inputs
 in percent form, converted to 9dp fractions on save ("13" → 0.13; display back ×100).
+BINDING (Task 4 review M6): the edit form PATCHes the FULL profile shape, never a delta —
+whole-row validation means a delta-PATCH against a row with any invalid stored field 422s
+on unrelated edits. CompPage's form does the same; when clearing half an equity pair
+(rsus/price), surface the orphaned operand rather than silently nulling the product.
 
 CompPage: events table (focal year asc; stored + computed columns; edit/delete + add form) +
 TC trajectory chart: `tcTrajectoryOption(events)` pure builder — stacked bars per focal_year:
@@ -1005,7 +1009,10 @@ NOT involved — plain script, GET-only):
   just remove it); money.py quantizers preserve Decimal("-0") house-wide (writers/readers
   that care must collapse with + ZERO); espp router imports money._quantize_bounded for the
   5dp/9dp column families — promote public quantize helpers at those scales when money.py
-  is next touched.
+  is next touched, and fold in the Task-4 review M5 dedup then too (identical
+  _validated_pct/_merged/IdPath vocabulary now lives in espp+paycheck+comp routers;
+  "share both or neither" — currently split because schemas share Pct9 while routers
+  duplicate validators).
 - [ ] **Step 3:** Definition-of-done audit against the checklist below; fix or document any
   miss; final commit `docs: Plan 5 final gates + forward notes`.
 
