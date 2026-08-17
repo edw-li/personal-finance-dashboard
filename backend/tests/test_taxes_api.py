@@ -105,12 +105,21 @@ async def test_delete_year_rejects_out_of_range_year(auth_client, definitions):
 
 
 async def test_delete_year_removes_the_whole_year_vertical(auth_client, db, definitions):
-    """A phantom year (a typo'd 2030) leaves with everything under it, in one statement."""
+    """A phantom year (a typo'd 2030) leaves with everything under it, in one statement.
+
+    The neighbor 2029 pins the WHERE clause: it is seeded with a vertical of its own and has
+    to survive INTACT, so an unfiltered `delete(TaxYear)` fails here rather than passing.
+    """
     await put_inputs(auth_client, 2030, {"annual_salary": "150000"})
     await put_brackets(auth_client, 2030, {"federal": rows(("0.10", "0"))})
+    await put_inputs(auth_client, 2029, {"annual_salary": "140000"})
+    await put_brackets(auth_client, 2029, {"federal": rows(("0.09", "0"))})
 
     assert (await auth_client.delete(f"{YEARS}/2030")).status_code == 204
-    assert (await auth_client.get(YEARS)).json() == []  # gone, and nothing recreated it
+    # 2030 gone and nothing recreated it; 2029 untouched, child counts and all.
+    assert (await auth_client.get(YEARS)).json() == [
+        {"year": 2029, "notes": None, "input_count": 1, "bracket_count": 1}
+    ]
     assert (await auth_client.get(f"{YEARS}/2030/inputs")).status_code == 404
     n_inputs = (
         await db.execute(select(func.count()).select_from(TaxInput).where(TaxInput.year == 2030))

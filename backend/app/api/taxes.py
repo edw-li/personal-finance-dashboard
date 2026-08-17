@@ -160,7 +160,9 @@ async def delete_year(year: YearPath, db: AsyncSession = Depends(get_db)) -> Res
     in Postgres and `TaxYear` declares no relationships, so one statement removes the whole
     year vertical (put_brackets' core-statement precedent). `tax_input_definitions` is
     year-independent seed data and is untouched. Deletion is not a tombstone either — any
-    write path recreates the year, so empty-PUT-creates stays law.
+    write path recreates the year, so empty-PUT-creates stays law. Re-import interplay: same
+    sheet-wins posture as the PUTs — deleting an IMPORTED year is undone by the next workbook
+    import, which recreates it from the sheet.
     """
     await _require_year(db, year)
     await db.execute(delete(TaxYear).where(TaxYear.year == year))
