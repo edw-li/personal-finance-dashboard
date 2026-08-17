@@ -1,0 +1,36 @@
+/* Page-scoped rules ONLY (TaxesPage.css / SettingsPage.css structure). The app-wide
+   vocabulary (.page, .page-header, .spacer, .card, .card-grid, .span-4, .span-8, .span-12,
+   .eyebrow, .kpi-row, .stat-tile, .button, .error-banner, .empty-note, .drill-hint,
+   .loading-dim) lives in panels.css and is not redefined here.
+
+   The card headings are .eyebrow rather than portfolio.css's visually identical
+   .panel-title: that stylesheet travels with the portfolio page, and this one must not
+   depend on another page's sheet happening to be in the bundle (SettingsPage.css's rule —
+   and route-level code-splitting is about to make each page's CSS load with its chunk). */
+
+/* .drill-hint is written for a <p>; here it is the card's NavLink, so it has to become a
+   block of its own and drop the anchor underline. */
+.overview-page .drill-hint {
+  display: block;
+  text-decoration: none;
+}
+
+.overview-page .drill-hint:hover {
+  color: var(--text);
+}
+
+.overview-freshness {
+  color: var(--muted);
+  font-size: 0.85rem;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+/* PALETTE[3] amber, written as a literal exactly as portfolio.css does: src/charts is
+   frozen, CSS cannot import a TS token, and this is already the app's staleness colour
+   (HoldingsTable's .sub.stale). */
+.overview-freshness .stale {
+  color: #c98500;
+}

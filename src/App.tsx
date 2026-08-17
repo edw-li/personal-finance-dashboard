@@ -7,6 +7,7 @@ import EsppPage from './pages/EsppPage'
 import LoginPage from './pages/LoginPage'
 import MonthlyUpdatePage from './pages/MonthlyUpdatePage'
 import NetWorthPage from './pages/NetWorthPage'
+import OverviewPage from './pages/OverviewPage'
 import PaycheckPage from './pages/PaycheckPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 import PortfolioPage from './pages/PortfolioPage'
@@ -22,7 +23,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
-              <Route path="/" element={<PlaceholderPage title="Overview" />} />
+              <Route path="/" element={<OverviewPage />} />
               <Route path="/update" element={<MonthlyUpdatePage />} />
               <Route path="/net-worth" element={<NetWorthPage />} />
               <Route path="/spending" element={<SpendingPage />} />
