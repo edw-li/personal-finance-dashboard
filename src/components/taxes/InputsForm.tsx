@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { putTaxInputs } from '../../api/taxes'
 import type { TaxInputsOut } from '../../types/api'
@@ -35,13 +35,17 @@ function valuesOf(inputs: TaxInputsOut): Record<string, string> {
 export default function InputsForm({
   inputs,
   onSaved,
+  onDirtyChange,
 }: {
   inputs: TaxInputsOut
   onSaved: (updated: TaxInputsOut) => void
+  onDirtyChange?: (dirty: boolean) => void
 }) {
   // `values` is what the user sees, `baseline` what the server last confirmed — the PUT
   // body is their diff, so an untouched key is never sent (sending one blank would DELETE
-  // a stored input the user never looked at).
+  // a stored input the user never looked at). Both seed from a useState INITIALIZER, so a
+  // prop replacement (the page refetching the same year) cannot overwrite typed work —
+  // only a save echo, or a remount on a real year switch, re-adopts a baseline.
   const [values, setValues] = useState<Record<string, string>>(() => valuesOf(inputs))
   const [baseline, setBaseline] = useState<Record<string, string>>(() => valuesOf(inputs))
   const [saving, setSaving] = useState(false)
@@ -58,6 +62,13 @@ export default function InputsForm({
     }
   }
   const changedCount = Object.keys(changed).length
+
+  // The page guards a year switch (and a Retry) with a confirm, so it has to know there is
+  // unsaved work here. Reported from an effect rather than from every handler: an edit, an
+  // Apply, a blank-out and a save echo all land on the same computed diff.
+  useEffect(() => {
+    onDirtyChange?.(changedCount > 0)
+  }, [changedCount, onDirtyChange])
 
   const submit = () => {
     if (invalid.length > 0) {
@@ -108,10 +119,20 @@ export default function InputsForm({
               {section.items.map((item) => {
                 const id = `tax-input-${item.key}`
                 const value = values[item.key] ?? ''
+                // Offered only while it differs from what is in the box; the money form is
+                // computed once because the chip, its title and the button's all show it.
+                const suggestion =
+                  item.suggested === null || item.suggested === value
+                    ? null
+                    : formatCurrency(item.suggested)
                 return (
                   <div key={item.key} className="tax-input-row">
                     <span className="tax-input-label">
-                      <label htmlFor={id}>{item.label}</label>
+                      {/* The grid gives the label a wide track, but a long key can still
+                          ellipsize — the title recovers the full text on hover. */}
+                      <label htmlFor={id} title={item.label}>
+                        {item.label}
+                      </label>
                       {item.is_derived && <span className="badge">derived</span>}
                     </span>
                     <input
@@ -125,16 +146,20 @@ export default function InputsForm({
                         setValues((current) => ({ ...current, [item.key]: e.target.value }))
                       }
                     />
+                    {/* The track is reserved whether or not a suggestion is showing, so a
+                        chip appearing mid-keystroke never shifts the input under the
+                        cursor. */}
                     <span className="tax-suggestion">
-                      {item.suggested !== null && item.suggested !== value && (
+                      {suggestion !== null && (
                         <>
-                          <span className="tax-suggestion-value">
-                            suggested {formatCurrency(item.suggested)}
+                          <span className="tax-suggestion-value" title={suggestion}>
+                            suggested {suggestion}
                           </span>
                           <button
                             type="button"
                             className="chip"
                             aria-label={`Apply suggestion for ${item.label}`}
+                            title={`Apply ${suggestion}`}
                             onClick={() =>
                               setValues((current) => ({
                                 ...current,

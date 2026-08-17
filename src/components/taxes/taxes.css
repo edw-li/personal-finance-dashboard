@@ -13,15 +13,19 @@
   color: var(--text);
 }
 
+/* 520px cards, so the two columns a 1240px window fits leave the label track ~250px: at
+   340px the field and the suggestion ate it and every label ellipsized. */
 .tax-input-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
   gap: 0.4rem 1.5rem;
 }
 
+/* The third track is FIXED, not minmax(0, …): the suggestion appears and disappears as the
+   field is typed into, and a collapsing track would move the input under the cursor. */
 .tax-input-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px minmax(0, 150px);
+  grid-template-columns: minmax(0, 1fr) 120px 170px;
   align-items: center;
   gap: 0.5rem;
 }
@@ -49,16 +53,18 @@
 .tax-suggestion {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.35rem;
   min-width: 0;
 }
 
+/* Wraps to a second line rather than clipping — a truncated amount is worse than none,
+   and the row's reserved track means the wrap moves nothing else. */
 .tax-suggestion-value {
   color: var(--muted);
   font-size: 0.72rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .tax-form-actions {

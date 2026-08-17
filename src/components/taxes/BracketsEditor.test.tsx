@@ -35,8 +35,13 @@ const threshold = (jurisdiction: string, index: number) =>
 const save = (jurisdiction: string) =>
   screen.getByRole('button', { name: `Save ${jurisdiction} brackets` })
 
+// Installed once for the file: only the delete-all test actually reaches a confirm, and
+// leaving it at "yes" keeps jsdom's unimplemented window.confirm out of the others.
+const confirmSpy = vi.spyOn(window, 'confirm')
+
 beforeEach(() => {
   vi.mocked(putTaxBrackets).mockResolvedValue(bracketsFixture())
+  confirmSpy.mockReturnValue(true)
 })
 
 afterEach(() => {
@@ -62,6 +67,9 @@ describe('BracketsEditor', () => {
     expect(rate('State', 1).value).toBe('9.3')
     expect(rate('Medicare', 1).value).toBe('1.45')
     expect(threshold('Federal', 2).value).toBe('100000.00')
+    // The hint states the precision the columns keep, because it decides what a typed
+    // percent becomes (37.005 -> 37.01) and therefore which saves are refused.
+    expect(screen.getByText(/stored as fractions with 4 decimal places/)).toBeTruthy()
   })
 
   it('saves ONE jurisdiction, converting percents back to fractions', async () => {
@@ -168,6 +176,112 @@ describe('BracketsEditor', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove Social Security bracket 2' }))
     expect(screen.queryByLabelText('Social Security bracket 2 rate (%)')).toBeNull()
+  })
+
+  it('compares thresholds AFTER quantizing them the way the server will', async () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add Federal bracket' }))
+    fireEvent.change(rate('Federal', 3), { target: { value: '40' } })
+    // Two different strings that both store as 100.00. The API quantizes before it checks
+    // the rules, so raw-text validation would wave this through into a 422 the user never
+    // asked for.
+    fireEvent.change(threshold('Federal', 2), { target: { value: '100.001' } })
+    fireEvent.change(threshold('Federal', 3), { target: { value: '100.002' } })
+    fireEvent.click(save('Federal'))
+    expect(screen.getByRole('alert').textContent).toContain(
+      'federal: thresholds must be strictly ascending',
+    )
+    expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
+
+    // And the mirror image: 0.001 IS a legal first threshold, because it stores as 0.00.
+    fireEvent.change(threshold('Federal', 1), { target: { value: '0.001' } })
+    fireEvent.change(threshold('Federal', 3), { target: { value: '200000' } })
+    fireEvent.click(save('Federal'))
+    await waitFor(() =>
+      // The typed text is what ships — the server does the rounding, never the client.
+      expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        jurisdictions: {
+          federal: [
+            { rate: '0.1', threshold: '0.001' },
+            { rate: '0.37', threshold: '100.001' },
+            { rate: '0.4', threshold: '200000' },
+          ],
+        },
+      }),
+    )
+  })
+
+  it('range-checks a rate at the precision the column keeps', async () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    // 100.006% stores as the fraction 1.0001 — over the ceiling, and the API says so.
+    fireEvent.change(rate('Federal', 1), { target: { value: '100.006' } })
+    fireEvent.click(save('Federal'))
+    expect(screen.getByRole('alert').textContent).toContain('rate must be between 0% and 100%')
+    expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
+
+    // 100.004% stores as exactly 1.0000, which is the ceiling and legal.
+    fireEvent.change(rate('Federal', 1), { target: { value: '100.004' } })
+    fireEvent.click(save('Federal'))
+    await waitFor(() => expect(vi.mocked(putTaxBrackets)).toHaveBeenCalled())
+    expect(vi.mocked(putTaxBrackets).mock.calls[0][1]).toEqual({
+      jurisdictions: {
+        federal: [
+          { rate: '1.00004', threshold: '0.00' },
+          { rate: '0.37', threshold: '100000.00' },
+        ],
+      },
+    })
+  })
+
+  it('confirms before a save that would delete a jurisdiction, and drops the PUT on no', async () => {
+    confirmSpy.mockReturnValue(false)
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Federal bracket 2' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Federal bracket 1' }))
+
+    fireEvent.click(save('Federal'))
+    expect(confirmSpy).toHaveBeenCalledWith('Delete all Federal brackets for 2024?')
+    expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
+
+    confirmSpy.mockReturnValue(true)
+    fireEvent.click(save('Federal'))
+    await waitFor(() =>
+      expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        jurisdictions: { federal: [] },
+      }),
+    )
+  })
+
+  it('retires a jurisdiction error as soon as one of its cells changes', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(threshold('Federal', 1), { target: { value: '5000' } })
+    fireEvent.click(save('Federal'))
+    expect(screen.getByRole('alert').textContent).toContain(
+      'federal: the first bracket threshold must be 0',
+    )
+
+    // The sentence described the table as it was; the keystroke that fixes it also ends it.
+    fireEvent.change(threshold('Federal', 1), { target: { value: '0' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('reports unsaved work to the page, and stops once the echo lands', async () => {
+    const onDirtyChange = vi.fn()
+    render(
+      <BracketsEditor
+        brackets={bracketsFixture()}
+        onSaved={vi.fn()}
+        onDirtyChange={onDirtyChange}
+      />,
+    )
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+
+    fireEvent.change(rate('Federal', 2), { target: { value: '12' } })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+
+    fireEvent.click(save('Federal'))
+    // The echo re-syncs the table, so there is nothing left to discard.
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false))
   })
 
   it('renders a server 422 verbatim', async () => {

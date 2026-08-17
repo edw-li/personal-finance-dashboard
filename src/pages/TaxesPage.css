@@ -12,6 +12,13 @@
   margin-bottom: 0.75rem;
 }
 
+/* Page-local, deliberately NOT in panels.css: elsewhere the dim covers read-only panels,
+   but here it covers two editors, and a dimmed field that still accepts keystrokes takes
+   typing that the arriving payload is about to replace. */
+.taxes-page .loading-dim.is-loading {
+  pointer-events: none;
+}
+
 .new-year-form {
   display: flex;
   align-items: center;

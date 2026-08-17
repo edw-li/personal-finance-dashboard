@@ -143,6 +143,34 @@ describe('InputsForm', () => {
     await waitFor(() => expect(saveButton().disabled).toBe(false))
   })
 
+  it('reports unsaved work to the page, and stops after the echo', async () => {
+    const onDirtyChange = vi.fn()
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} onDirtyChange={onDirtyChange} />)
+    // The page turns this into the confirm that guards a year switch.
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+
+    fireEvent.change(field('Annual Salary'), { target: { value: '210000' } })
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+
+    fireEvent.click(saveButton())
+    // The echo becomes the new baseline: there is nothing left to discard.
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false))
+  })
+
+  it('keeps a squeezed label and a suggested amount readable on hover', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    // The label track is wide, but a long key can still ellipsize — the title recovers it.
+    expect(field('Gross Paycheck').labels?.[0].getAttribute('title')).toBe('Gross Paycheck')
+    // The chip wraps rather than clips, and the amount rides the button's tooltip too, so
+    // "Apply" is never a button whose value the user cannot read.
+    expect(
+      screen
+        .getByRole('button', { name: 'Apply suggestion for Gross Paycheck' })
+        .getAttribute('title'),
+    ).toBe('Apply $8,333.33')
+    expect(screen.getByTitle('$8,333.33').textContent).toBe('suggested $8,333.33')
+  })
+
   it('blocks a non-numeric entry before calling the API', () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
     fireEvent.change(field('Annual Salary'), { target: { value: '200,000' } })
