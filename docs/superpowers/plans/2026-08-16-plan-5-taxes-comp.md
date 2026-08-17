@@ -1077,7 +1077,80 @@ NOT involved — plain script, GET-only):
 
 ---
 
-## Execution status (PAUSED 2026-08-17, user request — resume at Task 9)
+## Forward notes for Plan 6 (from Plan 5 execution, finalized 2026-08-17)
+
+**Data/engine facts:**
+- The canonical tax engine deliberately diverges from four sheet drifts (D1–D4 in the
+  Workbook reference); Task 10 reconciled every delta to the cent. Do NOT "fix" a summary
+  to match the sheet's 2023/2025/2026 cached cells — ours is the self-consistent model.
+- `capital_loss_deductions` is engine-inert (sheet-faithful); its suggestion still computes.
+  `is_derived` on tax_input_definitions is display-legacy — suggestion chips key off the
+  suggestions map, not the flag.
+- Missing-inputs warning lists the 21 engine-read keys in one long line; a fresh year is
+  NOISY by design (SummaryPanel wraps it).
+- Engine outputs are UNBOUNDED (module docstring contract): output paths use plain CENT
+  quantize + the 1e12 rate fence (null + "<jurisdiction> effective rate out of range");
+  never bounded quantizers on GETs. comp_calc._ratio carries the same fence.
+- money.py quantizers preserve Decimal("-0") house-wide; every Plan 5 writer/computed-out
+  collapses with + ZERO. Numeric(10,9) fields serialize via Pct9 (PlainSerializer format
+  'f') — bare Decimal would wire "0E-9". PostgreSQL NUMERIC can store 'NaN' (DB-direct
+  only); format(v,'f') would serialize it as "NaN" — unreachable via API.
+- Taxes re-import is sheet-wins within imported years: UI edits to 2023–2026 get clobbered
+  by a re-import — cutover order matters (import first, then edit).
+- Scheduler cron re-read note stands (restart to apply); prod import order gotcha stands
+  (five-slug is_component UPDATE + first refresh + ZI flags) for the Plan 6 deploy.
+
+**API residuals / candidates:**
+- Taxes router joins the accounts/securities accepted TOCTOU class (concurrent writes can
+  500-then-retry, no corruption; on_conflict_do_* is the batch fix for all three).
+- Every taxes write auto-creates the year row and NOTHING deletes one — phantom years from
+  typos need a Plan 6 `DELETE /taxes/years/{year}` (empty-PUT-creates is test-pinned).
+- espp router imports money._quantize_bounded (5dp/9dp families) — promote public helpers
+  when money.py is next touched, and fold in the router-validator dedup then too
+  (_validated_pct/_merged/IdPath now live in espp+paycheck+comp; schemas share Pct9 while
+  routers duplicate — "share both or neither").
+- The modeler never receives ?year= from the UI; adding a period in a new calendar year
+  silently retargets the card (heading is the cue) — Plan 6 candidate: year selector.
+- GET /espp/modeler could echo bracket-…: no — it's complete; but a modeler knob equal to
+  '0' is sent (truthy string) while '' is omitted — the documented client contract.
+- /prices/history & /portfolio/realized remain frontend-unconsumed; HoldingOut.accounts
+  still unrendered (Plan 4 notes stand).
+
+**Frontend house-law additions this plan:**
+- shiftPoint + isPlainDecimal live in src/utils/percent.ts (single copy; one regex shared
+  so they can't drift). Percent boxes must gate with isPlainDecimal BEFORE Number() range
+  checks — exponent notation ("1e-3") is otherwise stored 100× off silently.
+- Dirty-work protection: TaxesPage confirm-gates all three reload doors; EsppPage/
+  PaycheckPage/CompPage keep-previous-payload on reload failure with a conditional stale
+  cue (" — the table may be showing earlier data." only when a payload is on screen).
+- Full-form PATCH is the law for paycheck profiles, espp periods, comp events (whole-row
+  server validation; delta-PATCH 422s on unrelated edits when any stored field is bad).
+- Waterfall-style stacked bars need `stackStrategy: 'all'` (echarts' samesign default
+  un-floats segments whose base crosses zero — taxChartOptions has it; compChartOptions
+  doesn't need it for API-legal data since tc_after ≥ base, DB-direct negatives accepted).
+- TC chart series label is 'Equity value (incl. refresh)' — deliberately distinct from the
+  table's unvested_equity column (different quantities; the collision was a review catch).
+- Known cosmetic residuals (accepted): .finally seq guards unpinned on the three new pages
+  (a stale run can lift a dim early; no payload lands); Edit buttons clickable during a
+  save while Delete is disabled (house-wide class); 1dp formatPct on 9dp pct table columns
+  and 2dp formatCurrency on 4dp comp prices (displayed operands don't reproduce displayed
+  products); .span-2 overflows below ~2 grid tracks in three stylesheets (grid-column:
+  1 / -1 is the idiom); periods-load-failure test still missing on EsppPage.
+- Browser-only items for the user's visual pass (never verifiable in jsdom): inputs-grid
+  label widths at ~1240px and ~1000px vs the real 43-row payload; native form validation
+  interplay (noValidate is set on the new-year form; others rely on inline guards);
+  Enter-key implicit submission while a submit button is disabled; chart legend crowding
+  beyond ~10 trend years.
+
+**Plan 6 build notes:**
+- Overview page: reuse GET /taxes/summary (current-year effective rate), /portfolio/
+  holdings totals, /net-worth/summary — do NOT re-derive; investable_base stays the
+  4%-line source. It will hit preserve-manual-memoization (Plan 3 note stands).
+- Bundle at Plan 5 close: 1,034.68 kB raw / 338.41 kB gzip — code-splitting is due.
+- /settings page still placeholder (import UI + app-settings PUT live there; cron
+  min-interval guard note stands).
+
+## Execution status (COMPLETE 2026-08-17 — all 11 tasks; ready for the user's merge decision)
 
 Tasks 1–8 COMPLETE, each through implement → spec review → quality review → fix →
 re-review (all subagents Opus 5; every verdict SPEC_PASS / QUALITY_APPROVED at close):
@@ -1093,15 +1166,27 @@ re-review (all subagents Opus 5; every verdict SPEC_PASS / QUALITY_APPROVED at c
 | 7 taxes charts | 7446290 + aa152a1 (+13dd173) | stackStrategy all, guard/formatter pins |
 | 8 ESPP page | f2f0a30 + 71e2425 + 9b89248 | echo fixtures, seq pins, un-sell coverage |
 
-Gates at pause: backend **518 pytest -W error** + ruff + format + alembic check (single
-head e5b93d0a416f, zero new migrations); frontend **137 vitest** + lint (1 sanctioned
-warning) + build (bundle 1,014.32 kB raw / 334.55 kB gzip). Branch: 31 linear commits on
-`plan-5-taxes-comp` over main@5207d3a, worktree `.worktrees/plan-5-taxes-comp`, tree clean.
-NOT merged, NOT pushed.
+| 9 paycheck+comp pages | 6345a24 + 001a72a + 63a9821 | equity label, selection race, plain-decimal gates |
+| 10 reconciliation | d84cf8f (results) | 130/130 pass incl. exact drift table; first real-data comp_calc pass |
+| 11 final gates + docs | (this commit) | — |
 
-Remaining: Task 9 (paycheck + comp pages), Task 10 (read-only dev-DB reconciliation —
-note the comp fixtures used synthetic RSU counts, so Task 10 is the first real-data pass
-through comp_calc), Task 11 (final gates + forward notes + DoD audit).
+Final gates: backend **518 pytest -W error** + ruff + format + alembic check (single head
+e5b93d0a416f, ZERO new migration files); frontend **209 vitest** + lint (1 sanctioned
+warning) + build (bundle **1,034.68 kB raw / 338.41 kB gzip**). Branch: linear conventional
+commits on `plan-5-taxes-comp` over main@5207d3a, worktree `.worktrees/plan-5-taxes-comp`,
+tree clean. NOT merged, NOT pushed (user decides — Plans 1–4 precedent).
+
+**Definition-of-done audit (2026-08-17): every bullet below verified.** Golden gate: the
+canonical engine reproduces the pinned table (Task 1 tests), 2024 matches the sheet to the
+cent on every quantity (test + Task 10), D1–D4 each reproduced/explained to the cent
+(drift-pin tests + Task 10 drift table). Pages render real data with placeholders remaining
+only on /settings and the 404 route (by design); inputs/brackets/lots/periods/profiles/
+events all editable through the UI; suggestion chips, clone-year, modeler knobs all
+test-verified. Every derived value computed at request time; no schema changes; the real
+workbook path/filename appears NOWHERE in Plan 5's additions (pre-existing Plan 2–4 docs
+carry it, accepted posture); frozen palette untouched (src/charts diff vs main is empty).
+Task 10 results + these forward notes recorded. Interactive visual pass = user's morning
+step (browser-only items listed in the forward notes).
 
 ## Definition of done (Plan 5)
 
