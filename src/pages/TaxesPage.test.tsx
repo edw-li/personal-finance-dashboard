@@ -622,6 +622,9 @@ describe('TaxesPage', () => {
     // Declined: no request, and the typed work is still there.
     expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
     expect(salary().value).toBe('999')
+    // And no busy leaked out of a question that was answered "no" — the door is open for a
+    // second thought.
+    expect(deleteYearButton().disabled).toBe(false)
   })
 
   it('deletes the selected year, then reloads the list and clears the detail panel', async () => {
@@ -649,6 +652,48 @@ describe('TaxesPage', () => {
     // Nothing was refetched for the year that is gone.
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('drops an inputs save that echoes into the year being deleted', async () => {
+    const save = deferred<TaxInputsOut>()
+    const del = deferred<void>()
+    vi.mocked(putTaxInputs).mockReturnValueOnce(save.promise)
+    vi.mocked(deleteTaxYear).mockReturnValueOnce(del.promise)
+    vi.mocked(fetchTaxYears)
+      .mockResolvedValueOnce([year2023, year2024])
+      .mockResolvedValue([year2023])
+    render(<TaxesPage />)
+    await screen.findByLabelText('Annual Salary')
+
+    // A save against 2024 is still open when the year is deleted out from under it.
+    fireEvent.change(salary(), { target: { value: '210000' } })
+    fireEvent.click(saveInputs())
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(deleteYearButton())
+    expect(confirmSpy).toHaveBeenCalledWith(DELETE_2024_CONFIRM)
+    await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
+    const summaries = vi.mocked(fetchTaxSummary).mock.calls.length
+    const lists = vi.mocked(fetchTaxYears).mock.calls.length
+
+    // The PUT answers MID-delete. The page stopped belonging to 2024 at click time, so this
+    // echo is already stale: nothing may be spent on a year that is on its way out.
+    await act(async () => {
+      save.resolve(inputsFor(2024))
+    })
+    expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(summaries)
+    expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(lists)
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    // The delete lands last: the chip goes, the page ends on the prompt, and the echo never
+    // bought a totals refresh on the way there.
+    await act(async () => {
+      del.resolve(undefined)
+    })
+    expect(await screen.findByText(/select a tax year/i)).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('button', { name: '2024' })).toBeNull())
+    expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(summaries)
     expect(screen.queryByRole('alert')).toBeNull()
   })
 

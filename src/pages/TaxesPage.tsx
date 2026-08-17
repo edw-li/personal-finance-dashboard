@@ -284,24 +284,29 @@ export default function TaxesPage() {
     // whose only possible outcome is a banner about a year nobody can look at).
     const seq = ++seqRef.current
     summarySeqRef.current += 1
+    // Nulled HERE, with the seq bumps, and not in the .then: the switch door (loadYear) does
+    // its ref work synchronously at click time, and two tests pin that a save echoing after
+    // a switch never banners. The delete door upholds the same invariant — a save echoing
+    // back MID-delete must not spend a summary refresh or a list GET on the dying year.
+    currentYearRef.current = null
     setBusy(true)
     setError(null)
+    // An editor save that is still in flight and COMMITS after this request recreates the
+    // year server-side (both PUTs `_ensure_year`; a deletion is not a tombstone). Accepted
+    // single-user TOCTOU class: the next list load shows the year again, and the user
+    // deletes it again.
     deleteTaxYear(year)
       .then(() => {
         // Gone on the server whoever is looking at the page by now, so the chip goes
         // unguarded — the create path's optimistic list edit, inverted.
         setYears((current) => current.filter((y) => y.year !== year))
         if (seq !== seqRef.current) return
-        // No year is selected any more, and nothing may echo into one: an editor unmounted
-        // by the lines below can still resolve a save for the year that was deleted.
-        currentYearRef.current = null
+        // No year is selected any more — the ref that says which year the page belongs to
+        // was nulled at click time, above.
         setSelection(null)
         setDetail(null)
         setInputsDirty(false)
         setBracketsDirty(false)
-        // The create sentence may have been ABOUT this year ("already has 42 brackets") —
-        // an answer the delete just made false.
-        setCreateError(null)
         // The panel unmounts with the selection and refetches when a year is next selected,
         // so this is the counter staying honest rather than the thing that redraws it.
         setTrendRefresh((n) => n + 1)
@@ -313,6 +318,10 @@ export default function TaxesPage() {
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
+        // The delete failed, so the year is still the page's: put the ref back, or every
+        // later save echo would read as stale. INSIDE the seq guard — outside it, a newer
+        // load's year would be clobbered by this dead one.
+        currentYearRef.current = year
         // A 404 (someone deleted it first) lands here verbatim. The selection is untouched,
         // so Retry still means "reload the year I am looking at".
         setError(err instanceof ApiError ? err.message : `Failed to delete tax year ${year}`)

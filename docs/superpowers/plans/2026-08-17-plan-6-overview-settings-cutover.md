@@ -61,7 +61,9 @@ sanctioned warning) + build (single 1,034.68 kB raw / 338.41 kB gzip chunk + the
    comp router-validator dedup (money.py is untouched by this plan); JWT rotation /
    forced-logout on password change (single-user app, 24 h expiry — the settings UI states
    this honestly); rate-limiting `change-password` (already requires a valid JWT); upload
-   progress reporting on the import card.
+   progress reporting on the import card; save-vs-delete resurrect: an editor save committing
+   after `DELETE /taxes/years/{year}` recreates the year (`_ensure_year`; not a tombstone) —
+   accepted TOCTOU class, commented at the delete door (Task 4 review).
 4. **Prod actions are the USER's** (standing instruction): nothing in this plan pushes,
    deploys, or writes to any non-test database. The cutover work product is the runbook
    (Task 11) + the verified import UI.
