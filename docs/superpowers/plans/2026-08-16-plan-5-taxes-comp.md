@@ -790,6 +790,17 @@ Router `/comp`:
   - comp_calc unit: the four pinned rows (2024–2027) exactly.
   - comp API: CRUD + validations + computed fields on GET (seed the 2026 event at column
     scale → assert "333882.96", "0.236734", "601854.46"); auth 401 spot-checks.
+Ratified implementer decisions: net<0 warning judged on the DISPLAYED (2dp) net; pct-sum
+warning excludes withholding_pct (a tax, not a contribution); null semantics split — paycheck
+NOT NULL columns take the explicit-null-is-no-op house rule while comp's nullable columns
+(new_base/RSUs/prices) treat explicit null as CLEAR (tc_after falls back to current_base;
+new_base=0 rejected, null is "no raise"); comp_calc ratios guarded at PCT_MAX_ABS 1e12
+(taxes _effective_rate posture — storable extremes reach ~1e26); integer id path/query
+params bounded at 2^31−1 on both routers (int4 overflow otherwise 500s). The same
+unbounded-id latent 500 exists on /espp/lots/{id} and /espp/periods/{id} — fix in this
+task's review fix round (authorized file-scope extension: api/espp.py + test_espp_api.py,
+IdPath bound only).
+
 - [ ] **Step 2:** implement to green. **Step 3:** full gates. **Step 4:** commit
   `feat: paycheck waterfall + comp events APIs`.
 
@@ -808,6 +819,9 @@ Note (Task 3 review M2/M6): EsppPage's modeler `price_source` is `'params' | 'la
 — a DIFFERENT union than HoldingOut's same-named field; `espp_ticker` types as
 `string | null` (any stored string echoes through), and `ModelerOut.quoted_at` is
 `string | null`.
+Note (Task 4): ProfileOut carries five 9dp pct strings ("0.130000000"); BreakdownOut =
+{profile, the 11 waterfall lines, monthly_net, warnings: string[]}; CompEventOut computed
+fields are `string | null` EXCEPT tc_before/tc_after which are never null.
 
 - [ ] **Step 1:** write types + clients (every endpoint from Tasks 2–4, including
   clone-brackets and modeler params). **Step 2:** `npx tsc --noEmit` via `npm run build`
