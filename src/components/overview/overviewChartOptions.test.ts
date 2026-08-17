@@ -52,7 +52,6 @@ function summary(year: number): TaxSummaryOut {
 // --- option readers -------------------------------------------------------------------
 // EChartsOption is a wide union; narrowed once here so the assertions stay about the data.
 interface SeriesLike {
-  name?: string
   type?: string
   color?: string
   symbol?: string
@@ -104,6 +103,12 @@ describe('netWorthSparkOption', () => {
     expect(categoriesOf(option)).toEqual(['Nov 2025', 'Dec 2025', 'Jan 2026'])
     expect(xAxisOf(option).show).toBe(false)
     expect(yAxisOf(option).show).toBe(false)
+    // The wash under the line is shape emphasis, not an area encoding — pinned so a later
+    // "sparklines don't fill" edit has to argue with this test (see the builder's comment).
+    expect(line.areaStyle?.opacity).toBe(0.22)
+    // No half-category padding: the line has to touch both card edges or the fill leaves
+    // gutters that read as missing months.
+    expect(xAxisOf(option).boundaryGap).toBe(false)
     // Zero-anchoring a net-worth spark flattens it: scale lets the frame follow the line.
     expect(yAxisOf(option).scale).toBe(true)
     expect(valueFormatterOf(option)(1234.5)).toBe('$1,234.50')
@@ -121,8 +126,13 @@ describe('recentSpendOption', () => {
     const [bars] = seriesOf(option)
     expect(bars.type).toBe('bar')
     expect(bars.color).toBe(PALETTE[1])
-    // The surface-colored border is the gap between neighbours, not decoration.
+    // Single-series chart — there are no stacked neighbours here to separate. The
+    // surface-colored 1px border is an inset that keeps this chart reading as one family
+    // with SpendingPage's stacked bars (there the same border divides segments).
     expect(bars.itemStyle?.borderColor).toBe(SURFACE)
+    expect(bars.itemStyle?.borderWidth).toBe(1)
+    // A dozen months across a full-width card would otherwise stretch into blocks.
+    expect(bars.barMaxWidth).toBe(22)
     expect(bars.data).toEqual([100, 200, 300])
     expect(categoriesOf(option)).toEqual(['Jan 2026', 'Feb 2026', 'Mar 2026'])
   })
@@ -225,6 +235,10 @@ describe('pickTaxSummary', () => {
   it('shows a future-only feed rather than nothing', () => {
     // The tile's label carries the year either way, so a 2027-only book reads honestly.
     expect(pickTaxSummary([summary(2027)], 2026)?.year).toBe(2027)
+    // Two future years and no past one: the fallback is years[years.length - 1], the LATEST
+    // future year — not the nearest one. Planning forward, the newest projection is the live
+    // one, and the label's "(planned)" suffix says which year is on screen.
+    expect(pickTaxSummary([summary(2027), summary(2028)], 2026)?.year).toBe(2028)
   })
 
   it('returns null when no year has been touched yet', () => {

@@ -1,3 +1,12 @@
+// Pure option builders + tile stats for the overview page — no React, no fetching, no theme
+// decisions of their own (taxChartOptions.ts's posture).
+//
+// Number() at this boundary is deliberate and display-only: the server is pure-Decimal and
+// already quantized every figure to cents, so the charts parse the strings ONCE here and
+// never hand a float back to the API (src/utils/format.ts's rule). spendStats deliberately
+// does NOT: its `total` stays the server's own string so the tile renders it verbatim, and
+// only the comparison average — a presentation figure that never leaves the page — is a
+// number.
 import type { EChartsOption } from '../../charts/echarts'
 import { PALETTE, SURFACE } from '../../charts/theme'
 import type { NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
@@ -20,6 +29,10 @@ export function netWorthSparkOption(
         name: 'Net worth',
         symbol: 'none',
         lineStyle: { width: 1.5 },
+        // Axis-free shape emphasis, not an area encoding: with no labeled baseline on screen
+        // there is no zero for the fill to misrepresent, and a faint wash under the line is
+        // the common finance-sparkline idiom. Deliberate departure from Sparkline.tsx's
+        // `fill: none` (that SVG spark sits inline in a table row; this one owns a card).
         areaStyle: { opacity: 0.22 },
         color: PALETTE[0],
         data: ts.net_worth.map(Number),
