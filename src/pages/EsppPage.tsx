@@ -22,6 +22,7 @@ import type {
   EsppPeriodOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../utils/format'
+import { shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 import './EsppPage.css'
 
@@ -30,39 +31,6 @@ import './EsppPage.css'
 // fill width) and the meter's aria-valuemax/aria-label/aria-valuetext, and that is all —
 // "remaining" is the server's own number.
 const LIMIT_25K = 25000
-
-/**
- * Move a decimal string's point by `places`, keeping every digit exact.
- *
- * The same helper as BracketsEditor's (src/components/taxes/BracketsEditor.tsx), copied
- * rather than shared: it lives in a component file, and exporting a non-component from one
- * costs a react-refresh warning. The reason is identical — the form shows percents while
- * contribution_pct stores a fraction, and float division makes that round trip lossy
- * (11 / 100 is 0.11000000000000001 in binary, and that string would be saved as the
- * period's real contribution rate). Shifting the point pins "11" -> "0.11" (and back).
- *
- * Anything that is not a plain decimal is handed back untouched — the server's 422 is the
- * backstop for text no conversion should guess at.
- */
-function shiftPoint(raw: string, places: number): string {
-  const text = raw.trim()
-  const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(text)
-  if (!match) return text
-  const [, sign, whole, frac = ''] = match
-  const digits = `${whole}${frac}`
-  if (digits === '') return text
-  let point = whole.length + places
-  let shifted = digits
-  if (point <= 0) {
-    shifted = `${'0'.repeat(1 - point)}${digits}` // one leading zero survives: "0.11"
-    point = 1
-  } else if (point > shifted.length) {
-    shifted = shifted.padEnd(point, '0')
-  }
-  const head = shifted.slice(0, point).replace(/^0+(?=\d)/, '')
-  const tail = shifted.slice(point).replace(/0+$/, '')
-  return `${sign}${tail === '' ? head : `${head}.${tail}`}`
-}
 
 function message(err: unknown, fallback: string): string {
   // 404/409/422 details are the server's own sentences — rendered verbatim (house note).
