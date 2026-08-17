@@ -27,7 +27,9 @@ export class ApiError extends Error {
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    // FormData bodies must NOT get a manual Content-Type: the browser writes
+    // multipart/form-data with its boundary; a hand-set value breaks the upload.
+    ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options.headers as Record<string, string> | undefined),
   }
   const token = getToken()

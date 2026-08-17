@@ -645,3 +645,38 @@ export interface CompEventCreate {
 // on any other field really CLEARS that column (a raise that never happened, a grant
 // that was withdrawn). That is the deliberate difference from EsppLotUpdate.
 export type CompEventUpdate = Partial<CompEventCreate>
+
+// --- import (mirrors backend/app/importer/report.py) ---
+
+export interface ImportEntityCounts {
+  creates: number
+  updates: number
+  skips: number
+  deletes: number
+}
+
+export interface ImportSheetReport {
+  entities: Record<string, ImportEntityCounts>
+  warnings: string[]
+  errors: string[]
+  samples: string[]
+  samples_truncated: number
+}
+
+// sheets always carries all nine keys (report.SHEET_KEYS), even when a sheet is clean.
+export interface ImportReport {
+  dry_run: boolean
+  applied: boolean
+  sheets: Record<string, ImportSheetReport>
+}
+
+// --- app settings ---
+
+export interface AppSettingsOut {
+  swr_pct: string
+  espp_ticker: string | null
+  price_refresh_cron: string
+}
+
+// PUT is full-form (the paycheck/espp whole-form law): all three settings every time.
+export type AppSettingsUpdate = AppSettingsOut

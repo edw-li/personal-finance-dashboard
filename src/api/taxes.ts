@@ -72,3 +72,8 @@ export function fetchTaxSummary(year: number): Promise<TaxSummaryOut> {
 export function fetchAllTaxSummaries(): Promise<TaxSummariesOut> {
   return api<TaxSummariesOut>('/taxes/summary')
 }
+
+// 204, and the year's inputs + brackets go with it (both child FKs cascade).
+export function deleteTaxYear(year: number): Promise<void> {
+  return api<void>(`/taxes/years/${year}`, { method: 'DELETE' })
+}

@@ -1,5 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { api, ApiError } from './client'
+import { api, ApiError, setToken } from './client'
+
+function mockFetchOk() {
+  const spy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) })
+  vi.stubGlobal('fetch', spy)
+  return spy
+}
 
 function mockFetchFailure(status: number, body: unknown, jsonThrows = false) {
   vi.stubGlobal(
@@ -66,6 +72,25 @@ it('passes a default timeout signal to fetch but honors a caller signal', async 
   const own = new AbortController().signal
   await api('/y', { signal: own })
   expect(spy.mock.calls[1][1].signal).toBe(own)
+})
+
+// A FormData body must reach fetch with NO Content-Type: the browser writes
+// multipart/form-data plus its own boundary, and a hand-set value omits that boundary,
+// so the server sees an unparseable part. Auth must still ride along.
+it('omits the JSON content type for FormData bodies', async () => {
+  const fetchMock = mockFetchOk()
+  setToken('tok') // afterEach's localStorage.clear() unsets it
+  await api('/import/xlsx?dry_run=true', { method: 'POST', body: new FormData() })
+  const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>
+  expect('Content-Type' in headers).toBe(false)
+  expect(headers.Authorization).toBe('Bearer tok')
+})
+
+it('still sends the JSON content type for plain bodies', async () => {
+  const fetchMock = mockFetchOk()
+  await api('/settings', { method: 'PUT', body: JSON.stringify({}) })
+  const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>
+  expect(headers['Content-Type']).toBe('application/json')
 })
 
 it('rethrows caller-initiated aborts untouched', async () => {
