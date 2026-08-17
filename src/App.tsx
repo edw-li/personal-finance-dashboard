@@ -2,10 +2,12 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
+import CompPage from './pages/CompPage'
 import EsppPage from './pages/EsppPage'
 import LoginPage from './pages/LoginPage'
 import MonthlyUpdatePage from './pages/MonthlyUpdatePage'
 import NetWorthPage from './pages/NetWorthPage'
+import PaycheckPage from './pages/PaycheckPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 import PortfolioPage from './pages/PortfolioPage'
 import SpendingPage from './pages/SpendingPage'
@@ -26,8 +28,8 @@ export default function App() {
               <Route path="/portfolio" element={<PortfolioPage />} />
               <Route path="/taxes" element={<TaxesPage />} />
               <Route path="/espp" element={<EsppPage />} />
-              <Route path="/paycheck" element={<PlaceholderPage title="Paycheck" />} />
-              <Route path="/comp" element={<PlaceholderPage title="Comp" />} />
+              <Route path="/paycheck" element={<PaycheckPage />} />
+              <Route path="/comp" element={<CompPage />} />
               <Route path="/settings" element={<PlaceholderPage title="Settings" />} />
               <Route path="*" element={<PlaceholderPage title="Not Found" />} />
             </Route>

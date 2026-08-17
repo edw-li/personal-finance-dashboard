@@ -1,0 +1,172 @@
+/* Page-scoped rules ONLY (EsppPage.css / TaxesPage.css structure). The app-wide
+   vocabulary (.page, .card, .eyebrow, .chip, .data-table, .field-input, .button,
+   .kpi-row, .stat-tile, .error-banner, .empty-note, .drill-hint, .loading-dim) lives in
+   panels.css and is not redefined here. The form/row-action rules below are deliberate
+   near-twins of espp.css's and portfolio.css's: those stylesheets travel with their own
+   pages, and this one must not depend on either happening to be in the bundle. */
+
+.paycheck-page .card {
+  margin-bottom: 1rem;
+}
+
+/* No `pointer-events: none` on this page's .loading-dim.is-loading, deliberately.
+   TaxesPage takes that guard because its arriving payload REPLACES the editors, so a
+   keystroke landing during the fetch is typing thrown away. Here every load keeps the
+   payload it is refreshing and the panel owns its form state, so a half-typed row survives
+   the reload — the dim is a visual cue only, and the form stays finishable. */
+
+.paycheck-page .drill-hint {
+  max-width: 78ch;
+}
+
+/* One tile, so the auto-fit grid is fenced: left alone it would stretch a single card the
+   full width of the panel. */
+.paycheck-page .kpi-row {
+  max-width: 320px;
+}
+
+/* ── The waterfall ─────────────────────────────────────────────────── */
+
+.paycheck-waterfall {
+  margin: 0;
+  max-width: 460px;
+}
+
+.paycheck-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.paycheck-line:last-child {
+  border-bottom: none;
+}
+
+.paycheck-line dt {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.paycheck-line dd {
+  margin: 0;
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95rem;
+}
+
+/* The authoritative line: the ten above it are rounded views of a full-precision chain and
+   need not add up to it, so it is set apart rather than left as the last of eleven rows. */
+.paycheck-line.is-net {
+  margin-top: 0.35rem;
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+  padding-top: 0.6rem;
+}
+
+.paycheck-line.is-net dt {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+}
+
+.paycheck-line.is-net dd {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+/* The engine's advisory sentences. Not an error banner: nothing failed, and an
+   over-committed check is a thing the sheet models too. Same shape as taxes.css's
+   .tax-warnings, which is scoped to the taxes components and does not reach here. */
+.paycheck-warnings {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.paycheck-warnings p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* ── Profiles ──────────────────────────────────────────────────────── */
+
+/* Twelve columns, eight of them numeric: scroll the table, never the page. */
+.paycheck-scroll {
+  overflow-x: auto;
+}
+
+.paycheck-scroll .data-table {
+  white-space: nowrap;
+}
+
+.paycheck-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+  margin-bottom: 0.9rem;
+}
+
+.paycheck-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.paycheck-form .span-2 {
+  grid-column: span 2;
+}
+
+/* Free text, not a number: the monospaced right-aligned .field-input is for the figures. */
+.paycheck-form .span-2 .field-input {
+  text-align: left;
+  font-family: inherit;
+}
+
+.paycheck-form-actions {
+  display: flex;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.paycheck-page .row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.paycheck-page .row-actions .button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.paycheck-page tr.is-editing td {
+  background: var(--surface-2);
+}
+
+.paycheck-notes-cell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.paycheck-current {
+  margin-top: 0.6rem;
+}

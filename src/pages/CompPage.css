@@ -1,0 +1,109 @@
+/* Page-scoped rules ONLY (EsppPage.css / TaxesPage.css structure). The app-wide
+   vocabulary (.page, .card, .eyebrow, .data-table, .field-input, .button, .error-banner,
+   .empty-note, .drill-hint, .loading-dim) lives in panels.css and is not redefined here.
+   The form/row-action rules below are deliberate near-twins of espp.css's and
+   portfolio.css's: those stylesheets travel with their own pages, and this one must not
+   depend on either happening to be in the bundle. */
+
+.comp-page .card {
+  margin-bottom: 1rem;
+}
+
+/* No `pointer-events: none` on this page's .loading-dim.is-loading, deliberately.
+   TaxesPage takes that guard because its arriving payload REPLACES the editors, so a
+   keystroke landing during the fetch is typing thrown away. Here the reload keeps the
+   payload it is refreshing and the panel owns its form state, so a half-typed row survives
+   it — the dim is a visual cue only, and the form stays finishable. */
+
+.comp-page .drill-hint {
+  max-width: 78ch;
+}
+
+/* Sixteen columns, thirteen of them numeric: scroll the table, never the page. */
+.comp-scroll {
+  overflow-x: auto;
+}
+
+.comp-scroll .data-table {
+  white-space: nowrap;
+}
+
+/* ── Form ──────────────────────────────────────────────────────────── */
+
+.comp-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+  margin-bottom: 0.9rem;
+}
+
+.comp-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.comp-form .span-2 {
+  grid-column: span 2;
+}
+
+/* Free text, not a number: the monospaced right-aligned .field-input is for the figures. */
+.comp-form .span-2 .field-input {
+  text-align: left;
+  font-family: inherit;
+}
+
+.comp-form-actions {
+  display: flex;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.comp-page .row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.comp-page .row-actions .button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.comp-page tr.is-editing td {
+  background: var(--surface-2);
+}
+
+.comp-notes-cell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The orphaned-operand sentences. Deliberately NOT an .error-banner: nothing failed, the
+   save is not blocked, and a legal half-filled pair must not read as broken. Same shape as
+   taxes.css's .tax-warnings, which is scoped to the taxes components and does not reach
+   here. */
+.comp-warnings {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0 0 0.9rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.comp-warnings p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
