@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import type { HoldingOut, SparklinesResponse } from '../../types/api'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
+import { isStaleQuote } from '../../utils/staleness'
 import Sparkline from './Sparkline'
 import './portfolio.css'
 
@@ -23,23 +24,12 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean }[] = [
   { key: 'dividends_collected', label: 'Dividends', numeric: true },
 ]
 
-const STALE_AFTER_DAYS = 4
-
 function sortValue(h: HoldingOut, key: SortKey): number | string {
   if (key === 'ticker') return h.ticker
   const raw = h[key]
   // nulls sort as -Infinity: bottom in the default descending order (ascending puts
   // them first — accepted; a null is "least" either way)
   return raw === null ? Number.NEGATIVE_INFINITY : Number(raw)
-}
-
-function isStale(quotedAt: string | null): boolean {
-  if (!quotedAt) return false
-  // Bar-date vs today's DATE (forward note: "UI compares dates only") — an instant
-  // comparison flags a Friday bar early on Monday evening.
-  const bar = Date.parse(`${quotedAt.slice(0, 10)}T00:00:00Z`)
-  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`)
-  return today - bar > STALE_AFTER_DAYS * 86_400_000
 }
 
 function tone(value: string | null): string {
@@ -130,7 +120,7 @@ export default function HoldingsTable({
               <td className="num">{formatShares(h.shares)}</td>
               <td className="num">
                 {formatCurrency(h.price)}
-                {h.quoted_at && isStale(h.quoted_at) && (
+                {h.quoted_at && isStaleQuote(h.quoted_at) && (
                   <span className="sub stale"> as of {formatDate(h.quoted_at)}</span>
                 )}
               </td>
