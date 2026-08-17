@@ -935,6 +935,16 @@ Sections:
   (qualified vs countdown vs sold); add-lot posts payload with omitted purchase_price;
   modeler knobs refetch with params (assert query args); gauge width/aria pinned for the
   golden totals ("24935.34" → 99.74%); period add form posts pct as fraction ("11" → 0.11).
+Ratified implementer decisions: modeler knobs live on the PAGE and survive a failed
+recalculate (the clean-seed 422 needs them); knob seeding fills only still-blank fields
+(typing survives the first load); failed lots/periods RELOADS keep the previous payload +
+banner (same-entity rule — deliberate deviation from TaxesPage's drop-on-fail, which is
+about cross-year confusion) while the modeler drops its chain on failure; period edits
+PATCH the full row (Task 4 M6 binding); blank purchase_price = omit on POST / explicit
+null on PATCH; sold rows show sold_price in the Price column; three components in one
+page file (react-refresh constraint; nothing non-component exported); shiftPoint copied
+from BracketsEditor with attribution (dedup → forward note).
+
 - [ ] **Step 2:** implement + route swap. **Step 3:** npm gates. **Step 4:** commit
   `feat: ESPP page — lots, disposition countdown, 25k modeler`.
 
@@ -1018,7 +1028,8 @@ NOT involved — plain script, GET-only):
   is next touched, and fold in the Task-4 review M5 dedup then too (identical
   _validated_pct/_merged/IdPath vocabulary now lives in espp+paycheck+comp routers;
   "share both or neither" — currently split because schemas share Pct9 while routers
-  duplicate validators).
+  duplicate validators); frontend twin: shiftPoint (string percent⇄fraction) now lives in
+  BracketsEditor AND EsppPage — promote to src/utils when either is next touched.
 - [ ] **Step 3:** Definition-of-done audit against the checklist below; fix or document any
   miss; final commit `docs: Plan 5 final gates + forward notes`.
 
