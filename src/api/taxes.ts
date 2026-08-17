@@ -12,7 +12,9 @@ import type {
 // Render order for the brackets editor, mirroring backend `app/tax_keys.py`. The GET
 // returns a Record rather than these six fixed keys — an importer-written extra
 // jurisdiction survives a read — so a consumer renders these in order and appends
-// whatever else came back rather than indexing blindly.
+// whatever else came back rather than indexing blindly. (Note: filtering the extras via
+// JURISDICTIONS.includes(k) needs a cast for a plain-string k — the readonly tuple's
+// includes() takes the literal union; see MonthlyUpdatePage for the house cast.)
 export const JURISDICTIONS = [
   'federal',
   'state',
@@ -33,7 +35,8 @@ export function fetchTaxInputs(year: number): Promise<TaxInputsOut> {
 }
 
 // Bulk upsert of the keys in the body only; keys left out are untouched, a null value
-// unsets that input. Echoes the whole year back (with fresh suggestions).
+// unsets that input. Echoes the whole year back (with fresh suggestions). Both PUTs
+// auto-create the tax_years row (1900..2100) — that IS the "new year" affordance.
 export function putTaxInputs(year: number, body: TaxInputsUpdate): Promise<TaxInputsOut> {
   return api<TaxInputsOut>(`/taxes/years/${year}/inputs`, {
     method: 'PUT',

@@ -12,6 +12,7 @@ import type {
 
 // --- lots ---
 
+// Lots arrive ordered by (purchase_date, id).
 export function fetchLots(): Promise<EsppLotsResponse> {
   return api<EsppLotsResponse>('/espp/lots')
 }
@@ -33,6 +34,7 @@ export function deleteLot(id: number): Promise<void> {
 
 // --- periods ---
 
+// Periods arrive ordered by (period_end, id) — the modeler chains them in this order.
 export function fetchPeriods(): Promise<EsppPeriodOut[]> {
   return api<EsppPeriodOut[]>('/espp/periods')
 }
@@ -63,13 +65,15 @@ export interface ModelerParams {
   year?: number
 }
 
+// 404 when the (selected) year has no periods; 422 when neither prices-as-params nor a
+// live quote for the espp ticker exists (a clean seed's natural state).
 export function fetchModeler(params: ModelerParams = {}): Promise<EsppModelerOut> {
   const query = new URLSearchParams()
-  if (params.subscriptionPrice !== undefined) {
-    query.set('subscription_price', params.subscriptionPrice)
-  }
-  if (params.purchaseFmv !== undefined) query.set('purchase_fmv', params.purchaseFmv)
-  if (params.carryForward !== undefined) query.set('carry_forward', params.carryForward)
+  // A blanked controlled input arrives as '' — treat it as absent, or the server 422s
+  // on Decimal('') instead of falling back to the latest quote.
+  if (params.subscriptionPrice) query.set('subscription_price', params.subscriptionPrice)
+  if (params.purchaseFmv) query.set('purchase_fmv', params.purchaseFmv)
+  if (params.carryForward) query.set('carry_forward', params.carryForward)
   if (params.year !== undefined) query.set('year', String(params.year))
   const qs = query.toString()
   return api<EsppModelerOut>(`/espp/modeler${qs ? `?${qs}` : ''}`)

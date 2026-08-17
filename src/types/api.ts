@@ -353,7 +353,8 @@ export interface TaxBracketOut {
 }
 
 // The PUT element. `bracket_index` is renumbered server-side on every replace and a
-// round-tripped one is ignored, so an edited TaxBracketOut can be handed straight back.
+// round-tripped one is ignored, so an edited TaxBracketOut VARIABLE can be handed straight
+// back (a fresh object literal carrying bracket_index trips excess-property checking).
 export interface TaxBracketIn {
   rate: string
   threshold: string
@@ -437,6 +438,7 @@ export interface EsppLotOut {
   notes: string | null
   // --- computed (espp_calc.lot_metrics); the market fields are null when the
   // espp_ticker soft link dangles, or when a sold row is missing its price.
+  // days_until_qualified is null for sold lots.
   cost_basis: string
   market_value: string | null
   gain_amount: string | null
@@ -468,7 +470,9 @@ export interface EsppLotCreate {
 export type EsppLotUpdate = Partial<EsppLotCreate>
 
 export interface EsppLotsResponse {
-  // The quote the whole table was priced against — null at every break in the link.
+  // The quote the whole table was priced against. current_price/quoted_at are null at
+  // every break in the soft link; espp_ticker itself is null only when the SETTING is
+  // missing (a configured ticker echoes even if no security/price row exists).
   espp_ticker: string | null
   current_price: string | null
   quoted_at: string | null
@@ -610,14 +614,17 @@ export interface CompEventOut {
   grant_price: string | null
   notes: string | null
   // --- computed (comp_calc.metrics): 2dp money, 6dp percentages, null wherever an input
-  // is missing.
+  // is missing — and equity_delta_pct is also null on a zero denominator (rsus 0 is a
+  // legal write) or a ratio past 1e12.
   base_delta: string | null
   base_delta_pct: string | null
   unvested_equity: string | null
   equity_delta: string | null
   equity_delta_pct: string | null
-  // Total comp proxy = base + unvested equity (+ the refresh grant, after). Never null:
-  // current_base is NOT NULL and every missing side contributes 0.
+  // Total comp proxy = base + unvested equity (+ the refresh grant, after). The "after"
+  // base is (new_base ?? current_base) — chart math deriving equity as tc_after - base
+  // must use that same selection or a raise silently folds into the equity stack.
+  // Never null: current_base is NOT NULL and every missing side contributes 0.
   tc_before: string
   tc_after: string
 }
