@@ -249,6 +249,21 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(salary().value).toBe('200000.0000'))
   })
 
+  it('asks before creating a year that would discard typed work', async () => {
+    confirmSpy.mockReturnValue(false)
+    render(<TaxesPage />)
+    await screen.findByLabelText('Annual Salary')
+    fireEvent.change(salary(), { target: { value: '999' } })
+
+    fireEvent.change(screen.getByLabelText('New year'), { target: { value: '2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create year' }))
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
+    // Declined BEFORE the request: no year was created, nothing was lost.
+    expect(vi.mocked(cloneBrackets)).not.toHaveBeenCalled()
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+    expect(salary().value).toBe('999')
+  })
+
   it('keeps typed work across a same-year reload', async () => {
     vi.mocked(fetchTaxSummary)
       .mockResolvedValueOnce(summaryFor(2024))

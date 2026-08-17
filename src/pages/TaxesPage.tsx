@@ -216,6 +216,10 @@ export default function TaxesPage() {
       setCreateError(`Enter a year between ${YEAR_MIN} and ${YEAR_MAX}`)
       return
     }
+    // Third of the three reload doors (chips, Retry, create): creating a year jumps to
+    // it and remounts the editors, so it needs the same discard gate — and it must sit
+    // before the request so a declined confirm can't orphan a created year.
+    if (!confirmDiscard()) return
     // Seed from the newest year that actually HAS brackets. With none — a fresh database,
     // or a year list imported inputs-first — an empty inputs PUT is what creates the
     // tax_years row (both PUTs auto-create it; that IS the "new year" affordance).

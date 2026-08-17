@@ -17,7 +17,8 @@
    340px the field and the suggestion ate it and every label ellipsized. */
 .tax-input-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
+  /* min(520px, 100%) so a narrow viewport shrinks the card instead of overflowing it. */
+  grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr));
   gap: 0.4rem 1.5rem;
 }
 
