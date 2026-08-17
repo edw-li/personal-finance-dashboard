@@ -292,6 +292,8 @@ Certification Authorities*).
 
 ## Part 4 — Updating the app
 
+### 4.1 The update flow
+
 ```bash
 cd ~/personal-finance-dashboard
 git pull
@@ -303,6 +305,57 @@ healthcheck gates nginx, so a bad migration fails the deploy loudly. Nginx re-re
 the backend container's IP within ~10 s of a backend-only redeploy (the `resolver` +
 variable `proxy_pass` in `nginx.conf`) — if API calls ever 502 after a redeploy anyway,
 `docker compose -f docker-compose.prod.yml restart frontend` clears it.
+
+### 4.2 Scheduler & settings
+
+`price_refresh_cron` is read **once, at backend boot**. Saving a new value in **/settings**
+stores it but reschedules nothing — the running scheduler keeps the old expression until the
+backend restarts:
+
+```bash
+docker compose -f docker-compose.prod.yml restart backend
+```
+
+(A full 4.1 deploy restarts it too; the settings form says the same thing beside the field.)
+The other two settings, `swr_pct` and `espp_ticker`, are read per request and take effect on
+the next page load.
+
+### 4.3 Migration history: never re-chain a deployed revision
+
+A deployed database records where it is by **revision id** — one row in `alembic_version`.
+Reordering the chain after the fact (inserting a new parent beneath a revision that has
+already run, renumbering, "tidying" the sequence) leaves prod's recorded id pointing into a
+history that no longer exists: the revisions in between are silently skipped, and the first
+query touching a column they were supposed to add 500s. The same trap spans a merge — if two
+branches claim the same revision id, deploying one before merging the other strands the
+other's migrations.
+
+**New migrations chain onto the current head; a revision that has shipped is immutable.**
+
+If it happens anyway, `alembic stamp <revision>` forces `alembic_version` back to the truth —
+recovery of last resort. Stamping *asserts* a schema state rather than producing one, so
+verify the real schema by hand on both sides of it; restoring a backup (5.5) is often safer.
+
+### 4.4 After a deploy: stale tabs and the shell-cache check
+
+Frontend assets are content-hashed, so every deploy changes their filenames. A tab left open
+across a deploy still holds the old shell, and the first time it needs a route chunk it has
+not already loaded, that request 404s — the app catches it and renders **"This page failed to
+load"** with a **Reload** button. That is designed behavior, not an outage; reloading clears
+it.
+
+Reload only helps if the browser re-fetches `index.html` rather than replaying a cached copy,
+which is what the `location = /index.html` block in `nginx.conf` guarantees. Verify it on the
+server after a deploy that changed the frontend:
+
+```bash
+curl -skI https://localhost/net-worth | grep -i cache-control   # → Cache-Control: no-cache
+```
+
+The header has to survive the SPA fallback: `/net-worth` is not a file, so `try_files` issues
+an internal redirect to `/index.html`, and `no-cache` lands only because that redirect
+re-enters the exact-match block. If this ever returns nothing or a caching value, Reload will
+keep re-serving the stale shell and the tab stays broken — fix nginx before deploying again.
 
 ## Part 5 — Nightly backups to OCI Object Storage
 
@@ -395,6 +448,140 @@ Cloudflare. On [dash.cloudflare.com](https://dash.cloudflare.com), select the zo
 
 Direct `https://<public-ip>` visits will show cert warnings after this (the origin cert
 only names the domain) — expected; use the domain.
+
+## Part 7 — Production data: import, verification & cutover
+
+Parts 0–6 get an **empty** app running. This part fills it from the spreadsheet, checks the
+numbers against their source, and hands over from the sheet to the app.
+
+### 7.1 When you need this
+
+- **Fresh production database** — disaster recovery, or re-provisioning onto a new instance:
+  run 7.2 → 7.5 in order.
+- **A deliberate re-import**, because the sheet changed underneath the app: 7.2, then
+  re-check 7.5.
+- **The database that is live today** (imported 2026-08-13, Plans 1–5 deployed) needs none of
+  that. Routine deploys are **7.6**; retiring the sheet is **7.7**.
+
+### 7.2 Import the workbook
+
+Two paths, one importer — the app calls the same code the CLI does.
+
+**From the app**: **/settings** → *Import workbook* → choose `<path-to-workbook>.xlsx` →
+**Dry run** (parses the file and shows the diff it *would* apply; writes nothing) → review it
+→ **Apply import**. Apply stays disabled until a clean dry run of that exact file. The upload
+must be ≤ 15 MB (the app's cap; nginx's is 20 MB).
+
+**From the box**, with the workbook copied onto the server:
+
+```bash
+docker compose -f docker-compose.prod.yml exec backend python -m app.importer /path/on/box.xlsx --dry-run
+docker compose -f docker-compose.prod.yml exec backend python -m app.importer /path/on/box.xlsx
+```
+
+The CLI's default is **inverted** from the upload's: the CLI **applies** unless you pass
+`--dry-run`, while the app dry-runs unless you confirm. Exit codes — `0` applied/clean, `1`
+the report had errors and nothing was written, `2` the file could not be read.
+
+> **ORDER LAW: import first, then edit in the UI.** Re-importing taxes is *sheet-wins* inside
+> the years the sheet covers — any UI edit to a sheet-covered year is clobbered by the next
+> Apply. (The import card repeats this warning before Apply.) Import once, then let the app be
+> the system of record.
+
+### 7.3 Re-flag the five component accounts (fresh database only)
+
+Five 401(k) source buckets roll up into a parent account and carry `is_component` so that net
+worth counts the parent instead of both. **The importer always creates accounts with
+`is_component = FALSE`**, and the migration that backfilled the flag no-ops against a
+database that was empty when it ran — so on a fresh DB net worth silently **double-counts**
+those five until they are re-flagged:
+
+```bash
+sudo -u postgres psql -d finance -c "UPDATE accounts SET is_component = TRUE WHERE slug IN ('employer-match-401-k','reverse-rollover-401-k','traditional-401-k','roth-basic-401-k','after-tax-401-k')"
+sudo -u postgres psql -d finance -tAc "SELECT slug FROM accounts WHERE is_component ORDER BY sort_order"
+```
+
+The second command must list exactly those five slugs and nothing else. (Adjust the `psql`
+invocation to however this host runs Postgres.)
+
+> **Expected divergence**: with the five flagged, the dashboard's net worth equals the
+> sheet's **minus the After-Tax 401(k) bucket** — deliberate. The sheet double-counts that
+> one, confirmed at all 37 historical snapshots. If you ever prefer the sheet's number
+> reproduced exactly, one `PATCH /net-worth/accounts/{id}` with `{"is_component": false}` on
+> `after-tax-401-k` does it.
+
+### 7.4 First price refresh + ZI hygiene
+
+Trigger it from **/portfolio** → **Refresh prices**, or `POST /api/v1/prices/refresh`. Expect
+roughly **36 tickers updated**. One failure is expected and permanent: **ZI** (ZoomInfo,
+delisted) returns *"no data returned"* on every run until it is deactivated — set `is_active`
+false in the securities panel and the refresh stops trying.
+
+Until that first refresh lands, annual income, yield and yield-on-cost render the stale
+GOOGLEFINANCE values carried in from the sheet. Expected, not a bug — they correct themselves
+on the first successful refresh.
+
+### 7.5 Verify before trusting
+
+| Check | Where | Expected |
+|---|---|---|
+| Net worth identity | /net-worth totals vs the sheet's NET WORTH row | equal after 7.3, less the After-Tax component by design |
+| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent**; 2023 / 2025 / 2026 differ by four known drifts (below) |
+| Holdings | cost basis, per row | within ~$0.10 of the sheet (6dp shares × 4dp prices folding) |
+| Scheduler | /settings → price refresh cron | day **names** (`10 13 * * mon-fri`), never numbers |
+
+**The four known tax drifts** — D1 −31.20; D2 +405.50 and +117.85; D3 +4,918.92/93 at cents.
+Each is a place the sheet's own columns disagree with one another; the app is the
+self-consistent model. **Do not "fix" these** — a reconciliation that makes them vanish has
+introduced a bug, not removed one.
+
+**On the cron**: a legacy numeric day-of-week (`10 13 * * 1-5`) is misread by the scheduler
+(APScheduler counts `0` as Monday, so the whole range slips a day) *and* makes the settings
+form's first Save fail with a 422 until it is rewritten with names. A shipped repair
+migration fixes the one mis-seed we know of automatically; this check catches any other
+numeric variant.
+
+### 7.6 Routine deploy
+
+Plans 5 and 6 add **zero migrations** — the Alembic head stays `e5b93d0a416f` — so this
+deploy is order-safe (4.3 does not apply) and needs none of 7.2–7.5:
+
+```bash
+cd ~/personal-finance-dashboard
+git pull && docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Then verify: `curl -sk https://localhost/api/v1/health` → `{"status":"ok"}`, log in, and
+spot-check **/** (Overview), **/taxes** and **/settings**.
+
+That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
+day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the
+4.4 cache-control check once after the first deploy carrying the split route chunks.
+
+### 7.7 Parallel-run & retiring the sheet
+
+Run both systems for **at least one full monthly cycle** before trusting the app alone: do
+the month-end ritual in the **/update** wizard *and* in the sheet, then compare the net-worth
+summary, spending totals, holdings market value, and — if a tax year changed — the /taxes
+summary. Judge every difference against 7.5: the After-Tax offset and the four tax drifts are
+expected, anything else is not. One clean cycle and the sheet stops being updated — keep it
+as a frozen archive, which the importer remains able to re-consume if 7.2 is ever needed
+again.
+
+Before calling it done, close out the security items:
+
+- **Revoke the deploy token.** The 3.1 clone embeds the read-only PAT in the remote URL.
+  Revoke it on GitHub and re-point the remote at the plain URL (the next `git pull` will ask
+  for credentials — issue a fresh short-lived token then):
+  ```bash
+  git remote set-url origin https://github.com/<owner>/personal-finance-dashboard.git
+  ```
+- **Optionally rotate the prod secrets** in `.env` — `SECRET_KEY`, `POSTGRES_PASSWORD`, the
+  `OCI_*` pair. Rotating `SECRET_KEY` invalidates existing logins; expected.
+- **Confirm the backups are real**: the nightly cron ran within the last 24 h
+  (`tail /home/ubuntu/finance-backup.log`, and the object is in the bucket), and do one
+  restore drill end to end (5.5). Cutting over onto an unverified backup is the one failure
+  this runbook cannot undo.
 
 ## Troubleshooting
 
