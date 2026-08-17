@@ -10,9 +10,9 @@ Numeric(12,2) brackets come back at column scale and still land on the sheet's c
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.models import TaxBracket, TaxInput, TaxYear
+from app.models import TaxBracket, TaxInput, TaxInputDefinition, TaxYear
 from app.seed import seed_tax_definitions
 from app.services.tax_service import JURISDICTION_WARN_MISSING, SUGGESTION_KEYS
 from app.tax_keys import JURISDICTIONS, SECTIONS, TAX_INPUT_DEFINITIONS
@@ -91,6 +91,49 @@ async def test_years_list_empty_then_reports_counts(auth_client, db, definitions
     assert [y["year"] for y in body] == [2023, 2024]  # ascending, not insertion order
     assert body[0] == {"year": 2023, "notes": None, "input_count": 0, "bracket_count": 0}
     assert body[1] == {"year": 2024, "notes": "imported", "input_count": 2, "bracket_count": 1}
+
+
+async def test_delete_year_404_when_missing(auth_client, definitions):
+    resp = await auth_client.delete(f"{YEARS}/2031")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "tax year 2031 not found"
+
+
+async def test_delete_year_rejects_out_of_range_year(auth_client, definitions):
+    # The century guard is on the delete path too, not just the readers/writers.
+    assert (await auth_client.delete(f"{YEARS}/1899")).status_code == 422
+
+
+async def test_delete_year_removes_the_whole_year_vertical(auth_client, db, definitions):
+    """A phantom year (a typo'd 2030) leaves with everything under it, in one statement."""
+    await put_inputs(auth_client, 2030, {"annual_salary": "150000"})
+    await put_brackets(auth_client, 2030, {"federal": rows(("0.10", "0"))})
+
+    assert (await auth_client.delete(f"{YEARS}/2030")).status_code == 204
+    assert (await auth_client.get(YEARS)).json() == []  # gone, and nothing recreated it
+    assert (await auth_client.get(f"{YEARS}/2030/inputs")).status_code == 404
+    n_inputs = (
+        await db.execute(select(func.count()).select_from(TaxInput).where(TaxInput.year == 2030))
+    ).scalar_one()
+    n_brackets = (
+        await db.execute(
+            select(func.count()).select_from(TaxBracket).where(TaxBracket.year == 2030)
+        )
+    ).scalar_one()
+    assert (n_inputs, n_brackets) == (0, 0)  # the DB-level CASCADE, not an ORM relationship
+    # Definitions are year-independent seed data — a year delete must not touch them.
+    n_defs = (await db.execute(select(func.count()).select_from(TaxInputDefinition))).scalar_one()
+    assert n_defs == len(TAX_INPUT_DEFINITIONS)
+
+
+async def test_empty_put_recreates_a_deleted_year(auth_client, definitions):
+    """Deletion is not a tombstone: empty-PUT-creates stays law after the year is removed."""
+    await put_inputs(auth_client, 2029, {})
+    assert (await auth_client.delete(f"{YEARS}/2029")).status_code == 204
+    await put_inputs(auth_client, 2029, {})
+
+    years = [y["year"] for y in (await auth_client.get(YEARS)).json()]
+    assert 2029 in years
 
 
 # --- inputs ---
@@ -565,6 +608,7 @@ async def test_summary_guards_absurd_but_legal_inputs(auth_client, definitions):
 
 async def test_taxes_endpoints_require_auth(client):
     assert (await client.get(YEARS)).status_code == 401
+    assert (await client.delete(f"{YEARS}/2024")).status_code == 401
     assert (await client.get(f"{YEARS}/2024/inputs")).status_code == 401
     assert (await client.put(f"{YEARS}/2024/inputs", json={"values": {}})).status_code == 401
     assert (await client.get(f"{YEARS}/2024/brackets")).status_code == 401

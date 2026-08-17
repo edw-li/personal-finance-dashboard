@@ -13,7 +13,7 @@ why the summary serializer cannot reuse money.py's bounded quantizers.
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -149,6 +149,23 @@ async def list_years(db: AsyncSession = Depends(get_db)) -> list[TaxYearOut]:
         )
         for row in years
     ]
+
+
+@router.delete("/years/{year}", status_code=204)
+async def delete_year(year: YearPath, db: AsyncSession = Depends(get_db)) -> Response:
+    """Remove a tax year and everything under it — the exit for a typo'd year.
+
+    Every write auto-creates its year (`_ensure_year`), so a mistyped 2103 would otherwise
+    linger forever. Core DELETE, not an ORM cascade: both child FKs carry ondelete=CASCADE
+    in Postgres and `TaxYear` declares no relationships, so one statement removes the whole
+    year vertical (put_brackets' core-statement precedent). `tax_input_definitions` is
+    year-independent seed data and is untouched. Deletion is not a tombstone either — any
+    write path recreates the year, so empty-PUT-creates stays law.
+    """
+    await _require_year(db, year)
+    await db.execute(delete(TaxYear).where(TaxYear.year == year))
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/years/{year}/inputs", response_model=TaxInputsOut)
