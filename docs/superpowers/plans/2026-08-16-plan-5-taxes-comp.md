@@ -732,6 +732,12 @@ Router `/espp`:
   "24966.00", remaining "64.66"); param defaulting: seed NVDA security + latest price at
   column scale → price_source "latest_price"; no price + no params → 422; year param
   selects; empty periods → 404; auth 401 spot-check.
+Ratified implementer decisions (wire-visible): modeler share counts serialize as Decimal
+STRINGS ("78" not 78) — Task 5/8 type them as strings; `PATCH /espp/lots` with
+`purchase_price: null` RE-DERIVES the 85% default from the merged sub/fmv pair (useful
+divergence from the explicit-null-is-no-op convention; test-pinned); `price_source` is
+"params" only when BOTH prices came from the query; `?year=` with no periods → 404.
+
 - [ ] **Step 3:** implement to green. **Step 4:** full gates. **Step 5:** commit
   `feat: ESPP lots/periods API + chained 25k modeler`.
 
@@ -971,7 +977,9 @@ NOT involved — plain script, GET-only):
   every taxes write auto-creates the year row and nothing deletes one — phantom years from
   typos need a Plan 6 DELETE /taxes/years/{year} (empty-PUT-creates is test-pinned, don't
   just remove it); money.py quantizers preserve Decimal("-0") house-wide (writers/readers
-  that care must collapse with + ZERO).
+  that care must collapse with + ZERO); espp router imports money._quantize_bounded for the
+  5dp/9dp column families — promote public quantize helpers at those scales when money.py
+  is next touched.
 - [ ] **Step 3:** Definition-of-done audit against the checklist below; fix or document any
   miss; final commit `docs: Plan 5 final gates + forward notes`.
 
