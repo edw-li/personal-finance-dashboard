@@ -377,6 +377,10 @@ async def test_explicit_null_is_a_no_op_on_a_not_null_column(auth_client):
 async def test_patch_lot_404_and_delete_roundtrip(auth_client, db):
     assert (await auth_client.patch(f"{LOTS}/999", json={"shares": "1"})).status_code == 404
     assert (await auth_client.delete(f"{LOTS}/999")).status_code == 404
+    # The PK is an int4: an out-of-range id must be a 422 at the boundary, never the bare
+    # asyncpg DataError 500 it would otherwise reach the driver as (paycheck.py's fence).
+    huge = await auth_client.patch(f"{LOTS}/99999999999", json={"shares": "1"})
+    assert huge.status_code == 422
     created = await create_lot(auth_client)
     assert (await auth_client.delete(f"{LOTS}/{created['id']}")).status_code == 204
     assert await db.get(EsppLot, created["id"]) is None
@@ -540,6 +544,8 @@ async def test_patch_period_validates_the_merged_row(auth_client):
 async def test_patch_period_404_and_delete_404(auth_client):
     assert (await auth_client.patch(f"{PERIODS}/999", json={"label": "x"})).status_code == 404
     assert (await auth_client.delete(f"{PERIODS}/999")).status_code == 404
+    # Same int4 fence as the lots table's ids.
+    assert (await auth_client.delete(f"{PERIODS}/99999999999")).status_code == 422
 
 
 # --- modeler ---

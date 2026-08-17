@@ -19,7 +19,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,6 +67,11 @@ PCT_QUANTUM_9 = Decimal("0.000000001")
 # enforces that — this bound is only the NaN/absurd-magnitude fence, kept loose so a
 # `contribution_pct=14` (meaning 14%) reports the mis-scale, not a "10^1" complaint.
 PCT_INPUT_MAX_ABS = Decimal(10) ** 10
+
+# Both PKs are int4: an out-of-range id would reach asyncpg as a bare DataError (a 500),
+# so it is fenced at the boundary — paycheck.py's IdPath, taxes.py's YearPath precedent.
+INT32_MAX = 2**31 - 1
+IdPath = Annotated[int, Path(ge=1, le=INT32_MAX)]
 
 # The modeler's year filter runs over period_end.year, and every period date went
 # through money.py's century guard — so the query param wears the same bounds.
@@ -279,7 +284,7 @@ def _merged(provided: dict, key: str, current):
 
 
 @router.patch("/lots/{lot_id}", response_model=LotOut)
-async def update_lot(lot_id: int, body: LotUpdate, db: AsyncSession = Depends(get_db)) -> LotOut:
+async def update_lot(lot_id: IdPath, body: LotUpdate, db: AsyncSession = Depends(get_db)) -> LotOut:
     lot = await _get_lot(db, lot_id)
     provided = body.model_dump(exclude_unset=True)
     fields = _validated_lot(
@@ -311,7 +316,7 @@ async def update_lot(lot_id: int, body: LotUpdate, db: AsyncSession = Depends(ge
 
 
 @router.delete("/lots/{lot_id}", status_code=204)
-async def delete_lot(lot_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_lot(lot_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
     await db.delete(await _get_lot(db, lot_id))
     await db.commit()
     return Response(status_code=204)
@@ -390,7 +395,7 @@ async def create_period(body: PeriodIn, db: AsyncSession = Depends(get_db)) -> E
 
 @router.patch("/periods/{period_id}", response_model=PeriodOut)
 async def update_period(
-    period_id: int, body: PeriodUpdate, db: AsyncSession = Depends(get_db)
+    period_id: IdPath, body: PeriodUpdate, db: AsyncSession = Depends(get_db)
 ) -> EsppPeriod:
     period = await _get_period(db, period_id)
     provided = body.model_dump(exclude_unset=True)
@@ -411,7 +416,7 @@ async def update_period(
 
 
 @router.delete("/periods/{period_id}", status_code=204)
-async def delete_period(period_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_period(period_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
     await db.delete(await _get_period(db, period_id))
     await db.commit()
     return Response(status_code=204)

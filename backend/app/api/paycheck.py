@@ -7,8 +7,10 @@ five pcts Numeric(10,9) with the 0..1 mis-scale guard. `pay_periods_per_year` ca
 one rule the whole module depends on — 1 <= n <= 366, THE divide-by-zero guard from the
 Plan 1 forward note, since `gross = annual_salary / pay_periods_per_year`.
 
-The read side never rejects stored data: `paycheck_calc` returns full-precision Decimals
-and `half_up2` is a plain quantize, never a bounded one. `date.today()` is read HERE and
+The read side never rejects stored data OVER ITS SCALE: `paycheck_calc` returns
+full-precision Decimals and `half_up2` is a plain quantize, never a bounded one. Its one
+refusal is the divide-by-zero itself — a hand-written 0 periods 422s rather than 500s,
+because there is no number the breakdown could show. `date.today()` is read HERE and
 only here — the calc module takes no clock — and it decides one thing: which profile is
 current when no `profile_id` is given.
 """
@@ -47,6 +49,11 @@ PER_CHECK_MAX_ABS = Decimal(10) ** 6
 # The floor is what stops a division by zero one line into the waterfall.
 MIN_PAY_PERIODS = 1
 MAX_PAY_PERIODS = 366
+# One string, two callers (the writers and the breakdown's stored-data guard) — they must
+# never drift, because they are the same rule read from opposite ends.
+PAY_PERIODS_MESSAGE = (
+    f"pay_periods_per_year must be between {MIN_PAY_PERIODS} and {MAX_PAY_PERIODS}"
+)
 # The PK is an int4: an out-of-range id would reach asyncpg as a bare DataError (a 500),
 # so it is fenced at the boundary — taxes.py's YearPath precedent, Plan 1 forward note.
 INT32_MAX = 2**31 - 1
@@ -109,12 +116,7 @@ def _validated_profile(
     """
     require_reasonable_date(effective_date, "effective_date")
     if not MIN_PAY_PERIODS <= pay_periods_per_year <= MAX_PAY_PERIODS:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"pay_periods_per_year must be between {MIN_PAY_PERIODS} and {MAX_PAY_PERIODS}"
-            ),
-        )
+        raise HTTPException(status_code=422, detail=PAY_PERIODS_MESSAGE)
     return {
         "effective_date": effective_date,
         "annual_salary": _positive_salary(annual_salary, "annual_salary"),
@@ -273,6 +275,14 @@ async def get_breakdown(
         profile = await _default_profile(db, date.today())  # the ONLY clock read here
         if profile is None:
             raise HTTPException(status_code=404, detail="no paycheck profiles")
+
+    # The stored-data guard, and the one thing this read CAN reject: every writer bounds
+    # `pay_periods_per_year`, but the API's bounds cannot see a row put there by hand (or
+    # by a future importer), and `gross = annual_salary / periods` turns a stored 0 into a
+    # DivisionByZero 500. A GET must degrade instead — same rule, same words as the write
+    # side. Only the floor is fenced: an over-large period count computes fine.
+    if profile.pay_periods_per_year < MIN_PAY_PERIODS:
+        raise HTTPException(status_code=422, detail=PAY_PERIODS_MESSAGE)
 
     lines = {name: half_up2(value) for name, value in breakdown(profile).items()}
     warnings: list[str] = []

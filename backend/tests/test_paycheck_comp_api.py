@@ -279,6 +279,61 @@ def test_comp_metrics_degrade_an_unrepresentable_ratio_to_null():
     assert absurd["tc_after"] == D("999999989900188931.00")
 
 
+def test_comp_metrics_collapse_a_negative_zero_product():
+    # unvested_rsus is a signed Numeric(12,4) and the price a Numeric(14,4), so a
+    # hand-written -0.0001 x 0.0001 is perfectly storable — and its -1E-8 product quantizes
+    # to Decimal("-0.00") without half_up2's `+ ZERO`. Only `is_signed()` can see that:
+    # Decimal("-0.00") == Decimal("0.00") is True.
+    tiny = metrics(event(unvested_rsus=D("-0.0001"), unvested_price=D("0.0001")))
+    assert tiny["unvested_equity"] == D("0.00")
+    assert not tiny["unvested_equity"].is_signed()
+
+    # The TC lines carry that same product, so they need the same collapse — visible only
+    # when there is no base to swamp it.
+    flat = metrics(
+        event(
+            current_base=D("0.00"),
+            new_base=None,
+            refresh_rsus=None,
+            grant_price=None,
+            unvested_rsus=D("-0.0001"),
+            unvested_price=D("0.0001"),
+        )
+    )
+    assert flat["tc_before"] == flat["tc_after"] == D("0.00")
+    assert not flat["tc_before"].is_signed()
+    assert not flat["tc_after"].is_signed()
+
+
+def test_comp_metrics_pin_both_sides_of_the_ratio_fence():
+    # The fence measures the FULL-PRECISION denominator, not the displayed one: unvested
+    # equity renders as "0.00" here while the ratio still divides by the real 1E-8, so the
+    # zero-guard never fires and PCT_MAX_ABS is the only thing standing between this GET
+    # and an InvalidOperation. The comparison is `>=`, so exactly 1e12 is OUT.
+    at_fence = metrics(
+        event(
+            unvested_rsus=D("0.0001"),
+            unvested_price=D("0.0001"),  # denominator 1E-8
+            refresh_rsus=D("100.0000"),
+            grant_price=D("100.0000"),  # numerator 10000 -> ratio exactly 1e12
+        )
+    )
+    assert at_fence["unvested_equity"] == D("0.00")  # ... and yet not a zero denominator
+    assert at_fence["equity_delta_pct"] is None
+
+    # One step under, at the columns' own 4dp scale: 9999.99999999 / 1E-8 = 999999999999,
+    # the largest ratio these column scales can put beneath the fence.
+    under_fence = metrics(
+        event(
+            unvested_rsus=D("0.0001"),
+            unvested_price=D("0.0001"),
+            refresh_rsus=D("99999999.9999"),
+            grant_price=D("0.0001"),
+        )
+    )
+    assert str(under_fence["equity_delta_pct"]) == "999999999999.000000"
+
+
 def test_comp_metrics_land_on_the_wire_scales():
     # Decimal equality ignores scale (6000.00 == 6000.0000), so the pinned table above
     # cannot catch an unquantized output — these string pins can.
@@ -581,6 +636,46 @@ async def test_breakdown_is_silent_at_exactly_100pct_and_a_zero_net(auth_client)
     assert body["net_pay"] == "0.00"
     # Exactly 100% is not "exceeds", and a 0.00 net is not negative.
     assert body["warnings"] == []
+
+
+async def test_breakdown_judges_the_negative_net_warning_on_the_displayed_net(auth_client):
+    # The canary for THE warning rule: 1.00 gross, half of it withheld, and a roth pct one
+    # ulp over the other half. The full-precision net is -1E-9 — genuinely negative — while
+    # the line the warning would sit next to reads "0.00". Judging the rule on the
+    # full-precision net instead prints "net pay is negative" beside a zero.
+    created = await create_profile(
+        auth_client,
+        annual_salary="24",
+        trad_401k_pct="0",
+        roth_401k_pct="0.500000001",
+        after_tax_401k_pct="0",
+        espp_pct="0",
+        withholding_pct="0.5",
+        dental_vision_per_check="0",
+        hsa_per_check="0",
+    )
+    body = (await auth_client.get(BREAKDOWN, params={"profile_id": created["id"]})).json()
+    assert body["net_pay"] == "0.00"
+    assert body["monthly_net"] == "0.00"
+    assert body["warnings"] == []
+
+
+async def test_breakdown_degrades_on_a_stored_zero_pay_period_count(auth_client, db):
+    # Written STRAIGHT to the table: the API's bounds never saw this row, and
+    # `gross = annual_salary / periods` would make a plain GET a DivisionByZero 500.
+    stored = profile(pay_periods_per_year=0)
+    db.add(stored)
+    await db.commit()
+
+    resp = await auth_client.get(BREAKDOWN, params={"profile_id": stored.id})
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "pay_periods_per_year must be between 1 and 366"
+    # The default-profile branch resolves to the same row, and refuses the same way.
+    assert (await auth_client.get(BREAKDOWN)).status_code == 422
+    # ... but the row is still listable: only the line that cannot be computed refuses.
+    listed = await auth_client.get(PROFILES)
+    assert listed.status_code == 200
+    assert listed.json()[0]["pay_periods_per_year"] == 0
 
 
 async def test_paycheck_endpoints_require_auth(client):
