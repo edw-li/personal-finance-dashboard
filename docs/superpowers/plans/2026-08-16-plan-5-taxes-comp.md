@@ -1029,11 +1029,43 @@ NOT involved — plain script, GET-only):
   _validated_pct/_merged/IdPath vocabulary now lives in espp+paycheck+comp routers;
   "share both or neither" — currently split because schemas share Pct9 while routers
   duplicate validators); frontend twin: shiftPoint (string percent⇄fraction) now lives in
-  BracketsEditor AND EsppPage — promote to src/utils when either is next touched.
+  BracketsEditor AND EsppPage — promote to src/utils when either is next touched; EsppPage
+  next-touch nits (Task 8 re-review N-items): the three .finally seq guards are unpinned
+  (cosmetic-only survivor — a stale run can lift the dim early), no periods-load-failure
+  test exists (the stale-cue branch there is an unpinned twin of the pinned lots one),
+  .span-2 can overflow below ~2 grid tracks (grid-column: 1 / -1 is the idiom), the modeler
+  never sends ?year= (server targets the latest year with periods; adding a period in a new
+  calendar year silently retargets the card — Plan 6 candidate: a year selector).
 - [ ] **Step 3:** Definition-of-done audit against the checklist below; fix or document any
   miss; final commit `docs: Plan 5 final gates + forward notes`.
 
 ---
+
+## Execution status (PAUSED 2026-08-17, user request — resume at Task 9)
+
+Tasks 1–8 COMPLETE, each through implement → spec review → quality review → fix →
+re-review (all subagents Opus 5; every verdict SPEC_PASS / QUALITY_APPROVED at close):
+
+| Task | Landed at | Review fix rounds |
+|---|---|---|
+| 1 tax engine | 2dded98 + a007b78 | stack-clamp coverage, -0 rates, contracts |
+| 2 taxes API | 2afec8d + a4e61bc | -0 collapse, 422 details, pins, niit symmetry |
+| 3 ESPP API | 3731b46 + 5bb4fec | Pct9 wire format, carry hoist, bound, quoted_at |
+| 4 paycheck+comp API | 28aeb3b + 3cd15cc | stored-data guards, warning pins, espp id bounds |
+| 5 TS clients | a72b0bf + b27216e + df1c3ac | fetch* rename, blank-knob guard, notes |
+| 6 taxes page (forms) | afd6743 + 4b0a995 + a4fdd08 | create recovery, dirty gates, grid readability |
+| 7 taxes charts | 7446290 + aa152a1 (+13dd173) | stackStrategy all, guard/formatter pins |
+| 8 ESPP page | f2f0a30 + 71e2425 + 9b89248 | echo fixtures, seq pins, un-sell coverage |
+
+Gates at pause: backend **518 pytest -W error** + ruff + format + alembic check (single
+head e5b93d0a416f, zero new migrations); frontend **137 vitest** + lint (1 sanctioned
+warning) + build (bundle 1,014.32 kB raw / 334.55 kB gzip). Branch: 31 linear commits on
+`plan-5-taxes-comp` over main@5207d3a, worktree `.worktrees/plan-5-taxes-comp`, tree clean.
+NOT merged, NOT pushed.
+
+Remaining: Task 9 (paycheck + comp pages), Task 10 (read-only dev-DB reconciliation —
+note the comp fixtures used synthetic RSU counts, so Task 10 is the first real-data pass
+through comp_calc), Task 11 (final gates + forward notes + DoD audit).
 
 ## Definition of done (Plan 5)
 
