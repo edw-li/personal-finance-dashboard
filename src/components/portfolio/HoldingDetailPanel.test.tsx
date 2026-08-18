@@ -71,18 +71,18 @@ const POINTS: PriceHistoryResponse = {
   ],
 }
 
+// The "All holdings" way back is the PAGE's (the panel is a body swapped into the
+// Holdings card), so there is no close affordance to exercise here.
 function renderPanel(over: {
   holding?: HoldingOut
   transactions?: TransactionOut[]
   dividends?: DividendOut[]
-  onClose?: () => void
 } = {}) {
   return render(
     <HoldingDetailPanel
       holding={over.holding ?? holding()}
       transactions={over.transactions ?? []}
       dividends={over.dividends ?? []}
-      onClose={over.onClose ?? (() => undefined)}
     />,
   )
 }
@@ -155,11 +155,9 @@ describe('HoldingDetailPanel facts', () => {
     await screen.findByTestId('echart')
   })
 
-  it('hands Close back to the page', async () => {
-    const onClose = vi.fn()
-    renderPanel({ onClose })
-    fireEvent.click(screen.getByRole('button', { name: 'Close the AAA details' }))
-    expect(onClose).toHaveBeenCalledTimes(1)
+  it('leads the meta line with the full name the panel header no longer carries', async () => {
+    renderPanel()
+    expect(screen.getByText(/AAA Inc · Semiconductors · Stock/)).toBeTruthy()
     await screen.findByTestId('echart')
   })
 })

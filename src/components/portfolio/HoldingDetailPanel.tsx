@@ -36,19 +36,23 @@ function tone(value: string | null): string {
  * ONE security — the unsurfaced per-row figures (avg cost, realized G/L, the accounts the
  * shares sit in), a real daily price chart (the sparkline's grown-up form, fed by
  * GET /prices/history), and the security's own slice of the ledgers the page already
- * fetched. Mounted keyed by security, so switching rows resets the span and the feed.
+ * fetched.
+ *
+ * A BODY, not a card: it renders IN PLACE of the holdings table inside the page's own
+ * Holdings panel, whose header carries the ticker and the "All holdings" way back — so
+ * the drill-in never takes the user out of the section they acted in (the SpendingPage
+ * bars-to-pie swap, holdings-flavoured). Mounted keyed by security, so a remount resets
+ * the span and the feed.
  */
 export default function HoldingDetailPanel({
   holding,
   transactions,
   dividends,
-  onClose,
 }: {
   holding: HoldingOut
   /** The page's WHOLE ledgers — filtered here, so the page stays a pass-through. */
   transactions: TransactionOut[]
   dividends: DividendOut[]
-  onClose: () => void
 }) {
   // An OBJECT, not bare days: Retry re-asserts the same span, and only a fresh identity
   // re-runs the load effect (TaxesPage's `selection`). The chip handler guards same-span
@@ -59,7 +63,7 @@ export default function HoldingDetailPanel({
   const [busy, setBusy] = useState(true)
   // Two span flips in a row are two feeds in flight; only the newest may land or complain.
   const seqRef = useRef(0)
-  const rootRef = useRef<HTMLElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
 
   const ticker = holding.ticker
 
@@ -85,9 +89,10 @@ export default function HoldingDetailPanel({
       })
   }, [ticker, span])
 
-  // The holdings table above is ~25 rows and the clicked row is usually near its top, so
-  // this panel mounts off-screen. 'nearest' is a jump, not an animation — reduced-motion
-  // safe by construction. Optional-call: jsdom has no scrollIntoView.
+  // The swap happens at the SECTION's top, but the row that triggered it may have sat 25
+  // rows deep — collapsing the table can leave the viewport past the now-shorter panel
+  // entirely. 'nearest' pulls the body back into view as a jump, not an animation —
+  // reduced-motion safe by construction. Optional-call: jsdom has no scrollIntoView.
   useEffect(() => {
     rootRef.current?.scrollIntoView?.({ block: 'nearest' })
   }, [])
@@ -123,22 +128,12 @@ export default function HoldingDetailPanel({
   const undated = rows.filter((t) => t.txn_date === null).length
 
   return (
-    <section className="panel holding-detail" ref={rootRef} aria-label={`${ticker} details`}>
-      <div className="panel-title-row">
-        <h2 className="panel-title">
-          {ticker} — {holding.name}
-        </h2>
-        <button
-          type="button"
-          className="button"
-          aria-label={`Close the ${ticker} details`}
-          onClick={onClose}
-        >
-          Close
-        </button>
-      </div>
+    <div ref={rootRef}>
+      {/* The full NAME lives here — the panel header above says only "Holdings — {ticker}",
+          and the eyebrow register would shout a long fund name in uppercase. */}
       <p className="hint">
-        {holding.industry ?? 'Uncategorized'} · {TYPE_LABELS[holding.holding_type] ?? holding.holding_type}
+        {holding.name} · {holding.industry ?? 'Uncategorized'} ·{' '}
+        {TYPE_LABELS[holding.holding_type] ?? holding.holding_type}
         {holding.is_manual_priced && <span className="badge">manual</span>}
         {holding.accounts.length > 0 && <> · Held in {holding.accounts.join(', ')}</>}
       </p>
@@ -320,6 +315,6 @@ export default function HoldingDetailPanel({
           )}
         </div>
       </div>
-    </section>
+    </div>
   )
 }

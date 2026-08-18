@@ -273,35 +273,53 @@ export default function PortfolioPage() {
             )}
           </section>
           <section className="panel">
-            <h2 className="panel-title">Holdings</h2>
-            {totals && totals.unpriced_count > 0 && (
-              <p className="hint">
-                {totals.unpriced_count} holding(s) have no price yet — run a refresh or set
-                a manual price in Securities.
-              </p>
+            <div className="panel-title-row">
+              <h2 className="panel-title">
+                {/* The section keeps its NAME while drilled — "where am I" survives the
+                    swap (SpendingPage's header does the same dance). */}
+                {detailHolding ? `Holdings — ${detailHolding.ticker}` : 'Holdings'}
+              </h2>
+              {detailHolding && (
+                <button type="button" className="button" onClick={() => setDetailTicker(null)}>
+                  All holdings
+                </button>
+              )}
+            </div>
+            {detailHolding ? (
+              // IN PLACE of the table, not below it: a panel appended under ~25 rows was
+              // born off-screen. Keyed by SECURITY so a remount resets the span to 1Y and
+              // starts a fresh history feed (the taxes editors' keying lesson) — moot
+              // while the table is hidden, load-bearing again the day the detail gains an
+              // in-place way to switch tickers.
+              <HoldingDetailPanel
+                key={detailHolding.security_id}
+                holding={detailHolding}
+                transactions={transactions}
+                dividends={dividends}
+              />
+            ) : (
+              <>
+                {totals && totals.unpriced_count > 0 && (
+                  <p className="hint">
+                    {totals.unpriced_count} holding(s) have no price yet — run a refresh or
+                    set a manual price in Securities.
+                  </p>
+                )}
+                <p className="drill-hint">Click a holding to expand its detail.</p>
+                <HoldingsTable
+                  holdings={holdings.holdings}
+                  sparklines={sparklines}
+                  selectedTicker={detailTicker}
+                  // Functional toggle: normally the swap hides the table the moment a row
+                  // is picked, but a vanished ticker leaves the table up with a stale
+                  // selection — re-clicking that row must close, not reopen.
+                  onSelect={(ticker) =>
+                    setDetailTicker((current) => (current === ticker ? null : ticker))
+                  }
+                />
+              </>
             )}
-            <HoldingsTable
-              holdings={holdings.holdings}
-              sparklines={sparklines}
-              selectedTicker={detailTicker}
-              // Functional toggle: the click that opens a row is the click that closes it.
-              onSelect={(ticker) =>
-                setDetailTicker((current) => (current === ticker ? null : ticker))
-              }
-            />
           </section>
-          {detailHolding && (
-            // Keyed by SECURITY: switching rows remounts the panel, which resets its span
-            // to 1Y and starts a fresh history feed — 2023's window must not carry into
-            // another ticker (the taxes editors' keying lesson).
-            <HoldingDetailPanel
-              key={detailHolding.security_id}
-              holding={detailHolding}
-              transactions={transactions}
-              dividends={dividends}
-              onClose={() => setDetailTicker(null)}
-            />
-          )}
           <AllocationPanel industry={industry} byType={byType} byAccount={byAccount} />
           {/* group, not tablist: these buttons toggle panels below rather than owning
               tabpanels, and the aria-labels keep "Dividends" from colliding with the
