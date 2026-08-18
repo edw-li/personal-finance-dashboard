@@ -80,3 +80,21 @@ class PriceHistory(Base):
     # leave the column non-nullable. Verified hazard; do not rename back.
     price_date: Mapped[date] = mapped_column(Date)
     close: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+
+
+class PortfolioValueHistory(Base):
+    """The workbook's weekly portfolio series (Portfolio sheet, hidden cols AB..AH):
+    imported verbatim, import-owned via upsert-by-date, never derived from transactions
+    (most position rows are undated by design — see PositionTransaction.sort_index)."""
+
+    __tablename__ = "portfolio_value_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # snapshot_date, NOT date — the same annotation-shadowing hazard PriceHistory
+    # documents above; do not rename.
+    snapshot_date: Mapped[date] = mapped_column(Date, unique=True)
+    market_value: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    cost_basis: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    # The sheet's S&P 500 baseline: the STARTING balance benchmarked into VOO shares —
+    # later contributions are not added to it (spec "S&P baseline semantics").
+    sp500_value: Mapped[Decimal] = mapped_column(Numeric(14, 2))

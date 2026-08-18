@@ -9,6 +9,7 @@ from app.models import (
     TRANSACTION_SOURCES,
     DividendPayment,
     LatestPrice,
+    PortfolioValueHistory,
     PositionTransaction,
     PriceHistory,
     Security,
@@ -91,3 +92,30 @@ async def test_one_close_per_day(db):
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
+
+
+async def test_portfolio_value_history_roundtrip_and_unique_date(db):
+    row = PortfolioValueHistory(
+        snapshot_date=date(2023, 10, 23),
+        market_value=Decimal("53619.00"),
+        cost_basis=Decimal("53619.00"),
+        sp500_value=Decimal("53619.00"),
+    )
+    db.add(row)
+    await db.commit()
+
+    stored = (await db.execute(select(PortfolioValueHistory))).scalar_one()
+    assert stored.market_value == Decimal("53619.00")
+    assert stored.snapshot_date == date(2023, 10, 23)
+
+    db.add(
+        PortfolioValueHistory(
+            snapshot_date=date(2023, 10, 23),
+            market_value=Decimal("1.00"),
+            cost_basis=Decimal("1.00"),
+            sp500_value=Decimal("1.00"),
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()  # shared-session contract (conftest): unpoison after IntegrityError
