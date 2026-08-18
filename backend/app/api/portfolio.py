@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import DividendPayment, PositionTransaction, Security
+from app.models import DividendPayment, PortfolioValueHistory, PositionTransaction, Security
 from app.schemas.portfolio import (
     AllocationOut,
     AllocationSlice,
@@ -19,6 +19,7 @@ from app.schemas.portfolio import (
     HoldingOut,
     HoldingsOut,
     HoldingsTotals,
+    PortfolioHistoryOut,
     RealizedOut,
     RealizedRow,
     SecurityCreate,
@@ -522,6 +523,27 @@ async def allocation_view(
             )
             for key, value, count in buckets
         ],
+    )
+
+
+@router.get("/history", response_model=PortfolioHistoryOut)
+async def value_history(db: AsyncSession = Depends(get_db)) -> PortfolioHistoryOut:
+    """The imported weekly series behind the performance chart — empty arrays (not 404)
+    until a workbook carrying the Portfolio sheet's value-history columns is imported."""
+    rows = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return PortfolioHistoryOut(
+        dates=[row.snapshot_date for row in rows],
+        market_value=[row.market_value for row in rows],
+        cost_basis=[row.cost_basis for row in rows],
+        sp500=[row.sp500_value for row in rows],
     )
 
 

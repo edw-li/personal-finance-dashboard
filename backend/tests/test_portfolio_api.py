@@ -3,7 +3,14 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models import DividendPayment, LatestPrice, PositionTransaction, PriceHistory, Security
+from app.models import (
+    DividendPayment,
+    LatestPrice,
+    PortfolioValueHistory,
+    PositionTransaction,
+    PriceHistory,
+    Security,
+)
 
 SECURITIES = "/api/v1/portfolio/securities"
 TRANSACTIONS = "/api/v1/portfolio/transactions"
@@ -11,6 +18,7 @@ DIVIDENDS = "/api/v1/portfolio/dividends"
 HOLDINGS = "/api/v1/portfolio/holdings"
 ALLOCATION = "/api/v1/portfolio/allocation"
 REALIZED = "/api/v1/portfolio/realized"
+HISTORY = "/api/v1/portfolio/history"
 
 
 async def _create_security(auth_client, **fields) -> dict:
@@ -1284,5 +1292,39 @@ async def test_day_pct_none_when_prior_values_cancel(auth_client, db):
 
 
 async def test_computed_views_require_auth(client):
-    for url in (HOLDINGS, ALLOCATION, REALIZED):
+    for url in (HOLDINGS, ALLOCATION, REALIZED, HISTORY):
         assert (await client.get(url)).status_code == 401, url
+
+
+async def test_history_empty_is_empty_arrays_not_404(auth_client):
+    resp = await auth_client.get(HISTORY)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"dates": [], "market_value": [], "cost_basis": [], "sp500": []}
+
+
+async def test_history_returns_parallel_arrays_ordered_by_date(auth_client, db):
+    db.add_all(
+        [
+            # Inserted out of order on purpose: the endpoint must sort by snapshot_date.
+            PortfolioValueHistory(
+                snapshot_date=date(2023, 10, 30),
+                market_value=Decimal("53413.36"),
+                cost_basis=Decimal("55212.09"),
+                sp500_value=Decimal("53001.35"),
+            ),
+            PortfolioValueHistory(
+                snapshot_date=date(2023, 10, 23),
+                market_value=Decimal("53619.00"),
+                cost_basis=Decimal("53619.00"),
+                sp500_value=Decimal("53619.00"),
+            ),
+        ]
+    )
+    await db.commit()
+
+    body = (await auth_client.get(HISTORY)).json()
+    assert body["dates"] == ["2023-10-23", "2023-10-30"]
+    # Decimal strings on the wire (pydantic v2), aligned index-for-index
+    assert body["market_value"] == ["53619.00", "53413.36"]
+    assert body["cost_basis"] == ["53619.00", "55212.09"]
+    assert body["sp500"] == ["53619.00", "53001.35"]

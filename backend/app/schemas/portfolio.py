@@ -211,3 +211,14 @@ class LatestPriceOut(BaseModel):
     price: Decimal
     quoted_at: datetime
     source: str
+
+
+class PortfolioHistoryOut(BaseModel):
+    """Parallel arrays (net-worth TimeseriesOut posture): index i across all four lists
+    is one weekly imported point. sp500 is the sheet's baseline — the STARTING balance
+    benchmarked into VOO shares, not contribution-matched."""
+
+    dates: list[date]
+    market_value: list[Decimal]
+    cost_basis: list[Decimal]
+    sp500: list[Decimal]
