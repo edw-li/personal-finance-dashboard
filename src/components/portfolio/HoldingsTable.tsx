@@ -114,7 +114,11 @@ export default function HoldingsTable({
                       </span>
                     )}
                   </span>
-                  <span className="sub">{h.name}</span>
+                  {/* title: the CSS clamps long names to an ellipsis (the fit budget in
+                      portfolio.css), so the full text has to live somewhere reachable. */}
+                  <span className="sub" title={h.name}>
+                    {h.name}
+                  </span>
                 </div>
               </td>
               <td className="num">{formatShares(h.shares)}</td>

@@ -7,6 +7,16 @@
 
 /* --- summary panel --- */
 
+/* Header row of the trend card: the drill-in's "All years" button rides beside the title
+   (SpendingPage's .spending-chart-header — a copy by design; the two stylesheets are
+   scoped to different screens and neither reaches into the other). */
+.tax-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 .tax-chart-block {
   margin-top: 1.1rem;
 }

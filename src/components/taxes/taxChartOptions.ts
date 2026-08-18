@@ -47,6 +47,11 @@ export const TAX_COLORS = [
 
 export const WATERFALL_CATEGORIES = ['Gross', ...TAX_LABELS, 'Take-home'] as const
 
+// Stable ids shared by the trend's six stacks and the drill-in pie: universalTransition
+// keys on id across notMerge setOption calls, so the year's segments morph into slices
+// and back out (SpendingPage's `cat-${id}` idiom). Index in TAX_LABELS is the identity.
+export const TAX_SERIES_IDS = TAX_LABELS.map((_, i) => `tax-${i}`)
+
 const RATE_SERIES_NAME = 'Effective rate'
 
 // Display-only rounding. The subtraction chain a waterfall needs is float arithmetic
@@ -254,6 +259,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
     ],
     series: [
       ...TAX_LABELS.map((label, i) => ({
+        id: TAX_SERIES_IDS[i],
         name: label,
         type: 'bar' as const,
         stack: 'tax',
@@ -261,6 +267,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
         color: TAX_COLORS[i],
         itemStyle: { borderColor: SURFACE, borderWidth: 1 },
         emphasis: { itemStyle: { borderColor: INK } },
+        universalTransition: true,
         data: amounts.map((a) => a[i]),
       })),
       {
@@ -274,6 +281,54 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
         // A year with no gross income has no rate: the line stops rather than diving to 0.
         connectNulls: false,
         data: rates,
+      },
+    ],
+  }
+}
+
+/**
+ * One year's tax burden as a donut of the six jurisdictions — the trend chart's drill-in
+ * (SpendingPage's month pie, jurisdiction-flavoured). A pie can only draw positive slices,
+ * so zero and negative figures (a credit-driven negative state tax) are EXCLUDED here
+ * while the stacked bar nets them into the year's column; the totals line beside the
+ * chart stays the server's, which includes them (buildMonthSlices' documented
+ * divergence). Returns null when nothing is drawable — the caller renders an empty note.
+ */
+export function yearPieOption(summary: TaxSummaryOut): EChartsOption | null {
+  const slices = taxAmounts(summary)
+    .map((value, i) => ({ name: TAX_LABELS[i], value, color: TAX_COLORS[i] }))
+    .filter((s) => s.value > 0)
+  if (slices.length === 0) return null
+  return {
+    tooltip: {
+      // Item trigger (pies have no axis). "of tax" because this percent shares the YEAR'S
+      // TOTAL TAX — bare, a Federal slice's "56.1%" reads as a rate on income, which the
+      // trend's own rate line says is ~30%. Every string is this file's constant or a
+      // formatted server number — no user text reaches the HTML.
+      formatter: (params) => {
+        const p = Array.isArray(params) ? params[0] : params
+        return (
+          `<strong>${formatCurrency(p.value as number)}</strong> · ` +
+          `${(p.percent ?? 0).toFixed(1)}% of tax<br/>${p.name ?? ''}`
+        )
+      },
+    },
+    series: [
+      {
+        id: 'tax-year-pie',
+        type: 'pie' as const,
+        radius: ['42%', '70%'],
+        itemStyle: { borderColor: SURFACE, borderWidth: 2 },
+        label: { color: INK, formatter: '{b}  {d}%' },
+        emphasis: { itemStyle: { borderColor: INK } },
+        // Morph the year's stack segments into slices and back out on exit; falls back
+        // to a plain swap under reduced motion (EChart forces animation off).
+        universalTransition: { enabled: true, seriesKey: [...TAX_SERIES_IDS] },
+        data: slices.map((s) => ({
+          name: s.name,
+          value: s.value,
+          itemStyle: { color: s.color },
+        })),
       },
     ],
   }

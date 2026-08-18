@@ -18,13 +18,22 @@
 
 .holdings-scroll { overflow-x: auto; }
 .port-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.port-table th, .port-table td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--surface-2); }
+/* 8px side padding, not 10: twelve nowrap columns + the 120px sparkline column must fit
+   the ~1134px a .panel offers inside the page's 1240px cap, and 10px left the table a
+   few px over — the 1Y column clipped into .holdings-scroll's sideways scroll. */
+.port-table th, .port-table td { padding: 6px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--surface-2); }
 .port-table th.num, .port-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .port-table .th-sort { background: none; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0; }
 .ticker-cell { display: flex; flex-direction: column; }
 .ticker-cell .ticker { font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .port-table .sub, .ticker-cell .sub { color: var(--muted); font-size: 11px; }
+/* The security NAME is unbounded free text and the one cell that could stretch the row
+   past the panel on its own — clamped; the full name rides in the span's title. Works
+   because .ticker-cell is a column flex, which blockifies the span so max-width binds. */
+.ticker-cell .sub { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
 .port-table .sub.stale { color: #c98500; } /* must outrank .port-table .sub (Task 13 review) */
+/* A stale quote's "as of" date stacks under the price instead of widening the column. */
+.port-table .sub.stale { display: block; }
 /* Long free text must not stretch the row past the viewport (.port-table td already
    pins white-space: nowrap, so ellipsis needs only a bound + overflow). */
 .notes-cell { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }

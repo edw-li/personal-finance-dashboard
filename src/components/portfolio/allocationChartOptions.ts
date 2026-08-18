@@ -4,7 +4,7 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { INK, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { AllocationResponse } from '../../types/api'
-import { escapeHtml, formatCurrencyCompact, formatPct } from '../../utils/format'
+import { escapeHtml, formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
 
 export const TYPE_LABELS: Record<string, string> = {
   etf: 'ETF', mutual_fund: 'Mutual fund', stock: 'Stock', private: 'Private',
@@ -21,13 +21,22 @@ export function positiveSlices(data: AllocationResponse) {
 export function treemapOption(data: AllocationResponse): EChartsOption {
   const slices = positiveSlices(data)
   const max = Math.max(...slices.map((s) => Number(s.market_value)), 1)
+  // Share base = the DRAWN total (donutOption's posture): oversold slices are filtered
+  // out above, and a percentage must describe the areas actually on screen.
+  const total = slices.reduce((sum, s) => sum + Number(s.market_value), 0)
+  const share = (value: number) => formatPct(total > 0 ? value / total : 0, { signed: false })
   return {
     tooltip: {
       formatter: (params) => {
         // `TopLevelFormatterParams` is `CallbackDataParams | CallbackDataParams[]`;
         // item-trigger only ever passes the single form (SpendingPage's idiom).
         const p = Array.isArray(params) ? params[0] : params
-        return `${escapeHtml(p.name ?? '')}: ${formatCurrencyCompact(p.value as number)}`
+        // The treemap's implicit ROOT node answers hovers on the gaps between cells,
+        // carrying an EMPTY name and the whole book's value — ": $773.2K" is not a
+        // slice, so it gets no tooltip at all.
+        if (!p.name) return ''
+        const value = Number(p.value)
+        return `<strong>${formatCurrency(value)}</strong> · ${share(value)}<br/>${escapeHtml(p.name)}`
       },
     },
     series: [
@@ -36,7 +45,16 @@ export function treemapOption(data: AllocationResponse): EChartsOption {
         roam: false,
         nodeClick: false,
         breadcrumb: { show: false },
-        label: { show: true, formatter: '{b}', fontSize: 11 },
+        // Direct labels — name, compact value, share — truncated to the cell: hover-only
+        // numbers make the map a hunt (the waterfall's rule). Canvas TEXT, not tooltip
+        // HTML, so industry names need no escaping here.
+        label: {
+          show: true,
+          fontSize: 11,
+          overflow: 'truncate' as const,
+          formatter: (p: { name?: string; value?: unknown }) =>
+            `${p.name ?? ''}\n${formatCurrencyCompact(p.value as number)} · ${share(Number(p.value))}`,
+        },
         itemStyle: { borderColor: SURFACE, borderWidth: 2, gapWidth: 2 },
         data: slices.map((s) => {
           const idx = 3 + Math.round((Number(s.market_value) / max) * 8)

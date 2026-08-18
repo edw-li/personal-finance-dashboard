@@ -32,10 +32,20 @@ vi.mock('../api/taxes', async (importOriginal) => ({
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ option }: { option: { xAxis?: { data?: unknown[] } } }) =>
+    default: ({
+      option,
+      onClick,
+    }: {
+      option: { xAxis?: { data?: unknown[] } }
+      onClick?: (params: { name?: string }) => void
+    }) =>
       createElement('div', {
         'data-testid': 'echart',
         'data-categories': (option.xAxis?.data ?? []).join(','),
+        // A click on the marker stands in for a click on the chart's FIRST category —
+        // enough to walk the trend's drill-in door both ways without a canvas. Charts
+        // given no handler (the waterfall) stay inert, like the real thing.
+        onClick: () => onClick?.({ name: String((option.xAxis?.data ?? [])[0] ?? '') }),
       }),
   }
 })
@@ -501,6 +511,11 @@ describe('TaxesPage', () => {
     expect(screen.getByText('Total tax')).toBeTruthy()
     expect(screen.getByText('Take-home')).toBeTruthy()
     expect(screen.getByText('$376,543.22')).toBeTruthy()
+    // All four tiles share one size: the hero treatment belongs to pages with ONE
+    // headline figure, and here it made take-home shout over its own row.
+    expect(
+      screen.getByText('$376,543.22').closest('.stat-tile')!.className,
+    ).not.toContain('stat-tile-hero')
     expect(screen.getByText('Effective rate')).toBeTruthy()
     // The server's 6dp rate, rendered by format.ts and never recomputed from the tiles.
     expect(screen.getByText('24.7%')).toBeTruthy()
@@ -577,6 +592,48 @@ describe('TaxesPage', () => {
       slow.resolve({ years: [summaryFor(2021), summaryFor(2022)] })
     })
     expect(trendCategories()).toBe('2025,2026')
+  })
+
+  it('drills into a year on a trend click and returns on the next click', async () => {
+    // The shared fixture computes every jurisdiction to zero; give 2023 a federal tax so
+    // its pie has something to draw. (Replace the object — summaryFor aliases federal
+    // and state to ONE `income` literal, so writing through it would tax both.)
+    const taxed2023 = summaryFor(2023)
+    taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
+    render(<TaxesPage />)
+    await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+
+    // The mock forwards the first category: 2023.
+    fireEvent.click(screen.getAllByTestId('echart')[1])
+    expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+    // Same mount, now a pie — no x axis — and the way back is written beside it, with
+    // the SERVER's totals for the year (the pie itself only draws positive slices).
+    expect(trendCategories()).toBe('')
+    expect(screen.getByText(/click the chart to go back/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'All years' })).toBeTruthy()
+
+    // Any click in detail mode returns to all years.
+    fireEvent.click(screen.getAllByTestId('echart')[1])
+    await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+    expect(screen.queryByText('Tax breakdown — 2023')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'All years' })).toBeNull()
+  })
+
+  it('offers a note and the All years button for a year whose pie has nothing to draw', async () => {
+    // Every jurisdiction is zero in the shared fixture: the drill-in opens on a year
+    // with no drawable slice, and the button is the only chart-free way back.
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [summaryFor(2023)] })
+    render(<TaxesPage />)
+    await waitFor(() => expect(trendCategories()).toBe('2023'))
+
+    fireEvent.click(screen.getAllByTestId('echart')[1])
+    expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+    expect(screen.getByText('No tax computed for 2023.')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'All years' }))
+    await waitFor(() => expect(trendCategories()).toBe('2023'))
+    expect(screen.queryByText('No tax computed for 2023.')).toBeNull()
   })
 
   it('notes a trend-feed failure without disturbing the selected year', async () => {

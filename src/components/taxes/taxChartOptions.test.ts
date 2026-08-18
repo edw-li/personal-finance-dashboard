@@ -5,9 +5,11 @@ import type { TaxSummaryOut } from '../../types/api'
 import {
   TAX_COLORS,
   TAX_LABELS,
+  TAX_SERIES_IDS,
   WATERFALL_CATEGORIES,
   trendOption,
   waterfallOption,
+  yearPieOption,
 } from './taxChartOptions'
 
 // --- the golden summaries -------------------------------------------------------------
@@ -157,15 +159,18 @@ function emptySummary(year: number): TaxSummaryOut {
 // EChartsOption is a wide union; these narrow it once so the assertions stay about the
 // numbers (the same posture as SpendingPage's tooltip param narrowing).
 interface SeriesLike {
+  id?: string
   name?: string
   type?: string
   stack?: string
   stackStrategy?: string
   yAxisIndex?: number
   color?: string
+  universalTransition?: boolean | { enabled?: boolean; seriesKey?: string[] }
   data?: unknown[]
 }
 interface BarPoint {
+  name?: string
   value: number
   itemStyle?: { color?: string }
 }
@@ -175,6 +180,7 @@ interface TooltipParam {
   name?: string
   seriesName?: string
   value?: number | null
+  percent?: number
   marker?: string
 }
 
@@ -383,5 +389,61 @@ describe('trendOption', () => {
     // null, not 0: a year with no gross income has no effective rate to draw, and
     // connectNulls is off so the line simply stops.
     expect(series[6].data).toEqual([30.5661, null])
+  })
+
+  it('gives the six stacks the stable ids the drill-in pie morphs from', () => {
+    const series = seriesOf(trendOption([summaryFixture(2024)]))
+    // universalTransition keys on id across notMerge setOption swaps — without both, a
+    // drill-in is a hard cut instead of a morph (SpendingPage's cat-${id} idiom).
+    expect(series.slice(0, 6).map((s) => s.id)).toEqual([...TAX_SERIES_IDS])
+    expect(series.slice(0, 6).every((s) => s.universalTransition === true)).toBe(true)
+    // The rate line stays out of the morph: it has no pie counterpart.
+    expect(series[6].id).toBeUndefined()
+  })
+})
+
+describe('yearPieOption', () => {
+  it('slices one year into the six taxes, wearing the trend stack\'s own colors', () => {
+    const option = yearPieOption(summaryFixture(2024))
+    const series = seriesOf(option)[0]
+    const data = points(series)
+    expect(data.map((p) => p.name)).toEqual([...TAX_LABELS])
+    expect(data.map((p) => p.value)).toEqual([40782.88, 15884.46, 3634.95, 10453.2, 1950, 33.68])
+    // Same color per jurisdiction as the stack segment it morphs from.
+    expect(data.map((p) => p.itemStyle?.color)).toEqual([...TAX_COLORS])
+    // The morph targets the trend's six stacks and nothing else.
+    expect(series.universalTransition).toEqual({ enabled: true, seriesKey: [...TAX_SERIES_IDS] })
+  })
+
+  it('draws only positive slices — zero and credit-negative taxes are not pie material', () => {
+    // 2026 has no capital gains: five slices, not a zero-width sixth in the legend order.
+    const noGains = points(seriesOf(yearPieOption(summaryFixture(2026)))[0])
+    expect(noGains.map((p) => p.name)).toEqual([
+      'Federal', 'State', 'Medicare', 'Soc. Sec.', 'SDI',
+    ])
+    // A credit-driven NEGATIVE state tax steps the waterfall back up, but a pie has no
+    // way to draw it — the slice is excluded while the hint's totals stay the server's.
+    const credit = summaryFixture(2024)
+    credit.state.tax = '-500.00'
+    const slices = points(seriesOf(yearPieOption(credit))[0])
+    expect(slices.map((p) => p.name)).toEqual([
+      'Federal', 'Medicare', 'Soc. Sec.', 'SDI', 'Cap. gains',
+    ])
+  })
+
+  it('returns null for a year with no drawable tax at all', () => {
+    expect(yearPieOption(emptySummary(2026))).toBeNull()
+  })
+
+  it('says "of tax" in the tooltip — a bare percent reads as a rate on income', () => {
+    const option = yearPieOption(summaryFixture(2024))
+    const formatter = (
+      option as unknown as { tooltip: { formatter: (p: TooltipParam) => string } }
+    ).tooltip.formatter
+    // 40782.88 of 72739.17 total tax is 56.1% — while the year's effective rate is 30.6%,
+    // which is exactly the number a bare "56.1%" would be misread as.
+    expect(formatter({ name: 'Federal', value: 40782.88, percent: 56.1 })).toBe(
+      '<strong>$40,782.88</strong> · 56.1% of tax<br/>Federal',
+    )
   })
 })

@@ -3,7 +3,15 @@
   min-height: 100vh;
 }
 
+/* Sticky, not static: as a plain flex child the sidebar is as tall as the PAGE, so on a
+   long page the nav scrolled away at the top and logout sat at the document's bottom.
+   Pinned to the viewport instead, with its own scrollbar for viewports shorter than the
+   nav (height is the viewport exactly — border-box, so the padding is inside it). */
 .sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   width: 210px;

@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { fetchAllTaxSummaries } from '../../api/taxes'
 import EChart from '../EChart'
+import type { EChartEventParams } from '../EChart'
 import StatTile from '../StatTile'
 import type { TaxSummaryOut } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
-import { trendOption, waterfallOption } from './taxChartOptions'
+import { trendOption, waterfallOption, yearPieOption } from './taxChartOptions'
 // Only this component's own sheet, like its two siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.empty-note/.error-banner) is panels.css, which the PAGE
 // imports — and StatTile brings it along regardless.
@@ -13,7 +14,8 @@ import './taxes.css'
 
 /**
  * The engine's answer for the selected year, told three ways: tiles for the headline
- * figures, a waterfall walking gross income down to take-home, and the all-years trend.
+ * figures, a waterfall walking gross income down to take-home, and the all-years trend —
+ * whose bars drill into a per-year jurisdiction pie on click (SpendingPage's month pie).
  *
  * The SELECTED year's summary is the page's (it already owns the three-payload load and
  * its year guard). The TREND feed is this panel's own: it is all-years, so a year switch
@@ -31,6 +33,10 @@ export default function SummaryPanel({
   // the two say different things under the chart).
   const [years, setYears] = useState<TaxSummaryOut[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Year drill-in: the year whose jurisdiction pie replaces the trend chart. Stored as
+  // the YEAR (never an index) so a refetch that reshapes the feed cannot mis-target; a
+  // year that vanished falls back to the all-years view (SpendingPage's detailMonth).
+  const [detailYear, setDetailYear] = useState<number | null>(null)
   // Two saves in a row are two feeds in flight; only the newest may land or complain.
   const seqRef = useRef(0)
 
@@ -56,6 +62,31 @@ export default function SummaryPanel({
   const waterfall = useMemo(() => waterfallOption(summary), [summary])
   const trend = useMemo(() => (years === null ? null : trendOption(years)), [years])
 
+  // The drilled year's summary comes out of THIS panel's all-years feed, so a save that
+  // moves the year's figures redraws the open pie with the fresh ones.
+  const detailSummary = useMemo(
+    () =>
+      detailYear === null || years === null
+        ? null
+        : (years.find((y) => y.year === detailYear) ?? null),
+    [years, detailYear],
+  )
+  const detailPie = useMemo(
+    () => (detailSummary === null ? null : yearPieOption(detailSummary)),
+    [detailSummary],
+  )
+
+  const handleTrendClick = (params: EChartEventParams) => {
+    if (detailSummary !== null) {
+      setDetailYear(null) // any chart click in detail mode returns to all years
+      return
+    }
+    // The category NAME is the year on every clickable series (bars and rate line
+    // alike) — a dataIndex would have to re-derive trendOption's own ascending sort.
+    const year = Number(params.name)
+    if (years !== null && years.some((y) => y.year === year)) setDetailYear(year)
+  }
+
   const totals = summary.totals
 
   return (
@@ -66,7 +97,9 @@ export default function SummaryPanel({
           {/* Every figure is the engine's, rendered as it arrived (global rule 9). */}
           <StatTile label="Gross income" value={formatCurrency(totals.gross_income)} />
           <StatTile label="Total tax" value={formatCurrency(totals.total_tax)} />
-          <StatTile label="Take-home" value={formatCurrency(totals.take_home)} hero />
+          {/* Same size as its three siblings: the hero treatment belongs to pages with ONE
+              headline figure, and here it just made take-home shout over the row. */}
+          <StatTile label="Take-home" value={formatCurrency(totals.take_home)} />
           <StatTile
             label="Effective rate"
             value={formatPct(totals.effective_rate, { signed: false })}
@@ -100,14 +133,46 @@ export default function SummaryPanel({
       </section>
 
       <section className="card">
-        <h2 className="eyebrow">Tax composition and effective rate by year</h2>
+        <div className="tax-chart-header">
+          <h2 className="eyebrow">
+            {detailSummary
+              ? `Tax breakdown — ${detailSummary.year}`
+              : 'Tax composition and effective rate by year'}
+          </h2>
+          {detailSummary && (
+            <button className="button" onClick={() => setDetailYear(null)}>
+              All years
+            </button>
+          )}
+        </div>
         {error && (
           <div className="error-banner" role="alert">
             {error}
           </div>
         )}
-        {trend ? (
-          <EChart option={trend} height={320} />
+        {detailSummary ? (
+          <>
+            <p className="drill-hint">
+              {/* The SERVER's totals, negatives and all — the pie can only draw the
+                  positive slices (yearPieOption's note). */}
+              Total tax {formatCurrency(detailSummary.totals.total_tax)} · Gross{' '}
+              {formatCurrency(detailSummary.totals.gross_income)} · Effective rate{' '}
+              {detailSummary.totals.effective_rate === null
+                ? '—'
+                : formatPct(detailSummary.totals.effective_rate, { signed: false })}{' '}
+              — click the chart to go back.
+            </p>
+            {detailPie ? (
+              <EChart option={detailPie} height={320} onClick={handleTrendClick} />
+            ) : (
+              <p className="empty-note">No tax computed for {detailSummary.year}.</p>
+            )}
+          </>
+        ) : trend ? (
+          <>
+            <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
+            <EChart option={trend} height={320} onClick={handleTrendClick} />
+          </>
         ) : (
           !error && (
             <p className="empty-note">
