@@ -271,6 +271,16 @@ export interface AllocationResponse {
   slices: AllocationSlice[]
 }
 
+// GET /portfolio/history — parallel arrays (NetWorthTimeseries posture); index i across
+// all four lists is one weekly imported point. sp500 is the sheet's baseline: the
+// STARTING balance benchmarked into VOO shares, not contribution-matched.
+export interface PortfolioHistory {
+  dates: string[]
+  market_value: string[]
+  cost_basis: string[]
+  sp500: string[]
+}
+
 export interface RealizedRow {
   security_id: number
   ticker: string

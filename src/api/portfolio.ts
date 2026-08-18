@@ -5,6 +5,7 @@ import type {
   DividendCreate,
   DividendOut,
   HoldingsResponse,
+  PortfolioHistory,
   RealizedResponse,
   SecurityCreate,
   SecurityOut,
@@ -73,6 +74,10 @@ export function fetchHoldings(): Promise<HoldingsResponse> {
 
 export function fetchAllocation(by: AllocationDimension): Promise<AllocationResponse> {
   return api<AllocationResponse>(`/portfolio/allocation?by=${by}`)
+}
+
+export function fetchHistory(): Promise<PortfolioHistory> {
+  return api<PortfolioHistory>('/portfolio/history')
 }
 
 export function fetchRealized(): Promise<RealizedResponse> {

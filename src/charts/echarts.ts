@@ -1,6 +1,13 @@
 // Tree-shaken echarts surface: everything chart-related imports from HERE, never from
 // 'echarts' directly (the full bundle is ~1MB; this registers only what the app draws).
-import { BarChart, HeatmapChart, LineChart, PieChart, TreemapChart } from 'echarts/charts'
+import {
+  BarChart,
+  EffectScatterChart,
+  HeatmapChart,
+  LineChart,
+  PieChart,
+  TreemapChart,
+} from 'echarts/charts'
 import {
   GridComponent,
   LegendComponent,
@@ -15,6 +22,7 @@ import { UniversalTransition } from 'echarts/features'
 import { CanvasRenderer } from 'echarts/renderers'
 import type {
   BarSeriesOption,
+  EffectScatterSeriesOption,
   HeatmapSeriesOption,
   LineSeriesOption,
   PieSeriesOption,
@@ -32,6 +40,7 @@ import { FINANCE_THEME } from './theme'
 echarts.use([
   BarChart,
   LineChart,
+  EffectScatterChart,
   HeatmapChart,
   PieChart,
   TreemapChart,
@@ -49,6 +58,7 @@ echarts.registerTheme('finance', FINANCE_THEME)
 export type EChartsOption = ComposeOption<
   | BarSeriesOption
   | LineSeriesOption
+  | EffectScatterSeriesOption
   | HeatmapSeriesOption
   | PieSeriesOption
   | TreemapSeriesOption
