@@ -568,6 +568,17 @@ git pull && docker compose -f docker-compose.prod.yml up -d --build
 Then verify: `curl -sk https://localhost/api/v1/health` → `{"status":"ok"}`, log in, and
 spot-check **/** (Overview), **/taxes** and **/settings**.
 
+> **Addendum (2026-08-17)**: the *zero migrations* line above held through Plan 6 only.
+> The portfolio-performance-chart merge adds **one additive migration** —
+> `portfolio_value_history`, chained onto that head (4.3 respected) — so the head becomes
+> `705ec03f614f`. It runs at backend boot like every other, so the command above is still
+> the whole deploy, and it is order-safe both directions: old code never touches the table,
+> and the downgrade just drops it. The spot-checks shift too — **/** (Overview) now
+> carries the portfolio performance chart where the allocation-by-type donut did (the
+> donut stays on **/portfolio**), and both it and **/portfolio**'s new Performance panel
+> read *"No performance history yet"* until the next import (7.2) seeds the table:
+> expected on a first deploy, not a regression.
+
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the
 4.4 cache-control check once after the first deploy carrying the split route chunks.
