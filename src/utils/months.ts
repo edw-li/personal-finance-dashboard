@@ -17,3 +17,12 @@ export function currentMonthIso(): string {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
 }
+
+// Local calendar date as 'YYYY-MM-DD' — the injectable "today" the attention strip's pure
+// math runs on. (MonthlyUpdatePage carries a private copy that predates this export.)
+export function todayIso(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+    now.getDate(),
+  ).padStart(2, '0')}`
+}

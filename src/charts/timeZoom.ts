@@ -1,0 +1,50 @@
+// Preset time windows for the long category-axis charts (net worth, spending, portfolio
+// performance). Pure string math over ISO dates — never `new Date(iso)` (format.ts's
+// UTC-shift rule); zero-padded ISO strings compare correctly as strings, including months
+// ('YYYY-MM-01') against full dates ('YYYY-MM-DD').
+
+export type RangePreset = 'all' | '1y' | 'ytd'
+
+/**
+ * Index of the first point inside the preset's window. Windows are anchored on the LAST
+ * data point, not on today: a hand-entered series can trail the calendar by weeks, and a
+ * today-anchored 1Y over stale data would silently chop real months off the front while
+ * showing dead space at the end.
+ */
+export function rangeStartIndex(dates: string[], preset: RangePreset): number {
+  if (preset === 'all' || dates.length === 0) return 0
+  const last = dates[dates.length - 1]
+  const cutoff =
+    preset === 'ytd'
+      ? `${last.slice(0, 4)}-01-01`
+      : // Same month/day, prior year. A Feb-29 anchor yields the non-date '…-02-29' in a
+        // common year — harmless, because '>=' on ISO strings still cuts at March 1.
+        `${Number(last.slice(0, 4)) - 1}${last.slice(4)}`
+  const index = dates.findIndex((d) => d >= cutoff)
+  return index === -1 ? 0 : index
+}
+
+export interface InsideZoomOption {
+  type: 'inside'
+  /** Index into the category axis — appended categories (the live ping) don't shift it. */
+  startValue: number
+  /** Bare wheel keeps scrolling the page; ctrl+wheel zooms (drag still pans when zoomed). */
+  zoomOnMouseWheel: 'ctrl'
+  moveOnMouseWheel: false
+}
+
+/**
+ * The dataZoom config a preset resolves to. endValue is deliberately omitted: every
+ * window runs to the newest point, and a fresh option identity (the chips hand back a new
+ * `{preset}` object per click) resets any manual ctrl+wheel wandering.
+ */
+export function timeZoom(dates: string[], preset: RangePreset): InsideZoomOption[] {
+  return [
+    {
+      type: 'inside',
+      startValue: rangeStartIndex(dates, preset),
+      zoomOnMouseWheel: 'ctrl',
+      moveOnMouseWheel: false,
+    },
+  ]
+}

@@ -19,6 +19,36 @@
   color: var(--text);
 }
 
+/* The "needs attention" strip: one row per actionable condition, each a link to the page
+   that fixes it. Amber accent = advisory, not error (the .tax-warnings register) — the
+   same PALETTE[3] literal the freshness cue below uses, for the same frozen-charts reason. */
+.attention-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 1rem;
+}
+
+.attention-item {
+  display: block;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid #c98500;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.attention-item:hover {
+  background: var(--surface-2);
+}
+
+.attention-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .overview-freshness {
   color: var(--muted);
   font-size: 0.85rem;

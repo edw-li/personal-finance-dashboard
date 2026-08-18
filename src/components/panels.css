@@ -1,8 +1,11 @@
 /* ── Page scaffolding ──────────────────────────────────────────────── */
 
+/* Full-bleed by request (2026-08-18): the old 1240px cap parked a third of a wide monitor
+   as dead margin, and the densest surfaces (the holdings table, the wizard grids) are the
+   ones that want the room. Charts follow via EChart's ResizeObserver; the grids are
+   auto-fit/12-col so they redistribute rather than stretch single columns. */
 .page {
   padding: 1.75rem 2rem 3rem;
-  max-width: 1240px;
 }
 
 .page-header {

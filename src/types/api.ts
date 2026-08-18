@@ -305,6 +305,13 @@ export interface PricePoint {
   c: string
 }
 
+// GET /prices/history/{ticker}?days= — daily closes, oldest first (the holding drill-in's
+// chart feed; the sparklines endpoint is the weekly-downsampled cousin).
+export interface PriceHistoryResponse {
+  ticker: string
+  points: PricePoint[]
+}
+
 // Partial: a held security with no bars is ABSENT (not []) — consumers must `?? []`
 // (Task 12 review M1).
 export type SparklinesResponse = Partial<Record<string, PricePoint[]>>

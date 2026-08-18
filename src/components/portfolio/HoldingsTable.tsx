@@ -41,11 +41,17 @@ function tone(value: string | null): string {
 export default function HoldingsTable({
   holdings,
   sparklines,
+  selectedTicker = null,
+  onSelect,
 }: {
   holdings: HoldingOut[]
   // Partial record (Task 12 review M1): a held security with no bars is ABSENT, so the
   // `?? []` at the call site below is type-required, not defensive.
   sparklines: SparklinesResponse
+  /** The row whose detail panel is open — the page's state, echoed here as highlight. */
+  selectedTicker?: string | null
+  /** Row-click drill-in (NetWorthPage's accounts-table pattern); rows stay inert without it. */
+  onSelect?: (ticker: string) => void
 }) {
   const [sortKey, setSortKey] = useState<SortKey>('market_value')
   const [descending, setDescending] = useState(true)
@@ -97,11 +103,40 @@ export default function HoldingsTable({
         </thead>
         <tbody>
           {sorted.map((h) => (
-            <tr key={h.security_id}>
+            <tr
+              key={h.security_id}
+              // Whole-row click for the mouse, the .row-toggle button below for the
+              // keyboard — the NetWorthPage accounts-table recipe, selection highlight
+              // included.
+              onClick={onSelect ? () => onSelect(h.ticker) : undefined}
+              style={
+                onSelect
+                  ? {
+                      cursor: 'pointer',
+                      background: h.ticker === selectedTicker ? 'var(--surface-2)' : undefined,
+                    }
+                  : undefined
+              }
+            >
               <td>
                 <div className="ticker-cell">
                   <span className="ticker">
-                    {h.ticker}
+                    {onSelect ? (
+                      <button
+                        type="button"
+                        className="row-toggle"
+                        aria-pressed={h.ticker === selectedTicker}
+                        aria-label={`Toggle ${h.ticker} details`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onSelect(h.ticker)
+                        }}
+                      >
+                        {h.ticker}
+                      </button>
+                    ) : (
+                      h.ticker
+                    )}
                     {h.is_manual_priced && <span className="badge">manual</span>}
                     {h.warnings.length > 0 && (
                       <span

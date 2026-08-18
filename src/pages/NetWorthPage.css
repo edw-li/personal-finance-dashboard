@@ -6,3 +6,11 @@
   justify-content: space-between;
   gap: 1rem;
 }
+
+/* Two segmented controls side by side (time range + granularity); wraps on narrow. */
+.networth-chart-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}

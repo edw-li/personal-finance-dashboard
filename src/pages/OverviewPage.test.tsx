@@ -3,6 +3,8 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
+  EsppLotOut,
+  EsppLotsResponse,
   HoldingsResponse,
   NetWorthSummary,
   NetWorthTimeseries,
@@ -10,11 +12,14 @@ import type {
   SpendingMatrix,
   TaxSummariesOut,
   TaxSummaryOut,
+  TaxYearOut,
 } from '../types/api'
-import { formatDate } from '../utils/format'
+import { formatDate, formatMonth } from '../utils/format'
+import { addMonths, currentMonthIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
 
-// Six modules, one snapshot: the page's whole contract is that these resolve TOGETHER.
+// Five modules, eight clients, one snapshot: the page's whole contract is that these
+// resolve TOGETHER (the last two feed only the attention strip, and ride along anyway).
 vi.mock('../api/netWorth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/netWorth')>()),
   fetchSummary: vi.fn(),
@@ -32,6 +37,11 @@ vi.mock('../api/spending', async (importOriginal) => ({
 vi.mock('../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/taxes')>()),
   fetchAllTaxSummaries: vi.fn(),
+  fetchTaxYears: vi.fn(),
+}))
+vi.mock('../api/espp', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/espp')>()),
+  fetchLots: vi.fn(),
 }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
 // charts DRAW is pinned elsewhere — the spark and the bars in
@@ -49,10 +59,11 @@ vi.mock('../components/EChart', async () => {
       }),
   }
 })
+import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchHistory, fetchHoldings } from '../api/portfolio'
 import { fetchMatrix } from '../api/spending'
-import { fetchAllTaxSummaries } from '../api/taxes'
+import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 
 // --- fixtures ---------------------------------------------------------------------------
 // Money and percents are decimal STRINGS on the wire (pydantic v2) — every fixture below
@@ -91,9 +102,15 @@ function summaryOut(over: Partial<NetWorthSummary> = {}): NetWorthSummary {
   }
 }
 
+// The last three months ENDING ON THE REAL CURRENT MONTH: the attention strip reads this
+// list against the wall clock, and a hard-coded trio would start flagging "update not
+// entered" in every test here the month after it was written (the stale-fixture class the
+// tax-tile fixtures already guard against with CURRENT_YEAR).
+const NW_MONTHS = [-2, -1, 0].map((delta) => addMonths(currentMonthIso(), delta))
+
 function timeseriesOut(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries {
   return {
-    months: ['2026-06-01', '2026-07-01', '2026-08-01'],
+    months: [...NW_MONTHS],
     accounts: [],
     series: [],
     group_totals: {
@@ -174,6 +191,21 @@ function taxSummaryOut(year: number, effectiveRate: string | null = '0.246914'):
   }
 }
 
+function lotOut(days: number | null, over: Partial<EsppLotOut> = {}): EsppLotOut {
+  return {
+    id: 1, purchase_date: '2026-02-27', qualifying_date: '2026-09-01', shares: '10.0000',
+    subscription_price: '100.00000', purchase_fmv: '120.00000', purchase_price: '85.00000',
+    sold_date: null, sold_price: null, notes: null, cost_basis: '850.00',
+    market_value: null, gain_amount: null, gain_pct: null,
+    qualified: false, days_until_qualified: days, is_sold: false,
+    ...over,
+  }
+}
+
+function lotsOut(lots: EsppLotOut[] = []): EsppLotsResponse {
+  return { espp_ticker: null, current_price: null, quoted_at: null, lots }
+}
+
 interface Payload {
   summary: NetWorthSummary
   ts: NetWorthTimeseries
@@ -181,10 +213,14 @@ interface Payload {
   history: PortfolioHistory
   matrix: SpendingMatrix
   taxes: TaxSummariesOut
+  lots: EsppLotsResponse
+  taxYears: TaxYearOut[]
 }
 
-// Arms all six clients at once — the page never renders a partial snapshot, so neither
-// does the harness.
+// Arms all eight clients at once — the page never renders a partial snapshot, so neither
+// does the harness. The strip-quiet defaults (no lots, a filled current tax year) keep the
+// attention strip out of the tests that are not about it; the wall-clock-relative cases
+// (monthly-update nudges) live in attention.test.ts, where today is injectable.
 function serve(over: Partial<Payload> = {}): Payload {
   const payload: Payload = {
     summary: summaryOut(),
@@ -193,6 +229,8 @@ function serve(over: Partial<Payload> = {}): Payload {
     history: historyOut(),
     matrix: matrixOut(),
     taxes: { years: [taxSummaryOut(CURRENT_YEAR)] },
+    lots: lotsOut(),
+    taxYears: [{ year: CURRENT_YEAR, notes: null, input_count: 21, bracket_count: 42 }],
     ...over,
   }
   vi.mocked(fetchSummary).mockResolvedValue(payload.summary)
@@ -201,6 +239,8 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchHistory).mockResolvedValue(payload.history)
   vi.mocked(fetchMatrix).mockResolvedValue(payload.matrix)
   vi.mocked(fetchAllTaxSummaries).mockResolvedValue(payload.taxes)
+  vi.mocked(fetchLots).mockResolvedValue(payload.lots)
+  vi.mocked(fetchTaxYears).mockResolvedValue(payload.taxYears)
   return payload
 }
 
@@ -212,6 +252,8 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchHistory).mockImplementation(boom)
   vi.mocked(fetchMatrix).mockImplementation(boom)
   vi.mocked(fetchAllTaxSummaries).mockImplementation(boom)
+  vi.mocked(fetchLots).mockImplementation(boom)
+  vi.mocked(fetchTaxYears).mockImplementation(boom)
 }
 
 function renderPage() {
@@ -439,7 +481,7 @@ describe('OverviewPage snapshot fan-out', () => {
     expect(fetchTimeseries).toHaveBeenCalledWith('monthly')
   })
 
-  it('refetches all six clients on Refresh', async () => {
+  it('refetches all eight clients on Refresh', async () => {
     // One snapshot, one round trip per client: Refresh re-reads the WHOLE page rather than
     // topping up a tile, which is what keeps the tiles and the charts on the same instant.
     serve()
@@ -451,7 +493,7 @@ describe('OverviewPage snapshot fan-out', () => {
 
     for (const client of [
       fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
-      fetchAllTaxSummaries,
+      fetchAllTaxSummaries, fetchLots, fetchTaxYears,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
     }
@@ -470,7 +512,7 @@ describe('OverviewPage charts', () => {
     expect(charts).toHaveLength(3)
     // Spark first (net-worth months), performance second (weekly dates + the live
     // category derived from the quote bar date), bars last.
-    expect(categoriesOf(charts[0])).toBe('Jun 2026,Jul 2026,Aug 2026')
+    expect(categoriesOf(charts[0])).toBe(NW_MONTHS.map(formatMonth).join(','))
     expect(categoriesOf(charts[1])).toBe(
       ['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026', formatDate(quoted)].join(','),
     )
@@ -497,13 +539,59 @@ describe('OverviewPage freshness', () => {
     expect(screen.getByText('Spending through Jul 2026')).toBeTruthy()
   })
 
-  it('ambers a quote date that has gone stale', async () => {
+  it('ambers a quote date that has gone stale — and the strip says the same thing', async () => {
     const quoted = daysAgo(9)
     serve({ holdings: holdingsOut({ as_of: quoted }) })
     renderPage()
 
     const prices = await screen.findByText(`Prices as of ${formatDate(quoted)}`)
     expect(prices.className).toContain('stale')
+    // Two registers for one fact: the freshness row states it, the strip makes it a task.
+    expect(
+      screen.getByRole('link', { name: /Quotes are stale/ }).getAttribute('href'),
+    ).toBe('/portfolio')
+  })
+})
+
+describe('OverviewPage attention strip', () => {
+  it('stays absent when nothing needs doing', async () => {
+    // Strip-quiet defaults: current month covered (NW_MONTHS), fresh quote, no lots, a
+    // filled current tax year. No "all clear" badge either — silence IS the all-clear.
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+
+    expect(screen.queryByRole('navigation', { name: 'Needs attention' })).toBeNull()
+  })
+
+  it('surfaces the overdue ritual, the ESPP countdown and the empty tax year, each linked home', async () => {
+    const current = currentMonthIso()
+    serve({
+      // Coverage stops TWO months back: previous and current both missing, which is the
+      // one monthly case that fires on any day of the month — pinnable on a real clock.
+      // (The day-7 nudge and the rest of the calendar logic are pinned in
+      // attention.test.ts, where today is injected.)
+      ts: timeseriesOut({ months: [addMonths(current, -4), addMonths(current, -3)] }),
+      lots: lotsOut([lotOut(5)]),
+      taxYears: [{ year: CURRENT_YEAR, notes: null, input_count: 0, bracket_count: 42 }],
+    })
+    renderPage()
+
+    const strip = await screen.findByRole('navigation', { name: 'Needs attention' })
+    const update = screen.getByRole('link', {
+      name: /Monthly updates for .* haven't been entered/,
+    })
+    expect(update.getAttribute('href')).toBe('/update')
+    expect(
+      screen.getByRole('link', { name: /An ESPP lot qualifies in 5 days/ }).getAttribute('href'),
+    ).toBe('/espp')
+    expect(
+      screen
+        .getByRole('link', { name: new RegExp(`${CURRENT_YEAR}'s tax inputs are empty`) })
+        .getAttribute('href'),
+    ).toBe('/taxes')
+    // Exactly the three conditions above — nothing else invented itself an item.
+    expect(strip.querySelectorAll('a')).toHaveLength(3)
   })
 })
 
@@ -555,7 +643,7 @@ describe('OverviewPage on an empty database', () => {
 })
 
 describe('OverviewPage failures', () => {
-  it('banners a failed first load and refetches all six on Retry', async () => {
+  it('banners a failed first load and refetches all eight on Retry', async () => {
     failAll()
     renderPage()
 
@@ -574,7 +662,7 @@ describe('OverviewPage failures', () => {
     // One snapshot means one round trip per client, twice over: the failed mount and Retry.
     for (const client of [
       fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
-      fetchAllTaxSummaries,
+      fetchAllTaxSummaries, fetchLots, fetchTaxYears,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
     }

@@ -14,10 +14,14 @@ import EChart from '../components/EChart'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
 import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
+import HoldingDetailPanel from '../components/portfolio/HoldingDetailPanel'
 import HoldingsTable from '../components/portfolio/HoldingsTable'
 import SecuritiesPanel from '../components/portfolio/SecuritiesPanel'
 import TransactionsPanel from '../components/portfolio/TransactionsPanel'
+import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import { timeZoom } from '../charts/timeZoom'
+import type { RangePreset } from '../charts/timeZoom'
 import type {
   AllocationResponse,
   DividendOut,
@@ -79,6 +83,13 @@ export default function PortfolioPage() {
   const [sparklines, setSparklines] = useState<SparklinesResponse>({})
   const [history, setHistory] = useState<PortfolioHistory | null>(null)
   const [tab, setTab] = useState<Tab>('transactions')
+  // Performance-chart window; object identity so a re-click of the active chip snaps a
+  // ctrl+wheel wander back to the preset (NetWorthPage's `range`).
+  const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
+  // Holdings drill-in: the TICKER whose detail panel is open (never an index — a reload
+  // that resorts the table cannot mis-target, and a ticker that vanished simply finds no
+  // holding and the panel folds away: SpendingPage's detailMonth posture).
+  const [detailTicker, setDetailTicker] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [reloading, setReloading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -161,11 +172,23 @@ export default function PortfolioPage() {
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
 
-  // The page's only memoized value (OverviewPage's rule): EChart keys its setOption effect
-  // on [option], so a fresh object per render would redraw the chart on every tab click.
-  const performanceOption = useMemo(
-    () => (history && holdings ? portfolioHistoryOption(history, liveFromHoldings(holdings)) : null),
-    [history, holdings],
+  // The page's only memoized values (OverviewPage's rule): EChart keys its setOption
+  // effect on [option], so a fresh object per render would redraw the chart on every tab
+  // click. The zoom is spread on here rather than inside the builder, which stays pure and
+  // shared with OverviewPage (whose copy is a fixed snapshot, no chips).
+  const performanceOption = useMemo(() => {
+    if (!history || !holdings) return null
+    const base = portfolioHistoryOption(history, liveFromHoldings(holdings))
+    // startValue indexes history.dates; the appended live category sits at the END, so
+    // the indices are unshifted and the window always runs out to the ping.
+    return base === null ? null : { ...base, dataZoom: timeZoom(history.dates, range.preset) }
+  }, [history, holdings, range])
+
+  // The open row's holding, resolved fresh from every reload so the panel always shows
+  // the CURRENT figures; a sold-off ticker resolves to null and the panel folds away.
+  const detailHolding = useMemo(
+    () => holdings?.holdings.find((h) => h.ticker === detailTicker) ?? null,
+    [holdings, detailTicker],
   )
 
   return (
@@ -229,7 +252,10 @@ export default function PortfolioPage() {
             </div>
           )}
           <section className="panel">
-            <h2 className="panel-title">Performance</h2>
+            <div className="panel-title-row">
+              <h2 className="panel-title">Performance</h2>
+              {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
+            </div>
             {performanceOption ? (
               <>
                 <EChart option={performanceOption} height={300} />
@@ -254,8 +280,28 @@ export default function PortfolioPage() {
                 a manual price in Securities.
               </p>
             )}
-            <HoldingsTable holdings={holdings.holdings} sparklines={sparklines} />
+            <HoldingsTable
+              holdings={holdings.holdings}
+              sparklines={sparklines}
+              selectedTicker={detailTicker}
+              // Functional toggle: the click that opens a row is the click that closes it.
+              onSelect={(ticker) =>
+                setDetailTicker((current) => (current === ticker ? null : ticker))
+              }
+            />
           </section>
+          {detailHolding && (
+            // Keyed by SECURITY: switching rows remounts the panel, which resets its span
+            // to 1Y and starts a fresh history feed — 2023's window must not carry into
+            // another ticker (the taxes editors' keying lesson).
+            <HoldingDetailPanel
+              key={detailHolding.security_id}
+              holding={detailHolding}
+              transactions={transactions}
+              dividends={dividends}
+              onClose={() => setDetailTicker(null)}
+            />
+          )}
           <AllocationPanel industry={industry} byType={byType} byAccount={byAccount} />
           {/* group, not tablist: these buttons toggle panels below rather than owning
               tabpanels, and the aria-labels keep "Dividends" from colliding with the

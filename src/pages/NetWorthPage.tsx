@@ -5,8 +5,11 @@ import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { ApiError } from '../api/client'
 import EChart from '../components/EChart'
 import MonthRibbon from '../components/MonthRibbon'
+import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
 import type { EChartsOption } from '../charts/echarts'
+import { timeZoom } from '../charts/timeZoom'
+import type { RangePreset } from '../charts/timeZoom'
 import {
   GROUP_COLORS,
   GROUP_LABELS,
@@ -52,6 +55,11 @@ export default function NetWorthPage() {
   // Ribbon coverage is captured ONLY from monthly responses — the quarterly fetch
   // filters months server-side and must not make covered months read as missing.
   const [coverageMonths, setCoverageMonths] = useState<string[]>([])
+  // The page's time window, applied to BOTH time charts (they share one month axis, and
+  // two range controls answering one question would drift). An OBJECT, not a bare preset:
+  // re-clicking the active chip hands the memos a fresh identity, which is what snaps a
+  // ctrl+wheel wander back to the preset (RangeChips' contract).
+  const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
 
   // Promise callbacks rather than async/await, and no setState before the fetch starts:
   // every state update has to land in an async continuation, never in the synchronous
@@ -110,6 +118,10 @@ export default function NetWorthPage() {
     if (!data || data.months.length === 0) return null
     const labels = data.months.map(formatMonth)
     return {
+      // Windowed, not sliced: dataZoom keeps the whole series loaded so a ctrl+wheel or a
+      // chip flip never refetches, and the y-axis re-scales to the visible window (filter
+      // mode) so a zoomed-in year is read at its own scale.
+      dataZoom: timeZoom(data.months, range.preset),
       grid: { left: 70, right: 84, top: 40, bottom: 28 },
       legend: { top: 0 },
       tooltip: {
@@ -159,13 +171,14 @@ export default function NetWorthPage() {
         },
       ],
     }
-  }, [data])
+  }, [data, range])
 
   const drillOption = useMemo<EChartsOption | null>(() => {
     if (!data || drill.length === 0) return null
     const byId = new Map(data.series.map((s) => [s.account_id, s.values]))
     const nameById = new Map(data.accounts.map((a) => [a.id, a.name]))
     return {
+      dataZoom: timeZoom(data.months, range.preset), // the page's one window (see `range`)
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
       legend: { top: 0 },
       tooltip: {
@@ -190,7 +203,7 @@ export default function NetWorthPage() {
         data: (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v))),
       })),
     }
-  }, [data, drill])
+  }, [data, drill, range])
 
   const toggleDrill = (accountId: number) => {
     setDrill((current) => {
@@ -278,21 +291,26 @@ export default function NetWorthPage() {
         <div className="card span-12">
           <div className="networth-chart-header">
             <h2 className="eyebrow">By group over time</h2>
-            <div className="segmented" role="group" aria-label="Granularity">
-              {(['monthly', 'quarterly'] as const).map((g) => (
-                <button
-                  key={g}
-                  type="button"
-                  className={granularity === g ? 'active' : ''}
-                  onClick={() => {
-                    if (g === granularity) return
-                    beginLoad()
-                    setGranularity(g)
-                  }}
-                >
-                  {g === 'monthly' ? 'Monthly' : 'Quarterly'}
-                </button>
-              ))}
+            <div className="networth-chart-controls">
+              {/* One window for the whole page: the drill-down below follows these chips
+                  too (both charts share the month axis). */}
+              <RangeChips value={range.preset} onChange={setRange} />
+              <div className="segmented" role="group" aria-label="Granularity">
+                {(['monthly', 'quarterly'] as const).map((g) => (
+                  <button
+                    key={g}
+                    type="button"
+                    className={granularity === g ? 'active' : ''}
+                    onClick={() => {
+                      if (g === granularity) return
+                      beginLoad()
+                      setGranularity(g)
+                    }}
+                  >
+                    {g === 'monthly' ? 'Monthly' : 'Quarterly'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           {stackedOption ? (

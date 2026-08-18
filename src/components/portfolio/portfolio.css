@@ -45,6 +45,17 @@
 .neg { color: var(--negative); }
 .hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
 
+/* HoldingDetailPanel — the drill-in behind a holdings row. The facts dl is the row's
+   overflow: label-over-value pairs, tabular numerals, auto-fit so a full-bleed page lays
+   them out in one or two ranks. */
+.holding-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; margin: 4px 0 12px; }
+.holding-fact dt { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+.holding-fact dd { margin: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+.holding-fact dd .sub { margin-left: 2px; }
+/* The two ledgers side by side; the transactions table is the wider of the pair. */
+.holding-detail-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; margin-top: 14px; }
+@media (max-width: 1000px) { .holding-detail-grid { grid-template-columns: 1fr; } }
+
 /* Toggle buttons (AllocationPanel's donut dimension). The page's .tab-row repeats these
    declarations in PortfolioPage.css — the two live in different stylesheets by design. */
 .toggle-row button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 4px 12px; cursor: pointer; }

@@ -1,5 +1,10 @@
 import { api } from './client'
-import type { LatestPriceOut, RefreshResult, SparklinesResponse } from '../types/api'
+import type {
+  LatestPriceOut,
+  PriceHistoryResponse,
+  RefreshResult,
+  SparklinesResponse,
+} from '../types/api'
 
 // A live refresh walks ~37 tickers sequentially (tens of seconds) — the caller-supplied
 // signal REPLACES the client's 15s default (Plan 3 forward note).
@@ -14,6 +19,12 @@ export function refreshPrices(): Promise<RefreshResult> {
 
 export function fetchSparklines(days = 365): Promise<SparklinesResponse> {
   return api<SparklinesResponse>(`/prices/sparklines?days=${days}`)
+}
+
+// Router bounds: days 1..3650. The table accumulates forward from the first refresh
+// (rows are never deleted), so early on every window returns the same ~1 year.
+export function fetchPriceHistory(ticker: string, days = 365): Promise<PriceHistoryResponse> {
+  return api<PriceHistoryResponse>(`/prices/history/${encodeURIComponent(ticker)}?days=${days}`)
 }
 
 export function putManualPrice(

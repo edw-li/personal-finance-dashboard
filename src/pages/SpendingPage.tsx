@@ -6,8 +6,11 @@ import { fetchMatrix, fetchYearly } from '../api/spending'
 import EChart from '../components/EChart'
 import type { EChartEventParams, EChartsInstance } from '../components/EChart'
 import MonthRibbon from '../components/MonthRibbon'
+import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
 import type { EChartsOption } from '../charts/echarts'
+import { timeZoom } from '../charts/timeZoom'
+import type { RangePreset } from '../charts/timeZoom'
 import {
   INK,
   MUTED,
@@ -43,6 +46,12 @@ export default function SpendingPage() {
   // as the month string (never an index) so a refetch that reshapes the month list
   // cannot mis-target; a month that vanished falls back to the all-months view.
   const [detailMonth, setDetailMonth] = useState<string | null>(null)
+  // The page's time window, applied to the three time charts together (bars, savings
+  // rate, category trends — one month axis, one answer). Object identity so a re-click
+  // of the active chip re-asserts the window (NetWorthPage's `range`). The heatmap stays
+  // whole: its visualMap is scaled to all time, and windowing rows of cells reads as
+  // missing data rather than as a zoom.
+  const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
   // Instance handle for the bars chart so heatmap hover can dispatch highlights into it.
   const barsChartRef = useRef<EChartsInstance | null>(null)
 
@@ -119,6 +128,7 @@ export default function SpendingPage() {
       }, 0),
     )
     return {
+      dataZoom: timeZoom(matrix.months, range.preset),
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
       legend: { top: 0 },
       tooltip: {
@@ -184,7 +194,7 @@ export default function SpendingPage() {
         },
       ],
     }
-  }, [matrix, topIds, monthLabels, nameById])
+  }, [matrix, topIds, monthLabels, nameById, range])
 
   const detailIndex = useMemo(
     () => (matrix && detailMonth ? matrix.months.indexOf(detailMonth) : -1),
@@ -334,6 +344,7 @@ export default function SpendingPage() {
   const savingsOption = useMemo<EChartsOption | null>(() => {
     if (!matrix || matrix.months.length === 0) return null
     return {
+      dataZoom: timeZoom(matrix.months, range.preset), // the page's one window (see `range`)
       grid: { left: 60, right: 24, top: 16, bottom: 28 },
       tooltip: {
         trigger: 'axis',
@@ -369,12 +380,13 @@ export default function SpendingPage() {
         },
       ],
     }
-  }, [matrix, monthLabels])
+  }, [matrix, monthLabels, range])
 
   const trendOption = useMemo<EChartsOption | null>(() => {
     if (!matrix || matrix.months.length === 0 || trend.length === 0) return null
     const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
     return {
+      dataZoom: timeZoom(matrix.months, range.preset), // the page's one window (see `range`)
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
       legend: { top: 0 },
       tooltip: {
@@ -397,7 +409,7 @@ export default function SpendingPage() {
         data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
       })),
     }
-  }, [matrix, trend, monthLabels, nameById])
+  }, [matrix, trend, monthLabels, nameById, range])
 
   const toggleTrend = (categoryId: number) => {
     setTrend((current) => {
@@ -491,10 +503,14 @@ export default function SpendingPage() {
                 ? `Spending breakdown — ${detailLabel}`
                 : `Monthly spend vs net pay — top ${TOP_N} categories + other`}
             </h2>
-            {activeDetail && (
+            {/* One slot, two modes: the drill-in's way back, or the page's time window
+                (a pie has no time axis, so the chips would be dead weight beside it). */}
+            {activeDetail ? (
               <button className="button" onClick={() => setDetailMonth(null)}>
                 All months
               </button>
+            ) : (
+              <RangeChips value={range.preset} onChange={setRange} />
             )}
           </div>
           {activeDetail && matrix ? (

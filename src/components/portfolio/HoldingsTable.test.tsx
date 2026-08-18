@@ -97,6 +97,41 @@ describe('HoldingsTable', () => {
     expect(tickerColumn()[1]).toContain('BBB')
   })
 
+  it('toggles the drill-in through the row, and through its button exactly once', () => {
+    const onSelect = vi.fn()
+    render(
+      <HoldingsTable
+        holdings={rows}
+        sparklines={{}}
+        selectedTicker="BBB"
+        onSelect={onSelect}
+      />,
+    )
+    // The open row announces itself pressed; its sibling does not.
+    const bbb = screen.getByRole('button', { name: 'Toggle BBB details' })
+    expect(bbb.getAttribute('aria-pressed')).toBe('true')
+    expect(
+      screen.getByRole('button', { name: 'Toggle AAA details' }).getAttribute('aria-pressed'),
+    ).toBe('false')
+
+    // The keyboard button stops propagation — without it the row's own handler would fire
+    // the same toggle twice and the panel would open-and-shut in one click.
+    fireEvent.click(bbb)
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith('BBB')
+
+    // Whole-row click for the mouse: a cell far from the ticker still selects.
+    const firstDataRow = screen.getAllByRole('row')[1] // BBB — market-value descending
+    fireEvent.click(firstDataRow.querySelectorAll('td')[4]!)
+    expect(onSelect).toHaveBeenCalledTimes(2)
+    expect(onSelect).toHaveBeenLastCalledWith('BBB')
+  })
+
+  it('keeps the rows inert when no drill-in is wired', () => {
+    render(<HoldingsTable holdings={rows} sparklines={{}} />)
+    expect(screen.queryByRole('button', { name: /Toggle .* details/ })).toBeNull()
+  })
+
   it('flags stale quotes by bar DATE, not instant', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-20T12:00:00Z'))

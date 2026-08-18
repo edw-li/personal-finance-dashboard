@@ -9,6 +9,7 @@ import {
   TreemapChart,
 } from 'echarts/charts'
 import {
+  DataZoomInsideComponent,
   GridComponent,
   LegendComponent,
   MarkLineComponent,
@@ -29,6 +30,7 @@ import type {
   TreemapSeriesOption,
 } from 'echarts/charts'
 import type {
+  DataZoomComponentOption,
   GridComponentOption,
   LegendComponentOption,
   TooltipComponentOption,
@@ -49,6 +51,10 @@ echarts.use([
   LegendComponent,
   VisualMapComponent,
   MarkLineComponent,
+  // Inside-only zoom (src/charts/timeZoom.ts): the range chips cover the common windows,
+  // ctrl+wheel / drag-pan fine-tunes. The slider flavour is deliberately NOT registered —
+  // a 30px scrub bar under every chart is chrome the minimal theme does not want.
+  DataZoomInsideComponent,
   UniversalTransition,
   CanvasRenderer,
 ])
@@ -62,6 +68,7 @@ export type EChartsOption = ComposeOption<
   | HeatmapSeriesOption
   | PieSeriesOption
   | TreemapSeriesOption
+  | DataZoomComponentOption
   | GridComponentOption
   | TooltipComponentOption
   | LegendComponentOption
