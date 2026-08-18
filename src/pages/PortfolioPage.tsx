@@ -1,16 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ApiError } from '../api/client'
 import {
   fetchAllocation,
   fetchDividends,
+  fetchHistory,
   fetchHoldings,
   fetchSecurities,
   fetchTransactions,
 } from '../api/portfolio'
 import { fetchSparklines, refreshPrices } from '../api/prices'
+import EChart from '../components/EChart'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
+import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
 import HoldingsTable from '../components/portfolio/HoldingsTable'
 import SecuritiesPanel from '../components/portfolio/SecuritiesPanel'
 import TransactionsPanel from '../components/portfolio/TransactionsPanel'
@@ -19,6 +22,7 @@ import type {
   AllocationResponse,
   DividendOut,
   HoldingsResponse,
+  PortfolioHistory,
   RefreshResult,
   SecurityOut,
   SparklinesResponse,
@@ -73,18 +77,19 @@ export default function PortfolioPage() {
   const [byType, setByType] = useState<AllocationResponse | null>(null)
   const [byAccount, setByAccount] = useState<AllocationResponse | null>(null)
   const [sparklines, setSparklines] = useState<SparklinesResponse>({})
+  const [history, setHistory] = useState<PortfolioHistory | null>(null)
   const [tab, setTab] = useState<Tab>('transactions')
   const [loading, setLoading] = useState(true)
   const [reloading, setReloading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshNote, setRefreshNote] = useState<RefreshNote>(NO_NOTE)
   const [error, setError] = useState<string | null>(null)
-  // Four things trigger a load (mount, refresh, three panels' onChanged) and the eight
+  // Four things trigger a load (mount, refresh, three panels' onChanged) and the nine
   // requests are not ordered — a slow earlier load must never overwrite a later one.
   const seqRef = useRef(0)
 
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
-  // law (see NetWorthPage). One load() refetches EVERYTHING: eight cheap local queries,
+  // law (see NetWorthPage). One load() refetches EVERYTHING: nine cheap local queries,
   // and every mutation path (panels' onChanged, refresh) converges through it. Returns
   // the chain so callers can keep their own busy flag up until the data is on screen.
   const load = () => {
@@ -98,8 +103,9 @@ export default function PortfolioPage() {
       fetchAllocation('type'),
       fetchAllocation('account'),
       fetchSparklines(),
+      fetchHistory(),
     ])
-      .then(([h, secs, txns, divs, ind, typ, acct, spark]) => {
+      .then(([h, secs, txns, divs, ind, typ, acct, spark, hist]) => {
         if (seq !== seqRef.current) return
         setHoldings(h)
         setSecurities(secs)
@@ -109,6 +115,7 @@ export default function PortfolioPage() {
         setByType(typ)
         setByAccount(acct)
         setSparklines(spark)
+        setHistory(hist)
         setError(null)
       })
       .catch((err: unknown) => {
@@ -153,6 +160,13 @@ export default function PortfolioPage() {
 
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
+
+  // The page's only memoized value (OverviewPage's rule): EChart keys its setOption effect
+  // on [option], so a fresh object per render would redraw the chart on every tab click.
+  const performanceOption = useMemo(
+    () => (history && holdings ? portfolioHistoryOption(history, liveFromHoldings(holdings)) : null),
+    [history, holdings],
+  )
 
   return (
     <div className="page portfolio-page">
@@ -214,6 +228,24 @@ export default function PortfolioPage() {
               />
             </div>
           )}
+          <section className="panel">
+            <h2 className="panel-title">Performance</h2>
+            {performanceOption ? (
+              <>
+                <EChart option={performanceOption} height={300} />
+                {/* The sheet's baseline invests only the STARTING balance in VOO; saying so here
+                    keeps the gap under the blue line from reading as outperformance. */}
+                <p className="hint">
+                  S&amp;P 500 baseline tracks the starting balance invested in VOO — later
+                  contributions are not added to it.
+                </p>
+              </>
+            ) : (
+              <p className="empty-note">
+                No performance history yet — import your workbook in Settings to load it.
+              </p>
+            )}
+          </section>
           <section className="panel">
             <h2 className="panel-title">Holdings</h2>
             {totals && totals.unpriced_count > 0 && (
