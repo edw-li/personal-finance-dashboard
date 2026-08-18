@@ -83,6 +83,7 @@ describe('portfolioHistoryOption', () => {
     // Lines end at the last IMPORTED point — the live category is never extrapolated.
     expect(series[0].data).toEqual([700000, 710000.5, 718422.07, null])
     expect(series[1].data).toEqual([395000, 399542.36, 400243.74, null])
+    expect(series[2].data).toEqual([96000, 97000, 98636.7, null])
     const live = series[3]
     expect(live.type).toBe('effectScatter')
     expect(live.name).toBe('Live')
@@ -140,5 +141,37 @@ describe('historyTooltipFormatter', () => {
 
   it('returns an empty string when every row is null', () => {
     expect(historyTooltipFormatter([{ value: null }])).toBe('')
+  })
+
+  it('prints every finite row on a shared category, and accepts a non-array param', () => {
+    // Same-day park: the value line and the Live ping both sit on the last category, so
+    // BOTH rows are finite and both must print (the null-skipping must not over-filter).
+    const parked = historyTooltipFormatter([
+      {
+        seriesName: 'Portfolio value',
+        marker: '<i/>',
+        axisValueLabel: 'Aug 10, 2026',
+        value: 718422.07,
+      },
+      {
+        seriesName: 'Live',
+        marker: '<i/>',
+        axisValueLabel: 'Aug 10, 2026',
+        value: ['Aug 10, 2026', 720000],
+      },
+    ])
+    expect(parked).toContain('Portfolio value')
+    expect(parked).toContain('$718,422.07')
+    expect(parked).toContain('Live')
+    expect(parked).toContain('$720,000.00')
+    // echarts hands a lone object (not an array) to an axis formatter with one row.
+    expect(
+      historyTooltipFormatter({
+        seriesName: 'Portfolio value',
+        marker: '<i/>',
+        axisValueLabel: 'Aug 10, 2026',
+        value: 718422.07,
+      }),
+    ).toContain('$718,422.07')
   })
 })

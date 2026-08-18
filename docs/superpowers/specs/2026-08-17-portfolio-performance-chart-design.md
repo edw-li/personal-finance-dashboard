@@ -131,7 +131,11 @@ part of `holdings.as_of` — the quote timestamp — plus
 - **Live point:** same blue (same entity — a new hue would read as a fourth
   series); `effectScatter` single point with ripple ("ping"), dashed 2px
   connector segment from the last imported point (dashed = provisional), its own
-  "Live" legend entry, tooltip "Live — prices as of <date>". Rendered only when
+  "Live" legend entry, and a "Live" row in the shared axis tooltip under that
+  category's date header (the date is the header, so a separate "prices as of
+  <date>" string would repeat it). Under `prefers-reduced-motion` the ripple is
+  neutralized (`rippleEffect.number: 0`) by `src/charts/motion.ts` — echarts
+  starts ripple animators regardless of the global `animation` flag. Rendered only when
   a quote exists and its date ≥ the last imported date; if equal, the ping sits
   on the last category with no new category/connector. Self-retires otherwise.
 - Returns null when the imported series has < 2 points → pages show an empty

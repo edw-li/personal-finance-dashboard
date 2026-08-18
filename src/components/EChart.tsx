@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { echarts } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
+import { quiesceRipples } from '../charts/motion'
 
 export type EChartsInstance = ReturnType<typeof echarts.init>
 
@@ -76,9 +77,11 @@ export default function EChart({
   useEffect(() => {
     // notMerge: pages always send complete options; merging stale series causes ghosts.
     // Reduced-motion is forced AFTER the spread — a page option must never re-enable
-    // animation against the user's OS preference (Global rules a11y promise).
+    // animation against the user's OS preference (Global rules a11y promise). The flag
+    // alone is not enough: ripple animators ignore it, so quiesceRipples covers the gap.
+    const base = REDUCED_MOTION ? quiesceRipples(option) : option
     chartRef.current?.setOption(
-      { ...option, ...(REDUCED_MOTION ? { animation: false } : {}) },
+      { ...base, ...(REDUCED_MOTION ? { animation: false } : {}) },
       { notMerge: true },
     )
   }, [option])
