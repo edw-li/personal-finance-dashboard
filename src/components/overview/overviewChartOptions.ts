@@ -13,7 +13,7 @@ import type { NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../ty
 import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
 
 // Axis-free trend (Sparkline.tsx's sanctioned form, but echarts — the page already ships
-// the runtime for the donut/bars): tooltip stays, axes hide.
+// the runtime for the performance lines/bars): tooltip stays, axes hide.
 export function netWorthSparkOption(
   ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'>,
 ): EChartsOption | null {

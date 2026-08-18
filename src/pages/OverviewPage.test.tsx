@@ -34,9 +34,11 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   fetchAllTaxSummaries: vi.fn(),
 }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
-// charts DRAW is pinned in src/components/overview/overviewChartOptions.test.ts; this file
-// asks only whether a chart is on screen and — via the categories the marker carries —
-// WHICH feed drew it. The async factory keeps the JSX runtime out of the hoisted scope.
+// charts DRAW is pinned elsewhere — the spark and the bars in
+// src/components/overview/overviewChartOptions.test.ts, the performance lines in
+// src/components/portfolio/historyChartOptions.test.ts; this file asks only whether a chart
+// is on screen and — via the categories the marker carries — WHICH feed drew it. The async
+// factory keeps the JSX runtime out of the hoisted scope.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
@@ -458,7 +460,9 @@ describe('OverviewPage snapshot fan-out', () => {
 
 describe('OverviewPage charts', () => {
   it('feeds the spark, the performance lines and the bars', async () => {
-    serve()
+    // Captured once: daysAgo(1) called twice could straddle UTC midnight and disagree.
+    const quoted = daysAgo(1)
+    serve({ holdings: holdingsOut({ as_of: quoted }) })
     renderPage()
 
     await screen.findByText('Net worth — Aug 2026')
@@ -468,7 +472,7 @@ describe('OverviewPage charts', () => {
     // category derived from the quote bar date), bars last.
     expect(categoriesOf(charts[0])).toBe('Jun 2026,Jul 2026,Aug 2026')
     expect(categoriesOf(charts[1])).toBe(
-      ['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026', formatDate(daysAgo(1))].join(','),
+      ['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026', formatDate(quoted)].join(','),
     )
     expect(categoriesOf(charts[2])).toBe(
       'Aug 2025,Sep 2025,Oct 2025,Nov 2025,Dec 2025,Jan 2026,Feb 2026,Mar 2026,Apr 2026,May 2026,Jun 2026,Jul 2026',
