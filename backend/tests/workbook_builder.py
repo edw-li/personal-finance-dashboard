@@ -96,11 +96,55 @@ def default_portfolio_rows() -> list[list]:
         "Total Gain/Loss",
     ]
     totals = [None, None, None, None, 1, None, 0, 0, None, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    def with_history(row: list, tail: list) -> list:
+        """Pad a ticker-table row out to col 27, then lay the AB..AH region (cols 28-34)."""
+        return row + [None] * (27 - len(row)) + tail
+
+    # The hidden value-history region exactly as the real sheet lays it out: r1/r2 carry
+    # region headers the parser never reads (min_row=3); float noise exercises Q2.
     return [
-        header,
-        totals,
-        ["Acme ETF", "ACME", "ETF", 10, 0.5, 100.5, 0, 0, None, 0, 0, 0, 0, 0, 0, 0, 0],
-        ["Div Corp", "DIVC", "Financials", 5, 0.5, 20.0, 0, 0, None, 0, 0, 0, 0, 0, 0, 12.5, 0],
+        with_history(header, [None, None, "VOO Price:", 713.61, None, None, None]),
+        with_history(
+            totals,
+            [
+                "Current Row:",
+                150,
+                "Benchmarked Shares:",
+                138.797856643628,
+                None,
+                "Cost Basis",
+                None,
+            ],
+        ),
+        with_history(
+            ["Acme ETF", "ACME", "ETF", 10, 0.5, 100.5, 0, 0, None, 0, 0, 0, 0, 0, 0, 0, 0],
+            [datetime(2023, 10, 23), 53619.0, 0.0, 53619, 0.0, 53619, 0.0],
+        ),
+        with_history(
+            ["Div Corp", "DIVC", "Financials", 5, 0.5, 20.0, 0, 0, None, 0, 0, 0, 0, 0, 0, 12.5, 0],
+            [
+                datetime(2023, 10, 30),
+                53413.36244969999,
+                -0.003835161982,
+                53001.34954,
+                -0.0115192462,
+                55212.08872757,
+                0.02971127264,
+            ],
+        ),
+        with_history(
+            [],
+            [
+                datetime(2023, 11, 6),
+                63577.56194565128,
+                0.1902931969,
+                55548.29021,
+                0.04805426072,
+                62399.039886977764,
+                0.1301698835,
+            ],
+        ),
     ]
 
 

@@ -103,10 +103,12 @@ class ParsedReferenceData:
     issues: CellIssues
 
 
-def _iter_rows(ws, *, min_row: int, max_col: int, max_row: int = ROW_CAP):
+def _iter_rows(ws, *, min_row: int, max_col: int, max_row: int = ROW_CAP, min_col: int = 1):
     """Bounded values_only iteration with 1-based row numbers (unsized-worksheet safe)."""
     return enumerate(
-        ws.iter_rows(min_row=min_row, max_row=max_row, max_col=max_col, values_only=True),
+        ws.iter_rows(
+            min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col, values_only=True
+        ),
         start=min_row,
     )
 
@@ -982,14 +984,23 @@ def parse_focal_history(ws) -> ParsedFocalHistory:
 
 
 @dataclasses.dataclass
+class ParsedValuePoint:
+    snapshot_date: datetime.date
+    market_value: Decimal
+    cost_basis: Decimal
+    sp500_value: Decimal
+
+
+@dataclasses.dataclass
 class ParsedPortfolio:
+    history: list[ParsedValuePoint]
     issues: CellIssues
 
 
 def parse_portfolio(ws) -> ParsedPortfolio:
-    """Warn-only: the sheet's Dividends Collected are all 0 today; nonzero values cannot be
-    imported faithfully (no payment dates for dividend_payments.pay_date) — sanctioned
-    deviation from spec section 5, recorded in the plan's forward notes."""
+    """Two independent scans of one sheet: the ticker table (warn-only dividends check)
+    and the hidden value-history region (cols AB..AH, rows 3+ — the series behind the
+    'Portfolio Value over Time' chart). History is strict: errors block the apply."""
     issues = CellIssues()
     blanks = 0
     for rnum, row in _iter_rows(ws, min_row=2, max_col=16, max_row=200):
@@ -1008,4 +1019,63 @@ def parse_portfolio(ws) -> ParsedPortfolio:
                 f"Portfolio: {ticker} has Dividends Collected {dividends} — NOT imported "
                 "(sheet has no payment dates); enter via the UI in Plan 4"
             )
-    return ParsedPortfolio(issues=issues)
+
+    history: list[ParsedValuePoint] = []
+    prev_date: datetime.date | None = None
+    blanks = 0
+    # The chart's ranges are padded to row 2153, so the region outruns ROW_CAP; 6000 is
+    # comfortably above the padding while still bounded (unsized-worksheet law).
+    for rnum, row in _iter_rows(ws, min_row=3, min_col=28, max_col=34, max_row=6000):
+        if all(v is None for v in row):
+            blanks += 1
+            if blanks >= BLANK_STREAK_STOP:
+                break
+            continue
+        blanks = 0
+        snapshot_date = to_date_strict(row[0], ctx=cell_ref("Portfolio", rnum, 28), issues=issues)
+        if snapshot_date is None:
+            if row[0] is None:
+                issues.error(
+                    f"{cell_ref('Portfolio', rnum, 28)}: value-history row has values but no date"
+                )
+            continue  # non-date cell: to_date_strict already recorded the error
+        if prev_date is not None and snapshot_date <= prev_date:
+            issues.error(
+                f"{cell_ref('Portfolio', rnum, 28)}: value-history date "
+                f"{snapshot_date.isoformat()} is not after the previous row "
+                f"({prev_date.isoformat()})"
+            )
+            continue
+        prev_date = snapshot_date
+        values: dict[int, Decimal] = {}
+        for label, col in (("market value", 29), ("S&P 500 baseline", 31), ("cost basis", 33)):
+            before = len(issues.errors)
+            parsed_value = to_decimal(
+                row[col - 28], Q2, 12, ctx=cell_ref("Portfolio", rnum, col), issues=issues
+            )
+            if parsed_value is None:
+                if len(issues.errors) == before:
+                    # to_decimal is silent on blank/error-string cells; a hole in a dated
+                    # history row is an error here (strict region, unlike the ticker table).
+                    issues.error(
+                        f"{cell_ref('Portfolio', rnum, col)}: value-history {label} is missing"
+                    )
+                values.clear()
+                break
+            values[col] = parsed_value
+        if not values:
+            continue
+        history.append(
+            ParsedValuePoint(
+                snapshot_date=snapshot_date,
+                market_value=values[29],
+                sp500_value=values[31],
+                cost_basis=values[33],
+            )
+        )
+    if not history:
+        issues.warn(
+            "Portfolio: no value-history rows found (columns AB+) — the performance chart "
+            "stays empty until a workbook carrying the series is imported"
+        )
+    return ParsedPortfolio(history=history, issues=issues)

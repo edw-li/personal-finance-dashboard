@@ -507,3 +507,98 @@ def test_parsers_reject_overlong_text_fields():
     rows[0][1] = "C" * 90
     parsed = parse_spending(_sheet("Spending", spending=rows))
     assert any("category name too long" in e for e in parsed.issues.errors)
+
+
+def test_parse_portfolio_extracts_value_history():
+    from datetime import date
+    from decimal import Decimal
+
+    from app.importer.parsers import parse_portfolio
+
+    parsed = parse_portfolio(_sheet("Portfolio"))
+    assert parsed.issues.errors == []
+    assert [p.snapshot_date for p in parsed.history] == [
+        date(2023, 10, 23),
+        date(2023, 10, 30),
+        date(2023, 11, 6),
+    ]
+    # Q2 half-up quantization of the sheet's float noise
+    assert parsed.history[1].market_value == Decimal("53413.36")
+    assert parsed.history[1].sp500_value == Decimal("53001.35")
+    assert parsed.history[1].cost_basis == Decimal("55212.09")
+    assert parsed.history[2].market_value == Decimal("63577.56")
+    # No "no value-history rows" warning when the region is populated
+    assert not any("value-history" in w for w in parsed.issues.warnings)
+
+
+def test_parse_portfolio_history_errors_on_values_without_date():
+    from app.importer.parsers import parse_portfolio
+
+    rows = default_portfolio_rows()
+    rows[4][27] = None  # r5 col AB: date gone, values remain
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert any("r5c28" in e and "no date" in e for e in parsed.issues.errors)
+
+
+def test_parse_portfolio_history_errors_on_missing_or_junk_value():
+    from app.importer.parsers import parse_portfolio
+
+    rows = default_portfolio_rows()
+    rows[3][32] = None  # r4 col AG (cost basis) blank
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert any("r4c33" in e for e in parsed.issues.errors)
+
+    rows = default_portfolio_rows()
+    rows[3][28] = "#N/A"  # r4 col AC (market value): silent-None error string
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert any("r4c29" in e for e in parsed.issues.errors)
+
+    rows = default_portfolio_rows()
+    rows[3][28] = "abc"  # non-numeric: to_decimal's own error, not doubled
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert len([e for e in parsed.issues.errors if "r4c29" in e]) == 1
+
+
+def test_parse_portfolio_history_errors_on_non_increasing_dates():
+    from app.importer.parsers import parse_portfolio
+
+    rows = default_portfolio_rows()
+    rows[4][27] = datetime.datetime(2023, 10, 30)  # r5 duplicates r4's date
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert any("r5c28" in e and "not after" in e for e in parsed.issues.errors)
+
+    rows = default_portfolio_rows()
+    rows[4][27] = datetime.datetime(2023, 10, 1)  # r5 goes backwards
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert any("r5c28" in e and "not after" in e for e in parsed.issues.errors)
+
+
+def test_parse_portfolio_history_empty_region_warns_not_errors():
+    from app.importer.parsers import parse_portfolio
+
+    rows = [row[:27] for row in default_portfolio_rows()]  # strip the AB..AH region
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert parsed.issues.errors == []
+    assert parsed.history == []
+    assert any("no value-history rows" in w for w in parsed.issues.warnings)
+
+
+def test_parse_portfolio_history_continues_across_short_blank_gaps():
+    from datetime import date
+
+    from app.importer.parsers import parse_portfolio
+
+    rows = default_portfolio_rows()
+    # Two all-blank rows (below BLANK_STREAK_STOP=5) between r5 and a final point on r8:
+    # the scan must bridge the gap, not stop at it. [None] is the builder's proven
+    # spacer-row idiom (default_espp_rows uses it).
+    rows.append([None])
+    rows.append([None])
+    rows.append(
+        [None] * 27
+        + [datetime.datetime(2023, 11, 13), 64758.48, 0.0186, 56136.79, 0.0106, 62999.09, 0.0096]
+    )
+    parsed = parse_portfolio(_sheet("Portfolio", portfolio=rows))
+    assert parsed.issues.errors == []
+    assert [p.snapshot_date for p in parsed.history][-1] == date(2023, 11, 13)
+    assert len(parsed.history) == 4
