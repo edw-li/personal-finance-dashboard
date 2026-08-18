@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
-import { fetchAllocation, fetchHoldings } from '../api/portfolio'
+import { fetchHistory, fetchHoldings } from '../api/portfolio'
 import { fetchMatrix } from '../api/spending'
 import { fetchAllTaxSummaries } from '../api/taxes'
 import EChart from '../components/EChart'
@@ -12,13 +12,13 @@ import {
   recentSpendOption,
   spendStats,
 } from '../components/overview/overviewChartOptions'
-import { donutOption, positiveSlices } from '../components/portfolio/allocationChartOptions'
+import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
 import StatTile from '../components/StatTile'
 import type {
-  AllocationResponse,
   HoldingsResponse,
   NetWorthSummary,
   NetWorthTimeseries,
+  PortfolioHistory,
   SpendingMatrix,
   TaxSummariesOut,
 } from '../types/api'
@@ -34,7 +34,7 @@ interface OverviewData {
   summary: NetWorthSummary
   ts: NetWorthTimeseries
   holdings: HoldingsResponse
-  allocation: AllocationResponse
+  history: PortfolioHistory
   matrix: SpendingMatrix
   taxes: TaxSummariesOut
 }
@@ -55,13 +55,13 @@ export default function OverviewPage() {
       fetchSummary(),
       fetchTimeseries('monthly'),
       fetchHoldings(),
-      fetchAllocation('type'),
+      fetchHistory(),
       fetchMatrix(),
       fetchAllTaxSummaries(),
     ])
-      .then(([summary, ts, holdings, allocation, matrix, taxes]) => {
+      .then(([summary, ts, holdings, history, matrix, taxes]) => {
         if (seq !== seqRef.current) return
-        setData({ summary, ts, holdings, allocation, matrix, taxes })
+        setData({ summary, ts, holdings, history, matrix, taxes })
         setError(null)
       })
       .catch((err: unknown) => {
@@ -89,11 +89,9 @@ export default function OverviewPage() {
   // so a fresh object every render would redraw all three charts on every keystroke
   // elsewhere. Everything else below is a plain const.
   const spark = useMemo(() => (data ? netWorthSparkOption(data.ts) : null), [data])
-  const donut = useMemo(
+  const perf = useMemo(
     () =>
-      data && positiveSlices(data.allocation).length > 0
-        ? donutOption(data.allocation, true)
-        : null,
+      data ? portfolioHistoryOption(data.history, liveFromHoldings(data.holdings)) : null,
     [data],
   )
   const bars = useMemo(() => (data ? recentSpendOption(data.matrix) : null), [data])
@@ -214,7 +212,7 @@ export default function OverviewPage() {
             />
           </div>
           <div className="card-grid">
-            <section className="card span-8">
+            <section className="card span-12">
               <h2 className="eyebrow">Net worth trend</h2>
               <NavLink className="drill-hint" to="/net-worth">
                 Open net worth →
@@ -225,18 +223,15 @@ export default function OverviewPage() {
                 <p className="empty-note">No snapshots yet.</p>
               )}
             </section>
-            {/* PALETTE[0] draws both the spark line and the donut's largest slice; the
-                donut carries its own legend, which is what disambiguates them — the 260px
-                height is sized to keep that legend on screen. */}
-            <section className="card span-4">
-              <h2 className="eyebrow">Allocation by type</h2>
+            <section className="card span-12">
+              <h2 className="eyebrow">Portfolio performance</h2>
               <NavLink className="drill-hint" to="/portfolio">
                 Open portfolio →
               </NavLink>
-              {donut ? (
-                <EChart option={donut} height={260} />
+              {perf ? (
+                <EChart option={perf} height={280} />
               ) : (
-                <p className="empty-note">No priced holdings yet.</p>
+                <p className="empty-note">No performance history yet.</p>
               )}
             </section>
             <section className="card span-12">

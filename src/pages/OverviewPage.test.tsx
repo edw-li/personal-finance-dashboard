@@ -3,10 +3,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
-  AllocationResponse,
   HoldingsResponse,
   NetWorthSummary,
   NetWorthTimeseries,
+  PortfolioHistory,
   SpendingMatrix,
   TaxSummariesOut,
   TaxSummaryOut,
@@ -23,7 +23,7 @@ vi.mock('../api/netWorth', async (importOriginal) => ({
 vi.mock('../api/portfolio', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/portfolio')>()),
   fetchHoldings: vi.fn(),
-  fetchAllocation: vi.fn(),
+  fetchHistory: vi.fn(),
 }))
 vi.mock('../api/spending', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/spending')>()),
@@ -48,7 +48,7 @@ vi.mock('../components/EChart', async () => {
   }
 })
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
-import { fetchAllocation, fetchHoldings } from '../api/portfolio'
+import { fetchHistory, fetchHoldings } from '../api/portfolio'
 import { fetchMatrix } from '../api/spending'
 import { fetchAllTaxSummaries } from '../api/taxes'
 
@@ -124,14 +124,12 @@ function holdingsOut(over: Partial<HoldingsResponse> = {}): HoldingsResponse {
   }
 }
 
-function allocationOut(over: Partial<AllocationResponse> = {}): AllocationResponse {
+function historyOut(over: Partial<PortfolioHistory> = {}): PortfolioHistory {
   return {
-    by: 'type',
-    total_market_value: '812345.67',
-    slices: [
-      { key: 'etf', market_value: '500000.00', weight_pct: '0.6155', holdings: 4 },
-      { key: 'stock', market_value: '312345.67', weight_pct: '0.3845', holdings: 3 },
-    ],
+    dates: ['2026-07-27', '2026-08-03', '2026-08-10'],
+    market_value: ['700000.00', '710000.50', '718422.07'],
+    cost_basis: ['395000.00', '399542.36', '400243.74'],
+    sp500: ['96000.00', '97000.00', '98636.70'],
     ...over,
   }
 }
@@ -178,7 +176,7 @@ interface Payload {
   summary: NetWorthSummary
   ts: NetWorthTimeseries
   holdings: HoldingsResponse
-  allocation: AllocationResponse
+  history: PortfolioHistory
   matrix: SpendingMatrix
   taxes: TaxSummariesOut
 }
@@ -190,7 +188,7 @@ function serve(over: Partial<Payload> = {}): Payload {
     summary: summaryOut(),
     ts: timeseriesOut(),
     holdings: holdingsOut(),
-    allocation: allocationOut(),
+    history: historyOut(),
     matrix: matrixOut(),
     taxes: { years: [taxSummaryOut(CURRENT_YEAR)] },
     ...over,
@@ -198,7 +196,7 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchSummary).mockResolvedValue(payload.summary)
   vi.mocked(fetchTimeseries).mockResolvedValue(payload.ts)
   vi.mocked(fetchHoldings).mockResolvedValue(payload.holdings)
-  vi.mocked(fetchAllocation).mockResolvedValue(payload.allocation)
+  vi.mocked(fetchHistory).mockResolvedValue(payload.history)
   vi.mocked(fetchMatrix).mockResolvedValue(payload.matrix)
   vi.mocked(fetchAllTaxSummaries).mockResolvedValue(payload.taxes)
   return payload
@@ -209,7 +207,7 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchSummary).mockImplementation(boom)
   vi.mocked(fetchTimeseries).mockImplementation(boom)
   vi.mocked(fetchHoldings).mockImplementation(boom)
-  vi.mocked(fetchAllocation).mockImplementation(boom)
+  vi.mocked(fetchHistory).mockImplementation(boom)
   vi.mocked(fetchMatrix).mockImplementation(boom)
   vi.mocked(fetchAllTaxSummaries).mockImplementation(boom)
 }
@@ -429,15 +427,14 @@ describe('OverviewPage tiles', () => {
 
 describe('OverviewPage snapshot fan-out', () => {
   it('asks each client for the shape the page actually draws', async () => {
-    // The mocked EChart cannot tell a monthly series from a quarterly one, nor an
-    // allocation by type from one by sector, so the request arguments are pinned here: a
+    // The mocked EChart cannot tell a monthly series from a quarterly one, so the one
+    // request that carries an argument — the timeseries granularity — is pinned here: a
     // silent swap would still render three charts and pass every other test in this file.
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
     expect(fetchTimeseries).toHaveBeenCalledWith('monthly')
-    expect(fetchAllocation).toHaveBeenCalledWith('type')
   })
 
   it('refetches all six clients on Refresh', async () => {
@@ -451,7 +448,7 @@ describe('OverviewPage snapshot fan-out', () => {
     await waitFor(() => expect(fetchSummary).toHaveBeenCalledTimes(2))
 
     for (const client of [
-      fetchSummary, fetchTimeseries, fetchHoldings, fetchAllocation, fetchMatrix,
+      fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
       fetchAllTaxSummaries,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
@@ -460,16 +457,19 @@ describe('OverviewPage snapshot fan-out', () => {
 })
 
 describe('OverviewPage charts', () => {
-  it('feeds the spark, the donut and the bars', async () => {
+  it('feeds the spark, the performance lines and the bars', async () => {
     serve()
     renderPage()
 
     await screen.findByText('Net worth — Aug 2026')
     const charts = screen.getAllByTestId('echart')
     expect(charts).toHaveLength(3)
-    // Spark first (net-worth months), donut second (a pie has no x-axis), bars last.
+    // Spark first (net-worth months), performance second (weekly dates + the live
+    // category derived from the quote bar date), bars last.
     expect(categoriesOf(charts[0])).toBe('Jun 2026,Jul 2026,Aug 2026')
-    expect(categoriesOf(charts[1])).toBe('')
+    expect(categoriesOf(charts[1])).toBe(
+      ['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026', formatDate(daysAgo(1))].join(','),
+    )
     expect(categoriesOf(charts[2])).toBe(
       'Aug 2025,Sep 2025,Oct 2025,Nov 2025,Dec 2025,Jan 2026,Feb 2026,Mar 2026,Apr 2026,May 2026,Jun 2026,Jul 2026',
     )
@@ -523,7 +523,7 @@ describe('OverviewPage on an empty database', () => {
           unpriced_count: 0,
         },
       }),
-      allocation: allocationOut({ total_market_value: '0.00', slices: [] }),
+      history: historyOut({ dates: [], market_value: [], cost_basis: [], sp500: [] }),
       matrix: matrixOut({ months: [], totals: [] }),
       taxes: { years: [] },
     })
@@ -539,7 +539,7 @@ describe('OverviewPage on an empty database', () => {
 
     expect(screen.queryAllByTestId('echart')).toHaveLength(0)
     expect(screen.getByText('No snapshots yet.')).toBeTruthy()
-    expect(screen.getByText('No priced holdings yet.')).toBeTruthy()
+    expect(screen.getByText('No performance history yet.')).toBeTruthy()
     expect(screen.getByText('No spending months yet.')).toBeTruthy()
 
     // Capitalized (unlike PortfolioPage's lowercase note): three peer clauses in one row,
@@ -569,7 +569,7 @@ describe('OverviewPage failures', () => {
     expect(screen.queryByRole('alert')).toBeNull()
     // One snapshot means one round trip per client, twice over: the failed mount and Retry.
     for (const client of [
-      fetchSummary, fetchTimeseries, fetchHoldings, fetchAllocation, fetchMatrix,
+      fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
       fetchAllTaxSummaries,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
