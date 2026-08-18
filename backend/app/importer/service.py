@@ -70,6 +70,7 @@ async def run_import(data: bytes, db: AsyncSession, *, dry_run: bool) -> ImportR
             db, parsed["reference_data"], report.sheets["reference_data"]
         )
         await appliers.apply_positions(db, parsed["positions"], by_name, report.sheets["positions"])
+        await appliers.apply_portfolio_history(db, parsed["portfolio"], report.sheets["portfolio"])
         await appliers.apply_net_worth(db, parsed["net_worth"], report.sheets["net_worth"])
         await appliers.apply_spending(db, parsed["spending"], report.sheets["spending"])
         await appliers.apply_taxes(db, parsed["taxes"], report.sheets["taxes"])

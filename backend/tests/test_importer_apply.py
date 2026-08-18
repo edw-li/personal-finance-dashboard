@@ -5,12 +5,14 @@ from sqlalchemy import select
 
 from app.importer.apply import (
     apply_net_worth,
+    apply_portfolio_history,
     apply_positions,
     apply_reference_data,
     apply_spending,
 )
 from app.importer.parsers import (
     parse_net_worth,
+    parse_portfolio,
     parse_positions,
     parse_reference_data,
     parse_spending,
@@ -23,11 +25,17 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    PortfolioValueHistory,
     PositionTransaction,
     Security,
     SpendingCategory,
 )
-from tests.workbook_builder import build_workbook, default_positions_rows, load_readonly
+from tests.workbook_builder import (
+    build_workbook,
+    default_portfolio_rows,
+    default_positions_rows,
+    load_readonly,
+)
 
 
 def sheets(**overrides):
@@ -678,3 +686,61 @@ async def test_component_without_aggregate_in_sheet_gets_no_parent(db):
     ).scalar_one()
     assert account.is_component is True
     assert account.parent_account_id is None
+
+
+async def test_apply_portfolio_history_creates_then_skips(db):
+    parsed = parse_portfolio(sheets()["Portfolio"])
+    report = SheetReport()
+    await apply_portfolio_history(db, parsed, report)
+    await db.commit()
+    assert report.entities["portfolio_value_history"].creates == 3
+
+    rows = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.snapshot_date for r in rows] == [
+        date(2023, 10, 23),
+        date(2023, 10, 30),
+        date(2023, 11, 6),
+    ]
+    assert rows[1].market_value == Decimal("53413.36")
+    assert rows[1].sp500_value == Decimal("53001.35")
+    assert rows[1].cost_basis == Decimal("55212.09")
+
+    # Idempotent second pass: same workbook -> all skips, nothing rewritten
+    report2 = SheetReport()
+    await apply_portfolio_history(db, parse_portfolio(sheets()["Portfolio"]), report2)
+    await db.commit()
+    counts = report2.entities["portfolio_value_history"]
+    assert (counts.creates, counts.updates, counts.skips) == (0, 0, 3)
+
+
+async def test_apply_portfolio_history_diff_updates_changed_values(db):
+    parsed = parse_portfolio(sheets()["Portfolio"])
+    await apply_portfolio_history(db, parsed, SheetReport())
+    await db.commit()
+
+    rows = default_portfolio_rows()
+    rows[3][28] = 99999.99  # r4 col AC: revised market value for 2023-10-30
+    changed = parse_portfolio(load_readonly(build_workbook(portfolio=rows))["Portfolio"])
+    report = SheetReport()
+    await apply_portfolio_history(db, changed, report)
+    await db.commit()
+
+    counts = report.entities["portfolio_value_history"]
+    assert (counts.creates, counts.updates, counts.skips) == (0, 1, 2)
+    assert any("portfolio_value_history[2023-10-30]" in s for s in report.samples)
+    row = (
+        await db.execute(
+            select(PortfolioValueHistory).where(
+                PortfolioValueHistory.snapshot_date == date(2023, 10, 30)
+            )
+        )
+    ).scalar_one()
+    assert row.market_value == Decimal("99999.99")

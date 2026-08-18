@@ -16,6 +16,7 @@ from app.importer.parsers import (
     ParsedFocalHistory,
     ParsedNetWorth,
     ParsedPaycheck,
+    ParsedPortfolio,
     ParsedPositions,
     ParsedReferenceData,
     ParsedSpending,
@@ -33,6 +34,7 @@ from app.models import (
     MonthlySpending,
     NetWorthSnapshot,
     PaycheckProfile,
+    PortfolioValueHistory,
     PositionTransaction,
     Security,
     SpendingCategory,
@@ -329,6 +331,37 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
                     report,
                     f"account_balances[{snap.month.isoformat()}/{account.slug}]",
                 )
+
+
+async def apply_portfolio_history(
+    db: AsyncSession, parsed: ParsedPortfolio, report: SheetReport
+) -> None:
+    """Upsert the weekly value-history series by snapshot_date. No deletes: the sheet's
+    series is append-only, so a date that vanished from the sheet is left in place
+    (net-worth snapshot posture, not the positions sync-delete contract)."""
+    counts = report.counts("portfolio_value_history")
+    existing = {
+        row.snapshot_date: row
+        for row in (await db.execute(select(PortfolioValueHistory))).scalars()
+    }
+    for point in parsed.history:
+        fields = {
+            "market_value": point.market_value,
+            "cost_basis": point.cost_basis,
+            "sp500_value": point.sp500_value,
+        }
+        row = existing.get(point.snapshot_date)
+        if row is None:
+            db.add(PortfolioValueHistory(snapshot_date=point.snapshot_date, **fields))
+            counts.creates += 1
+        else:
+            _diff_update(
+                row,
+                fields,
+                counts,
+                report,
+                f"portfolio_value_history[{point.snapshot_date.isoformat()}]",
+            )
 
 
 async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: SheetReport) -> None:

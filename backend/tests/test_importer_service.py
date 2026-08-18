@@ -17,6 +17,7 @@ async def test_dry_run_reports_without_writing(db):
     assert not report.has_errors
     assert report.sheets["net_worth"].entities["accounts"].creates == 3
     assert report.sheets["taxes"].entities["tax_inputs"].creates == 86
+    assert report.sheets["portfolio"].entities["portfolio_value_history"].creates == 3
     assert await _count(db, Account) == 0
     assert await _count(db, Security) == 0
     assert await _count(db, TaxInput) == 0
