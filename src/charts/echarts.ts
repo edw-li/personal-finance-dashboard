@@ -6,6 +6,7 @@ import {
   HeatmapChart,
   LineChart,
   PieChart,
+  ScatterChart,
   TreemapChart,
 } from 'echarts/charts'
 import {
@@ -27,6 +28,7 @@ import type {
   HeatmapSeriesOption,
   LineSeriesOption,
   PieSeriesOption,
+  ScatterSeriesOption,
   TreemapSeriesOption,
 } from 'echarts/charts'
 import type {
@@ -43,6 +45,9 @@ echarts.use([
   BarChart,
   LineChart,
   EffectScatterChart,
+  // Plain scatter for STILL annotation markers (net-worth notes). NOT effectScatter:
+  // the ripple is the live-ping's reserved "this is now" signal, and a note is history.
+  ScatterChart,
   HeatmapChart,
   PieChart,
   TreemapChart,
@@ -65,6 +70,7 @@ export type EChartsOption = ComposeOption<
   | BarSeriesOption
   | LineSeriesOption
   | EffectScatterSeriesOption
+  | ScatterSeriesOption
   | HeatmapSeriesOption
   | PieSeriesOption
   | TreemapSeriesOption

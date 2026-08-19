@@ -7,6 +7,7 @@ import {
   LogOut,
   Receipt,
   Settings,
+  Telescope,
   TrendingUp,
   Wallet,
 } from 'lucide-react'
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { to: '/espp', label: 'ESPP', icon: Banknote },
   { to: '/paycheck', label: 'Paycheck', icon: Banknote },
   { to: '/comp', label: 'Comp', icon: Briefcase },
+  { to: '/projection', label: 'Projection', icon: Telescope },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 

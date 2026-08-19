@@ -155,6 +155,7 @@ async def _seed_timeseries(db):
     card = Account(name="Card", slug="card", group="liability", sort_order=3)
     months = [date(2025, 12, 1), date(2026, 1, 1), date(2026, 3, 1)]  # gap at 2026-02
     snaps = [NetWorthSnapshot(month=m) for m in months]
+    snaps[1].notes = "january bonus"  # one noted month exercises the notes alignment
     db.add_all([agg, comp, card, *snaps])
     await db.flush()
     balances = [
@@ -189,6 +190,8 @@ async def test_timeseries_shapes_and_component_exclusion(auth_client, db):
     assert by_id[card.id] == ["-100.00", "-80.00", None]  # missing balance is null
     assert body["mom_pct"][0] is None
     assert body["mom_pct"][1] == "0.244444"  # (1120-900)/900, 6 dp HALF_UP
+    # Snapshot notes ride the same month alignment — the chart annotation feed.
+    assert body["notes"] == [None, "january bonus", None]
 
 
 async def test_timeseries_quarterly_filters_to_quarter_end_months(auth_client, db):
@@ -198,6 +201,8 @@ async def test_timeseries_quarterly_filters_to_quarter_end_months(auth_client, d
     assert body["months"] == ["2025-12-01", "2026-03-01"]
     assert body["net_worth"] == ["900.00", "1500.00"]
     assert body["mom_pct"] == [None, "0.666667"]  # vs previous kept month
+    # The noted month (2026-01) is not a quarter end: its note is filtered WITH it.
+    assert body["notes"] == [None, None]
 
 
 async def test_timeseries_rejects_unknown_granularity(auth_client):

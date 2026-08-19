@@ -36,3 +36,55 @@ export function buildMonthSlices(
   if (other > 0) slices.push({ name: 'Other', value: other, slot: null })
   return slices
 }
+
+export interface CategoryMover {
+  categoryId: number
+  /** The target month's figure — the wizard writes explicit 0.00s, so 0 is a real zero. */
+  value: number
+  /** vs the previous month; null when that month was never entered (or does not exist). */
+  deltaPrior: number | null
+  /** vs the mean of the category's non-null values across up to 12 months before. */
+  deltaAvg: number | null
+}
+
+/**
+ * The "what changed" math for one month: per-category deltas against the prior month and
+ * the trailing average, ranked by the larger of the two so a flat-but-way-over-average
+ * category still surfaces. Presentation floats over server strings (spendStats' class).
+ *
+ * "Entered" is judged across the whole month (any category non-null): the wizard writes
+ * every active category together, so a month with no values at all is an un-entered one,
+ * and deltas against it would congratulate the user for data that does not exist.
+ */
+export function monthMovers(
+  matrix: Pick<SpendingMatrix, 'series'>,
+  monthIndex: number,
+  top = 5,
+): CategoryMover[] {
+  if (monthIndex < 0) return []
+  const entered = (i: number) => matrix.series.some((s) => s.values[i] !== null)
+  if (!entered(monthIndex)) return []
+  const priorIndex = monthIndex - 1
+  const hasPrior = priorIndex >= 0 && entered(priorIndex)
+  const movers: CategoryMover[] = matrix.series.map((s) => {
+    const value = Number(s.values[monthIndex] ?? 0)
+    const prior = hasPrior ? Number(s.values[priorIndex] ?? 0) : null
+    const window = s.values
+      .slice(Math.max(0, monthIndex - 12), monthIndex)
+      .filter((v): v is string => v !== null)
+    const avg =
+      window.length > 0 ? window.reduce((acc, v) => acc + Number(v), 0) / window.length : null
+    return {
+      categoryId: s.category_id,
+      value,
+      deltaPrior: prior === null ? null : value - prior,
+      deltaAvg: avg === null ? null : value - avg,
+    }
+  })
+  const magnitude = (m: CategoryMover) =>
+    Math.max(Math.abs(m.deltaPrior ?? 0), Math.abs(m.deltaAvg ?? 0))
+  return movers
+    .filter((m) => magnitude(m) >= 0.005) // a cent of movement on either measure
+    .sort((a, b) => magnitude(b) - magnitude(a))
+    .slice(0, top)
+}

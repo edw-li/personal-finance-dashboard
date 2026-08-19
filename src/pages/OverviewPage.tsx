@@ -3,11 +3,12 @@ import { NavLink } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
-import { fetchHistory, fetchHoldings } from '../api/portfolio'
-import { fetchMatrix } from '../api/spending'
+import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
+import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import EChart from '../components/EChart'
 import { attentionItems } from '../components/overview/attention'
+import { ytdStats } from '../components/overview/ytd'
 import {
   netWorthSparkOption,
   pickTaxSummary,
@@ -17,12 +18,14 @@ import {
 import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
 import StatTile from '../components/StatTile'
 import type {
+  DividendOut,
   EsppLotsResponse,
   HoldingsResponse,
   NetWorthSummary,
   NetWorthTimeseries,
   PortfolioHistory,
   SpendingMatrix,
+  SpendingYearly,
   TaxSummariesOut,
   TaxYearOut,
 } from '../types/api'
@@ -33,7 +36,7 @@ import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
 
-// One payload object, never eight pieces of state: the page is a SNAPSHOT, and a tile that
+// One payload object, never ten pieces of state: the page is a SNAPSHOT, and a tile that
 // belongs to a newer fetch than the chart beside it is a lie about the same instant.
 interface OverviewData {
   summary: NetWorthSummary
@@ -42,10 +45,13 @@ interface OverviewData {
   history: PortfolioHistory
   matrix: SpendingMatrix
   taxes: TaxSummariesOut
-  // The attention strip's two extra feeds (ESPP countdowns, tax-year input counts) ride
-  // the same all-or-nothing snapshot: per-slot degradation stays the documented v2 shape.
+  // The attention strip's feeds (ESPP countdowns, tax-year input counts) and the YTD
+  // card's (yearly rollup, dividend log) ride the same all-or-nothing snapshot:
+  // per-slot degradation stays the documented v2 shape.
   lots: EsppLotsResponse
   taxYears: TaxYearOut[]
+  yearly: SpendingYearly
+  dividends: DividendOut[]
 }
 
 export default function OverviewPage() {
@@ -69,10 +75,12 @@ export default function OverviewPage() {
       fetchAllTaxSummaries(),
       fetchLots(),
       fetchTaxYears(),
+      fetchYearly(),
+      fetchDividends(),
     ])
-      .then(([summary, ts, holdings, history, matrix, taxes, lots, taxYears]) => {
+      .then(([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends]) => {
         if (seq !== seqRef.current) return
-        setData({ summary, ts, holdings, history, matrix, taxes, lots, taxYears })
+        setData({ summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends })
         setError(null)
       })
       .catch((err: unknown) => {
@@ -115,14 +123,21 @@ export default function OverviewPage() {
   const stats = data ? spendStats(data.matrix) : null
   const currentYear = new Date().getFullYear()
   const tax = data ? pickTaxSummary(data.taxes.years, currentYear) : null
-  // Plain const like its siblings (the memo rule below covers CHART options only) — the
-  // strip's rules are cheap string math over the snapshot.
+  // Plain consts like their siblings (the memo rule below covers CHART options only) —
+  // the strip's and the YTD card's rules are cheap math over the snapshot.
   const attention = data
     ? attentionItems(
         { months: data.ts.months, holdings: data.holdings, lots: data.lots, taxYears: data.taxYears },
         todayIso(),
       )
     : []
+  const ytd = data ? ytdStats(data.ts, data.yearly, data.dividends, todayIso()) : null
+  // Shown once ANY feed has history — on a fresh database the empty states below carry
+  // the message, and a card of five dashes would just restate them.
+  const showYtd =
+    ytd !== null &&
+    data !== null &&
+    (data.ts.months.length > 0 || data.yearly.years.length > 0 || data.dividends.length > 0)
 
   // The matrix months are a UNION of spending rows and net-pay rows, so a month whose
   // paycheck is entered but whose spending is not comes back with an explicit "0.00". A
@@ -168,7 +183,7 @@ export default function OverviewPage() {
       <header className="page-header">
         <h1>Overview</h1>
         <div className="spacer" />
-        {/* Eight idempotent GETs and no mutation anywhere on this page, so the button stays
+        {/* Ten idempotent GETs and no mutation anywhere on this page, so the button stays
             live while a load is in flight: an impatient second click is harmless, the body
             dims to show the work, and seqRef decides which answer lands. */}
         <button type="button" className="button" onClick={reload}>
@@ -242,6 +257,62 @@ export default function OverviewPage() {
               value={tax === null ? '—' : formatPct(tax.totals.effective_rate, { signed: false })}
             />
           </div>
+          {showYtd && ytd && (
+            <section className="card ytd-card">
+              <h2 className="eyebrow">Year to date — {ytd.year}</h2>
+              <dl className="ytd-facts">
+                <div className="ytd-fact">
+                  <dt>Net worth</dt>
+                  <dd>
+                    {ytd.netWorthDelta === null ? (
+                      '—'
+                    ) : (
+                      // Glyph + colour + the signed number — three channels, none alone
+                      // (StatTile's delta grammar). Up is good here, so glyph and tone agree.
+                      <span
+                        className={
+                          ytd.netWorthDelta > 0
+                            ? 'delta-positive'
+                            : ytd.netWorthDelta < 0
+                              ? 'delta-negative'
+                              : ''
+                        }
+                      >
+                        <span aria-hidden="true">
+                          {ytd.netWorthDelta > 0 ? '▲ ' : ytd.netWorthDelta < 0 ? '▼ ' : ''}
+                        </span>
+                        {formatCurrency(ytd.netWorthDelta)}
+                        {ytd.netWorthPct !== null && ` (${formatPct(ytd.netWorthPct)})`}
+                      </span>
+                    )}
+                    {ytd.anchorMonth && (
+                      <span className="ytd-sub"> since {formatMonth(ytd.anchorMonth)}</span>
+                    )}
+                  </dd>
+                </div>
+                <div className="ytd-fact">
+                  <dt>Spend</dt>
+                  <dd>{formatCurrency(ytd.spend)}</dd>
+                </div>
+                <div className="ytd-fact">
+                  <dt>Net pay</dt>
+                  <dd>{formatCurrency(ytd.netPay)}</dd>
+                </div>
+                <div className="ytd-fact">
+                  <dt>Savings rate</dt>
+                  <dd>
+                    {ytd.savingsRate === null
+                      ? '—'
+                      : formatPct(ytd.savingsRate, { signed: false })}
+                  </dd>
+                </div>
+                <div className="ytd-fact">
+                  <dt>Dividends collected</dt>
+                  <dd>{ytd.dividends === null ? '—' : formatCurrency(ytd.dividends)}</dd>
+                </div>
+              </dl>
+            </section>
+          )}
           <div className="card-grid">
             <section className="card span-12">
               <h2 className="eyebrow">Net worth trend</h2>

@@ -42,6 +42,55 @@ function todayIso(): string {
   ).padStart(2, '0')}`
 }
 
+// ── Unsaved-work drafts ──────────────────────────────────────────────────────────────
+// The wizard's two losses were (a) any navigation away mid-entry — no route guard exists
+// under a plain <BrowserRouter> — and (b) the mid-save 401, whose redirect destroyed the
+// spending half after the balances PUT had landed. A continuously written sessionStorage
+// draft closes both: it survives the SPA route change AND the full-page login redirect,
+// and is restored (with a visible note) the next time this month is opened. sessionStorage,
+// not localStorage, on purpose: a draft is "this sitting", and a week-old one silently
+// resurrecting over fresh server data would be worse than the loss it prevents.
+
+interface WizardDraft {
+  balances: Record<string, string>
+  amounts: Record<string, string>
+  netPay: string
+  recordedOn: string
+  notes: string
+}
+
+const DRAFT_PREFIX = 'finance-update-draft:'
+
+function draftKey(month: string): string {
+  return `${DRAFT_PREFIX}${month}`
+}
+
+// One serialized shape for three jobs — the dirty comparison, the stored draft, the
+// restore. Numeric keys serialize in ascending order (the JS integer-key law), so the
+// same values always yield the same string regardless of setState spread order.
+function snapshotOf(
+  balances: Record<number, string>,
+  amounts: Record<number, string>,
+  netPay: string,
+  recordedOn: string,
+  notes: string,
+): string {
+  return JSON.stringify({ balances, amounts, netPay, recordedOn, notes })
+}
+
+function readDraft(month: string): { raw: string; draft: WizardDraft } | null {
+  const raw = sessionStorage.getItem(draftKey(month))
+  if (raw === null) return null
+  try {
+    const draft = JSON.parse(raw) as WizardDraft
+    // A shape check, not a validator: a corrupt entry is discarded, never restored.
+    if (typeof draft !== 'object' || draft === null) return null
+    return { raw, draft }
+  } catch {
+    return null
+  }
+}
+
 export default function MonthlyUpdatePage() {
   const [params, setParams] = useSearchParams()
   const month = params.get('month') ?? currentMonthIso()
@@ -62,6 +111,12 @@ export default function MonthlyUpdatePage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
+  // What the server seeded for the month on screen, serialized — the draft machinery's
+  // reference point. Carries its OWN month so a mid-switch render can never write the old
+  // month's values under the new month's key.
+  const [baseline, setBaseline] = useState<{ month: string; data: string } | null>(null)
+  // A draft was restored over the seed this load — the banner's flag.
+  const [restored, setRestored] = useState(false)
 
   // Both keys are always written together, so the step never loses the month (and any
   // unrelated query param a deep link carried survives the copy).
@@ -106,15 +161,14 @@ export default function MonthlyUpdatePage() {
         // ritual starts from last month's numbers); otherwise 0.00.
         const source = thisMonth.exists ? thisMonth.balances : priorMonth.balances
         const byId = new Map(source.map((b) => [b.account_id, b.balance]))
-        setBalances(
-          Object.fromEntries(activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
+        const seededBalances = Object.fromEntries(
+          activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00']),
         )
         // Reset on EVERY month load — stale notes/date must never leak into another
         // month's save (the next PUT would silently write them there).
-        setRecordedOn(
-          thisMonth.exists && thisMonth.recorded_on ? thisMonth.recorded_on : todayIso(),
-        )
-        setNotes(thisMonth.exists && thisMonth.notes ? thisMonth.notes : '')
+        const seededRecordedOn =
+          thisMonth.exists && thisMonth.recorded_on ? thisMonth.recorded_on : todayIso()
+        const seededNotes = thisMonth.exists && thisMonth.notes ? thisMonth.notes : ''
 
         const prevSum = priorMonth.exists
           ? priorMonth.balances.reduce((acc, b) => {
@@ -124,21 +178,86 @@ export default function MonthlyUpdatePage() {
           : null
         setPrevNetWorth(prevSum)
 
+        const activeCategories = categoryList.filter((c) => c.is_active)
         const spendById = new Map(spendMonth.amounts.map((a) => [a.category_id, a.amount]))
-        setAmounts(
-          Object.fromEntries(
-            categoryList
-              .filter((c) => c.is_active)
-              .map((c) => [c.id, spendById.get(c.id) ?? '0.00']),
-          ),
+        const seededAmounts = Object.fromEntries(
+          activeCategories.map((c) => [c.id, spendById.get(c.id) ?? '0.00']),
         )
-        setNetPay(spendMonth.net_pay ?? '')
+        const seededNetPay = spendMonth.net_pay ?? ''
+
+        // A stored draft that differs from the seed is unsaved work — restore it over the
+        // seed (per field, keyed by id, so an account added since the draft still seeds).
+        // One that MATCHES the seed is a leftover with nothing to say and is dropped.
+        const seedSnapshot = snapshotOf(
+          seededBalances,
+          seededAmounts,
+          seededNetPay,
+          seededRecordedOn,
+          seededNotes,
+        )
+        const stored = readDraft(month)
+        const draft = stored !== null && stored.raw !== seedSnapshot ? stored.draft : null
+        if (stored !== null && draft === null) sessionStorage.removeItem(draftKey(month))
+        setBalances(
+          draft
+            ? Object.fromEntries(
+                activeAccounts.map((a) => [
+                  a.id,
+                  draft.balances?.[String(a.id)] ?? seededBalances[a.id],
+                ]),
+              )
+            : seededBalances,
+        )
+        setAmounts(
+          draft
+            ? Object.fromEntries(
+                activeCategories.map((c) => [
+                  c.id,
+                  draft.amounts?.[String(c.id)] ?? seededAmounts[c.id],
+                ]),
+              )
+            : seededAmounts,
+        )
+        setNetPay(draft ? (draft.netPay ?? seededNetPay) : seededNetPay)
+        setRecordedOn(draft ? (draft.recordedOn ?? seededRecordedOn) : seededRecordedOn)
+        setNotes(draft ? (draft.notes ?? seededNotes) : seededNotes)
+        setBaseline({ month, data: seedSnapshot })
+        setRestored(draft !== null)
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Failed to load month data')
       })
       .finally(() => setLoading(false))
   }, [month])
+
+  // Persist typed-but-unsaved work continuously: the draft is written on every edit and
+  // deleted the moment the boxes match the seed again, so storage always mirrors "what
+  // would be lost". Gated on the BASELINE's month (never the URL's) and on loading — a
+  // mid-switch render still holds the old month's values under the new month's URL, and
+  // this is what keeps them from being filed under the wrong key. No setState here, so
+  // the effect-body rule has nothing to say.
+  useEffect(() => {
+    if (loading || baseline === null || baseline.month !== month) return
+    const current = snapshotOf(balances, amounts, netPay, recordedOn, notes)
+    if (current === baseline.data) {
+      sessionStorage.removeItem(draftKey(baseline.month))
+    } else {
+      sessionStorage.setItem(draftKey(baseline.month), current)
+    }
+  }, [balances, amounts, netPay, recordedOn, notes, baseline, month, loading])
+
+  // Back to the server's seed, forgetting the draft — the restore banner's exit.
+  const discardDraft = () => {
+    if (baseline === null || baseline.month !== month) return
+    const seed = JSON.parse(baseline.data) as WizardDraft
+    setBalances(seed.balances as Record<number, string>)
+    setAmounts(seed.amounts as Record<number, string>)
+    setNetPay(seed.netPay)
+    setRecordedOn(seed.recordedOn)
+    setNotes(seed.notes)
+    setRestored(false)
+    sessionStorage.removeItem(draftKey(month))
+  }
 
   const balancesValid = accounts.every((a) => isNumeric(balances[a.id] ?? ''))
   const amountsValid =
@@ -180,6 +299,10 @@ export default function MonthlyUpdatePage() {
           `${balanceResult.unchanged} unchanged. Spending: ${spendResult.created} added, ` +
           `${spendResult.updated} changed, ${spendResult.unchanged} unchanged.`,
       )
+      // What is on screen IS saved now: adopting it as the baseline makes the wizard
+      // clean, and the draft effect deletes the stored copy on the same render.
+      setBaseline({ month, data: snapshotOf(balances, amounts, netPay, recordedOn, notes) })
+      setRestored(false)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Saving failed — nothing was lost, retry')
     } finally {
@@ -198,6 +321,9 @@ export default function MonthlyUpdatePage() {
     setLoading(true)
     setError(null)
     setSaved(null)
+    // The banner describes the month being LEFT; the new load re-derives it. The typed
+    // work itself needs no goodbye — the draft effect has been persisting it all along.
+    setRestored(false)
     setParams(() => new URLSearchParams({ month: m, step: 'balances' }))
   }
 
@@ -247,6 +373,18 @@ export default function MonthlyUpdatePage() {
       {error && (
         <div className="error-banner" role="alert">
           {error}
+        </div>
+      )}
+      {restored && (
+        // Advisory, not an error: nothing failed — work was preserved. The discard button
+        // is the only way to decline it; saving is the way to accept it.
+        <div className="draft-note" role="status">
+          <span>
+            Restored unsaved entries for {formatMonth(month)} — they are not saved yet.
+          </span>
+          <button type="button" className="button" onClick={discardDraft}>
+            Discard restored entries
+          </button>
         </div>
       )}
       {saved && (

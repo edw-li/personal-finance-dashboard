@@ -7,11 +7,13 @@ import { configDefaults } from 'vitest/config'
 export default defineConfig({
   plugins: [react()],
   build: {
-    // The echarts subset is one indivisible LAZY chunk (678.97 kB raw / 231.10 kB gzip),
-    // reached only from the six chart routes — the entry is 249.06 kB and never loads it.
-    // Raising the advisory limit documents that it is deliberate, not forgotten; the
-    // headroom is small on purpose, so pulling more echarts modules in trips it again.
-    chunkSizeWarningLimit: 700,
+    // The echarts subset is one indivisible LAZY chunk, reached only from the chart
+    // routes — the entry (~249 kB) never loads it. Raising the advisory limit documents
+    // that it is deliberate, not forgotten; the headroom is small on purpose, so pulling
+    // more echarts modules in trips it again. History: 678.97 kB at the 700 limit; the
+    // dataZoom component took it to 694.77; ScatterChart (net-worth note markers) pushes
+    // past 700, hence 720.
+    chunkSizeWarningLimit: 720,
   },
   server: {
     proxy: {

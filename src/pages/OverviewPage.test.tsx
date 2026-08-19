@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
+  DividendOut,
   EsppLotOut,
   EsppLotsResponse,
   HoldingsResponse,
@@ -10,6 +11,7 @@ import type {
   NetWorthTimeseries,
   PortfolioHistory,
   SpendingMatrix,
+  SpendingYearly,
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
@@ -18,8 +20,8 @@ import { formatDate, formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
 
-// Five modules, eight clients, one snapshot: the page's whole contract is that these
-// resolve TOGETHER (the last two feed only the attention strip, and ride along anyway).
+// Five modules, ten clients, one snapshot: the page's whole contract is that these
+// resolve TOGETHER (the strip's and the YTD card's feeds ride along like the rest).
 vi.mock('../api/netWorth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/netWorth')>()),
   fetchSummary: vi.fn(),
@@ -29,10 +31,12 @@ vi.mock('../api/portfolio', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/portfolio')>()),
   fetchHoldings: vi.fn(),
   fetchHistory: vi.fn(),
+  fetchDividends: vi.fn(),
 }))
 vi.mock('../api/spending', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/spending')>()),
   fetchMatrix: vi.fn(),
+  fetchYearly: vi.fn(),
 }))
 vi.mock('../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/taxes')>()),
@@ -61,8 +65,8 @@ vi.mock('../components/EChart', async () => {
 })
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
-import { fetchHistory, fetchHoldings } from '../api/portfolio'
-import { fetchMatrix } from '../api/spending'
+import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
+import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 
 // --- fixtures ---------------------------------------------------------------------------
@@ -118,6 +122,7 @@ function timeseriesOut(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseri
     },
     net_worth: ['1200000.00', '1224567.00', '1234567.00'],
     mom_pct: [null, '0.020466', '0.008163'],
+    notes: [null, null, null],
     ...over,
   }
 }
@@ -215,9 +220,11 @@ interface Payload {
   taxes: TaxSummariesOut
   lots: EsppLotsResponse
   taxYears: TaxYearOut[]
+  yearly: SpendingYearly
+  dividends: DividendOut[]
 }
 
-// Arms all eight clients at once — the page never renders a partial snapshot, so neither
+// Arms all ten clients at once — the page never renders a partial snapshot, so neither
 // does the harness. The strip-quiet defaults (no lots, a filled current tax year) keep the
 // attention strip out of the tests that are not about it; the wall-clock-relative cases
 // (monthly-update nudges) live in attention.test.ts, where today is injectable.
@@ -231,6 +238,8 @@ function serve(over: Partial<Payload> = {}): Payload {
     taxes: { years: [taxSummaryOut(CURRENT_YEAR)] },
     lots: lotsOut(),
     taxYears: [{ year: CURRENT_YEAR, notes: null, input_count: 21, bracket_count: 42 }],
+    yearly: { years: [] },
+    dividends: [],
     ...over,
   }
   vi.mocked(fetchSummary).mockResolvedValue(payload.summary)
@@ -241,6 +250,8 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchAllTaxSummaries).mockResolvedValue(payload.taxes)
   vi.mocked(fetchLots).mockResolvedValue(payload.lots)
   vi.mocked(fetchTaxYears).mockResolvedValue(payload.taxYears)
+  vi.mocked(fetchYearly).mockResolvedValue(payload.yearly)
+  vi.mocked(fetchDividends).mockResolvedValue(payload.dividends)
   return payload
 }
 
@@ -254,6 +265,8 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchAllTaxSummaries).mockImplementation(boom)
   vi.mocked(fetchLots).mockImplementation(boom)
   vi.mocked(fetchTaxYears).mockImplementation(boom)
+  vi.mocked(fetchYearly).mockImplementation(boom)
+  vi.mocked(fetchDividends).mockImplementation(boom)
 }
 
 function renderPage() {
@@ -481,7 +494,7 @@ describe('OverviewPage snapshot fan-out', () => {
     expect(fetchTimeseries).toHaveBeenCalledWith('monthly')
   })
 
-  it('refetches all eight clients on Refresh', async () => {
+  it('refetches all ten clients on Refresh', async () => {
     // One snapshot, one round trip per client: Refresh re-reads the WHOLE page rather than
     // topping up a tile, which is what keeps the tiles and the charts on the same instant.
     serve()
@@ -493,7 +506,7 @@ describe('OverviewPage snapshot fan-out', () => {
 
     for (const client of [
       fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
-      fetchAllTaxSummaries, fetchLots, fetchTaxYears,
+      fetchAllTaxSummaries, fetchLots, fetchTaxYears, fetchYearly, fetchDividends,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
     }
@@ -553,6 +566,51 @@ describe('OverviewPage freshness', () => {
   })
 })
 
+describe('OverviewPage year to date', () => {
+  it('states the year facts from the yearly rollup and the dividend log', async () => {
+    serve({
+      yearly: {
+        years: [
+          {
+            year: CURRENT_YEAR,
+            by_category: [],
+            total: '32000.00',
+            net_pay_total: '90000.00',
+            savings_rate: '0.644444',
+          },
+        ],
+      },
+      dividends: [
+        { id: 1, security_id: 1, account: null, pay_date: `${CURRENT_YEAR}-03-15`, amount: '120.50', notes: null },
+        // Last year's payout must stay OUT of this year's sum.
+        { id: 2, security_id: 1, account: null, pay_date: `${CURRENT_YEAR - 1}-12-15`, amount: '999.00', notes: null },
+      ],
+    })
+    renderPage()
+
+    await screen.findByText(`Year to date — ${CURRENT_YEAR}`)
+    // The spending figures are the SERVER's yearly rollup, verbatim.
+    expect(screen.getByText('$32,000.00')).toBeTruthy()
+    expect(screen.getByText('$90,000.00')).toBeTruthy()
+    expect(screen.getByText('64.4%')).toBeTruthy()
+    // The dividend sum is this year's payments only.
+    expect(screen.getByText('$120.50')).toBeTruthy()
+    expect(screen.queryByText('$999.00')).toBeNull()
+  })
+
+  it('stays off a fresh database — the empty states already carry the message', async () => {
+    serve({
+      ts: timeseriesOut({ months: [], net_worth: [], mom_pct: [], notes: [] }),
+      yearly: { years: [] },
+      dividends: [],
+    })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+
+    expect(screen.queryByText(/Year to date/)).toBeNull()
+  })
+})
+
 describe('OverviewPage attention strip', () => {
   it('stays absent when nothing needs doing', async () => {
     // Strip-quiet defaults: current month covered (NW_MONTHS), fresh quote, no lots, a
@@ -599,7 +657,7 @@ describe('OverviewPage on an empty database', () => {
   it('renders dashes and per-slot empty notes rather than a page of zeros', async () => {
     serve({
       summary: summaryOut({ month: null, net_worth: null, mom_delta: null, mom_pct: null }),
-      ts: timeseriesOut({ months: [], net_worth: [], mom_pct: [] }),
+      ts: timeseriesOut({ months: [], net_worth: [], mom_pct: [], notes: [] }),
       holdings: holdingsOut({
         as_of: null,
         totals: {
@@ -643,7 +701,7 @@ describe('OverviewPage on an empty database', () => {
 })
 
 describe('OverviewPage failures', () => {
-  it('banners a failed first load and refetches all eight on Retry', async () => {
+  it('banners a failed first load and refetches all ten on Retry', async () => {
     failAll()
     renderPage()
 
@@ -662,7 +720,7 @@ describe('OverviewPage failures', () => {
     // One snapshot means one round trip per client, twice over: the failed mount and Retry.
     for (const client of [
       fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
-      fetchAllTaxSummaries, fetchLots, fetchTaxYears,
+      fetchAllTaxSummaries, fetchLots, fetchTaxYears, fetchYearly, fetchDividends,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
     }

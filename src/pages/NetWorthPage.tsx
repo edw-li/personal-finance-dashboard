@@ -15,11 +15,13 @@ import {
   GROUP_LABELS,
   GROUP_ORDER,
   INK,
+  MUTED,
   PALETTE,
 } from '../charts/theme'
 import type { AccountGroup, NetWorthSummary, NetWorthTimeseries } from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import {
+  escapeHtml,
   formatCurrency,
   formatCurrencyCompact,
   formatMonth,
@@ -33,6 +35,10 @@ import './NetWorthPage.css'
 const ASSET_GROUPS = GROUP_ORDER.filter((g): g is AccountGroup => g !== 'liability')
 // One slot per validated palette hue (theme.ts: never cycle past 8).
 const MAX_DRILL = PALETTE.length
+
+// The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
+// the legend, the tooltip branch and the series stay in lockstep.
+const NOTES_SERIES = 'Notes'
 
 function pctChange(curr: string | null, prev: string | null): number | null {
   if (curr === null || prev === null || Number(prev) === 0) return null
@@ -117,6 +123,16 @@ export default function NetWorthPage() {
   const stackedOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.months.length === 0) return null
     const labels = data.months.map(formatMonth)
+    // The annotation layer: one marker per NOTED month, sitting on the net-worth line at
+    // that month's value. (data.notes ?? []) is stale-deploy armor — a tab served the old
+    // bundle keeps working against a payload that already carries notes, and vice versa.
+    const noted = data.months
+      .map((_, i) => ({
+        label: labels[i],
+        value: Number(data.net_worth[i]),
+        note: (data.notes ?? [])[i],
+      }))
+      .filter((p): p is { label: string; value: number; note: string } => !!p.note)
     return {
       // Windowed, not sliced: dataZoom keeps the whole series loaded so a ctrl+wheel or a
       // chip flip never refetches, and the y-axis re-scales to the visible window (filter
@@ -126,7 +142,31 @@ export default function NetWorthPage() {
       legend: { top: 0 },
       tooltip: {
         trigger: 'axis',
-        valueFormatter: (value) => formatCurrency(value as number),
+        // A full formatter, not valueFormatter: the Notes series carries TEXT — and note
+        // text is USER TEXT, so escapeHtml is mandatory (SpendingPage's rule). Money rows
+        // keep the currency treatment; a padded null still reads as a dash.
+        formatter: (params: unknown) => {
+          const list = (Array.isArray(params) ? params : [params]) as {
+            seriesName?: string
+            marker?: string
+            axisValueLabel?: string
+            value?: unknown
+            data?: unknown
+          }[]
+          if (list.length === 0) return ''
+          const head = `<strong>${list[0].axisValueLabel ?? ''}</strong>`
+          const lines = list.map((p) => {
+            if (p.seriesName === NOTES_SERIES) {
+              const note = (p.data as { note?: string } | undefined)?.note ?? ''
+              return `${p.marker ?? ''}${escapeHtml(note)}`
+            }
+            const raw = Array.isArray(p.value) ? p.value[1] : p.value
+            const text =
+              typeof raw === 'number' && Number.isFinite(raw) ? formatCurrency(raw) : '—'
+            return `${p.marker ?? ''}${p.seriesName ?? ''}: ${text}`
+          })
+          return [head, ...lines].join('<br/>')
+        },
       },
       xAxis: { type: 'category', data: labels, boundaryGap: false },
       yAxis: {
@@ -169,6 +209,25 @@ export default function NetWorthPage() {
           },
           data: data.net_worth.map(Number),
         },
+        ...(noted.length > 0
+          ? [
+              {
+                name: NOTES_SERIES,
+                // Plain scatter, deliberately not effectScatter: a note is history, and
+                // the ripple is the live ping's reserved "this is now" signal. Diamond +
+                // MUTED = identity by SHAPE and a neutral tone — the wizard's notes are
+                // an annotation layer, not a fourth data hue (theme.ts's ≤3-hue law).
+                type: 'scatter' as const,
+                symbol: 'diamond' as const,
+                symbolSize: 9,
+                color: MUTED,
+                itemStyle: { borderColor: INK, borderWidth: 1 },
+                emphasis: { itemStyle: { borderColor: INK } },
+                z: 11,
+                data: noted.map((p) => ({ value: [p.label, p.value], note: p.note })),
+              },
+            ]
+          : []),
       ],
     }
   }, [data, range])

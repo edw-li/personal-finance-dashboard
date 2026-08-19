@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMonthSlices } from './spending'
+import { buildMonthSlices, monthMovers } from './spending'
 
 const categories = [
   { id: 1, name: 'Rent', slug: 'rent', sort_order: 1, is_active: true },
@@ -47,5 +47,50 @@ describe('buildMonthSlices', () => {
   it('falls back to the id when a series category is missing from the list', () => {
     const m = { categories: [], series: [{ category_id: 9, values: ['12.00'] }] }
     expect(buildMonthSlices(m, [9], 0)).toEqual([{ name: '9', value: 12, slot: 0 }])
+  })
+})
+
+describe('monthMovers', () => {
+  it('ranks by the larger delta and keeps the top N', () => {
+    const m = matrix({
+      1: ['100.00', '100.00', '400.00'], // +300 vs prior, +300 vs avg
+      2: ['50.00', '80.00', '20.00'], // -60 vs prior, -45 vs avg
+      3: ['10.00', '10.00', '10.00'], // flat both ways — not a mover
+      4: [null, null, '30.00'], // new spend: +30 vs prior's implicit 0, no history for avg
+    })
+    expect(monthMovers(m, 2, 2)).toEqual([
+      { categoryId: 1, value: 400, deltaPrior: 300, deltaAvg: 300 },
+      { categoryId: 2, value: 20, deltaPrior: -60, deltaAvg: -45 },
+    ])
+    // Unclipped, the new spend ranks third and the flat category never appears.
+    expect(monthMovers(m, 2).map((mv) => mv.categoryId)).toEqual([1, 2, 4])
+  })
+
+  it('surfaces a flat-vs-prior category that is far off its average', () => {
+    // Same as last month, but the trailing mean is 100: the avg delta alone ranks it.
+    const m = matrix({ 1: ['100.00', '100.00', '250.00', '250.00'] })
+    expect(monthMovers(m, 3)).toEqual([
+      { categoryId: 1, value: 250, deltaPrior: 0, deltaAvg: 100 },
+    ])
+  })
+
+  it('nulls the prior delta when the previous month was never entered', () => {
+    // Month 1 is a hole (every category null) — a delta against it would be fiction.
+    const m = matrix({
+      1: ['100.00', null, '400.00'],
+      2: ['20.00', null, '30.00'],
+    })
+    // Averages skip the hole: cat 1's window is [100] -> avg 100, cat 2's [20] -> avg 20.
+    expect(monthMovers(m, 2)).toEqual([
+      { categoryId: 1, value: 400, deltaPrior: null, deltaAvg: 300 },
+      { categoryId: 2, value: 30, deltaPrior: null, deltaAvg: 10 },
+    ])
+  })
+
+  it('answers [] for the first month, an un-entered month, or out of range', () => {
+    const m = matrix({ 1: ['100.00', null] })
+    expect(monthMovers(m, 0)).toEqual([]) // nothing before it to move against
+    expect(monthMovers(m, 1)).toEqual([]) // the month itself was never entered
+    expect(monthMovers(m, -1)).toEqual([])
   })
 })

@@ -17,6 +17,7 @@ from app.api import (
     paycheck,
     portfolio,
     prices,
+    projection,
     spending,
     taxes,
 )
@@ -79,6 +80,7 @@ app.include_router(taxes.router, prefix="/api/v1")
 app.include_router(espp.router, prefix="/api/v1")
 app.include_router(paycheck.router, prefix="/api/v1")
 app.include_router(comp.router, prefix="/api/v1")
+app.include_router(projection.router, prefix="/api/v1")
 app.include_router(app_settings.router, prefix="/api/v1")
 
 

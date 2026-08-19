@@ -49,6 +49,41 @@
   outline-offset: 1px;
 }
 
+/* Year-to-date facts: label-over-value pairs (portfolio.css's holding-facts shape, copied
+   by design — per-page stylesheets never import each other). */
+.ytd-card {
+  margin-bottom: 1rem;
+}
+
+.ytd-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+
+.ytd-fact dt {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.ytd-fact dd {
+  margin: 0;
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ytd-fact .ytd-sub {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-family: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
 .overview-freshness {
   color: var(--muted);
   font-size: 0.85rem;

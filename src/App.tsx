@@ -17,6 +17,7 @@ const TaxesPage = lazy(() => import('./pages/TaxesPage'))
 const EsppPage = lazy(() => import('./pages/EsppPage'))
 const PaycheckPage = lazy(() => import('./pages/PaycheckPage'))
 const CompPage = lazy(() => import('./pages/CompPage'))
+const ProjectionPage = lazy(() => import('./pages/ProjectionPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 
 export default function App() {
@@ -36,6 +37,7 @@ export default function App() {
               <Route path="/espp" element={<EsppPage />} />
               <Route path="/paycheck" element={<PaycheckPage />} />
               <Route path="/comp" element={<CompPage />} />
+              <Route path="/projection" element={<ProjectionPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<PlaceholderPage title="Not Found" />} />
             </Route>

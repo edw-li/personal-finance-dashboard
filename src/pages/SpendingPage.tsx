@@ -28,12 +28,27 @@ import {
   formatPct,
 } from '../utils/format'
 import { currentMonthIso } from '../utils/months'
-import { buildMonthSlices } from '../utils/spending'
+import { buildMonthSlices, monthMovers } from '../utils/spending'
 import '../components/panels.css'
 import './SpendingPage.css'
 
 const TOP_N = 7
 const MAX_TREND = 3
+const MOVERS_TOP = 5
+
+// Spending UP is BAD: the glyph carries which way the number moved, the colour whether
+// that is good — StatTile's decoupled delta grammar, table-cell sized. Null (no month to
+// compare against) and a flat cent both read as a dash.
+function moverCell(delta: number | null) {
+  if (delta === null || Math.abs(delta) < 0.005) return '—'
+  const up = delta > 0
+  return (
+    <span className={up ? 'delta-negative' : 'delta-positive'}>
+      <span aria-hidden="true">{up ? '▲ ' : '▼ '}</span>
+      {formatCurrency(Math.abs(delta))}
+    </span>
+  )
+}
 
 export default function SpendingPage() {
   const navigate = useNavigate()
@@ -241,6 +256,14 @@ export default function SpendingPage() {
       ],
     }
   }, [matrix, detailIndex, topIds])
+
+  // The movers follow the month being LOOKED AT: the drilled month when the pie is open,
+  // the latest month otherwise — one card answering "what changed here".
+  const moversIndex = matrix ? (activeDetail ? detailIndex : matrix.months.length - 1) : -1
+  const movers = useMemo(
+    () => (matrix ? monthMovers(matrix, moversIndex, MOVERS_TOP) : []),
+    [matrix, moversIndex],
+  )
 
   const handleSpendChartClick = (params: EChartEventParams) => {
     if (activeDetail) {
@@ -551,6 +574,38 @@ export default function SpendingPage() {
             )
           )}
         </div>
+
+        {movers.length > 0 && (
+          <div className="card span-12">
+            <h2 className="eyebrow">What changed — {monthLabels[moversIndex]}</h2>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th className="num">{monthLabels[moversIndex]}</th>
+                  <th className="num">
+                    vs {moversIndex > 0 ? monthLabels[moversIndex - 1] : 'prior month'}
+                  </th>
+                  <th className="num">vs 12-mo avg</th>
+                </tr>
+              </thead>
+              <tbody>
+                {movers.map((m) => (
+                  <tr key={m.categoryId}>
+                    <td>{nameById.get(m.categoryId) ?? String(m.categoryId)}</td>
+                    <td className="num">{formatCurrency(m.value)}</td>
+                    <td className="num">{moverCell(m.deltaPrior)}</td>
+                    <td className="num">{moverCell(m.deltaAvg)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="drill-hint">
+              The {MOVERS_TOP} biggest category moves for the month above — drill into a
+              month on the top chart to see its movers instead.
+            </p>
+          </div>
+        )}
 
         <div className="card span-12">
           <h2 className="eyebrow">Month × category heatmap</h2>

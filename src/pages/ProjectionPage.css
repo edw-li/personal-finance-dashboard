@@ -1,0 +1,50 @@
+/* Page-scoped rules ONLY (the per-page stylesheet law). The app-wide vocabulary (.page,
+   .card, .kpi-row, .stat-tile, .button, .field-input, .error-banner, .empty-note,
+   .drill-hint, .loading-dim) lives in panels.css and is not redefined here. */
+
+.projection-chart-card {
+  margin-bottom: 1rem;
+}
+
+/* The knobs form: the espp-form shape (labels over inputs, auto-fit), copied by design —
+   per-page stylesheets never import each other. */
+.projection-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 16px;
+  align-items: end;
+}
+
+.projection-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.projection-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Advisory sentences about what the model ran with — the tax-warnings register: nothing
+   failed, so never an error banner. */
+.projection-warnings {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.projection-warnings p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+}

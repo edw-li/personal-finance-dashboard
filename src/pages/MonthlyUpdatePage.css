@@ -108,3 +108,21 @@
   font-family: inherit;
   width: 190px;
 }
+
+/* The draft-restored banner: advisory amber (the .tax-warnings register), never an error
+   — nothing failed, work was preserved. The literal is PALETTE[3], the app's one
+   annotation/advisory color (portfolio.css's staleness note explains why it's a literal). */
+.draft-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid #c98500;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.85rem;
+}

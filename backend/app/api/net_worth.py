@@ -169,6 +169,8 @@ async def timeseries(
         group_totals=group_totals,
         net_worth=net_worth,
         mom_pct=mom,
+        # After the quarterly filter, so the list stays aligned with `months`.
+        notes=[s.notes for s in snapshots],
     )
 
 

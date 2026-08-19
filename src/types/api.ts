@@ -50,6 +50,8 @@ export interface NetWorthTimeseries {
   group_totals: Record<AccountGroup, string[]>
   net_worth: string[]
   mom_pct: (string | null)[]
+  /** Snapshot notes aligned with months — the chart's annotation layer (user text). */
+  notes: (string | null)[]
 }
 
 export interface GroupSummary {
@@ -662,6 +664,33 @@ export interface CompEventCreate {
 // on any other field really CLEARS that column (a raise that never happened, a grant
 // that was withdrawn). That is the deliberate difference from EsppLotUpdate.
 export type CompEventUpdate = Partial<CompEventCreate>
+
+// --- projection ---
+// GET /projection — the FIRE modeler (the ESPP modeler's shape: knobs as query params,
+// the echo is what the page's form seeds from). Money 2dp; rates 6dp when a param was
+// quantized, verbatim seeds otherwise ("0.05" / "0.04").
+
+export interface ProjectionOut {
+  starting_balance: string
+  /** The snapshot month the starting balance came from. */
+  base_month: string
+  /** The projection's t0 — the current calendar month. */
+  start_month: string
+  annual_return: string
+  monthly_contribution: string
+  annual_spend: string | null
+  swr_pct: string
+  years: number
+  fi_target: string | null
+  fi_ratio: string | null
+  fi_month: string | null
+  coast_fi_month: string | null
+  // Parallel arrays: index i across all three is one month.
+  months: string[]
+  projected: string[]
+  coast: string[]
+  warnings: string[]
+}
 
 // --- import (mirrors backend/app/importer/report.py) ---
 

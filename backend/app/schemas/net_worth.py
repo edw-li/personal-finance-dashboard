@@ -88,6 +88,9 @@ class TimeseriesOut(BaseModel):
     group_totals: dict[str, list[Decimal]]
     net_worth: list[Decimal]
     mom_pct: list[Decimal | None]
+    # Aligned with months, like every other parallel list here: the wizard has collected
+    # snapshot notes since Plan 3, and this is what finally lets a chart show them.
+    notes: list[str | None]
 
 
 class GroupSummary(BaseModel):

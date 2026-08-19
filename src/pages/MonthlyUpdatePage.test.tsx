@@ -48,6 +48,7 @@ beforeEach(() => {
     },
     net_worth: ['1500.00'],
     mom_pct: [null],
+    notes: [null],
   })
   vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category])
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
@@ -61,6 +62,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // Drafts live in sessionStorage, which jsdom keeps alive across tests in this file —
+  // without this, one test's typed work restores itself into the next test's wizard.
+  sessionStorage.clear()
 })
 
 function renderWizard() {
@@ -144,6 +148,56 @@ it('resets notes/date on month switch and survives same-month clicks', async () 
   ).not.toBe('2026-08-05')
 })
 
+it('drafts typed work and restores it after leaving and coming back', async () => {
+  const first = renderWizard()
+  const balanceInput = await screen.findByLabelText('Checking')
+  fireEvent.change(balanceInput, { target: { value: '1600.00' } })
+  // Leaving is just unmounting — under a plain <BrowserRouter> there is no route guard,
+  // and the draft in sessionStorage is the whole safety net.
+  first.unmount()
+
+  renderWizard()
+  expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1600.00')
+  expect(screen.getByText(/restored unsaved entries/i)).toBeTruthy()
+
+  // Discard puts the server's seed back and forgets the draft.
+  fireEvent.click(screen.getByRole('button', { name: /discard restored entries/i }))
+  expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1500.00')
+  expect(screen.queryByText(/restored unsaved entries/i)).toBeNull()
+})
+
+it('forgets the draft once the month is saved', async () => {
+  const first = renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  first.unmount()
+
+  renderWizard()
+  // The seed is the SERVER's again and no banner shows — the draft died with the save.
+  expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
+  expect(screen.queryByText(/restored unsaved entries/i)).toBeNull()
+})
+
+it('keeps a draft per month across ribbon switches', async () => {
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Jun 2026 — no data' }))
+  await waitFor(() =>
+    expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('0.00'),
+  )
+  // June is untouched: no draft, no banner — August's work never leaks sideways.
+  expect(screen.queryByText(/restored unsaved entries/i)).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Aug 2026 — no data' }))
+  await screen.findByText(/restored unsaved entries/i)
+  expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1600.00')
+})
+
 it('offers starting the month after the latest covered month', async () => {
   // Date-independent: months derive from the SAME clock the component reads, so this
   // holds whenever the run happens. Coverage through the current month = the state
@@ -167,6 +221,7 @@ it('offers starting the month after the latest covered month', async () => {
     },
     net_worth: ['1500.00'],
     mom_pct: [null],
+    notes: [null],
   })
   render(
     <MemoryRouter initialEntries={[`/update?month=${current}`]}>
