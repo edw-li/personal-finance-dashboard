@@ -43,12 +43,12 @@ const SETTINGS: AppSettingsOut = {
   price_refresh_cron: '10 13 * * mon-fri',
 }
 
-// Static copy, pinned verbatim: it is the only place the two traps behind this box are
-// stated (day NAMES, and a cron the scheduler will not read until it reboots).
+// Static copy, pinned verbatim: it is the only place the day-NAMES trap is stated — and
+// since the hot-reload landed, the note must NOT resurrect the old restart ritual.
 const CRON_HINT =
-  '5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applies after a ' +
-  'backend restart. Must not fire more often than hourly.'
-const SAVED_NOTE = 'Saved — cron changes apply after a backend restart.'
+  '5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied to the ' +
+  'live schedule on save. Must not fire more often than hourly.'
+const SAVED_NOTE = 'Saved — the schedule is applied immediately.'
 
 const swrBox = () => screen.getByLabelText('Withdrawal rate (% / year)') as HTMLInputElement
 const tickerBox = () => screen.getByLabelText('ESPP ticker') as HTMLInputElement
@@ -165,7 +165,7 @@ describe('SettingsPage — app settings', () => {
     expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(1)
   })
 
-  it('PUTs the full form with the rate shifted back, and notes the restart', async () => {
+  it('PUTs the full form with the rate shifted back, and notes the hot-applied schedule', async () => {
     render(<SettingsPage />)
     await screen.findByLabelText('ESPP ticker')
 

@@ -11,15 +11,18 @@ from app.config import settings
 from app.database import get_db
 from app.models import LatestPrice, PositionTransaction, PriceHistory, Security
 from app.schemas.portfolio import (
+    LastRefreshOut,
     LatestPriceOut,
     ManualPriceIn,
     PriceHistoryOut,
     PricePoint,
     RefreshOut,
+    RefreshStatusOut,
 )
 from app.services.money import quantize_price, require_reasonable_date
 from app.services.portfolio_calc import fold_transactions
-from app.services.price_service import refresh_prices, set_manual_price
+from app.services.price_service import read_last_refresh, run_refresh, set_manual_price
+from app.services.scheduler import get_next_run_time
 
 router = APIRouter(prefix="/prices", tags=["prices"], dependencies=[Depends(get_current_user)])
 
@@ -34,13 +37,31 @@ def get_provider():
 @router.post("/refresh", response_model=RefreshOut)
 async def refresh(db: AsyncSession = Depends(get_db)) -> RefreshOut:
     started = time_module.monotonic()
-    result = await refresh_prices(db, get_provider())
+    # run_refresh, not refresh_prices: the manual button and the scheduled job walk ONE
+    # ritual (prices -> value-history snapshot -> recorded outcome), so the two can never
+    # drift. The response shape is unchanged; the extras land in /prices/refresh-status.
+    result, _appended = await run_refresh(db, get_provider(), trigger="manual")
     return RefreshOut(
         updated=result.updated,
         failed=result.failed,
         skipped_manual=result.skipped_manual,
         duration_ms=int((time_module.monotonic() - started) * 1000),
     )
+
+
+@router.get("/refresh-status", response_model=RefreshStatusOut)
+async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut:
+    """What happened last and what happens next — the header line's and the attention
+    strip's feed. The stored payload is convention-shaped JSON; anything malformed reads
+    as 'no run recorded' rather than a 500 (get_swr_pct's fallback posture)."""
+    raw = await read_last_refresh(db)
+    last: LastRefreshOut | None = None
+    if raw is not None:
+        try:
+            last = LastRefreshOut.model_validate(raw)
+        except ValueError:
+            last = None
+    return RefreshStatusOut(last=last, next_run_at=get_next_run_time())
 
 
 async def _security_by_ticker(db: AsyncSession, ticker: str) -> Security:

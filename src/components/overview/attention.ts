@@ -1,10 +1,12 @@
 // Pure "needs attention" math for the overview strip — no React, no fetching (the
 // overviewChartOptions.ts posture). Everything here is derived from feeds the page
 // already holds; `todayIso` is a parameter so the rules are clock-injectable in tests.
-//
-// Deliberately NOT here (needs the scheduler-persistence backend work): "last scheduled
-// refresh failed" and per-ticker failure noise — the cron run's outcome is log-only today.
-import type { EsppLotsResponse, HoldingsResponse, TaxYearOut } from '../../types/api'
+import type {
+  EsppLotsResponse,
+  HoldingsResponse,
+  LastRefresh,
+  TaxYearOut,
+} from '../../types/api'
 import { formatDate, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 import { isStaleQuote } from '../../utils/staleness'
@@ -21,6 +23,8 @@ export interface AttentionInputs {
   holdings: HoldingsResponse
   lots: EsppLotsResponse
   taxYears: TaxYearOut[]
+  /** The persisted outcome of the most recent refresh run; null before the first one. */
+  lastRefresh: LastRefresh | null
 }
 
 // The ritual runs in the month's first days (recorded_on evidence), so the nudge waits a
@@ -91,6 +95,22 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
     items.push({
       key: 'holding-warnings',
       text: `${warned} ${plural(warned, 'holding carries', 'holdings carry')} data warnings`,
+      to: '/portfolio',
+    })
+  }
+
+  // The last refresh run's failures — persisted whichever way it ran (the scheduled
+  // job's outcome used to be log-only). The Portfolio header carries the per-ticker
+  // detail and the one-click deactivate.
+  const failedTickers = data.lastRefresh === null ? [] : Object.keys(data.lastRefresh.failed)
+  if (failedTickers.length > 0) {
+    const shown = failedTickers.slice(0, 3).join(', ')
+    const more = failedTickers.length - Math.min(3, failedTickers.length)
+    items.push({
+      key: 'refresh-failed',
+      text:
+        `${failedTickers.length} ${plural(failedTickers.length, 'ticker', 'tickers')} failed ` +
+        `the last price refresh (${shown}${more > 0 ? `, +${more} more` : ''})`,
       to: '/portfolio',
     })
   }

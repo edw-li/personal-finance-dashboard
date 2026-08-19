@@ -54,6 +54,21 @@ export function formatDate(iso: string | null | undefined): string {
   return `${MONTH_NAMES[Number(month) - 1]} ${Number(day)}, ${year}`
 }
 
+export function formatDateTime(iso: string | null | undefined): string {
+  // The one formatter that IS allowed to `new Date(iso)`: it takes full offset-carrying
+  // timestamps only (refresh runs, next-fire times), where parsing is exact and the
+  // LOCAL wall clock is the honest rendering — these are "when did/does it happen"
+  // stamps, not calendar data. Never hand it a bare date (that is formatDate's job).
+  if (!iso) return '—'
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return '—'
+  const hours24 = at.getHours()
+  const hours = hours24 % 12 === 0 ? 12 : hours24 % 12
+  const minutes = String(at.getMinutes()).padStart(2, '0')
+  const meridiem = hours24 < 12 ? 'AM' : 'PM'
+  return `${MONTH_NAMES[at.getMonth()]} ${at.getDate()}, ${at.getFullYear()}, ${hours}:${minutes} ${meridiem}`
+}
+
 export function escapeHtml(raw: string): string {
   // ECharts tooltip formatters build HTML strings; account/category names are user text.
   return raw

@@ -189,6 +189,25 @@ class RefreshOut(BaseModel):
     duration_ms: int
 
 
+class LastRefreshOut(BaseModel):
+    """The persisted outcome of the most recent refresh run, manual or scheduled —
+    price_service.record_refresh_run's payload, given back a shape."""
+
+    at: datetime
+    trigger: str
+    updated: int
+    failed: dict[str, str]
+    skipped_manual: int
+    history_appended: bool
+
+
+class RefreshStatusOut(BaseModel):
+    # last is None before the first recorded run; next_run_at is None when no scheduler
+    # is running (SCHEDULER_ENABLED=0, tests) — two different kinds of quiet.
+    last: LastRefreshOut | None
+    next_run_at: datetime | None
+
+
 class PricePoint(BaseModel):
     d: date
     c: Decimal

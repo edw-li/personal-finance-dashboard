@@ -13,6 +13,24 @@
 .portfolio-page .hint:empty { margin: 0; }
 .hint.refresh-note-bad { color: var(--negative); }
 
+/* The last-run failures, each with its one-click deactivate. Amber = the app's advisory
+   register (the staleness literal, PALETTE[3]); the chip's button carries panels.css's
+   .button tokens at chip scale. */
+.refresh-failures { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.refresh-failure {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 6px 3px 10px;
+  border: 1px solid var(--border); border-left: 3px solid #c98500; border-radius: 8px;
+  background: var(--surface); color: var(--text); font-size: 12px;
+}
+.refresh-failure button {
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+  color: var(--text); font-size: 11px; padding: 2px 8px; cursor: pointer;
+}
+.refresh-failure button:hover { border-color: var(--muted); }
+.refresh-failure button:disabled { opacity: 0.5; cursor: not-allowed; }
+.refresh-failure button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* Same declarations as portfolio.css's .toggle-row button: the tab row is page furniture,
    the toggle row is AllocationPanel's, and neither stylesheet reaches into the other. */
 .tab-row { display: flex; gap: 8px; margin: 16px 0 8px; }

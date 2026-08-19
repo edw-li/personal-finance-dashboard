@@ -8,7 +8,10 @@ from app.services.scheduler import (
     DEFAULT_PRICE_REFRESH_CRON,
     SCHEDULER_TIMEZONE,
     build_trigger,
+    get_next_run_time,
+    missed_todays_run,
     read_cron_setting,
+    reschedule_price_refresh,
 )
 
 
@@ -36,6 +39,37 @@ def test_build_trigger_falls_back_to_the_default_schedule():
     anchor = datetime(2026, 8, 10, 9, 0, tzinfo=ZoneInfo(SCHEDULER_TIMEZONE))
     # Same resolved schedule, not merely "some CronTrigger" (Task 7 review I3).
     assert garbage.get_next_fire_time(None, anchor) == default.get_next_fire_time(None, anchor)
+
+
+def test_missed_todays_run_judges_from_the_trigger_own_calendar():
+    trigger = build_trigger(DEFAULT_PRICE_REFRESH_CRON)  # 13:10 PT, mon-fri
+    tz = ZoneInfo(SCHEDULER_TIMEZONE)
+    monday_evening = datetime(2026, 8, 10, 18, 0, tzinfo=tz)  # boot AFTER the fire
+    monday_morning = datetime(2026, 8, 10, 9, 0, tzinfo=tz)  # boot BEFORE the fire
+    saturday = datetime(2026, 8, 15, 18, 0, tzinfo=tz)  # no fire scheduled today
+
+    # The restart-spanning-13:10 hazard (README 7.6): nothing ran today, fire is past.
+    assert missed_todays_run(trigger, None, monday_evening) is True
+    ran_at_1311 = datetime(2026, 8, 10, 13, 11, tzinfo=tz)
+    assert missed_todays_run(trigger, ran_at_1311, monday_evening) is False
+    # A run recorded YESTERDAY does not cover today's fire.
+    ran_yesterday = datetime(2026, 8, 9, 13, 11, tzinfo=tz)
+    assert missed_todays_run(trigger, ran_yesterday, monday_evening) is True
+    # Before the fire time there is nothing to have missed yet…
+    assert missed_todays_run(trigger, None, monday_morning) is False
+    # …and a weekend has no fire at all — the trigger's own calendar answers, not ours.
+    assert missed_todays_run(trigger, None, saturday) is False
+    # UTC-stamped last runs (record_refresh_run stores UTC) compare correctly across
+    # zones: 20:11 UTC IS 13:11 PDT.
+    ran_utc = datetime(2026, 8, 10, 20, 11, tzinfo=ZoneInfo("UTC"))
+    assert missed_todays_run(trigger, ran_utc, monday_evening) is False
+
+
+def test_scheduler_accessors_degrade_when_nothing_is_running():
+    # pytest never starts the scheduler (module docstring), so the module handle is None:
+    # the status endpoint reads None and a settings save reschedules nothing — quietly.
+    assert get_next_run_time() is None
+    assert reschedule_price_refresh("0 6 * * mon") is False
 
 
 async def test_read_cron_setting_envelope_and_fallbacks(db):

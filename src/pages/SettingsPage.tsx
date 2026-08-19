@@ -305,8 +305,8 @@ export default function SettingsPage() {
                 />
               </label>
               <p className="settings-note">
-                5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applies
-                after a backend restart. Must not fire more often than hourly.
+                5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied
+                to the live schedule on save. Must not fire more often than hourly.
               </p>
               <div className="settings-actions">
                 <button type="submit" className="button button-primary" disabled={saving}>
@@ -320,7 +320,7 @@ export default function SettingsPage() {
               )}
               {savedNote && (
                 <p className="settings-note" role="status">
-                  Saved — cron changes apply after a backend restart.
+                  Saved — the schedule is applied immediately.
                 </p>
               )}
             </form>

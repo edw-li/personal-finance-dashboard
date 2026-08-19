@@ -38,6 +38,25 @@ async def test_get_falls_back_on_a_malformed_stored_value(auth_client, db):
     assert body["swr_pct"] == "0.04"  # reader semantics: malformed == absent
 
 
+async def test_put_hot_applies_the_cron_to_the_live_scheduler(auth_client, monkeypatch):
+    # The router hands the validated cron to the scheduler AFTER the commit; in a
+    # scheduler-less process the real call is a quiet False (test_scheduler pins that) —
+    # here a spy proves the wiring and the argument.
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "app.api.app_settings.reschedule_price_refresh",
+        lambda cron: calls.append(cron) or True,
+    )
+    body = {**VALID_BODY, "price_refresh_cron": "0 6 * * mon"}
+    assert (await auth_client.put(SETTINGS, json=body)).status_code == 200
+    assert calls == ["0 6 * * mon"]
+
+    # A rejected cron never reaches the scheduler — validation runs first.
+    bad = {**VALID_BODY, "price_refresh_cron": "* * * * *"}
+    assert (await auth_client.put(SETTINGS, json=bad)).status_code == 422
+    assert calls == ["0 6 * * mon"]
+
+
 async def test_put_round_trips_and_stores_the_envelope(auth_client, db):
     r = await auth_client.put(SETTINGS, json=VALID_BODY)
     assert r.status_code == 200, r.text

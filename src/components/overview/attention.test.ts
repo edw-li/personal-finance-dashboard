@@ -4,6 +4,7 @@ import type {
   EsppLotsResponse,
   HoldingOut,
   HoldingsResponse,
+  LastRefresh,
   TaxYearOut,
 } from '../../types/api'
 import { attentionItems } from './attention'
@@ -60,14 +61,26 @@ function taxYear(year: number, inputCount = 21): TaxYearOut {
   return { year, notes: null, input_count: inputCount, bracket_count: 42 }
 }
 
+function lastRefreshOut(failed: Record<string, string> = {}): LastRefresh {
+  return {
+    at: '2026-08-18T20:11:00+00:00',
+    trigger: 'scheduled',
+    updated: 36,
+    failed,
+    skipped_manual: 1,
+    history_appended: true,
+  }
+}
+
 // The all-clear baseline: current month entered, quotes fresh, everything priced, no
-// qualifying window open, the year's inputs filled.
+// qualifying window open, the year's inputs filled, the last refresh clean.
 function inputs(over: Partial<AttentionInputs> = {}): AttentionInputs {
   return {
     months: ['2026-06-01', '2026-07-01', '2026-08-01'],
     holdings: holdingsOut(),
     lots: lotsOut([]),
     taxYears: [taxYear(2026)],
+    lastRefresh: lastRefreshOut(),
     ...over,
   }
 }
@@ -178,6 +191,31 @@ describe('attentionItems — ESPP qualifying window', () => {
   })
 })
 
+describe('attentionItems — the last refresh run', () => {
+  it('stays quiet with no recorded run and with a clean one', () => {
+    expect(keys(inputs({ lastRefresh: null }))).toEqual([])
+    expect(keys(inputs({ lastRefresh: lastRefreshOut() }))).toEqual([])
+  })
+
+  it('names the failed tickers, capped at three', () => {
+    const [one] = attentionItems(
+      inputs({ lastRefresh: lastRefreshOut({ ZI: 'delisted' }) }),
+      TODAY,
+    )
+    expect(one.key).toBe('refresh-failed')
+    expect(one.text).toBe('1 ticker failed the last price refresh (ZI)')
+    expect(one.to).toBe('/portfolio')
+
+    const [many] = attentionItems(
+      inputs({
+        lastRefresh: lastRefreshOut({ A: 'x', B: 'x', C: 'x', D: 'x', E: 'x' }),
+      }),
+      TODAY,
+    )
+    expect(many.text).toBe('5 tickers failed the last price refresh (A, B, C, +2 more)')
+  })
+})
+
 describe('attentionItems — taxes', () => {
   it('asks for the current year when it does not exist yet', () => {
     const [item] = attentionItems(inputs({ taxYears: [taxYear(2025)] }), TODAY)
@@ -202,12 +240,14 @@ describe('attentionItems — ordering', () => {
       }),
       lots: lotsOut([lot(9)]),
       taxYears: [],
+      lastRefresh: lastRefreshOut({ ZI: 'delisted' }),
     })
     expect(keys(noisy)).toEqual([
       'update-due',
       'prices-stale',
       'unpriced',
       'holding-warnings',
+      'refresh-failed',
       'espp-qualifying',
       'tax-year-missing',
     ])

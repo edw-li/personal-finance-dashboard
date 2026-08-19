@@ -4,10 +4,36 @@ import {
   formatCurrency,
   formatCurrencyCompact,
   formatDate,
+  formatDateTime,
   formatMonth,
   formatPct,
   formatShares,
 } from './format'
+
+describe('formatDateTime', () => {
+  it('renders wall-clock stamps in twelve-hour local time', () => {
+    // Offset-LESS date-times parse as LOCAL time (the ES spec), so these pins hold on
+    // any runner timezone — which is exactly the rendering the formatter promises.
+    expect(formatDateTime('2026-08-18T13:07:00')).toBe('Aug 18, 2026, 1:07 PM')
+    expect(formatDateTime('2026-08-18T00:05:00')).toBe('Aug 18, 2026, 12:05 AM')
+    expect(formatDateTime('2026-08-18T12:00:00')).toBe('Aug 18, 2026, 12:00 PM')
+  })
+
+  it('accepts offset-carrying stamps and renders them on the runner clock', () => {
+    // The one formatter ALLOWED to new Date(iso): a full timestamp carries its zone, so
+    // parsing is exact. The pin mirrors the same conversion rather than assuming a TZ.
+    const iso = '2026-08-18T20:11:00+00:00'
+    const at = new Date(iso)
+    expect(formatDateTime(iso)).toContain(`, ${at.getFullYear()},`)
+    expect(formatDateTime(iso)).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M$/)
+  })
+
+  it('dashes null and garbage', () => {
+    expect(formatDateTime(null)).toBe('—')
+    expect(formatDateTime(undefined)).toBe('—')
+    expect(formatDateTime('not a time')).toBe('—')
+  })
+})
 
 describe('formatCurrency', () => {
   it('formats server decimal strings', () => {

@@ -19,10 +19,16 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import LatestPrice, PriceHistory, Security
+from app.models import AppSetting, LatestPrice, PriceHistory, Security
 from app.services.price_provider import DailyBar, PriceProvider
 
 logger = logging.getLogger(__name__)
+
+# app_settings key for the last refresh run's outcome — the status endpoint's and the
+# attention strip's feed. Deliberately a single JSON blob, not a runs table: "what
+# happened last" is the operational question; a log can graduate to a table if history
+# ever matters (no migration this way).
+LAST_REFRESH_KEY = "last_refresh"
 
 HISTORY_WINDOW_DAYS = 370
 TTM_DAYS = 365
@@ -149,6 +155,65 @@ def _update_dividend_metadata(security: Security, bars: list[DailyBar], today: d
         return  # absurd feed value; keep the previous metadata
     security.annual_dividend = ttm.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     security.ex_div_date = max((b.bar_date for b in events), default=None)
+
+
+async def record_refresh_run(
+    db: AsyncSession,
+    result: RefreshResult,
+    *,
+    trigger: str,
+    history_appended: bool,
+    at: datetime,
+) -> None:
+    """Persist the run's outcome under app_settings[LAST_REFRESH_KEY], envelope
+    {"value": ...} (the readers' convention). Caller commits."""
+    payload = {
+        "at": at.isoformat(),
+        "trigger": trigger,
+        "updated": len(result.updated),
+        "failed": dict(sorted(result.failed.items())),
+        "skipped_manual": len(result.skipped_manual),
+        "history_appended": history_appended,
+    }
+    setting = await db.get(AppSetting, LAST_REFRESH_KEY)
+    if setting is None:
+        db.add(AppSetting(key=LAST_REFRESH_KEY, value={"value": payload}))
+    else:
+        setting.value = {"value": payload}
+
+
+async def read_last_refresh(db: AsyncSession) -> dict | None:
+    """The stored outcome, or None before the first recorded run (or on any unexpected
+    shape — the envelope is convention-only, net_worth_calc.get_swr_pct's posture)."""
+    setting = await db.get(AppSetting, LAST_REFRESH_KEY)
+    if setting is None or not isinstance(setting.value, dict):
+        return None
+    raw = setting.value.get("value")
+    return raw if isinstance(raw, dict) else None
+
+
+async def run_refresh(
+    db: AsyncSession, provider: PriceProvider, *, trigger: str, today: date | None = None
+) -> tuple[RefreshResult, bool]:
+    """The whole refresh ritual, shared by the manual endpoint and the scheduled job so
+    the two can never drift: refresh prices (commits itself), extend the live value
+    series, record the outcome, commit the bookkeeping. A snapshot failure degrades to
+    history_appended=False — the price refresh already committed and must stand."""
+    from app.services.value_history import append_value_snapshot
+
+    today = today or date.today()
+    result = await refresh_prices(db, provider, today=today)
+    appended = False
+    try:
+        appended = await append_value_snapshot(db, today=today)
+    except Exception:
+        logger.exception("value snapshot failed — the price refresh stands")
+        await db.rollback()
+    await record_refresh_run(
+        db, result, trigger=trigger, history_appended=appended, at=datetime.now(UTC)
+    )
+    await db.commit()
+    return result, appended
 
 
 async def set_manual_price(

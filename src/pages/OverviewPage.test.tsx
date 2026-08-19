@@ -10,6 +10,7 @@ import type {
   NetWorthSummary,
   NetWorthTimeseries,
   PortfolioHistory,
+  RefreshStatus,
   SpendingMatrix,
   SpendingYearly,
   TaxSummariesOut,
@@ -20,7 +21,7 @@ import { formatDate, formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
 
-// Five modules, ten clients, one snapshot: the page's whole contract is that these
+// Six modules, eleven clients, one snapshot: the page's whole contract is that these
 // resolve TOGETHER (the strip's and the YTD card's feeds ride along like the rest).
 vi.mock('../api/netWorth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/netWorth')>()),
@@ -47,6 +48,10 @@ vi.mock('../api/espp', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/espp')>()),
   fetchLots: vi.fn(),
 }))
+vi.mock('../api/prices', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/prices')>()),
+  fetchRefreshStatus: vi.fn(),
+}))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
 // charts DRAW is pinned elsewhere — the spark and the bars in
 // src/components/overview/overviewChartOptions.test.ts, the performance lines in
@@ -66,6 +71,7 @@ vi.mock('../components/EChart', async () => {
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
+import { fetchRefreshStatus } from '../api/prices'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 
@@ -222,12 +228,14 @@ interface Payload {
   taxYears: TaxYearOut[]
   yearly: SpendingYearly
   dividends: DividendOut[]
+  refresh: RefreshStatus
 }
 
-// Arms all ten clients at once — the page never renders a partial snapshot, so neither
-// does the harness. The strip-quiet defaults (no lots, a filled current tax year) keep the
-// attention strip out of the tests that are not about it; the wall-clock-relative cases
-// (monthly-update nudges) live in attention.test.ts, where today is injectable.
+// Arms all eleven clients at once — the page never renders a partial snapshot, so neither
+// does the harness. The strip-quiet defaults (no lots, a filled current tax year, no
+// recorded refresh) keep the attention strip out of the tests that are not about it; the
+// wall-clock-relative cases (monthly-update nudges) live in attention.test.ts, where
+// today is injectable.
 function serve(over: Partial<Payload> = {}): Payload {
   const payload: Payload = {
     summary: summaryOut(),
@@ -240,6 +248,7 @@ function serve(over: Partial<Payload> = {}): Payload {
     taxYears: [{ year: CURRENT_YEAR, notes: null, input_count: 21, bracket_count: 42 }],
     yearly: { years: [] },
     dividends: [],
+    refresh: { last: null, next_run_at: null },
     ...over,
   }
   vi.mocked(fetchSummary).mockResolvedValue(payload.summary)
@@ -252,6 +261,7 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchTaxYears).mockResolvedValue(payload.taxYears)
   vi.mocked(fetchYearly).mockResolvedValue(payload.yearly)
   vi.mocked(fetchDividends).mockResolvedValue(payload.dividends)
+  vi.mocked(fetchRefreshStatus).mockResolvedValue(payload.refresh)
   return payload
 }
 
@@ -267,6 +277,7 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchTaxYears).mockImplementation(boom)
   vi.mocked(fetchYearly).mockImplementation(boom)
   vi.mocked(fetchDividends).mockImplementation(boom)
+  vi.mocked(fetchRefreshStatus).mockImplementation(boom)
 }
 
 function renderPage() {
@@ -494,7 +505,7 @@ describe('OverviewPage snapshot fan-out', () => {
     expect(fetchTimeseries).toHaveBeenCalledWith('monthly')
   })
 
-  it('refetches all ten clients on Refresh', async () => {
+  it('refetches all eleven clients on Refresh', async () => {
     // One snapshot, one round trip per client: Refresh re-reads the WHOLE page rather than
     // topping up a tile, which is what keeps the tiles and the charts on the same instant.
     serve()
@@ -507,6 +518,7 @@ describe('OverviewPage snapshot fan-out', () => {
     for (const client of [
       fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
       fetchAllTaxSummaries, fetchLots, fetchTaxYears, fetchYearly, fetchDividends,
+      fetchRefreshStatus,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
     }
@@ -701,7 +713,7 @@ describe('OverviewPage on an empty database', () => {
 })
 
 describe('OverviewPage failures', () => {
-  it('banners a failed first load and refetches all ten on Retry', async () => {
+  it('banners a failed first load and refetches all eleven on Retry', async () => {
     failAll()
     renderPage()
 
@@ -721,6 +733,7 @@ describe('OverviewPage failures', () => {
     for (const client of [
       fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
       fetchAllTaxSummaries, fetchLots, fetchTaxYears, fetchYearly, fetchDividends,
+      fetchRefreshStatus,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
     }

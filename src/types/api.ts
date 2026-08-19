@@ -302,6 +302,24 @@ export interface RefreshResult {
   duration_ms: number
 }
 
+// GET /prices/refresh-status — the persisted outcome of the most recent refresh run
+// (manual or scheduled) plus the live scheduler's next fire.
+export interface LastRefresh {
+  at: string
+  trigger: string
+  updated: number
+  failed: Record<string, string>
+  skipped_manual: number
+  history_appended: boolean
+}
+
+export interface RefreshStatus {
+  /** null before the first recorded run. */
+  last: LastRefresh | null
+  /** null when no scheduler is running (SCHEDULER_ENABLED=0). */
+  next_run_at: string | null
+}
+
 export interface PricePoint {
   d: string
   c: string

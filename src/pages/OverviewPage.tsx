@@ -4,6 +4,7 @@ import { ApiError } from '../api/client'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
+import { fetchRefreshStatus } from '../api/prices'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import EChart from '../components/EChart'
@@ -24,6 +25,7 @@ import type {
   NetWorthSummary,
   NetWorthTimeseries,
   PortfolioHistory,
+  RefreshStatus,
   SpendingMatrix,
   SpendingYearly,
   TaxSummariesOut,
@@ -36,8 +38,8 @@ import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './OverviewPage.css'
 
-// One payload object, never ten pieces of state: the page is a SNAPSHOT, and a tile that
-// belongs to a newer fetch than the chart beside it is a lie about the same instant.
+// One payload object, never eleven pieces of state: the page is a SNAPSHOT, and a tile
+// that belongs to a newer fetch than the chart beside it is a lie about the same instant.
 interface OverviewData {
   summary: NetWorthSummary
   ts: NetWorthTimeseries
@@ -45,13 +47,14 @@ interface OverviewData {
   history: PortfolioHistory
   matrix: SpendingMatrix
   taxes: TaxSummariesOut
-  // The attention strip's feeds (ESPP countdowns, tax-year input counts) and the YTD
-  // card's (yearly rollup, dividend log) ride the same all-or-nothing snapshot:
-  // per-slot degradation stays the documented v2 shape.
+  // The attention strip's feeds (ESPP countdowns, tax-year input counts, the last
+  // refresh run) and the YTD card's (yearly rollup, dividend log) ride the same
+  // all-or-nothing snapshot: per-slot degradation stays the documented v2 shape.
   lots: EsppLotsResponse
   taxYears: TaxYearOut[]
   yearly: SpendingYearly
   dividends: DividendOut[]
+  refresh: RefreshStatus
 }
 
 export default function OverviewPage() {
@@ -77,12 +80,17 @@ export default function OverviewPage() {
       fetchTaxYears(),
       fetchYearly(),
       fetchDividends(),
+      fetchRefreshStatus(),
     ])
-      .then(([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends]) => {
-        if (seq !== seqRef.current) return
-        setData({ summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends })
-        setError(null)
-      })
+      .then(
+        ([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, refresh]) => {
+          if (seq !== seqRef.current) return
+          setData({
+            summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, refresh,
+          })
+          setError(null)
+        },
+      )
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
         setError(err instanceof ApiError ? err.message : 'Could not load the overview.')
@@ -127,7 +135,13 @@ export default function OverviewPage() {
   // the strip's and the YTD card's rules are cheap math over the snapshot.
   const attention = data
     ? attentionItems(
-        { months: data.ts.months, holdings: data.holdings, lots: data.lots, taxYears: data.taxYears },
+        {
+          months: data.ts.months,
+          holdings: data.holdings,
+          lots: data.lots,
+          taxYears: data.taxYears,
+          lastRefresh: data.refresh.last,
+        },
         todayIso(),
       )
     : []
@@ -183,9 +197,9 @@ export default function OverviewPage() {
       <header className="page-header">
         <h1>Overview</h1>
         <div className="spacer" />
-        {/* Ten idempotent GETs and no mutation anywhere on this page, so the button stays
-            live while a load is in flight: an impatient second click is harmless, the body
-            dims to show the work, and seqRef decides which answer lands. */}
+        {/* Eleven idempotent GETs and no mutation anywhere on this page, so the button
+            stays live while a load is in flight: an impatient second click is harmless,
+            the body dims to show the work, and seqRef decides which answer lands. */}
         <button type="button" className="button" onClick={reload}>
           Refresh
         </button>

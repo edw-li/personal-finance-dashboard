@@ -3,6 +3,7 @@ import type {
   LatestPriceOut,
   PriceHistoryResponse,
   RefreshResult,
+  RefreshStatus,
   SparklinesResponse,
 } from '../types/api'
 
@@ -25,6 +26,10 @@ export function fetchSparklines(days = 365): Promise<SparklinesResponse> {
 // (rows are never deleted), so early on every window returns the same ~1 year.
 export function fetchPriceHistory(ticker: string, days = 365): Promise<PriceHistoryResponse> {
   return api<PriceHistoryResponse>(`/prices/history/${encodeURIComponent(ticker)}?days=${days}`)
+}
+
+export function fetchRefreshStatus(): Promise<RefreshStatus> {
+  return api<RefreshStatus>('/prices/refresh-status')
 }
 
 export function putManualPrice(

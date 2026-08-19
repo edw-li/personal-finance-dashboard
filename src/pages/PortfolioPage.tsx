@@ -9,8 +9,9 @@ import {
   fetchRealized,
   fetchSecurities,
   fetchTransactions,
+  updateSecurity,
 } from '../api/portfolio'
-import { fetchSparklines, refreshPrices } from '../api/prices'
+import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import EChart from '../components/EChart'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
@@ -31,11 +32,12 @@ import type {
   PortfolioHistory,
   RealizedResponse,
   RefreshResult,
+  RefreshStatus,
   SecurityOut,
   SparklinesResponse,
   TransactionOut,
 } from '../types/api'
-import { formatCurrency, formatDate, formatPct } from '../utils/format'
+import { formatCurrency, formatDate, formatDateTime, formatPct } from '../utils/format'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import '../components/portfolio/portfolio.css'
@@ -86,6 +88,10 @@ export default function PortfolioPage() {
   const [sparklines, setSparklines] = useState<SparklinesResponse>({})
   const [history, setHistory] = useState<PortfolioHistory | null>(null)
   const [realized, setRealized] = useState<RealizedResponse | null>(null)
+  const [refreshStatus, setRefreshStatus] = useState<RefreshStatus | null>(null)
+  // Ticker being deactivated from the failed-refresh row (the old manual-psql ritual for
+  // a delisted symbol, one click now); single-flight like the panels' busy flags.
+  const [deactivating, setDeactivating] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('transactions')
   // Performance-chart window; object identity so a re-click of the active chip snaps a
   // ctrl+wheel wander back to the preset (NetWorthPage's `range`).
@@ -99,12 +105,12 @@ export default function PortfolioPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshNote, setRefreshNote] = useState<RefreshNote>(NO_NOTE)
   const [error, setError] = useState<string | null>(null)
-  // Four things trigger a load (mount, refresh, three panels' onChanged) and the ten
+  // Four things trigger a load (mount, refresh, three panels' onChanged) and the eleven
   // requests are not ordered — a slow earlier load must never overwrite a later one.
   const seqRef = useRef(0)
 
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
-  // law (see NetWorthPage). One load() refetches EVERYTHING: ten cheap local queries,
+  // law (see NetWorthPage). One load() refetches EVERYTHING: eleven cheap local queries,
   // and every mutation path (panels' onChanged, refresh) converges through it. Returns
   // the chain so callers can keep their own busy flag up until the data is on screen.
   const load = () => {
@@ -120,8 +126,9 @@ export default function PortfolioPage() {
       fetchSparklines(),
       fetchHistory(),
       fetchRealized(),
+      fetchRefreshStatus(),
     ])
-      .then(([h, secs, txns, divs, ind, typ, acct, spark, hist, real]) => {
+      .then(([h, secs, txns, divs, ind, typ, acct, spark, hist, real, status]) => {
         if (seq !== seqRef.current) return
         setHoldings(h)
         setSecurities(secs)
@@ -133,6 +140,7 @@ export default function PortfolioPage() {
         setSparklines(spark)
         setHistory(hist)
         setRealized(real)
+        setRefreshStatus(status)
         setError(null)
       })
       .catch((err: unknown) => {
@@ -178,6 +186,26 @@ export default function PortfolioPage() {
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
 
+  // The last run's failures, filtered to tickers that are STILL ACTIVE securities — a
+  // deactivation clears its chip on the very reload it triggers, instead of lingering
+  // until the next refresh rewrites the record.
+  const activeTickers = new Set(securities.filter((s) => s.is_active).map((s) => s.ticker))
+  const failedEntries = Object.entries(refreshStatus?.last?.failed ?? {}).filter(([ticker]) =>
+    activeTickers.has(ticker),
+  )
+
+  const deactivate = (ticker: string) => {
+    const security = securities.find((s) => s.ticker === ticker)
+    if (security === undefined || deactivating !== null) return
+    setDeactivating(ticker)
+    updateSecurity(security.id, { is_active: false })
+      .then(() => load())
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : `Failed to deactivate ${ticker}`)
+      })
+      .finally(() => setDeactivating(null))
+  }
+
   // The page's only memoized values (OverviewPage's rule): EChart keys its setOption
   // effect on [option], so a fresh object per render would redraw the chart on every tab
   // click. The zoom is spread on here rather than inside the builder, which stays pure and
@@ -222,6 +250,39 @@ export default function PortfolioPage() {
       >
         {refreshNote.text}
       </div>
+      {/* The scheduler, finally visible: what ran last (manual or scheduled — the outcome
+          persists either way now) and when the next run fires. Wall-clock stamps, local
+          time — these answer "when", not "which bar". */}
+      {refreshStatus?.last && (
+        <div className="hint refresh-status-line">
+          Last refresh {formatDateTime(refreshStatus.last.at)} ({refreshStatus.last.trigger}) ·{' '}
+          {refreshStatus.last.updated} updated
+          {refreshStatus.last.failed && Object.keys(refreshStatus.last.failed).length > 0 && (
+            <> · {Object.keys(refreshStatus.last.failed).length} failed</>
+          )}
+          {refreshStatus.next_run_at && <> · next {formatDateTime(refreshStatus.next_run_at)}</>}
+        </div>
+      )}
+      {failedEntries.length > 0 && (
+        <div className="refresh-failures">
+          {failedEntries.map(([ticker, reason]) => (
+            <span key={ticker} className="refresh-failure" title={reason}>
+              {ticker}
+              {/* One click retires the ZI ritual (README 7.4's manual is_active edit):
+                  deactivating removes the ticker from every future refresh; the
+                  Securities tab can always bring it back. */}
+              <button
+                type="button"
+                aria-label={`Deactivate ${ticker} so refreshes skip it`}
+                disabled={deactivating !== null}
+                onClick={() => deactivate(ticker)}
+              >
+                {deactivating === ticker ? 'Deactivating…' : 'Deactivate'}
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {error && <div className="error-banner" role="alert">{error}</div>}
       {loading ? (
         <p className="empty-note">Loading…</p>

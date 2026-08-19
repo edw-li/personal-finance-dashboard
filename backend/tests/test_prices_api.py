@@ -4,14 +4,22 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models import LatestPrice, PositionTransaction, PriceHistory, Security
+from app.models import (
+    LatestPrice,
+    PortfolioValueHistory,
+    PositionTransaction,
+    PriceHistory,
+    Security,
+)
 from app.services.price_provider import DailyBar
 
 REFRESH = "/api/v1/prices/refresh"
+STATUS = "/api/v1/prices/refresh-status"
 HISTORY = "/api/v1/prices/history"
 SPARKLINES = "/api/v1/prices/sparklines"
 PRICES = "/api/v1/prices"
 TRANSACTIONS = "/api/v1/portfolio/transactions"
+VALUE_SERIES = "/api/v1/portfolio/history"
 
 D = Decimal
 
@@ -80,9 +88,149 @@ async def test_refresh_endpoint_runs_and_reports(auth_client, db, monkeypatch):
         (today, D("225.5000")),
     ]
 
+    # No held shares: the live value series has nothing honest to record — but the run
+    # itself is still on the books, with the skip stated.
+    assert (await auth_client.get(VALUE_SERIES)).json()["dates"] == []
+    status = (await auth_client.get(STATUS)).json()
+    assert status["last"]["trigger"] == "manual"
+    assert status["last"]["history_appended"] is False
+    assert status["next_run_at"] is None  # tests never start the scheduler
+
 
 async def test_refresh_requires_auth(client):
     assert (await client.post(REFRESH)).status_code == 401
+
+
+# --- refresh status + the live value series ---
+
+
+async def test_refresh_status_requires_auth(client):
+    assert (await client.get(STATUS)).status_code == 401
+
+
+async def test_refresh_status_empty_before_any_run(auth_client):
+    resp = await auth_client.get(STATUS)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"last": None, "next_run_at": None}
+
+
+async def test_refresh_appends_the_live_value_series_and_records_the_run(
+    auth_client, db, monkeypatch
+):
+    security = await seed_security(db, "NVDA")
+    db.add(
+        PositionTransaction(
+            security_id=security.id,
+            account="Fidelity",
+            type="buy",
+            shares=D("10.000000"),
+            price=D("100.0000"),
+            sort_index=10,
+            source="ui",
+        )
+    )
+    await db.commit()
+    today = date.today()
+    provider = FakeProvider({"NVDA": [bar(today - timedelta(days=1), "220"), bar(today, "225.5")]})
+    monkeypatch.setattr("app.api.prices.get_provider", lambda: provider)
+
+    resp = await auth_client.post(REFRESH)
+    assert resp.status_code == 200, resp.text
+
+    series = (await auth_client.get(VALUE_SERIES)).json()
+    assert series["dates"] == [today.isoformat()]
+    assert series["market_value"] == ["2255.00"]  # 10 shares × the 225.50 close
+    assert series["cost_basis"] == ["1000.00"]  # 10 × the 100 buy
+    # No prior series to extend: the baseline is REBORN at parity with the book.
+    assert series["sp500"] == ["2255.00"]
+
+    status = (await auth_client.get(STATUS)).json()
+    assert status["last"]["trigger"] == "manual"
+    assert status["last"]["updated"] == 1
+    assert status["last"]["failed"] == {}
+    assert status["last"]["skipped_manual"] == 0
+    assert status["last"]["history_appended"] is True
+    assert datetime.fromisoformat(status["last"]["at"]).tzinfo is not None  # UTC-stamped
+
+    # A second run the same day UPSERTS the same date — the series never forks.
+    assert (await auth_client.post(REFRESH)).status_code == 200
+    assert (await auth_client.get(VALUE_SERIES)).json()["dates"] == [today.isoformat()]
+
+
+async def test_refresh_extends_the_baseline_by_implied_shares(auth_client, db, monkeypatch):
+    # A held, priced book plus a prior imported row and benchmark bars on both sides of it.
+    security = await seed_security(db, "NVDA")
+    voo = await seed_security(db, "VOO", is_manual_priced=True)  # the refresh skips it
+    today = date.today()
+    db.add_all(
+        [
+            PositionTransaction(
+                security_id=security.id,
+                account="Fidelity",
+                type="buy",
+                shares=D("10.000000"),
+                price=D("100.0000"),
+                sort_index=10,
+                source="ui",
+            ),
+            PortfolioValueHistory(
+                snapshot_date=today - timedelta(days=7),
+                market_value=D("9000.00"),
+                cost_basis=D("5000.00"),
+                sp500_value=D("8000.00"),
+            ),
+            PriceHistory(
+                security_id=voo.id, price_date=today - timedelta(days=8), close=D("400.0000")
+            ),
+            PriceHistory(
+                security_id=voo.id, price_date=today - timedelta(days=1), close=D("410.0000")
+            ),
+        ]
+    )
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(today, "225.5")]})
+    monkeypatch.setattr("app.api.prices.get_provider", lambda: provider)
+
+    assert (await auth_client.post(REFRESH)).status_code == 200
+
+    series = (await auth_client.get(VALUE_SERIES)).json()
+    assert series["dates"][-1] == today.isoformat()
+    # 8000 / 400 (the close on-or-before the anchor row) = 20 implied shares, × 410 today.
+    assert series["sp500"] == ["8000.00", "8200.00"]
+    assert series["market_value"][-1] == "2255.00"
+
+
+async def test_refresh_carries_the_baseline_flat_without_benchmark_bars(
+    auth_client, db, monkeypatch
+):
+    security = await seed_security(db, "NVDA")
+    today = date.today()
+    db.add_all(
+        [
+            PositionTransaction(
+                security_id=security.id,
+                account="Fidelity",
+                type="buy",
+                shares=D("10.000000"),
+                price=D("100.0000"),
+                sort_index=10,
+                source="ui",
+            ),
+            PortfolioValueHistory(
+                snapshot_date=today - timedelta(days=7),
+                market_value=D("9000.00"),
+                cost_basis=D("5000.00"),
+                sp500_value=D("8000.00"),
+            ),
+        ]
+    )
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(today, "225.5")]})
+    monkeypatch.setattr("app.api.prices.get_provider", lambda: provider)
+
+    assert (await auth_client.post(REFRESH)).status_code == 200
+    # No benchmark bars anywhere: the leg carries flat rather than inventing a move.
+    assert (await auth_client.get(VALUE_SERIES)).json()["sp500"] == ["8000.00", "8000.00"]
 
 
 # --- history ---

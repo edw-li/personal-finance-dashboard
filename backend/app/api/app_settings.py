@@ -3,8 +3,9 @@ readers the app uses; PUT is full-form and stores the readers' envelope {"value"
 
 The cron guard is server-side (plan-4 forward note: '* * * * *' would hammer Yahoo):
 parse with the scheduler's own CronTrigger, reject sub-hourly cadence and numeric
-day-of-week (APScheduler numbers days 0=Mon — the recorded prod mis-seed). The scheduler
-reads the cron ONCE at boot; this router only stores — the UI carries the restart note."""
+day-of-week (APScheduler numbers days 0=Mon — the recorded prod mis-seed). A saved cron
+is HOT-APPLIED to the live job (reschedule_price_refresh) — the old restart ritual is
+gone; boot still reads the stored value, so a no-scheduler process loses nothing."""
 
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -21,7 +22,11 @@ from app.models import AppSetting
 from app.schemas.app_settings import AppSettingsOut, AppSettingsUpdate
 from app.services.money import quantize_pct
 from app.services.net_worth_calc import get_swr_pct
-from app.services.scheduler import SCHEDULER_TIMEZONE, read_cron_setting
+from app.services.scheduler import (
+    SCHEDULER_TIMEZONE,
+    read_cron_setting,
+    reschedule_price_refresh,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(get_current_user)])
 
@@ -130,4 +135,8 @@ async def put_settings(
         else:
             setting.value = value
     await db.commit()
+    # AFTER the commit: the stored value is what a crashed reschedule (or a scheduler-less
+    # process — tests, SCHEDULER_ENABLED=0, where this is a plain False) falls back to at
+    # the next boot. Best-effort by design; the response is the same either way.
+    reschedule_price_refresh(cron)
     return AppSettingsOut(swr_pct=swr, espp_ticker=ticker or None, price_refresh_cron=cron)
