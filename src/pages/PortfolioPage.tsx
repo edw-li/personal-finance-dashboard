@@ -186,13 +186,10 @@ export default function PortfolioPage() {
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
 
-  // The last run's failures, filtered to tickers that are STILL ACTIVE securities — a
-  // deactivation clears its chip on the very reload it triggers, instead of lingering
-  // until the next refresh rewrites the record.
-  const activeTickers = new Set(securities.filter((s) => s.is_active).map((s) => s.ticker))
-  const failedEntries = Object.entries(refreshStatus?.last?.failed ?? {}).filter(([ticker]) =>
-    activeTickers.has(ticker),
-  )
+  // The SERVER already scopes `failed` to tickers a future refresh would still attempt
+  // (active, auto-priced) — one rule on one side of the wire, so a deactivation clears
+  // this chip AND the Overview strip's item on their next fetch alike.
+  const failedEntries = Object.entries(refreshStatus?.last?.failed ?? {})
 
   const deactivate = (ticker: string) => {
     const security = securities.find((s) => s.ticker === ticker)

@@ -61,6 +61,33 @@ async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut
             last = LastRefreshOut.model_validate(raw)
         except ValueError:
             last = None
+    if last is not None and last.failed:
+        # Failures are reported only while still ACTIONABLE. The record is rewritten only
+        # when a refresh RUNS, so a ticker the user has since deactivated (or moved to
+        # manual pricing) — the two remedies for a delisted symbol — would otherwise nag
+        # every consumer until the next run happened to overwrite it. Filtering HERE is
+        # what keeps the Portfolio chips and the Overview strip telling one story; the
+        # stored record itself stays verbatim.
+        still_refreshable = set(
+            (
+                await db.execute(
+                    select(Security.ticker).where(
+                        Security.ticker.in_(last.failed),
+                        Security.is_active.is_(True),
+                        Security.is_manual_priced.is_(False),
+                    )
+                )
+            ).scalars()
+        )
+        last = last.model_copy(
+            update={
+                "failed": {
+                    ticker: reason
+                    for ticker, reason in last.failed.items()
+                    if ticker in still_refreshable
+                }
+            }
+        )
     return RefreshStatusOut(last=last, next_run_at=get_next_run_time())
 
 

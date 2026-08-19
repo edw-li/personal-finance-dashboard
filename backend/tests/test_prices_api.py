@@ -114,6 +114,42 @@ async def test_refresh_status_empty_before_any_run(auth_client):
     assert resp.json() == {"last": None, "next_run_at": None}
 
 
+async def test_refresh_status_drops_failures_that_left_the_refresh_population(
+    auth_client, db, monkeypatch
+):
+    # The reported bug: deactivating a failed ticker cleared the Portfolio chip (a
+    # client-side filter) but the Overview strip kept nagging — the persisted record is
+    # rewritten only when a refresh RUNS. The status endpoint now scopes `failed` to
+    # tickers a future refresh would still attempt, so every consumer clears at once.
+    zi = await seed_security(db, "ZI")
+    vf = await seed_security(db, "VFFSX")
+    provider = FakeProvider(
+        errors={"ZI": RuntimeError("delisted"), "VFFSX": RuntimeError("no coverage")}
+    )
+    monkeypatch.setattr("app.api.prices.get_provider", lambda: provider)
+    assert (await auth_client.post(REFRESH)).status_code == 200
+
+    status = (await auth_client.get(STATUS)).json()
+    assert set(status["last"]["failed"]) == {"ZI", "VFFSX"}
+
+    # The two remedies for a dead symbol: deactivate one, hand the other to manual
+    # pricing. Both leave the refresh population — neither failure is actionable now.
+    deactivated = await auth_client.patch(
+        f"/api/v1/portfolio/securities/{zi.id}", json={"is_active": False}
+    )
+    assert deactivated.status_code == 200, deactivated.text
+    manual = await auth_client.patch(
+        f"/api/v1/portfolio/securities/{vf.id}", json={"is_manual_priced": True}
+    )
+    assert manual.status_code == 200, manual.text
+
+    cleared = (await auth_client.get(STATUS)).json()
+    assert cleared["last"]["failed"] == {}
+    # Only the actionability view moved — the run's other facts stand verbatim.
+    assert cleared["last"]["trigger"] == "manual"
+    assert cleared["last"]["updated"] == 0
+
+
 async def test_refresh_appends_the_live_value_series_and_records_the_run(
     auth_client, db, monkeypatch
 ):
