@@ -381,9 +381,16 @@ Hint under the investable chart appends: `" With a volatility, bands are percent
 
 ### Task 5: Whole-feature gate
 
-- [ ] **Step 1:** `cd backend && .venv/Scripts/python.exe -m pytest -q`; `ruff check .`; `alembic check` (head unmoved).
-- [ ] **Step 2:** `npm run test && npm run lint && npm run build`.
-- [ ] **Step 3:** Tick all plan checkboxes; `git commit -am "chore: monte carlo feature gate green"`.
+- [x] **Step 1:** `cd backend && .venv/Scripts/python.exe -m pytest -q`; `ruff check .`; `alembic check` (head unmoved).
+- [x] **Step 2:** `npm run test && npm run lint && npm run build`.
+- [x] **Step 3:** Tick all plan checkboxes; `git commit -am "chore: monte carlo feature gate green"`.
+
+**Gate results (2026-08-20):** backend 627 passed; `ruff check` clean and `ruff format --check`
+clean (120 files); `alembic check` "No new upgrade operations detected", head `b3d47a1c9e62`
+unmoved. Frontend `npm run test` 485 passed / 45 files (467 + 18 new); `npm run lint` 1
+sanctioned warning (AuthContext fast-refresh); `npm run build` green with
+`dist/assets/EChart-skvsTzqX.js 700.93 kB │ gzip: 238.19 kB` — under the 720 kB advisory,
+no new echarts registrations needed.
 
 ---
 
