@@ -122,7 +122,10 @@ def decompose_espp(
         )
         ordinary = min(total_gain, cap)
         if ordinary < 0:
-            ordinary = ZERO  # a qualified LOSS has no ordinary component
+            # A qualified LOSS has no ordinary component. Cents-exponent zero, not the
+            # module's raw ZERO: this figure serializes verbatim, and "0" beside a column
+            # of "x.xx" strings would be the one odd cell (Tasks 1-2 review note).
+            ordinary = ZERO.quantize(MONEY_Q)
         capital = total_gain - ordinary
         term = "long"  # a qualified disposition is >= 1y past purchase by definition
         warnings.append(QUALIFIED_FMV_WARNING.format(lot_id=lot_id))

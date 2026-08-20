@@ -164,11 +164,11 @@ def test_decompose_qualified_clamped_by_gain():
 
 def test_decompose_qualified_loss_has_no_ordinary():
     """A qualified LOSS has no bargain element to report: the clamp floors it at zero and
-    the whole loss stays capital. The zero is the module's raw ZERO (exponent 0), so it
-    renders "0" rather than "0.00" — value, not scale, is what the engine reads."""
+    the whole loss stays capital. The zero carries the CENTS exponent — this figure
+    serializes verbatim into a column of "x.xx" strings (Tasks 1-2 review note)."""
     detail = espp(sale_price="80", today=QUALIFYING)
     assert detail.ordinary_income == ZERO
-    assert str(detail.ordinary_income) == "0"
+    assert str(detail.ordinary_income) == "0.00"
     assert str(detail.capital_gain) == "-50.00"  # (80 - 85) x 10
 
 
