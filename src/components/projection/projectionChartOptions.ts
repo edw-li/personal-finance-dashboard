@@ -102,6 +102,9 @@ export function netWorthProjectionOption(
   const count = Math.max(0, monthSerial(end) - monthSerial(last))
   const future = Array.from({ length: count }, (_, i) => addMonths(last, i + 1))
   const months = [...history.months, ...future]
+  // The log axis below cannot place zero or below — such points become gaps (NaN keeps
+  // the arrays plain number[]; echarts treats NaN as an empty value), never lies.
+  const positive = (value: number) => (value > 0 ? value : Number.NaN)
   return {
     dataZoom: timeZoom(months, 'all'),
     grid: { left: 76, right: 24, top: 40, bottom: 28 },
@@ -116,12 +119,16 @@ export function netWorthProjectionOption(
     tooltip: {
       trigger: 'axis',
       valueFormatter: (value) =>
-        value === null || value === undefined ? '—' : formatCurrency(value as number),
+        value === null || value === undefined || Number.isNaN(value as number)
+          ? '—'
+          : formatCurrency(value as number),
     },
     xAxis: { type: 'category', data: months.map(formatMonth), boundaryGap: false },
     yAxis: {
-      // Zero-anchored (the house rule): the dots stand on an honest baseline.
-      type: 'value',
+      // Log scale (user-requested departure from the zero-anchored house rule — a log
+      // axis HAS no zero): equal steps are equal multiples, so decades of growth can't
+      // squash the early history into the floor.
+      type: 'log',
       axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
     },
     series: [
@@ -132,7 +139,7 @@ export function netWorthProjectionOption(
         color: PALETTE[0],
         // Above the curve, so the dots stay visible where it passes through them.
         z: 3,
-        data: history.net_worth.map(Number),
+        data: history.net_worth.map((value) => positive(Number(value))),
       },
       ...(fit === null
         ? []
@@ -144,7 +151,7 @@ export function netWorthProjectionOption(
               lineStyle: { width: 2 },
               color: PALETTE[1],
               z: 2,
-              data: months.map((m) => fit.valueAt(m)),
+              data: months.map((m) => positive(fit.valueAt(m))),
             },
           ]),
     ],

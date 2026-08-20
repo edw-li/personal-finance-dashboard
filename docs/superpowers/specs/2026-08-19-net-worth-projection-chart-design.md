@@ -6,6 +6,9 @@ the fit changed from Excel's `exp` trendline to a **second-degree polynomial** a
 user's request (the exponential outgrows the axis so fast the visible history flattens
 into the floor; the user also recalls the sheet originally using a poly-2 trendline —
 the current file carries `exp`, but the polynomial is the picture they want).
+**Revised again 2026-08-20:** the y-axis became **log scale** at the user's request
+(equal steps are equal multiples, keeping early history readable across decades of
+growth); nonpositive values become NaN gaps — a log axis has no zero.
 **Scope:** Frontend only — no backend changes, no migrations, no new endpoints.
 
 ## Goal
@@ -103,7 +106,10 @@ export function netWorthProjectionOption(
   (dots-only chart; the card's hint explains why).
 - **Legend:** top 0, with `data` entries so the scatter's swatch renders as
   `icon: 'circle'` — the two entries stay tellable apart.
-- **Axes/tooltip/zoom:** zero-anchored value axis with `formatCurrencyCompact` labels;
+- **Axes/tooltip/zoom:** **log-scale** value axis (documented departure from the
+  zero-anchored house rule — a log axis has no zero) with `formatCurrencyCompact`
+  labels; zero-or-below points in either series map to `Number.NaN` (echarts gap;
+  arrays stay plain `number[]`), and the tooltip renders NaN as '—';
   axis-trigger tooltip with the sibling's `valueFormatter` (null → '—', else
   `formatCurrency`); `dataZoom: timeZoom(axisMonths, 'all')` (ctrl+wheel over the long
   axis); grid `{ left: 76, right: 24, top: 40, bottom: 28 }` matching the sibling.
@@ -166,9 +172,10 @@ export function netWorthProjectionOption(
 
 ## Non-goals / constraints
 
-- No backend or wire changes; no new knobs; no log-scale axis; no y-axis cap (the
-  sheet's manual $50M clamp is replaced by dataZoom); no notes/annotation layer on this
-  chart; Overview and NetWorthPage untouched.
+- No backend or wire changes; no new knobs; no y-axis cap (the sheet's manual $50M
+  clamp is replaced by dataZoom + the log scale); no notes/annotation layer on this
+  chart; Overview and NetWorthPage untouched. (An earlier "no log-scale axis" non-goal
+  was overridden by the 2026-08-20 revision.)
 - No new echarts component registrations (Scatter + Line already in the bundle) — the
   chunk advisory (720 kB) is not expected to move.
 - Never copy real workbook dollar values into fixtures, code, or docs (standing rule).

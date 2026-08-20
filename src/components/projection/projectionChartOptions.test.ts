@@ -82,6 +82,7 @@ function readNw(option: EChartsOption | null) {
     dataZoom: { type: string; startValue: number }[]
     legend: { data: { name: string; icon?: string }[] }
     xAxis: { data: string[] }
+    yAxis: { type: string }
     series: {
       name: string
       type: string
@@ -157,5 +158,19 @@ describe('netWorthProjectionOption', () => {
     expect(option.legend.data[1]).toEqual({ name: NET_WORTH_PROJECTION_SERIES[1] })
     expect(option.dataZoom[0].type).toBe('inside')
     expect(option.dataZoom[0].startValue).toBe(0)
+  })
+
+  it('rides a log y-axis, turning nonpositive values into gaps', () => {
+    // A log axis cannot place zero or below — such points become NaN gaps, never lies.
+    const history = {
+      months: ['2026-06-01', '2026-07-01', '2026-08-01'],
+      net_worth: ['-5.00', '101000.00', '102010.00'],
+    }
+    const dipping: PolyTrendFit = { valueAt: (iso) => (iso === '2026-06-01' ? -1 : 123456) }
+    const option = readNw(netWorthProjectionOption(history, dipping, '2026-08-01', 1))
+    expect(option.yAxis.type).toBe('log')
+    expect(option.series[0].data).toEqual([NaN, 101000, 102010])
+    expect(option.series[1].data[0]).toBeNaN()
+    expect(option.series[1].data[1]).toBe(123456)
   })
 })

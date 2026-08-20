@@ -278,8 +278,8 @@ export default function ProjectionPage() {
                   <EChart option={nwChart} height={340} />
                   <p className="drill-hint">
                     {fit === null
-                      ? 'The polynomial trendline needs at least three snapshots — showing the history alone.'
-                      : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${data.years} years — momentum, not a plan; the knob-driven model is the chart below.`}
+                      ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
+                      : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${data.years} years — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples.`}
                   </p>
                 </>
               )}
