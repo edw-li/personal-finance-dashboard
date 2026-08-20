@@ -127,8 +127,7 @@ async def ingest_dividends(
         }
         for event_date, bar in events.items():
             if any(
-                abs(pay_date - event_date) <= overlap
-                for pay_date in manual_dates.get(sec_id, [])
+                abs(pay_date - event_date) <= overlap for pay_date in manual_dates.get(sec_id, [])
             ):
                 result.skipped_manual_overlap += 1
                 continue

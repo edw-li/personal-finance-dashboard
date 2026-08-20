@@ -673,9 +673,9 @@ async def test_importer_never_writes_dividends(db):
 - Modify: `src/components/portfolio/DividendsPanel.test.tsx`
 - Modify: `src/pages/PortfolioPage.tsx` (pass `annualIncome`; refresh note)
 
-- [ ] **Step 1: Types.** In `src/types/api.ts`: `DividendOut` gains `source: string`, `ex_date: string | null`, `per_share: string | null`, `shares_held: string | null`. `LastRefresh` gains `dividends_ingested?: number | null`, `dividends_removed?: number | null`, `dividends_skipped_overlap?: number | null` (optional — stale-deploy armor). `RefreshResult` gains `dividends_ingested: number`.
+- [x] **Step 1: Types.** In `src/types/api.ts`: `DividendOut` gains `source: string`, `ex_date: string | null`, `per_share: string | null`, `shares_held: string | null`. `LastRefresh` gains `dividends_ingested?: number | null`, `dividends_removed?: number | null`, `dividends_skipped_overlap?: number | null` (optional — stale-deploy armor). `RefreshResult` gains `dividends_ingested: number`.
 
-- [ ] **Step 2: The income builder** at `src/components/portfolio/dividendChartOptions.ts` (pure, no React — `historyChartOptions.ts` posture):
+- [x] **Step 2: The income builder** at `src/components/portfolio/dividendChartOptions.ts` (pure, no React — `historyChartOptions.ts` posture):
 
 ```ts
 // Pure option builder for the dividend income chart — no React, no fetching, no theme
@@ -750,9 +750,9 @@ export function incomeStats(dividends: DividendOut[], todayIso: string): IncomeS
 }
 ```
 
-- [ ] **Step 3: Builder tests** at `src/components/portfolio/dividendChartOptions.test.ts`: month bucketing sums two same-month rows; zero-fill (a month between two payments carries 0); window excludes a 25-month-old row; null with no rows; `incomeStats` trailing-12 boundary (a row exactly 12 months back counts, 13 back doesn't), YTD sum, null-vs-0 distinction. Use fixed `todayIso` strings — never `new Date()`.
+- [x] **Step 3: Builder tests** at `src/components/portfolio/dividendChartOptions.test.ts`: month bucketing sums two same-month rows; zero-fill (a month between two payments carries 0); window excludes a 25-month-old row; null with no rows; `incomeStats` trailing-12 boundary (a row exactly 12 months back counts, 13 back doesn't), YTD sum, null-vs-0 distinction. Use fixed `todayIso` strings — never `new Date()`.
 
-- [ ] **Step 4: DividendsPanel upgrade.** Props gain `annualIncome: string | null` (the page passes `totals?.annual_income ?? null` — a server figure, rendered verbatim). Above the form, add the analytics block; in the table, add Source (badge, `auto`/`manual` — TransactionsPanel's badge idiom) and Per share (`per_share` with `shares_held` in a `.sub` span) columns; rewrite the hint. Skeleton of the changed JSX (state/handlers unchanged):
+- [x] **Step 4: DividendsPanel upgrade.** Props gain `annualIncome: string | null` (the page passes `totals?.annual_income ?? null` — a server figure, rendered verbatim). Above the form, add the analytics block; in the table, add Source (badge, `auto`/`manual` — TransactionsPanel's badge idiom) and Per share (`per_share` with `shares_held` in a `.sub` span) columns; rewrite the hint. Skeleton of the changed JSX (state/handlers unchanged):
 
 ```tsx
       <p className="hint">
@@ -794,22 +794,22 @@ with `const chart = useMemo(() => monthlyIncomeOption(dividends, todayIso()), [d
                 </td>
 ```
 
-- [ ] **Step 5: PortfolioPage.** Pass `annualIncome={totals?.annual_income ?? null}` to `<DividendsPanel …>`. In `describeRefresh`, append the dividend clause to `text` when present: `(result.dividends_ingested > 0 ? `, ${result.dividends_ingested} dividends logged` : '')` — before the duration clause.
+- [x] **Step 5: PortfolioPage.** Pass `annualIncome={totals?.annual_income ?? null}` to `<DividendsPanel …>`. In `describeRefresh`, append the dividend clause to `text` when present: `(result.dividends_ingested > 0 ? `, ${result.dividends_ingested} dividends logged` : '')` — before the duration clause.
 
-- [ ] **Step 6: Extend `DividendsPanel.test.tsx`** (mirror its existing render fixtures; every fixture `DividendOut` must gain the four new fields — `source: 'manual'`, nulls — or tsc fails, which is the point): badges render per row; tiles + chart section renders with rows and is absent on an empty log; hint names the resurrect rule. Extend the fixtures in `PortfolioPage`-adjacent tests only if tsc forces it (grep `DividendOut` fixtures repo-wide: `OverviewPage.test.tsx` carries them too).
+- [x] **Step 6: Extend `DividendsPanel.test.tsx`** (mirror its existing render fixtures; every fixture `DividendOut` must gain the four new fields — `source: 'manual'`, nulls — or tsc fails, which is the point): badges render per row; tiles + chart section renders with rows and is absent on an empty log; hint names the resurrect rule. Extend the fixtures in `PortfolioPage`-adjacent tests only if tsc forces it (grep `DividendOut` fixtures repo-wide: `OverviewPage.test.tsx` carries them too).
 
-- [ ] **Step 7: Run gates** — `npm run test`, `npm run lint`, `npm run build` → all green (lint's 1 sanctioned AuthContext warning only).
+- [x] **Step 7: Run gates** — `npm run test`, `npm run lint`, `npm run build` → all green (lint's 1 sanctioned AuthContext warning only).
 
-- [ ] **Step 8: Commit** — `git commit -am "feat: dividend income analytics, source badges, refresh note"`
+- [x] **Step 8: Commit** — `git commit -am "feat: dividend income analytics, source badges, refresh note"`
 
 ---
 
 ### Task 7: Whole-feature gate + docs touch
 
-- [ ] **Step 1: Full backend suite** — `cd backend && .venv/Scripts/python.exe -m pytest -q` → all green, no new warnings (`-W error` is configured). `ruff check .` clean. `alembic check` clean (cwd=backend against the migrated dev DB).
-- [ ] **Step 2: Full frontend gates** — `npm run test && npm run lint && npm run build`.
-- [ ] **Step 3: README touch** — README Part 7.6 gains a one-line addendum blockquote: the deploy carries migration `b3d47a1c9e62` (additive; auto-applies at boot) and the first refresh after it backfills ~a year of dividend rows automatically.
-- [ ] **Step 4: Commit** — `git commit -am "docs: dividend tracking deploy note"`.
+- [x] **Step 1: Full backend suite** — `cd backend && .venv/Scripts/python.exe -m pytest -q` → all green, no new warnings (`-W error` is configured). `ruff check .` clean. `alembic check` clean (cwd=backend against the migrated dev DB).
+- [x] **Step 2: Full frontend gates** — `npm run test && npm run lint && npm run build`.
+- [x] **Step 3: README touch** — README Part 7.6 gains a one-line addendum blockquote: the deploy carries migration `b3d47a1c9e62` (additive; auto-applies at boot) and the first refresh after it backfills ~a year of dividend rows automatically.
+- [x] **Step 4: Commit** — `git commit -am "docs: dividend tracking deploy note"`.
 
 ---
 

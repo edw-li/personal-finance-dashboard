@@ -579,6 +579,11 @@ spot-check **/** (Overview), **/taxes** and **/settings**.
 > read *"No performance history yet"* until the next import (7.2) seeds the table:
 > expected on a first deploy, not a regression.
 
+> **Addendum (2026-08-20)**: rich dividend tracking adds one more additive migration —
+> `b3d47a1c9e62`, chained on `705ec03f614f` and applied at boot like every other — and the
+> first refresh after it backfills roughly a year of `source='auto'` dividend rows by
+> itself, so **/portfolio** → **Dividends** fills in without any extra step.
+
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the
 4.4 cache-control check once after the first deploy carrying the split route chunks.
