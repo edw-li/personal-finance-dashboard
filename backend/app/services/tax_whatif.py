@@ -111,9 +111,7 @@ def decompose_espp(
     today: date,
 ) -> EsppSaleDetail:
     proceeds = (shares * sale_price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
-    total_gain = (shares * (sale_price - purchase_price)).quantize(
-        MONEY_Q, rounding=ROUND_HALF_UP
-    )
+    total_gain = (shares * (sale_price - purchase_price)).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
     qualified = today >= qualifying_date
     warnings: list[str] = []
     if qualified:
@@ -133,9 +131,7 @@ def decompose_espp(
         ordinary = (shares * (purchase_fmv - purchase_price)).quantize(
             MONEY_Q, rounding=ROUND_HALF_UP
         )
-        capital = (shares * (sale_price - purchase_fmv)).quantize(
-            MONEY_Q, rounding=ROUND_HALF_UP
-        )
+        capital = (shares * (sale_price - purchase_fmv)).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
         term = "long" if (today - purchase_date).days > LONG_TERM_DAYS else "short"
     return EsppSaleDetail(
         lot_id=lot_id,

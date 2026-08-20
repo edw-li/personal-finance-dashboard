@@ -22,9 +22,7 @@ def upgrade() -> None:
     )
     op.add_column("dividend_payments", sa.Column("ex_date", sa.Date(), nullable=True))
     op.add_column("dividend_payments", sa.Column("per_share", sa.Numeric(10, 6), nullable=True))
-    op.add_column(
-        "dividend_payments", sa.Column("shares_held", sa.Numeric(16, 6), nullable=True)
-    )
+    op.add_column("dividend_payments", sa.Column("shares_held", sa.Numeric(16, 6), nullable=True))
     op.create_index(
         "ux_dividend_auto_event",
         "dividend_payments",

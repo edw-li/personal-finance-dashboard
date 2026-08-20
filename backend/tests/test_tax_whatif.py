@@ -149,9 +149,7 @@ def test_decompose_qualified_clamped_by_discount():
     assert str(detail.capital_gain) == "473.53"  # 650.00 - 176.47
     assert detail.term == "long"
     assert detail.warnings == [QUALIFIED_FMV_WARNING.format(lot_id=7)]
-    assert detail.warnings == [
-        "lot 7: grant-date FMV approximated from the subscription price"
-    ]
+    assert detail.warnings == ["lot 7: grant-date FMV approximated from the subscription price"]
 
 
 def test_decompose_qualified_clamped_by_gain():

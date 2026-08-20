@@ -562,9 +562,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         for leg in body.sales:
             security = securities.get(leg.security_id)
             if security is None:
-                raise HTTPException(
-                    status_code=404, detail=f"unknown security {leg.security_id}"
-                )
+                raise HTTPException(status_code=404, detail=f"unknown security {leg.security_id}")
             shares = quantize_shares(leg.shares, "shares")
             if shares <= 0:
                 raise HTTPException(status_code=422, detail="shares must be positive")
@@ -625,9 +623,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
             if leg.sale_price is not None:
                 sale_price = quantize_price(leg.sale_price, "sale_price")
                 if sale_price <= 0:
-                    raise HTTPException(
-                        status_code=422, detail="sale_price must be positive"
-                    )
+                    raise HTTPException(status_code=422, detail="sale_price must be positive")
             elif quote_price is not None:
                 sale_price = quote_price
             else:
@@ -682,9 +678,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         social_security_tax=scenario.social_security.tax - baseline.social_security.tax,
         disability_tax=scenario.disability.tax - baseline.disability.tax,
         capital_gains_tax=scenario.capital_gains.tax - baseline.capital_gains.tax,
-        effective_rate=rate_delta(
-            scenario.totals.effective_rate, baseline.totals.effective_rate
-        ),
+        effective_rate=rate_delta(scenario.totals.effective_rate, baseline.totals.effective_rate),
     )
     return WhatIfOut(
         year=year,

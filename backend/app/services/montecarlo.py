@@ -88,9 +88,7 @@ def simulate(
     for month_index in range(months + 1):
         column = sorted(path[month_index] for path in paths)
         for p in PERCENTILES:
-            value = Decimal(str(_percentile(column, p))).quantize(
-                CENT, rounding=ROUND_HALF_UP
-            )
+            value = Decimal(str(_percentile(column, p))).quantize(CENT, rounding=ROUND_HALF_UP)
             bands[f"p{p}"].append(value)
     return MonteCarloResult(bands=bands, reach_indices=reach_indices)
 

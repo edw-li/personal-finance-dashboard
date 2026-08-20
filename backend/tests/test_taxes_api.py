@@ -782,9 +782,7 @@ async def test_what_if_espp_disqualified_hits_w2_and_fica(auth_client, db, defin
     await seeded_2024(auth_client)
     lot_id = await seed_lot(db)
 
-    body = await what_if(
-        auth_client, espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}]
-    )
+    body = await what_if(auth_client, espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}])
 
     assert body["espp_sale_details"] == [
         {
@@ -910,9 +908,7 @@ async def test_what_if_no_price_paths_422(auth_client, db, definitions):
     assert resp.status_code == 422
     assert resp.json()["detail"] == "no price for NVDA — provide one"
 
-    resp = await auth_client.post(
-        WHAT_IF, json={"year": 2024, "espp_sales": [{"lot_id": lot_id}]}
-    )
+    resp = await auth_client.post(WHAT_IF, json={"year": 2024, "espp_sales": [{"lot_id": lot_id}]})
     assert resp.status_code == 422
     assert resp.json()["detail"] == "no ESPP quote available — provide a sale_price"
 

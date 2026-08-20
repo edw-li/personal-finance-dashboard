@@ -20,7 +20,12 @@ def test_seed_determinism():
 
 def test_band_ordering():
     result = simulate(
-        Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"), 240,
+        Decimal("100000"),
+        Decimal("1000"),
+        Decimal("0.05"),
+        Decimal("0.15"),
+        Decimal("0"),
+        240,
         None,
     )
     assert sorted(result.bands) == sorted(BAND_KEYS)
@@ -44,7 +49,12 @@ def test_t0_is_the_starting_balance_in_every_band():
     # t0 is not simulated — every path starts at the same known balance, so the fan
     # opens from the deterministic line's own first point.
     result = simulate(
-        Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"), 12,
+        Decimal("100000"),
+        Decimal("1000"),
+        Decimal("0.05"),
+        Decimal("0.15"),
+        Decimal("0"),
+        12,
         None,
     )
     for key in BAND_KEYS:
@@ -56,7 +66,12 @@ def test_zero_target_reached_immediately():
     # A target already met at t0 reaches at index 0 on every path — including the
     # pessimistic p90 edge.
     result = simulate(
-        Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"), 12,
+        Decimal("100000"),
+        Decimal("1000"),
+        Decimal("0.05"),
+        Decimal("0.15"),
+        Decimal("0"),
+        12,
         Decimal("50000"),
     )
     assert result.reach_indices == [0] * SIMULATIONS
@@ -67,7 +82,12 @@ def test_never_reaching_paths_percentile_none():
     # Absurd target: every path is "never", so every percentile is None — the router
     # renders a dash rather than inventing a date.
     result = simulate(
-        Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"), 12,
+        Decimal("100000"),
+        Decimal("1000"),
+        Decimal("0.05"),
+        Decimal("0.15"),
+        Decimal("0"),
+        12,
         Decimal("1000000000"),
     )
     assert result.reach_indices == [None] * SIMULATIONS
@@ -92,11 +112,21 @@ def test_contribution_growth_shifts_bands_up():
     # Same seed, same draws — the only difference is the escalating contribution, so the
     # final median must be strictly higher.
     flat = simulate(
-        Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"), 120,
+        Decimal("100000"),
+        Decimal("1000"),
+        Decimal("0.05"),
+        Decimal("0.15"),
+        Decimal("0"),
+        120,
         None,
     )
     escalating = simulate(
-        Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0.05"), 120,
+        Decimal("100000"),
+        Decimal("1000"),
+        Decimal("0.05"),
+        Decimal("0.15"),
+        Decimal("0.05"),
+        120,
         None,
     )
     assert escalating.bands["p50"][-1] > flat.bands["p50"][-1]
