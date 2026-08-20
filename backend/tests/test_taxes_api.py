@@ -7,12 +7,22 @@ the summary golden also proves the DB round-trip: Numeric(14,4) inputs and Numer
 Numeric(12,2) brackets come back at column scale and still land on the sheet's cents.
 """
 
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import func, select
 
-from app.models import TaxBracket, TaxInput, TaxInputDefinition, TaxYear
+from app.models import (
+    EsppLot,
+    LatestPrice,
+    PositionTransaction,
+    Security,
+    TaxBracket,
+    TaxInput,
+    TaxInputDefinition,
+    TaxYear,
+)
 from app.seed import seed_tax_definitions
 from app.services.tax_service import JURISDICTION_WARN_MISSING, SUGGESTION_KEYS
 from app.tax_keys import JURISDICTIONS, SECTIONS, TAX_INPUT_DEFINITIONS
@@ -20,6 +30,7 @@ from tests.test_tax_service import YEAR_BRACKETS, YEAR_INPUTS
 
 YEARS = "/api/v1/taxes/years"
 ALL_SUMMARY = "/api/v1/taxes/summary"
+WHAT_IF = "/api/v1/taxes/what-if"
 
 
 @pytest.fixture
@@ -615,6 +626,326 @@ async def test_summary_guards_absurd_but_legal_inputs(auth_client, definitions):
     assert any(w.startswith("capital-gains rates 0.188/0.238 contradict") for w in body["warnings"])
 
 
+# --- what-if ---
+
+
+async def seeded_2024(auth_client) -> None:
+    """The pinned 2024 column through the real editors — the what-if's baseline."""
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+
+
+async def what_if(auth_client, **body) -> dict:
+    resp = await auth_client.post(WHAT_IF, json={"year": 2024, **body})
+    assert resp.status_code == 200, resp.text  # fail here, not on a later KeyError
+    return resp.json()
+
+
+async def seed_holding(db, *, held: str = "100.000000", quote: str | None = "62.5000") -> int:
+    """100 NVDA at 50 (avg cost 50), DATELESS like the imported book, quoted at 62.50.
+
+    Column scale on purpose (conftest contract): shares Numeric(16,6), prices Numeric(14,4).
+    """
+    security = Security(ticker="NVDA", name="NVIDIA", holding_type="stock")
+    db.add(security)
+    await db.flush()
+    db.add(
+        PositionTransaction(
+            security_id=security.id,
+            account="Taxable",
+            type="buy",
+            txn_date=None,  # the dateless book: the term default has to warn
+            shares=Decimal(held),
+            price=Decimal("50.0000"),
+            sort_index=1,
+        )
+    )
+    if quote is not None:
+        db.add(
+            LatestPrice(
+                security_id=security.id,
+                price=Decimal(quote),
+                quoted_at=datetime(2026, 8, 14, 20, 30, tzinfo=UTC),
+                source="yfinance",
+            )
+        )
+    await db.commit()
+    return security.id
+
+
+async def seed_lot(db, *, sold: bool = False) -> int:
+    """One unsold ESPP lot, hand-computable: 10 sh, sub 100, FMV 120, price 85.
+
+    The dates are chosen so BOTH the disposition and the term are the same on any day the
+    suite runs — the router reads the real clock, so a lot whose qualifying date is decades
+    out is always disqualified, and a purchase decades back is always long-term.
+    """
+    lot = EsppLot(
+        purchase_date=date(2020, 2, 28),
+        qualifying_date=date(2099, 1, 1),
+        shares=Decimal("10.0000"),
+        subscription_price=Decimal("100.00000"),
+        purchase_fmv=Decimal("120.00000"),
+        purchase_price=Decimal("85.00000"),
+        sold_date=date(2021, 3, 1) if sold else None,
+        sold_price=Decimal("99.00000") if sold else None,
+    )
+    db.add(lot)
+    await db.commit()
+    return lot.id
+
+
+async def test_what_if_empty_scenario_echoes_baseline(auth_client, definitions):
+    """The legal no-op: the engine runs twice over the same inputs, so the two panels are
+    identical and every delta is a zero. The baseline is also the SUMMARY endpoint's body,
+    field for field — one quantization discipline, not two."""
+    await seeded_2024(auth_client)
+
+    body = await what_if(auth_client)
+    assert body["year"] == 2024
+    assert body["scenario"] == body["baseline"]
+    assert body["baseline"] == (await auth_client.get(f"{YEARS}/2024/summary")).json()
+    assert body["delta"] == {
+        "total_tax": "0.00",
+        "take_home": "0.00",
+        "federal_tax": "0.00",
+        "state_tax": "0.00",
+        "medicare_tax": "0.00",
+        "social_security_tax": "0.00",
+        "disability_tax": "0.00",
+        "capital_gains_tax": "0.00",
+        "effective_rate": "0.000000",
+    }
+    assert body["changed_inputs"] == []
+    assert body["sale_details"] == []
+    assert body["espp_sale_details"] == []
+    assert body["warnings"] == []
+
+
+async def test_what_if_long_sale_moves_ltcg_and_delta(auth_client, db, definitions):
+    """A 40-share sale at the stored quote: average cost in, BOTH LTCG keys out."""
+    await seeded_2024(auth_client)
+    security_id = await seed_holding(db)
+
+    body = await what_if(auth_client, sales=[{"security_id": security_id, "shares": "40"}])
+
+    assert body["sale_details"] == [
+        {
+            "security_id": security_id,
+            "ticker": "NVDA",
+            "shares": "40.000000",
+            "price": "62.5000",  # defaulted to the latest quote, at ITS column scale
+            "proceeds": "2500.00",
+            "cost_basis": "2000.00",  # 40 x the 50.00 average cost
+            "gain": "500.00",
+            "term": "long",
+            "warnings": ["NVDA: acquisition dates unknown — treated as long-term"],
+        }
+    ]
+    # The load-bearing pin: the COMPONENT key and the TOTAL the engine reads move together.
+    assert body["changed_inputs"] == [
+        {
+            "key": "ltcg_brokerage",
+            "label": "LTCG: Brokerage Gain/Loss",
+            "before": "0.00",
+            "after": "500.00",
+        },
+        {
+            "key": "ltcg_total",
+            "label": "Long Term Capital Gain/Loss",
+            "before": "0.00",
+            "after": "500.00",
+        },
+    ]
+    assert body["warnings"] == ["NVDA: acquisition dates unknown — treated as long-term"]
+
+    # The delta is the two RENDERED figures subtracted — never a third computation.
+    scenario_tax = Decimal(body["scenario"]["totals"]["total_tax"])
+    baseline_tax = Decimal(body["baseline"]["totals"]["total_tax"])
+    assert Decimal(body["delta"]["total_tax"]) == scenario_tax - baseline_tax
+    assert scenario_tax > baseline_tax  # 500 of long-term gain costs real tax
+    assert Decimal(body["delta"]["capital_gains_tax"]) == Decimal(
+        body["scenario"]["capital_gains"]["tax"]
+    ) - Decimal(body["baseline"]["capital_gains"]["tax"])
+    assert Decimal(body["delta"]["take_home"]) == Decimal(
+        body["scenario"]["totals"]["take_home"]
+    ) - Decimal(body["baseline"]["totals"]["take_home"])
+    # Nothing about the sale reached the stored year.
+    assert (await auth_client.get(f"{YEARS}/2024/summary")).json() == body["baseline"]
+
+
+async def test_what_if_espp_disqualified_hits_w2_and_fica(auth_client, db, definitions):
+    """A disqualified disposition splits into W-2 ordinary income and a capital leg, and
+    the ordinary half raises the engine's FICA wage bases — sheet-faithful (the sheet's
+    ESPP component rolls into the W-2 total; real-world ESPP ordinary income is FICA-exempt).
+    """
+    await seeded_2024(auth_client)
+    lot_id = await seed_lot(db)
+
+    body = await what_if(
+        auth_client, espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}]
+    )
+
+    assert body["espp_sale_details"] == [
+        {
+            "lot_id": lot_id,
+            "purchase_date": "2020-02-28",
+            "shares": "10.0000",
+            "sale_price": "150.0000",
+            "proceeds": "1500.00",
+            "ordinary_income": "350.00",  # (120 - 85) x 10, the bargain element at purchase
+            "capital_gain": "300.00",  # (150 - 120) x 10
+            "term": "long",
+            "disposition": "disqualified",
+            "warnings": [],
+        }
+    ]
+    assert body["changed_inputs"] == [
+        {
+            "key": "ltcg_espp_component",
+            "label": "LTCG: ESPP Sale Component",
+            "before": "0.00",
+            "after": "300.00",
+        },
+        {
+            "key": "ltcg_total",
+            "label": "Long Term Capital Gain/Loss",
+            "before": "0.00",
+            "after": "300.00",
+        },
+        {
+            "key": "other_w2_income",
+            "label": "Other W2 Income",
+            "before": "122474.46",
+            "after": "122824.46",
+        },
+        {
+            "key": "w2_espp_sale_component",
+            "label": "W2: ESPP Sale Component",
+            "before": "0.00",
+            "after": "350.00",
+        },
+    ]
+    # FICA moves with the W-2 line: Medicare has no cap, so the 350 meets the 2.35% tier.
+    assert Decimal(body["delta"]["medicare_tax"]) > 0
+    assert Decimal(body["delta"]["medicare_tax"]) == Decimal(
+        body["scenario"]["medicare"]["tax"]
+    ) - Decimal(body["baseline"]["medicare"]["tax"])
+    assert body["scenario"]["medicare"]["taxable_wages"] == "231624.46"  # 231274.46 + 350
+    # ...and does NOT move where the 2024 wage bases are already capped out.
+    assert body["delta"]["social_security_tax"] == "0.00"  # capped at 168600
+    assert body["delta"]["disability_tax"] == "0.00"  # 0-rate above 195000
+
+
+async def test_what_if_oversell_422(auth_client, db, definitions):
+    await seeded_2024(auth_client)
+    security_id = await seed_holding(db)
+
+    resp = await auth_client.post(
+        WHAT_IF,
+        json={"year": 2024, "sales": [{"security_id": security_id, "shares": "150"}]},
+    )
+    assert resp.status_code == 422
+    # Both figures at share scale, so the sentence reads like the holdings table.
+    assert resp.json()["detail"] == "selling 150.000000 NVDA — only 100.000000 held"
+
+
+async def test_what_if_unknown_security_404(auth_client, definitions):
+    await seeded_2024(auth_client)
+
+    resp = await auth_client.post(
+        WHAT_IF, json={"year": 2024, "sales": [{"security_id": 9999, "shares": "1"}]}
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "unknown security 9999"
+
+
+async def test_what_if_sold_lot_409(auth_client, db, definitions):
+    """A sold lot has already happened — modelling its sale is a stale link, not a scenario."""
+    await seeded_2024(auth_client)
+    lot_id = await seed_lot(db, sold=True)
+
+    resp = await auth_client.post(
+        WHAT_IF, json={"year": 2024, "espp_sales": [{"lot_id": lot_id, "sale_price": "150"}]}
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == f"lot {lot_id} already sold"
+
+    missing = await auth_client.post(
+        WHAT_IF, json={"year": 2024, "espp_sales": [{"lot_id": 9999, "sale_price": "150"}]}
+    )
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "unknown lot 9999"
+
+
+async def test_what_if_unknown_override_key_422(auth_client, definitions):
+    """Overrides speak the PUT-inputs vocabulary, down to the sentence."""
+    await seeded_2024(auth_client)
+
+    resp = await auth_client.post(
+        WHAT_IF, json={"year": 2024, "overrides": {"nope": "2", "qualified_dividends": "2500"}}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "unknown input key(s): ['nope']"
+
+    # A known key is a plain replacement, applied over the stored value.
+    body = await what_if(auth_client, overrides={"qualified_dividends": "2500"})
+    assert body["changed_inputs"] == [
+        {
+            "key": "qualified_dividends",
+            "label": "Qualified Dividends",
+            "before": "179.13",
+            "after": "2500.00",
+        }
+    ]
+
+
+async def test_what_if_year_404(auth_client, definitions):
+    """The sandbox models a REAL year: no tax_years row, no scenario."""
+    resp = await auth_client.post(WHAT_IF, json={"year": 2029})
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "tax year 2029 not found"
+
+    # The century guard rides on the body here, where a Path() bound cannot reach it — an
+    # int4 column would otherwise answer a mistyped year with a bare DataError 500.
+    out_of_range = await auth_client.post(WHAT_IF, json={"year": 99999999999})
+    assert out_of_range.status_code == 422
+    assert out_of_range.json()["detail"] == "year must be between 1900 and 2100"
+
+
+async def test_what_if_writes_nothing(auth_client, db, definitions):
+    """The whole feature's contract: a full scenario is a computation, not an edit."""
+    await seeded_2024(auth_client)
+    security_id = await seed_holding(db)
+    lot_id = await seed_lot(db)
+    before_payload = (await auth_client.get(f"{YEARS}/2024/inputs")).json()
+    before_rows = {
+        row.key: str(row.value)
+        for row in (await db.execute(select(TaxInput).where(TaxInput.year == 2024))).scalars()
+    }
+
+    body = await what_if(
+        auth_client,
+        sales=[{"security_id": security_id, "shares": "40", "term": "short"}],
+        espp_sales=[{"lot_id": lot_id, "sale_price": "150.0000"}],
+        overrides={"qualified_dividends": "2500", "interest_total": None},
+    )
+    assert body["scenario"] != body["baseline"]  # the scenario really did move
+
+    db.expire_all()  # re-read from Postgres, not from the identity map
+    after_rows = {
+        row.key: str(row.value)
+        for row in (await db.execute(select(TaxInput).where(TaxInput.year == 2024))).scalars()
+    }
+    assert after_rows == before_rows  # byte-identical, key for key
+    assert (await auth_client.get(f"{YEARS}/2024/inputs")).json() == before_payload
+    # Nor did the scenario touch the lot it modelled, or invent a year row.
+    lot = await db.get(EsppLot, lot_id)
+    assert (lot.sold_date, lot.sold_price) == (None, None)
+    years = (await db.execute(select(func.count()).select_from(TaxYear))).scalar_one()
+    assert years == 1
+
+
 async def test_taxes_endpoints_require_auth(client):
     assert (await client.get(YEARS)).status_code == 401
     assert (await client.delete(f"{YEARS}/2024")).status_code == 401
@@ -626,3 +957,4 @@ async def test_taxes_endpoints_require_auth(client):
     assert (await client.post(f"{YEARS}/2025/clone-brackets-from/2024")).status_code == 401
     assert (await client.get(f"{YEARS}/2024/summary")).status_code == 401
     assert (await client.get(ALL_SUMMARY)).status_code == 401
+    assert (await client.post(WHAT_IF, json={"year": 2024})).status_code == 401

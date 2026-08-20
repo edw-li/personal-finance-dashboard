@@ -1,4 +1,5 @@
-"""Taxes API: the inputs/brackets editors plus the engine-computed summaries (spec §5).
+"""Taxes API: the inputs/brackets editors, the engine-computed summaries, and the
+nothing-stored what-if sandbox (spec §5).
 
 The stored `tax_inputs` / `tax_brackets` rows are the engine's only feed, so this router is
 deliberately thin: validate at the boundary (money.py's vocabulary), hand full-precision
@@ -10,6 +11,8 @@ READ endpoints must never reject stored data: `_money` / `_effective_rate` below
 why the summary serializer cannot reuse money.py's bounded quantizers.
 """
 
+from collections.abc import Iterable
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
@@ -18,15 +21,23 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+
+# The espp router owns the espp_ticker -> securities -> latest_prices soft link; the
+# what-if borrows it rather than minting a second copy (app_settings.py imports
+# portfolio.py's _normalize_ticker on the same precedent).
+from app.api.espp import _espp_quote
 from app.database import get_db
-from app.models import TaxBracket, TaxInput, TaxInputDefinition, TaxYear
+from app.models import EsppLot, TaxBracket, TaxInput, TaxInputDefinition, TaxYear
 from app.schemas.taxes import (
     BracketIn,
     BracketOut,
     BracketsIn,
     BracketsOut,
     CapitalGainsTaxOut,
+    ChangedInput,
+    EsppSaleDetailOut,
     IncomeTaxOut,
+    SaleDetailOut,
     TaxInputItemOut,
     TaxInputSectionOut,
     TaxInputsIn,
@@ -36,6 +47,9 @@ from app.schemas.taxes import (
     TaxTotalsOut,
     TaxYearOut,
     WageTaxOut,
+    WhatIfDelta,
+    WhatIfIn,
+    WhatIfOut,
 )
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -44,7 +58,9 @@ from app.services.money import (
     quantize_money,
     quantize_pct,
     quantize_price,
+    quantize_shares,
 )
+from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
 from app.services.tax_service import (
     Bracket,
     JurisdictionResult,
@@ -52,7 +68,14 @@ from app.services.tax_service import (
     compute_breakdown,
     derive_suggestions,
 )
-from app.tax_keys import JURISDICTIONS, SECTIONS
+from app.services.tax_whatif import (
+    EsppSaleDetail,
+    SaleDetail,
+    apply_scenario,
+    classify_sale,
+    decompose_espp,
+)
+from app.tax_keys import JURISDICTIONS, SECTIONS, TAX_INPUT_DEFINITIONS
 
 router = APIRouter(prefix="/taxes", tags=["taxes"], dependencies=[Depends(get_current_user)])
 
@@ -61,6 +84,10 @@ router = APIRouter(prefix="/taxes", tags=["taxes"], dependencies=[Depends(get_cu
 YEAR_MIN = 1900
 YEAR_MAX = 2100
 YearPath = Annotated[int, Path(ge=YEAR_MIN, le=YEAR_MAX)]
+# The what-if carries its year in the BODY, where a Path() bound cannot reach it, so the
+# same guard is spelled out there — with a sentence of its own, because pydantic's is not
+# available off the path.
+YEAR_MESSAGE = f"year must be between {YEAR_MIN} and {YEAR_MAX}"
 
 MAX_BRACKETS = 12
 ZERO = Decimal("0")
@@ -176,6 +203,31 @@ async def get_inputs(year: YearPath, db: AsyncSession = Depends(get_db)) -> TaxI
     return await _inputs_payload(db, year)
 
 
+async def _require_known_input_keys(db: AsyncSession, keys: Iterable[str]) -> None:
+    """The definition table is the only place that knows which keys are seeded, so every
+    endpoint that speaks the input vocabulary (PUT inputs, the what-if overrides) asks it
+    the same question and reports an unknown key with the same sentence."""
+    known = set((await db.execute(select(TaxInputDefinition.key))).scalars())
+    unknown = sorted(set(keys) - known)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown input key(s): {unknown}")
+
+
+def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
+    """One input value at the tax_inputs column scale, Numeric(14,4); null stays null.
+
+    `+ ZERO` is tax_service._rate's trick: -0.00004 quantizes to Decimal("-0.0000"), and
+    this session keeps the written object (expire_on_commit=False), so without the
+    collapse the PUT echoes "-0.0000" where a later GET reads Postgres's plain "0.0000".
+
+    The `values.` field prefix is the PUT's, kept verbatim for the what-if overrides too:
+    one vocabulary means a bad input value is reported identically wherever it arrives.
+    """
+    if value is None:
+        return None
+    return quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
+
+
 @router.put("/years/{year}/inputs", response_model=TaxInputsOut)
 async def put_inputs(
     year: YearPath, body: TaxInputsIn, db: AsyncSession = Depends(get_db)
@@ -183,23 +235,10 @@ async def put_inputs(
     # Re-import interplay (Plan 2 forward note): the taxes import is sheet-wins within the
     # years it covers, so edits made here to an imported year are clobbered by the next
     # re-import. Cutover order is documented, not guarded.
-    known = set((await db.execute(select(TaxInputDefinition.key))).scalars())
-    unknown = sorted(set(body.values) - known)
-    if unknown:
-        raise HTTPException(status_code=422, detail=f"unknown input key(s): {unknown}")
+    await _require_known_input_keys(db, body.values)
     # Quantize EVERY value before the first write: a 422 raised halfway through a bulk
     # upsert would otherwise leave the year half-edited (portfolio PATCH posture).
-    # `+ ZERO` is tax_service._rate's trick: -0.00004 quantizes to Decimal("-0.0000"), and
-    # this session keeps the written object (expire_on_commit=False), so without the
-    # collapse the PUT echoes "-0.0000" where a later GET reads Postgres's plain "0.0000".
-    quantized = {
-        key: (
-            None
-            if value is None
-            else quantize_price(value, f"values.{key}", max_abs=MONEY_MAX_ABS_14_4) + ZERO
-        )
-        for key, value in body.values.items()
-    }
+    quantized = {key: _validated_input_value(key, value) for key, value in body.values.items()}
 
     await _ensure_year(db, year)
     existing = {
@@ -469,4 +508,175 @@ async def get_all_summaries(db: AsyncSession = Depends(get_db)) -> TaxSummariesO
             # A year with no inputs computes an all-zero column — noise in a trend chart.
             if inputs_by_year.get(year)
         ]
+    )
+
+
+@router.post("/what-if", response_model=WhatIfOut)
+async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfOut:
+    """Baseline vs scenario through the engine — NOTHING is stored. today is read here
+    (paycheck.py's clock posture) for ESPP disposition dating."""
+    year = body.year
+    if not YEAR_MIN <= year <= YEAR_MAX:
+        raise HTTPException(status_code=422, detail=YEAR_MESSAGE)
+    await _require_year(db, year)
+    today = date.today()
+
+    stored = await _stored_inputs(db, year)
+    bracket_rows = (
+        await db.execute(
+            select(TaxBracket)
+            .where(TaxBracket.year == year)
+            .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
+        )
+    ).scalars()
+    brackets: dict[str, list[Bracket]] = {}
+    for row in bracket_rows:
+        brackets.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
+
+    # Overrides: the PUT-inputs vocabulary — unknown keys 422, values quantized 4dp.
+    await _require_known_input_keys(db, body.overrides)
+    overrides: dict[str, Decimal | None] = {
+        key: _validated_input_value(key, value) for key, value in body.overrides.items()
+    }
+
+    # Brokerage legs: average-cost fold, summed per security across accounts.
+    sale_details: list[SaleDetail] = []
+    if body.sales:
+        securities, txns, latest, _history, _dividends = await load_portfolio(
+            db, with_history=False, with_dividends=False
+        )
+        folded = fold_transactions(txns)
+        per_sec: dict[int, dict] = {}
+        for pos in folded.values():
+            agg = per_sec.setdefault(
+                pos.security_id,
+                {"shares": ZERO, "cost_basis": ZERO, "has_dateless": False},
+            )
+            agg["shares"] += pos.shares
+            agg["cost_basis"] += pos.cost_basis
+            agg["has_dateless"] = agg["has_dateless"] or pos.has_dateless_txn
+        for leg in body.sales:
+            security = securities.get(leg.security_id)
+            if security is None:
+                raise HTTPException(
+                    status_code=404, detail=f"unknown security {leg.security_id}"
+                )
+            shares = quantize_shares(leg.shares, "shares")
+            if shares <= 0:
+                raise HTTPException(status_code=422, detail="shares must be positive")
+            agg = per_sec.get(leg.security_id)
+            held = agg["shares"].quantize(SHARE_Q, rounding=ROUND_HALF_UP) if agg else ZERO
+            if shares > held:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(f"selling {shares} {security.ticker} — only {held} held"),
+                )
+            if leg.price is not None:
+                price = quantize_price(leg.price, "price")
+                if price <= 0:
+                    raise HTTPException(status_code=422, detail="price must be positive")
+            else:
+                quote = latest.get(leg.security_id)
+                if quote is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"no price for {security.ticker} — provide one",
+                    )
+                price = quote.price
+            sale_details.append(
+                classify_sale(
+                    security_id=security.id,
+                    ticker=security.ticker,
+                    shares=shares,
+                    price=price,
+                    held_shares=agg["shares"],
+                    held_cost_basis=agg["cost_basis"],
+                    has_dateless=agg["has_dateless"],
+                    term=leg.term,
+                )
+            )
+
+    # ESPP legs.
+    espp_details: list[EsppSaleDetail] = []
+    if body.espp_sales:
+        _ticker, quote_price, _quoted_at = await _espp_quote(db)
+        for leg in body.espp_sales:
+            lot = await db.get(EsppLot, leg.lot_id)
+            if lot is None:
+                raise HTTPException(status_code=404, detail=f"unknown lot {leg.lot_id}")
+            if lot.sold_date is not None:
+                raise HTTPException(status_code=409, detail=f"lot {leg.lot_id} already sold")
+            if leg.sale_price is not None:
+                sale_price = quantize_price(leg.sale_price, "sale_price")
+                if sale_price <= 0:
+                    raise HTTPException(
+                        status_code=422, detail="sale_price must be positive"
+                    )
+            elif quote_price is not None:
+                sale_price = quote_price
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail="no ESPP quote available — provide a sale_price",
+                )
+            espp_details.append(
+                decompose_espp(
+                    lot_id=lot.id,
+                    purchase_date=lot.purchase_date,
+                    qualifying_date=lot.qualifying_date,
+                    shares=lot.shares,
+                    subscription_price=lot.subscription_price,
+                    purchase_fmv=lot.purchase_fmv,
+                    purchase_price=lot.purchase_price,
+                    sale_price=sale_price,
+                    today=today,
+                )
+            )
+
+    scenario_inputs, scenario_warnings = apply_scenario(
+        stored, sale_details, espp_details, overrides
+    )
+    baseline = _summary_out(compute_breakdown(year, stored, brackets))
+    scenario = _summary_out(compute_breakdown(year, scenario_inputs, brackets))
+
+    changed: list[ChangedInput] = []
+    labels = {key: label for key, label, _s, _o, _d in TAX_INPUT_DEFINITIONS}
+    for key in sorted(set(stored) | set(scenario_inputs)):
+        before = stored.get(key, ZERO)
+        after = scenario_inputs.get(key, ZERO)
+        if before != after:
+            changed.append(
+                ChangedInput(
+                    key=key,
+                    label=labels.get(key, key),
+                    before=_money(before),
+                    after=_money(after),
+                )
+            )
+
+    def rate_delta(a: Decimal | None, b: Decimal | None) -> Decimal | None:
+        return None if a is None or b is None else quantize_pct(a - b)
+
+    delta = WhatIfDelta(
+        total_tax=scenario.totals.total_tax - baseline.totals.total_tax,
+        take_home=scenario.totals.take_home - baseline.totals.take_home,
+        federal_tax=scenario.federal.tax - baseline.federal.tax,
+        state_tax=scenario.state.tax - baseline.state.tax,
+        medicare_tax=scenario.medicare.tax - baseline.medicare.tax,
+        social_security_tax=scenario.social_security.tax - baseline.social_security.tax,
+        disability_tax=scenario.disability.tax - baseline.disability.tax,
+        capital_gains_tax=scenario.capital_gains.tax - baseline.capital_gains.tax,
+        effective_rate=rate_delta(
+            scenario.totals.effective_rate, baseline.totals.effective_rate
+        ),
+    )
+    return WhatIfOut(
+        year=year,
+        baseline=baseline,
+        scenario=scenario,
+        delta=delta,
+        changed_inputs=changed,
+        sale_details=[SaleDetailOut(**vars(d)) for d in sale_details],
+        espp_sale_details=[EsppSaleDetailOut(**vars(d)) for d in espp_details],
+        warnings=scenario_warnings,
     )

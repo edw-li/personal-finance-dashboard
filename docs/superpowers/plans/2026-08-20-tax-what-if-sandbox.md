@@ -314,7 +314,7 @@ class WhatIfOut(BaseModel):
 - Modify: `backend/app/api/taxes.py` (new route + helpers; reuse `_summary_out`, `_stored_inputs`, `_require_year`)
 - Test: `backend/tests/test_taxes_api.py` (extend)
 
-- [ ] **Step 1: Add the route.** Read the whole of `api/taxes.py` first (the PUT-inputs handler shows the override-key validation vocabulary to reuse — unknown keys 422 with its exact wording, values quantized with its exact helper). Then append:
+- [x] **Step 1: Add the route.** Read the whole of `api/taxes.py` first (the PUT-inputs handler shows the override-key validation vocabulary to reuse — unknown keys 422 with its exact wording, values quantized with its exact helper). Then append:
 
 ```python
 @router.post("/what-if", response_model=WhatIfOut)
@@ -493,7 +493,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
 
 Notes for the implementer: (a) `_espp_quote_for_whatif` — `api/espp.py` already has `_espp_quote(db)`; import it (rename nothing) rather than duplicating; if importing across routers is unprecedented in this repo, lift `_espp_quote` into a small shared helper module instead and update espp.py — pick whichever the codebase's precedent supports (check how routers share `money.py` helpers). (b) `_validated_input_value` — extract from the PUT-inputs handler if inline; identical wording. (c) Imports needed: `load_portfolio`, `fold_transactions`, `SHARE_Q` from portfolio_calc; `quantize_shares`, `quantize_price` from money (verify exact names in `services/money.py` — if `quantize_shares` doesn't exist, use the module's actual share quantizer); `EsppLot` model; the whatif service; new schemas; `TAX_INPUT_DEFINITIONS`. (d) `YEAR_MESSAGE`/`YEAR_MIN`/`YEAR_MAX` already exist in the file — reuse.
 
-- [ ] **Step 2: API tests** in `backend/tests/test_taxes_api.py` (follow its `auth_client` fixture idioms; seed inputs/brackets like the summary tests do):
+- [x] **Step 2: API tests** in `backend/tests/test_taxes_api.py` (follow its `auth_client` fixture idioms; seed inputs/brackets like the summary tests do):
 
 1. `test_what_if_empty_scenario_echoes_baseline` — seeded year: `scenario == baseline` field-for-field, all deltas "0.00", `changed_inputs == []`.
 2. `test_what_if_long_sale_moves_ltcg_and_delta` — seed a security + dateless buy (100 sh @ 50) + latest price 62.50 + a year with real brackets; sell 40 (price defaulted) → `changed_inputs` carries ltcg_brokerage AND ltcg_total (+500.00 each); `delta.total_tax == scenario − baseline` recomputed in-test; the dateless warning present.
@@ -501,9 +501,9 @@ Notes for the implementer: (a) `_espp_quote_for_whatif` — `api/espp.py` alread
 4. `test_what_if_oversell_422`, `test_what_if_unknown_security_404`, `test_what_if_sold_lot_409`, `test_what_if_unknown_override_key_422`, `test_what_if_year_404`.
 5. `test_what_if_writes_nothing` — after a full scenario call, `tax_inputs` rows for the year are byte-identical to what was seeded.
 
-- [ ] **Step 3: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_tax_whatif.py tests/test_taxes_api.py -q` → PASS; `ruff check .` clean; full backend suite once green.
+- [x] **Step 3: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_tax_whatif.py tests/test_taxes_api.py -q` → PASS; `ruff check .` clean; full backend suite once green.
 
-- [ ] **Step 4: Commit** — `git commit -am "feat: POST /taxes/what-if — baseline vs scenario vs delta through the engine, nothing stored"`
+- [x] **Step 4: Commit** — `git commit -am "feat: POST /taxes/what-if — baseline vs scenario vs delta through the engine, nothing stored"`
 
 ---
 
