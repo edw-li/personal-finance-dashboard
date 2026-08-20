@@ -513,7 +513,7 @@ Notes for the implementer: (a) `_espp_quote_for_whatif` — `api/espp.py` alread
 - Create: `src/api/whatif.ts`
 - Modify: `src/types/api.ts`
 
-- [ ] **Step 1: Types** — mirror the wire schemas exactly (Decimals as strings, dates as strings):
+- [x] **Step 1: Types** — mirror the wire schemas exactly (Decimals as strings, dates as strings):
 
 ```ts
 export interface SaleLegIn {
@@ -584,7 +584,7 @@ export interface WhatIfOut {
 }
 ```
 
-- [ ] **Step 2: Client** at `src/api/whatif.ts`:
+- [x] **Step 2: Client** at `src/api/whatif.ts`:
 
 ```ts
 import type { EsppSaleIn, SaleLegIn, WhatIfOut } from '../types/api'
@@ -602,7 +602,7 @@ export function runWhatIf(body: WhatIfBody): Promise<WhatIfOut> {
 }
 ```
 
-- [ ] **Step 3: Commit** — `git commit -am "feat: what-if API client + wire types"`
+- [x] **Step 3: Commit** — `git commit -am "feat: what-if API client + wire types"`
 
 ---
 

@@ -470,6 +470,82 @@ export interface TaxSummariesOut {
   years: TaxSummaryOut[]
 }
 
+// --- taxes: what-if ---
+// POST /taxes/what-if — a scenario run against a STORED year; nothing is written. The
+// request halves mirror backend/app/schemas/taxes.py's WhatIfIn field-for-field (an
+// omitted `price`/`sale_price` means "use the latest quote", and an omitted `term` means
+// "long", with a warning when the lot's acquisition dates are unknown). Money and rates
+// arrive as Decimal strings at the summary's own quanta — money 2dp, effective rates 6dp
+// — and are rendered verbatim, never re-derived from the two summaries.
+
+export interface SaleLegIn {
+  security_id: number
+  shares: string
+  price?: string
+  term?: 'long' | 'short'
+}
+
+export interface EsppSaleIn {
+  lot_id: number
+  sale_price?: string
+}
+
+export interface WhatIfDelta {
+  total_tax: string
+  take_home: string
+  federal_tax: string
+  state_tax: string
+  medicare_tax: string
+  social_security_tax: string
+  disability_tax: string
+  capital_gains_tax: string
+  // A fraction delta (scenario − baseline); null when either side has no rate at all.
+  effective_rate: string | null
+}
+
+export interface ChangedInput {
+  key: string
+  label: string
+  before: string // "0" when the key had no stored row
+  after: string
+}
+
+export interface SaleDetailOut {
+  security_id: number
+  ticker: string
+  shares: string
+  price: string
+  proceeds: string
+  cost_basis: string
+  gain: string
+  term: string
+  warnings: string[]
+}
+
+export interface EsppSaleDetailOut {
+  lot_id: number
+  purchase_date: string
+  shares: string
+  sale_price: string
+  proceeds: string
+  ordinary_income: string
+  capital_gain: string
+  term: string
+  disposition: string
+  warnings: string[]
+}
+
+export interface WhatIfOut {
+  year: number
+  baseline: TaxSummaryOut
+  scenario: TaxSummaryOut
+  delta: WhatIfDelta
+  changed_inputs: ChangedInput[]
+  sale_details: SaleDetailOut[]
+  espp_sale_details: EsppSaleDetailOut[]
+  warnings: string[]
+}
+
 // --- espp ---
 // espp_lots prices are 5dp (the one place in the app that is not 4dp), shares 4dp,
 // period money 2dp, contribution_pct 9dp ("0.130000000"), modeler money 2dp and
