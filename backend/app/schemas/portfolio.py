@@ -105,6 +105,10 @@ class DividendOut(BaseModel):
     account: str | None
     pay_date: date
     amount: Decimal
+    source: str
+    ex_date: date | None
+    per_share: Decimal | None
+    shares_held: Decimal | None
     notes: str | None
 
 
@@ -187,6 +191,9 @@ class RefreshOut(BaseModel):
     failed: dict[str, str]
     skipped_manual: list[str]
     duration_ms: int
+    # Defaulted until run_refresh returns the ingest counts — the endpoint that builds this
+    # response cannot supply the field before then.
+    dividends_ingested: int = 0
 
 
 class LastRefreshOut(BaseModel):
@@ -199,6 +206,11 @@ class LastRefreshOut(BaseModel):
     failed: dict[str, str]
     skipped_manual: int
     history_appended: bool
+    # Optional: payloads stored before this feature lack the keys and must still validate
+    # (the status endpoint's degrade posture).
+    dividends_ingested: int | None = None
+    dividends_removed: int | None = None
+    dividends_skipped_overlap: int | None = None
 
 
 class RefreshStatusOut(BaseModel):

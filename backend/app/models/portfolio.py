@@ -1,7 +1,17 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -9,6 +19,7 @@ from app.database import Base
 HOLDING_TYPES = ("etf", "mutual_fund", "stock", "private")
 TRANSACTION_TYPES = ("buy", "sell", "split")
 TRANSACTION_SOURCES = ("import", "ui")
+DIVIDEND_SOURCES = ("manual", "auto")
 PRICE_SOURCES = ("yfinance", "manual")
 
 
@@ -49,12 +60,35 @@ class PositionTransaction(Base):
 
 class DividendPayment(Base):
     __tablename__ = "dividend_payments"
+    __table_args__ = (
+        # The auto-ingest idempotency key: one row per (security, account, event date)
+        # for refresh-written rows. Partial — manual rows stay unconstrained, and the
+        # index must live HERE (not only in the migration) because the test database is
+        # built by Base.metadata.create_all.
+        Index(
+            "ux_dividend_auto_event",
+            "security_id",
+            "account",
+            "ex_date",
+            unique=True,
+            postgresql_where=text("source = 'auto'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     security_id: Mapped[int] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"))
     account: Mapped[str | None] = mapped_column(String(80))
     pay_date: Mapped[date] = mapped_column(Date)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # Ownership contract (the transactions `source` precedent, user decision 2026-08-20):
+    # the refresh owns source='auto' rows inside its 370-day window; the importer never
+    # writes dividends at all (pinned in tests); manual rows are the user's alone.
+    source: Mapped[str] = mapped_column(String(10), default="manual", server_default="manual")
+    # The event date (auto rows always carry it; pay_date on auto rows equals it — Yahoo's
+    # chart feed has no payment date, an honest documented approximation).
+    ex_date: Mapped[date | None] = mapped_column(Date)
+    per_share: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    shares_held: Mapped[Decimal | None] = mapped_column(Numeric(16, 6))
     notes: Mapped[str | None] = mapped_column(Text)
 
 

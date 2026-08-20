@@ -119,3 +119,44 @@ async def test_portfolio_value_history_roundtrip_and_unique_date(db):
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()  # shared-session contract (conftest): unpoison after IntegrityError
+
+
+async def test_dividend_source_defaults_manual_and_auto_key_is_unique(db):
+    sec = Security(ticker="DIVX", name="Div X", holding_type="stock")
+    db.add(sec)
+    await db.commit()
+    # Held as a plain int: the rollback below expires every instance, and a later sec.id
+    # would then emit lazy IO (MissingGreenlet under asyncio).
+    sec_id = sec.id
+    row = DividendPayment(security_id=sec_id, pay_date=date(2026, 3, 20), amount=Decimal("10.00"))
+    db.add(row)
+    await db.commit()
+    assert row.source == "manual" and row.ex_date is None
+
+    auto_kwargs = dict(
+        security_id=sec_id,
+        account="RH Taxable",
+        pay_date=date(2026, 3, 20),
+        amount=Decimal("12.00"),
+        source="auto",
+        ex_date=date(2026, 3, 20),
+        per_share=Decimal("0.820000"),
+        shares_held=Decimal("14.634146"),
+    )
+    db.add(DividendPayment(**auto_kwargs))
+    await db.commit()
+    # Same (security, account, ex_date) auto key must be refused by the partial index…
+    db.add(DividendPayment(**auto_kwargs))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+    # …while a second MANUAL row on the same coordinates is fine (index is partial).
+    db.add(
+        DividendPayment(
+            security_id=sec_id,
+            account="RH Taxable",
+            pay_date=date(2026, 3, 20),
+            amount=Decimal("12.00"),
+        )
+    )
+    await db.commit()
