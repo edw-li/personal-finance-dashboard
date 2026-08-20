@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { MUTED, PALETTE } from '../../charts/theme'
-import type { ExpTrendFit } from './expTrend'
+import type { PolyTrendFit } from './polyTrend'
 import {
   NET_WORTH_PROJECTION_SERIES,
   netWorthProjectionOption,
@@ -71,10 +71,8 @@ const HISTORY = {
 }
 
 // A hand-made fit — the builder only ever calls valueAt (the real math is pinned in
-// expTrend.test.ts; this keeps the builder test a unit test).
-const FIT: ExpTrendFit = {
-  monthlyGrowth: 1.01,
-  annualRate: 1.01 ** 12 - 1,
+// polyTrend.test.ts; this keeps the builder test a unit test).
+const FIT: PolyTrendFit = {
   valueAt: (iso) => (iso === '2026-06-01' ? 100000 : 123456),
 }
 

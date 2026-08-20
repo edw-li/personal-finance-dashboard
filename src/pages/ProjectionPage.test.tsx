@@ -170,7 +170,7 @@ describe('ProjectionPage', () => {
     ).toBeTruthy()
   })
 
-  it('draws the net-worth history chart above the investable one, hint carrying the fitted rate', async () => {
+  it('draws the net-worth history chart above the investable one, hint naming the model', async () => {
     renderPage()
     const charts = await screen.findAllByTestId('echart')
     expect(charts).toHaveLength(2)
@@ -179,8 +179,7 @@ describe('ProjectionPage', () => {
     expect(charts[0].getAttribute('data-categories')).toContain('Jun 2026')
     expect(charts[1].getAttribute('data-categories')?.startsWith('Aug 2026')).toBe(true)
     expect(screen.getByText('Net worth over time (projected)')).toBeTruthy()
-    // 1.01^12 − 1 → 12.7% at formatPct's 1dp — the fixture's exact geometric rate.
-    expect(screen.getByText(/12\.7%\/yr/)).toBeTruthy()
+    expect(screen.getByText(/Second-degree polynomial best-fit/)).toBeTruthy()
   })
 
   it('keeps the page alive when the history fetch alone fails', async () => {
@@ -203,13 +202,28 @@ describe('ProjectionPage', () => {
     expect(fetchTimeseries).toHaveBeenCalledTimes(1)
   })
 
-  it('draws dots alone and says why when a snapshot is nonpositive', async () => {
+  it('still fits through a zero-value month — a parabola has no positivity rule', async () => {
     vi.mocked(fetchTimeseries).mockResolvedValue(
       timeseries({ net_worth: ['0.00', '101000.00', '102010.00'] }),
     )
     renderPage()
 
-    expect(await screen.findByText(/needs every net-worth snapshot above zero/)).toBeTruthy()
+    expect(await screen.findByText(/Second-degree polynomial best-fit/)).toBeTruthy()
+    expect(screen.getAllByTestId('echart')).toHaveLength(2)
+  })
+
+  it('draws dots alone and says why under three snapshots', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(
+      timeseries({
+        months: ['2026-07-01', '2026-08-01'],
+        net_worth: ['100000.00', '101000.00'],
+        mom_pct: [null, null],
+        notes: [null, null],
+      }),
+    )
+    renderPage()
+
+    expect(await screen.findByText(/needs at least three snapshots/)).toBeTruthy()
     expect(screen.getAllByTestId('echart')).toHaveLength(2) // the dots still chart
   })
 

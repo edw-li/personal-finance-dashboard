@@ -5,7 +5,7 @@ import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 import type { ProjectionParams } from '../api/projection'
 import EChart from '../components/EChart'
-import { fitExpTrend } from '../components/projection/expTrend'
+import { fitPolyTrend } from '../components/projection/polyTrend'
 import {
   netWorthProjectionOption,
   projectionOption,
@@ -185,7 +185,7 @@ export default function ProjectionPage() {
   }
 
   const chart = data === null ? null : projectionOption(data)
-  const fit = history === null ? null : fitExpTrend(history.months, history.net_worth)
+  const fit = history === null ? null : fitPolyTrend(history.months, history.net_worth)
   const nwChart =
     history === null || data === null
       ? null
@@ -278,8 +278,8 @@ export default function ProjectionPage() {
                   <EChart option={nwChart} height={340} />
                   <p className="drill-hint">
                     {fit === null
-                      ? 'The exponential trendline needs every net-worth snapshot above zero — showing the history alone.'
-                      : `Exponential best-fit over every monthly net-worth snapshot, extended ${data.years} years — history implies ≈${formatPct(fit.annualRate, { signed: false })}/yr. Momentum, not a plan; the knob-driven model is the chart below.`}
+                      ? 'The polynomial trendline needs at least three snapshots — showing the history alone.'
+                      : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${data.years} years — momentum, not a plan; the knob-driven model is the chart below.`}
                   </p>
                 </>
               )}

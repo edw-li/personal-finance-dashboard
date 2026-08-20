@@ -7,8 +7,8 @@ import { timeZoom } from '../../charts/timeZoom'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
 import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
-import { monthSerial } from './expTrend'
-import type { ExpTrendFit } from './expTrend'
+import { monthSerial } from './polyTrend'
+import type { PolyTrendFit } from './polyTrend'
 
 // Series names in series order — the projected balance, the same growth with the
 // contributions turned off, and the threshold.
@@ -79,19 +79,19 @@ export function projectionOption(
 }
 
 // Series names in series order — the measured months and the fitted extrapolation.
-export const NET_WORTH_PROJECTION_SERIES = ['Net worth', 'Exponential trend'] as const
+export const NET_WORTH_PROJECTION_SERIES = ['Net worth', 'Quadratic trend'] as const
 
 /**
  * The sheet's "Net Worth over Time (Projected)": actual snapshots as blue dots, the
- * exponential best-fit as a solid orange curve drawn over history AND the future (so
- * fit-vs-dots stays visible, like Excel's trendline), extended to the SAME final month
- * as the investable chart — one horizon per page. No wash: an area under a 30-year
- * exponential swallows the chart. A refused fit (null) drops the curve, never the dots —
- * the page's hint says why. Returns null under two points.
+ * second-degree polynomial best-fit as a solid orange curve drawn over history AND the
+ * future (so fit-vs-dots stays visible, like Excel's trendline), extended to the SAME
+ * final month as the investable chart — one horizon per page. No wash (the curve is a
+ * fit, not an accumulation). A refused fit (null) drops the curve, never the dots — the
+ * page's hint says why. Returns null under two points.
  */
 export function netWorthProjectionOption(
   history: Pick<NetWorthTimeseries, 'months' | 'net_worth'>,
-  fit: ExpTrendFit | null,
+  fit: PolyTrendFit | null,
   startMonth: string,
   years: number,
 ): EChartsOption | null {
