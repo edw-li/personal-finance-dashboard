@@ -614,7 +614,7 @@ export function runWhatIf(body: WhatIfBody): Promise<WhatIfOut> {
 - Modify: `src/pages/TaxesPage.tsx` (render under SummaryPanel)
 - Test: `src/components/taxes/WhatIfPanel.test.tsx` (new)
 
-- [ ] **Step 1: The panel.** House idioms bind: promise callbacks (no setState in effect bodies), seqRef guard on the run, `role="alert"` errors with server sentences verbatim, advisory warnings in the amber register, server figures rendered verbatim, EChart-free (this card is tiles + tables). Structure (write the full component; abbreviated JSX contracts below are binding):
+- [x] **Step 1: The panel.** House idioms bind: promise callbacks (no setState in effect bodies), seqRef guard on the run, `role="alert"` errors with server sentences verbatim, advisory warnings in the amber register, server figures rendered verbatim, EChart-free (this card is tiles + tables). Structure (write the full component; abbreviated JSX contracts below are binding):
 
 ```tsx
 export default function WhatIfPanel({ year }: { year: number }) {
@@ -654,7 +654,7 @@ export default function WhatIfPanel({ year }: { year: number }) {
 - The card renders closed as `<section className="card">` with an "Open what-if" button
   (aria-expanded), NOT a native `<details>` (house segmented/button idiom + testability).
 
-- [ ] **Step 2: TaxesPage wiring** — under `<SummaryPanel …/>` inside the `detail !== null` block:
+- [x] **Step 2: TaxesPage wiring** — under `<SummaryPanel …/>` inside the `detail !== null` block:
 
 ```tsx
           <WhatIfPanel key={`whatif-${detail.summary.year}`} year={detail.summary.year} />
@@ -663,10 +663,10 @@ export default function WhatIfPanel({ year }: { year: number }) {
 (Keyed by year: a year switch remounts — fresh legs, no stale scenario; same-year
 reloads leave typed legs alone. Mirrors the editors' keying comment.)
 
-- [ ] **Step 3: CSS** — add to `taxes.css` a `.whatif-form` grid in the file's existing
+- [x] **Step 3: CSS** — add to `taxes.css` a `.whatif-form` grid in the file's existing
   form-row vocabulary (copy `.new-year-form`'s row treatment; do not invent new spacing).
 
-- [ ] **Step 4: Tests** (`WhatIfPanel.test.tsx`, mock `../../api/whatif` + portfolio/espp
+- [x] **Step 4: Tests** (`WhatIfPanel.test.tsx`, mock `../../api/whatif` + portfolio/espp
   clients like TaxesPage.test.tsx mocks its api modules): opens lazily (no fetch before
   the open click; both feeds after); add-sale prefills from holdings; run posts the
   typed body (blank price omitted) and renders delta tiles + changed-inputs verbatim;
@@ -674,9 +674,9 @@ reloads leave typed legs alone. Mirrors the editors' keying comment.)
   register not the banner; a second run's stale first response never lands (seq guard);
   year-key remount clears the scenario (render with new key).
 
-- [ ] **Step 5: Run** `npm run test && npm run lint && npm run build` → green.
+- [x] **Step 5: Run** `npm run test && npm run lint && npm run build` → green.
 
-- [ ] **Step 6: Commit** — `git commit -am "feat: what-if panel on /taxes — sale legs, ESPP legs, delta tiles"`
+- [x] **Step 6: Commit** — `git commit -am "feat: what-if panel on /taxes — sale legs, ESPP legs, delta tiles"`
 
 ---
 

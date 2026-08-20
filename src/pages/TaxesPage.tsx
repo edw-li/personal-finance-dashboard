@@ -12,6 +12,7 @@ import {
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import InputsForm from '../components/taxes/InputsForm'
 import SummaryPanel from '../components/taxes/SummaryPanel'
+import WhatIfPanel from '../components/taxes/WhatIfPanel'
 import type { TaxBracketsOut, TaxInputsOut, TaxSummaryOut, TaxYearOut } from '../types/api'
 import '../components/panels.css'
 import './TaxesPage.css'
@@ -460,6 +461,12 @@ export default function TaxesPage() {
               redraw the same chart. Its per-year half is a prop, so it follows the year
               anyway. */}
           <SummaryPanel summary={detail.summary} refreshKey={trendRefresh} />
+          {/* Keyed by year for the editors' own reason: a real switch remounts it, so the
+              typed legs and any scenario on screen go with the year they were run against
+              (a stale scenario under a new year's heading would lie), while a same-year
+              reload leaves half-typed legs alone. It owns its two feeds and loads them
+              lazily on first open, so the remount costs nothing until the card is used. */}
+          <WhatIfPanel key={`whatif-${detail.summary.year}`} year={detail.summary.year} />
           {/* Keyed by YEAR, not by load: a real switch remounts the editors (2023's typed
               rows must not carry into 2024), while a same-year reload — Retry, or the
               refresh after a save — leaves them mounted. Their state seeds from useState
