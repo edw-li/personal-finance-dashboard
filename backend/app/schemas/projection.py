@@ -26,3 +26,13 @@ class ProjectionOut(BaseModel):
     projected: list[Decimal]
     coast: list[Decimal]
     warnings: list[str]
+    # Monte Carlo (present only when `volatility` was provided; echoes are nullable so a
+    # stale tab against an older payload keeps rendering).
+    volatility: Decimal | None = None
+    inflation: Decimal | None = None
+    contribution_growth: Decimal | None = None
+    bands: dict[str, list[Decimal]] | None = None
+    fi_probability: Decimal | None = None
+    fi_month_p10: date | None = None
+    fi_month_p50: date | None = None
+    fi_month_p90: date | None = None

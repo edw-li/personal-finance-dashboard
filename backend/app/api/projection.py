@@ -24,6 +24,7 @@ from app.database import get_db
 from app.models import MonthlyCashflow, MonthlySpending, NetWorthSnapshot
 from app.schemas.projection import ProjectionOut
 from app.services.money import quantize_money, quantize_pct
+from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import get_swr_pct, investable_base
 from app.services.projection import CENT, first_reaching, project
 
@@ -41,6 +42,14 @@ RETURN_MIN = Decimal("-0.5")
 RETURN_MAX = Decimal("0.5")
 RETURN_MESSAGE = "annual_return must be between -0.5 and 0.5"
 SWR_MESSAGE = "swr must be greater than 0 and at most 1"
+# The Monte Carlo knobs. A sigma of 0 is the deterministic line itself (leave the knob
+# blank for that), and above 100%/yr the lognormal walk is noise, not a scenario.
+VOLATILITY_MESSAGE = "volatility must be greater than 0 and at most 1"
+INFLATION_MIN = Decimal("-0.1")
+INFLATION_MAX = Decimal("0.25")
+INFLATION_MESSAGE = "inflation must be between -0.1 and 0.25"
+GROWTH_MAX = Decimal("0.25")
+GROWTH_MESSAGE = "contribution_growth must be between 0 and 0.25"
 # Bounds in money.py's vocabulary: contributions are monthly money, spend is annual.
 CONTRIBUTION_MAX_ABS = Decimal(10) ** 7
 SPEND_MAX_ABS = Decimal(10) ** 9
@@ -114,6 +123,9 @@ async def projection(
     annual_spend: Decimal | None = Query(default=None),
     swr: Decimal | None = Query(default=None),
     years: YearsQuery = DEFAULT_YEARS,
+    volatility: Decimal | None = Query(default=None),
+    inflation: Decimal | None = Query(default=None),
+    contribution_growth: Decimal | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> ProjectionOut:
     today = date.today()  # the ONLY clock read (module docstring)
@@ -173,12 +185,45 @@ async def projection(
             raise HTTPException(status_code=422, detail=SWR_MESSAGE)
         swr = quantize_pct(swr)
 
+    # The three Monte Carlo knobs, each in the annual_return pattern: finite, bounded,
+    # quantized on the way in. All three stay None when absent — that null is what the
+    # form's blank-box convention round-trips through the echo.
+    if volatility is not None:
+        if not volatility.is_finite() or not Decimal(0) < volatility <= Decimal(1):
+            raise HTTPException(status_code=422, detail=VOLATILITY_MESSAGE)
+        volatility = quantize_pct(volatility)
+
+    if inflation is not None:
+        if not inflation.is_finite() or not INFLATION_MIN <= inflation <= INFLATION_MAX:
+            raise HTTPException(status_code=422, detail=INFLATION_MESSAGE)
+        inflation = quantize_pct(inflation)
+
+    if contribution_growth is not None:
+        if (
+            not contribution_growth.is_finite()
+            or not Decimal(0) <= contribution_growth <= GROWTH_MAX
+        ):
+            raise HTTPException(status_code=422, detail=GROWTH_MESSAGE)
+        contribution_growth = quantize_pct(contribution_growth)
+
+    # Inflation converts BOTH rates to real terms so every line and band shifts together
+    # while the FI target stays in today's dollars — the whole frame reads in one unit.
+    inflation_rate = inflation if inflation is not None else Decimal("0")
+    real_return = (Decimal(1) + annual_return) / (Decimal(1) + inflation_rate) - Decimal(1)
+    growth_rate = contribution_growth if contribution_growth is not None else Decimal("0")
+    real_growth = (Decimal(1) + growth_rate) / (Decimal(1) + inflation_rate) - Decimal(1)
+
     month_count = years * 12
     months = _months_from(start_month, month_count)
-    projected = project(starting, monthly_contribution, annual_return, month_count)
+    # Every ARRAY below runs on `real_return` (= annual_return when no inflation was
+    # given, so the no-knobs response is byte-identical); the ECHOED `annual_return` stays
+    # the NOMINAL value the user provided or the default — the echo is what seeds the
+    # form, and `inflation` echoes separately so the page can reconstruct the real rate.
+    projected = project(starting, monthly_contribution, real_return, month_count, real_growth)
     # The coast line: the same growth with the contributions turned off — the distance
-    # between the two lines is what the saving is buying.
-    coast = project(starting, ZERO, annual_return, month_count)
+    # between the two lines is what the saving is buying. Nothing to escalate, so the
+    # escalator is 0 here too.
+    coast = project(starting, ZERO, real_return, month_count, Decimal("0"))
 
     fi_target: Decimal | None = None
     fi_ratio: Decimal | None = None
@@ -201,6 +246,36 @@ async def projection(
                     "at these assumptions"
                 )
 
+    # The simulation surrounds the deterministic line; without a volatility it never runs
+    # and the whole block stays null (the back-compat contract).
+    bands: dict[str, list[Decimal]] | None = None
+    fi_probability: Decimal | None = None
+    fi_month_p10: date | None = None
+    fi_month_p50: date | None = None
+    fi_month_p90: date | None = None
+    if volatility is not None:
+        mc = simulate(
+            starting,
+            monthly_contribution,
+            real_return,
+            volatility,
+            real_growth,
+            month_count,
+            fi_target,
+        )
+        bands = mc.bands
+        if fi_target is not None:
+            reached = sum(1 for index in mc.reach_indices if index is not None)
+            fi_probability = quantize_pct(Decimal(reached) / Decimal(SIMULATIONS))
+            p10 = reach_percentile(mc.reach_indices, 10)
+            p50 = reach_percentile(mc.reach_indices, 50)
+            p90 = reach_percentile(mc.reach_indices, 90)
+            # An interpolated percentile can land a hair past the last month index; clamp
+            # onto the axis rather than invent a month the chart does not have.
+            fi_month_p10 = None if p10 is None else months[min(p10, month_count)]
+            fi_month_p50 = None if p50 is None else months[min(p50, month_count)]
+            fi_month_p90 = None if p90 is None else months[min(p90, month_count)]
+
     return ProjectionOut(
         starting_balance=starting,
         base_month=base_month,
@@ -218,4 +293,12 @@ async def projection(
         projected=projected,
         coast=coast,
         warnings=warnings,
+        volatility=volatility,
+        inflation=inflation,
+        contribution_growth=contribution_growth,
+        bands=bands,
+        fi_probability=fi_probability,
+        fi_month_p10=fi_month_p10,
+        fi_month_p50=fi_month_p50,
+        fi_month_p90=fi_month_p90,
     )

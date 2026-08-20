@@ -196,7 +196,7 @@ def project(
 - Modify: `backend/app/schemas/projection.py`
 - Test: `backend/tests/test_projection_api.py` (extend)
 
-- [ ] **Step 1: Schema additions** (`ProjectionOut`):
+- [x] **Step 1: Schema additions** (`ProjectionOut`):
 
 ```python
     # Monte Carlo (present only when `volatility` was provided; echoes are nullable so a
@@ -211,7 +211,7 @@ def project(
     fi_month_p90: date | None = None
 ```
 
-- [ ] **Step 2: Router.** New bounds/messages beside the existing ones:
+- [x] **Step 2: Router.** New bounds/messages beside the existing ones:
 
 ```python
 VOLATILITY_MESSAGE = "volatility must be greater than 0 and at most 1"
@@ -260,7 +260,7 @@ The two `project(...)` calls use `real_return` and pass `contribution_growth=rea
 
 and thread all eight new fields into `ProjectionOut(...)` (echoes: `volatility=volatility`, `inflation=inflation`, `contribution_growth=contribution_growth` — null when absent, the blank-box round trip).
 
-- [ ] **Step 3: API tests** (extend `tests/test_projection_api.py`, its clock-relative seed style):
+- [x] **Step 3: API tests** (extend `tests/test_projection_api.py`, its clock-relative seed style):
 
 1. `test_projection_backcompat_without_new_knobs` — response has `bands is None`, three null echoes, and `projected`/`coast` EQUAL to a pre-change captured fixture call (seed identical data; capture the arrays by running the endpoint before editing, pin as literals).
 2. `test_projection_bands_shape_and_alignment` — with `volatility=0.15`: five keys, each `len == months`, every month ordered p10 ≤ … ≤ p90, `bands["p50"][0] == starting_balance`.
@@ -270,9 +270,9 @@ and thread all eight new fields into `ProjectionOut(...)` (echoes: `volatility=v
 6. `test_projection_seed_stability` — two identical calls, identical `bands`.
 7. Bounds 422s: volatility 0 / 1.5, inflation −0.2 / 0.3, growth −0.01 / 0.3 (six asserts, the router's exact messages).
 
-- [ ] **Step 4: Run** the two projection test files + full suite once; `ruff check .`.
+- [x] **Step 4: Run** the two projection test files + full suite once; `ruff check .`.
 
-- [ ] **Step 5: Commit** — `git commit -am "feat: GET /projection — volatility/inflation/contribution-growth knobs, seeded percentile bands, FI probability"`
+- [x] **Step 5: Commit** — `git commit -am "feat: GET /projection — volatility/inflation/contribution-growth knobs, seeded percentile bands, FI probability"`
 
 ---
 
