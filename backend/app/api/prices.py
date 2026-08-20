@@ -40,12 +40,13 @@ async def refresh(db: AsyncSession = Depends(get_db)) -> RefreshOut:
     # run_refresh, not refresh_prices: the manual button and the scheduled job walk ONE
     # ritual (prices -> value-history snapshot -> recorded outcome), so the two can never
     # drift. The response shape is unchanged; the extras land in /prices/refresh-status.
-    result, _appended = await run_refresh(db, get_provider(), trigger="manual")
+    result, _appended, dividends = await run_refresh(db, get_provider(), trigger="manual")
     return RefreshOut(
         updated=result.updated,
         failed=result.failed,
         skipped_manual=result.skipped_manual,
         duration_ms=int((time_module.monotonic() - started) * 1000),
+        dividends_ingested=dividends.ingested,
     )
 
 

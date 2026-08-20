@@ -4,9 +4,22 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.models import LatestPrice, PriceHistory, Security
+from app.models import (
+    DividendPayment,
+    LatestPrice,
+    PortfolioValueHistory,
+    PositionTransaction,
+    PriceHistory,
+    Security,
+)
+from app.services.dividend_ingest import DividendIngestResult
 from app.services.price_provider import DailyBar
-from app.services.price_service import refresh_prices, set_manual_price
+from app.services.price_service import (
+    read_last_refresh,
+    refresh_prices,
+    run_refresh,
+    set_manual_price,
+)
 
 D = Decimal
 TODAY = date(2026, 8, 14)
@@ -27,6 +40,18 @@ class FakeProvider:
 
 def bar(day, close, dividend="0"):
     return DailyBar(bar_date=day, close=D(close), dividend=D(dividend))
+
+
+def buy(sec_id, account="RH Taxable", shares="10.000000", price="100.0000"):
+    return PositionTransaction(
+        security_id=sec_id,
+        account=account,
+        type="buy",
+        shares=D(shares),
+        price=D(price),
+        sort_index=10,
+        source="ui",
+    )
 
 
 async def seed_security(db, ticker, *, manual=False, active=True, annual_dividend=None):
@@ -266,6 +291,96 @@ async def test_per_ticker_db_failure_does_not_abort_the_batch(db):
     assert [c[0] for c in provider.calls] == ["AAA", "BAD", "ZZZ"]  # ZZZ still attempted
     history = (await db.execute(select(PriceHistory))).scalars().all()
     assert len(history) == 2  # BAD's savepoint rolled back; AAA and ZZZ persisted
+
+
+async def test_run_refresh_records_dividend_counts(db):
+    sec = await seed_security(db, "DIVX")
+    holding = buy(sec.id)
+    db.add(holding)
+    db.add(  # 5 days from the August event: the whole event is skipped, not double-counted
+        DividendPayment(
+            security_id=sec.id, pay_date=date(2026, 8, 5), amount=D("9.99"), account="RH Taxable"
+        )
+    )
+    await db.commit()
+    provider = FakeProvider(
+        {
+            "DIVX": [
+                bar(date(2026, 3, 20), "100", "0.8200"),
+                bar(date(2026, 6, 19), "110", "0.8200"),
+                bar(date(2026, 8, 10), "115", "0.8200"),
+                bar(TODAY, "120"),
+            ]
+        }
+    )
+    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=TODAY)
+
+    assert result.updated == ["DIVX"] and appended is True
+    assert (dividends.ingested, dividends.removed, dividends.skipped_manual_overlap) == (2, 0, 1)
+    rows = (
+        (
+            await db.execute(
+                select(DividendPayment)
+                .where(DividendPayment.source == "auto")
+                .order_by(DividendPayment.ex_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(r.ex_date, r.amount) for r in rows] == [
+        (date(2026, 3, 20), D("8.20")),  # 10 shares × 0.82
+        (date(2026, 6, 19), D("8.20")),
+    ]
+    payload = await read_last_refresh(db)
+    # Three distinct values: the payload keys cannot be silently transposed.
+    assert payload["dividends_ingested"] == 2
+    assert payload["dividends_removed"] == 0
+    assert payload["dividends_skipped_overlap"] == 1
+
+    # The self-heal leg is recorded too: the book loses the position, the run removes
+    # the auto rows it can no longer support.
+    await db.delete(holding)
+    await db.commit()
+    _result, _appended, healed = await run_refresh(db, provider, trigger="scheduled", today=TODAY)
+    assert (healed.ingested, healed.removed, healed.skipped_manual_overlap) == (0, 2, 1)
+    healed_payload = await read_last_refresh(db)
+    assert healed_payload["dividends_ingested"] == 0
+    assert healed_payload["dividends_removed"] == 2
+    assert healed_payload["trigger"] == "scheduled"
+
+
+async def test_ingest_failure_degrades_and_preserves_snapshot(db, engine, monkeypatch):
+    sec = await seed_security(db, "DIVX")
+    db.add(buy(sec.id))
+    await db.commit()
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("ingest exploded")
+
+    # run_refresh imports ingest_dividends lazily, INSIDE the function (the circular-import
+    # dodge) — so the patch belongs on the source module, not on price_service.
+    monkeypatch.setattr("app.services.dividend_ingest.ingest_dividends", boom)
+    provider = FakeProvider({"DIVX": [bar(date(2026, 6, 19), "110", "0.8200"), bar(TODAY, "120")]})
+
+    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=TODAY)
+
+    assert result.updated == ["DIVX"]
+    assert appended is True  # the savepoint rolled back the ingest ALONE
+    assert dividends == DividendIngestResult()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as other:
+        # Durably committed from another session: prices, and the snapshot a plain
+        # rollback-on-failure would have destroyed.
+        assert (await other.get(LatestPrice, sec.id)).price == D("120.0000")
+        snapshots = (await other.execute(select(PortfolioValueHistory))).scalars().all()
+        assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(TODAY, D("1200.00"))]
+        assert (await other.execute(select(DividendPayment))).scalars().all() == []
+    payload = await read_last_refresh(db)
+    assert payload["history_appended"] is True
+    assert payload["dividends_ingested"] == 0
+    assert payload["dividends_removed"] == 0
+    assert payload["dividends_skipped_overlap"] == 0
 
 
 async def test_backdated_manual_price_does_not_move_import_seeded_latest(db):

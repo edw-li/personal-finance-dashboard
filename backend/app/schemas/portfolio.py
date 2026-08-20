@@ -191,9 +191,7 @@ class RefreshOut(BaseModel):
     failed: dict[str, str]
     skipped_manual: list[str]
     duration_ms: int
-    # Defaulted until run_refresh returns the ingest counts — the endpoint that builds this
-    # response cannot supply the field before then.
-    dividends_ingested: int = 0
+    dividends_ingested: int
 
 
 class LastRefreshOut(BaseModel):

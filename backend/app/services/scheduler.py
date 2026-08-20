@@ -95,14 +95,15 @@ async def _refresh_job(trigger_label: str = "scheduled") -> None:
 
     provider = YFinanceProvider(settings.yfinance_ca_bundle)
     async with SessionLocal() as db:
-        result, appended = await run_refresh(db, provider, trigger=trigger_label)
+        result, appended, dividends = await run_refresh(db, provider, trigger=trigger_label)
     logger.info(
-        "%s price refresh: %d updated, %d failed, %d manual-skipped, history %s",
+        "%s price refresh: %d updated, %d failed, %d manual-skipped, history %s, %d dividends",
         trigger_label,
         len(result.updated),
         len(result.failed),
         len(result.skipped_manual),
         "appended" if appended else "unchanged",
+        dividends.ingested,
     )
 
 

@@ -5,6 +5,8 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.models import (
+    AppSetting,
+    DividendPayment,
     LatestPrice,
     PortfolioValueHistory,
     PositionTransaction,
@@ -12,6 +14,7 @@ from app.models import (
     Security,
 )
 from app.services.price_provider import DailyBar
+from app.services.price_service import LAST_REFRESH_KEY
 
 REFRESH = "/api/v1/prices/refresh"
 STATUS = "/api/v1/prices/refresh-status"
@@ -70,6 +73,7 @@ async def test_refresh_endpoint_runs_and_reports(auth_client, db, monkeypatch):
     assert body["updated"] == ["NVDA"]
     assert body["failed"] == {}
     assert body["skipped_manual"] == []
+    assert body["dividends_ingested"] == 0  # no dividend events in these bars
     # MILLIseconds, not seconds: a 50ms provider fetch must not report "0" or "50000".
     assert isinstance(body["duration_ms"], int)
     assert 20 <= body["duration_ms"] < 60_000
@@ -97,6 +101,42 @@ async def test_refresh_endpoint_runs_and_reports(auth_client, db, monkeypatch):
     assert status["next_run_at"] is None  # tests never start the scheduler
 
 
+async def test_refresh_endpoint_ingests_dividends_and_echoes_the_counts(
+    auth_client, db, monkeypatch
+):
+    security = await seed_security(db, "DIVX")
+    db.add(
+        PositionTransaction(
+            security_id=security.id,
+            account="RH Taxable",
+            type="buy",
+            shares=D("10.000000"),
+            price=D("100.0000"),
+            sort_index=10,
+            source="ui",
+        )
+    )
+    await db.commit()
+    today = date.today()
+    ex_date = today - timedelta(days=30)
+    provider = FakeProvider({"DIVX": [bar(ex_date, "100", "0.8200"), bar(today, "120")]})
+    monkeypatch.setattr("app.api.prices.get_provider", lambda: provider)
+
+    resp = await auth_client.post(REFRESH)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["dividends_ingested"] == 1  # the header note's "N dividends logged"
+
+    rows = (await db.execute(select(DividendPayment))).scalars().all()
+    assert [(r.account, r.ex_date, r.pay_date, r.amount, r.source) for r in rows] == [
+        ("RH Taxable", ex_date, ex_date, D("8.20"), "auto")  # 10 shares × 0.82
+    ]
+
+    status = (await auth_client.get(STATUS)).json()
+    assert status["last"]["dividends_ingested"] == 1
+    assert status["last"]["dividends_removed"] == 0
+    assert status["last"]["dividends_skipped_overlap"] == 0
+
+
 async def test_refresh_requires_auth(client):
     assert (await client.post(REFRESH)).status_code == 401
 
@@ -112,6 +152,35 @@ async def test_refresh_status_empty_before_any_run(auth_client):
     resp = await auth_client.get(STATUS)
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"last": None, "next_run_at": None}
+
+
+async def test_refresh_status_tolerates_pre_feature_payloads(auth_client, db):
+    # A payload written before this feature has no dividend keys at all — the stored blob
+    # is convention-shaped JSON, and a deploy must not 500 the header line on its own
+    # history. The three counts read as "unknown" (None), not as zero.
+    db.add(
+        AppSetting(
+            key=LAST_REFRESH_KEY,
+            value={
+                "value": {
+                    "at": "2026-08-01T20:10:00+00:00",
+                    "trigger": "scheduled",
+                    "updated": 3,
+                    "failed": {},
+                    "skipped_manual": 1,
+                    "history_appended": True,
+                }
+            },
+        )
+    )
+    await db.commit()
+    resp = await auth_client.get(STATUS)
+    assert resp.status_code == 200, resp.text
+    last = resp.json()["last"]
+    assert last["updated"] == 3 and last["history_appended"] is True
+    assert last["dividends_ingested"] is None
+    assert last["dividends_removed"] is None
+    assert last["dividends_skipped_overlap"] is None
 
 
 async def test_refresh_status_drops_failures_that_left_the_refresh_population(

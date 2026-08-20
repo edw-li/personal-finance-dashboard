@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -21,6 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AppSetting, LatestPrice, PriceHistory, Security
 from app.services.price_provider import DailyBar, PriceProvider
+
+if TYPE_CHECKING:
+    # Annotation only: dividend_ingest imports THIS module, so a runtime import here
+    # would be circular (run_refresh imports it lazily, inside the function).
+    from app.services.dividend_ingest import DividendIngestResult
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +176,7 @@ async def record_refresh_run(
     trigger: str,
     history_appended: bool,
     at: datetime,
+    dividends: "DividendIngestResult | None" = None,
 ) -> None:
     """Persist the run's outcome under app_settings[LAST_REFRESH_KEY], envelope
     {"value": ...} (the readers' convention). Caller commits."""
@@ -180,6 +187,11 @@ async def record_refresh_run(
         "failed": dict(sorted(result.failed.items())),
         "skipped_manual": len(result.skipped_manual),
         "history_appended": history_appended,
+        "dividends_ingested": dividends.ingested if dividends is not None else 0,
+        "dividends_removed": dividends.removed if dividends is not None else 0,
+        "dividends_skipped_overlap": (
+            dividends.skipped_manual_overlap if dividends is not None else 0
+        ),
     }
     setting = await db.get(AppSetting, LAST_REFRESH_KEY)
     if setting is None:
@@ -200,11 +212,12 @@ async def read_last_refresh(db: AsyncSession) -> dict | None:
 
 async def run_refresh(
     db: AsyncSession, provider: PriceProvider, *, trigger: str, today: date | None = None
-) -> tuple[RefreshResult, bool]:
+) -> tuple[RefreshResult, bool, "DividendIngestResult"]:
     """The whole refresh ritual, shared by the manual endpoint and the scheduled job so
     the two can never drift: refresh prices (commits itself), extend the live value
-    series, record the outcome, commit the bookkeeping. A snapshot failure degrades to
-    history_appended=False — the price refresh already committed and must stand."""
+    series, ingest dividend events, record the outcome, commit the bookkeeping. Snapshot
+    and ingest failures each degrade alone — the price refresh always stands."""
+    from app.services.dividend_ingest import DividendIngestResult, ingest_dividends
     from app.services.value_history import append_value_snapshot
 
     today = today or date.today()
@@ -215,11 +228,25 @@ async def run_refresh(
     except Exception:
         logger.exception("value snapshot failed — the price refresh stands")
         await db.rollback()
+    dividends = DividendIngestResult()
+    try:
+        # Savepoint, not rollback-on-failure: a rollback here would also destroy the
+        # uncommitted value snapshot above; the savepoint isolates the ingest alone.
+        async with db.begin_nested():
+            dividends = await ingest_dividends(db, result.dividend_events, today=today)
+    except Exception:
+        logger.exception("dividend ingest failed — the price refresh stands")
+        dividends = DividendIngestResult()
     await record_refresh_run(
-        db, result, trigger=trigger, history_appended=appended, at=datetime.now(UTC)
+        db,
+        result,
+        trigger=trigger,
+        history_appended=appended,
+        at=datetime.now(UTC),
+        dividends=dividends,
     )
     await db.commit()
-    return result, appended
+    return result, appended, dividends
 
 
 async def set_manual_price(

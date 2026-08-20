@@ -513,7 +513,7 @@ Tests (write all of these; arrange with the helpers above):
 - Modify: `backend/app/api/prices.py:43-49` (3-tuple + `dividends_ingested`)
 - Test: `backend/tests/test_prices_api.py`, `backend/tests/test_price_service.py` (extend)
 
-- [ ] **Step 1: `run_refresh` grows the ingest leg** (replace the current body; note the savepoint — a plain `db.rollback()` on ingest failure would also destroy the uncommitted value snapshot):
+- [x] **Step 1: `run_refresh` grows the ingest leg** (replace the current body; note the savepoint — a plain `db.rollback()` on ingest failure would also destroy the uncommitted value snapshot):
 
 ```python
 async def run_refresh(
@@ -555,7 +555,7 @@ async def run_refresh(
     return result, appended, dividends
 ```
 
-- [ ] **Step 2: `record_refresh_run` records the counts** — add the parameter and three payload keys:
+- [x] **Step 2: `record_refresh_run` records the counts** — add the parameter and three payload keys:
 
 ```python
 async def record_refresh_run(
@@ -581,17 +581,17 @@ and inside `payload`:
 
 (Type the forward ref via `from __future__` or a `TYPE_CHECKING` import — match the module's existing style; a lazy runtime import inside `run_refresh` already exists.)
 
-- [ ] **Step 3: Update both call sites.**
+- [x] **Step 3: Update both call sites.**
 `backend/app/services/scheduler.py` `_refresh_job`: `result, appended, dividends = await run_refresh(db, provider, trigger=trigger_label)` and extend the log line with `%d dividends` / `dividends.ingested`.
 `backend/app/api/prices.py` `refresh`: `result, _appended, dividends = await run_refresh(db, get_provider(), trigger="manual")` and add `dividends_ingested=dividends.ingested` to the `RefreshOut(...)` construction.
 
-- [ ] **Step 4: Extend the tests.**
+- [x] **Step 4: Extend the tests.**
 - `test_price_service.py`: the existing `run_refresh` tests unpack a 2-tuple — update to 3; add `test_run_refresh_records_dividend_counts` asserting the stored `last_refresh` payload carries the three keys with the fake provider's event math, and `test_ingest_failure_degrades_and_preserves_snapshot` (monkeypatch `ingest_dividends` to raise; assert refresh + snapshot committed, payload has zeros).
 - `test_prices_api.py`: `POST /prices/refresh` response carries `dividends_ingested`; `GET /prices/refresh-status` echoes the three counts, and a stored PRE-FEATURE payload (write one without the keys) still validates with `None`s.
 
-- [ ] **Step 5: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_price_service.py tests/test_prices_api.py tests/test_scheduler.py -q` → PASS.
+- [x] **Step 5: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_price_service.py tests/test_prices_api.py tests/test_scheduler.py -q` → PASS.
 
-- [ ] **Step 6: Commit** — `git commit -am "feat: run_refresh ingests dividends, records and exposes the counts"`
+- [x] **Step 6: Commit** — `git commit -am "feat: run_refresh ingests dividends, records and exposes the counts"`
 
 ---
 
