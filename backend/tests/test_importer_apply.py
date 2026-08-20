@@ -21,6 +21,7 @@ from app.importer.report import SheetReport
 from app.models import (
     Account,
     AccountBalance,
+    DividendPayment,
     LatestPrice,
     MonthlyCashflow,
     MonthlySpending,
@@ -744,3 +745,56 @@ async def test_apply_portfolio_history_diff_updates_changed_values(db):
         )
     ).scalar_one()
     assert row.market_value == Decimal("99999.99")
+
+
+async def test_importer_never_writes_dividends(db):
+    """THE OWNERSHIP CONTRACT (user decision 2026-08-20): the dashboard is the system of
+    record for dividends — a re-import must not create, update, or delete ANY
+    dividend_payments row, manual or auto. If a future importer change touches
+    dividends, this is the test that must be argued with."""
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await apply_net_worth(db, parse_net_worth(wb["Net Worth"]), report)
+    await apply_spending(db, parse_spending(wb["Spending"]), report)
+    await apply_portfolio_history(db, parse_portfolio(wb["Portfolio"]), report)
+    await db.commit()
+
+    sec = (await db.execute(select(Security).order_by(Security.id))).scalars().first()
+    manual = DividendPayment(security_id=sec.id, pay_date=date(2026, 5, 1), amount=Decimal("12.34"))
+    auto = DividendPayment(
+        security_id=sec.id,
+        account="RH Taxable",
+        pay_date=date(2026, 6, 19),
+        amount=Decimal("8.20"),
+        source="auto",
+        ex_date=date(2026, 6, 19),
+        per_share=Decimal("0.820000"),
+        shares_held=Decimal("10.000000"),
+    )
+    db.add_all([manual, auto])
+    await db.commit()
+    before = {
+        row.id: (row.source, row.account, row.pay_date, row.amount, row.ex_date)
+        for row in (await db.execute(select(DividendPayment))).scalars()
+    }
+    assert len(before) == 2
+
+    wb2 = sheets()
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await apply_net_worth(db, parse_net_worth(wb2["Net Worth"]), report2)
+    await apply_spending(db, parse_spending(wb2["Spending"]), report2)
+    await apply_portfolio_history(db, parse_portfolio(wb2["Portfolio"]), report2)
+    await db.commit()
+
+    after = {
+        row.id: (row.source, row.account, row.pay_date, row.amount, row.ex_date)
+        for row in (
+            await db.execute(select(DividendPayment).execution_options(populate_existing=True))
+        ).scalars()
+    }
+    assert after == before
+    assert "dividend_payments" not in report2.entities

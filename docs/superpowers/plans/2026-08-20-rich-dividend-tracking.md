@@ -600,7 +600,7 @@ and inside `payload`:
 **Files:**
 - Test: `backend/tests/test_importer_apply.py` (extend — test only, no production code)
 
-- [ ] **Step 1: Write the pin test** (uses the file's existing `sheets()` helper and apply functions; imports `DividendPayment` and the remaining parse/apply pairs the file already imports):
+- [x] **Step 1: Write the pin test** (uses the file's existing `sheets()` helper and apply functions; imports `DividendPayment` and the remaining parse/apply pairs the file already imports):
 
 ```python
 async def test_importer_never_writes_dividends(db):
@@ -657,9 +657,9 @@ async def test_importer_never_writes_dividends(db):
 
 (If `report.entities` uses a different container shape, assert equivalently that no entity named `dividend_payments` was reported — check `SheetReport`'s definition in `app/importer/report.py` and match it.)
 
-- [ ] **Step 2: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_importer_apply.py -q` → PASS.
+- [x] **Step 2: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_importer_apply.py -q` → PASS.
 
-- [ ] **Step 3: Commit** — `git commit -am "test: pin the importer's never-writes-dividends ownership contract"`
+- [x] **Step 3: Commit** — `git commit -am "test: pin the importer's never-writes-dividends ownership contract"`
 
 ---
 
