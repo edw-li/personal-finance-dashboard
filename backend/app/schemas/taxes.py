@@ -5,9 +5,11 @@ sees a float. The router owns every quantum: inputs 4dp, bracket rates 4dp, thre
 2dp, summary money 2dp, effective rates 6dp.
 """
 
+from datetime import date
 from decimal import Decimal
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TaxYearOut(BaseModel):
@@ -109,3 +111,77 @@ class TaxSummaryOut(BaseModel):
 
 class TaxSummariesOut(BaseModel):
     years: list[TaxSummaryOut]
+
+
+class SaleLegIn(BaseModel):
+    security_id: int
+    shares: Decimal
+    price: Decimal | None = None  # None -> the security's latest price
+    term: Literal["long", "short"] | None = None  # None -> 'long' (+ warning if dateless)
+
+
+class EsppSaleIn(BaseModel):
+    lot_id: int
+    sale_price: Decimal | None = None  # None -> the ESPP ticker's latest quote
+
+
+class WhatIfIn(BaseModel):
+    year: int
+    sales: list[SaleLegIn] = Field(default_factory=list, max_length=20)
+    espp_sales: list[EsppSaleIn] = Field(default_factory=list, max_length=20)
+    overrides: dict[str, Decimal | None] = Field(default_factory=dict)
+
+
+class WhatIfDelta(BaseModel):
+    total_tax: Decimal
+    take_home: Decimal
+    federal_tax: Decimal
+    state_tax: Decimal
+    medicare_tax: Decimal
+    social_security_tax: Decimal
+    disability_tax: Decimal
+    capital_gains_tax: Decimal
+    effective_rate: Decimal | None  # fraction delta; None when either side is None
+
+
+class ChangedInput(BaseModel):
+    key: str
+    label: str
+    before: Decimal  # 0 when the key was absent
+    after: Decimal
+
+
+class SaleDetailOut(BaseModel):
+    security_id: int
+    ticker: str
+    shares: Decimal
+    price: Decimal
+    proceeds: Decimal
+    cost_basis: Decimal
+    gain: Decimal
+    term: str
+    warnings: list[str]
+
+
+class EsppSaleDetailOut(BaseModel):
+    lot_id: int
+    purchase_date: date
+    shares: Decimal
+    sale_price: Decimal
+    proceeds: Decimal
+    ordinary_income: Decimal
+    capital_gain: Decimal
+    term: str
+    disposition: str
+    warnings: list[str]
+
+
+class WhatIfOut(BaseModel):
+    year: int
+    baseline: TaxSummaryOut
+    scenario: TaxSummaryOut
+    delta: WhatIfDelta
+    changed_inputs: list[ChangedInput]
+    sale_details: list[SaleDetailOut]
+    espp_sale_details: list[EsppSaleDetailOut]
+    warnings: list[str]

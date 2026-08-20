@@ -21,7 +21,7 @@
 - Modify: `backend/app/schemas/taxes.py` (append the What-if schemas)
 - Test: `backend/tests/test_tax_whatif.py` (new)
 
-- [ ] **Step 1: Write the service** (complete file). Read `backend/app/services/tax_service.py` and `backend/app/tax_keys.py` first — the key-mapping comment below is the load-bearing design fact.
+- [x] **Step 1: Write the service** (complete file). Read `backend/app/services/tax_service.py` and `backend/app/tax_keys.py` first — the key-mapping comment below is the load-bearing design fact.
 
 ```python
 """What-if scenario math over the tax engine's input vocabulary.
@@ -210,7 +210,7 @@ def apply_scenario(
     return scenario, warnings
 ```
 
-- [ ] **Step 2: Append the schemas** to `backend/app/schemas/taxes.py` (match the file's existing pydantic style; `TaxSummaryOut` already lives there):
+- [x] **Step 2: Append the schemas** to `backend/app/schemas/taxes.py` (match the file's existing pydantic style; `TaxSummaryOut` already lives there):
 
 ```python
 class SaleLegIn(BaseModel):
@@ -289,7 +289,7 @@ class WhatIfOut(BaseModel):
 
 (Add `Literal` / `Field` to the file's imports if absent.)
 
-- [ ] **Step 3: Unit tests** at `backend/tests/test_tax_whatif.py` — pure, no DB. Hand-computed, each its own test:
+- [x] **Step 3: Unit tests** at `backend/tests/test_tax_whatif.py` — pure, no DB. Hand-computed, each its own test:
 
 1. `test_classify_sale_average_cost` — held 100 sh / basis 5000 (avg 50), sell 40 @ 62.50 → proceeds 2500.00, basis 2000.00, gain 500.00, term 'long', no warnings when `has_dateless=False`.
 2. `test_classify_sale_dateless_default_warns` — `term=None, has_dateless=True` → term 'long' + the warning; explicit `term='short'` → no warning.
@@ -302,9 +302,9 @@ class WhatIfOut(BaseModel):
 9. `test_apply_scenario_dual_key_mapping` — one long sale gain 500 → `ltcg_brokerage` AND `ltcg_total` both +500 over stored; one espp short lot (ordinary 350, capital 300) → `w2_espp_sale_component`+350, `other_w2_income`+350, `stcg_espp_component`+300, `stcg_total`+300.
 10. `test_apply_scenario_overrides_win_and_null_zeroes` — override on `ltcg_total` after a sale delta replaces it; `{"qualified_dividends": None}` lands ZERO.
 
-- [ ] **Step 4: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_tax_whatif.py -q` → PASS. `ruff check .` clean.
+- [x] **Step 4: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_tax_whatif.py -q` → PASS. `ruff check .` clean.
 
-- [ ] **Step 5: Commit** — `git commit -am "feat: tax what-if scenario service — sale classification, ESPP decomposition, engine key mapping"`
+- [x] **Step 5: Commit** — `git commit -am "feat: tax what-if scenario service — sale classification, ESPP decomposition, engine key mapping"`
 
 ---
 
