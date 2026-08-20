@@ -35,7 +35,8 @@ The `attention.ts`/`ytd.ts` precedent: page-adjacent pure logic, no React, no fe
 - **x is the calendar month serial** `year*12 + (month − 1)` parsed from the ISO month
   string — NOT the array index — so a skipped snapshot month cannot compress time and
   skew the rate (Excel fits on true dates; serials are the equivalent under monthly
-  data). Module-private `monthSerial(iso)` helper; same index formula `addMonths` uses.
+  data). Exported `monthSerial(iso)` helper (the builder reuses it for the continuation
+  count); same index formula `addMonths` uses.
 
 ```ts
 export interface ExpTrendFit {
@@ -84,7 +85,9 @@ export function netWorthProjectionOption(
   shortens or empties the continuation; the axis stays monotonic. `boundaryGap: false`.
 - **Series 1 "Net worth":** `type: 'scatter'` (already registered in `charts/echarts.ts`),
   `PALETTE[0]` blue (net worth's app-wide color identity), `symbolSize: 6`,
-  history values `Number()`-parsed then null-padded across the continuation, and a
+  history values `Number()`-parsed and UNPADDED — on a category axis the shorter series
+  simply ends where history does (no null-typing friction; beyond history the tooltip
+  lists the trend alone), and a
   **higher `z` than the trend** so dots stay visible where the curve passes through them.
 - **Series 2 "Exponential trend":** `type: 'line'`, `symbol: 'none'`, solid width 2,
   `PALETTE[1]` orange (on this page orange = derived growth model; dashed stays reserved
@@ -102,7 +105,8 @@ export function netWorthProjectionOption(
 ## Page wiring — `ProjectionPage.tsx`
 
 - New state: `history: NetWorthTimeseries | null`, `historyError: string | null`.
-- **Mount-only** second effect: `fetchTimeseries('month')` with promise callbacks
+- **Mount-only** second effect: `fetchTimeseries()` (the client's `'monthly'` default)
+  with promise callbacks
   (`.then(setHistory)` / `.catch` → `historyError` via the page's `message()` helper,
   fallback sentence `'Failed to load net-worth history'`). **Not refetched on
   Recalculate** — history doesn't change with knobs; the horizon reaches the chart
@@ -147,7 +151,7 @@ export function netWorthProjectionOption(
   extends beyond them. Synthetic values only.
 - **`projectionChartOptions.test.ts` (extend):** null under 2 history points; axis =
   history + continuation ending exactly at `addMonths(startMonth, years*12)`; dot data
-  null-padded to axis length; trend data spans the full axis; trend series absent when
+  spans exactly the history months; trend data spans the full axis; trend series absent when
   fit is null; dataZoom present; dots' `z` above the trend's; a history month at or past
   the horizon end yields an empty continuation (axis = history months verbatim).
 - **`ProjectionPage.test.tsx` (extend):** mock `../api/netWorth` with a resolved fixture
