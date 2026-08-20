@@ -20,7 +20,7 @@
 - Create: `backend/app/services/montecarlo.py`
 - Test: `backend/tests/test_montecarlo.py` (new)
 
-- [ ] **Step 1: Write the service** (complete file):
+- [x] **Step 1: Write the service** (complete file):
 
 ```python
 """Seeded Monte Carlo over the projection's monthly recurrence.
@@ -132,7 +132,7 @@ def reach_percentile(reach_indices: list[int | None], pct: int) -> int | None:
     return None if math.isinf(value) else round(value)
 ```
 
-- [ ] **Step 2: Unit tests** at `backend/tests/test_montecarlo.py` (pure, no DB):
+- [x] **Step 2: Unit tests** at `backend/tests/test_montecarlo.py` (pure, no DB):
 
 1. `test_seed_determinism` — two identical `simulate(...)` calls return equal bands and reach_indices.
 2. `test_band_ordering` — for every month, p10 ≤ p25 ≤ p50 ≤ p75 ≤ p90 (240-month run, 5% return, 15% vol).
@@ -143,9 +143,9 @@ def reach_percentile(reach_indices: list[int | None], pct: int) -> int | None:
 7. `test_reach_percentile_mixed` — hand-built indices `[2, 5, None, None]`: p10 → 2 area, p90 → None (interpolation against inf).
 8. `test_contribution_growth_shifts_bands_up` — same knobs ± growth 0.05: final p50 strictly greater with growth.
 
-- [ ] **Step 3: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_montecarlo.py -q` → PASS. `ruff check .` clean.
+- [x] **Step 3: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_montecarlo.py -q` → PASS. `ruff check .` clean.
 
-- [ ] **Step 4: Commit** — `git commit -am "feat: seeded lognormal Monte Carlo service with percentile bands"`
+- [x] **Step 4: Commit** — `git commit -am "feat: seeded lognormal Monte Carlo service with percentile bands"`
 
 ---
 
