@@ -262,7 +262,7 @@ Fill the `...` from the file's existing fixtures (`FakeProvider`-style classes a
 - Create: `backend/app/services/dividend_ingest.py`
 - Test: `backend/tests/test_dividend_ingest.py` (new)
 
-- [ ] **Step 1: Write the service** (complete file):
+- [x] **Step 1: Write the service** (complete file):
 
 ```python
 """Automatic dividend ingestion — the refresh's dividend leg.
@@ -453,7 +453,7 @@ async def ingest_dividends(
     return result
 ```
 
-- [ ] **Step 2: Write the unit tests** at `backend/tests/test_dividend_ingest.py`. Seed directly via the `db` fixture (no HTTP). Cover, each as its own test with hand-computed expectations:
+- [x] **Step 2: Write the unit tests** at `backend/tests/test_dividend_ingest.py`. Seed directly via the `db` fixture (no HTTP). Cover, each as its own test with hand-computed expectations:
 
 ```python
 from datetime import date
@@ -499,9 +499,9 @@ Tests (write all of these; arrange with the helpers above):
 9. `test_window_boundary` — event older than `today - 370d` is ignored entirely (not ingested, not healed against).
 10. `test_shares_on_dateless_counts_always` — direct unit test of `shares_on` mixing dateless/dated rows.
 
-- [ ] **Step 3: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_dividend_ingest.py -q` → PASS (all 10).
+- [x] **Step 3: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_dividend_ingest.py -q` → PASS (all 10).
 
-- [ ] **Step 4: Commit** — `git commit -am "feat: dividend_ingest service — refresh-owned auto rows, per-account, idempotent, self-healing"`
+- [x] **Step 4: Commit** — `git commit -am "feat: dividend_ingest service — refresh-owned auto rows, per-account, idempotent, self-healing"`
 
 ---
 
