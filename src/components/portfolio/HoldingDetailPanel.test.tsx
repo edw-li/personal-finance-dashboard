@@ -57,7 +57,8 @@ function txn(over: Partial<TransactionOut> = {}): TransactionOut {
 function dividend(over: Partial<DividendOut> = {}): DividendOut {
   return {
     id: 1, security_id: 1, account: 'RH Taxable', pay_date: '2026-06-30',
-    amount: '3.21', notes: null,
+    amount: '3.21', source: 'manual', ex_date: null, per_share: null,
+    shares_held: null, notes: null,
     ...over,
   }
 }

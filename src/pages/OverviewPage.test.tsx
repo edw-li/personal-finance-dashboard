@@ -593,9 +593,17 @@ describe('OverviewPage year to date', () => {
         ],
       },
       dividends: [
-        { id: 1, security_id: 1, account: null, pay_date: `${CURRENT_YEAR}-03-15`, amount: '120.50', notes: null },
+        {
+          id: 1, security_id: 1, account: null, pay_date: `${CURRENT_YEAR}-03-15`,
+          amount: '120.50', source: 'manual', ex_date: null, per_share: null,
+          shares_held: null, notes: null,
+        },
         // Last year's payout must stay OUT of this year's sum.
-        { id: 2, security_id: 1, account: null, pay_date: `${CURRENT_YEAR - 1}-12-15`, amount: '999.00', notes: null },
+        {
+          id: 2, security_id: 1, account: null, pay_date: `${CURRENT_YEAR - 1}-12-15`,
+          amount: '999.00', source: 'manual', ex_date: null, per_share: null,
+          shares_held: null, notes: null,
+        },
       ],
     })
     renderPage()

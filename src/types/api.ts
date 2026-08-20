@@ -200,6 +200,14 @@ export interface DividendOut {
   account: string | null
   pay_date: string
   amount: string
+  // Ownership: 'auto' rows belong to the refresh (rewritten every run inside its window,
+  // and a delete comes back next run); 'manual' rows are the user's alone. The three
+  // event fields are the auto path's provenance — always null on a manual row, and on
+  // auto rows pay_date equals ex_date (Yahoo's chart feed carries no payment date).
+  source: string
+  ex_date: string | null
+  per_share: string | null
+  shares_held: string | null
   notes: string | null
 }
 
@@ -300,6 +308,7 @@ export interface RefreshResult {
   failed: Record<string, string>
   skipped_manual: string[]
   duration_ms: number
+  dividends_ingested: number
 }
 
 // GET /prices/refresh-status — the persisted outcome of the most recent refresh run
@@ -311,6 +320,11 @@ export interface LastRefresh {
   failed: Record<string, string>
   skipped_manual: number
   history_appended: boolean
+  // Optional, not required: a payload stored before the dividend feature shipped carries
+  // none of these keys and the server echoes nulls for it (stale-deploy armor).
+  dividends_ingested?: number | null
+  dividends_removed?: number | null
+  dividends_skipped_overlap?: number | null
 }
 
 export interface RefreshStatus {

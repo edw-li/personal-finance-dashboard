@@ -23,7 +23,10 @@ function rollup(year: number): SpendingYearly['years'][number] {
 }
 
 function dividend(payDate: string, amount: string, id = 1): DividendOut {
-  return { id, security_id: 1, account: null, pay_date: payDate, amount, notes: null }
+  return {
+    id, security_id: 1, account: null, pay_date: payDate, amount,
+    source: 'manual', ex_date: null, per_share: null, shares_held: null, notes: null,
+  }
 }
 
 describe('ytdStats — net worth delta', () => {

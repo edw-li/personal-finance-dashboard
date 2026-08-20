@@ -69,6 +69,11 @@ function describeRefresh(result: RefreshResult): RefreshNote {
       (result.skipped_manual.length > 0
         ? `, ${result.skipped_manual.length} manual skipped`
         : '') +
+      // Only when the run actually wrote some: a steady-state refresh between ex-dates
+      // ingests nothing, and ", 0 dividends logged" would read as a failure.
+      (result.dividends_ingested > 0
+        ? `, ${result.dividends_ingested} dividends logged`
+        : '') +
       ` in ${Math.round(result.duration_ms / 1000)}s`,
     // Per-ticker reasons ride in the title attribute — React escapes attribute values, so
     // provider error text cannot inject markup (the RefreshOut.failed escaping note).
@@ -412,7 +417,12 @@ export default function PortfolioPage() {
             <TransactionsPanel securities={securities} transactions={transactions} onChanged={reload} />
           )}
           {tab === 'dividends' && (
-            <DividendsPanel securities={securities} dividends={dividends} onChanged={reload} />
+            <DividendsPanel
+              securities={securities}
+              dividends={dividends}
+              annualIncome={totals?.annual_income ?? null}
+              onChanged={reload}
+            />
           )}
           {tab === 'securities' && <SecuritiesPanel securities={securities} onChanged={reload} />}
           {tab === 'realized' && realized && <RealizedPanel realized={realized} />}
