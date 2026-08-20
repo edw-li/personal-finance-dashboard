@@ -26,7 +26,8 @@ Deterministic behavior with the new knobs absent stays byte-identical (back-comp
   simulated paths alike shift together, and the FI target (today's spend ÷ SWR) stays in
   today's dollars, which is what makes the whole frame coherent.
 - `contribution_growth` — annual escalator for the monthly contribution. Absent ⇒ 0.
-  Bounds `[0, 0.25]`. Contribution in month m is `base × (1+g_m)^m` with
+  Bounds `[0, 0.25]`. Contribution in month m (1-based) is `base × (1+g_m)^(m−1)` — the first
+  contribution is unescalated (both engines, pinned by test) — with
   `g_m = (1+g_real)^(1/12) − 1`.
 
 Echo fields on `ProjectionOut` (nullable — stale-tab armor): `volatility`, `inflation`,

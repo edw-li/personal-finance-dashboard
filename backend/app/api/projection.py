@@ -270,7 +270,8 @@ async def projection(
             p10 = reach_percentile(mc.reach_indices, 10)
             p50 = reach_percentile(mc.reach_indices, 50)
             p90 = reach_percentile(mc.reach_indices, 90)
-            # An interpolated percentile can land a hair past the last month index; clamp
+            # Defense in depth only: an interpolation of order statistics all <= month_count
+            # cannot exceed it (branch review N4) — the clamp just makes that not load-bearing.
             # onto the axis rather than invent a month the chart does not have.
             fi_month_p10 = None if p10 is None else months[min(p10, month_count)]
             fi_month_p50 = None if p50 is None else months[min(p50, month_count)]

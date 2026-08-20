@@ -7,8 +7,11 @@ the frontend). The deterministic engine (services/projection.py) stays Decimal a
 arrays are untouched — the simulation surrounds the line, never replaces it.
 
 Model: monthly growth factor exp(N(mu_m, sigma_m)) with mu_m = ln(1 + r) / 12, so the
-MEDIAN path compounds at exactly the deterministic rate and the p50 band hugs the
-deterministic line by construction; sigma_m = sigma / sqrt(12). Contributions are added
+MEDIAN growth FACTOR is exactly the deterministic rate; with contributions the p50
+band tracks the deterministic line approximately, not identically (summed lognormals
+pull the median toward the mean over long horizons — measured ~+8% at month 360 on
+typical knobs), which is one reason p50 is never drawn as its own curve.
+sigma_m = sigma / sqrt(12). Contributions are added
 after growth each month (the deterministic recurrence's own order) and may escalate
 geometrically. Balances stay positive by construction (multiplicative).
 

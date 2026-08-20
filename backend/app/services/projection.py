@@ -19,8 +19,9 @@ def monthly_rate(annual_return: Decimal) -> Decimal:
 
     Decimal ** with a fractional exponent is context-rounded (28 significant digits) —
     orders of magnitude under the 2dp display quantum, and deterministic, which is what
-    lets the API tests pin exact strings. The router bounds r to [-0.5, 0.5], so the
-    base stays strictly positive and the power is always defined.
+    lets the API tests pin exact strings. The router bounds the NOMINAL r to [-0.5, 0.5]
+    and may pass a real-terms conversion of it; the inflation bounds keep the worst
+    case at -0.6, so the base stays strictly positive and the power is always defined.
     """
     return (ONE + annual_return) ** (ONE / TWELVE) - ONE
 
