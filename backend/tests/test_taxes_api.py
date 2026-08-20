@@ -847,7 +847,74 @@ async def test_what_if_oversell_422(auth_client, db, definitions):
     )
     assert resp.status_code == 422
     # Both figures at share scale, so the sentence reads like the holdings table.
-    assert resp.json()["detail"] == "selling 150.000000 NVDA — only 100.000000 held"
+    assert (
+        resp.json()["detail"]
+        == "selling 150.000000 NVDA across the scenario — only 100.000000 held"
+    )
+
+
+async def test_what_if_duplicate_legs_cannot_oversell_in_aggregate(auth_client, db, definitions):
+    """The fence sums ACROSS legs (branch review I1): two 60-share legs against a
+    100-share position must 422 even though each leg alone would pass."""
+    await seeded_2024(auth_client)
+    security_id = await seed_holding(db)
+
+    resp = await auth_client.post(
+        WHAT_IF,
+        json={
+            "year": 2024,
+            "sales": [
+                {"security_id": security_id, "shares": "60"},
+                {"security_id": security_id, "shares": "60"},
+            ],
+        },
+    )
+    assert resp.status_code == 422
+    assert (
+        resp.json()["detail"]
+        == "selling 120.000000 NVDA across the scenario — only 100.000000 held"
+    )
+
+
+async def test_what_if_duplicate_lot_422(auth_client, db, definitions):
+    """Listing a lot twice would double-count its ordinary income and capital gain."""
+    await seeded_2024(auth_client)
+    lot_id = await seed_lot(db)
+
+    resp = await auth_client.post(
+        WHAT_IF,
+        json={
+            "year": 2024,
+            "espp_sales": [
+                {"lot_id": lot_id, "sale_price": "150"},
+                {"lot_id": lot_id, "sale_price": "160"},
+            ],
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == f"lot {lot_id} appears more than once"
+
+
+async def test_what_if_no_price_paths_422(auth_client, db, definitions):
+    """Both defaulted-price branches refuse when nothing is quoted (branch review M2):
+    a sale leg against an unquoted security, and an ESPP leg with no ESPP quote
+    configured (no espp_ticker setting seeded here)."""
+    await seeded_2024(auth_client)
+    security_id = await seed_holding(db, quote=None)
+    lot_id = await seed_lot(db)
+
+    resp = await auth_client.post(
+        WHAT_IF,
+        json={"year": 2024, "sales": [{"security_id": security_id, "shares": "10"}]},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "no price for NVDA — provide one"
+
+    resp = await auth_client.post(
+        WHAT_IF, json={"year": 2024, "espp_sales": [{"lot_id": lot_id}]}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "no ESPP quote available — provide a sale_price"
 
 
 async def test_what_if_unknown_security_404(auth_client, definitions):

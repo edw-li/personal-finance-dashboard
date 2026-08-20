@@ -555,6 +555,10 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
             agg["shares"] += pos.shares
             agg["cost_basis"] += pos.cost_basis
             agg["has_dateless"] = agg["has_dateless"] or pos.has_dateless_txn
+        # The oversell fence sums ACROSS legs: two legs naming the same security must not
+        # each pass against the full position (branch review I1 — an impossible sale is a
+        # typo, and splitting it across rows doesn't make it possible).
+        requested: dict[int, Decimal] = {}
         for leg in body.sales:
             security = securities.get(leg.security_id)
             if security is None:
@@ -566,10 +570,14 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
                 raise HTTPException(status_code=422, detail="shares must be positive")
             agg = per_sec.get(leg.security_id)
             held = agg["shares"].quantize(SHARE_Q, rounding=ROUND_HALF_UP) if agg else ZERO
-            if shares > held:
+            requested[leg.security_id] = requested.get(leg.security_id, ZERO) + shares
+            if requested[leg.security_id] > held:
                 raise HTTPException(
                     status_code=422,
-                    detail=(f"selling {shares} {security.ticker} — only {held} held"),
+                    detail=(
+                        f"selling {requested[leg.security_id]} {security.ticker} "
+                        f"across the scenario — only {held} held"
+                    ),
                 )
             if leg.price is not None:
                 price = quantize_price(leg.price, "price")
@@ -599,8 +607,16 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     # ESPP legs.
     espp_details: list[EsppSaleDetail] = []
     if body.espp_sales:
+        # One sale per lot: listing a lot twice would double-count its ordinary income
+        # and capital gain into the scenario (branch review I1's ESPP half).
+        seen_lots: set[int] = set()
         _ticker, quote_price, _quoted_at = await _espp_quote(db)
         for leg in body.espp_sales:
+            if leg.lot_id in seen_lots:
+                raise HTTPException(
+                    status_code=422, detail=f"lot {leg.lot_id} appears more than once"
+                )
+            seen_lots.add(leg.lot_id)
             lot = await db.get(EsppLot, leg.lot_id)
             if lot is None:
                 raise HTTPException(status_code=404, detail=f"unknown lot {leg.lot_id}")

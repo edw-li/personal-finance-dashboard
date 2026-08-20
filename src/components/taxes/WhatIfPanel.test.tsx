@@ -162,8 +162,8 @@ function resultFixture(overrides: Partial<WhatIfOut> = {}): WhatIfOut {
       {
         key: 'ltcg_brokerage',
         label: 'LTCG: Brokerage Gain/Loss',
-        before: '12000.0000',
-        after: '30500.0000',
+        before: '12000.00',
+        after: '30500.00',
       },
     ],
     sale_details: [

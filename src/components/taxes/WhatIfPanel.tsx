@@ -336,7 +336,8 @@ export default function WhatIfPanel({
             ordinary income lands in Other W2 Income — which raises the engine&apos;s
             Medicare/Social Security/SDI wage bases, exactly as the sheet does it. Real ESPP
             ordinary income is FICA-exempt; this sandbox inherits the sheet&apos;s structure.
-            Nothing here is stored.
+            Long/short is your call: imported transactions carry no dates, so the app
+            cannot verify a holding period. Nothing here is stored.
           </p>
           {feedError !== null && (
             <div className="error-banner" role="alert">

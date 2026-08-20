@@ -506,7 +506,7 @@ export interface WhatIfDelta {
 export interface ChangedInput {
   key: string
   label: string
-  before: string // "0" when the key had no stored row
+  before: string // "0.00" when the key had no stored row (2dp, _money-rendered)
   after: string
 }
 
