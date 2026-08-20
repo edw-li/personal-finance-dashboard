@@ -14,23 +14,91 @@ import type { PolyTrendFit } from './polyTrend'
 // contributions turned off, and the threshold.
 export const PROJECTION_SERIES = ['Projected', 'Growth only', 'FI target'] as const
 
+// The two band labels the legend admits. The outer band is drawn as TWO washes (below
+// p25 and above p75) that share this one name-stem; only the lower one is named exactly
+// `BAND_SERIES[0]`, the upper wears the `-upper` suffix and stays out of the legend.
+export const BAND_SERIES = ['10–90% band', '25–75% band'] as const
+
 /**
  * Two trajectories and a threshold: projected (blue, the one wash — the money the plan
  * accumulates), growth-only "coast" (orange — what the balance does by itself, so the gap
  * between the lines is what the saving buys), and the FI target as a dashed MUTED
  * constant (dashed is reserved for thresholds — the 4%-rule line's own posture). Absent
  * target = two lines, no threshold. Returns null under two points.
+ *
+ * With Monte Carlo `bands` on the payload the same chart grows a fan: four stacked
+ * series drawn FIRST (so the three real lines stay on top of their own uncertainty).
  */
 export function projectionOption(
-  data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'fi_target'>,
+  data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'fi_target' | 'bands'>,
 ): EChartsOption | null {
   if (data.months.length < 2) return null
   const target = data.fi_target === null ? null : Number(data.fi_target)
+  const bands = data.bands ?? null
+  const bandSeries =
+    bands === null
+      ? []
+      : (() => {
+          const p10 = bands.p10.map(Number)
+          const p25 = bands.p25.map(Number)
+          const p75 = bands.p75.map(Number)
+          const p90 = bands.p90.map(Number)
+          // Stacked washes: an invisible ABSOLUTE base at p10, then DIFFS on top of it —
+          // p25−p10 (outer), p75−p25 (inner), p90−p75 (outer). echarts sums the stack, so
+          // the three washes land on p25 / p75 / p90 and each one fills the gap below
+          // itself. Two opacities read as "50% of paths" vs "80%".
+          const diff = (hi: number[], lo: number[]) => hi.map((v, i) => v - lo[i])
+          // All the projection's own blue: uncertainty about one entity wears that
+          // entity's hue (theme law — never a new hue). Tooltip-silent: the bands are
+          // geometry; the three real lines carry the numbers.
+          const wash = (name: string, values: number[], opacity: number) => ({
+            name,
+            type: 'line' as const,
+            stack: 'mc-band',
+            symbol: 'none' as const,
+            lineStyle: { width: 0 },
+            color: PALETTE[0],
+            emphasis: { disabled: true },
+            tooltip: { show: false },
+            silent: true,
+            areaStyle: { opacity },
+            data: values,
+          })
+          return [
+            {
+              name: 'mc-base',
+              type: 'line' as const,
+              stack: 'mc-band',
+              symbol: 'none' as const,
+              lineStyle: { width: 0 },
+              color: 'transparent',
+              emphasis: { disabled: true },
+              tooltip: { show: false },
+              silent: true,
+              data: p10,
+            },
+            wash(BAND_SERIES[0], diff(p25, p10), 0.1),
+            wash(BAND_SERIES[1], diff(p75, p25), 0.18),
+            wash(`${BAND_SERIES[0]}-upper`, diff(p90, p75), 0.1),
+          ]
+        })()
   return {
     // ctrl+wheel / drag-pan over a 30-year axis; the horizon knob changes the window.
     dataZoom: timeZoom(data.months, 'all'),
     grid: { left: 76, right: 24, top: 40, bottom: 28 },
-    legend: { top: 0 },
+    // Listed explicitly so the invisible base and the duplicate upper wash stay OUT: an
+    // automatic legend would offer "mc-base" and two "10–90%" entries. Accepted echarts
+    // stack quirk — toggling the outer entry hides only the LOWER outer wash, since the
+    // upper one is a separate (legend-hidden) series in the same stack.
+    legend: {
+      top: 0,
+      data: [
+        PROJECTION_SERIES[0],
+        PROJECTION_SERIES[1],
+        ...(target === null ? [] : [PROJECTION_SERIES[2]]),
+        ...(bands === null ? [] : [...BAND_SERIES]),
+      ],
+    },
     tooltip: {
       trigger: 'axis',
       valueFormatter: (value) =>
@@ -44,6 +112,8 @@ export function projectionOption(
       axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
     },
     series: [
+      // Bands first: series order is paint order, and the lines belong on top.
+      ...bandSeries,
       {
         name: PROJECTION_SERIES[0],
         type: 'line',

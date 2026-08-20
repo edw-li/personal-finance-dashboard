@@ -286,11 +286,11 @@ and thread all eight new fields into `ProjectionOut(...)` (echoes: `volatility=v
 - Modify: `src/pages/ProjectionPage.tsx` (knobs, fences, tile, hint)
 - Modify: `src/pages/ProjectionPage.test.tsx`
 
-- [ ] **Step 1: Types** — `ProjectionOut` gains `volatility: string | null`, `inflation: string | null`, `contribution_growth: string | null`, `bands: Record<string, string[]> | null`, `fi_probability: string | null`, `fi_month_p10/50/90: string | null` (all OPTIONAL-with-null semantics exactly as the wire).
+- [x] **Step 1: Types** — `ProjectionOut` gains `volatility: string | null`, `inflation: string | null`, `contribution_growth: string | null`, `bands: Record<string, string[]> | null`, `fi_probability: string | null`, `fi_month_p10/50/90: string | null` (all OPTIONAL-with-null semantics exactly as the wire).
 
-- [ ] **Step 2: Client** — `ProjectionParams` gains `volatility?: string; inflation?: string; contributionGrowth?: string`; append to the query string ONLY when non-empty (the module's existing blank-omit convention; wire name `contribution_growth`).
+- [x] **Step 2: Client** — `ProjectionParams` gains `volatility?: string; inflation?: string; contributionGrowth?: string`; append to the query string ONLY when non-empty (the module's existing blank-omit convention; wire name `contribution_growth`).
 
-- [ ] **Step 3: Builder.** Extend `projectionOption(data)` — signature unchanged; it already receives the whole `ProjectionOut`-shaped pick, widen the Pick to include `bands`. When `data.bands` is non-null, PREPEND (so lines draw on top) four band series in the stacked-area idiom, all `PALETTE[0]`, all silent to the tooltip:
+- [x] **Step 3: Builder.** Extend `projectionOption(data)` — signature unchanged; it already receives the whole `ProjectionOut`-shaped pick, widen the Pick to include `bands`. When `data.bands` is non-null, PREPEND (so lines draw on top) four band series in the stacked-area idiom, all `PALETTE[0]`, all silent to the tooltip:
 
 ```ts
 const bandSeries =
@@ -346,9 +346,9 @@ Legend: explicitly list entries so the base and the duplicate upper wash stay OU
 legend entry hides only the lower outer wash — an accepted echarts stack quirk, note it
 in a comment). Bands render BEFORE the three line series in the `series` array.
 
-- [ ] **Step 4: Builder tests** — bands absent ⇒ series array identical to today's (pin: 3 series when target present); bands present ⇒ 4 extra series FIRST, stack shared, tooltip-silent, diffs exact for a hand fixture (p25−p10 etc.), legend data excludes 'mc-base' and the upper wash, includes the two labels.
+- [x] **Step 4: Builder tests** — bands absent ⇒ series array identical to today's (pin: 3 series when target present); bands present ⇒ 4 extra series FIRST, stack shared, tooltip-silent, diffs exact for a hand fixture (p25−p10 etc.), legend data excludes 'mc-base' and the upper wash, includes the two labels.
 
-- [ ] **Step 5: Page.** `Knobs` gains `volatility` / `inflation` / `contributionGrowth` (blank-seeded from null echoes via the existing per-field seed rule — shiftPoint(…, 2) for all three since they're percent boxes). Fences in `recalculate` (the page's existing pattern + wording): volatility blank or (0, 100]; inflation blank or [-10, 25]; growth blank or [0, 25]. Pass through `load()` with `shiftPoint(…, -2)`. New form fields labelled `Volatility (%/yr)`, `Inflation (%/yr)`, `Contribution growth (%/yr)` (after Withdrawal rate, before Horizon). New tile in the KPI row:
+- [x] **Step 5: Page.** `Knobs` gains `volatility` / `inflation` / `contributionGrowth` (blank-seeded from null echoes via the existing per-field seed rule — shiftPoint(…, 2) for all three since they're percent boxes). Fences in `recalculate` (the page's existing pattern + wording): volatility blank or (0, 100]; inflation blank or [-10, 25]; growth blank or [0, 25]. Pass through `load()` with `shiftPoint(…, -2)`. New form fields labelled `Volatility (%/yr)`, `Inflation (%/yr)`, `Contribution growth (%/yr)` (after Withdrawal rate, before Horizon). New tile in the KPI row:
 
 ```tsx
               <StatTile
@@ -373,9 +373,9 @@ in a comment). Bands render BEFORE the three line series in the `series` array.
 
 Hint under the investable chart appends: `" With a volatility, bands are percentiles across 500 simulated lognormal-return paths — seed-stable, so identical knobs redraw identical bands."` Assumptions drill-hint gains: `"Volatility turns on the bands; inflation converts everything to today's dollars; contribution growth models raises."`
 
-- [ ] **Step 6: Page tests** — knobs render and blank-omit (recalculate with all blank sends none of the three params); fence messages; FI-probability tile dash without bands, formatted with; echo-seeding leaves blank boxes blank (null echoes); with a bands fixture the chart option carries the band series (via the mocked EChart's option capture, the file's existing pattern).
+- [x] **Step 6: Page tests** — knobs render and blank-omit (recalculate with all blank sends none of the three params); fence messages; FI-probability tile dash without bands, formatted with; echo-seeding leaves blank boxes blank (null echoes); with a bands fixture the chart option carries the band series (via the mocked EChart's option capture, the file's existing pattern).
 
-- [ ] **Step 7: Run gates; commit** — `git commit -am "feat: Monte Carlo bands, inflation + contribution-growth knobs, FI probability tile"`
+- [x] **Step 7: Run gates; commit** — `git commit -am "feat: Monte Carlo bands, inflation + contribution-growth knobs, FI probability tile"`
 
 ---
 

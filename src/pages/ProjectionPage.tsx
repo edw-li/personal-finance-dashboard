@@ -22,14 +22,18 @@ function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
 
-// The five what-if knobs, percent-form where the wire wants fractions ("5" = 5%/yr —
+// The eight what-if knobs, percent-form where the wire wants fractions ("5" = 5%/yr —
 // shiftPoint converts on the way out, the echo shifts back on the way in). Blank means
-// "derive it server-side", which is the whole modeler contract.
+// "derive it server-side", which is the whole modeler contract — and for volatility it
+// means more: blank is the deterministic chart, with no simulation run at all.
 interface Knobs {
   annualReturn: string
   monthlyContribution: string
   annualSpend: string
   swr: string
+  volatility: string
+  inflation: string
+  contributionGrowth: string
   years: string
 }
 
@@ -38,6 +42,9 @@ const EMPTY_KNOBS: Knobs = {
   monthlyContribution: '',
   annualSpend: '',
   swr: '',
+  volatility: '',
+  inflation: '',
+  contributionGrowth: '',
   years: '',
 }
 
@@ -46,6 +53,9 @@ const EMPTY_KNOBS: Knobs = {
 // server's fraction-worded bounds would call a perfectly good 5 out of range.
 const RETURN_MIN_PCT = -50
 const RETURN_MAX_PCT = 50
+const INFLATION_MIN_PCT = -10
+const INFLATION_MAX_PCT = 25
+const GROWTH_MAX_PCT = 25
 const YEARS_MIN = 1
 const YEARS_MAX = 60
 
@@ -99,6 +109,20 @@ export default function ProjectionPage() {
                 : current.monthlyContribution,
             annualSpend: current.annualSpend === '' ? (res.annual_spend ?? '') : current.annualSpend,
             swr: current.swr === '' ? shiftPoint(res.swr_pct, 2) : current.swr,
+            // The three Monte Carlo knobs echo NULL when they weren't sent, and a null
+            // echo seeds nothing: an empty box is the honest reading of "not in play".
+            volatility:
+              current.volatility === '' && res.volatility !== null
+                ? shiftPoint(res.volatility, 2)
+                : current.volatility,
+            inflation:
+              current.inflation === '' && res.inflation !== null
+                ? shiftPoint(res.inflation, 2)
+                : current.inflation,
+            contributionGrowth:
+              current.contributionGrowth === '' && res.contribution_growth !== null
+                ? shiftPoint(res.contribution_growth, 2)
+                : current.contributionGrowth,
             years: current.years === '' ? String(res.years) : current.years,
           }))
         }
@@ -171,6 +195,42 @@ export default function ProjectionPage() {
       setFormError('Annual spend must be a positive number')
       return
     }
+    const volatility = knobs.volatility.trim()
+    if (volatility !== '') {
+      if (!isPlainDecimal(volatility)) {
+        setFormError('Volatility % must be a number')
+        return
+      }
+      const n = Number(volatility)
+      if (!(n > 0) || n > 100) {
+        setFormError('Volatility % must be greater than 0 and at most 100')
+        return
+      }
+    }
+    const inflation = knobs.inflation.trim()
+    if (inflation !== '') {
+      if (!isPlainDecimal(inflation)) {
+        setFormError('Inflation % must be a number')
+        return
+      }
+      const n = Number(inflation)
+      if (n < INFLATION_MIN_PCT || n > INFLATION_MAX_PCT) {
+        setFormError(`Inflation % must be between ${INFLATION_MIN_PCT} and ${INFLATION_MAX_PCT}`)
+        return
+      }
+    }
+    const growth = knobs.contributionGrowth.trim()
+    if (growth !== '') {
+      if (!isPlainDecimal(growth)) {
+        setFormError('Contribution growth % must be a number')
+        return
+      }
+      const n = Number(growth)
+      if (n < 0 || n > GROWTH_MAX_PCT) {
+        setFormError(`Contribution growth % must be between 0 and ${GROWTH_MAX_PCT}`)
+        return
+      }
+    }
     const years = knobs.years.trim()
     if (years !== '') {
       const n = Number(years)
@@ -188,6 +248,9 @@ export default function ProjectionPage() {
       monthlyContribution: contribution,
       annualSpend: spend,
       swr: swr === '' ? '' : shiftPoint(swr, -2),
+      volatility: volatility === '' ? '' : shiftPoint(volatility, -2),
+      inflation: inflation === '' ? '' : shiftPoint(inflation, -2),
+      contributionGrowth: growth === '' ? '' : shiftPoint(growth, -2),
       years,
     })
   }
@@ -260,6 +323,24 @@ export default function ProjectionPage() {
                 }
                 tone="neutral"
               />
+              <StatTile
+                label="FI probability"
+                value={
+                  data.fi_probability === null
+                    ? '—'
+                    : formatPct(data.fi_probability, { signed: false })
+                }
+                delta={
+                  data.fi_month_p50 === null
+                    ? undefined
+                    : `p50 ${formatMonth(data.fi_month_p50)}${
+                        data.fi_month_p90 === null
+                          ? ''
+                          : ` · p90 ${formatMonth(data.fi_month_p90)}`
+                      }`
+                }
+                tone="neutral"
+              />
             </div>
 
             {data.warnings.length > 0 && (
@@ -319,7 +400,9 @@ export default function ProjectionPage() {
                 Deterministic compounding at one assumed return — a planning sketch, not a
                 forecast. Enter a real (after-inflation) return to read the chart in
                 today&apos;s dollars; the growth-only line is the same balance with
-                contributions turned off.
+                contributions turned off. With a volatility, bands are percentiles across
+                500 simulated lognormal-return paths — seed-stable, so identical knobs
+                redraw identical bands.
               </p>
             </section>
 
@@ -329,6 +412,8 @@ export default function ProjectionPage() {
                 Blank boxes re-derive from the data on Recalculate: contribution from the
                 trailing 12 months of (net pay − spend), annual spend from the trailing
                 spend, the withdrawal rate from Settings. Percents are percents (5 = 5%).
+                Volatility turns on the bands; inflation converts everything to
+                today&apos;s dollars; contribution growth models raises.
               </p>
               <form
                 className="projection-form"
@@ -371,6 +456,33 @@ export default function ProjectionPage() {
                     inputMode="decimal"
                     value={knobs.swr}
                     onChange={(e) => setKnob('swr')(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Volatility (%/yr)
+                  <input
+                    className="field-input"
+                    inputMode="decimal"
+                    value={knobs.volatility}
+                    onChange={(e) => setKnob('volatility')(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Inflation (%/yr)
+                  <input
+                    className="field-input"
+                    inputMode="decimal"
+                    value={knobs.inflation}
+                    onChange={(e) => setKnob('inflation')(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Contribution growth (%/yr)
+                  <input
+                    className="field-input"
+                    inputMode="decimal"
+                    value={knobs.contributionGrowth}
+                    onChange={(e) => setKnob('contributionGrowth')(e.target.value)}
                   />
                 </label>
                 <label>

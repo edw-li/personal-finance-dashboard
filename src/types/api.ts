@@ -798,6 +798,17 @@ export interface ProjectionOut {
   projected: string[]
   coast: string[]
   warnings: string[]
+  // Monte Carlo — populated only when the `volatility` knob was sent; null everywhere
+  // otherwise, so a deterministic run and an older payload read the same.
+  volatility: string | null
+  inflation: string | null
+  contribution_growth: string | null
+  /** Keys "p10"/"p25"/"p50"/"p75"/"p90"; each list is parallel to `months`. */
+  bands: Record<string, string[]> | null
+  fi_probability: string | null
+  fi_month_p10: string | null
+  fi_month_p50: string | null
+  fi_month_p90: string | null
 }
 
 // --- import (mirrors backend/app/importer/report.py) ---

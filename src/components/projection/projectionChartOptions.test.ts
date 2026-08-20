@@ -3,6 +3,7 @@ import type { EChartsOption } from '../../charts/echarts'
 import { MUTED, PALETTE } from '../../charts/theme'
 import type { PolyTrendFit } from './polyTrend'
 import {
+  BAND_SERIES,
   NET_WORTH_PROJECTION_SERIES,
   netWorthProjectionOption,
   PROJECTION_SERIES,
@@ -14,6 +15,16 @@ const DATA = {
   projected: ['100000.00', '104000.00', '108000.00'],
   coast: ['100000.00', '100000.00', '100000.00'],
   fi_target: '1500000.00' as string | null,
+  bands: null as Record<string, string[]> | null,
+}
+
+// Three months of hand-made percentiles — every diff below is checkable by eye.
+const BANDS: Record<string, string[]> = {
+  p10: ['100000.00', '90000.00', '80000.00'],
+  p25: ['100000.00', '95000.00', '92000.00'],
+  p50: ['100000.00', '104000.00', '108000.00'],
+  p75: ['100000.00', '112000.00', '125000.00'],
+  p90: ['100000.00', '120000.00', '150000.00'],
 }
 
 // EChartsOption is a wide union; narrow once so the assertions stay about the numbers
@@ -22,12 +33,17 @@ function read(option: EChartsOption | null) {
   expect(option).not.toBeNull()
   return option as unknown as {
     dataZoom: { type: string; startValue: number }[]
+    legend: { data: string[] }
     xAxis: { data: string[] }
     series: {
       name: string
       color: string
-      lineStyle: { type?: string }
-      areaStyle?: unknown
+      stack?: string
+      silent?: boolean
+      tooltip?: { show: boolean }
+      emphasis?: { disabled: boolean }
+      lineStyle: { type?: string; width?: number }
+      areaStyle?: { opacity: number }
       data: number[]
     }[]
   }
@@ -62,6 +78,89 @@ describe('projectionOption', () => {
     expect(option.xAxis.data).toEqual(['Aug 2026', 'Sep 2026', 'Oct 2026'])
     expect(option.dataZoom[0].type).toBe('inside')
     expect(option.dataZoom[0].startValue).toBe(0)
+  })
+
+  it('draws the pre-Monte-Carlo chart exactly when the payload carries no bands', () => {
+    // Back-compat is a test, not a hope: a deterministic run is three series, no more.
+    // The second case is the older payload with no `bands` key at all (a stale tab).
+    const stale = { ...DATA, bands: undefined } as unknown as typeof DATA
+    for (const data of [DATA, stale]) {
+      const option = read(projectionOption(data))
+      expect(option.series).toHaveLength(3)
+      expect(option.series.map((s) => s.name)).toEqual([...PROJECTION_SERIES])
+      expect(option.series.every((s) => s.stack === undefined)).toBe(true)
+      expect(option.legend.data).toEqual([...PROJECTION_SERIES])
+    }
+  })
+
+  it('prepends four stacked band series so the lines draw on top', () => {
+    const option = read(projectionOption({ ...DATA, bands: BANDS }))
+    expect(option.series).toHaveLength(7)
+    expect(option.series.map((s) => s.name)).toEqual([
+      'mc-base',
+      BAND_SERIES[0],
+      BAND_SERIES[1],
+      `${BAND_SERIES[0]}-upper`,
+      ...PROJECTION_SERIES,
+    ])
+    // One stack, so echarts sums base + the three diffs back into p25 / p75 / p90.
+    expect(option.series.slice(0, 4).every((s) => s.stack === 'mc-band')).toBe(true)
+    expect(option.series.slice(4).every((s) => s.stack === undefined)).toBe(true)
+  })
+
+  it('stacks an absolute p10 base under exact percentile diffs, all in the projection blue', () => {
+    const option = read(projectionOption({ ...DATA, bands: BANDS }))
+    const [base, outerLow, inner, outerHigh] = option.series
+    expect(base.data).toEqual([100000, 90000, 80000]) // ABSOLUTE — the stack's floor
+    expect(base.color).toBe('transparent')
+    expect(base.areaStyle).toBeUndefined() // an invisible line, not a wash
+    expect(outerLow.data).toEqual([0, 5000, 12000]) // p25 − p10
+    expect(inner.data).toEqual([0, 17000, 33000]) // p75 − p25
+    expect(outerHigh.data).toEqual([0, 8000, 25000]) // p90 − p75
+    // Uncertainty about one entity wears that entity's hue — never a new one.
+    expect([outerLow.color, inner.color, outerHigh.color]).toEqual([
+      PALETTE[0],
+      PALETTE[0],
+      PALETTE[0],
+    ])
+    // The inner half reads denser than the outer eighty percent.
+    expect(outerLow.areaStyle?.opacity).toBe(0.1)
+    expect(inner.areaStyle?.opacity).toBe(0.18)
+    expect(outerHigh.areaStyle?.opacity).toBe(0.1)
+    expect(option.series.slice(0, 4).every((s) => s.lineStyle.width === 0)).toBe(true)
+  })
+
+  it('keeps the bands out of the tooltip and the hover — they are geometry', () => {
+    const option = read(projectionOption({ ...DATA, bands: BANDS }))
+    for (const series of option.series.slice(0, 4)) {
+      expect(series.silent).toBe(true)
+      expect(series.tooltip).toEqual({ show: false })
+      expect(series.emphasis).toEqual({ disabled: true })
+    }
+    // The three real lines still carry the numbers.
+    for (const series of option.series.slice(4)) {
+      expect(series.silent).toBeUndefined()
+      expect(series.tooltip).toBeUndefined()
+    }
+  })
+
+  it('names only the two washes that differ in the legend', () => {
+    const option = read(projectionOption({ ...DATA, bands: BANDS }))
+    // 'mc-base' is invisible and the '-upper' wash is the same band as its lower half —
+    // an automatic legend would offer both, and one of them twice.
+    expect(option.legend.data).toEqual([...PROJECTION_SERIES, ...BAND_SERIES])
+    expect(option.legend.data).not.toContain('mc-base')
+    expect(option.legend.data).not.toContain(`${BAND_SERIES[0]}-upper`)
+  })
+
+  it('bands survive a missing target — the threshold leaves, the fan stays', () => {
+    const option = read(projectionOption({ ...DATA, fi_target: null, bands: BANDS }))
+    expect(option.series).toHaveLength(6)
+    expect(option.legend.data).toEqual([
+      PROJECTION_SERIES[0],
+      PROJECTION_SERIES[1],
+      ...BAND_SERIES,
+    ])
   })
 })
 
