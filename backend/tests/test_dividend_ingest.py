@@ -312,3 +312,43 @@ def test_shares_on_dateless_counts_always():
     assert shares_on(txns, date(2026, 6, 1))[(1, "RH Taxable")] == Decimal("15")  # inclusive
     assert shares_on(txns, date(2026, 6, 19))[(1, "RH Taxable")] == Decimal("15")
     assert shares_on(txns, date(2026, 7, 10))[(1, "RH Taxable")] == Decimal("18")
+
+
+async def test_self_heal_covers_securities_with_bars_but_no_events(db):
+    # Branch review I1: a security whose in-window events ALL vanished from the feed
+    # still arrives in events_by_security (with an empty list — refresh_prices records
+    # every updated ticker), and its stale in-window auto rows must heal away. Absent
+    # keys (failed tickers) stay protected — the sibling untouched test pins that side.
+    sec = await seed_security(db)
+    db.add(auto(sec.id, "RH Taxable", date(2026, 6, 19), "8.20"))
+    await db.commit()
+
+    result = await ingest_dividends(db, {sec.id: []}, today=TODAY)
+    await db.commit()
+
+    assert counts(result) == (0, 0, 1, 0)
+    assert await dividend_rows(db) == []
+
+
+async def test_manual_overlap_boundary_exactly_14_days(db):
+    # The overlap window is INCLUSIVE at exactly ±14 days — the conservative edge:
+    # skipped, never double-counted. 15 days out is past the window and ingests.
+    sec = await seed_security(db)
+    db.add(txn(sec.id, "RH Taxable", "10"))
+    db.add(manual(sec.id, date(2026, 7, 3), "8.00"))  # event + 14 days exactly
+    await db.commit()
+
+    event = [bar(date(2026, 6, 19), "0.8200")]
+    result = await ingest_dividends(db, {sec.id: event}, today=TODAY)
+    await db.commit()
+    assert counts(result) == (0, 0, 0, 1)
+    assert await dividend_rows(db, source="auto") == []
+
+    # Move the manual row one day further out: the same event now ingests.
+    row = (await db.execute(select(DividendPayment))).scalar_one()
+    row.pay_date = date(2026, 7, 4)
+    await db.commit()
+    result = await ingest_dividends(db, {sec.id: event}, today=TODAY)
+    await db.commit()
+    assert counts(result) == (1, 0, 0, 0)
+    assert [r.amount for r in await dividend_rows(db, source="auto")] == [Decimal("8.20")]

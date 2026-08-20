@@ -127,9 +127,12 @@ async def refresh_prices(
             }
         )
         _update_dividend_metadata(security, bars, today)
-        events = [b for b in bars if b.dividend > 0]
-        if events:
-            result.dividend_events[security.id] = events
+        # ALWAYS recorded for an updated ticker, even when empty: the self-heal scope is
+        # "returned bars this run" (spec §2), so a book whose in-window events all
+        # vanished from the feed still gets its stale auto rows removed. A transient feed
+        # drop therefore churns rows away and back rather than leaving ghost income
+        # standing for up to 370 days (branch review I1).
+        result.dividend_events[security.id] = [b for b in bars if b.dividend > 0]
         result.updated.append(security.ticker)
     if latest_rows:
         # Plan 1 forward note: one bulk ON CONFLICT DO UPDATE for the whole ticker batch.

@@ -234,13 +234,15 @@ async def test_absurd_ttm_keeps_previous_metadata(db):
 async def test_refresh_collects_dividend_events_for_updated_tickers_only(db):
     good = await seed_security(db, "DIVX")
     failed = await seed_security(db, "AAA")
+    nodiv = await seed_security(db, "NODIV")
     provider = FakeProvider(
         data={
             "DIVX": [
                 bar(date(2026, 3, 20), "100", "0.8200"),
                 bar(date(2026, 6, 19), "110", "0.8200"),
                 bar(TODAY, "120"),
-            ]
+            ],
+            "NODIV": [bar(TODAY, "50")],
         },
         errors={"AAA": RuntimeError("nope")},
     )
@@ -251,6 +253,10 @@ async def test_refresh_collects_dividend_events_for_updated_tickers_only(db):
         (date(2026, 6, 19), D("0.8200")),
     ]
     assert failed.id not in result.dividend_events
+    # An updated ticker with no events is PRESENT with an empty list — that presence is
+    # what lets the ingest self-heal a book whose in-window events all vanished from the
+    # feed (branch review I1); a failed ticker stays absent and untouched.
+    assert result.dividend_events[nodiv.id] == []
 
 
 async def test_duplicate_bar_dates_deduped_last_wins(db):
@@ -381,6 +387,43 @@ async def test_ingest_failure_degrades_and_preserves_snapshot(db, engine, monkey
     assert payload["dividends_ingested"] == 0
     assert payload["dividends_removed"] == 0
     assert payload["dividends_skipped_overlap"] == 0
+
+
+async def test_mid_ingest_db_failure_rolls_back_to_the_savepoint(db, engine, monkeypatch):
+    # Branch review M1: the sibling test raises BEFORE any ingest DB work, which pins the
+    # try/except but not the savepoint itself. A FAILED STATEMENT poisons the transaction,
+    # so without begin_nested the run-record `db.get` would raise PendingRollbackError and
+    # lose both the snapshot and the outcome — this test makes the savepoint load-bearing.
+    from sqlalchemy import text
+
+    sec = await seed_security(db, "DIVX")
+    db.add(buy(sec.id))
+    await db.commit()
+
+    async def failing_statement(session, *args, **kwargs):
+        # NOT NULL violation raises at execute time, mid-"ingest", inside the savepoint.
+        await session.execute(
+            text(
+                "INSERT INTO dividend_payments (security_id, pay_date, amount) "
+                "VALUES (NULL, '2026-01-01', 1)"
+            )
+        )
+
+    monkeypatch.setattr("app.services.dividend_ingest.ingest_dividends", failing_statement)
+    provider = FakeProvider({"DIVX": [bar(date(2026, 6, 19), "110", "0.8200"), bar(TODAY, "120")]})
+
+    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=TODAY)
+
+    assert result.updated == ["DIVX"]
+    assert appended is True
+    assert dividends == DividendIngestResult()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as other:
+        snapshots = (await other.execute(select(PortfolioValueHistory))).scalars().all()
+        assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(TODAY, D("1200.00"))]
+        assert (await other.execute(select(DividendPayment))).scalars().all() == []
+    payload = await read_last_refresh(db)
+    assert payload["history_appended"] is True and payload["dividends_ingested"] == 0
 
 
 async def test_backdated_manual_price_does_not_move_import_seeded_latest(db):

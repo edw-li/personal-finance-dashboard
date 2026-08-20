@@ -119,7 +119,11 @@ async def ingest_dividends(
     overlap = timedelta(days=MANUAL_OVERLAP_DAYS)
     for sec_id, bars in events_by_security.items():
         # De-dup by date (last wins) and bound the per-share amount — the provider
-        # contract promises neither (refresh_prices' own posture for closes).
+        # contract promises neither (refresh_prices' own posture for closes). A bounded-
+        # OUT event reads as "vanished" to the self-heal below and removes its previously
+        # sane row — the opposite of _update_dividend_metadata's keep-previous posture on
+        # absurd values; accepted asymmetry, it self-corrects when the feed recovers
+        # (branch review M2).
         events = {
             b.bar_date: b
             for b in bars

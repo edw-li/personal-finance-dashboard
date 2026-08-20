@@ -10,7 +10,8 @@ export const INCOME_WINDOW_MONTHS = 24
 
 /** Sums of `amount` by pay-date month over the trailing window, zero-filled so quiet
  * months read as quiet rather than absent. Returns null with no rows in the window —
- * the caller renders an empty note (house floor). `todayIso` injectable for tests. */
+ * the caller simply omits the chart (the tiles still render whenever the log has rows
+ * at all). `todayIso` injectable for tests. */
 export function monthlyIncomeOption(
   dividends: DividendOut[],
   todayIso: string,

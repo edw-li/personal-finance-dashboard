@@ -121,7 +121,10 @@ async def ingest_dividends(db, events_by_security: dict[int, list[DailyBar]],
 - `types/api.ts`: `DividendOut` extension; `LastRefresh` gains the three optional counts;
   `RefreshResult` gains optional `dividends_ingested`.
 - **DividendsPanel:** source badge per row (`auto`/`manual` — the transactions panel's
-  badge idiom), ex-date + per-share/shares shown when present, hint rewritten: refreshes
+  badge idiom), per-share/shares shown when present (no separate ex-date column —
+  `pay_date == ex_date` on auto rows by construction, so it would duplicate Pay date on
+  every auto row; the hint carries the fact instead — branch-review-ratified), hint
+  rewritten: refreshes
   log dividends automatically for auto-priced tickers; auto rows are rewritten by
   refreshes and deleting one brings it back; manual entry remains for private/manual-priced
   holdings and pre-window history.
