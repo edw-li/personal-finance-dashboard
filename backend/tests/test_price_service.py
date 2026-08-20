@@ -206,6 +206,28 @@ async def test_absurd_ttm_keeps_previous_metadata(db):
     assert sec.annual_dividend == D("2.5000")
 
 
+async def test_refresh_collects_dividend_events_for_updated_tickers_only(db):
+    good = await seed_security(db, "DIVX")
+    failed = await seed_security(db, "AAA")
+    provider = FakeProvider(
+        data={
+            "DIVX": [
+                bar(date(2026, 3, 20), "100", "0.8200"),
+                bar(date(2026, 6, 19), "110", "0.8200"),
+                bar(TODAY, "120"),
+            ]
+        },
+        errors={"AAA": RuntimeError("nope")},
+    )
+    result = await refresh_prices(db, provider, today=TODAY)
+    events = result.dividend_events[good.id]
+    assert [(b.bar_date, b.dividend) for b in events] == [
+        (date(2026, 3, 20), D("0.8200")),
+        (date(2026, 6, 19), D("0.8200")),
+    ]
+    assert failed.id not in result.dividend_events
+
+
 async def test_duplicate_bar_dates_deduped_last_wins(db):
     sec = await seed_security(db, "DUP")
     result = await refresh_prices(

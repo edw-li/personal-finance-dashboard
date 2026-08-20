@@ -43,6 +43,9 @@ class RefreshResult:
     updated: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
     skipped_manual: list[str] = field(default_factory=list)
+    # Per-security dividend events seen in this run's bars (updated tickers only) —
+    # run_refresh hands them to dividend_ingest so the Yahoo fetch happens exactly once.
+    dividend_events: dict[int, list[DailyBar]] = field(default_factory=dict)
 
 
 def _expire_price_rows(db: AsyncSession) -> None:
@@ -118,6 +121,9 @@ async def refresh_prices(
             }
         )
         _update_dividend_metadata(security, bars, today)
+        events = [b for b in bars if b.dividend > 0]
+        if events:
+            result.dividend_events[security.id] = events
         result.updated.append(security.ticker)
     if latest_rows:
         # Plan 1 forward note: one bulk ON CONFLICT DO UPDATE for the whole ticker batch.

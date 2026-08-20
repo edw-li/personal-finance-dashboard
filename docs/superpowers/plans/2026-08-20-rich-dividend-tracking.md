@@ -28,7 +28,7 @@
 - Modify: `backend/app/schemas/portfolio.py` (DividendOut, RefreshOut, LastRefreshOut)
 - Test: `backend/tests/test_models_portfolio.py` (extend)
 
-- [ ] **Step 1: Extend the model.** In `backend/app/models/portfolio.py`, add `Index` and `text` to the sqlalchemy import, add a sources tuple next to `TRANSACTION_SOURCES`, and extend `DividendPayment`:
+- [x] **Step 1: Extend the model.** In `backend/app/models/portfolio.py`, add `Index` and `text` to the sqlalchemy import, add a sources tuple next to `TRANSACTION_SOURCES`, and extend `DividendPayment`:
 
 ```python
 DIVIDEND_SOURCES = ("manual", "auto")
@@ -69,7 +69,7 @@ class DividendPayment(Base):
     notes: Mapped[str | None] = mapped_column(Text)
 ```
 
-- [ ] **Step 2: Write the migration** at `backend/alembic/versions/20260820_1200_b3d47a1c9e62_dividend_source_and_auto_event_columns.py`:
+- [x] **Step 2: Write the migration** at `backend/alembic/versions/20260820_1200_b3d47a1c9e62_dividend_source_and_auto_event_columns.py`:
 
 ```python
 """dividend source and auto-event columns
@@ -115,7 +115,7 @@ def downgrade() -> None:
     op.drop_column("dividend_payments", "source")
 ```
 
-- [ ] **Step 3: Extend the wire schemas** in `backend/app/schemas/portfolio.py`. `DividendCreate`/`DividendUpdate` are deliberately NOT extended — auto columns are the refresh's alone:
+- [x] **Step 3: Extend the wire schemas** in `backend/app/schemas/portfolio.py`. `DividendCreate`/`DividendUpdate` are deliberately NOT extended — auto columns are the refresh's alone:
 
 ```python
 class DividendOut(BaseModel):
@@ -150,7 +150,7 @@ class RefreshOut(BaseModel):
     dividends_skipped_overlap: int | None = None
 ```
 
-- [ ] **Step 4: Extend the model test.** In `backend/tests/test_models_portfolio.py`, add (match the file's existing fixture idioms — it inserts via `db`):
+- [x] **Step 4: Extend the model test.** In `backend/tests/test_models_portfolio.py`, add (match the file's existing fixture idioms — it inserts via `db`):
 
 ```python
 async def test_dividend_source_defaults_manual_and_auto_key_is_unique(db):
@@ -193,12 +193,12 @@ async def test_dividend_source_defaults_manual_and_auto_key_is_unique(db):
     await db.commit()
 ```
 
-- [ ] **Step 5: Run the tests and gates**
+- [x] **Step 5: Run the tests and gates**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_models_portfolio.py -q`
 Expected: PASS (new test included). Then `.venv/Scripts/python.exe -m ruff check .` → clean, and `alembic check` (cwd=backend, dev DB up and migrated with `alembic upgrade head`) → "No new upgrade operations detected".
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat: dividend source/ex_date/per_share/shares_held columns + auto-event partial unique index"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat: dividend source/ex_date/per_share/shares_held columns + auto-event partial unique index"`
 
 ---
 
@@ -208,7 +208,7 @@ Expected: PASS (new test included). Then `.venv/Scripts/python.exe -m ruff check
 - Modify: `backend/app/services/price_service.py` (RefreshResult + the loop)
 - Test: `backend/tests/test_price_service.py` (extend)
 
-- [ ] **Step 1: Extend `RefreshResult`** (top of `price_service.py`; `DailyBar` is already imported):
+- [x] **Step 1: Extend `RefreshResult`** (top of `price_service.py`; `DailyBar` is already imported):
 
 ```python
 @dataclass
@@ -221,7 +221,7 @@ class RefreshResult:
     dividend_events: dict[int, list[DailyBar]] = field(default_factory=dict)
 ```
 
-- [ ] **Step 2: Collect events in the loop.** In `refresh_prices`, immediately after the existing `_update_dividend_metadata(security, bars, today)` line:
+- [x] **Step 2: Collect events in the loop.** In `refresh_prices`, immediately after the existing `_update_dividend_metadata(security, bars, today)` line:
 
 ```python
         events = [b for b in bars if b.dividend > 0]
@@ -231,7 +231,7 @@ class RefreshResult:
 
 (`bars` is already date-deduped and close-bounded at this point; the per-share dividend bound is the ingest service's job.)
 
-- [ ] **Step 3: Extend the service test.** `backend/tests/test_price_service.py` already has a fake provider returning `DailyBar`s — add a test in its idiom:
+- [x] **Step 3: Extend the service test.** `backend/tests/test_price_service.py` already has a fake provider returning `DailyBar`s — add a test in its idiom:
 
 ```python
 async def test_refresh_collects_dividend_events_for_updated_tickers_only(db, ...):
@@ -250,9 +250,9 @@ async def test_refresh_collects_dividend_events_for_updated_tickers_only(db, ...
 
 Fill the `...` from the file's existing fixtures (`FakeProvider`-style classes and seeded securities are already there — mirror the nearest existing test's arrange block verbatim).
 
-- [ ] **Step 4: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_price_service.py -q` → PASS.
+- [x] **Step 4: Run** `cd backend && .venv/Scripts/python.exe -m pytest tests/test_price_service.py -q` → PASS.
 
-- [ ] **Step 5: Commit** — `git commit -am "feat: refresh collects per-security dividend events from the bars it already fetched"`
+- [x] **Step 5: Commit** — `git commit -am "feat: refresh collects per-security dividend events from the bars it already fetched"`
 
 ---
 
