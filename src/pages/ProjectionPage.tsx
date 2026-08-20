@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
+import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 import type { ProjectionParams } from '../api/projection'
 import EChart from '../components/EChart'
-import { projectionOption } from '../components/projection/projectionChartOptions'
+import { fitExpTrend } from '../components/projection/expTrend'
+import {
+  netWorthProjectionOption,
+  projectionOption,
+} from '../components/projection/projectionChartOptions'
 import StatTile from '../components/StatTile'
-import type { ProjectionOut } from '../types/api'
+import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
@@ -53,6 +58,10 @@ export default function ProjectionPage() {
   const [busy, setBusy] = useState(true)
   const [formError, setFormError] = useState<string | null>(null)
   const [knobs, setKnobs] = useState<Knobs>(EMPTY_KNOBS)
+  // The history behind the new chart — its OWN state and failure: the card degrades to a
+  // note while the tiles, the investable chart and the form keep running.
+  const [history, setHistory] = useState<NetWorthTimeseries | null>(null)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   // Two recalculates in a row are two runs in flight; only the newest may land.
   const seqRef = useRef(0)
   // Seeded once, ever: a later echo must not overwrite knobs mid-typing (EsppPage).
@@ -102,6 +111,16 @@ export default function ProjectionPage() {
   useEffect(() => {
     load()
     // mount-only: load is a plain function over stable setters (house idiom)
+  }, [])
+
+  useEffect(() => {
+    // Mount-only, never on Recalculate: the history doesn't change with the knobs — the
+    // horizon reaches the chart through the projection echo instead.
+    fetchTimeseries()
+      .then((res) => setHistory(res))
+      .catch((err: unknown) =>
+        setHistoryError(message(err, 'Failed to load net-worth history')),
+      )
   }, [])
 
   const setKnob = (field: keyof Knobs) => (value: string) => {
@@ -166,6 +185,11 @@ export default function ProjectionPage() {
   }
 
   const chart = data === null ? null : projectionOption(data)
+  const fit = history === null ? null : fitExpTrend(history.months, history.net_worth)
+  const nwChart =
+    history === null || data === null
+      ? null
+      : netWorthProjectionOption(history, fit, data.start_month, data.years)
 
   return (
     <div className="page projection-page">
@@ -239,6 +263,27 @@ export default function ProjectionPage() {
                 ))}
               </div>
             )}
+
+            <section className="card projection-chart-card">
+              <h2 className="eyebrow">Net worth over time (projected)</h2>
+              {historyError !== null ? (
+                // Advisory, never the page banner: the rest of the page runs without it.
+                <p className="empty-note">{historyError}</p>
+              ) : history === null ? (
+                <p className="empty-note">Loading net-worth history…</p>
+              ) : nwChart === null ? (
+                <p className="empty-note">Not enough monthly snapshots to chart yet.</p>
+              ) : (
+                <>
+                  <EChart option={nwChart} height={340} />
+                  <p className="drill-hint">
+                    {fit === null
+                      ? 'The exponential trendline needs every net-worth snapshot above zero — showing the history alone.'
+                      : `Exponential best-fit over every monthly net-worth snapshot, extended ${data.years} years — history implies ≈${formatPct(fit.annualRate, { signed: false })}/yr. Momentum, not a plan; the knob-driven model is the chart below.`}
+                  </p>
+                </>
+              )}
+            </section>
 
             <section className="card projection-chart-card">
               <h2 className="eyebrow">Projected investable balance</h2>

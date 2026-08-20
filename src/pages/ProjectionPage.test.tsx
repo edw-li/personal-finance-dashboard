@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { ProjectionOut } from '../types/api'
+import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
 import ProjectionPage from './ProjectionPage'
 
 vi.mock('../api/projection', async (importOriginal) => ({
@@ -21,6 +21,11 @@ vi.mock('../components/EChart', async () => {
       }),
   }
 })
+vi.mock('../api/netWorth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/netWorth')>()),
+  fetchTimeseries: vi.fn(),
+}))
+import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 
 function projectionOut(over: Partial<ProjectionOut> = {}): ProjectionOut {
@@ -45,6 +50,27 @@ function projectionOut(over: Partial<ProjectionOut> = {}): ProjectionOut {
   }
 }
 
+function timeseries(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries {
+  return {
+    months: ['2026-06-01', '2026-07-01', '2026-08-01'],
+    accounts: [],
+    series: [],
+    group_totals: {
+      cash: [],
+      pre_tax: [],
+      post_tax: [],
+      taxable: [],
+      equity: [],
+      other: [],
+      liability: [],
+    },
+    net_worth: ['100000.00', '101000.00', '102010.00'],
+    mom_pct: [null, null, null],
+    notes: [null, null, null],
+    ...over,
+  }
+}
+
 function renderPage() {
   return render(
     <MemoryRouter>
@@ -57,6 +83,7 @@ const box = (label: RegExp) => screen.getByLabelText(label) as HTMLInputElement
 
 beforeEach(() => {
   vi.mocked(fetchProjection).mockResolvedValue(projectionOut())
+  vi.mocked(fetchTimeseries).mockResolvedValue(timeseries())
 })
 
 afterEach(() => {
@@ -73,7 +100,7 @@ describe('ProjectionPage', () => {
     expect(screen.getByText('$100,000.00')).toBeTruthy()
     expect(screen.getByText('as of Aug 2026')).toBeTruthy()
     expect(screen.getByText('Oct 2055')).toBeTruthy() // projected FI date
-    expect(await screen.findByTestId('echart')).toBeTruthy()
+    expect(await screen.findAllByTestId('echart')).toHaveLength(2)
   })
 
   it('seeds the knobs from the echo, percent-shifted into the boxes vocabulary', async () => {
@@ -141,5 +168,63 @@ describe('ProjectionPage', () => {
     expect(
       await screen.findByText('no cashflow history — monthly contribution defaulted to 0'),
     ).toBeTruthy()
+  })
+
+  it('draws the net-worth history chart above the investable one, hint carrying the fitted rate', async () => {
+    renderPage()
+    const charts = await screen.findAllByTestId('echart')
+    expect(charts).toHaveLength(2)
+    // DOM order IS the card order: the net-worth chart's axis starts at the history
+    // (Jun 2026); the investable chart's starts at the projection t0 (Aug 2026).
+    expect(charts[0].getAttribute('data-categories')).toContain('Jun 2026')
+    expect(charts[1].getAttribute('data-categories')?.startsWith('Aug 2026')).toBe(true)
+    expect(screen.getByText('Net worth over time (projected)')).toBeTruthy()
+    // 1.01^12 − 1 → 12.7% at formatPct's 1dp — the fixture's exact geometric rate.
+    expect(screen.getByText(/12\.7%\/yr/)).toBeTruthy()
+  })
+
+  it('keeps the page alive when the history fetch alone fails', async () => {
+    vi.mocked(fetchTimeseries).mockRejectedValue(new ApiError('history unavailable', 500))
+    renderPage()
+
+    expect(await screen.findByText('history unavailable')).toBeTruthy()
+    expect(await screen.findByText('$1,500,000.00')).toBeTruthy() // tiles still stand
+    expect(screen.getAllByTestId('echart')).toHaveLength(1) // the investable chart
+    expect(screen.queryByRole('alert')).toBeNull() // advisory note, not the page banner
+  })
+
+  it('does not refetch the history on Recalculate', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+
+    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+
+    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
+    expect(fetchTimeseries).toHaveBeenCalledTimes(1)
+  })
+
+  it('draws dots alone and says why when a snapshot is nonpositive', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(
+      timeseries({ net_worth: ['0.00', '101000.00', '102010.00'] }),
+    )
+    renderPage()
+
+    expect(await screen.findByText(/needs every net-worth snapshot above zero/)).toBeTruthy()
+    expect(screen.getAllByTestId('echart')).toHaveLength(2) // the dots still chart
+  })
+
+  it('asks for more snapshots under two history points', async () => {
+    vi.mocked(fetchTimeseries).mockResolvedValue(
+      timeseries({
+        months: ['2026-08-01'],
+        net_worth: ['100000.00'],
+        mom_pct: [null],
+        notes: [null],
+      }),
+    )
+    renderPage()
+
+    expect(await screen.findByText('Not enough monthly snapshots to chart yet.')).toBeTruthy()
+    expect(screen.getAllByTestId('echart')).toHaveLength(1)
   })
 })
