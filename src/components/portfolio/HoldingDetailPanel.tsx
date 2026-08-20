@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import { fetchPriceHistory } from '../../api/prices'
 import EChart from '../EChart'
@@ -207,6 +208,15 @@ export default function HoldingDetailPanel({
           to light it up.
         </p>
       )}
+      {/* The unrealized figure above raises exactly one question this panel cannot answer —
+          what selling it would COST — and /taxes is where the engine answers it. The ticker
+          rides the URL and the what-if card seeds one leg from it; encoded, because a
+          ticker is server text and this page does not get to assume it is [A-Z]. */}
+      <p className="hint">
+        <Link to={`/taxes?whatif=${encodeURIComponent(holding.ticker)}`}>
+          Model selling {holding.ticker} in Taxes →
+        </Link>
+      </p>
 
       <div className="panel-title-row">
         <h3 className="eyebrow">Price history</h3>

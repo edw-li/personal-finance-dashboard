@@ -85,11 +85,10 @@ export default function WhatIfPanel({
 }: {
   year: number
   /**
-   * The deep links' seeds (/taxes?whatif=TICKER and ?whatif-lot={id}). Either one non-null
-   * mounts the card OPEN and prefills ONE leg once the feeds land — the ticker/lot id only
-   * mean something against a feed, so the seeding rides its promise callback. Task 5 adds
-   * the links that emit them and the page's param pass-through; the panel already reads
-   * them, so that task stays additive.
+   * The deep links' seeds (/taxes?whatif=TICKER from the holdings drill-in, ?whatif-lot={id}
+   * from the ESPP lots table), read off the URL by TaxesPage and handed down. Either one
+   * non-null mounts the card OPEN and prefills ONE leg once the feeds land — the ticker/lot
+   * id only mean something against a feed, so the seeding rides its promise callback.
    */
   initialTicker?: string | null
   initialLotId?: number | null
@@ -622,11 +621,13 @@ export default function WhatIfPanel({
                     ) : (
                       <ul className="whatif-changed">
                         {result.changed_inputs.map((changed) => (
-                          // The label is the definition table's own text and may itself
-                          // carry a colon ("LTCG: Brokerage Gain/Loss") — rendered as it
-                          // arrived, like every figure beside it.
+                          // An em dash, not a colon: the label is the definition table's own
+                          // text and often carries a colon already ("LTCG: Brokerage
+                          // Gain/Loss"), which a second one would double-punctuate. The
+                          // label itself is rendered as it arrived, like every figure
+                          // beside it.
                           <li key={changed.key}>
-                            {changed.label}: {formatCurrency(changed.before)} →{' '}
+                            {changed.label} — {formatCurrency(changed.before)} →{' '}
                             {formatCurrency(changed.after)}
                           </li>
                         ))}

@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type {
@@ -73,18 +74,21 @@ const POINTS: PriceHistoryResponse = {
 }
 
 // The "All holdings" way back is the PAGE's (the panel is a body swapped into the
-// Holdings card), so there is no close affordance to exercise here.
+// Holdings card), so there is no close affordance to exercise here. Under a router because
+// the what-if deep link is a <Link>, which has no meaning outside one.
 function renderPanel(over: {
   holding?: HoldingOut
   transactions?: TransactionOut[]
   dividends?: DividendOut[]
 } = {}) {
   return render(
-    <HoldingDetailPanel
-      holding={over.holding ?? holding()}
-      transactions={over.transactions ?? []}
-      dividends={over.dividends ?? []}
-    />,
+    <MemoryRouter>
+      <HoldingDetailPanel
+        holding={over.holding ?? holding()}
+        transactions={over.transactions ?? []}
+        dividends={over.dividends ?? []}
+      />
+    </MemoryRouter>,
   )
 }
 
@@ -159,6 +163,24 @@ describe('HoldingDetailPanel facts', () => {
   it('leads the meta line with the full name the panel header no longer carries', async () => {
     renderPanel()
     expect(screen.getByText(/AAA Inc · Semiconductors · Stock/)).toBeTruthy()
+    await screen.findByTestId('echart')
+  })
+
+  it('offers the what-if deep link into Taxes, carrying this ticker', async () => {
+    renderPanel()
+    const link = screen.getByRole('link', { name: 'Model selling AAA in Taxes →' })
+    // The query param the what-if card reads to seed one sale leg (TaxesPage's
+    // useSearchParams → WhatIfPanel's initialTicker).
+    expect(link.getAttribute('href')).toBe('/taxes?whatif=AAA')
+    await screen.findByTestId('echart')
+  })
+
+  it('encodes a ticker the URL would otherwise eat', async () => {
+    renderPanel({ holding: holding({ ticker: 'BRK.B+X' }) })
+    expect(
+      (screen.getByRole('link', { name: 'Model selling BRK.B+X in Taxes →' }) as HTMLAnchorElement)
+        .getAttribute('href'),
+    ).toBe('/taxes?whatif=BRK.B%2BX')
     await screen.findByTestId('echart')
   })
 })

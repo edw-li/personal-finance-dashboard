@@ -380,10 +380,11 @@ describe('WhatIfPanel', () => {
     // A rate is a level, not a movement: both sides of it, from the two summaries.
     expect(tile('Effective rate').querySelector('.stat-value')?.textContent).toBe('24.7% → 28.1%')
 
-    // "{label}: {before} → {after}" — the label is the definition table's own text and
-    // carries a colon of its own.
+    // "{label} — {before} → {after}": the label is the definition table's own text and
+    // carries a colon of its own, so the separator is an em dash — a second colon here
+    // would double-punctuate every capital-gains row.
     expect(
-      screen.getByText('LTCG: Brokerage Gain/Loss: $12,000.00 → $30,500.00'),
+      screen.getByText('LTCG: Brokerage Gain/Loss — $12,000.00 → $30,500.00'),
     ).toBeTruthy()
     // The per-leg table, server figures verbatim.
     expect(screen.getByText('$1,250.00')).toBeTruthy()

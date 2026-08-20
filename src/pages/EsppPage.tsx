@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import {
   createLot,
@@ -398,6 +399,15 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
                     >
                       Delete
                     </button>
+                    {/* UNSOLD rows only: the what-if card models a PROSPECTIVE sale, and a
+                        lot that already has a sold date 409s there (api/taxes.py). The link
+                        wears .button so it sits in the row-actions rank with its two
+                        neighbours rather than reading as body text. */}
+                    {!lot.is_sold && (
+                      <Link className="button" to={`/taxes?whatif-lot=${lot.id}`}>
+                        Model sale →
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))}

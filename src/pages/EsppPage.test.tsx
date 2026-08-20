@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
@@ -242,6 +243,10 @@ function fillNewPeriod() {
 
 const confirmSpy = vi.spyOn(window, 'confirm')
 
+// Every render goes through a router: each unsold lot row carries a "Model sale →" <Link>
+// into the what-if card, and a Link has no meaning outside one.
+const renderPage = () => render(<EsppPage />, { wrapper: MemoryRouter })
+
 beforeEach(() => {
   vi.mocked(fetchLots).mockResolvedValue(lotsResponse())
   vi.mocked(fetchPeriods).mockResolvedValue([febPeriod, augPeriod])
@@ -262,7 +267,7 @@ afterEach(() => {
 
 describe('EsppPage — lots', () => {
   it('renders server metrics, the quote header and every disposition badge', async () => {
-    render(<EsppPage />)
+    renderPage()
 
     // Server values, rendered — nothing is re-derived here.
     expect(await screen.findByText('$10,720.49')).toBeTruthy()
@@ -282,6 +287,25 @@ describe('EsppPage — lots', () => {
     expect(screen.getByText('Sold (unqualified)')).toBeTruthy()
   })
 
+  it('links every UNSOLD lot into the what-if card, and never a sold one', async () => {
+    renderPage()
+    await screen.findByText('$10,720.49')
+
+    // One per unsold row, each carrying its own lot id — the param TaxesPage reads to seed
+    // an ESPP leg. The fixture holds two unsold lots (1 and 4) and two sold ones (2 and 3).
+    const links = screen.getAllByRole('link', { name: 'Model sale →' })
+    expect(links.map((a) => a.getAttribute('href'))).toEqual([
+      '/taxes?whatif-lot=1',
+      '/taxes?whatif-lot=4',
+    ])
+
+    // A sold lot 409s at the endpoint (a disposition cannot be modelled twice), so its row
+    // is not offered the door at all — Edit and Delete are its whole action rank.
+    const soldRow = screen.getByText('Sold (unqualified)').closest('tr') as HTMLTableRowElement
+    expect(within(soldRow).queryByRole('link')).toBeNull()
+    expect(within(soldRow).getByRole('button', { name: /^Edit lot/ })).toBeTruthy()
+  })
+
   it('renders "—" for the market columns when the ticker link dangles', async () => {
     vi.mocked(fetchLots).mockResolvedValue(
       lotsResponse({
@@ -292,7 +316,7 @@ describe('EsppPage — lots', () => {
         ],
       }),
     )
-    render(<EsppPage />)
+    renderPage()
 
     expect(await screen.findByText('$10,720.49')).toBeTruthy() // cost basis survives
     expect(screen.getByText('NVDA — no live quote; market values are unavailable.')).toBeTruthy()
@@ -301,7 +325,7 @@ describe('EsppPage — lots', () => {
   })
 
   it('omits purchase_price from the add-lot POST when the field is left blank', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     fillNewLot()
@@ -325,7 +349,7 @@ describe('EsppPage — lots', () => {
   })
 
   it('sends a typed purchase price, and blanking it on an edit re-derives the default', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     fillNewLot()
@@ -347,7 +371,7 @@ describe('EsppPage — lots', () => {
   })
 
   it('PATCHes the FULL lot row, and clears BOTH sold fields to un-sell one', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit lot from Feb 29, 2024' }))
@@ -398,7 +422,7 @@ describe('EsppPage — lots', () => {
   })
 
   it('answers a qualifying date behind the purchase date before it reaches the server', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     fillNewLot()
@@ -413,7 +437,7 @@ describe('EsppPage — lots', () => {
   })
 
   it('refuses a half-filled sold pair before it reaches the server', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     fillNewLot()
@@ -428,7 +452,7 @@ describe('EsppPage — lots', () => {
   })
 
   it('deletes a lot only after the confirm is accepted', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     confirmSpy.mockReturnValue(false)
@@ -445,7 +469,7 @@ describe('EsppPage — lots', () => {
     vi.mocked(createLot).mockRejectedValue(
       new ApiError('an espp lot for 2026-02-27 already exists', 409),
     )
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     fillNewLot()
@@ -458,7 +482,7 @@ describe('EsppPage — lots', () => {
 
   it('offers a retry when the lots load fails', async () => {
     vi.mocked(fetchLots).mockRejectedValueOnce(new ApiError('lots unavailable', 503))
-    render(<EsppPage />)
+    renderPage()
 
     // No stale cue on a FIRST load: there is no table on screen to be behind.
     expect(await screen.findByText('lots unavailable')).toBeTruthy()
@@ -471,7 +495,7 @@ describe('EsppPage — lots', () => {
     vi.mocked(fetchLots)
       .mockResolvedValueOnce(lotsResponse())
       .mockRejectedValueOnce(new ApiError('lots unavailable', 503))
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     type('Notes', 'half-typed lot')
@@ -489,7 +513,7 @@ describe('EsppPage — lots', () => {
 
 describe('EsppPage — modeler', () => {
   it('renders the chain, the provenance line and the $25k gauge', async () => {
-    render(<EsppPage />)
+    renderPage()
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledWith({}))
 
     expect(await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')).toBeTruthy()
@@ -514,7 +538,7 @@ describe('EsppPage — modeler', () => {
   })
 
   it('recalculates with the typed knobs', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')
 
     // The knobs seed from the response echo — the server's QUANTIZED strings, not the
@@ -539,7 +563,7 @@ describe('EsppPage — modeler', () => {
   })
 
   it('passes blank knobs through for the client to omit (falling back to the quote)', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')
 
     type('Subscription price', '')
@@ -563,7 +587,7 @@ describe('EsppPage — modeler', () => {
         resolve = res
       }),
     )
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$10,720.49')
 
     type('Subscription price', '200')
@@ -583,7 +607,7 @@ describe('EsppPage — modeler', () => {
       .mockResolvedValueOnce(modelerResponse()) // the mount
       .mockReturnValueOnce(slow.promise) // the Recalculate
       .mockReturnValueOnce(fast.promise) // the period delete's re-run
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$24,935.34 used')
 
     fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }))
@@ -611,7 +635,7 @@ describe('EsppPage — modeler', () => {
       .mockResolvedValueOnce(modelerResponse()) // the mount
       .mockReturnValueOnce(stale.promise) // the Recalculate
       .mockResolvedValueOnce(totalsUsing('22222.22')) // the period delete's re-run
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('$24,935.34 used')
 
     fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }))
@@ -634,7 +658,7 @@ describe('EsppPage — modeler', () => {
     vi.mocked(fetchModeler).mockResolvedValue(
       modelerResponse({ price_source: 'params', quoted_at: null }),
     )
-    render(<EsppPage />)
+    renderPage()
 
     expect(await screen.findByText('custom prices')).toBeTruthy()
     expect(screen.queryByText(/using latest/)).toBeNull()
@@ -643,7 +667,7 @@ describe('EsppPage — modeler', () => {
   it('shows an empty state pointing at the periods section when the modeler 404s', async () => {
     vi.mocked(fetchModeler).mockRejectedValue(new ApiError('no espp periods', 404))
     vi.mocked(fetchPeriods).mockResolvedValue([])
-    render(<EsppPage />)
+    renderPage()
 
     expect(
       await screen.findByText('no espp periods — add one below to run the $25,000 model.'),
@@ -661,7 +685,7 @@ describe('EsppPage — modeler', () => {
       .mockRejectedValueOnce(new ApiError('no espp periods', 404))
       .mockReturnValueOnce(pending.promise)
     vi.mocked(fetchPeriods).mockResolvedValue([])
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('no espp periods — add one below to run the $25,000 model.')
 
     fillNewPeriod()
@@ -685,7 +709,7 @@ describe('EsppPage — modeler', () => {
     vi.mocked(fetchModeler).mockRejectedValue(
       new ApiError('no live price for NVDA; pass subscription_price and purchase_fmv', 422),
     )
-    render(<EsppPage />)
+    renderPage()
 
     expect(
       await screen.findByText(
@@ -698,7 +722,7 @@ describe('EsppPage — modeler', () => {
   })
 
   it('does not remount the lots panel when the modeler reloads', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')
 
     type('Notes', 'half-typed lot')
@@ -711,7 +735,7 @@ describe('EsppPage — modeler', () => {
 
 describe('EsppPage — periods', () => {
   it('lists the stored periods with the contribution shown as a percent', async () => {
-    render(<EsppPage />)
+    renderPage()
 
     // Via the row action, not the label cell: the modeler's mini-table names the same
     // periods, and only these buttons belong to this section alone.
@@ -723,7 +747,7 @@ describe('EsppPage — periods', () => {
   })
 
   it('posts a new period with the percent converted to a fraction, then refetches the model', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByRole('button', { name: 'Edit period Feb 2026' })
 
     fillNewPeriod()
@@ -750,7 +774,7 @@ describe('EsppPage — periods', () => {
   })
 
   it('edits a period with the full row shape and the pct shifted back', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByRole('button', { name: 'Edit period Feb 2026' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit period Feb 2026' }))
@@ -774,7 +798,7 @@ describe('EsppPage — periods', () => {
   })
 
   it('answers a period that does not end after it starts before it reaches the server', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByRole('button', { name: 'Edit period Feb 2026' })
 
     fillNewPeriod()
@@ -786,7 +810,7 @@ describe('EsppPage — periods', () => {
   })
 
   it('bounds the contribution in the box’s own vocabulary, not the fraction’s', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByRole('button', { name: 'Edit period Feb 2026' })
 
     fillNewPeriod()
@@ -807,7 +831,7 @@ describe('EsppPage — periods', () => {
   })
 
   it('refuses exponent notation in the contribution box, client-side', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByRole('button', { name: 'Edit period Feb 2026' })
 
     fillNewPeriod()
@@ -828,7 +852,7 @@ describe('EsppPage — periods', () => {
   })
 
   it('deletes a period after a confirm and refetches the model', async () => {
-    render(<EsppPage />)
+    renderPage()
     await screen.findByRole('button', { name: 'Edit period Feb 2026' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete period Aug 2026' }))
@@ -841,7 +865,7 @@ describe('EsppPage — periods', () => {
     vi.mocked(createPeriod).mockRejectedValue(
       new ApiError("espp period 'Feb 2026' already exists", 409),
     )
-    render(<EsppPage />)
+    renderPage()
     await screen.findByRole('button', { name: 'Edit period Feb 2026' })
 
     fillNewPeriod()

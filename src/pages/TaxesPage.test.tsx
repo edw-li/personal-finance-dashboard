@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
@@ -46,6 +47,30 @@ vi.mock('../components/EChart', async () => {
         // enough to walk the trend's drill-in door both ways without a canvas. Charts
         // given no handler (the waterfall) stay inert, like the real thing.
         onClick: () => onClick?.({ name: String((option.xAxis?.data ?? [])[0] ?? '') }),
+      }),
+  }
+})
+// The what-if card owns two feeds and a whole test file of its own (WhatIfPanel.test.tsx
+// pins the seeding end of the deep links, and its own year-keyed remount). Here it is a
+// marker reporting the three props the page hands it — which IS this page's whole contract
+// with it, and keeps a card the page never opens from spending requests in these tests.
+vi.mock('../components/taxes/WhatIfPanel', async () => {
+  const { createElement } = await import('react')
+  return {
+    default: ({
+      year,
+      initialTicker,
+      initialLotId,
+    }: {
+      year: number
+      initialTicker?: string | null
+      initialLotId?: number | null
+    }) =>
+      createElement('div', {
+        'data-testid': 'whatif-panel',
+        'data-year': String(year),
+        'data-ticker': initialTicker ?? '',
+        'data-lot': initialLotId == null ? '' : String(initialLotId),
       }),
   }
 })
@@ -159,6 +184,23 @@ const trendCategories = () => screen.getAllByTestId('echart')[1]?.getAttribute('
 // are ABOUT the guard have to think about it.
 const confirmSpy = vi.spyOn(window, 'confirm')
 
+// The URL as the router holds it — the deep-link tests below pin that this page READS the
+// what-if params and never rewrites them (a reload re-seeding the same leg is honest).
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+}
+
+// Every render goes through a router: the page reads the what-if deep-link params with
+// useSearchParams, which is not optional about its router.
+const renderPage = (entry = '/taxes') =>
+  render(
+    <MemoryRouter initialEntries={[entry]}>
+      <TaxesPage />
+      <LocationProbe />
+    </MemoryRouter>,
+  )
+
 beforeEach(() => {
   vi.mocked(fetchTaxYears).mockResolvedValue([year2023, year2024])
   vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
@@ -181,7 +223,7 @@ afterEach(() => {
 
 describe('TaxesPage', () => {
   it('renders a chip per tax year and loads the latest', async () => {
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByRole('button', { name: '2024' })
     expect(screen.getByRole('button', { name: '2023' })).toBeTruthy()
     // Latest year wins on arrival — the sheet's rightmost column.
@@ -195,7 +237,7 @@ describe('TaxesPage', () => {
   })
 
   it('reloads inputs, brackets and summary on a year switch — and not on a re-click', async () => {
-    render(<TaxesPage />)
+    renderPage()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
@@ -215,7 +257,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([year2023, year2024])
       .mockResolvedValueOnce([year2023, year2024, year2025])
-    render(<TaxesPage />)
+    renderPage()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     // Default = latest + 1.
@@ -233,7 +275,7 @@ describe('TaxesPage', () => {
     vi.mocked(cloneBrackets).mockRejectedValue(
       new ApiError('tax year 2025 already has 42 brackets', 409),
     )
-    render(<TaxesPage />)
+    renderPage()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     fireEvent.click(screen.getByRole('button', { name: /create year/i }))
@@ -248,7 +290,7 @@ describe('TaxesPage', () => {
       .mockResolvedValueOnce([year2023, year2024])
       .mockRejectedValueOnce(new ApiError('years unavailable', 503))
       .mockResolvedValue([year2023, year2024, year2025])
-    render(<TaxesPage />)
+    renderPage()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     fireEvent.click(screen.getByRole('button', { name: /create year/i }))
@@ -278,7 +320,7 @@ describe('TaxesPage', () => {
 
   it('shows ONLY the banner when the first year-list load fails', async () => {
     vi.mocked(fetchTaxYears).mockRejectedValueOnce(new ApiError('years unavailable', 503))
-    render(<TaxesPage />)
+    renderPage()
 
     expect(await screen.findByText('years unavailable')).toBeTruthy()
     // A load that never came back knows nothing about whether the database is empty.
@@ -291,7 +333,7 @@ describe('TaxesPage', () => {
 
   it('asks before a year switch that would discard typed work', async () => {
     confirmSpy.mockReturnValue(false)
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
     fireEvent.change(salary(), { target: { value: '999' } })
 
@@ -310,7 +352,7 @@ describe('TaxesPage', () => {
 
   it('asks before creating a year that would discard typed work', async () => {
     confirmSpy.mockReturnValue(false)
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
     fireEvent.change(salary(), { target: { value: '999' } })
 
@@ -327,7 +369,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxSummary)
       .mockResolvedValueOnce(summaryFor(2024))
       .mockRejectedValueOnce(new ApiError('totals unavailable', 500))
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
     fireEvent.change(salary(), { target: { value: '4242' } })
 
@@ -355,7 +397,7 @@ describe('TaxesPage', () => {
       .mockResolvedValueOnce(summaryFor(2024)) // the initial load
       .mockReturnValueOnce(slow.promise) // the first save's refresh
       .mockReturnValueOnce(fast.promise) // the second save's
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
 
     fireEvent.change(salary(), { target: { value: '210000' } })
@@ -382,7 +424,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxSummary)
       .mockResolvedValueOnce(summaryFor(2024))
       .mockReturnValueOnce(pending.promise)
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
 
     fireEvent.change(salary(), { target: { value: '210000' } })
@@ -400,7 +442,7 @@ describe('TaxesPage', () => {
   })
 
   it('refreshes the totals AND the chip counts after a save', async () => {
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
@@ -419,7 +461,7 @@ describe('TaxesPage', () => {
   it('drops a bracket save that echoes after a year switch', async () => {
     const pending = deferred<TaxBracketsOut>()
     vi.mocked(putTaxBrackets).mockReturnValueOnce(pending.promise)
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Federal bracket 1 rate (%)')
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
@@ -442,7 +484,7 @@ describe('TaxesPage', () => {
   })
 
   it('answers an out-of-range year itself rather than leaving it to the browser', async () => {
-    render(<TaxesPage />)
+    renderPage()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     const input = screen.getByLabelText('New year')
@@ -460,7 +502,7 @@ describe('TaxesPage', () => {
     vi.mocked(cloneBrackets).mockRejectedValue(
       new ApiError('tax year 2025 already has 42 brackets', 409),
     )
-    render(<TaxesPage />)
+    renderPage()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
 
     fireEvent.click(screen.getByRole('button', { name: /create year/i }))
@@ -484,7 +526,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ year: thisYear, notes: null, input_count: 0, bracket_count: 0 }])
-    render(<TaxesPage />)
+    renderPage()
 
     expect(await screen.findByText(/no tax years yet/i)).toBeTruthy()
     expect((screen.getByLabelText('New year') as HTMLInputElement).value).toBe(String(thisYear))
@@ -503,7 +545,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
       years: [summaryFor(2023), summaryFor(2024)],
     })
-    render(<TaxesPage />)
+    renderPage()
 
     expect(await screen.findByText('$123,456.78')).toBeTruthy() // total tax
     expect(screen.getByText('Gross income')).toBeTruthy()
@@ -527,7 +569,7 @@ describe('TaxesPage', () => {
     const sparse = summaryFor(2024)
     sparse.warnings = [MISSING_21, 'no state brackets for 2024: state tax computed as 0']
     vi.mocked(fetchTaxSummary).mockResolvedValue(sparse)
-    render(<TaxesPage />)
+    renderPage()
 
     // One text node, wrapped by CSS — not truncated, not summarised, not re-worded.
     expect(await screen.findByText(MISSING_21)).toBeTruthy()
@@ -541,7 +583,7 @@ describe('TaxesPage', () => {
       take_home: '0.00', effective_rate: null,
     }
     vi.mocked(fetchTaxSummary).mockResolvedValue(zeros)
-    render(<TaxesPage />)
+    renderPage()
 
     expect(await screen.findByText(/nothing to chart yet/i)).toBeTruthy()
     // And an empty feed is an answer of its own, distinct from "still loading".
@@ -550,7 +592,7 @@ describe('TaxesPage', () => {
   })
 
   it('loads the trend feed once per visit, and again after a save lands', async () => {
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
     await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
 
@@ -573,7 +615,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchAllTaxSummaries)
       .mockReturnValueOnce(slow.promise) // the mount feed
       .mockReturnValueOnce(fast.promise) // the one the save's refreshKey bump starts
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
     await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
 
@@ -601,7 +643,7 @@ describe('TaxesPage', () => {
     const taxed2023 = summaryFor(2023)
     taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
-    render(<TaxesPage />)
+    renderPage()
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
 
     // The mock forwards the first category: 2023.
@@ -624,7 +666,7 @@ describe('TaxesPage', () => {
     // Every jurisdiction is zero in the shared fixture: the drill-in opens on a year
     // with no drawable slice, and the button is the only chart-free way back.
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [summaryFor(2023)] })
-    render(<TaxesPage />)
+    renderPage()
     await waitFor(() => expect(trendCategories()).toBe('2023'))
 
     fireEvent.click(screen.getAllByTestId('echart')[1])
@@ -638,7 +680,7 @@ describe('TaxesPage', () => {
 
   it('notes a trend-feed failure without disturbing the selected year', async () => {
     vi.mocked(fetchAllTaxSummaries).mockRejectedValue(new ApiError('trend unavailable', 503))
-    render(<TaxesPage />)
+    renderPage()
 
     expect(await screen.findByText('trend unavailable')).toBeTruthy()
     // Different request, still on screen: the year's own totals are unaffected.
@@ -652,7 +694,7 @@ describe('TaxesPage', () => {
     // A fresh database has nothing to delete — and the button still has to be THERE, or
     // its disabled state would be indistinguishable from a missing feature.
     vi.mocked(fetchTaxYears).mockResolvedValue([])
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByText(/no tax years yet/i)
 
     // The exact label, pinned once: every other test here finds it by pattern.
@@ -666,7 +708,7 @@ describe('TaxesPage', () => {
 
   it('asks ONE question before deleting — the delete confirm subsumes the discard one', async () => {
     confirmSpy.mockReturnValue(false)
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
     // Unsaved work, so the discard gate would fire too if the page stacked them.
     fireEvent.change(salary(), { target: { value: '999' } })
@@ -688,7 +730,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([year2023, year2024])
       .mockResolvedValueOnce([year2023])
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
     await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
 
@@ -720,7 +762,7 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([year2023, year2024])
       .mockResolvedValue([year2023])
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
 
     // A save against 2024 is still open when the year is deleted out from under it.
@@ -756,7 +798,7 @@ describe('TaxesPage', () => {
 
   it('surfaces a delete failure verbatim and keeps the year on screen', async () => {
     vi.mocked(deleteTaxYear).mockRejectedValue(new ApiError('tax year 2024 not found', 404))
-    render(<TaxesPage />)
+    renderPage()
     await screen.findByLabelText('Annual Salary')
 
     fireEvent.click(deleteYearButton())
@@ -768,5 +810,47 @@ describe('TaxesPage', () => {
     expect(salary().value).toBe('200000.0000')
     // The door is open again for a second try.
     await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
+  })
+
+  it('hands the what-if card the ticker a holdings deep link named', async () => {
+    renderPage('/taxes?whatif=VTI')
+    const panel = await screen.findByTestId('whatif-panel')
+
+    // Verbatim off the URL — the panel matches it against its own holdings feed, and a
+    // ticker that matches nothing is its problem, not the page's.
+    expect(panel.getAttribute('data-ticker')).toBe('VTI')
+    expect(panel.getAttribute('data-lot')).toBe('')
+    expect(panel.getAttribute('data-year')).toBe('2024')
+    // Deliberately NOT cleared: this page owns no history writes, and a reload re-seeding
+    // the same leg is the honest reading of the URL the user is sitting on.
+    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
+  })
+
+  it('reads ?whatif-lot as a lot id, and lets a garbled one seed nothing', async () => {
+    renderPage('/taxes?whatif-lot=3')
+    const panel = await screen.findByTestId('whatif-panel')
+    expect(panel.getAttribute('data-lot')).toBe('3')
+    expect(panel.getAttribute('data-ticker')).toBe('')
+    cleanup()
+
+    // A hand-edited URL is nobody's lot: null seeds nothing and the card mounts closed, the
+    // way it does for every visitor who arrived without a link.
+    renderPage('/taxes?whatif-lot=not-a-lot')
+    expect((await screen.findByTestId('whatif-panel')).getAttribute('data-lot')).toBe('')
+  })
+
+  it('keeps the seeds on the card across a year switch', async () => {
+    renderPage('/taxes?whatif=VTI')
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
+
+    // The panel is keyed by year, so this is a fresh mount — and the seed is a property of
+    // the URL, not of the year, so it goes down again: the link said "model selling VTI",
+    // and it means that against whichever year is on screen.
+    const panel = await screen.findByTestId('whatif-panel')
+    expect(panel.getAttribute('data-year')).toBe('2023')
+    expect(panel.getAttribute('data-ticker')).toBe('VTI')
   })
 })

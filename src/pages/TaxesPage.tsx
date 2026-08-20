@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import {
   cloneBrackets,
@@ -36,6 +37,18 @@ function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
 }
 
 export default function TaxesPage() {
+  // The deep links' seeds — /taxes?whatif=TICKER from the holdings drill-in, ?whatif-lot={id}
+  // from the ESPP lots table. A plain read per render (it is a hook, not a fetch), and the
+  // params are deliberately NOT cleared: this page owns no history writes, and a reload
+  // re-seeding the same leg is the honest reading of the URL the user is sitting on.
+  const [searchParams] = useSearchParams()
+  const whatIfTicker = searchParams.get('whatif')
+  // A garbled or hand-edited ?whatif-lot= is nobody's lot: null seeds nothing and the card
+  // mounts closed as usual, rather than banner-ing about a URL nobody typed. Number(null)
+  // and Number('') are both 0, which the > 0 fence sends the same way as NaN.
+  const lotParam = Number(searchParams.get('whatif-lot'))
+  const whatIfLotId = Number.isInteger(lotParam) && lotParam > 0 ? lotParam : null
+
   const [years, setYears] = useState<TaxYearOut[]>([])
   // An OBJECT, not a bare number: a fresh identity re-runs the load effect, so selecting
   // the year that is already selected (right after cloning into it) still refetches.
@@ -465,8 +478,17 @@ export default function TaxesPage() {
               typed legs and any scenario on screen go with the year they were run against
               (a stale scenario under a new year's heading would lie), while a same-year
               reload leaves half-typed legs alone. It owns its two feeds and loads them
-              lazily on first open, so the remount costs nothing until the card is used. */}
-          <WhatIfPanel key={`whatif-${detail.summary.year}`} year={detail.summary.year} />
+              lazily on first open, so the remount costs nothing until the card is used.
+              The seeds are handed to EVERY mount, this year's or the next one's: they are a
+              property of the URL, not of the year, and the panel pins them at its own mount
+              — so a year switch re-seeds the same leg against the year now on screen, which
+              is what a link that says "model selling VTI" means. */}
+          <WhatIfPanel
+            key={`whatif-${detail.summary.year}`}
+            year={detail.summary.year}
+            initialTicker={whatIfTicker}
+            initialLotId={whatIfLotId}
+          />
           {/* Keyed by YEAR, not by load: a real switch remounts the editors (2023's typed
               rows must not carry into 2024), while a same-year reload — Retry, or the
               refresh after a save — leaves them mounted. Their state seeds from useState
