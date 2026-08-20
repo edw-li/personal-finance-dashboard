@@ -688,7 +688,7 @@ reloads leave typed legs alone. Mirrors the editors' keying comment.)
 - Modify: `src/components/taxes/WhatIfPanel.tsx` + `src/pages/TaxesPage.tsx` (read the params)
 - Test: extend `HoldingDetailPanel.test.tsx`, `EsppPage.test.tsx`, `WhatIfPanel.test.tsx`
 
-- [ ] **Step 1: Emit links.** HoldingDetailPanel, after the XIRR hint block:
+- [x] **Step 1: Emit links.** HoldingDetailPanel, after the XIRR hint block:
 
 ```tsx
       <p className="hint">
@@ -700,19 +700,19 @@ reloads leave typed legs alone. Mirrors the editors' keying comment.)
 
 EsppPage lots table row actions (unsold rows only): `<Link className="button" to={`/taxes?whatif-lot=${lot.id}`}>Model sale →</Link>` (match the row-actions button sizing; import Link).
 
-- [ ] **Step 2: Consume them.** WhatIfPanel gains optional props `initialTicker?: string | null` and `initialLotId?: number | null`; when either is non-null the panel mounts OPEN, loads feeds, and seeds one leg once the feed lands (ticker → matching holding's prefill; lot id → matching unsold lot). TaxesPage reads `useSearchParams()` once per mount and passes them through; it does NOT clear the params (a reload re-seeding the same leg is honest).
+- [x] **Step 2: Consume them.** WhatIfPanel gains optional props `initialTicker?: string | null` and `initialLotId?: number | null`; when either is non-null the panel mounts OPEN, loads feeds, and seeds one leg once the feed lands (ticker → matching holding's prefill; lot id → matching unsold lot). TaxesPage reads `useSearchParams()` once per mount and passes them through; it does NOT clear the params (a reload re-seeding the same leg is honest).
 
-- [ ] **Step 3: Tests** — the links render (holding panel; unsold lot rows only), and WhatIfPanel with `initialTicker` auto-opens + seeds the leg after the mocked feed resolves.
+- [x] **Step 3: Tests** — the links render (holding panel; unsold lot rows only), and WhatIfPanel with `initialTicker` auto-opens + seeds the leg after the mocked feed resolves.
 
-- [ ] **Step 4: Run gates; commit** — `git commit -am "feat: what-if deep links from holdings and ESPP lots"`
+- [x] **Step 4: Run gates; commit** — `git commit -am "feat: what-if deep links from holdings and ESPP lots"`
 
 ---
 
 ### Task 6: Whole-feature gate
 
-- [ ] **Step 1:** `cd backend && .venv/Scripts/python.exe -m pytest -q` → all green; `ruff check .`; `alembic check` (head unmoved).
-- [ ] **Step 2:** `npm run test && npm run lint && npm run build` → green.
-- [ ] **Step 3:** Tick all plan checkboxes; commit any stragglers — `git commit -am "chore: what-if feature gate green"`.
+- [x] **Step 1:** `cd backend && .venv/Scripts/python.exe -m pytest -q` → all green; `ruff check .`; `alembic check` (head unmoved).
+- [x] **Step 2:** `npm run test && npm run lint && npm run build` → green.
+- [x] **Step 3:** Tick all plan checkboxes; commit any stragglers — `git commit -am "chore: what-if feature gate green"`.
 
 ---
 
