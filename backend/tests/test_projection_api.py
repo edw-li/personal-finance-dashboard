@@ -9,6 +9,7 @@ from app.models import (
     NetWorthSnapshot,
     SpendingCategory,
 )
+from app.services.projection import project
 
 # The projection anchors on date.today() (the router's one clock read), so the seeds are
 # built RELATIVE to the run's own month — nothing here goes stale with the calendar.
@@ -192,3 +193,27 @@ async def test_projection_names_an_unreachable_horizon(auth_client, db):
     assert body["fi_month"] is None
     assert body["fi_ratio"] == "0.066667"  # the ratio still reads — only the date is out
     assert any("not reached within the 1-year horizon" in w for w in body["warnings"])
+
+
+# --- the engine itself (pure Decimal, no DB): the contribution escalator's two pins ---
+
+
+def test_project_growth_zero_matches_previous_behavior():
+    # Back-compat is a test, not a hope: these four strings were CAPTURED from the engine
+    # before the contribution_growth parameter existed, and the defaulted call must keep
+    # reproducing them byte for byte — same call site, same digits.
+    points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3)
+    assert [str(p) for p in points] == ["1000.00", "1104.07", "1208.57", "1313.50"]
+    # Passing the new parameter explicitly as 0 is the same chain.
+    explicit = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3, Decimal("0"))
+    assert explicit == points
+
+
+def test_project_contribution_growth_two_months_exact():
+    # r = 0 collapses the compounding, so the escalator is the only thing moving:
+    #   month 1 = 1000 + 100                       = 1100.00
+    #   month 2 = 1100 + 100 x 1.12^(1/12)
+    #           = 1100 + 100 x 1.009488792934582974126355069   (Decimal ** at 28 digits)
+    #           = 1200.948879293458297412635507 -> HALF_UP -> 1200.95
+    points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 2, Decimal("0.12"))
+    assert [str(p) for p in points] == ["1000.00", "1100.00", "1200.95"]

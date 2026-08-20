@@ -155,7 +155,7 @@ def reach_percentile(reach_indices: list[int | None], pct: int) -> int | None:
 - Modify: `backend/app/services/projection.py` (`project` gains a defaulted param)
 - Test: `backend/tests/test_projection_api.py` or the engine's own test file (extend — locate `project`'s existing direct tests first)
 
-- [ ] **Step 1: Extend `project`** — the default keeps every existing call byte-identical:
+- [x] **Step 1: Extend `project`** — the default keeps every existing call byte-identical:
 
 ```python
 def project(
@@ -183,9 +183,9 @@ def project(
     return points
 ```
 
-- [ ] **Step 2: Tests** — `test_project_growth_zero_matches_previous_behavior` (pin a 3-month exact sequence WITHOUT the param, values computed by today's code before you change it — run it first to capture); `test_project_contribution_growth_two_months_exact` (hand-computed: start 1000, contribution 100, r 0, g 0.12 → month1 = 1100.00, month2 = 1100 + 100×1.12^(1/12) ≈ pin the exact cents the Decimal math yields — compute with Python once and pin the string).
+- [x] **Step 2: Tests** — `test_project_growth_zero_matches_previous_behavior` (pin a 3-month exact sequence WITHOUT the param, values computed by today's code before you change it — run it first to capture); `test_project_contribution_growth_two_months_exact` (hand-computed: start 1000, contribution 100, r 0, g 0.12 → month1 = 1100.00, month2 = 1100 + 100×1.12^(1/12) ≈ pin the exact cents the Decimal math yields — compute with Python once and pin the string).
 
-- [ ] **Step 3: Run + commit** — `git commit -am "feat: project() gains a geometric contribution escalator (default 0, byte-identical)"`
+- [x] **Step 3: Run + commit** — `git commit -am "feat: project() gains a geometric contribution escalator (default 0, byte-identical)"`
 
 ---
 

@@ -30,17 +30,22 @@ def project(
     monthly_contribution: Decimal,
     annual_return: Decimal,
     months: int,
+    contribution_growth: Decimal = Decimal("0"),
 ) -> list[Decimal]:
     """months+1 points at cents; t0 is the starting balance itself, and each later point
-    is `previous × (1 + monthly rate) + contribution`. The chain runs at full precision
-    and only the OUTPUTS land on cents (the tax engine's display-rounding posture) — so
-    no month's dust can compound into the next.
+    is `previous × (1 + monthly rate) + contribution`, where the contribution escalates
+    geometrically by `contribution_growth` per year ((1+g)^(1/12) per month — 0 keeps
+    the historical flat behavior byte-identical). The chain runs at full precision and
+    only the OUTPUTS land on cents, so no month's dust can compound into the next.
     """
     rate = monthly_rate(annual_return)
+    growth = (ONE + contribution_growth) ** (ONE / TWELVE)
     points = [starting_balance.quantize(CENT, rounding=ROUND_HALF_UP)]
     balance = starting_balance
+    contribution = monthly_contribution
     for _ in range(months):
-        balance = balance * (ONE + rate) + monthly_contribution
+        balance = balance * (ONE + rate) + contribution
+        contribution *= growth
         points.append(balance.quantize(CENT, rounding=ROUND_HALF_UP))
     return points
 
