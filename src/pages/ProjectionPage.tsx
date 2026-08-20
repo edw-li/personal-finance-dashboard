@@ -49,6 +49,13 @@ const RETURN_MAX_PCT = 50
 const YEARS_MIN = 1
 const YEARS_MAX = 60
 
+// The trend chart's own forward spans — deliberately DECOUPLED from the Horizon knob:
+// the trend chart's axis carries the whole history before it even starts projecting, so
+// the knob's "years into the future from now" made the two charts' axes disagree while
+// claiming one number. 40 is the sheet's original sweep.
+const TREND_SPANS = [1, 5, 10, 40] as const
+type TrendSpan = (typeof TREND_SPANS)[number]
+
 export default function ProjectionPage() {
   const [data, setData] = useState<ProjectionOut | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -62,6 +69,7 @@ export default function ProjectionPage() {
   // note while the tiles, the investable chart and the form keep running.
   const [history, setHistory] = useState<NetWorthTimeseries | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
+  const [trendYears, setTrendYears] = useState<TrendSpan>(10)
   // Two recalculates in a row are two runs in flight; only the newest may land.
   const seqRef = useRef(0)
   // Seeded once, ever: a later echo must not overwrite knobs mid-typing (EsppPage).
@@ -189,7 +197,7 @@ export default function ProjectionPage() {
   const nwChart =
     history === null || data === null
       ? null
-      : netWorthProjectionOption(history, fit, data.start_month, data.years)
+      : netWorthProjectionOption(history, fit, data.start_month, trendYears)
 
   return (
     <div className="page projection-page">
@@ -265,7 +273,22 @@ export default function ProjectionPage() {
             )}
 
             <section className="card projection-chart-card">
-              <h2 className="eyebrow">Net worth over time (projected)</h2>
+              <div className="projection-chart-header">
+                <h2 className="eyebrow">Net worth over time (projected)</h2>
+                <div className="segmented" role="group" aria-label="Trend span">
+                  {TREND_SPANS.map((span) => (
+                    <button
+                      key={span}
+                      type="button"
+                      className={trendYears === span ? 'active' : ''}
+                      aria-pressed={trendYears === span}
+                      onClick={() => setTrendYears(span)}
+                    >
+                      {span}Y
+                    </button>
+                  ))}
+                </div>
+              </div>
               {historyError !== null ? (
                 // Advisory, never the page banner: the rest of the page runs without it.
                 <p className="empty-note">{historyError}</p>
@@ -279,7 +302,7 @@ export default function ProjectionPage() {
                   <p className="drill-hint">
                     {fit === null
                       ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
-                      : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${data.years} years — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples.`}
+                      : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples.`}
                   </p>
                 </>
               )}

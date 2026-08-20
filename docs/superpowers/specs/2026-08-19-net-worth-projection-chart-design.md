@@ -8,7 +8,9 @@ into the floor; the user also recalls the sheet originally using a poly-2 trendl
 the current file carries `exp`, but the polynomial is the picture they want).
 **Revised again 2026-08-20:** the y-axis became **log scale** at the user's request
 (equal steps are equal multiples, keeping early history readable across decades of
-growth); nonpositive values become NaN gaps — a log axis has no zero.
+growth); nonpositive values become NaN gaps — a log axis has no zero. Same day, the
+trend's forward span was **decoupled from the Horizon knob** into the card's own
+1Y/5Y/10Y/40Y chips (see Decisions §2).
 **Scope:** Frontend only — no backend changes, no migrations, no new endpoints.
 
 ## Goal
@@ -27,9 +29,13 @@ carries that distinction in words.
 1. **Model:** a trendline fitted to the monthly net-worth history — not the tab's
    knob-driven compounding, not both. Originally the exponential fit; **revised to a
    second-degree polynomial least-squares fit** (see Status).
-2. **Horizon:** follows the tab's existing Horizon (`years`) knob via the projection
-   response echo. One horizon for the whole page; setting it to ~40 reproduces the
-   sheet's sweep to 2065.
+2. **Horizon:** ~~follows the tab's Horizon (`years`) knob~~ — **revised 2026-08-20
+   (user): DECOUPLED.** The trend chart's axis carries the whole history before it even
+   starts projecting, so the knob's "years forward from now" made the two charts' axes
+   disagree while claiming one number. The trend card now has its own **1Y/5Y/10Y/40Y
+   span chips** (default 10Y; 40Y ≈ the sheet's original sweep), a `.segmented` group in
+   the card header, forward from the present month; the Horizon knob drives ONLY the
+   investable chart below.
 3. **Compute location:** client-side. The page fetches the existing
    `GET /net-worth/timeseries` and a pure TS module does the fit. Float math is
    display-only and never handed back to the API (format.ts's Number() rule).
@@ -87,8 +93,9 @@ export function netWorthProjectionOption(
 
 - **Null under 2 history points** (sibling builder's posture) — the card shows an
   empty-note instead.
-- **Axis:** category months = `history.months` + a generated continuation. The horizon
-  end is `addMonths(startMonth, years*12)` — the SAME final month as the sibling chart.
+- **Axis:** category months = `history.months` + a generated continuation. The
+  extension end is `addMonths(startMonth, years*12)`, where `years` is the card's own
+  span-chip value (the builder signature is span-agnostic; the page passes `trendYears`).
   Continuation runs from the month after the LAST history month to that end,
   `max(0, …)` months long: a future-dated snapshot (e.g. the 2026-09-01 entry) simply
   shortens or empties the continuation; the axis stays monotonic. `boundaryGap: false`.
@@ -121,9 +128,10 @@ export function netWorthProjectionOption(
   with promise callbacks
   (`.then(setHistory)` / `.catch` → `historyError` via the page's `message()` helper,
   fallback sentence `'Failed to load net-worth history'`). **Not refetched on
-  Recalculate** — history doesn't change with knobs; the horizon reaches the chart
-  through the projection echo (`data.start_month`, `data.years`), so the Horizon knob +
-  Recalculate re-extends the curve with zero new form state.
+  Recalculate** — history doesn't change with knobs. The extension anchor is still the
+  echo's `data.start_month` (server clock), but the SPAN is the page's own
+  `trendYears` chip state (`TREND_SPANS = [1, 5, 10, 40]`, default 10) — a chip press is
+  a redraw, never a request, and the Horizon knob no longer touches this chart.
 - Derivations are plain per-render calls (the page's existing `chart = projectionOption(data)`
   pattern): `fit = history ? fitPolyTrend(history.months, history.net_worth) : null`,
   then `nwChart = history && data ? netWorthProjectionOption(…) : null`.
@@ -147,8 +155,9 @@ export function netWorthProjectionOption(
      to chart yet."
   4. chart → `EChart` + hint line (`drill-hint`):
      - fit present: *"Second-degree polynomial best-fit over every monthly net-worth
-       snapshot, extended {years} years — momentum, not a plan; the knob-driven model is
-       the chart below."* (a parabola has no single growth rate, so no implied-%/yr claim)
+       snapshot, extended {trendYears} year(s) — momentum, not a plan; the knob-driven
+       model is the chart below. Log-scale axis: equal steps are equal multiples."*
+       (a parabola has no single growth rate, so no implied-%/yr claim)
      - fit refused (exactly 2 points — the chart draws, the parabola can't): *"The
        polynomial trendline needs at least three snapshots — showing the history alone."*
 
@@ -168,7 +177,8 @@ export function netWorthProjectionOption(
   in the default beforeEach (existing tests keep passing); new card renders with the
   eyebrow and chart; hint names the model; history rejection → card empty-note
   while tiles/sibling chart/form still render; `fetchTimeseries` called once and NOT
-  re-called on Recalculate.
+  re-called on Recalculate; span chips — 10Y default pressed, 40Y click re-extends the
+  axis without any refetch, and a Horizon-knob Recalculate leaves the trend axis alone.
 
 ## Non-goals / constraints
 

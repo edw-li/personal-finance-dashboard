@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
@@ -225,6 +225,39 @@ describe('ProjectionPage', () => {
 
     expect(await screen.findByText(/needs at least three snapshots/)).toBeTruthy()
     expect(screen.getAllByTestId('echart')).toHaveLength(2) // the dots still chart
+  })
+
+  it('gives the trend its own span chips — 10y default, 40y on demand', async () => {
+    renderPage()
+    const charts = await screen.findAllByTestId('echart')
+    // Fixture history ends Aug 2026; the DEFAULT 10y span ends Aug 2036 — NOT the
+    // knob's 30-year echo (that would read Aug 2056): the spans are decoupled.
+    expect(charts[0].getAttribute('data-categories')?.endsWith('Aug 2036')).toBe(true)
+
+    const group = screen.getByRole('group', { name: /trend span/i })
+    expect(within(group).getByRole('button', { name: '10Y' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    )
+    fireEvent.click(within(group).getByRole('button', { name: '40Y' }))
+
+    expect(
+      screen.getAllByTestId('echart')[0].getAttribute('data-categories')?.endsWith('Aug 2066'),
+    ).toBe(true)
+    expect(fetchProjection).toHaveBeenCalledTimes(1) // a chip is a redraw, not a request
+    expect(fetchTimeseries).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the trend span fixed while the Horizon knob reshapes the chart below', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/horizon/i).value).toBe('30'))
+
+    fireEvent.change(box(/horizon/i), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+
+    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
+    expect(
+      screen.getAllByTestId('echart')[0].getAttribute('data-categories')?.endsWith('Aug 2036'),
+    ).toBe(true)
   })
 
   it('asks for more snapshots under two history points', async () => {

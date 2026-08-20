@@ -6,6 +6,15 @@
   margin-bottom: 1rem;
 }
 
+/* Eyebrow + the trend-span chips on one line (the networth-chart-header shape, copied by
+   design — per-page stylesheets never import each other). */
+.projection-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 /* The knobs form: the espp-form shape (labels over inputs, auto-fit), copied by design —
    per-page stylesheets never import each other. */
 .projection-form {
