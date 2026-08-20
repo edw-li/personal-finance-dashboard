@@ -39,7 +39,7 @@
 - Create: `src/components/projection/expTrend.ts`
 - Test: `src/components/projection/expTrend.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/components/projection/expTrend.test.ts` with exactly:
 
@@ -109,12 +109,12 @@ describe('fitExpTrend', () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/components/projection/expTrend.test.ts`
 Expected: FAIL — `Cannot find module './expTrend'` (or equivalent resolve error).
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/components/projection/expTrend.ts` with exactly:
 
@@ -178,12 +178,12 @@ export function fitExpTrend(months: string[], values: string[]): ExpTrendFit | n
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run src/components/projection/expTrend.test.ts`
 Expected: PASS — 7 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/projection/expTrend.ts src/components/projection/expTrend.test.ts
@@ -198,7 +198,7 @@ git commit -m "feat: exponential trend fit for the net-worth projection"
 - Modify: `src/components/projection/projectionChartOptions.ts` (imports at top; new exports appended after `projectionOption`)
 - Test: `src/components/projection/projectionChartOptions.test.ts` (imports; new `describe` appended)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `src/components/projection/projectionChartOptions.test.ts`, replace the existing import line
 
@@ -319,12 +319,12 @@ describe('netWorthProjectionOption', () => {
 })
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/components/projection/projectionChartOptions.test.ts`
 Expected: FAIL — `netWorthProjectionOption`/`NET_WORTH_PROJECTION_SERIES` are not exported. The four pre-existing `projectionOption` tests must still PASS.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/components/projection/projectionChartOptions.ts`, replace the import block at the top
 
@@ -426,12 +426,12 @@ export function netWorthProjectionOption(
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/components/projection/projectionChartOptions.test.ts`
 Expected: PASS — 11 tests (4 pre-existing + 7 new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/projection/projectionChartOptions.ts src/components/projection/projectionChartOptions.test.ts
@@ -446,7 +446,7 @@ git commit -m "feat: net worth (projected) chart builder"
 - Modify: `src/pages/ProjectionPage.tsx`
 - Test: `src/pages/ProjectionPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Four edits to `src/pages/ProjectionPage.test.tsx`.
 
@@ -592,12 +592,12 @@ with
   })
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/pages/ProjectionPage.test.tsx`
 Expected: FAIL — the five new tests (and the edited first test, which now expects 2 charts) fail because the page renders one chart and no new card. The other pre-existing tests must still PASS.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Five edits to `src/pages/ProjectionPage.tsx`.
 
@@ -705,12 +705,12 @@ and the existing `<section className="card projection-chart-card">` (the "Projec
 
 (`formatPct` is already imported by the page; the em dash and `≈` are literal characters, fine inside the template literal.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/pages/ProjectionPage.test.tsx`
 Expected: PASS — 11 tests (6 pre-existing, one of them edited, + 5 new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/pages/ProjectionPage.tsx src/pages/ProjectionPage.test.tsx
@@ -723,22 +723,22 @@ git commit -m "feat: net worth over time (projected) card on /projection"
 
 **Files:** none (verification only)
 
-- [ ] **Step 1: Full frontend suite**
+- [x] **Step 1: Full frontend suite**
 
 Run: `npm test`
 Expected: ALL green — 406 pre-existing + 18 new/edited ≈ 424 tests, 0 failures. (If any UNRELATED test fails, stop and report — do not fix drive-by.)
 
-- [ ] **Step 2: Lint**
+- [x] **Step 2: Lint**
 
 Run: `npm run lint`
 Expected: exactly ONE pre-existing sanctioned warning (AuthContext react-refresh); zero errors, nothing new.
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 Run: `npm run build`
 Expected: clean build. The EChart chunk stays ~700.93 kB (no new echarts registrations) — under the 720 kB advisory in `vite.config.ts`. If the chunk moved more than ~1 kB, something imported echarts wrongly (only `src/charts/echarts.ts` may import from `'echarts/*'`).
 
-- [ ] **Step 4: Report**
+- [x] **Step 4: Report**
 
 No commit here unless gates forced a fix. Summarize: tests/lint/build results, files touched, and that the feature is visible at `/projection` (requires a logged-in session against the dev DB, which has real snapshots).
 
