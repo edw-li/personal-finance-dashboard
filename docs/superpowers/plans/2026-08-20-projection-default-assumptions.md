@@ -98,7 +98,16 @@ resolved values (never None). Where the current code computes `inflation_rate`/
 
 ### Task 3: Gate
 
-- [ ] Full backend suite (expect 627 net of renames/additions — report exact), `ruff check`, `ruff format --check`, `alembic check` clean; full frontend gates; spec/plan checkboxes ticked; commit stragglers `chore: projection defaults gate green`.
+- [x] Full backend suite (expect 627 net of renames/additions — report exact), `ruff check`, `ruff format --check`, `alembic check` clean; full frontend gates; spec/plan checkboxes ticked; commit stragglers `chore: projection defaults gate green`.
+
+**Gate results (2026-08-20):** backend `pytest -q` **629 passed** (+2: the defaults test and
+the volatility-0 off-switch test; the back-compat pin was renamed, not added); `ruff check`
+and `ruff format --check` clean over 120 files; `alembic check` — "No new upgrade operations
+detected", head **b3d47a1c9e62** unmoved. Frontend `npm run test` **491 passed / 45 files**
+(+3: the stale-echo placeholder test, the volatility>100 fence test, the hint-text pin, less
+the retired echo-seeding test, plus one in `src/api/projection.test.ts` pinning that `"0"`
+survives the blank-omit filter); `npm run lint` 1 sanctioned warning (AuthContext fast-refresh);
+`npm run build` green.
 
 ---
 
