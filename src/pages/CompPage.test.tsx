@@ -155,6 +155,7 @@ const GRANT_NEW_HIRE: RsuGrantOut = {
   // The STORED string, at the column's 4dp — deliberately not the '0.25' the client derives,
   // so an unchanged kind can be shown to send the stored one back.
   cliff_pct: '0.2500',
+  vest_quantum: 10,
   notes: null,
   vest_count: 13,
   vested_shares: 450,
@@ -170,6 +171,7 @@ const GRANT_REFRESH: RsuGrantOut = {
   grant_price: '129.5651',
   first_vest_date: '2026-09-16',
   cliff_pct: '0.0625',
+  vest_quantum: 1,
   notes: 'seeded from focal history',
   vest_count: 16,
   vested_shares: 0,
@@ -852,6 +854,8 @@ describe('CompPage — RSU grant writes', () => {
       first_vest_date: '2027-02-17',
       // A quarter held back for a year, then 6.25% a quarter — never a box the user fills.
       cliff_pct: '0.25',
+      // The rounding box defaults to single shares; the offer grant's tens are typed in.
+      vest_quantum: 1,
       notes: null,
     })
     // A grant write moves the schedule and nothing else: the focal history is untouched.
@@ -876,11 +880,13 @@ describe('CompPage — RSU grant writes', () => {
     await screen.findByText('RSU grants')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the FY24 new hire grant' }))
-    // The boxes seed from the row, verbatim.
+    // The boxes seed from the row, verbatim — the rounding box included (this row is the
+    // real offer grant, vesting in tens).
     expect(field('Label').value).toBe('FY24 new hire')
     expect(field('Shares').value).toBe('1200')
     expect(field('Price at grant').value).toBe('112.0750')
     expect(field('First vest').value).toBe('2024-11-20')
+    expect(field('Vest rounding').value).toBe('10')
 
     fireEvent.click(screen.getByRole('button', { name: 'Save grant' }))
     await waitFor(() => expect(vi.mocked(updateRsuGrant)).toHaveBeenCalledTimes(1))
@@ -898,6 +904,7 @@ describe('CompPage — RSU grant writes', () => {
       grant_price: '112.0750',
       first_vest_date: '2024-11-20',
       cliff_pct: '0.2500',
+      vest_quantum: 10,
       notes: null,
     })
 

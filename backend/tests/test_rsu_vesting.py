@@ -97,9 +97,33 @@ def test_schedule_zips_dates_and_shares():
         shares = 320
         cliff_pct = Decimal("0.0625")
         first_vest_date = date(2025, 6, 18)
+        vest_quantum = 1
 
     events = schedule(Grant())
     assert len(events) == 16
     assert events[0] == (date(2025, 6, 18), 20)
     assert events[-1][0] == date(2029, 3, 21)  # Mar 2029: Mar 1 is a Thursday -> 3rd Wed = 21st
     assert sum(s for _, s in events) == 320
+
+
+def test_vest_shares_quantum_ten_reproduces_the_broker_offer_grant():
+    # The user's real offer grant, all 13 tranches broker-verified (2026-08-21, spec §8.2):
+    # cumulative entitlement floors to whole TENS, and the two 140s land exactly where the
+    # cumulative crosses a clean multiple — 1050 at the fourth quarterly, 2100 at the close.
+    shares = vest_shares(2100, Decimal("0.25"), quantum=10)
+    assert shares == [520, 130, 130, 130, 140, 130, 130, 130, 130, 130, 130, 130, 140]
+    assert sum(shares) == 2100
+
+
+def test_vest_shares_quantum_true_up_conserves_non_multiple_totals():
+    # A total that is NOT a multiple of the quantum: the final vest carries the remainder
+    # (2105 x 93.75% = 1973.4375 -> floored to 1970; the close trues up to 2105).
+    shares = vest_shares(2105, Decimal("0.25"), quantum=10)
+    assert sum(shares) == 2105
+    assert shares[-1] == 135
+
+
+def test_vest_shares_quantum_one_is_the_historical_behavior():
+    # Explicit quantum=1 must be bit-for-bit the old cumulative floor.
+    assert vest_shares(1000, Decimal("0.0625"), quantum=1) == vest_shares(1000, Decimal("0.0625"))
+    assert vest_shares(700, Decimal("0.25"), quantum=1) == vest_shares(700, Decimal("0.25"))

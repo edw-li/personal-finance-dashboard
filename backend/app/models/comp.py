@@ -82,4 +82,8 @@ class RsuGrant(Base):
     grant_price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
     first_vest_date: Mapped[date] = mapped_column(Date)
     cliff_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4))
+    # Shares-per-vest rounding: cumulative entitlement floors to a multiple of this (the
+    # final vest trues up to `shares`). 1 = single shares (refresh grants); the user's real
+    # offer grant vests in tens (broker-verified 2026-08-21, spec §8.2).
+    vest_quantum: Mapped[int] = mapped_column(default=1, server_default="1")
     notes: Mapped[str | None] = mapped_column(Text)

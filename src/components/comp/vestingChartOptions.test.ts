@@ -22,6 +22,7 @@ function grant(over: Partial<RsuGrantOut> & Pick<RsuGrantOut, 'id' | 'label'>): 
     grant_price: '129.5651',
     first_vest_date: '2024-11-20',
     cliff_pct: '0.0625',
+    vest_quantum: 1,
     notes: null,
     vest_count: 16,
     vested_shares: 0,

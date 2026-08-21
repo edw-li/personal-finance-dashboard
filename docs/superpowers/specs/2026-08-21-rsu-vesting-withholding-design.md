@@ -250,7 +250,23 @@ Five changes after the user exercised the shipped feature with real grants:
 Known non-change: the dashboard's cumulative-floor split was validated to the share against
 three of the user's four real grants; the initial offer grant reads −3 vested vs the broker
 and no uniform rounding rule reproduces it from aggregates — awaiting per-vest broker data
-before any change (per-vest overrides remain the v2 answer if needed).
+before any change (per-vest overrides remain the v2 answer if needed). *(Resolved same day —
+see §8.2.)*
+
+## 8.2 Revision — 2026-08-21 (the offer grant's vest quantum, broker data supplied)
+
+The user supplied the initial grant's per-vest counts (520 cliff; 130 quarterly; 140 on
+2025-09-17 and 2027-09-15), which identify the rule exactly: **cumulative entitlement floored
+to a multiple of TEN** — floor₁₀(2100 × cum%) reproduces all 13 tranches including both 140
+true-ups (the cumulative crosses clean multiples at 1050 and 2100), while the three focal
+refreshes remain plain single-share cumulative floor. Shipped as a per-grant
+**`vest_quantum`** column (migration `b0465b6d6ac2`, additive, server_default 1 so every
+existing row and refresh grant is bit-for-bit unchanged): `vest_shares` floors each
+cumulative to the quantum and the FINAL vest trues up to the grant total (conservation for
+non-multiple totals). API: field on In (default 1) / Update (null = no-op) / Out; 422 fence
+1..1000. UI: a "Vest rounding" box on the grants form (default 1) and a `×10` marker in the
+table's shares cell. With the offer grant set to 10, the dashboard's split matches the
+broker exactly (1440 vested / 660 unvested as of 2026-08-21).
 
 ## 9. Out of scope (v2 candidates)
 

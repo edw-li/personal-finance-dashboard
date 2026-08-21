@@ -81,12 +81,17 @@ class RsuGrantIn(BaseModel):
     grant_price: Decimal
     first_vest_date: date
     cliff_pct: Decimal
+    # Shares-per-vest rounding (spec §8.2): cumulative entitlement floors to a multiple of
+    # this, the final vest trues up. 1 (the default, so pre-§8.2 clients keep working) is
+    # plain whole-share flooring; the user's real offer grant vests in tens.
+    vest_quantum: int = 1
     notes: str | None = None
 
 
 class RsuGrantUpdate(BaseModel):
-    # kind/label/shares/grant_price/first_vest_date/cliff_pct are NOT NULL: explicit null is
-    # the house no-op on those. focal_year and notes are nullable: their null really CLEARS.
+    # kind/label/shares/grant_price/first_vest_date/cliff_pct/vest_quantum are NOT NULL:
+    # explicit null is the house no-op on those. focal_year and notes are nullable: their
+    # null really CLEARS.
     kind: str | None = None
     label: str | None = Field(default=None, min_length=1, max_length=60)
     focal_year: int | None = None
@@ -94,6 +99,7 @@ class RsuGrantUpdate(BaseModel):
     grant_price: Decimal | None = None
     first_vest_date: date | None = None
     cliff_pct: Decimal | None = None
+    vest_quantum: int | None = None
     notes: str | None = None
 
 
@@ -106,6 +112,7 @@ class RsuGrantOut(BaseModel):
     grant_price: Decimal
     first_vest_date: date
     cliff_pct: Decimal
+    vest_quantum: int
     notes: str | None
     # --- computed (rsu_vesting); the vested split is judged on the scheduler-zone day the
     # ROUTE reads, never a clock inside the helper.

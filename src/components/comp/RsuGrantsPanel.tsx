@@ -46,14 +46,19 @@ interface GrantFormState {
   shares: string
   grant_price: string
   first_vest_date: string
+  vest_quantum: string
   notes: string
 }
 
 // A grant has to be one kind or the other, and new-hire is the one a first grant usually is.
+// Vest rounding defaults to single shares — the offer grant's tens (spec §8.2) are typed in.
 const EMPTY_GRANT: GrantFormState = {
   kind: 'new_hire', label: '', focal_year: '', shares: '',
-  grant_price: '', first_vest_date: '', notes: '',
+  grant_price: '', first_vest_date: '', vest_quantum: '1', notes: '',
 }
+
+// The router's fence for the vest-rounding box (app/api/comp.py VEST_QUANTUM_MAX).
+const VEST_QUANTUM_MAX = 1000
 
 /**
  * The grants table and the one form that doubles as add-row and row editor (EventsPanel's
@@ -93,6 +98,7 @@ export default function RsuGrantsPanel({
       shares: String(grant.shares),
       grant_price: grant.grant_price,
       first_vest_date: grant.first_vest_date,
+      vest_quantum: String(grant.vest_quantum),
       notes: grant.notes ?? '',
     })
   }
@@ -118,6 +124,8 @@ export default function RsuGrantsPanel({
       shares: String(parseInt(seed.shares, 10)),
       grant_price: seed.grant_price,
       first_vest_date: seed.suggested_first_vest_date,
+      // Refresh grants vest in single shares (the broker-verified split, spec §8.2).
+      vest_quantum: '1',
       notes: '',
     })
   }
@@ -162,6 +170,16 @@ export default function RsuGrantsPanel({
       setError(`focal_year must be between ${YEAR_MIN} and ${YEAR_MAX}`)
       return
     }
+    const quantumText = form.vest_quantum.trim()
+    if (
+      !/^\d+$/.test(quantumText) ||
+      Number(quantumText) < 1 ||
+      Number(quantumText) > VEST_QUANTUM_MAX
+    ) {
+      // The server's own sentence — a count is a count on both sides.
+      setError(`vest_quantum must be between 1 and ${VEST_QUANTUM_MAX}`)
+      return
+    }
     // The row as the SERVER has it, looked up in the current feed. A stored cliff is kept
     // while the kind is unchanged — the column is Numeric(7,4) and an old grant may carry a
     // cliff this client would no longer derive — and re-derived the moment the kind flips,
@@ -182,6 +200,7 @@ export default function RsuGrantsPanel({
       grant_price: price,
       first_vest_date: form.first_vest_date,
       cliff_pct: cliff,
+      vest_quantum: Number(quantumText),
       notes: form.notes.trim() || null,
     }
     const request = editingId !== null ? updateRsuGrant(editingId, body) : createRsuGrant(body)
@@ -223,10 +242,12 @@ export default function RsuGrantsPanel({
       </h2>
       <p className="drill-hint">
         Parameters, not tranches: the schedule below is recomputed on every read from these
-        seven fields. The cliff comes with the kind — a new hire holds 25% back for a year and
-        then vests 6.25% a quarter, a refresh vests 6.25% a quarter from its first date — so
-        there is no cliff box to get wrong. The focal year is only a tag that lines a grant up
-        with its comp event.
+        fields. The cliff comes with the kind — a new hire holds 25% back for a year and then
+        vests 6.25% a quarter, a refresh vests 6.25% a quarter from its first date — so there
+        is no cliff box to get wrong. Vest rounding is the broker&apos;s per-vest share
+        multiple: 1 for refreshes, 10 for the offer letter (each vest floors to it; the final
+        vest trues up). The focal year is only a tag that lines a grant up with its comp
+        event.
       </p>
       {error && (
         <div className="error-banner" role="alert">
@@ -327,6 +348,18 @@ export default function RsuGrantsPanel({
             onChange={(e) => set('first_vest_date')(e.target.value)}
           />
         </label>
+        <label>
+          Vest rounding
+          {/* Shares-per-vest rounding (spec §8.2): each vest floors the cumulative
+              entitlement to a multiple of this, and the final vest trues up. 1 for the
+              focal refreshes; the offer letter vests in tens — both broker-verified. */}
+          <input
+            className="field-input"
+            inputMode="numeric"
+            value={form.vest_quantum}
+            onChange={(e) => set('vest_quantum')(e.target.value)}
+          />
+        </label>
         <label className="span-2">
           Grant notes
           <input
@@ -383,8 +416,14 @@ export default function RsuGrantsPanel({
                   </td>
                   <td className="num">{grant.focal_year ?? '—'}</td>
                   {/* The three counts on the right are the SERVER's, judged against its own
-                      day — never re-derived here (global rule 9). */}
-                  <td className="num">{formatShares(grant.shares)}</td>
+                      day — never re-derived here (global rule 9). A non-unit vest rounding
+                      rides the shares cell rather than owning an eleventh column. */}
+                  <td className="num">
+                    {formatShares(grant.shares)}
+                    {grant.vest_quantum !== 1 && (
+                      <span className="sub"> ×{grant.vest_quantum}</span>
+                    )}
+                  </td>
                   <td className="num">{formatCurrency(grant.grant_price)}</td>
                   <td>{formatDate(grant.first_vest_date)}</td>
                   <td className="num">{grant.vest_count}</td>

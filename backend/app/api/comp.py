@@ -91,6 +91,9 @@ GRANT_SHARES_MAX = 10**8
 # real one — this bound exists so the quantize itself cannot trap (money.py's note: pydantic
 # hands "1e26" through, and Decimal.quantize() raises InvalidOperation on it, i.e. a 500).
 CLIFF_MAX_ABS = Decimal(10) ** 3
+# Real-world vest quanta are 1 (refresh grants) and 10 (the offer grant, broker-verified);
+# anything past this is a typo fence, not a plan.
+VEST_QUANTUM_MAX = 1000
 
 
 def _positive_base(value: Decimal, field: str) -> Decimal:
@@ -266,6 +269,7 @@ def _validated_grant(
     grant_price: Decimal,
     first_vest_date: date,
     cliff_pct: Decimal,
+    vest_quantum: int,
 ) -> dict:
     """One grant's stored columns, validated as a WHOLE row (`_validated_event`'s posture) so
     a PATCH gets the same rules as a POST, and raising before anything is returned."""
@@ -301,6 +305,14 @@ def _validated_grant(
             status_code=422,
             detail="cliff_pct must leave a whole number of 6.25% quarterly vests",
         ) from None
+    # A quantum past the fence would be a typo, not a plan (real values: 1, or the offer
+    # grant's 10). No divisibility rule — the final vest trues up whatever remainder the
+    # flooring leaves (rsu_vesting.vest_shares' note).
+    if not 1 <= vest_quantum <= VEST_QUANTUM_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"vest_quantum must be between 1 and {VEST_QUANTUM_MAX}",
+        )
     return {
         "kind": kind,
         "label": clean_label,
@@ -309,6 +321,7 @@ def _validated_grant(
         "grant_price": price,
         "first_vest_date": first_vest_date,
         "cliff_pct": quantized_cliff,
+        "vest_quantum": vest_quantum,
     }
 
 
@@ -326,6 +339,7 @@ def _grant_out(grant: RsuGrant, today: date) -> RsuGrantOut:
         grant_price=grant.grant_price,
         first_vest_date=grant.first_vest_date,
         cliff_pct=grant.cliff_pct,
+        vest_quantum=grant.vest_quantum,
         notes=grant.notes,
         vest_count=len(events),
         vested_shares=vested,
@@ -369,6 +383,7 @@ async def create_grant(body: RsuGrantIn, db: AsyncSession = Depends(get_db)) -> 
         grant_price=body.grant_price,
         first_vest_date=body.first_vest_date,
         cliff_pct=body.cliff_pct,
+        vest_quantum=body.vest_quantum,
     )
     # The TRIMMED label, i.e. the value that would be stored: checking the raw one would let a
     # padded duplicate past the pre-select and onto the unique index as a 500. Plain
@@ -395,6 +410,7 @@ async def update_grant(
         grant_price=_merged(provided, "grant_price", grant.grant_price),
         first_vest_date=_merged(provided, "first_vest_date", grant.first_vest_date),
         cliff_pct=_merged(provided, "cliff_pct", grant.cliff_pct),
+        vest_quantum=_merged(provided, "vest_quantum", grant.vest_quantum),
     )
     if fields["label"] != grant.label:
         await _require_free_label(db, fields["label"])

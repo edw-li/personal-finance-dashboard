@@ -848,6 +848,10 @@ export interface RsuGrantOut {
   grant_price: string
   first_vest_date: string
   cliff_pct: string
+  // Shares-per-vest rounding (spec §8.2): each vest floors the cumulative entitlement to a
+  // multiple of this, the final vest trues up. 1 = single shares (the refreshes); the real
+  // offer grant vests in tens — both broker-verified.
+  vest_quantum: number
   notes: string | null
   // --- computed (rsu_vesting), judged against the SERVER's day: never re-derive these on
   // the client, and never carry them across an edit — re-read the row instead.
@@ -867,6 +871,8 @@ export interface RsuGrantCreate {
   grant_price: string
   first_vest_date: string
   cliff_pct: string
+  // Optional so pre-§8.2 callers keep working: the server defaults an omitted value to 1.
+  vest_quantum?: number
   notes?: string | null
 }
 

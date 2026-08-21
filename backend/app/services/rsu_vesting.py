@@ -39,21 +39,35 @@ def vest_dates(first_vest_date: date, count: int) -> list[date]:
     return dates
 
 
-def vest_shares(total: int, cliff_pct: Decimal) -> list[int]:
-    """Cumulative floor: vest_k = floor(total x cum%_k) - already vested. The last cumulative
-    percentage is exactly 1, so the sum is conserved by construction."""
+def vest_shares(total: int, cliff_pct: Decimal, quantum: int = 1) -> list[int]:
+    """Cumulative floor TO A MULTIPLE OF `quantum`: vest_k = floor_q(total x cum%_k) - already
+    vested, and the FINAL vest trues up to `total` itself (so conservation holds even when
+    total is not a multiple of the quantum). quantum=1 is the plain cumulative floor and the
+    historical behavior, bit for bit.
+
+    The quantum is real broker behavior, not a modeling knob (2026-08-21, spec §8.2): the
+    user's offer grant vests in whole tens — 2100 @ 25% cliff floors to 520, quarterlies to
+    130, with 140 true-ups exactly where the cumulative lands on a multiple of ten — while
+    every focal refresh floors to single shares. Verified against all 13 broker tranches.
+    """
     count = vest_count(cliff_pct)
     shares: list[int] = []
     vested = 0
     for k in range(count):
         cum_pct = cliff_pct + QUARTERLY_STEP * k
-        cum_shares = int(total * cum_pct)  # positive Decimals: int() truncation IS floor
+        if k == count - 1:
+            cum_shares = total  # the true-up: everything granted has vested by the last date
+        else:
+            # positive Decimals: int() truncation IS floor, and flooring the floor to the
+            # quantum is flooring to the quantum.
+            cum_shares = int(total * cum_pct) // quantum * quantum
         shares.append(cum_shares - vested)
         vested = cum_shares
     return shares
 
 
 def schedule(grant) -> list[tuple[date, int]]:
-    """(date, shares) per vest for a grant-shaped object (shares, cliff_pct, first_vest_date)."""
-    counts = vest_shares(grant.shares, grant.cliff_pct)
+    """(date, shares) per vest for a grant-shaped object (shares, cliff_pct, first_vest_date,
+    vest_quantum)."""
+    counts = vest_shares(grant.shares, grant.cliff_pct, grant.vest_quantum)
     return list(zip(vest_dates(grant.first_vest_date, len(counts)), counts, strict=True))

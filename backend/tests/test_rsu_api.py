@@ -328,6 +328,31 @@ async def test_rsu_grant_endpoints_require_auth(client):
     assert (await client.get(SCHEDULE)).status_code == 401
 
 
+async def test_grant_vest_quantum_ten_reproduces_the_broker_split(auth_client, frozen_today):
+    """The user's real offer grant end to end (spec §8.2): 2100 shares vesting in whole TENS.
+    By the frozen 2025-01-02, the broker-verified tranches are 520 (2024-09-18 cliff) + 130
+    (2024-12-18) = 650 vested / 1450 unvested — the split the dashboard previously missed
+    by three shares under single-share flooring."""
+    created = await create_grant(auth_client, shares=2100, vest_quantum=10)
+    assert created["vest_quantum"] == 10
+    assert (created["vested_shares"], created["unvested_shares"]) == (650, 1450)
+
+    # Omitted on create -> the default 1 (pre-§8.2 clients keep working unchanged).
+    plain = await create_grant(auth_client, label="Plain grant")
+    assert plain["vest_quantum"] == 1
+
+    # PATCH: an explicit null is the NOT-NULL no-op; a value re-validates the merged row.
+    resp = await auth_client.patch(f"{GRANTS}/{plain['id']}", json={"vest_quantum": None})
+    assert resp.status_code == 200 and resp.json()["vest_quantum"] == 1
+
+
+async def test_grant_vest_quantum_fences_typos(auth_client):
+    for bad in (0, -10, 1001):
+        resp = await auth_client.post(GRANTS, json=grant_payload(vest_quantum=bad))
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"] == "vest_quantum must be between 1 and 1000"
+
+
 # --- GET /comp/vesting-schedule ---
 
 # A LATER frozen day than the CRUD pins use: the vested-this-year tile needs past vests inside
