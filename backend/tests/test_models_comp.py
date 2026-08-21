@@ -97,6 +97,29 @@ async def test_rsu_grant_roundtrip(db):
     assert grant.first_vest_date == date(2024, 9, 18)
 
 
+async def test_rsu_grant_label_unique(db):
+    # The API answers a taken label with a 409 from a pre-select, so it never reaches this
+    # constraint — which is exactly why the constraint itself needs its own test.
+    def grant(**overrides) -> RsuGrant:
+        fields = {
+            "kind": "refresh",
+            "label": "FY26 refresh",
+            "shares": 320,
+            "grant_price": Decimal("129.5651"),
+            "first_vest_date": date(2025, 6, 18),
+            "cliff_pct": Decimal("0.0625"),
+        }
+        fields.update(overrides)
+        return RsuGrant(**fields)
+
+    db.add(grant())
+    await db.commit()
+    db.add(grant(shares=400, first_vest_date=date(2026, 6, 17)))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
 async def test_focal_year_unique(db):
     db.add(CompEvent(focal_year=2025, current_base=Decimal("1")))
     await db.commit()

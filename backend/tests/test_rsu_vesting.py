@@ -39,6 +39,10 @@ def test_vest_count_by_cliff():
     assert vest_count(Decimal("1")) == 1  # degenerate single-vest grant is legal
     with pytest.raises(ValueError):
         vest_count(Decimal("0.30"))  # (1 - 0.30) / 0.0625 = 11.2
+    with pytest.raises(ValueError):
+        # The remainder < 0 branch: a cliff over 100% would otherwise return a NEGATIVE
+        # count and make `vest_shares` hand back an empty schedule instead of raising.
+        vest_count(Decimal("1.5"))
 
 
 def test_vest_dates_quarterly_grid_from_first_vest():
@@ -76,6 +80,16 @@ def test_vest_shares_conserves_prime_totals():
     assert len(shares) == 16
     assert sum(shares) == 997
     assert all(s >= 0 for s in shares)
+
+
+def test_vest_shares_leaves_real_zero_tranches_on_a_tiny_grant():
+    # 5 shares over 16 vests: the cumulative floor cannot advance most quarters, so the
+    # schedule genuinely contains 0-share vests. That is deliberate, not a rounding bug —
+    # downstream renders them, and collapsing them would break the conservation sum.
+    shares = vest_shares(5, Decimal("0.0625"))
+    assert sum(shares) == 5
+    assert len(shares) == 16
+    assert 0 in shares
 
 
 def test_schedule_zips_dates_and_shares():

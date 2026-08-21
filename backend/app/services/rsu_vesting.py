@@ -2,7 +2,10 @@
 (tax_whatif's posture). Whole-share tranches by CUMULATIVE FLOOR so every grant's vests sum
 exactly to its share count; dates ride the 3rd-Wednesday quarterly grid the user's grants use,
 except the stored first_vest_date, which is always taken verbatim (off-convention grants stay
-expressible)."""
+expressible).
+
+Precondition (enforced at the API boundary, not here): cliff_pct is fenced into (0, 1], so a
+non-positive or over-100% cliff is unrepresentable upstream and needs no runtime guard below."""
 
 from datetime import date
 from decimal import Decimal
