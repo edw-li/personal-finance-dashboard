@@ -21,7 +21,8 @@ export function fetchProjection(params: ProjectionParams = {}): Promise<Projecti
   if (params.annualSpend) query.set('annual_spend', params.annualSpend)
   if (params.swr) query.set('swr', params.swr)
   if (params.years) query.set('years', params.years)
-  // A blank volatility is the whole "deterministic only" switch — omitted, never "0".
+  // Blank omits (the server then defaults it); "0" is a VALUE and must survive this
+  // filter — it is the fan's off switch. Non-empty strings are truthy, "0" included.
   if (params.volatility) query.set('volatility', params.volatility)
   if (params.inflation) query.set('inflation', params.inflation)
   if (params.contributionGrowth) query.set('contribution_growth', params.contributionGrowth)

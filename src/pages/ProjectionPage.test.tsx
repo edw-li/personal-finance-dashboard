@@ -39,6 +39,9 @@ vi.mock('../api/netWorth', async (importOriginal) => ({
 import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 
+// The bare GET's answer as the server now gives it: absent assumption knobs DEFAULT
+// server-side, so the fan is up and the three echoes are filled — three months of
+// hand-made percentiles standing in for the simulation.
 function projectionOut(over: Partial<ProjectionOut> = {}): ProjectionOut {
   return {
     starting_balance: '100000.00',
@@ -57,25 +60,9 @@ function projectionOut(over: Partial<ProjectionOut> = {}): ProjectionOut {
     projected: ['100000.00', '104000.00', '108000.00'],
     coast: ['100000.00', '100000.00', '100000.00'],
     warnings: [],
-    // Deterministic by default — the Monte Carlo block is null until a volatility is sent.
-    volatility: null,
-    inflation: null,
-    contribution_growth: null,
-    bands: null,
-    fi_probability: null,
-    fi_month_p10: null,
-    fi_month_p50: null,
-    fi_month_p90: null,
-    ...over,
-  }
-}
-
-// The same payload with the simulation in play — three months of hand-made percentiles.
-function simulated(over: Partial<ProjectionOut> = {}): ProjectionOut {
-  return projectionOut({
     volatility: '0.150000',
     inflation: '0.030000',
-    contribution_growth: '0.020000',
+    contribution_growth: '0.030000',
     bands: {
       p10: ['100000.00', '90000.00', '80000.00'],
       p25: ['100000.00', '95000.00', '92000.00'],
@@ -88,7 +75,27 @@ function simulated(over: Partial<ProjectionOut> = {}): ProjectionOut {
     fi_month_p50: '2055-10-01',
     fi_month_p90: '2061-03-01',
     ...over,
+  }
+}
+
+// An explicit volatility=0: the echo is a real zero and the whole simulation block is
+// null — the fan's off switch, which is a different payload from a stale backend's nulls.
+function fanOff(over: Partial<ProjectionOut> = {}): ProjectionOut {
+  return projectionOut({
+    volatility: '0.000000',
+    bands: null,
+    fi_probability: null,
+    fi_month_p10: null,
+    fi_month_p50: null,
+    fi_month_p90: null,
+    ...over,
   })
+}
+
+// A STALE backend — one from before the defaults existed, still echoing nulls. Pinned so
+// the page keeps rendering against it instead of greying in a number nothing ran with.
+function staleEchoes(over: Partial<ProjectionOut> = {}): ProjectionOut {
+  return fanOff({ volatility: null, inflation: null, contribution_growth: null, ...over })
 }
 
 function timeseries(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries {
@@ -174,7 +181,8 @@ describe('ProjectionPage', () => {
       monthlyContribution: '4000.00',
       annualSpend: '',
       swr: '0.04',
-      // Never sent as zeros: blank is "no simulation", and the client omits blanks.
+      // Never sent as zeros: the assumption boxes are never SEEDED, so they are still
+      // blank — and blank is omitted, which is what asks for the server's defaults.
       volatility: '',
       inflation: '',
       contributionGrowth: '',
@@ -327,24 +335,42 @@ describe('ProjectionPage', () => {
     expect(screen.getAllByTestId('echart')).toHaveLength(1)
   })
 
-  it('leaves the three Monte Carlo boxes blank when their echoes are null', async () => {
+  it('greys the defaults into the three assumption boxes without filling them', async () => {
     renderPage()
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
-    // A null echo seeds NOTHING — a zero here would read as "0% volatility, simulated",
-    // which is the opposite of "no simulation was run".
+    // Blank VALUE (blank omits the param, which is what asks for the default) with the
+    // echo as the PLACEHOLDER, percent-shifted — so the grey number can never disagree
+    // with what the server actually ran.
     expect(box(/volatility/i).value).toBe('')
     expect(box(/inflation/i).value).toBe('')
     expect(box(/contribution growth/i).value).toBe('')
+    expect(box(/volatility/i).placeholder).toBe('15')
+    expect(box(/inflation/i).placeholder).toBe('3')
+    expect(box(/contribution growth/i).placeholder).toBe('3')
   })
 
-  it('seeds the Monte Carlo boxes from a simulated echo, percent-shifted', async () => {
-    vi.mocked(fetchProjection).mockResolvedValue(simulated())
+  it('leaves the assumption placeholders empty when a stale backend echoes null', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(staleEchoes())
     renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
-    await waitFor(() => expect(box(/volatility/i).value).toBe('15'))
-    expect(box(/inflation/i).value).toBe('3')
-    expect(box(/contribution growth/i).value).toBe('2')
+    // A null echo names NOTHING — greying in a default the server never applied would
+    // be a lie about what is on the chart.
+    expect(box(/volatility/i).placeholder).toBe('')
+    expect(box(/inflation/i).placeholder).toBe('')
+    expect(box(/contribution growth/i).placeholder).toBe('')
+    expect(box(/volatility/i).value).toBe('')
+  })
+
+  it('says in both hints that the defaults are what blank runs', async () => {
+    renderPage()
+    await screen.findByText('$1,500,000.00')
+
+    expect(
+      screen.getByText(/reads in today's dollars by default \(inflation is modelled\)/),
+    ).toBeTruthy()
+    expect(screen.getByText(/assumption boxes grey in their defaults/)).toBeTruthy()
   })
 
   it('recalculates with the Monte Carlo knobs shifted back to fractions', async () => {
@@ -366,14 +392,27 @@ describe('ProjectionPage', () => {
     )
   })
 
-  it('refuses a zero volatility in the box vocabulary, spending no request', async () => {
+  it('sends a typed zero volatility — the fan’s off switch, not a refusal', async () => {
     renderPage()
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
     fireEvent.change(box(/volatility/i), { target: { value: '0' } })
     fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
 
-    expect(screen.getByText('Volatility % must be greater than 0 and at most 100')).toBeTruthy()
+    // 0 is INSIDE the fence now, and a typed 0 is a value, not a blank: it must reach the
+    // server, where it means "run no simulation".
+    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
+    expect(fetchProjection).toHaveBeenLastCalledWith(expect.objectContaining({ volatility: '0' }))
+  })
+
+  it('fences volatility above 100 in the box vocabulary, spending no request', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+
+    fireEvent.change(box(/volatility/i), { target: { value: '150' } })
+    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+
+    expect(screen.getByText('Volatility % must be between 0 and 100')).toBeTruthy()
     expect(fetchProjection).toHaveBeenCalledTimes(1) // the mount load only
   })
 
@@ -393,7 +432,8 @@ describe('ProjectionPage', () => {
     expect(fetchProjection).toHaveBeenCalledTimes(1)
   })
 
-  it('dashes the FI probability tile until a volatility is in play', async () => {
+  it('dashes the FI probability tile when the fan is switched off', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fanOff())
     renderPage()
     await screen.findByText('$1,500,000.00')
 
@@ -403,7 +443,6 @@ describe('ProjectionPage', () => {
   })
 
   it('states the FI probability with its p50 and p90 months', async () => {
-    vi.mocked(fetchProjection).mockResolvedValue(simulated())
     renderPage()
 
     await screen.findByText('$1,500,000.00')
@@ -413,7 +452,6 @@ describe('ProjectionPage', () => {
   })
 
   it('draws the fan under the lines when the payload carries bands', async () => {
-    vi.mocked(fetchProjection).mockResolvedValue(simulated())
     renderPage()
 
     const charts = await screen.findAllByTestId('echart')
@@ -428,6 +466,7 @@ describe('ProjectionPage', () => {
   })
 
   it('charts the three deterministic series alone when there are no bands', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(fanOff())
     renderPage()
 
     const charts = await screen.findAllByTestId('echart')

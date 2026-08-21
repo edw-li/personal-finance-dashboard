@@ -69,7 +69,7 @@ resolved values (never None). Where the current code computes `inflation_rate`/
 - Modify: `src/pages/ProjectionPage.tsx`
 - Test: `src/pages/ProjectionPage.test.tsx`
 
-- [ ] **Step 1:** Read `src/pages/ProjectionPage.tsx` in full. In the one-shot echo-seed
+- [x] **Step 1:** Read `src/pages/ProjectionPage.tsx` in full. In the one-shot echo-seed
   block, REMOVE the three new-knob entries (volatility/inflation/contributionGrowth stay
   `''` — with a comment: assumptions render as placeholders, not filled boxes; the five
   derived knobs keep seeding). On each of the three inputs add
@@ -77,22 +77,22 @@ resolved values (never None). Where the current code computes `inflation_rate`/
   shape for the other two; `data` is in scope where the form renders — inside the
   `data && (…)` branch, so `data.volatility == null ? '' : …` suffices; null echoes —
   a stale backend — leave the placeholder empty rather than lying).
-- [ ] **Step 2:** Widen the volatility fence to `[0, 100]` with the message
+- [x] **Step 2:** Widen the volatility fence to `[0, 100]` with the message
   `"Volatility % must be between 0 and 100"`. Update the assumptions drill-hint: append
   `"The three assumption boxes grey in their defaults — blank uses them; 0 turns the fan
   off (volatility) or reads nominal dollars (inflation)."` Update the investable-chart
   hint sentence from "Enter a real (after-inflation) return to read the chart in today's
   dollars" to `"The chart reads in today's dollars by default (inflation is modelled);
   set inflation to 0 to read nominal dollars."`
-- [ ] **Step 3:** Tests: default fixture's three echoes become `"0.150000"` /
+- [x] **Step 3:** Tests: default fixture's three echoes become `"0.150000"` /
   `"0.030000"` / `"0.030000"` with a bands object (the server's new truth — keep ONE
   fixture variant with null echoes to pin stale-backend placeholder-empties); assert the
   three boxes have `value === ''` AND the placeholder attributes carry `"15"`, `"3"`,
   `"3"`; assert recalculate with blank boxes still omits all three params; volatility
   `"0"` typed → param `volatility=0` sent (fence allows it); fence message pin updated;
   hint text pins updated.
-- [ ] **Step 4:** `npm run test`, `npm run lint` (1 sanctioned warning), `npm run build` → green.
-- [ ] **Step 5:** Commit — `git commit -am "feat: assumption boxes show echo-fed placeholders; fan on by default"`
+- [x] **Step 4:** `npm run test`, `npm run lint` (1 sanctioned warning), `npm run build` → green.
+- [x] **Step 5:** Commit — `git commit -am "feat: assumption boxes show echo-fed placeholders; fan on by default"`
 
 ---
 

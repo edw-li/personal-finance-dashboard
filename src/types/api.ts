@@ -798,8 +798,10 @@ export interface ProjectionOut {
   projected: string[]
   coast: string[]
   warnings: string[]
-  // Monte Carlo — populated only when the `volatility` knob was sent; null everywhere
-  // otherwise, so a deterministic run and an older payload read the same.
+  // Monte Carlo. The three assumption echoes name what the run actually used, and a live
+  // server always sends them (absent knobs default server-side) — they stay NULLABLE for
+  // a stale backend, which the page reads as "no placeholder". `bands` and the probability
+  // block are null whenever volatility was an explicit 0 (the fan's off switch).
   volatility: string | null
   inflation: string | null
   contribution_growth: string | null

@@ -24,8 +24,10 @@ function message(err: unknown, fallback: string): string {
 
 // The eight what-if knobs, percent-form where the wire wants fractions ("5" = 5%/yr —
 // shiftPoint converts on the way out, the echo shifts back on the way in). Blank means
-// "derive it server-side", which is the whole modeler contract — and for volatility it
-// means more: blank is the deterministic chart, with no simulation run at all.
+// "let the server decide", which is the whole modeler contract: derived from the data for
+// the five older knobs, the planning DEFAULT for the three assumptions (which is why only
+// those three carry the echo as a placeholder). An explicit 0 is a value, not a blank —
+// volatility 0 turns the fan off, inflation 0 reads nominal dollars.
 interface Knobs {
   annualReturn: string
   monthlyContribution: string
@@ -53,6 +55,8 @@ const EMPTY_KNOBS: Knobs = {
 // server's fraction-worded bounds would call a perfectly good 5 out of range.
 const RETURN_MIN_PCT = -50
 const RETURN_MAX_PCT = 50
+// 0 is INSIDE the volatility fence: it is the fan's off switch server-side, not a refusal.
+const VOLATILITY_MAX_PCT = 100
 const INFLATION_MIN_PCT = -10
 const INFLATION_MAX_PCT = 25
 const GROWTH_MAX_PCT = 25
@@ -97,10 +101,15 @@ export default function ProjectionPage() {
         setMissing(false)
         if (!knobsSeeded.current) {
           knobsSeeded.current = true
-          // The echo IS the seed: the server answers with the values it actually used
-          // (derived or defaulted), shifted into the boxes' percent vocabulary. Per-field,
-          // because the boxes are on screen throughout this first load (EsppPage's rule).
+          // The echo IS the seed for the five DERIVED knobs: the server answers with the
+          // values it actually used (derived or defaulted), shifted into the boxes'
+          // percent vocabulary. Per-field, because the boxes are on screen throughout this
+          // first load (EsppPage's rule). The three ASSUMPTION knobs are deliberately
+          // absent from this block — they render as grey PLACEHOLDERS instead of filled
+          // boxes (see the inputs below), so blank keeps meaning "use the server's
+          // default" and the spread carries whatever the user has already typed.
           setKnobs((current) => ({
+            ...current,
             annualReturn:
               current.annualReturn === '' ? shiftPoint(res.annual_return, 2) : current.annualReturn,
             monthlyContribution:
@@ -109,20 +118,6 @@ export default function ProjectionPage() {
                 : current.monthlyContribution,
             annualSpend: current.annualSpend === '' ? (res.annual_spend ?? '') : current.annualSpend,
             swr: current.swr === '' ? shiftPoint(res.swr_pct, 2) : current.swr,
-            // The three Monte Carlo knobs echo NULL when they weren't sent, and a null
-            // echo seeds nothing: an empty box is the honest reading of "not in play".
-            volatility:
-              current.volatility === '' && res.volatility !== null
-                ? shiftPoint(res.volatility, 2)
-                : current.volatility,
-            inflation:
-              current.inflation === '' && res.inflation !== null
-                ? shiftPoint(res.inflation, 2)
-                : current.inflation,
-            contributionGrowth:
-              current.contributionGrowth === '' && res.contribution_growth !== null
-                ? shiftPoint(res.contribution_growth, 2)
-                : current.contributionGrowth,
             years: current.years === '' ? String(res.years) : current.years,
           }))
         }
@@ -202,8 +197,8 @@ export default function ProjectionPage() {
         return
       }
       const n = Number(volatility)
-      if (!(n > 0) || n > 100) {
-        setFormError('Volatility % must be greater than 0 and at most 100')
+      if (n < 0 || n > VOLATILITY_MAX_PCT) {
+        setFormError(`Volatility % must be between 0 and ${VOLATILITY_MAX_PCT}`)
         return
       }
     }
@@ -398,11 +393,11 @@ export default function ProjectionPage() {
               )}
               <p className="drill-hint">
                 Deterministic compounding at one assumed return — a planning sketch, not a
-                forecast. Enter a real (after-inflation) return to read the chart in
-                today&apos;s dollars; the growth-only line is the same balance with
-                contributions turned off. With a volatility, bands are percentiles across
-                500 simulated lognormal-return paths — seed-stable, so identical knobs
-                redraw identical bands.
+                forecast. The chart reads in today&apos;s dollars by default (inflation is
+                modelled); set inflation to 0 to read nominal dollars. The growth-only line
+                is the same balance with contributions turned off. With a volatility, bands
+                are percentiles across 500 simulated lognormal-return paths — seed-stable,
+                so identical knobs redraw identical bands.
               </p>
             </section>
 
@@ -413,7 +408,9 @@ export default function ProjectionPage() {
                 trailing 12 months of (net pay − spend), annual spend from the trailing
                 spend, the withdrawal rate from Settings. Percents are percents (5 = 5%).
                 Volatility turns on the bands; inflation converts everything to
-                today&apos;s dollars; contribution growth models raises.
+                today&apos;s dollars; contribution growth models raises. The three
+                assumption boxes grey in their defaults — blank uses them; 0 turns the fan
+                off (volatility) or reads nominal dollars (inflation).
               </p>
               <form
                 className="projection-form"
@@ -458,11 +455,16 @@ export default function ProjectionPage() {
                     onChange={(e) => setKnob('swr')(e.target.value)}
                   />
                 </label>
+                {/* The three assumptions: blank boxes carrying the ECHO as a placeholder,
+                    so the grey number is always exactly what the server just ran with. A
+                    null echo (a stale backend, before the defaults existed) leaves the
+                    placeholder empty rather than naming a value nothing used. */}
                 <label>
                   Volatility (%/yr)
                   <input
                     className="field-input"
                     inputMode="decimal"
+                    placeholder={data.volatility == null ? '' : shiftPoint(data.volatility, 2)}
                     value={knobs.volatility}
                     onChange={(e) => setKnob('volatility')(e.target.value)}
                   />
@@ -472,6 +474,7 @@ export default function ProjectionPage() {
                   <input
                     className="field-input"
                     inputMode="decimal"
+                    placeholder={data.inflation == null ? '' : shiftPoint(data.inflation, 2)}
                     value={knobs.inflation}
                     onChange={(e) => setKnob('inflation')(e.target.value)}
                   />
@@ -481,6 +484,11 @@ export default function ProjectionPage() {
                   <input
                     className="field-input"
                     inputMode="decimal"
+                    placeholder={
+                      data.contribution_growth == null
+                        ? ''
+                        : shiftPoint(data.contribution_growth, 2)
+                    }
                     value={knobs.contributionGrowth}
                     onChange={(e) => setKnob('contributionGrowth')(e.target.value)}
                   />

@@ -33,6 +33,13 @@ it('names the Monte Carlo knobs the way the wire does', async () => {
   expect(path()).toBe('/projection?volatility=0.15&inflation=0.03&contribution_growth=0.02')
 })
 
+it('sends an explicit zero through — it is the fan off, not a blank', async () => {
+  // "0" is a non-empty string and therefore truthy: the blank-omit filter must not eat it,
+  // because absent means the 15% DEFAULT while 0 means "run no simulation".
+  await fetchProjection({ volatility: '0', inflation: '0', contributionGrowth: '0' })
+  expect(path()).toBe('/projection?volatility=0&inflation=0&contribution_growth=0')
+})
+
 it('keeps the older knobs ahead of the new ones in the query', async () => {
   await fetchProjection({ annualReturn: '0.07', years: '30', volatility: '0.15' })
   expect(path()).toBe('/projection?annual_return=0.07&years=30&volatility=0.15')
