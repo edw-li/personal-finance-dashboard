@@ -915,6 +915,36 @@ describe('CompPage — RSU grant writes', () => {
     expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(1)
   })
 
+  it('shuts the seed chips and the row Edits while a save is in flight', async () => {
+    const slow = deferred<RsuGrantOut>()
+    vi.mocked(createRsuGrant).mockReturnValueOnce(slow.promise)
+    render(<CompPage />)
+    await screen.findByText('RSU grants')
+
+    const chip = () =>
+      screen.getByRole('button', {
+        name: 'Add 2026 focal — 480 sh @ $129.57',
+      }) as HTMLButtonElement
+    const edit = () =>
+      screen.getByRole('button', { name: 'Edit the FY24 new hire grant' }) as HTMLButtonElement
+    expect(chip().disabled).toBe(false)
+
+    fillNewGrant()
+    fireEvent.click(screen.getByRole('button', { name: 'Add grant' }))
+
+    // Both of these fill the same form the save is about to reset (submit's
+    // `setForm(EMPTY_GRANT)`), so an offer taken — or a row opened — mid-flight would be
+    // wiped a moment after it was clicked. They shut with the rest of the panel.
+    await waitFor(() => expect(chip().disabled).toBe(true))
+    expect(edit().disabled).toBe(true)
+
+    await act(async () => {
+      slow.resolve(GRANT_NEW_HIRE)
+    })
+    expect(chip().disabled).toBe(false)
+    expect(edit().disabled).toBe(false)
+  })
+
   it('deletes a grant only after the confirm names it', async () => {
     render(<CompPage />)
     await screen.findByText('RSU grants')

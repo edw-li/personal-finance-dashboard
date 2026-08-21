@@ -584,6 +584,19 @@ spot-check **/** (Overview), **/taxes** and **/settings**.
 > first refresh after it backfills roughly a year of `source='auto'` dividend rows by
 > itself, so **/portfolio** → **Dividends** fills in without any extra step.
 
+> **Addendum (2026-08-21)**: the RSU vesting + withholding build adds one more additive
+> migration — `983a8ec3f1cd` (`rsu_grants`), chained on `b3d47a1c9e62` and applied at boot
+> like every other. The table is **dashboard-only**: workbook imports never read or write
+> it (pinned by test), so re-imports are unaffected; the downgrade is a bare `drop_table`
+> with no foreign keys in or out and no old-code references, order-safe both directions.
+> The spot-checks grow again — **/comp** carries the RSU grants card and the computed
+> vesting schedule below the trajectory (both empty until grants are entered, and a focal
+> year with refresh RSUs offers a seed chip that fills the form in one click), and
+> **/taxes** carries the *"Will I owe?"* withholding tracker on the **current** calendar
+> year alone: absent on a settled year by design, not a regression. The `espp_ticker`
+> setting doubles as the employer/RSU ticker — without it the schedule renders unpriced
+> and says so.
+
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the
 4.4 cache-control check once after the first deploy carrying the split route chunks.

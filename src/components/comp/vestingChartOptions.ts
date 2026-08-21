@@ -79,15 +79,21 @@ export function vestingChartOption(
     .filter(({ vest, amount }) => amount !== null && slotByGrantId.has(vest.grant_id))
   if (drawable.length === 0) return null
 
-  // The empty-LOOKING chart: every column would draw at zero height, and no PAST tranche
-  // behind them carries a stored close. An axis of flat zeros says "these vests were worth
-  // nothing", which is the one thing an unpriced vest does not mean (`contribution`'s note) —
-  // so the caller's empty note, with the payload's warnings beside it, is the honest answer.
-  // A PRICED zero still draws: a 0.00 close, or a zero-share tranche valued at a real quote,
-  // is a figure the server actually computed, and the column IS its answer.
+  // The empty-LOOKING chart: every column would draw at zero height, and not one drawable
+  // tranche is a past vest with a stored close behind it. An axis of flat zeros says "these
+  // vests were worth nothing", which is the one thing an unpriced vest does not mean
+  // (`contribution`'s note) — so the caller's empty note, with the payload's warnings beside
+  // it, is the honest answer. A PRICED zero still draws: a 0.00 close, or a zero-share tranche
+  // valued at a real quote, is a figure the server actually computed, and the column IS its
+  // answer.
+  //
+  // With no past tranche at all the second clause is vacuously true, so an all-FUTURE chart of
+  // zeros nulls as well — the same answer for the same reason, and unreachable with validated
+  // data regardless: a grant's tranches sum to its `shares` (>= 1), so every future column can
+  // only be zero if the latest quote itself is 0.
   if (
     drawable.every(({ amount }) => amount === 0) &&
-    drawable.every(({ vest }) => !vest.is_past || vest.value === null)
+    !drawable.some(({ vest }) => vest.is_past && vest.value !== null)
   ) {
     return null
   }
