@@ -79,6 +79,19 @@ export function vestingChartOption(
     .filter(({ vest, amount }) => amount !== null && slotByGrantId.has(vest.grant_id))
   if (drawable.length === 0) return null
 
+  // The empty-LOOKING chart: every column would draw at zero height, and no PAST tranche
+  // behind them carries a stored close. An axis of flat zeros says "these vests were worth
+  // nothing", which is the one thing an unpriced vest does not mean (`contribution`'s note) —
+  // so the caller's empty note, with the payload's warnings beside it, is the honest answer.
+  // A PRICED zero still draws: a 0.00 close, or a zero-share tranche valued at a real quote,
+  // is a figure the server actually computed, and the column IS its answer.
+  if (
+    drawable.every(({ amount }) => amount === 0) &&
+    drawable.every(({ vest }) => !vest.is_past || vest.value === null)
+  ) {
+    return null
+  }
+
   // The feed is chronological, but the chart owns its own x-axis order rather than trusting
   // it (tcTrajectoryOption's reasoning). ISO dates sort as strings.
   const dates = [...new Set(drawable.map(({ vest }) => vest.vest_date))].sort()

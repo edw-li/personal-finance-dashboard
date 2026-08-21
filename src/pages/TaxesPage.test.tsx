@@ -8,10 +8,13 @@ import type {
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
+  WithholdingOut,
 } from '../types/api'
 import TaxesPage from './TaxesPage'
 
-// JURISDICTIONS (render order) stays real; every request is stubbed.
+// JURISDICTIONS (render order) stays real; every request is stubbed — including the
+// withholding card's own, which the page mounts (unmocked, unlike the what-if one) whenever
+// the selected year IS the current one.
 vi.mock('../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/taxes')>()),
   fetchTaxYears: vi.fn(),
@@ -19,6 +22,7 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   fetchTaxBrackets: vi.fn(),
   fetchTaxSummary: vi.fn(),
   fetchAllTaxSummaries: vi.fn(),
+  fetchWithholding: vi.fn(),
   putTaxInputs: vi.fn(),
   putTaxBrackets: vi.fn(),
   cloneBrackets: vi.fn(),
@@ -82,6 +86,7 @@ import {
   fetchTaxInputs,
   fetchTaxSummary,
   fetchTaxYears,
+  fetchWithholding,
   putTaxBrackets,
   putTaxInputs,
 } from '../api/taxes'
@@ -157,6 +162,29 @@ function summaryFor(year: number): TaxSummaryOut {
   }
 }
 
+// The withholding card's feed — the panel has a file of its own (WithholdingPanel.test.tsx),
+// so this is the minimum that renders, with figures deliberately unlike every other fixture's
+// so a tile of it can never be mistaken for one of the summary panel's.
+function withholdingFor(year: number): WithholdingOut {
+  const leg = { ytd: '2000.00', projected: '4000.00' }
+  return {
+    year,
+    liability_total: '5000.00',
+    salary: leg,
+    vest: {
+      income_ytd: '0.00', income_projected: '0.00',
+      supplemental_ytd: '0.00', supplemental_projected: '0.00',
+      fica_ytd: '0.00', fica_projected: '0.00',
+    },
+    total: leg,
+    balance_projected: '1000.00',
+    checks_elapsed: 12,
+    checks_total: 24,
+    safe_harbor: null,
+    warnings: [],
+  }
+}
+
 // The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 21 of
 // them, in ONE line (backend/app/services/tax_service.py MISSING_INPUTS_WARNING). It is
 // rendered verbatim — the list IS the message.
@@ -209,6 +237,7 @@ beforeEach(() => {
   // The panel's own feed. Empty by default so no test's pins can collide with a trend
   // year's numbers; the tests that are ABOUT the trend fill it in.
   vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [] })
+  vi.mocked(fetchWithholding).mockImplementation(async (year: number) => withholdingFor(year))
   vi.mocked(cloneBrackets).mockImplementation(async (year: number) => bracketsFor(year))
   vi.mocked(putTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
   vi.mocked(putTaxBrackets).mockImplementation(async (year: number) => bracketsFor(year))
@@ -849,8 +878,58 @@ describe('TaxesPage', () => {
     // The panel is keyed by year, so this is a fresh mount — and the seed is a property of
     // the URL, not of the year, so it goes down again: the link said "model selling VTI",
     // and it means that against whichever year is on screen.
-    const panel = await screen.findByTestId('whatif-panel')
-    expect(panel.getAttribute('data-year')).toBe('2023')
-    expect(panel.getAttribute('data-ticker')).toBe('VTI')
+    //
+    // waitFor, not a bare read off findByTestId: the card is on screen either way (it is the
+    // PROPS that move), and the year only reaches it when the switch's three payloads land —
+    // which the "was 2023 requested" wait above does not promise. Read straight, this raced
+    // the Promise.all's own microtasks and read 2024 about one run in six.
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2023'),
+    )
+    expect(screen.getByTestId('whatif-panel').getAttribute('data-ticker')).toBe('VTI')
+  })
+
+  // --- the withholding card (Task 9) ----------------------------------------------------
+  // Clock-relative years throughout, never a pinned 2026: the card is the CURRENT year's or
+  // nothing at all, and a hard-coded fixture year would rot on a New Year's Day.
+
+  const yearRow = (year: number): TaxYearOut => ({
+    year, notes: null, input_count: 21, bracket_count: 42,
+  })
+
+  it('mounts the will-I-owe card on the current year and loads it for that year', async () => {
+    const thisYear = new Date().getFullYear()
+    vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear - 1), yearRow(thisYear)])
+    renderPage()
+
+    // The latest year wins on arrival, and it is this one.
+    expect(await screen.findByText(`Will I owe? — ${thisYear}`)).toBeTruthy()
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledWith(thisYear))
+    // The card's own figures, from its own feed — not the summary panel's.
+    expect(await screen.findByText('$5,000.00')).toBeTruthy()
+  })
+
+  it('leaves the card off a past year rather than spending a request on the 422', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(new Date().getFullYear() - 1)])
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    // The endpoint refuses any year but the current one; the page asks the same question here
+    // rather than drawing a card whose only possible content is that refusal.
+    expect(screen.queryByText(/will i owe/i)).toBeNull()
+    expect(vi.mocked(fetchWithholding)).not.toHaveBeenCalled()
+  })
+
+  it('takes the card away when the user switches off the current year', async () => {
+    const thisYear = new Date().getFullYear()
+    vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear - 1), yearRow(thisYear)])
+    renderPage()
+    await screen.findByText(`Will I owe? — ${thisYear}`)
+
+    fireEvent.click(screen.getByRole('button', { name: String(thisYear - 1) }))
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(thisYear - 1))
+    // Gone with the year it belonged to, and no second request was spent on the way out.
+    await waitFor(() => expect(screen.queryByText(/will i owe/i)).toBeNull())
+    expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
   })
 })

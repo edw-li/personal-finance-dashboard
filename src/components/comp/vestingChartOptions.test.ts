@@ -184,6 +184,30 @@ describe('vestingChartOption', () => {
     expect(seriesOf(option)[0].data).toEqual([11207.5, 3239.13, 0])
   })
 
+  it('returns null when every past tranche is unpriced and nothing else draws', () => {
+    // Two vests that happened, neither with a bar behind it: both contribute 0, so the chart
+    // would be an axis of flat zeros — and a flat zero says "worth nothing", which is not what
+    // "no stored close" means. The caller's empty note (with the payload's warnings beside it)
+    // is the honest answer instead.
+    const first = vest({
+      vest_date: '2025-02-19', grant_id: 1, label: 'FY24 new hire', shares: 25, is_past: true,
+    })
+    const second = vest({
+      vest_date: '2025-05-21', grant_id: 1, label: 'FY24 new hire', shares: 25, is_past: true,
+    })
+    expect(vestingChartOption([first, second], [NEW_HIRE], QUOTE)).toBeNull()
+
+    // One PRICED zero among them is a figure the server actually computed, so the chart is
+    // drawn — the zero-share-tranche rule above, seen from the other side.
+    const priced = vest({
+      vest_date: '2025-08-20', grant_id: 1, label: 'FY24 new hire', shares: 0,
+      fmv: '150.0000', value: '0.00', is_past: true,
+    })
+    const option = vestingChartOption([first, second, priced], [NEW_HIRE], QUOTE)
+    expect(categoriesOf(option)).toEqual(['Feb 19, 2025', 'May 21, 2025', 'Aug 20, 2025'])
+    expect(seriesOf(option)[0].data).toEqual([0, 0, 0])
+  })
+
   it('folds the ninth grant and beyond into one Other series', () => {
     const { grants, vests } = manyGrants(9)
     const series = seriesOf(vestingChartOption(vests, grants, QUOTE))

@@ -15,6 +15,7 @@ import BracketsEditor from '../components/taxes/BracketsEditor'
 import InputsForm from '../components/taxes/InputsForm'
 import SummaryPanel from '../components/taxes/SummaryPanel'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
+import WithholdingPanel from '../components/taxes/WithholdingPanel'
 import type { TaxBracketsOut, TaxInputsOut, TaxSummaryOut, TaxYearOut } from '../types/api'
 import '../components/panels.css'
 import './TaxesPage.css'
@@ -478,6 +479,17 @@ export default function TaxesPage() {
               redraw the same chart. Its per-year half is a prop, so it follows the year
               anyway. */}
           <SummaryPanel summary={detail.summary} refreshKey={trendRefresh} />
+          {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
+              be stored and summarizable, and this card still cannot be drawn for it) — asked
+              here rather than spending a request on the refusal. Keyed by year like the card
+              below, so a switch INTO this year mounts it fresh rather than leaving another
+              year's estimate under this heading. */}
+          {detail.summary.year === new Date().getFullYear() && (
+            <WithholdingPanel
+              key={`withholding-${detail.summary.year}`}
+              year={detail.summary.year}
+            />
+          )}
           {/* Keyed by year for the editors' own reason: a real switch remounts it, so the
               typed legs and any scenario on screen go with the year they were run against
               (a stale scenario under a new year's heading would lie), while a same-year

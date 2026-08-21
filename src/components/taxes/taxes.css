@@ -232,3 +232,19 @@
      card sideways (the .tax-warnings rule). */
   overflow-wrap: anywhere;
 }
+
+/* --- will-I-owe (withholding) panel --- */
+
+/* The card's advisory sentences: the safe-harbor line, the W-2 consistency nudge and the
+   server's own warnings. `.hint` is the app's word for them, and this is the TAXES page's copy
+   of the declaration — a deliberate near-twin of portfolio.css's and CompPage.css's, because
+   those stylesheets travel with their own screens and this one must not depend on either
+   happening to be in the bundle (the .tax-chart-header note at the top of this file). */
+.withholding-panel .hint {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 4px 0 10px;
+  /* A warning naming every unpriced vest date is a long line: it wraps rather than pushing
+     the card sideways (the .tax-warnings rule). */
+  overflow-wrap: anywhere;
+}

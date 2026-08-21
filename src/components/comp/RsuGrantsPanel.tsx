@@ -247,6 +247,10 @@ export default function RsuGrantsPanel({
                 key={seed.focal_year}
                 type="button"
                 className="button"
+                // Shut mid-save, like every other button on this panel: a save's echo resets
+                // the form (submit's `setForm(EMPTY_GRANT)`), so an offer prefilled while one
+                // was in flight would be wiped a moment after it was clicked.
+                disabled={busy}
                 onClick={() => prefill(seed)}
               >
                 {`Add ${seed.suggested_label} — ${formatShares(seed.shares)} sh @ ${formatCurrency(
@@ -397,6 +401,10 @@ export default function RsuGrantsPanel({
                       type="button"
                       className="button"
                       aria-label={`Edit the ${grant.label} grant`}
+                      // Same reason as the seed chips above and the Delete beside it: this
+                      // fills the form from the row, and a save landing a moment later would
+                      // reset it out from under the click.
+                      disabled={busy}
                       onClick={() => startEdit(grant)}
                     >
                       Edit
