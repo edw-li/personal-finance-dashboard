@@ -663,6 +663,50 @@ async def test_backfill_failure_degrades_alone_and_the_monday_append_stands(db, 
     assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(MONDAY, D("1200.00"))]
 
 
+async def test_append_failure_degrades_alone_and_the_backfilled_rows_stand(db, monkeypatch):
+    # The reverse of the test above — the other half of S1's promise: an exploding Monday
+    # append must not destroy the same run's backfilled rows. Same source-module patch
+    # (run_refresh imports lazily, inside the function). Monday's own bar IS available, so
+    # that date's absence below proves the explosion was isolated, not a lack of data.
+    sec = await seed_security(db, "NVDA")
+    db.add(buy(sec.id))
+    db.add(
+        PortfolioValueHistory(
+            snapshot_date=MONDAY - timedelta(days=14),
+            market_value=D("1000.00"),
+            cost_basis=D("900.00"),
+            sp500_value=D("800.00"),
+        )
+    )
+    await db.commit()
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("append exploded")
+
+    monkeypatch.setattr("app.services.value_history.append_value_snapshot", boom)
+    provider = FakeProvider({"NVDA": [bar(MONDAY - timedelta(days=7), "110"), bar(MONDAY, "120")]})
+
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY
+    )
+
+    # The backfill's write is what history_appended reports; MONDAY itself never lands.
+    assert appended is True
+    snapshots = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(s.snapshot_date, s.market_value) for s in snapshots] == [
+        (MONDAY - timedelta(days=14), D("1000.00")),
+        (MONDAY - timedelta(days=7), D("1100.00")),  # 10 × that Monday's 110 close
+    ]
+
+
 async def test_backfill_anchors_off_a_stray_mid_week_row(db):
     # Daily-era leftovers: the newest row may be a Wednesday (flushed only on the next
     # re-upload). The first fill is the next Monday AFTER it — never the same week's

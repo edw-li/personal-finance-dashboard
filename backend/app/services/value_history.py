@@ -33,7 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import PortfolioValueHistory, PriceHistory, Security
+from app.models import LatestPrice, PortfolioValueHistory, PriceHistory, Security
 from app.services.portfolio_calc import MONEY_Q, SHARE_Q, fold_transactions, load_portfolio
 from app.services.scheduler import product_today
 
@@ -97,7 +97,7 @@ async def _extended_baseline(db: AsyncSession, today: date, market_value: Decima
 
 async def _current_book(
     db: AsyncSession,
-) -> tuple[dict[int, Decimal], dict[int, Decimal], dict]:
+) -> tuple[dict[int, Decimal], dict[int, Decimal], dict[int, LatestPrice]]:
     """Per-security shares and cost from the live fold — the holdings table's own
     numbers — plus the latest quotes. Positions are mostly undated by design
     (PositionTransaction.sort_index), so the CURRENT share count is the only one
@@ -179,7 +179,7 @@ async def append_value_snapshot(db: AsyncSession, *, today: date | None = None) 
     market_value, cost_basis, any_held, any_priced = _value_book(
         shares_by_sec,
         cost_by_sec,
-        lambda sec_id: latest[sec_id].price if sec_id in latest else None,
+        lambda sec_id: quote.price if (quote := latest.get(sec_id)) is not None else None,
     )
     if not any_held or not any_priced:
         logger.info("value snapshot skipped: nothing held and priced yet")
@@ -269,6 +269,9 @@ async def backfill_missed_snapshots(db: AsyncSession, *, today: date | None = No
             shares_by_sec, cost_by_sec, price_at
         )
         if not any_priced:
+            # Deliberate hole, said out loud (the fills at the bottom already log): an ops
+            # log where only successes speak makes "no row" read as a bug.
+            logger.info("value snapshot: missed Monday %s has no prices — left a hole", monday)
             continue
         # Chronological order on purpose: each fill becomes the next one's S&P anchor.
         sp500_value = await _extended_baseline(db, monday, market_value)
