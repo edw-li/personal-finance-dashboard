@@ -134,7 +134,9 @@ async def test_importer_never_writes_rsu_grants(db, workbook_path):
 Adapt the apply invocation/fixture names to what `test_importer_apply.py` actually uses — read
 it first; the assertion (exactly the pre-seeded row, untouched) is the contract.
 
-- [ ] **Step 6: Run the suite files, expect PASS** (migration applies via conftest rebuild):
+- [ ] **Step 6: Run the suite files, expect PASS** (note: conftest builds the test schema via
+`Base.metadata.create_all`, so pytest never executes migration SQL — the migration's own gate
+is Step 7's `alembic upgrade head` + `alembic check` against the dev DB):
 `./.venv/Scripts/python -m pytest tests/test_models_comp.py tests/test_importer_apply.py -q`
 
 - [ ] **Step 7: `alembic check` clean** (`./.venv/Scripts/python -m alembic check`, cwd=backend),
