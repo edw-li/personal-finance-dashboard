@@ -121,7 +121,10 @@ def simulate(
   be two names for one curve). Tooltip: band series formatted as ranges is over-clever —
   keep the default rows but name them (`10–90% low`, …)? No: **suppress band series from
   the tooltip** (`tooltip: {show: false}` per band series) and let the three real lines
-  carry it — the bands are geometry, the tooltip stays honest.
+  carry it — the bands are geometry, the tooltip stays honest. **(Revised 2026-08-20,
+  user request: the wash SERIES stay silent — their stacked values are diffs — but a
+  chart-level formatter now reconstructs the real percentile RANGES from the bands
+  arrays, appending "10–90% band: $a – $b" / "25–75% band" rows to the hover.)**
 - **FI probability tile:** value `formatPct(fi_probability)` with delta line
   `p50 {formatMonth(fi_month_p50)} · p90 {formatMonth(fi_month_p90)}` when present;
   dash when deterministic-only.

@@ -8,6 +8,7 @@ import {
   netWorthProjectionOption,
   PROJECTION_SERIES,
   projectionOption,
+  projectionTooltipFormatter,
 } from './projectionChartOptions'
 
 const DATA = {
@@ -161,6 +162,48 @@ describe('projectionOption', () => {
       PROJECTION_SERIES[1],
       ...BAND_SERIES,
     ])
+  })
+
+  it('tooltip reconstructs the band RANGES the silent washes cannot say (2026-08-20 revision)', () => {
+    const option = projectionOption({ ...DATA, bands: BANDS }) as unknown as {
+      tooltip: { formatter?: (params: unknown) => string; valueFormatter?: unknown }
+    }
+    expect(option.tooltip.valueFormatter).toBeUndefined()
+    expect(typeof option.tooltip.formatter).toBe('function')
+    const html = option.tooltip.formatter!([
+      { seriesName: 'Projected', marker: 'M1', axisValueLabel: 'Sep 2026', dataIndex: 1, value: 104000 },
+      { seriesName: 'Growth only', marker: 'M2', dataIndex: 1, value: 100000 },
+      { seriesName: 'FI target', marker: 'M3', dataIndex: 1, value: 1500000 },
+    ])
+    expect(html).toContain('<strong>Sep 2026</strong>')
+    expect(html).toContain('M1Projected: $104,000.00')
+    expect(html).toContain('M3FI target: $1,500,000.00')
+    // Real percentile ABSOLUTES from the bands arrays — never the stack's diff values.
+    expect(html).toContain(`${BAND_SERIES[0]}: $90,000.00 – $120,000.00`)
+    expect(html).toContain(`${BAND_SERIES[1]}: $95,000.00 – $112,000.00`)
+    // The legend's own order: the wide band above the tight one.
+    expect(html.indexOf(BAND_SERIES[0])).toBeLessThan(html.indexOf(BAND_SERIES[1]))
+  })
+
+  it('keeps the plain per-value tooltip without bands — back-compat', () => {
+    const option = projectionOption(DATA) as unknown as {
+      tooltip: { formatter?: unknown; valueFormatter?: unknown }
+    }
+    expect(option.tooltip.formatter).toBeUndefined()
+    expect(typeof option.tooltip.valueFormatter).toBe('function')
+  })
+
+  it('tooltip formatter drops non-finite rows and answers nothing with none', () => {
+    const formatter = projectionTooltipFormatter(BANDS)
+    expect(formatter([{ seriesName: 'Projected', value: null }])).toBe('')
+    const html = formatter([
+      { seriesName: 'Projected', axisValueLabel: 'Oct 2026', dataIndex: 2, value: 108000 },
+      { seriesName: 'FI target', value: Number.NaN },
+    ])
+    expect(html).toContain('Projected: $108,000.00')
+    expect(html).not.toContain('FI target')
+    expect(html).toContain(`${BAND_SERIES[0]}: $80,000.00 – $150,000.00`)
+    expect(html).toContain(`${BAND_SERIES[1]}: $92,000.00 – $125,000.00`)
   })
 })
 

@@ -19,6 +19,60 @@ export const PROJECTION_SERIES = ['Projected', 'Growth only', 'FI target'] as co
 // `BAND_SERIES[0]`, the upper wears the `-upper` suffix and stays out of the legend.
 export const BAND_SERIES = ['10–90% band', '25–75% band'] as const
 
+// The runtime shape for trigger:'axis' params (historyChartOptions' subset posture).
+interface AxisTooltipParam {
+  seriesName?: string
+  marker?: string
+  axisValueLabel?: string
+  dataIndex?: number
+  value?: unknown
+}
+
+// The band rows' swatch: the fan's own blue at wash-like strength, echarts-marker
+// shaped, so a range row reads as belonging to the fan rather than to a line.
+const BAND_MARKER =
+  '<span style="display:inline-block;margin-right:4px;border-radius:10px;' +
+  `width:10px;height:10px;background-color:${PALETTE[0]};opacity:0.3;"></span>`
+
+/**
+ * Exported for tests. The wash series stay tooltip-silent because a stacked wash's own
+ * value is a DIFF (p75−p25) — meaningless as a hover number — so the RANGES are
+ * reconstructed here from the percentile arrays by dataIndex instead (2026-08-20 user
+ * revision: hover must answer "what's the band here", not just name the lines). Rows
+ * whose value is not a finite number (a padded null) are dropped, the padded-row rule
+ * historyTooltipFormatter set. Every string is an own constant or a formatted server
+ * number — no user text reaches this HTML.
+ */
+export function projectionTooltipFormatter(
+  bands: Record<string, string[]>,
+): (params: unknown) => string {
+  return (params: unknown) => {
+    const list = (Array.isArray(params) ? params : [params]) as AxisTooltipParam[]
+    const rows = list.filter((p) => typeof p.value === 'number' && Number.isFinite(p.value))
+    if (rows.length === 0) return ''
+    const head = `<strong>${rows[0].axisValueLabel ?? ''}</strong>`
+    const lines = rows.map(
+      (p) => `${p.marker ?? ''}${p.seriesName ?? ''}: ${formatCurrency(p.value as number)}`,
+    )
+    const index = rows[0].dataIndex
+    if (typeof index === 'number') {
+      const at = (key: string) => Number(bands[key]?.[index])
+      const range = (label: string, low: number, high: number) =>
+        Number.isFinite(low) && Number.isFinite(high)
+          ? `${BAND_MARKER}${label}: ${formatCurrency(low)} – ${formatCurrency(high)}`
+          : null
+      // The legend's own order: the wide band first, the tight one under it.
+      for (const line of [
+        range(BAND_SERIES[0], at('p10'), at('p90')),
+        range(BAND_SERIES[1], at('p25'), at('p75')),
+      ]) {
+        if (line !== null) lines.push(line)
+      }
+    }
+    return [head, ...lines].join('<br/>')
+  }
+}
+
 /**
  * Two trajectories and a threshold: projected (blue, the one wash — the money the plan
  * accumulates), growth-only "coast" (orange — what the balance does by itself, so the gap
@@ -49,8 +103,9 @@ export function projectionOption(
           // itself. Two opacities read as "50% of paths" vs "80%".
           const diff = (hi: number[], lo: number[]) => hi.map((v, i) => v - lo[i])
           // All the projection's own blue: uncertainty about one entity wears that
-          // entity's hue (theme law — never a new hue). Tooltip-silent: the bands are
-          // geometry; the three real lines carry the numbers.
+          // entity's hue (theme law — never a new hue). Tooltip-silent: a stacked wash's
+          // own value is a diff, so the chart-level projectionTooltipFormatter
+          // reconstructs the real ranges from the percentile arrays instead.
           const wash = (name: string, values: number[], opacity: number) => ({
             name,
             type: 'line' as const,
@@ -99,11 +154,17 @@ export function projectionOption(
         ...(bands === null ? [] : [...BAND_SERIES]),
       ],
     },
-    tooltip: {
-      trigger: 'axis',
-      valueFormatter: (value) =>
-        value === null || value === undefined ? '—' : formatCurrency(value as number),
-    },
+    // With bands, a full formatter reconstructs the percentile RANGES the silent washes
+    // cannot say for themselves; without them, the plain per-value form stays —
+    // byte-identical to the pre-Monte-Carlo chart (back-compat pin).
+    tooltip:
+      bands === null
+        ? {
+            trigger: 'axis',
+            valueFormatter: (value) =>
+              value === null || value === undefined ? '—' : formatCurrency(value as number),
+          }
+        : { trigger: 'axis', formatter: projectionTooltipFormatter(bands) },
     xAxis: { type: 'category', data: data.months.map(formatMonth), boundaryGap: false },
     yAxis: {
       // Zero-anchored: the projected line carries a wash, and a washed area over a
