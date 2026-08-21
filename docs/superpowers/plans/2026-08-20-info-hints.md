@@ -1,6 +1,6 @@
 # Info Hints Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** An ⓘ beside every chart title, section title, and KPI tile on the data pages, showing a brief authored explanation on hover and keyboard focus.
 
@@ -198,7 +198,7 @@ export default function InfoHint({ text }: { text: string }) {
 | 53 | "Δ take-home" StatTile | Scenario take-home minus baseline. |
 | 54 | Effective-rate StatTile (WhatIfPanel) | Overall effective rate, baseline → scenario. |
 
-- [ ] Transcribe, gates, commit `feat: info hints — taxes`.
+- [x] Transcribe, gates, commit `feat: info hints — taxes`.
 
 ---
 
@@ -233,16 +233,16 @@ export default function InfoHint({ text }: { text: string }) {
 | 77 | "Password" h2 | Changes your login password; existing sessions stay signed in until their token expires. |
 | 78 | "Import workbook" h2 | Dry run shows the diff without writing. Apply overwrites sheet-owned rows — dividends are never touched; taxes inside sheet-covered years reset to the sheet. |
 
-- [ ] **Presence test** (ProjectionPage.test.tsx): the FI-target tile's label contains an
+- [x] **Presence test** (ProjectionPage.test.tsx): the FI-target tile's label contains an
   `info-hint` button whose aria-label starts "Annual spend ÷ withdrawal rate", and both
   chart-card headings contain one (three asserts — the app-wide transcription's canary).
-- [ ] Gates, commit `feat: info hints — espp, paycheck, comp, projection, update, settings`.
+- [x] Gates, commit `feat: info hints — espp, paycheck, comp, projection, update, settings`.
 
 ---
 
 ### Task 6: Whole-feature gate
 
-- [ ] `npm run test` (existing suites green — heading text queries unaffected; report exact), `npm run lint` (1 sanctioned warning), `npm run build` (chunk line reported). Backend untouched — run `cd backend && .venv/Scripts/python.exe -m ruff format --check .` only as a no-op sanity. Tick all checkboxes; commit `chore: info hints gate green`.
+- [x] `npm run test` (existing suites green — heading text queries unaffected; report exact), `npm run lint` (1 sanctioned warning), `npm run build` (chunk line reported). Backend untouched — run `cd backend && .venv/Scripts/python.exe -m ruff format --check .` only as a no-op sanity. Tick all checkboxes; commit `chore: info hints gate green`.
 
 ---
 
