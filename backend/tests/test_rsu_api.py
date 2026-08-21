@@ -341,9 +341,10 @@ async def test_grant_vest_quantum_ten_reproduces_the_broker_split(auth_client, f
     plain = await create_grant(auth_client, label="Plain grant")
     assert plain["vest_quantum"] == 1
 
-    # PATCH: an explicit null is the NOT-NULL no-op; a value re-validates the merged row.
-    resp = await auth_client.patch(f"{GRANTS}/{plain['id']}", json={"vest_quantum": None})
-    assert resp.status_code == 200 and resp.json()["vest_quantum"] == 1
+    # PATCH: an explicit null is the NOT-NULL no-op — pinned on the quantum-10 grant, where
+    # "kept current" and "reset to default" are actually different answers.
+    resp = await auth_client.patch(f"{GRANTS}/{created['id']}", json={"vest_quantum": None})
+    assert resp.status_code == 200 and resp.json()["vest_quantum"] == 10
 
 
 async def test_grant_vest_quantum_fences_typos(auth_client):
@@ -766,6 +767,37 @@ async def test_schedule_skips_an_unschedulable_stored_grant_instead_of_failing(
     assert [row["label"] for row in body["grants"]] == ["Offer letter"]
     assert {v["grant_id"] for v in body["vests"]} == {good["id"]}
     assert body["tiles"]["unvested_shares"] == 394  # the bad grant's 100 are not counted
+
+
+async def test_schedule_skips_a_hand_edited_vest_quantum_instead_of_failing(
+    auth_client, db, priced_employer, frozen_schedule_today
+):
+    # vest_quantum is NOT NULL server_default 1 and API-fenced 1..1000, so a zero can only
+    # be hand-edited in — where it would divide-by-zero without vest_shares' own guard
+    # (review §8.2 I1). Same degradation as the bad cliff: named, dropped, page answers.
+    good = await create_grant(auth_client)
+    db.add(
+        RsuGrant(
+            kind="refresh",
+            label="hand-edited quantum",
+            shares=100,
+            grant_price=Decimal("45.1200"),
+            first_vest_date=date(2024, 9, 18),
+            cliff_pct=Decimal("0.0625"),
+            vest_quantum=0,
+        )
+    )
+    await db.commit()
+
+    resp = await auth_client.get(SCHEDULE)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["warnings"] == [
+        "hand-edited quantum: stored grant cannot be scheduled — "
+        "vest_quantum must be a positive integer"
+    ]
+    assert [row["label"] for row in body["grants"]] == ["Offer letter"]
+    assert {v["grant_id"] for v in body["vests"]} == {good["id"]}
 
 
 async def test_schedule_emits_the_zero_share_tranches_of_a_tiny_grant(

@@ -190,8 +190,8 @@ def _merged(provided: dict, key: str, current):
     """PATCH merge for a NOT NULL column: absent keeps it, and an explicit null reads as
     a no-op request rather than an error (portfolio.py's update_security posture). Only the
     NOT NULL columns go through this — an event's focal_year/current_base, a grant's
-    kind/label/shares/grant_price/first_vest_date/cliff_pct. Every other column is nullable,
-    so its null is taken literally."""
+    kind/label/shares/grant_price/first_vest_date/cliff_pct/vest_quantum. Every other column
+    is nullable, so its null is taken literally."""
     value = provided.get(key, current)
     return current if value is None else value
 

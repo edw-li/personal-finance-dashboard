@@ -5,7 +5,10 @@ except the stored first_vest_date, which is always taken verbatim (off-conventio
 expressible).
 
 Precondition (enforced at the API boundary, not here): cliff_pct is fenced into (0, 1], so a
-non-positive or over-100% cliff is unrepresentable upstream and needs no runtime guard below."""
+non-positive or over-100% cliff is unrepresentable upstream and needs no runtime guard below.
+vest_quantum DOES carry a guard (`vest_shares` raises on < 1): unlike a bad cliff, a zero
+divides and a negative silently CEILINGS, so a hand-edited row must land in the computed
+GETs' ValueError degradation rather than a 500 or a wrong schedule."""
 
 from datetime import date
 from decimal import Decimal
@@ -50,6 +53,10 @@ def vest_shares(total: int, cliff_pct: Decimal, quantum: int = 1) -> list[int]:
     130, with 140 true-ups exactly where the cumulative lands on a multiple of ten — while
     every focal refresh floors to single shares. Verified against all 13 broker tranches.
     """
+    if quantum < 1:
+        # A zero divides below and a NEGATIVE silently ceilings — both are hand-edit-only
+        # states, and both must degrade like a bad cliff (the computed GETs catch ValueError).
+        raise ValueError("vest_quantum must be a positive integer")
     count = vest_count(cliff_pct)
     shares: list[int] = []
     vested = 0

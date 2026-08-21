@@ -813,6 +813,9 @@ describe('CompPage — vesting schedule', () => {
     expect(table.getByText('450')).toBeTruthy() // vested_shares — the server's, on its day
     expect(table.getByText('750')).toBeTruthy() // unvested_shares
     expect(table.getByText('seeded from focal history')).toBeTruthy()
+    // The offer grant's tens wear a marker in the shares cell; the quantum-1 refresh doesn't.
+    expect(table.getByText('×10')).toBeTruthy()
+    expect(table.queryByText('×1')).toBeNull()
   })
 })
 
