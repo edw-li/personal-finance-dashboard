@@ -924,8 +924,10 @@ async def test_holdings_end_to_end_math(auth_client, db):
         isinstance(body["holdings"][0][field], str)
         for field in ("shares", "cost_basis", "price", "market_value", "weight_pct")
     )
-    # as_of is the OLDEST quote (conservative staleness), not the newest.
+    # as_of is the OLDEST quote (conservative staleness); latest_quote_at is the NEWEST
+    # (it dates the chart's live ping — a stale straggler must not drag that backwards).
     assert datetime.fromisoformat(body["as_of"]) == datetime(2026, 8, 13, tzinfo=UTC)
+    assert datetime.fromisoformat(body["latest_quote_at"]) == datetime(2026, 8, 14, tzinfo=UTC)
     second = body["holdings"][1]
     assert datetime.fromisoformat(second["quoted_at"]) == datetime(2026, 8, 14, tzinfo=UTC)
     assert second["market_value"] == "1000.00"
@@ -972,6 +974,7 @@ async def test_holdings_empty_portfolio(auth_client, db):
     assert resp.status_code == 200, resp.text
     assert resp.json() == {
         "as_of": None,
+        "latest_quote_at": None,
         "totals": {
             "market_value": "0.00",
             "cost_basis": "0.00",
@@ -1006,6 +1009,7 @@ async def test_holdings_unpriced_holding_flagged(auth_client, db):
     body = resp.json()
     assert [h["ticker"] for h in body["holdings"]] == ["VOO", "PRIV"]  # unpriced rows sort last
     assert datetime.fromisoformat(body["as_of"]) == datetime(2026, 8, 14, tzinfo=UTC)
+    assert body["latest_quote_at"] == body["as_of"]  # one quote: the two clocks agree
     ghost = body["holdings"][1]
     assert ghost["shares"] == "5.000000"
     assert ghost["cost_basis"] == "250.00"  # cost is known even when value is not

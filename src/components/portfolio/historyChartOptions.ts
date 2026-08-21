@@ -13,13 +13,16 @@ export interface LivePoint {
 }
 
 // Both pages derive the live point from the SAME holdings payload they already fetch —
-// one definition so the two charts can never disagree about what "live" means.
+// one definition so the two charts can never disagree about what "live" means. Dated by
+// the NEWEST quote (latest_quote_at), never by as_of: as_of is the OLDEST (the staleness
+// clock), and once weekly Monday rows keep the series fresh, a single stale manual-priced
+// quote in it dragged the live date behind the series' end and silently retired the ping.
 export function liveFromHoldings(holdings: {
-  as_of: string | null
+  latest_quote_at: string | null
   totals: Pick<HoldingsTotals, 'market_value'>
 }): LivePoint | null {
-  return holdings.as_of
-    ? { date: holdings.as_of.slice(0, 10), value: Number(holdings.totals.market_value) }
+  return holdings.latest_quote_at
+    ? { date: holdings.latest_quote_at.slice(0, 10), value: Number(holdings.totals.market_value) }
     : null
 }
 

@@ -31,6 +31,7 @@ function holding(over: Partial<HoldingOut> = {}): HoldingOut {
 function holdingsOut(over: Partial<HoldingsResponse> = {}): HoldingsResponse {
   return {
     as_of: '2026-08-17T00:00:00Z', // one day back — fresh
+    latest_quote_at: '2026-08-17T00:00:00Z', // attention never reads it; type-complete
     totals: {
       market_value: '1100.00', cost_basis: '1000.00', unrealized_gl: '100.00',
       unrealized_gl_pct: '0.100000', day_change_amount: null, day_change_pct: null,

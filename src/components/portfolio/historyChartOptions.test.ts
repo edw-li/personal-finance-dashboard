@@ -116,14 +116,17 @@ describe('portfolioHistoryOption', () => {
 })
 
 describe('liveFromHoldings', () => {
-  it('slices the bar date off a datetime and parses the market value once', () => {
+  it('slices the bar date off the NEWEST quote and parses the market value once', () => {
     expect(
-      liveFromHoldings({ as_of: '2026-08-14T00:00:00Z', totals: { market_value: '723456.78' } }),
+      liveFromHoldings({
+        latest_quote_at: '2026-08-14T00:00:00Z',
+        totals: { market_value: '723456.78' },
+      }),
     ).toEqual({ date: '2026-08-14', value: 723456.78 })
   })
 
   it('is null before the first price refresh', () => {
-    expect(liveFromHoldings({ as_of: null, totals: { market_value: '0.00' } })).toBeNull()
+    expect(liveFromHoldings({ latest_quote_at: null, totals: { market_value: '0.00' } })).toBeNull()
   })
 })
 

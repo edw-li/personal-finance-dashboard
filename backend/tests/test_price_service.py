@@ -453,6 +453,277 @@ async def test_value_snapshot_rides_only_the_monday_refresh(db):
     assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(MONDAY, D("1200.00"))]
 
 
+async def test_missed_monday_is_backfilled_from_stored_closes(db):
+    # Host down all Monday, refresh runs Tuesday: refresh_prices has just re-fetched the
+    # bar window, so the missed Monday fills at its TRUE closes and is dated Monday;
+    # Tuesday itself stays gated. The S&P leg extends to Monday's benchmark close.
+    sec = await seed_security(db, "NVDA")
+    voo = await seed_security(db, "VOO", manual=True)  # bars seeded below, refresh skips it
+    db.add(buy(sec.id))
+    db.add_all(
+        [
+            PortfolioValueHistory(
+                snapshot_date=MONDAY - timedelta(days=7),
+                market_value=D("1000.00"),
+                cost_basis=D("900.00"),
+                sp500_value=D("800.00"),
+            ),
+            PriceHistory(
+                security_id=voo.id, price_date=MONDAY - timedelta(days=7), close=D("400.0000")
+            ),
+            PriceHistory(security_id=voo.id, price_date=MONDAY, close=D("410.0000")),
+        ]
+    )
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(MONDAY, "118"), bar(MONDAY + timedelta(days=1), "120")]})
+
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY + timedelta(days=1)
+    )
+
+    assert appended is True  # the backfill is history movement — the payload says so
+    snapshots = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(s.snapshot_date, s.market_value, s.cost_basis, s.sp500_value) for s in snapshots] == [
+        (MONDAY - timedelta(days=7), D("1000.00"), D("900.00"), D("800.00")),
+        # 10 shares × Monday's 118 close; S&P leg: 800/400 = 2 implied shares × 410.
+        (MONDAY, D("1180.00"), D("1000.00"), D("820.00")),
+    ]
+    payload = await read_last_refresh(db)
+    assert payload["history_appended"] is True
+
+    # Idempotent: Wednesday's run finds the week already covered and writes nothing new.
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY + timedelta(days=2)
+    )
+    assert appended is False
+    assert len((await db.execute(select(PortfolioValueHistory))).scalars().all()) == 2
+
+
+async def test_backfill_chains_across_weeks_and_the_monday_run_still_prices_live(db):
+    # Two-week outage ending on a Monday: the hole fills IN ORDER and today's own row
+    # comes from the live quotes — never the close lookup. The S&P legs pin the CHAIN:
+    # the original anchor has no benchmark bar (its extension carries FLAT to 800), so
+    # the live row's 807.92 = 800/404 implied shares × 408 is only reachable by anchoring
+    # off the FILL — extending off the original row would flat-carry 800 again.
+    sec = await seed_security(db, "NVDA")
+    voo = await seed_security(db, "VOO", manual=True)
+    db.add(buy(sec.id))
+    db.add_all(
+        [
+            PortfolioValueHistory(
+                snapshot_date=MONDAY - timedelta(days=14),
+                market_value=D("1000.00"),
+                cost_basis=D("900.00"),
+                sp500_value=D("800.00"),
+            ),
+            PriceHistory(
+                security_id=voo.id, price_date=MONDAY - timedelta(days=7), close=D("404.0000")
+            ),
+            PriceHistory(security_id=voo.id, price_date=MONDAY, close=D("408.0000")),
+        ]
+    )
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(MONDAY - timedelta(days=7), "110"), bar(MONDAY, "120")]})
+
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY
+    )
+
+    assert appended is True
+    snapshots = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(s.snapshot_date, s.market_value, s.sp500_value) for s in snapshots] == [
+        (MONDAY - timedelta(days=14), D("1000.00"), D("800.00")),
+        (MONDAY - timedelta(days=7), D("1100.00"), D("800.00")),  # flat: no bar ≤ its anchor
+        (MONDAY, D("1200.00"), D("807.92")),  # (800 / 404) implied shares × 408, off the FILL
+    ]
+
+
+async def test_backfill_leaves_a_hole_it_cannot_price(db):
+    # The first missed Monday predates every stored bar: no honest close exists, so that
+    # week stays empty rather than guessed — and the NEXT missed Monday still fills from
+    # the newest close on-or-before it (the sheet's own "latest closing prices" carry).
+    sec = await seed_security(db, "NVDA")
+    db.add(buy(sec.id))
+    db.add(
+        PortfolioValueHistory(
+            snapshot_date=MONDAY - timedelta(days=14),
+            market_value=D("1000.00"),
+            cost_basis=D("900.00"),
+            sp500_value=D("800.00"),
+        )
+    )
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(MONDAY - timedelta(days=4), "115")]})  # Thu only
+
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY + timedelta(days=1)
+    )
+
+    assert appended is True
+    snapshots = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(s.snapshot_date, s.market_value) for s in snapshots] == [
+        (MONDAY - timedelta(days=14), D("1000.00")),
+        (MONDAY, D("1150.00")),  # Thursday's 115 close is the newest on-or-before Monday
+    ]
+
+
+async def test_backfill_prices_quote_only_holdings_at_their_standing_quote(db):
+    # Review I1: import-seeded and manual-priced holdings may carry a LatestPrice and no
+    # bars at all. The live Monday rows value them (the sheet did too), so a backfilled
+    # Monday must as well — at the standing quote, provided it already existed by that
+    # Monday. A quote from AFTER the Monday is future knowledge and stays out of the fill.
+    nvda = await seed_security(db, "NVDA")
+    priv = await seed_security(db, "PRIV", manual=True)
+    late = await seed_security(db, "LATE", manual=True)
+    db.add_all([buy(nvda.id), buy(priv.id, account="Other"), buy(late.id, account="Third")])
+    db.add_all(
+        [
+            PortfolioValueHistory(
+                snapshot_date=MONDAY - timedelta(days=7),
+                market_value=D("1000.00"),
+                cost_basis=D("900.00"),
+                sp500_value=D("800.00"),
+            ),
+            LatestPrice(  # quoted the Friday BEFORE the missed Monday — counts
+                security_id=priv.id,
+                price=D("50"),
+                quoted_at=datetime(2026, 8, 14, tzinfo=UTC),
+                source="manual",
+            ),
+            LatestPrice(  # quoted the day AFTER the missed Monday — stays out
+                security_id=late.id,
+                price=D("999"),
+                quoted_at=datetime(2026, 8, 18, tzinfo=UTC),
+                source="manual",
+            ),
+        ]
+    )
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(MONDAY, "118")]})
+
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY + timedelta(days=1)
+    )
+
+    assert appended is True
+    row = (
+        await db.execute(
+            select(PortfolioValueHistory).where(PortfolioValueHistory.snapshot_date == MONDAY)
+        )
+    ).scalar_one()
+    # 10 × 118 (bar) + 10 × 50 (standing quote); LATE contributes cost only.
+    assert row.market_value == D("1680.00")
+    assert row.cost_basis == D("3000.00")
+
+
+async def test_backfill_failure_degrades_alone_and_the_monday_append_stands(db, monkeypatch):
+    # One savepoint per movement (review S1): an exploding backfill must not suppress the
+    # same run's live Monday append. Patched at the source module — run_refresh imports
+    # it lazily, inside the function (the circular-import dodge).
+    sec = await seed_security(db, "NVDA")
+    db.add(buy(sec.id))
+    await db.commit()
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("backfill exploded")
+
+    monkeypatch.setattr("app.services.value_history.backfill_missed_snapshots", boom)
+    provider = FakeProvider({"NVDA": [bar(MONDAY, "120")]})
+
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY
+    )
+
+    assert appended is True
+    snapshots = (await db.execute(select(PortfolioValueHistory))).scalars().all()
+    assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(MONDAY, D("1200.00"))]
+
+
+async def test_backfill_anchors_off_a_stray_mid_week_row(db):
+    # Daily-era leftovers: the newest row may be a Wednesday (flushed only on the next
+    # re-upload). The first fill is the next Monday AFTER it — never the same week's
+    # earlier Monday, which the stray's week already covers.
+    sec = await seed_security(db, "NVDA")
+    db.add(buy(sec.id))
+    db.add(
+        PortfolioValueHistory(
+            snapshot_date=MONDAY - timedelta(days=5),  # the prior Wednesday
+            market_value=D("1000.00"),
+            cost_basis=D("900.00"),
+            sp500_value=D("800.00"),
+        )
+    )
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(MONDAY, "118")]})
+
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY + timedelta(days=1)
+    )
+
+    assert appended is True
+    snapshots = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(s.snapshot_date, s.market_value) for s in snapshots] == [
+        (MONDAY - timedelta(days=5), D("1000.00")),
+        (MONDAY, D("1180.00")),
+    ]
+
+
+async def test_backfill_never_reaches_backwards_from_a_future_dated_series(db):
+    # A re-uploaded workbook can carry Mondays past the runtime clock (timezone-shifted
+    # exports): there is nothing to fill — the series is already ahead of today.
+    sec = await seed_security(db, "NVDA")
+    db.add(buy(sec.id))
+    db.add(
+        PortfolioValueHistory(
+            snapshot_date=MONDAY + timedelta(days=14),
+            market_value=D("1000.00"),
+            cost_basis=D("900.00"),
+            sp500_value=D("800.00"),
+        )
+    )
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(MONDAY, "118")]})
+
+    _result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY + timedelta(days=1)
+    )
+
+    assert appended is False
+    assert len((await db.execute(select(PortfolioValueHistory))).scalars().all()) == 1
+
+
 async def test_backdated_manual_price_does_not_move_import_seeded_latest(db):
     # Import seeding leaves latest_prices populated while price_history is EMPTY —
     # the guard must respect the seeded quote too (Task 6 review I1).

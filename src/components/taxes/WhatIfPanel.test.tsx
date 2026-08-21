@@ -66,6 +66,7 @@ function holding(id: number, ticker: string, shares: string, price: string | nul
 function holdingsFixture(): HoldingsResponse {
   return {
     as_of: '2026-08-20',
+    latest_quote_at: '2026-08-20',
     totals: {
       market_value: '6250.00',
       cost_basis: '5000.00',

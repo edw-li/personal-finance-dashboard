@@ -263,7 +263,12 @@ export interface HoldingsTotals {
 }
 
 export interface HoldingsResponse {
+  /** OLDEST quote timestamp — the staleness clock ("Prices as of", attention strip). */
   as_of: string | null
+  /** NEWEST quote timestamp — dates the performance chart's live ping. Never swap the
+   * two: a stale manual quote in as_of would drag the ping behind the weekly series'
+   * end and silently retire it. */
+  latest_quote_at: string | null
   totals: HoldingsTotals
   holdings: HoldingOut[]
 }

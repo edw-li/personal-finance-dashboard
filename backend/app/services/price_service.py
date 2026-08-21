@@ -220,20 +220,31 @@ async def run_refresh(
     db: AsyncSession, provider: PriceProvider, *, trigger: str, today: date | None = None
 ) -> tuple[RefreshResult, bool, "DividendIngestResult"]:
     """The whole refresh ritual, shared by the manual endpoint and the scheduled job so
-    the two can never drift: refresh prices (commits itself), extend the live value
-    series, ingest dividend events, record the outcome, commit the bookkeeping. Snapshot
-    and ingest failures each degrade alone — the price refresh always stands."""
+    the two can never drift: refresh prices (commits itself), backfill and extend the
+    weekly value series, ingest dividend events, record the outcome, commit the
+    bookkeeping. Snapshot and ingest failures each degrade alone — the price refresh
+    always stands."""
     from app.services.dividend_ingest import DividendIngestResult, ingest_dividends
-    from app.services.value_history import append_value_snapshot
+    from app.services.value_history import append_value_snapshot, backfill_missed_snapshots
 
     today = today or product_today()
     result = await refresh_prices(db, provider, today=today)
+    # Backfill first — missed Mondays extend the series chronologically off the bar
+    # window refresh_prices just healed — then the Monday leg for today itself. Either
+    # movement flips the payload's history_appended flag. One savepoint EACH ("each
+    # degrade alone"): a backfill failure must not suppress today's live append, and an
+    # append failure must not destroy the backfilled rows (branch review S1).
     appended = False
     try:
-        appended = await append_value_snapshot(db, today=today)
+        async with db.begin_nested():
+            appended = await backfill_missed_snapshots(db, today=today) > 0
+    except Exception:
+        logger.exception("value backfill failed — the price refresh stands")
+    try:
+        async with db.begin_nested():
+            appended = await append_value_snapshot(db, today=today) or appended
     except Exception:
         logger.exception("value snapshot failed — the price refresh stands")
-        await db.rollback()
     dividends = DividendIngestResult()
     try:
         # Savepoint, not rollback-on-failure: a rollback here would also destroy the

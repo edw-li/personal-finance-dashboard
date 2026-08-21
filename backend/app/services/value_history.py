@@ -8,8 +8,9 @@ what the entire imported series is made of. The snapshot rides the Monday leg of
 daily price refresh (13:10 PT is already past the 13:00 close, so it reads the same
 finalized closes the sheet did at 13:30; a MANUAL Monday refresh before close records
 intraday values, which the scheduled run's same-date upsert overwrites); refreshes on
-other days keep quotes fresh but record nothing, and a holiday Monday still records a
-row from the latest closes — both exactly the sheet's behavior. A workbook re-import
+other days keep quotes fresh and backfill any Monday the host slept through
+(backfill_missed_snapshots), and a holiday Monday still records a row from the latest
+closes — all exactly the sheet's behavior. A workbook re-import
 stays the series' source of truth: apply_portfolio_history overrides live rows wherever
 the sheet reaches. This is the
 deferred follow-up the performance-chart spec recorded ("considered and deferred; the
@@ -24,10 +25,11 @@ to itself, so a second same-day refresh rewrites the same numbers.
 """
 
 import logging
-from datetime import date
+from collections.abc import Callable
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -93,6 +95,74 @@ async def _extended_baseline(db: AsyncSession, today: date, market_value: Decima
     return (implied_shares * today_close).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
 
 
+async def _current_book(
+    db: AsyncSession,
+) -> tuple[dict[int, Decimal], dict[int, Decimal], dict]:
+    """Per-security shares and cost from the live fold — the holdings table's own
+    numbers — plus the latest quotes. Positions are mostly undated by design
+    (PositionTransaction.sort_index), so the CURRENT share count is the only one
+    there is; every snapshot, live or backfilled, prices this book."""
+    _securities, txns, latest, _history, _dividends = await load_portfolio(
+        db, with_history=False, with_dividends=False
+    )
+    positions = fold_transactions(txns)
+    shares_by_sec: dict[int, Decimal] = {}
+    cost_by_sec: dict[int, Decimal] = {}
+    for pos in positions.values():
+        shares_by_sec[pos.security_id] = shares_by_sec.get(pos.security_id, ZERO) + pos.shares
+        cost_by_sec[pos.security_id] = cost_by_sec.get(pos.security_id, ZERO) + pos.cost_basis
+    return shares_by_sec, cost_by_sec, latest
+
+
+def _value_book(
+    shares_by_sec: dict[int, Decimal],
+    cost_by_sec: dict[int, Decimal],
+    price_for: Callable[[int], Decimal | None],
+) -> tuple[Decimal, Decimal, bool, bool]:
+    """Value the folded book against `price_for`. Returns (market_value, cost_basis,
+    any_held, any_priced). Cost accrues for every held row, priced or not — the holdings
+    totals' own semantics (an unpriced private fund still has a basis)."""
+    market_value = ZERO
+    cost_basis = ZERO
+    any_held = False
+    any_priced = False
+    for sec_id, raw_shares in shares_by_sec.items():
+        shares = raw_shares.quantize(SHARE_Q, rounding=ROUND_HALF_UP)
+        if shares == 0:
+            continue
+        any_held = True
+        cost_basis += cost_by_sec.get(sec_id, ZERO)
+        price = price_for(sec_id)
+        if price is None:
+            continue
+        any_priced = True
+        market_value += (shares * price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+    return (
+        market_value.quantize(MONEY_Q, rounding=ROUND_HALF_UP),
+        cost_basis.quantize(MONEY_Q, rounding=ROUND_HALF_UP),
+        any_held,
+        any_priced,
+    )
+
+
+async def _closes_on_or_before(db: AsyncSession, day: date) -> dict[int, Decimal]:
+    """Newest stored close per security on-or-before `day` — the backfill's price book
+    (one window-ranked query, not one per held security)."""
+    ranked = (
+        select(
+            PriceHistory.security_id,
+            PriceHistory.close,
+            func.row_number()
+            .over(partition_by=PriceHistory.security_id, order_by=PriceHistory.price_date.desc())
+            .label("rn"),
+        )
+        .where(PriceHistory.price_date <= day)
+        .subquery()
+    )
+    rows = await db.execute(select(ranked.c.security_id, ranked.c.close).where(ranked.c.rn == 1))
+    return dict(rows.all())
+
+
 async def append_value_snapshot(db: AsyncSession, *, today: date | None = None) -> bool:
     """Upsert this Monday's (market_value, cost_basis, sp500) row from the live book.
 
@@ -105,37 +175,15 @@ async def append_value_snapshot(db: AsyncSession, *, today: date | None = None) 
     today = today or product_today()
     if today.weekday() != SNAPSHOT_WEEKDAY:
         return False
-    _securities, txns, latest, _history, _dividends = await load_portfolio(
-        db, with_history=False, with_dividends=False
+    shares_by_sec, cost_by_sec, latest = await _current_book(db)
+    market_value, cost_basis, any_held, any_priced = _value_book(
+        shares_by_sec,
+        cost_by_sec,
+        lambda sec_id: latest[sec_id].price if sec_id in latest else None,
     )
-    positions = fold_transactions(txns)
-    shares_by_sec: dict[int, Decimal] = {}
-    cost_by_sec: dict[int, Decimal] = {}
-    for pos in positions.values():
-        shares_by_sec[pos.security_id] = shares_by_sec.get(pos.security_id, ZERO) + pos.shares
-        cost_by_sec[pos.security_id] = cost_by_sec.get(pos.security_id, ZERO) + pos.cost_basis
-    market_value = ZERO
-    cost_basis = ZERO
-    any_held = False
-    any_priced = False
-    for sec_id, raw_shares in shares_by_sec.items():
-        shares = raw_shares.quantize(SHARE_Q, rounding=ROUND_HALF_UP)
-        if shares == 0:
-            continue
-        any_held = True
-        # Cost accrues for every held row, priced or not — the holdings totals' own
-        # semantics (an unpriced private fund still has a basis).
-        cost_basis += cost_by_sec.get(sec_id, ZERO)
-        quote = latest.get(sec_id)
-        if quote is None:
-            continue
-        any_priced = True
-        market_value += (shares * quote.price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
     if not any_held or not any_priced:
         logger.info("value snapshot skipped: nothing held and priced yet")
         return False
-    market_value = market_value.quantize(MONEY_Q, rounding=ROUND_HALF_UP)
-    cost_basis = cost_basis.quantize(MONEY_Q, rounding=ROUND_HALF_UP)
 
     sp500_value = await _extended_baseline(db, today, market_value)
     stmt = pg_insert(PortfolioValueHistory).values(
@@ -155,3 +203,85 @@ async def append_value_snapshot(db: AsyncSession, *, today: date | None = None) 
         )
     )
     return True
+
+
+async def backfill_missed_snapshots(db: AsyncSession, *, today: date | None = None) -> int:
+    """Fill Mondays the host slept straight through (branch review F2): every refresh —
+    any weekday — extends the series to the current week by pricing TODAY'S book at each
+    missed Monday's stored closes. run_refresh calls this right after refresh_prices, so
+    a Tuesday boot prices yesterday's TRUE closes off the just-healed bar window; if the
+    feed is down too, the newest earlier close carries — the sheet's own "latest closing
+    prices". The current share count stands in for each Monday's (positions are mostly
+    undated by design, so no other exists); a trade made after a missed Monday skews that
+    fill slightly — accepted, a hole is worse. Today itself is never backfilled: the
+    Monday leg of append_value_snapshot prices it from live quotes. Each holding prices
+    at the newest stored close on-or-before that Monday, falling back to its standing
+    latest quote when that quote already existed by then — import-seeded and manual-priced
+    securities may have no bars at all, and omitting them dents the fill against its live
+    neighbors (review I1); a quote from after the Monday is future knowledge and stays
+    out. A Monday NOTHING reaches stays a hole rather than a guess. Returns rows written;
+    0 with no series to extend (a book that never imported one starts at its first live
+    Monday instead). Caller commits (refresh_prices' session posture)."""
+    today = today or product_today()
+    latest_row = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory)
+                .order_by(PortfolioValueHistory.snapshot_date.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if latest_row is None:
+        return 0
+    anchor = latest_row.snapshot_date
+    first_missing = anchor + timedelta(days=(7 - anchor.weekday()) % 7 or 7)
+    last_monday = today - timedelta(days=today.weekday())
+    mondays = []
+    day = first_missing
+    while day <= last_monday:
+        if day != today:
+            mondays.append(day)
+        day += timedelta(days=7)
+    if not mondays:
+        return 0
+    shares_by_sec, cost_by_sec, latest = await _current_book(db)
+    if not any(
+        raw.quantize(SHARE_Q, rounding=ROUND_HALF_UP) != 0 for raw in shares_by_sec.values()
+    ):
+        return 0  # empty book: no Monday can be honestly filled
+    written = 0
+    for monday in mondays:
+        closes = await _closes_on_or_before(db, monday)
+
+        def price_at(sec_id: int, closes=closes, monday=monday) -> Decimal | None:
+            close = closes.get(sec_id)
+            if close is not None:
+                return close
+            quote = latest.get(sec_id)
+            if quote is not None and quote.quoted_at.date() <= monday:
+                return quote.price
+            return None
+
+        market_value, cost_basis, _any_held, any_priced = _value_book(
+            shares_by_sec, cost_by_sec, price_at
+        )
+        if not any_priced:
+            continue
+        # Chronological order on purpose: each fill becomes the next one's S&P anchor.
+        sp500_value = await _extended_baseline(db, monday, market_value)
+        stmt = pg_insert(PortfolioValueHistory).values(
+            snapshot_date=monday,
+            market_value=market_value,
+            cost_basis=cost_basis,
+            sp500_value=sp500_value,
+        )
+        # do_nothing, not do_update: candidates are beyond the newest row by construction,
+        # and a backfill must never win over anything that somehow beat it there.
+        result = await db.execute(stmt.on_conflict_do_nothing(index_elements=["snapshot_date"]))
+        if result.rowcount:
+            written += 1
+            logger.info("value snapshot backfilled for missed Monday %s", monday)
+    return written

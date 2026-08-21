@@ -340,7 +340,7 @@ export default function PortfolioPage() {
             <div className="panel-title-row">
               <h2 className="panel-title">
                 Performance
-                <InfoHint text="Value vs cost basis over time. The S&P 500 baseline invests only the starting balance, so it compares price performance, not a contribution-matched alternative." />
+                <InfoHint text="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance, so it compares price performance, not a contribution-matched alternative." />
               </h2>
               {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
             </div>

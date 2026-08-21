@@ -496,8 +496,15 @@ async def holdings(db: AsyncSession = Depends(get_db)) -> HoldingsOut:
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         unpriced_count=sum(1 for h in rows if h.market_value is None),
     )
-    as_of = min((h.quoted_at for h in rows if h.quoted_at is not None), default=None)
-    return HoldingsOut(as_of=as_of, totals=totals, holdings=out_rows)
+    quote_times = [h.quoted_at for h in rows if h.quoted_at is not None]
+    return HoldingsOut(
+        # Two clocks on purpose: as_of (oldest) drives staleness, latest_quote_at
+        # (newest) dates the live chart ping — see HoldingsOut.
+        as_of=min(quote_times, default=None),
+        latest_quote_at=max(quote_times, default=None),
+        totals=totals,
+        holdings=out_rows,
+    )
 
 
 @router.get("/allocation", response_model=AllocationOut)

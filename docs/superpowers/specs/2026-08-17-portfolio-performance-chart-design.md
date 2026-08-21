@@ -120,7 +120,10 @@ boundary only, no theme decisions of its own.
 `portfolioHistoryOption(history, live?)` where `live` is
 `{ date: string, value: number } | null` (derived by callers: the calendar-date
 part of `holdings.as_of` — the quote timestamp — plus
-`Number(totals.market_value)`; null when `as_of` is null).
+`Number(totals.market_value)`; null when `as_of` is null). *(Superseded
+2026-08-21: dated by `latest_quote_at`, the NEWEST quote — `as_of` is the oldest,
+and one stale manual-priced quote retired the ping once weekly live rows kept the
+series' end fresh; see `liveFromHoldings`.)*
 
 - **Form:** three 2px lines, no point symbols; faint area wash under the
   Portfolio-value line only (netWorthSparkOption precedent). Y axis from zero

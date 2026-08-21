@@ -157,6 +157,10 @@ class HoldingsTotals(BaseModel):
 
 class HoldingsOut(BaseModel):
     as_of: datetime | None  # OLDEST quoted_at among priced holdings (conservative staleness)
+    # NEWEST quoted_at — the performance chart dates its live ping by this. Dating it by
+    # as_of let one stale manual quote drag the ping behind the weekly series' end and
+    # silently retire it once live Monday rows kept the series fresh (review-confirmed).
+    latest_quote_at: datetime | None
     totals: HoldingsTotals
     holdings: list[HoldingOut]
 

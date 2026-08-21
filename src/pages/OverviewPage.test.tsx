@@ -134,8 +134,10 @@ function timeseriesOut(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseri
 }
 
 function holdingsOut(over: Partial<HoldingsResponse> = {}): HoldingsResponse {
+  const quoted = daysAgo(1) // captured once — two calls could straddle UTC midnight
   return {
-    as_of: daysAgo(1),
+    as_of: quoted,
+    latest_quote_at: quoted,
     totals: {
       market_value: '812345.67',
       cost_basis: '600000.00',
@@ -529,7 +531,10 @@ describe('OverviewPage charts', () => {
   it('feeds the spark, the performance lines and the bars', async () => {
     // Captured once: daysAgo(1) called twice could straddle UTC midnight and disagree.
     const quoted = daysAgo(1)
-    serve({ holdings: holdingsOut({ as_of: quoted }) })
+    // Regression: as_of is the OLDEST quote — here a stale manual-priced straggler. The
+    // live category must come from latest_quote_at, or the ping retires the moment the
+    // weekly series' last row is newer than the stalest holding.
+    serve({ holdings: holdingsOut({ as_of: daysAgo(30), latest_quote_at: quoted }) })
     renderPage()
 
     await screen.findByText('Net worth — Aug 2026')
@@ -680,6 +685,7 @@ describe('OverviewPage on an empty database', () => {
       ts: timeseriesOut({ months: [], net_worth: [], mom_pct: [], notes: [] }),
       holdings: holdingsOut({
         as_of: null,
+        latest_quote_at: null,
         totals: {
           market_value: '0.00',
           cost_basis: '0.00',
