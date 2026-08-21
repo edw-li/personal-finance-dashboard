@@ -143,7 +143,9 @@ Pure module; the router feeds it profiles, vest events (with FMV/quote), bracket
 `today`.
 
 - **Check grid:** using the CURRENT profile's `pay_periods_per_year` P, check i (1..P) is
-  implied on day `round(i × days_in_year / P)` of the year. Deterministic, testable, stated as
+  implied on day `ceil(i × days_in_year / P)` of the year (ceil, not round: no .5 ambiguity,
+  monotone, always ends Dec 31 — amended 2026-08-21 to match the shipped plan). Deterministic,
+  testable, stated as
   an estimate in the card's hint. Each check's withholding = `paycheck_calc.breakdown(profile
   in force on that day)["withholding"]` — this respects the pre-tax base (the % applies to
   taxable, not gross) and profile history mid-year. YTD = checks implied ≤ today; projected =
