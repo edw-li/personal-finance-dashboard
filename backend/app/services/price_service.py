@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AppSetting, LatestPrice, PriceHistory, Security
 from app.services.price_provider import DailyBar, PriceProvider
+from app.services.scheduler import product_today
 
 if TYPE_CHECKING:
     # Annotation only: dividend_ingest imports THIS module, so a runtime import here
@@ -73,7 +74,9 @@ def _bar_datetime(day: date) -> datetime:
 async def refresh_prices(
     db: AsyncSession, provider: PriceProvider, *, today: date | None = None
 ) -> RefreshResult:
-    today = today or date.today()
+    # product_today, never date.today(): the container clock is UTC, and the run's
+    # calendar day (fetch window, snapshot key, TTM window) must match the fire zone.
+    today = today or product_today()
     start = today - timedelta(days=HISTORY_WINDOW_DAYS)
     result = RefreshResult()
     securities = list(
@@ -223,7 +226,7 @@ async def run_refresh(
     from app.services.dividend_ingest import DividendIngestResult, ingest_dividends
     from app.services.value_history import append_value_snapshot
 
-    today = today or date.today()
+    today = today or product_today()
     result = await refresh_prices(db, provider, today=today)
     appended = False
     try:

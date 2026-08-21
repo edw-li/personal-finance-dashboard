@@ -57,6 +57,17 @@ async def seed_security(db, ticker, **fields) -> Security:
     return security
 
 
+# The live value series is Monday-gated (the sheet's weekly cadence). The refresh
+# endpoint has no date parameter — it runs on the scheduler-zone product_today() — so
+# tests that expect an appended row pin that clock to a fixed Monday; a real-clock test
+# would pass one day in seven.
+MONDAY = date(2026, 8, 17)
+
+
+def freeze_service_today(monkeypatch, day: date) -> None:
+    monkeypatch.setattr("app.services.price_service.product_today", lambda: day)
+
+
 # --- refresh ---
 
 
@@ -235,7 +246,8 @@ async def test_refresh_appends_the_live_value_series_and_records_the_run(
         )
     )
     await db.commit()
-    today = date.today()
+    today = MONDAY
+    freeze_service_today(monkeypatch, today)
     provider = FakeProvider({"NVDA": [bar(today - timedelta(days=1), "220"), bar(today, "225.5")]})
     monkeypatch.setattr("app.api.prices.get_provider", lambda: provider)
 
@@ -266,7 +278,8 @@ async def test_refresh_extends_the_baseline_by_implied_shares(auth_client, db, m
     # A held, priced book plus a prior imported row and benchmark bars on both sides of it.
     security = await seed_security(db, "NVDA")
     voo = await seed_security(db, "VOO", is_manual_priced=True)  # the refresh skips it
-    today = date.today()
+    today = MONDAY
+    freeze_service_today(monkeypatch, today)
     db.add_all(
         [
             PositionTransaction(
@@ -309,7 +322,8 @@ async def test_refresh_carries_the_baseline_flat_without_benchmark_bars(
     auth_client, db, monkeypatch
 ):
     security = await seed_security(db, "NVDA")
-    today = date.today()
+    today = MONDAY
+    freeze_service_today(monkeypatch, today)
     db.add_all(
         [
             PositionTransaction(

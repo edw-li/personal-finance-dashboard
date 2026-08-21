@@ -1,9 +1,12 @@
+from datetime import date
+from decimal import Decimal
+
 from sqlalchemy import func, select
 
 from app.importer.__main__ import build_parser
 from app.importer.report import SHEET_KEYS
 from app.importer.service import run_import
-from app.models import Account, PositionTransaction, Security, TaxInput
+from app.models import Account, PortfolioValueHistory, PositionTransaction, Security, TaxInput
 from tests.workbook_builder import build_workbook, default_taxes_rows
 
 
@@ -21,6 +24,26 @@ async def test_dry_run_reports_without_writing(db):
     assert await _count(db, Account) == 0
     assert await _count(db, Security) == 0
     assert await _count(db, TaxInput) == 0
+
+
+async def test_dry_run_reports_deletes_without_deleting(db):
+    # Deletes are the one verb dry-run most needs to be provably safe on (the history
+    # override contract is the importer's only sweep besides the positions sync): a live
+    # row inside the sheet's range is REPORTED as a delete and survives the run.
+    db.add(
+        PortfolioValueHistory(
+            snapshot_date=date(2023, 11, 1),  # mid-week stray inside the sheet's range
+            market_value=Decimal("60000.00"),
+            cost_basis=Decimal("55000.00"),
+            sp500_value=Decimal("53100.00"),
+        )
+    )
+    await db.commit()
+
+    report = await run_import(build_workbook(), db, dry_run=True)
+    assert report.dry_run is True and report.applied is False
+    assert report.sheets["portfolio"].entities["portfolio_value_history"].deletes == 1
+    assert await _count(db, PortfolioValueHistory) == 1  # the seeded row alone, untouched
 
 
 async def test_apply_then_reapply_is_all_skips(db):

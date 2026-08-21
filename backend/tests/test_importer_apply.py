@@ -747,6 +747,92 @@ async def test_apply_portfolio_history_diff_updates_changed_values(db):
     assert row.market_value == Decimal("99999.99")
 
 
+async def test_apply_portfolio_history_reupload_overrides_live_rows(db):
+    """THE OVERRIDE CONTRACT (user directive 2026-08-21): the workbook owns the series up
+    to its last row — a live row at a sheet date is overwritten with the sheet's values,
+    live rows at dates the sheet never had (including strays from the daily-append era)
+    are deleted, and rows past the sheet's last date survive as the live continuation the
+    sheet hasn't caught up to yet."""
+    # Sheet series: 2023-10-23 / 10-30 / 11-06. Seed a live row AT the sheet's last
+    # Monday with drifted values, one stray mid-week row inside the covered range, and
+    # one live Monday row beyond it.
+    db.add_all(
+        [
+            PortfolioValueHistory(
+                snapshot_date=date(2023, 11, 1),  # a Wednesday the sheet never had
+                market_value=Decimal("60000.00"),
+                cost_basis=Decimal("55000.00"),
+                sp500_value=Decimal("53100.00"),
+            ),
+            PortfolioValueHistory(
+                snapshot_date=date(2023, 11, 6),  # the sheet's last Monday, live-written
+                market_value=Decimal("63000.00"),
+                cost_basis=Decimal("62000.00"),
+                sp500_value=Decimal("55000.00"),
+            ),
+            PortfolioValueHistory(
+                snapshot_date=date(2023, 11, 13),  # the Monday after the sheet's last row
+                market_value=Decimal("61000.00"),
+                cost_basis=Decimal("55000.00"),
+                sp500_value=Decimal("53200.00"),
+            ),
+        ]
+    )
+    await db.commit()
+
+    report = SheetReport()
+    await apply_portfolio_history(db, parse_portfolio(sheets()["Portfolio"]), report)
+    await db.commit()
+
+    counts = report.entities["portfolio_value_history"]
+    assert (counts.creates, counts.updates, counts.deletes) == (2, 1, 1)
+    assert any("portfolio_value_history[2023-11-01]: deleted" in s for s in report.samples)
+    rows = (
+        (
+            await db.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.snapshot_date for r in rows] == [
+        date(2023, 10, 23),
+        date(2023, 10, 30),
+        date(2023, 11, 6),
+        date(2023, 11, 13),
+    ]
+    # The sheet's numbers stand at the shared date — the live row's drift is gone.
+    assert rows[2].market_value == Decimal("63577.56")
+    assert rows[2].cost_basis == Decimal("62399.04")
+    assert rows[2].sp500_value == Decimal("55548.29")
+
+
+async def test_apply_portfolio_history_empty_sheet_deletes_nothing(db):
+    """Hollow history columns parse to an empty series — that must read as 'nothing to
+    say', never as 'wipe the table'."""
+    from app.importer.cells import CellIssues
+    from app.importer.parsers import ParsedPortfolio
+
+    db.add(
+        PortfolioValueHistory(
+            snapshot_date=date(2023, 11, 13),
+            market_value=Decimal("61000.00"),
+            cost_basis=Decimal("55000.00"),
+            sp500_value=Decimal("53200.00"),
+        )
+    )
+    await db.commit()
+
+    report = SheetReport()
+    await apply_portfolio_history(db, ParsedPortfolio(history=[], issues=CellIssues()), report)
+    await db.commit()
+
+    counts = report.entities["portfolio_value_history"]
+    assert (counts.creates, counts.updates, counts.deletes) == (0, 0, 0)
+    assert (await db.execute(select(PortfolioValueHistory))).scalar_one() is not None
+
+
 async def test_importer_never_writes_dividends(db):
     """THE OWNERSHIP CONTRACT (user decision 2026-08-20): the dashboard is the system of
     record for dividends — a re-import must not create, update, or delete ANY

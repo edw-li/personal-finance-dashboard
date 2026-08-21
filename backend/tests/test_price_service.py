@@ -23,6 +23,9 @@ from app.services.price_service import (
 
 D = Decimal
 TODAY = date(2026, 8, 14)
+# The value snapshot is Monday-gated (the sheet's weekly cadence) — refresh runs that
+# expect an appended row must land on one. TODAY itself is a Friday.
+MONDAY = date(2026, 8, 17)
 
 
 class FakeProvider:
@@ -319,7 +322,7 @@ async def test_run_refresh_records_dividend_counts(db):
             ]
         }
     )
-    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=TODAY)
+    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=MONDAY)
 
     assert result.updated == ["DIVX"] and appended is True
     assert (dividends.ingested, dividends.removed, dividends.skipped_manual_overlap) == (2, 0, 1)
@@ -348,7 +351,7 @@ async def test_run_refresh_records_dividend_counts(db):
     # the auto rows it can no longer support.
     await db.delete(holding)
     await db.commit()
-    _result, _appended, healed = await run_refresh(db, provider, trigger="scheduled", today=TODAY)
+    _result, _appended, healed = await run_refresh(db, provider, trigger="scheduled", today=MONDAY)
     assert (healed.ingested, healed.removed, healed.skipped_manual_overlap) == (0, 2, 1)
     healed_payload = await read_last_refresh(db)
     assert healed_payload["dividends_ingested"] == 0
@@ -369,7 +372,7 @@ async def test_ingest_failure_degrades_and_preserves_snapshot(db, engine, monkey
     monkeypatch.setattr("app.services.dividend_ingest.ingest_dividends", boom)
     provider = FakeProvider({"DIVX": [bar(date(2026, 6, 19), "110", "0.8200"), bar(TODAY, "120")]})
 
-    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=TODAY)
+    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=MONDAY)
 
     assert result.updated == ["DIVX"]
     assert appended is True  # the savepoint rolled back the ingest ALONE
@@ -380,7 +383,7 @@ async def test_ingest_failure_degrades_and_preserves_snapshot(db, engine, monkey
         # rollback-on-failure would have destroyed.
         assert (await other.get(LatestPrice, sec.id)).price == D("120.0000")
         snapshots = (await other.execute(select(PortfolioValueHistory))).scalars().all()
-        assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(TODAY, D("1200.00"))]
+        assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(MONDAY, D("1200.00"))]
         assert (await other.execute(select(DividendPayment))).scalars().all() == []
     payload = await read_last_refresh(db)
     assert payload["history_appended"] is True
@@ -412,7 +415,7 @@ async def test_mid_ingest_db_failure_rolls_back_to_the_savepoint(db, engine, mon
     monkeypatch.setattr("app.services.dividend_ingest.ingest_dividends", failing_statement)
     provider = FakeProvider({"DIVX": [bar(date(2026, 6, 19), "110", "0.8200"), bar(TODAY, "120")]})
 
-    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=TODAY)
+    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=MONDAY)
 
     assert result.updated == ["DIVX"]
     assert appended is True
@@ -420,10 +423,34 @@ async def test_mid_ingest_db_failure_rolls_back_to_the_savepoint(db, engine, mon
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as other:
         snapshots = (await other.execute(select(PortfolioValueHistory))).scalars().all()
-        assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(TODAY, D("1200.00"))]
+        assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(MONDAY, D("1200.00"))]
         assert (await other.execute(select(DividendPayment))).scalars().all() == []
     payload = await read_last_refresh(db)
     assert payload["history_appended"] is True and payload["dividends_ingested"] == 0
+
+
+async def test_value_snapshot_rides_only_the_monday_refresh(db):
+    # Sheet parity: the workbook's automation added ONE point per week, Mondays after
+    # close. Refreshes on every other day — scheduled or manual, weekend included — must
+    # keep quotes fresh WITHOUT thickening the weekly series into a daily one.
+    sec = await seed_security(db, "NVDA")
+    db.add(buy(sec.id))
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(TODAY, "120")]})
+
+    for offset in range(1, 7):  # Tue..Sun after the anchor Monday
+        _result, appended, _dividends = await run_refresh(
+            db, provider, trigger="scheduled", today=MONDAY + timedelta(days=offset)
+        )
+        assert appended is False
+    assert (await db.execute(select(PortfolioValueHistory))).scalars().all() == []
+    payload = await read_last_refresh(db)
+    assert payload["history_appended"] is False
+
+    _result, appended, _dividends = await run_refresh(db, provider, trigger="manual", today=MONDAY)
+    assert appended is True
+    snapshots = (await db.execute(select(PortfolioValueHistory))).scalars().all()
+    assert [(s.snapshot_date, s.market_value) for s in snapshots] == [(MONDAY, D("1200.00"))]
 
 
 async def test_backdated_manual_price_does_not_move_import_seeded_latest(db):

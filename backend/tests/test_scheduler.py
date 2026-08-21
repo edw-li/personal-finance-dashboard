@@ -10,9 +10,26 @@ from app.services.scheduler import (
     build_trigger,
     get_next_run_time,
     missed_todays_run,
+    product_today,
     read_cron_setting,
     reschedule_price_refresh,
 )
+
+
+def test_product_today_is_the_scheduler_zone_day(monkeypatch):
+    # The review scenario verbatim: Monday 18:30 PT is already Tuesday 01:30 UTC — the
+    # product day must still read Monday, or the weekly value snapshot gates itself off
+    # under any post-close-evening cron.
+    from datetime import UTC
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 8, 18, 1, 30, tzinfo=UTC).astimezone(tz)
+
+    monkeypatch.setattr("app.services.scheduler.datetime", _FixedDatetime)
+    assert product_today() == date(2026, 8, 17)  # a Monday
+    assert product_today().weekday() == 0
 
 
 def test_build_trigger_parses_valid_cron():

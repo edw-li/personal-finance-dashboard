@@ -47,7 +47,8 @@ const SETTINGS: AppSettingsOut = {
 // since the hot-reload landed, the note must NOT resurrect the old restart ritual.
 const CRON_HINT =
   '5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied to the ' +
-  'live schedule on save. Must not fire more often than hourly.'
+  'live schedule on save. Must not fire more often than hourly. The Monday run also ' +
+  'records the weekly performance point — keep Mondays covered.'
 const SAVED_NOTE = 'Saved — the schedule is applied immediately.'
 
 const swrBox = () => screen.getByLabelText('Withdrawal rate (% / year)') as HTMLInputElement

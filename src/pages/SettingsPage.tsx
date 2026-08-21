@@ -310,7 +310,8 @@ export default function SettingsPage() {
               </label>
               <p className="settings-note">
                 5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied
-                to the live schedule on save. Must not fire more often than hourly.
+                to the live schedule on save. Must not fire more often than hourly. The Monday
+                run also records the weekly performance point — keep Mondays covered.
               </p>
               <div className="settings-actions">
                 <button type="submit" className="button button-primary" disabled={saving}>

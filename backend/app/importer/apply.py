@@ -336,14 +336,19 @@ async def apply_net_worth(db: AsyncSession, parsed: ParsedNetWorth, report: Shee
 async def apply_portfolio_history(
     db: AsyncSession, parsed: ParsedPortfolio, report: SheetReport
 ) -> None:
-    """Upsert the weekly value-history series by snapshot_date. No deletes: the sheet's
-    series is append-only, so a date that vanished from the sheet is left in place
-    (net-worth snapshot posture, not the positions sync-delete contract)."""
+    """Upsert the weekly value-history series by snapshot_date, then delete rows the
+    workbook doesn't carry, up to its last date: a re-upload OVERRIDES whatever the live
+    Monday snapshots wrote (user directive 2026-08-21, superseding the original
+    no-deletes posture) — which also flushes any stray rows from the retired daily-append
+    era. Rows PAST the sheet's last date survive: they are the live continuation the
+    sheet hasn't caught up to yet. An empty parsed series deletes nothing (hollow history
+    columns must read as 'nothing to say', never as 'wipe the table')."""
     counts = report.counts("portfolio_value_history")
     existing = {
         row.snapshot_date: row
         for row in (await db.execute(select(PortfolioValueHistory))).scalars()
     }
+    imported_dates = {point.snapshot_date for point in parsed.history}
     for point in parsed.history:
         fields = {
             "market_value": point.market_value,
@@ -361,6 +366,17 @@ async def apply_portfolio_history(
                 counts,
                 report,
                 f"portfolio_value_history[{point.snapshot_date.isoformat()}]",
+            )
+    if not parsed.history:
+        return
+    last_imported = max(imported_dates)
+    for snapshot_date in sorted(existing):
+        if snapshot_date <= last_imported and snapshot_date not in imported_dates:
+            await db.delete(existing[snapshot_date])
+            counts.deletes += 1
+            report.add_sample(
+                f"portfolio_value_history[{snapshot_date.isoformat()}]: deleted "
+                "(absent from workbook — the sheet owns the series up to its last row)"
             )
 
 

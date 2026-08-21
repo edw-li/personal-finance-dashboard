@@ -8,7 +8,7 @@ saved cron and the status endpoint can name the next run; both degrade to no-op/
 when nothing is running."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -30,6 +30,15 @@ CATCHUP_DELAY_SECONDS = 10
 
 # The running scheduler, if any — set by start_scheduler, read by the two accessors.
 _scheduler: AsyncIOScheduler | None = None
+
+
+def product_today() -> date:
+    """The calendar day in the scheduler's zone — the ONE clock the refresh ritual keeps
+    time by. The prod container runs UTC, where every evening from 16:00/17:00 PT is
+    already tomorrow: a Monday 18:00 PT refresh judged by date.today() would gate the
+    weekly value snapshot into Tuesday and silently end the series (branch review F1).
+    Fire time (APScheduler, this zone) and the run's idea of "today" must agree."""
+    return datetime.now(ZoneInfo(SCHEDULER_TIMEZONE)).date()
 
 
 async def read_cron_setting(db: AsyncSession) -> str:

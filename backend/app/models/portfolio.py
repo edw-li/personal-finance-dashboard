@@ -118,8 +118,11 @@ class PriceHistory(Base):
 
 class PortfolioValueHistory(Base):
     """The workbook's weekly portfolio series (Portfolio sheet, hidden cols AB..AH):
-    imported verbatim, import-owned via upsert-by-date, never derived from transactions
-    (most position rows are undated by design — see PositionTransaction.sort_index)."""
+    imported verbatim and extended live at the same weekly-Monday cadence
+    (services.value_history), never derived from transactions (most position rows are
+    undated by design — see PositionTransaction.sort_index). Import-owned up to the
+    workbook's last row: a re-import upserts by date AND deletes rows the sheet doesn't
+    carry in that range (apply_portfolio_history's override contract)."""
 
     __tablename__ = "portfolio_value_history"
 

@@ -88,7 +88,9 @@ order-safe both directions (old code never touches the table, no backfill).
   via the existing create-or-`_diff_update` pattern; counts + samples under the
   existing `"portfolio"` sheet report key (bucket `portfolio_value_history`).
   **No deletes** — the series is append-only in the sheet; a vanished date row is
-  left in place (same posture as net-worth snapshots). Wired into
+  left in place (same posture as net-worth snapshots). *(Superseded 2026-08-21:
+  re-upload now overrides — rows absent from the workbook up to its last date are
+  deleted; see `apply_portfolio_history`.)* Wired into
   `service.run_import` alongside the other appliers; dry-run/apply symmetry free.
 - Idempotent: re-importing the same workbook yields 0 creates / 0 updates.
 
