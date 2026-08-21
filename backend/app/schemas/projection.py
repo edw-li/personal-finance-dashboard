@@ -26,8 +26,10 @@ class ProjectionOut(BaseModel):
     projected: list[Decimal]
     coast: list[Decimal]
     warnings: list[str]
-    # Monte Carlo (present only when `volatility` was provided; echoes are nullable so a
-    # stale tab against an older payload keeps rendering).
+    # Monte Carlo. A live server now always echoes the three assumption knobs (absent ones
+    # default in the router), and `bands`/probability/percentile months are present unless
+    # volatility is an explicit 0. The echoes stay NULLABLE anyway: a stale tab or a stored
+    # older payload must keep rendering, and the page reads a null echo as "no placeholder".
     volatility: Decimal | None = None
     inflation: Decimal | None = None
     contribution_growth: Decimal | None = None

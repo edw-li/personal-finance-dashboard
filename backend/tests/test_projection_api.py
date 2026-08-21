@@ -109,7 +109,11 @@ async def test_projection_defaults_derive_from_the_data(auth_client, db):
 
 async def test_projection_zero_return_is_an_exact_chain(auth_client, db):
     this_month = await _seed_book(db)
-    resp = await auth_client.get("/api/v1/projection?annual_return=0")
+    # NOMINAL arithmetic is what this pins, so the two real-terms assumptions are sent as
+    # explicit zeros — absent they would default to 3%/3% and bend every figure below.
+    resp = await auth_client.get(
+        "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0"
+    )
     body = resp.json()
 
     # r = 0 collapses the compounding to plain addition — the chain is exact and pins the
@@ -199,8 +203,9 @@ async def test_projection_names_an_unreachable_horizon(auth_client, db):
 
 # CAPTURED FROM THE ENDPOINT BEFORE THE KNOBS EXISTED (every point of a 2-year run at the
 # derived defaults: 100,000 investable, 4,000/month, 5%/yr). The real-terms conversion now
-# sits between the knobs and `project(...)`, so "no knobs ⇒ byte-identical" has to be a
-# test, not a hope — these strings are what it is measured against.
+# sits between the knobs and `project(...)`, so byte-identity has to be a test, not a hope
+# — these strings are what it is measured against. They are NOT regenerated: if they ever
+# stop matching, the engine moved.
 BACKCOMPAT_PROJECTED_2Y = (
     "100000.00 104407.41 108832.78 113276.18 117737.68 122217.36 126715.29 131231.54 "
     "135766.19 140319.32 144891.00 149481.30 154090.31 158718.09 163364.73 168030.30 "
@@ -215,15 +220,20 @@ BACKCOMPAT_COAST_2Y = (
 ).split()
 
 
-async def test_projection_backcompat_without_new_knobs(auth_client, db):
+async def test_projection_explicit_zero_knobs_reproduce_the_pre_monte_carlo_arrays(auth_client, db):
     this_month = await _seed_book(db)
-    short = (await auth_client.get("/api/v1/projection?years=2")).json()
+    # The back-compat guarantee RE-ANCHORED: absent knobs now mean the assumption defaults
+    # (that is the feature), so the pre-Monte-Carlo engine is what EXPLICIT zeros buy. Only
+    # inflation and contribution growth touch the deterministic arrays; volatility=0 rides
+    # along to pin that the fan's off switch leaves the lines alone.
+    zeros = "volatility=0&inflation=0&contribution_growth=0"
+    short = (await auth_client.get(f"/api/v1/projection?years=2&{zeros}")).json()
     assert short["projected"] == BACKCOMPAT_PROJECTED_2Y
     assert short["coast"] == BACKCOMPAT_COAST_2Y
 
     # The default horizon's landmarks, captured the same way — the long chain has more
     # room to drift than 24 months do.
-    full = (await auth_client.get("/api/v1/projection")).json()
+    full = (await auth_client.get(f"/api/v1/projection?{zeros}")).json()
     assert full["projected"][180] == "1267191.20"
     assert full["coast"][180] == "207892.82"
     assert full["projected"][-1] == "3693697.87"
@@ -232,17 +242,55 @@ async def test_projection_backcompat_without_new_knobs(auth_client, db):
     assert full["fi_target"] == "1500000.00"
     assert full["fi_ratio"] == "0.066667"
 
-    # No volatility ⇒ no simulation ran, and the three knobs echo NULL (not 0) so the
-    # page's blank boxes stay blank through the round trip.
+    # Volatility 0 ⇒ no simulation ran, and the three knobs echo the zeros they were sent:
+    # the echo names what actually ran, never a null (the page reads it as a placeholder).
     for body in (short, full):
         assert body["bands"] is None
         assert body["fi_probability"] is None
         assert body["fi_month_p10"] is None
         assert body["fi_month_p50"] is None
         assert body["fi_month_p90"] is None
-        assert body["volatility"] is None
-        assert body["inflation"] is None
-        assert body["contribution_growth"] is None
+        assert body["volatility"] == "0.000000"
+        assert body["inflation"] == "0.000000"
+        assert body["contribution_growth"] == "0.000000"
+
+
+async def test_projection_defaults_apply_when_knobs_absent(auth_client, db):
+    await _seed_book(db)
+    body = (await auth_client.get("/api/v1/projection?years=10")).json()
+
+    # Absent means the planning defaults, echoed at the percent quantum so the page can
+    # grey them into the empty boxes without ever disagreeing with what ran.
+    assert body["volatility"] == "0.150000"
+    assert body["inflation"] == "0.030000"
+    assert body["contribution_growth"] == "0.030000"
+    # The fan and the probability tile are therefore on for a bare GET — the whole point.
+    assert sorted(body["bands"]) == ["p10", "p25", "p50", "p75", "p90"]
+    assert body["fi_probability"] is not None
+
+    # ...and the defaults are observable on the deterministic line: 3% inflation is a real
+    # -terms shift, so the defaulted run cannot land on the explicit-zeros one.
+    zeros = (
+        await auth_client.get("/api/v1/projection?years=10&inflation=0&contribution_growth=0")
+    ).json()
+    assert body["projected"][-1] != zeros["projected"][-1]
+
+
+async def test_projection_volatility_zero_turns_the_fan_off(auth_client, db):
+    await _seed_book(db)
+    resp = await auth_client.get("/api/v1/projection?volatility=0&years=2")
+    assert resp.status_code == 200, resp.text  # 0 is legal now, not a 422
+    body = resp.json()
+
+    assert body["volatility"] == "0.000000"
+    assert body["bands"] is None
+    assert body["fi_probability"] is None
+    assert body["fi_month_p10"] is None
+    assert body["fi_month_p50"] is None
+    assert body["fi_month_p90"] is None
+    # The other two still defaulted — the off switch is volatility's alone.
+    assert body["inflation"] == "0.030000"
+    assert body["contribution_growth"] == "0.030000"
 
 
 async def test_projection_bands_shape_and_alignment(auth_client, db):
@@ -267,10 +315,13 @@ async def test_projection_bands_shape_and_alignment(auth_client, db):
 
 async def test_projection_inflation_moves_deterministic_lines(auth_client, db):
     await _seed_book(db)
-    plain = (await auth_client.get("/api/v1/projection?years=10")).json()
-    real = (await auth_client.get("/api/v1/projection?years=10&inflation=0.03")).json()
+    # Inflation is the ONLY difference between the two runs: contribution growth is pinned
+    # to 0 on both sides, because absent it would default to 3% and move the lines itself.
+    base = "/api/v1/projection?years=10&contribution_growth=0"
+    plain = (await auth_client.get(f"{base}&inflation=0")).json()
+    real = (await auth_client.get(f"{base}&inflation=0.03")).json()
 
-    assert plain["inflation"] is None
+    assert plain["inflation"] == "0.000000"
     assert real["inflation"] == "0.030000"
     # The ECHOED return stays nominal — it is what seeds the form; inflation echoes
     # separately, so the page can reconstruct the real rate itself.
@@ -283,10 +334,11 @@ async def test_projection_inflation_moves_deterministic_lines(auth_client, db):
 
 async def test_projection_contribution_growth(auth_client, db):
     await _seed_book(db)
-    flat = (await auth_client.get("/api/v1/projection?years=10")).json()
+    # "Flat" is now an explicit 0 — absent means the 3% default, which is a raise.
+    flat = (await auth_client.get("/api/v1/projection?years=10&contribution_growth=0")).json()
     raises = (await auth_client.get("/api/v1/projection?years=10&contribution_growth=0.05")).json()
 
-    assert flat["contribution_growth"] is None
+    assert flat["contribution_growth"] == "0.000000"
     assert raises["contribution_growth"] == "0.050000"
     assert Decimal(raises["projected"][-1]) > Decimal(flat["projected"][-1])
     # The coast line has no contribution to escalate — it must not move an inch.
@@ -326,10 +378,11 @@ async def test_projection_seed_stability(auth_client, db):
 async def test_projection_bounds_the_monte_carlo_knobs(auth_client, db):
     await _seed_book(db)
 
-    for bad in ("0", "1.5"):
+    # 0 is no longer out of range — it is the fan's off switch (its own test above).
+    for bad in ("-0.01", "1.5"):
         resp = await auth_client.get(f"/api/v1/projection?volatility={bad}")
         assert resp.status_code == 422
-        assert resp.json()["detail"] == "volatility must be greater than 0 and at most 1"
+        assert resp.json()["detail"] == "volatility must be between 0 and 1"
 
     for bad in ("-0.2", "0.3"):
         resp = await auth_client.get(f"/api/v1/projection?inflation={bad}")

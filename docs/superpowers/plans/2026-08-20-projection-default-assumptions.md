@@ -18,7 +18,7 @@
 - Modify: `backend/app/api/projection.py`
 - Test: `backend/tests/test_projection_api.py`
 
-- [ ] **Step 1:** Read `backend/app/api/projection.py` in full. Beside the existing constants add:
+- [x] **Step 1:** Read `backend/app/api/projection.py` in full. Beside the existing constants add:
 
 ```python
 # Assumption defaults (user decision 2026-08-20): absent knobs mean these, so a fresh
@@ -37,7 +37,7 @@ from `volatility is not None` to `volatility > 0`. The echo fields now pass the
 resolved values (never None). Where the current code computes `inflation_rate`/
 `growth_rate` from `None`, simplify — the values are always resolved by then.
 
-- [ ] **Step 2:** Update the tests in `backend/tests/test_projection_api.py`:
+- [x] **Step 2:** Update the tests in `backend/tests/test_projection_api.py`:
 
 1. RETIRE `test_projection_backcompat_without_new_knobs`'s absent-knob framing: rename it
    `test_projection_explicit_zero_knobs_reproduce_the_pre_monte_carlo_arrays`, call the
@@ -57,9 +57,9 @@ resolved values (never None). Where the current code computes `inflation_rate`/
    explicit `inflation=0` / `contribution_growth=0` where they pinned nominal behavior
    (read each and adjust the minimal set — report which).
 
-- [ ] **Step 3:** Run `cd backend && .venv/Scripts/python.exe -m pytest tests/test_projection_api.py tests/test_montecarlo.py -q -W error` → PASS; `ruff check .` and `ruff format --check .` clean.
+- [x] **Step 3:** Run `cd backend && .venv/Scripts/python.exe -m pytest tests/test_projection_api.py tests/test_montecarlo.py -q -W error` → PASS; `ruff check .` and `ruff format --check .` clean.
 
-- [ ] **Step 4:** Commit — `git commit -am "feat: projection assumptions default server-side — fan and today's-dollars by default, volatility 0 is the off switch"`
+- [x] **Step 4:** Commit — `git commit -am "feat: projection assumptions default server-side — fan and today's-dollars by default, volatility 0 is the off switch"`
 
 ---
 

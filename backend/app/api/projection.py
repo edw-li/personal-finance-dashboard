@@ -7,6 +7,12 @@ balance (net_worth_calc's own rule, the 4%-line's base), the trailing-12 mean of
 spend, and the stored SWR — and the response echoes the values actually used, so the
 page's form seeds from the echo.
 
+The three ASSUMPTION knobs (volatility, inflation, contribution growth) have no data to
+derive from, so an absent one takes a planning default instead (the DEFAULT_* constants
+below) — the fan and today's-dollars framing are on unless you turn them off with an
+explicit 0. They echo like every other knob; the page renders them as placeholders rather
+than seeding their boxes, so blank always means "whatever the echo says".
+
 `date.today()` is read HERE and only here (paycheck.py's posture): it anchors the
 starting balance and the month axis; services/projection.py takes no clock.
 """
@@ -42,14 +48,21 @@ RETURN_MIN = Decimal("-0.5")
 RETURN_MAX = Decimal("0.5")
 RETURN_MESSAGE = "annual_return must be between -0.5 and 0.5"
 SWR_MESSAGE = "swr must be greater than 0 and at most 1"
-# The Monte Carlo knobs. A sigma of 0 is the deterministic line itself (leave the knob
-# blank for that), and above 100%/yr the lognormal walk is noise, not a scenario.
-VOLATILITY_MESSAGE = "volatility must be greater than 0 and at most 1"
+# The Monte Carlo knobs. A sigma of 0 is the deterministic line itself — now an EXPLICIT
+# 0 (the fan's off switch), since a blank one means DEFAULT_VOLATILITY; above 100%/yr the
+# lognormal walk is noise, not a scenario.
+VOLATILITY_MESSAGE = "volatility must be between 0 and 1"
 INFLATION_MIN = Decimal("-0.1")
 INFLATION_MAX = Decimal("0.25")
 INFLATION_MESSAGE = "inflation must be between -0.1 and 0.25"
 GROWTH_MAX = Decimal("0.25")
 GROWTH_MESSAGE = "contribution_growth must be between 0 and 0.25"
+# Assumption defaults (user decision 2026-08-20): absent knobs mean these, so a fresh
+# page shows the fan and reads in today's dollars with no typing. Explicit values —
+# including the zeros — always win; volatility 0 is the fan's off switch.
+DEFAULT_VOLATILITY = Decimal("0.15")
+DEFAULT_INFLATION = Decimal("0.03")
+DEFAULT_CONTRIBUTION_GROWTH = Decimal("0.03")
 # Bounds in money.py's vocabulary: contributions are monthly money, spend is annual.
 CONTRIBUTION_MAX_ABS = Decimal(10) ** 7
 SPEND_MAX_ABS = Decimal(10) ** 9
@@ -185,40 +198,44 @@ async def projection(
             raise HTTPException(status_code=422, detail=SWR_MESSAGE)
         swr = quantize_pct(swr)
 
-    # The three Monte Carlo knobs, each in the annual_return pattern: finite, bounded,
-    # quantized on the way in. All three stay None when absent — that null is what the
-    # form's blank-box convention round-trips through the echo.
-    if volatility is not None:
-        if not volatility.is_finite() or not Decimal(0) < volatility <= Decimal(1):
-            raise HTTPException(status_code=422, detail=VOLATILITY_MESSAGE)
-        volatility = quantize_pct(volatility)
+    # The three assumption knobs, each in the annual_return pattern: finite, bounded,
+    # quantized on the way in. ABSENT means the DEFAULT here, never None — that is the
+    # whole feature: a fresh page gets the fan and today's dollars with no typing. An
+    # explicit value always wins, zeros included (volatility 0 turns the fan off, the
+    # gate below; inflation 0 reads nominal; growth 0 keeps contributions flat), and the
+    # quantize runs on both paths so the echo always names what actually ran at 6dp.
+    if volatility is None:
+        volatility = DEFAULT_VOLATILITY
+    elif not volatility.is_finite() or not Decimal(0) <= volatility <= Decimal(1):
+        raise HTTPException(status_code=422, detail=VOLATILITY_MESSAGE)
+    volatility = quantize_pct(volatility)
 
-    if inflation is not None:
-        if not inflation.is_finite() or not INFLATION_MIN <= inflation <= INFLATION_MAX:
-            raise HTTPException(status_code=422, detail=INFLATION_MESSAGE)
-        inflation = quantize_pct(inflation)
+    if inflation is None:
+        inflation = DEFAULT_INFLATION
+    elif not inflation.is_finite() or not INFLATION_MIN <= inflation <= INFLATION_MAX:
+        raise HTTPException(status_code=422, detail=INFLATION_MESSAGE)
+    inflation = quantize_pct(inflation)
 
-    if contribution_growth is not None:
-        if (
-            not contribution_growth.is_finite()
-            or not Decimal(0) <= contribution_growth <= GROWTH_MAX
-        ):
-            raise HTTPException(status_code=422, detail=GROWTH_MESSAGE)
-        contribution_growth = quantize_pct(contribution_growth)
+    if contribution_growth is None:
+        contribution_growth = DEFAULT_CONTRIBUTION_GROWTH
+    elif not contribution_growth.is_finite() or not Decimal(0) <= contribution_growth <= GROWTH_MAX:
+        raise HTTPException(status_code=422, detail=GROWTH_MESSAGE)
+    contribution_growth = quantize_pct(contribution_growth)
 
     # Inflation converts BOTH rates to real terms so every line and band shifts together
     # while the FI target stays in today's dollars — the whole frame reads in one unit.
-    inflation_rate = inflation if inflation is not None else Decimal("0")
-    real_return = (Decimal(1) + annual_return) / (Decimal(1) + inflation_rate) - Decimal(1)
-    growth_rate = contribution_growth if contribution_growth is not None else Decimal("0")
-    real_growth = (Decimal(1) + growth_rate) / (Decimal(1) + inflation_rate) - Decimal(1)
+    # Both knobs are resolved by here (defaulted or validated), so there is no None branch
+    # left: an explicit 0 is the only way back to nominal arithmetic.
+    real_return = (Decimal(1) + annual_return) / (Decimal(1) + inflation) - Decimal(1)
+    real_growth = (Decimal(1) + contribution_growth) / (Decimal(1) + inflation) - Decimal(1)
 
     month_count = years * 12
     months = _months_from(start_month, month_count)
-    # Every ARRAY below runs on `real_return` (= annual_return when no inflation was
-    # given, so the no-knobs response is byte-identical); the ECHOED `annual_return` stays
-    # the NOMINAL value the user provided or the default — the echo is what seeds the
-    # form, and `inflation` echoes separately so the page can reconstruct the real rate.
+    # Every ARRAY below runs on `real_return` (= annual_return under an EXPLICIT
+    # inflation=0, which is what reproduces the pre-Monte-Carlo arrays byte for byte);
+    # the ECHOED `annual_return` stays the NOMINAL value the user provided or the default
+    # — the echo is what seeds the form, and `inflation` echoes separately so the page can
+    # reconstruct the real rate.
     projected = project(starting, monthly_contribution, real_return, month_count, real_growth)
     # The coast line: the same growth with the contributions turned off — the distance
     # between the two lines is what the saving is buying. Nothing to escalate, so the
@@ -246,14 +263,15 @@ async def projection(
                     "at these assumptions"
                 )
 
-    # The simulation surrounds the deterministic line; without a volatility it never runs
-    # and the whole block stays null (the back-compat contract).
+    # The simulation surrounds the deterministic line. Sigma 0 is its off switch — an
+    # explicit one now that absent means DEFAULT_VOLATILITY — and turning it off leaves
+    # this whole block null, exactly as an absent knob used to.
     bands: dict[str, list[Decimal]] | None = None
     fi_probability: Decimal | None = None
     fi_month_p10: date | None = None
     fi_month_p50: date | None = None
     fi_month_p90: date | None = None
-    if volatility is not None:
+    if volatility > 0:
         mc = simulate(
             starting,
             monthly_contribution,
