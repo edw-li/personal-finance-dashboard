@@ -159,19 +159,26 @@ export default function WithholdingPanel({ year }: { year: number }) {
           )}
 
           {/* The two halves of the app that both know about vest income have to agree: this
-              card counts the vests, and the engine above only knows what the W-2 inputs say. */}
+              card counts the vests, while the engine's total above it knows only what the
+              inputs form BELOW was told — which is where the reader has to go to fix it. */}
           {Number(withholding.vest.income_projected) > 0 && (
             <p className="hint">
               {`This year's vests imply ≈${formatCurrency(
                 withholding.vest.income_projected,
-              )} of W-2 income at vest prices — make sure your W-2 inputs above include it.`}
+              )} of W-2 income at vest prices — make sure your W-2 inputs below include it.`}
             </p>
           )}
 
+          {/* What the estimate ASSUMED, in the order it bites: the check grid, the FICA
+              stacking, and the quote the future half rides — the balance above moves with the
+              stock, which is the one thing a reader would otherwise not guess. "Tends to err
+              toward owing more" rather than a flat promise: the stacking leans that way, but
+              additional-Medicare convexity can run the other, and an even grid is
+              direction-neutral. */}
           <p className="drill-hint">
             Checks are estimated on an even calendar grid, and vest FICA stacks on top of salary
-            rather than by date — a conservative, owe-more approximation. Supplemental rates: 22%
-            federal + 10.23% CA.
+            rather than by date — an approximation that tends to err toward owing more. Future
+            vests are valued at the latest quote. Supplemental rates: 22% federal + 10.23% CA.
           </p>
 
           {/* Advisory, never an error banner: the estimate CAME BACK — these are the honest

@@ -200,7 +200,9 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     expect(
       await screen.findByText(
-        "This year's vests imply ≈$48,000.00 of W-2 income at vest prices — make sure your W-2 inputs above include it.",
+        // BELOW: the inputs form the reader has to fix this in renders under this card
+        // (TaxesPage's order — summary, this card, what-if, then the two editors).
+        "This year's vests imply ≈$48,000.00 of W-2 income at vest prices — make sure your W-2 inputs below include it.",
       ),
     ).toBeTruthy()
     cleanup()
@@ -226,9 +228,13 @@ describe('WithholdingPanel', () => {
 
   it('always says how the estimate was made', async () => {
     render(<WithholdingPanel year={2026} />)
+    // Every assumption that moves the balance above it: the check grid, the FICA stacking, and
+    // the quote the future half is valued at — the last one is why the balance moves with the
+    // stock. The lean is worded as a tendency, not a promise (additional-Medicare convexity
+    // can run the other way, and an even grid is direction-neutral).
     expect(
       await screen.findByText(
-        /Checks are estimated on an even calendar grid.*conservative, owe-more approximation\. Supplemental rates: 22% federal \+ 10\.23% CA\./,
+        /Checks are estimated on an even calendar grid.*an approximation that tends to err toward owing more\. Future vests are valued at the latest quote\. Supplemental rates: 22% federal \+ 10\.23% CA\./,
       ),
     ).toBeTruthy()
   })
