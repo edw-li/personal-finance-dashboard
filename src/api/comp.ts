@@ -1,5 +1,12 @@
 import { api } from './client'
-import type { CompEventCreate, CompEventOut, CompEventUpdate } from '../types/api'
+import type {
+  CompEventCreate,
+  CompEventOut,
+  CompEventUpdate,
+  RsuGrantCreate,
+  RsuGrantOut,
+  VestingScheduleOut,
+} from '../types/api'
 
 // Ascending by focal_year — the page reads as a trajectory.
 export function fetchEvents(): Promise<CompEventOut[]> {
@@ -18,4 +25,28 @@ export function updateEvent(id: number, body: CompEventUpdate): Promise<CompEven
 
 export function deleteEvent(id: number): Promise<void> {
   return api<void>(`/comp/events/${id}`, { method: 'DELETE' })
+}
+
+// --- RSU grants + the vesting schedule ---
+
+// The whole Comp card set in one read-only payload: grants, every vest, the tiles, the
+// seed prefills and both warning lists. Never rejects — the price chain degrades to nulls
+// plus warnings — so reload this after ANY grant write rather than patching state locally.
+export function fetchVestingSchedule(): Promise<VestingScheduleOut> {
+  return api<VestingScheduleOut>('/comp/vesting-schedule')
+}
+
+// label is the natural key here (not focal_year): a duplicate — after trimming — is a 409.
+export function createRsuGrant(body: RsuGrantCreate): Promise<RsuGrantOut> {
+  return api<RsuGrantOut>('/comp/rsu-grants', { method: 'POST', body: JSON.stringify(body) })
+}
+
+// The whole merged row is re-validated, so a PATCH gets a POST's rules. Only focal_year and
+// notes are nullable columns: an explicit null clears those two and is a no-op elsewhere.
+export function updateRsuGrant(id: number, body: Partial<RsuGrantCreate>): Promise<RsuGrantOut> {
+  return api<RsuGrantOut>(`/comp/rsu-grants/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+}
+
+export function deleteRsuGrant(id: number): Promise<void> {
+  return api<void>(`/comp/rsu-grants/${id}`, { method: 'DELETE' })
 }

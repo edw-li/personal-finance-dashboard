@@ -7,6 +7,7 @@ import type {
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
+  WithholdingOut,
 } from '../types/api'
 
 // Render order for the brackets editor, mirroring backend `app/tax_keys.py`. The GET
@@ -71,6 +72,14 @@ export function fetchTaxSummary(year: number): Promise<TaxSummaryOut> {
 // The trend feed: one summary per year that has at least one stored input.
 export function fetchAllTaxSummaries(): Promise<TaxSummariesOut> {
   return api<TaxSummariesOut>('/taxes/summary')
+}
+
+// The "Will I owe?" tracker: the year's liability against an estimate of what will actually
+// be withheld. CURRENT YEAR ONLY — any other year is a 422 (a settled year may well be
+// stored and summarizable, and this card still cannot be drawn for it) — and a 404 when the
+// current year has no stored row at all.
+export function fetchWithholding(year: number): Promise<WithholdingOut> {
+  return api<WithholdingOut>(`/taxes/years/${year}/withholding`)
 }
 
 // 204, and the year's inputs + brackets go with it (both child FKs cascade).

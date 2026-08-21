@@ -551,6 +551,51 @@ export interface WhatIfOut {
   warnings: string[]
 }
 
+// --- taxes: the "Will I owe?" tracker ---
+// GET /taxes/years/{year}/withholding — the CURRENT year only (any other year is a 422,
+// even a stored one) and computed end to end at read time from paycheck profiles, RSU
+// grants, employer prices and the bracket tables; nothing in it is persisted. Money is 2dp
+// Decimal strings. Every input is a soft link that can break — a missing ticker, no bar
+// behind a past vest, no current quote, an unschedulable grant, an unusable profile — and
+// each break EXCLUDES that piece from the estimate and names itself in `warnings` rather
+// than failing the read, so the warnings are part of the number, not decoration.
+
+export interface WithholdingOut {
+  year: number
+  // The engine's liability for the year — the same figure TaxSummaryOut.totals.total_tax
+  // carries, verbatim.
+  liability_total: string
+  // Withholding received so far (`ytd`) vs the full-year estimate (`projected`). The salary
+  // leg is all-in: the user's withholding_pct already carries its FICA, so no salary-side
+  // FICA is added anywhere.
+  salary: { ytd: string; projected: string }
+  vest: {
+    // The vest BASE (fmv x shares) the two tax legs below were computed on — reported so
+    // the card can show its own inputs.
+    income_ytd: string
+    income_projected: string
+    supplemental_ytd: string
+    supplemental_projected: string
+    fica_ytd: string
+    fica_projected: string
+  }
+  total: { ytd: string; projected: string }
+  // liability_total - total.projected: POSITIVE means "will owe", negative is a refund.
+  balance_projected: string
+  // Paychecks received / expected this year — the progress denominator for the salary leg.
+  checks_elapsed: number
+  checks_total: number
+  // Null when the prior year has no summarizable row, or when its total tax is <= 0 (a
+  // zero threshold anything clears would be a false all-clear) — `warnings` says which.
+  safe_harbor: {
+    prior_year: number
+    prior_total_tax: string
+    threshold: string // prior_total_tax x 1.10
+    met: boolean // total.projected >= threshold
+  } | null
+  warnings: string[]
+}
+
 // --- espp ---
 // espp_lots prices are 5dp (the one place in the app that is not 4dp), shares 4dp,
 // period money 2dp, contribution_pct 9dp ("0.130000000"), modeler money 2dp and
@@ -777,6 +822,95 @@ export interface CompEventCreate {
 // on any other field really CLEARS that column (a raise that never happened, a grant
 // that was withdrawn). That is the deliberate difference from EsppLotUpdate.
 export type CompEventUpdate = Partial<CompEventCreate>
+
+// --- comp: RSU grants + the vesting schedule ---
+// Grants store PARAMETERS only: vest rows are never persisted, so every read recomputes the
+// schedule (a cliff, then 6.25% quarterly steps) and the vested split moves on its own
+// between reads. Prices and percentages are 4dp Decimal strings — grant_price Numeric(14,4),
+// cliff_pct Numeric(7,4) in (0, 1] — while `shares` here is a whole-share INT, not a string,
+// because the column is one (the seed candidates below are the exception).
+
+export interface RsuGrantOut {
+  id: number
+  // Router-validated membership, exactly as AccountGroup/HoldingType narrow their own plain
+  // String columns; anything else is a 422 on the way in.
+  kind: 'new_hire' | 'refresh'
+  label: string // unique, <= 60 chars after trim — a duplicate is a 409
+  focal_year: number | null
+  shares: number
+  grant_price: string
+  first_vest_date: string
+  cliff_pct: string
+  notes: string | null
+  // --- computed (rsu_vesting), judged against the SERVER's day: never re-derive these on
+  // the client, and never carry them across an edit — re-read the row instead.
+  vest_count: number
+  vested_shares: number
+  unvested_shares: number
+}
+
+// POST, and PATCH takes a Partial of it. The null split lands differently from CompEventCreate
+// above: only focal_year and notes are nullable columns, so only their explicit null CLEARS —
+// on every other field a null is a server-side no-op (send a value or leave it out).
+export interface RsuGrantCreate {
+  kind: 'new_hire' | 'refresh'
+  label: string
+  focal_year?: number | null
+  shares: number
+  grant_price: string
+  first_vest_date: string
+  cliff_pct: string
+  notes?: string | null
+}
+
+// One tranche of one grant. A past vest is priced at the stored close ON OR BEFORE its date
+// (what the stock was worth THEN); a future one is left unpriced here and valued at the
+// latest quote by the tiles only. Both money fields are null when no such bar exists, and a
+// zero-share tranche is a real event that stays in the list.
+export interface VestOut {
+  vest_date: string
+  grant_id: number
+  label: string
+  shares: number
+  fmv: string | null
+  value: string | null // fmv x shares, 2dp
+  is_past: boolean
+}
+
+// GET /comp/vesting-schedule — the whole Comp card set in one read-only payload, computed
+// end to end. The ticker -> security -> quote/history chain is a soft link that breaks at any
+// hop, so every price-dependent field is nullable and `warnings` names each break; a grant
+// too broken to schedule is dropped from BOTH lists with a warning naming it.
+export interface VestingScheduleOut {
+  ticker: string | null
+  latest_price: string | null
+  quoted_at: string | null
+  grants: RsuGrantOut[]
+  vests: VestOut[] // chronological across grants, past and future together
+  tiles: {
+    next_vest: { vest_date: string; shares: number; est_value: string | null } | null
+    unvested_shares: number
+    unvested_value: string | null
+    vested_this_year_shares: number
+    // Null (not "0.00") when nothing vested this year could be priced: those vests happened
+    // and their value is unknown — a confident zero would be a different claim.
+    vested_this_year_income: string | null
+  }
+  // Prefills for a focal year that has refresh RSUs on its comp event but no grant yet.
+  // `shares` is comp_events.refresh_rsus verbatim at its 4dp scale — a string, unlike the
+  // whole-share ints above — and the grant writer is what enforces whole shares.
+  seed_candidates: {
+    focal_year: number
+    shares: string
+    grant_price: string
+    suggested_first_vest_date: string
+    suggested_label: string
+  }[]
+  // Informational only: focal history and a grant disagreeing is a hint, never an error —
+  // the grant is the vesting truth. Kept apart from `warnings` so the UI can tone them apart.
+  drift_warnings: string[]
+  warnings: string[]
+}
 
 // --- projection ---
 // GET /projection — the FIRE modeler (the ESPP modeler's shape: knobs as query params,
