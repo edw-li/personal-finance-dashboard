@@ -14,10 +14,16 @@ That is the deliberate difference from the espp lots router, where nothing clear
 The second half of the file is /rsu-grants (2026-08-21 spec §3): grant PARAMETERS in,
 `rsu_vesting`'s schedule out. No vest row is ever stored, so every echo recomputes — and
 the vested/unvested split is judged on `scheduler.product_today()`, read at the route.
+
+The third is /vesting-schedule (spec §4), the whole Comp card set in one computed payload.
+It is a pure READ over stored rows, so it degrades where the CRUD half raises: an unpriced
+vest, an unconfigured ticker, even a hand-edited grant `_validated_grant` would refuse all
+come back 200 with a warning.
 """
 
+from bisect import bisect_right
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response
@@ -25,21 +31,32 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+
+# The espp router owns the espp_ticker -> securities -> latest_prices soft link; the vest
+# calendar borrows it rather than minting a second copy (taxes.py imports it on the same
+# precedent — the employer ticker is one setting, not one per feature).
+from app.api.espp import _espp_quote
 from app.database import get_db
-from app.models import CompEvent, RsuGrant
+from app.models import CompEvent, PriceHistory, RsuGrant, Security
 from app.schemas.comp import (
     CompEventIn,
     CompEventOut,
     CompEventUpdate,
+    NextVestOut,
     RsuGrantIn,
     RsuGrantOut,
     RsuGrantUpdate,
+    SeedCandidateOut,
+    VestingScheduleOut,
+    VestingTilesOut,
+    VestOut,
 )
 from app.services import rsu_vesting
 from app.services.comp_calc import metrics
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
+    MONEY_QUANTUM,
     quantize_money,
     quantize_price,
     require_reasonable_date,
@@ -393,3 +410,180 @@ async def delete_grant(grant_id: IdPath, db: AsyncSession = Depends(get_db)) -> 
     await db.delete(await _get_grant(db, grant_id))
     await db.commit()
     return Response(status_code=204)
+
+
+# --- the vest calendar: grants + focal history + prices, computed into one payload (spec §4).
+# Nothing below is stored, and this is where the "GETs never reject stored data" law binds
+# hardest: the employer ticker is a SOFT link that can break at any hop, and a grant row can
+# predate — or sidestep — `_validated_grant`. Every one of those degrades to null + warning.
+
+NO_TICKER_WARNING = "no ESPP/employer ticker configured — vest values are unavailable"
+
+
+def _vest_value(price: Decimal | None, shares: int) -> Decimal | None:
+    """price x shares at 2dp, null-safe. A PLAIN quantize (taxes.py's `_money` posture): a read
+    serializer must not trap on stored data the way money.py's bounded quantizers would."""
+    if price is None:
+        return None
+    return (price * shares).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+async def _employer_bars(db: AsyncSession, ticker: str | None) -> tuple[list[date], list[Decimal]]:
+    """The employer security's whole close history as parallel (days, closes) lists, oldest
+    first — ONE query for the page, with the per-vest lookup done in Python below. Both hops of
+    the soft link degrade to an empty history rather than raising."""
+    if ticker is None:
+        return [], []
+    security = (
+        (await db.execute(select(Security).where(Security.ticker == ticker))).scalars().first()
+    )
+    if security is None:
+        return [], []
+    rows = (
+        await db.execute(
+            select(PriceHistory.price_date, PriceHistory.close)
+            .where(PriceHistory.security_id == security.id)
+            .order_by(PriceHistory.price_date)
+        )
+    ).all()
+    return [row[0] for row in rows], [row[1] for row in rows]
+
+
+def _close_on_or_before(days: list[date], closes: list[Decimal], day: date) -> Decimal | None:
+    """The newest stored close dated ON OR BEFORE `day` — a later bar is information the vest
+    did not have. bisect_right lands one past the last qualifying bar, so index-1 IS that bar;
+    -1 means the history starts after `day` and there is nothing to price it with."""
+    index = bisect_right(days, day) - 1
+    return closes[index] if index >= 0 else None
+
+
+@router.get("/vesting-schedule", response_model=VestingScheduleOut)
+async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingScheduleOut:
+    # One clock for the whole payload (list_grants' note): every `is_past` flag, the grant
+    # echoes and the this-year tile have to agree with each other.
+    today = product_today()
+    warnings: list[str] = []
+    ticker, latest_price, quoted_at = await _espp_quote(db)
+    if ticker is None:
+        warnings.append(NO_TICKER_WARNING)
+    grants = list(
+        (
+            await db.execute(select(RsuGrant).order_by(RsuGrant.first_vest_date, RsuGrant.id))
+        ).scalars()
+    )
+    bar_days, bar_closes = await _employer_bars(db, ticker)
+
+    grant_rows: list[RsuGrantOut] = []
+    vests: list[VestOut] = []
+    unpriced: set[date] = set()
+    for grant in grants:
+        try:
+            vest_events = rsu_vesting.schedule(grant)
+            grant_rows.append(_grant_out(grant, today))
+        except (ValueError, OverflowError) as exc:
+            # `rsu_vesting`'s precondition is enforced by the WRITER, so only a hand-edited row
+            # reaches this branch — and spec §4 promises the page still answers. Name the grant
+            # and drop it from BOTH lists (it cannot be echoed without its computed fields);
+            # that absence plus this warning IS the degradation.
+            warnings.append(f"{grant.label}: stored grant cannot be scheduled — {exc}")
+            continue
+        for vest_date, shares in vest_events:
+            is_past = vest_date <= today
+            # A past vest is worth what the stock was worth THEN; a future one is left unpriced
+            # here and valued at the latest quote by the tiles, never off a stale bar.
+            fmv = _close_on_or_before(bar_days, bar_closes, vest_date) if is_past else None
+            if is_past and fmv is None:
+                unpriced.add(vest_date)
+            vests.append(
+                VestOut(
+                    vest_date=vest_date,
+                    grant_id=grant.id,
+                    label=grant.label,
+                    shares=shares,
+                    fmv=fmv,
+                    # Zero-share tranches are real vest events (a tiny grant floors most of
+                    # them to nothing) and stay in the list: priced, they are worth 0.00.
+                    value=_vest_value(fmv, shares),
+                    is_past=is_past,
+                )
+            )
+    # Chronological across grants, with the same id tiebreak the grant list uses.
+    vests.sort(key=lambda vest: (vest.vest_date, vest.grant_id))
+    # One warning per unpriced DATE, not per row: two grants vesting the same day is one hole.
+    warnings.extend(
+        f"vest on {day} has no stored price — value unknown" for day in sorted(unpriced)
+    )
+
+    future = [vest for vest in vests if not vest.is_past]
+    in_year = [vest for vest in vests if vest.is_past and vest.vest_date.year == today.year]
+    priced_in_year = [vest.value for vest in in_year if vest.value is not None]
+    unvested_shares = sum(vest.shares for vest in future)
+    tiles = VestingTilesOut(
+        next_vest=(
+            NextVestOut(
+                vest_date=future[0].vest_date,
+                shares=future[0].shares,
+                est_value=_vest_value(latest_price, future[0].shares),
+            )
+            if future
+            else None
+        ),
+        unvested_shares=unvested_shares,
+        unvested_value=_vest_value(latest_price, unvested_shares),
+        vested_this_year_shares=sum(vest.shares for vest in in_year),
+        # Null rather than 0.00 when nothing in the year could be priced: those vests happened
+        # and their value is unknown (the warnings above name them). A confident zero would be
+        # the different claim "no vest income this year".
+        vested_this_year_income=sum(priced_in_year) if priced_in_year else None,
+    )
+
+    focal_events = {
+        event.focal_year: event
+        for event in (await db.execute(select(CompEvent).order_by(CompEvent.focal_year))).scalars()
+    }
+    # Every grant's year, schedulable or not: an unschedulable grant still CLAIMS its focal
+    # year, and offering to seed a second one for it would be worse than the warning it got.
+    claimed = {grant.focal_year for grant in grants if grant.focal_year is not None}
+    seed_candidates = [
+        SeedCandidateOut(
+            focal_year=year,
+            shares=event.refresh_rsus,
+            grant_price=event.grant_price,
+            suggested_first_vest_date=rsu_vesting.third_wednesday(year, 6),
+            suggested_label=f"{year} focal",
+        )
+        for year, event in sorted(focal_events.items())
+        # The writers' year fence, and load-bearing here rather than decorative:
+        # `third_wednesday` calls date(year, 6, 1), which raises on a hand-inserted year
+        # outside 1..9999 — a 500 on a GET.
+        if MIN_FOCAL_YEAR <= year <= MAX_FOCAL_YEAR
+        and year not in claimed
+        and event.refresh_rsus is not None
+        and event.refresh_rsus > ZERO
+        and event.grant_price is not None
+    ]
+
+    drift_warnings: list[str] = []
+    for grant in grants:
+        event = focal_events.get(grant.focal_year)  # a null focal_year matches nothing
+        if event is None or event.refresh_rsus is None or event.grant_price is None:
+            continue
+        # Decimal(grant.shares): grants count WHOLE shares, comp_events keeps Numeric(12,4) —
+        # 480 and 480.0000 have to compare equal, or every grant would look like it drifted.
+        if Decimal(grant.shares) != event.refresh_rsus or grant.grant_price != event.grant_price:
+            drift_warnings.append(
+                f"{grant.focal_year} focal grant ({grant.shares} sh @ {grant.grant_price}) "
+                f"no longer matches focal history ({event.refresh_rsus} sh @ {event.grant_price})"
+            )
+
+    return VestingScheduleOut(
+        ticker=ticker,
+        latest_price=latest_price,
+        quoted_at=quoted_at,
+        grants=grant_rows,
+        vests=vests,
+        tiles=tiles,
+        seed_candidates=seed_candidates,
+        drift_warnings=drift_warnings,
+        warnings=warnings,
+    )

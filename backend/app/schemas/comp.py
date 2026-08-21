@@ -12,9 +12,13 @@ deliberate difference from the espp lots table, where every null is a no-op.
 The RSU grant shapes at the bottom follow the same split, with a different NOT NULL set:
 only `focal_year` and `notes` are nullable there. Their vest columns are never stored —
 `rsu_vesting` recomputes the schedule on every read (2026-08-21 spec §3).
+
+The vesting-schedule payload after them is READ-ONLY and computed end to end: nothing in it
+is stored, and every field that depends on a price is nullable, because the ticker -> security
+-> quote/history chain is a soft link that breaks at any hop (spec §4).
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -108,3 +112,57 @@ class RsuGrantOut(BaseModel):
     vest_count: int
     vested_shares: int
     unvested_shares: int
+
+
+# --- GET /comp/vesting-schedule: one payload for the whole Comp card set (spec §4).
+
+
+class VestOut(BaseModel):
+    # vest_date, NOT date: a field literally named `date` shadows the datetime.date it is
+    # annotated with, inside the class body (the hazard PriceHistory.price_date documents,
+    # and the reason prices' PricePoint uses `d`/`c`). Do not rename.
+    vest_date: date
+    grant_id: int
+    label: str
+    shares: int
+    fmv: Decimal | None  # stored close on-or-before the vest date; null when none
+    value: Decimal | None  # fmv x shares, 2dp; null when fmv is
+    is_past: bool
+
+
+class NextVestOut(BaseModel):
+    vest_date: date
+    shares: int
+    est_value: Decimal | None  # at the latest quote
+
+
+class VestingTilesOut(BaseModel):
+    next_vest: NextVestOut | None
+    unvested_shares: int
+    unvested_value: Decimal | None
+    vested_this_year_shares: int
+    vested_this_year_income: Decimal | None
+
+
+class SeedCandidateOut(BaseModel):
+    focal_year: int
+    # comp_events.refresh_rsus verbatim at its Numeric(12,4) scale — this is a form prefill,
+    # and the grant writer is the one that enforces whole shares.
+    shares: Decimal
+    grant_price: Decimal
+    suggested_first_vest_date: date
+    suggested_label: str
+
+
+class VestingScheduleOut(BaseModel):
+    ticker: str | None
+    latest_price: Decimal | None
+    quoted_at: datetime | None
+    grants: list[RsuGrantOut]
+    vests: list[VestOut]
+    tiles: VestingTilesOut
+    seed_candidates: list[SeedCandidateOut]
+    # Informational only: focal history and a grant disagreeing is a hint, never an error —
+    # the grant is the vesting truth (spec §4).
+    drift_warnings: list[str]
+    warnings: list[str]

@@ -887,6 +887,12 @@ async def test_importer_never_writes_dividends(db):
     assert "dividend_payments" not in report2.entities
 
 
+def grant_row(row: RsuGrant) -> tuple:
+    """EVERY stored column, so "byte-identical" below is literally what the assert compares —
+    and a column added to the model later is covered without anyone editing this pin."""
+    return tuple(getattr(row, column.key) for column in RsuGrant.__table__.columns)
+
+
 async def test_importer_never_writes_rsu_grants(db):
     """Same ownership contract for equity grants (2026-08-21 spec): rsu_grants is
     dashboard-only, so a re-import must leave it byte-identical. Runs the whole orchestrator
@@ -907,13 +913,19 @@ async def test_importer_never_writes_rsu_grants(db):
         )
     )
     await db.commit()
+    before = {row.id: grant_row(row) for row in (await db.execute(select(RsuGrant))).scalars()}
+    assert len(before) == 1
 
     report = await run_import(build_workbook(), db, dry_run=False)
     assert report.applied is True  # a blocked import would pin nothing
 
-    rows = list(
-        (await db.execute(select(RsuGrant).execution_options(populate_existing=True))).scalars()
-    )
-    assert len(rows) == 1
-    assert (rows[0].label, rows[0].shares, rows[0].notes) == ("2025 focal", 480, "pre-import row")
+    # populate_existing, or the identity map would hand back the pre-import objects and this
+    # would pass even if the import had rewritten every column (the dividends pin's note).
+    after = {
+        row.id: grant_row(row)
+        for row in (
+            await db.execute(select(RsuGrant).execution_options(populate_existing=True))
+        ).scalars()
+    }
+    assert after == before
     assert all("rsu_grants" not in sheet.entities for sheet in report.sheets.values())
