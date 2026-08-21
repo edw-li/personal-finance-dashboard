@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ApiError } from '../../api/client'
 import { createSecurity, deleteSecurity, updateSecurity } from '../../api/portfolio'
 import { putManualPrice } from '../../api/prices'
+import InfoHint from '../InfoHint'
 import type { HoldingType, SecurityOut } from '../../types/api'
 import { formatCurrency, formatDate } from '../../utils/format'
 import './portfolio.css'
@@ -141,7 +142,10 @@ export default function SecuritiesPanel({
 
   return (
     <section className="panel">
-      <h2 className="panel-title">Securities</h2>
+      <h2 className="panel-title">
+        Securities
+        <InfoHint text="The instruments themselves — metadata, pricing mode, active flag. Deactivate a dead ticker to stop refreshing it; deleting is refused while records reference it." />
+      </h2>
       <p className="hint">
         Deactivating a security stops its price refresh and leaves every transaction,
         dividend and price bar in place — that is the way to retire a delisted ticker.

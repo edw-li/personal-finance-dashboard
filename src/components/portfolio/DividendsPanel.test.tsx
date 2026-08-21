@@ -137,7 +137,10 @@ describe('DividendsPanel manual entry', () => {
     fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
     fireEvent.change(screen.getByLabelText(/account/i), { target: { value: 'Fidelity' } })
     fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
-    fireEvent.change(screen.getByLabelText(/amount/i), { target: { value: '4.10' } })
+    // Exact label, not /amount/i: the panel title's ⓘ carries an aria-label ending
+    // "…the per-share amount;…", and getByLabelText reads aria-label too, so the loose
+    // regex now matches the hint button as well as this field. Same input, named exactly.
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
     fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(vi.mocked(createDividend).mock.calls[0][0]).toMatchObject({

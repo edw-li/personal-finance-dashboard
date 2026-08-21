@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import EChart from '../EChart'
+import InfoHint from '../InfoHint'
 import type { AllocationResponse } from '../../types/api'
 import { donutOption, positiveSlices, treemapOption } from './allocationChartOptions'
 import './portfolio.css'
@@ -33,7 +34,10 @@ export default function AllocationPanel({
   return (
     <div className="allocation-grid">
       <section className="panel">
-        <h2 className="panel-title">Allocation by industry</h2>
+        <h2 className="panel-title">
+          Allocation by industry
+          <InfoHint text="Holdings grouped by industry; cell size and shading both follow market value." />
+        </h2>
         {treemap ? (
           <EChart option={treemap} height={300} />
         ) : (
@@ -42,7 +46,10 @@ export default function AllocationPanel({
       </section>
       <section className="panel">
         <div className="panel-title-row">
-          <h2 className="panel-title">Allocation</h2>
+          <h2 className="panel-title">
+            Allocation
+            <InfoHint text="Portfolio share by holding type or account — top three slices named, the rest folded into Other." />
+          </h2>
           <div className="toggle-row" role="group" aria-label="Donut dimension">
             <button
               type="button"

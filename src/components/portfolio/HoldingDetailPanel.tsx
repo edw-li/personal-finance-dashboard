@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import { fetchPriceHistory } from '../../api/prices'
 import EChart from '../EChart'
+import InfoHint from '../InfoHint'
 import type { DividendOut, HoldingOut, PricePoint, TransactionOut } from '../../types/api'
 import {
   formatCurrency,
@@ -219,7 +220,10 @@ export default function HoldingDetailPanel({
       </p>
 
       <div className="panel-title-row">
-        <h3 className="eyebrow">Price history</h3>
+        <h3 className="eyebrow">
+          Price history
+          <InfoHint text="Daily closes for this security over the chosen window; manual-priced securities accrue one point per hand entry." />
+        </h3>
         <div className="segmented" role="group" aria-label="History window">
           {SPANS.map(({ days, label }) => (
             <button

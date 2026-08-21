@@ -5,6 +5,7 @@ import {
   deleteTransaction,
   updateTransaction,
 } from '../../api/portfolio'
+import InfoHint from '../InfoHint'
 import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import './portfolio.css'
@@ -136,7 +137,10 @@ export default function TransactionsPanel({
 
   return (
     <section className="panel">
-      <h2 className="panel-title">Transactions</h2>
+      <h2 className="panel-title">
+        Transactions
+        <InfoHint text="The buy/sell/split ledger every computed figure stands on. Sheet-imported rows are rewritten by re-imports; rows added here are never touched." />
+      </h2>
       <p className="hint">
         Rows marked <span className="badge">sheet</span> are owned by the spreadsheet
         importer: a re-import reverts edits to them and resurrects deletions. Rows added

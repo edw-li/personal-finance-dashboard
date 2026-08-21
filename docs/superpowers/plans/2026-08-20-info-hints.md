@@ -173,7 +173,7 @@ export default function InfoHint({ text }: { text: string }) {
 | 39 | "Realized gains" panel-title | Lifetime realized gain or loss per security from sells, average-cost method. |
 | 40 | "Price history" h3 (HoldingDetailPanel) | Daily closes for this security over the chosen window; manual-priced securities accrue one point per hand entry. |
 
-- [ ] Transcribe, gates, commit `feat: info hints — portfolio`.
+- [x] Transcribe, gates, commit `feat: info hints — portfolio`.
 
 ---
 

@@ -1,3 +1,4 @@
+import InfoHint from '../InfoHint'
 import type { RealizedResponse } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 import './portfolio.css'
@@ -22,7 +23,10 @@ export default function RealizedPanel({ realized }: { realized: RealizedResponse
     .sort((a, b) => Number(b.realized_gl) - Number(a.realized_gl))
   return (
     <section className="panel">
-      <h2 className="panel-title">Realized gains</h2>
+      <h2 className="panel-title">
+        Realized gains
+        <InfoHint text="Lifetime realized gain or loss per security from sells, average-cost method." />
+      </h2>
       <p className="hint">
         Lifetime realized G/L by the average-cost method, booked when shares are sold.
         Per-year splits need dated transactions — most imported rows carry none.

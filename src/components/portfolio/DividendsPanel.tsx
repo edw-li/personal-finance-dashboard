@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { createDividend, deleteDividend } from '../../api/portfolio'
 import EChart from '../EChart'
+import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type { DividendOut, SecurityOut } from '../../types/api'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
@@ -57,7 +58,10 @@ export default function DividendsPanel({
 
   return (
     <section className="panel">
-      <h2 className="panel-title">Dividends</h2>
+      <h2 className="panel-title">
+        Dividends
+        <InfoHint text="The dividend log. Refreshes write auto rows from real events — shares held on the ex-date × the per-share amount; manual entry covers manual-priced holdings and older history." />
+      </h2>
       <p className="hint">
         Refreshes log dividends automatically for auto-priced tickers — rows marked{' '}
         <span className="badge">auto</span> are rewritten by refreshes, and deleting one
@@ -70,14 +74,17 @@ export default function DividendsPanel({
             <StatTile
               label="Trailing 12-mo income"
               value={stats.trailing12 === null ? '—' : formatCurrency(stats.trailing12)}
+              hint="Dividends received in the last 12 months, including the current one."
             />
             <StatTile
               label="YTD income"
               value={stats.ytd === null ? '—' : formatCurrency(stats.ytd)}
+              hint="Dividends received this calendar year."
             />
             <StatTile
               label="Projected annual income"
               value={annualIncome === null ? '—' : formatCurrency(annualIncome)}
+              hint="Each holding's trailing-12-month dividend rate × shares held, summed."
             />
           </div>
           {chart && <EChart option={chart} height={220} />}

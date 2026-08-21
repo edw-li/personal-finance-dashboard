@@ -13,6 +13,7 @@ import {
 } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import EChart from '../components/EChart'
+import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
 import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
@@ -303,6 +304,7 @@ export default function PortfolioPage() {
                     : undefined
                 }
                 tone={toneOf(totals.day_change_amount)}
+                hint="Market value of every priced holding at the latest quotes."
                 hero
               />
               <StatTile
@@ -310,6 +312,7 @@ export default function PortfolioPage() {
                 value={formatCurrency(totals.unrealized_gl)}
                 delta={totals.unrealized_gl_pct !== null ? formatPct(totals.unrealized_gl_pct) : undefined}
                 tone={toneOf(totals.unrealized_gl)}
+                hint="Market value minus cost basis across current holdings."
               />
               {/* The totals field that never rendered anywhere until the Realized tab
                   landed — the tile is the headline, the tab below is the breakdown. */}
@@ -317,19 +320,28 @@ export default function PortfolioPage() {
                 label="Realized gains"
                 value={formatCurrency(totals.realized_gl)}
                 tone={toneOf(totals.realized_gl)}
+                hint="Lifetime gains and losses booked on sells, by the average-cost method."
               />
-              <StatTile label="Cost basis" value={formatCurrency(totals.cost_basis)} />
+              <StatTile
+                label="Cost basis"
+                value={formatCurrency(totals.cost_basis)}
+                hint="What the current holdings cost to acquire, fees included, average-cost method."
+              />
               <StatTile
                 label="Dividends collected"
                 value={formatCurrency(totals.dividends_collected)}
                 delta={`${formatCurrency(totals.annual_income)}/yr expected`}
                 tone="neutral"
+                hint="Every dividend logged — auto-ingested and manual — with the expected annual income at current rates."
               />
             </div>
           )}
           <section className="panel">
             <div className="panel-title-row">
-              <h2 className="panel-title">Performance</h2>
+              <h2 className="panel-title">
+                Performance
+                <InfoHint text="Value vs cost basis over time. The S&P 500 baseline invests only the starting balance, so it compares price performance, not a contribution-matched alternative." />
+              </h2>
               {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
             </div>
             {performanceOption ? (
@@ -354,6 +366,7 @@ export default function PortfolioPage() {
                 {/* The section keeps its NAME while drilled — "where am I" survives the
                     swap (SpendingPage's header does the same dance). */}
                 {detailHolding ? `Holdings — ${detailHolding.ticker}` : 'Holdings'}
+                <InfoHint text="One row per held security: price, value, weight, gains, yields, and money-weighted return. XIRR needs dated transactions — imported rows have none until backfilled." />
               </h2>
               {detailHolding && (
                 <button type="button" className="button" onClick={() => setDetailTicker(null)}>
