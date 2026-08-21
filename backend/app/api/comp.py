@@ -524,12 +524,13 @@ async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingSchedul
         )
 
     # The table's rows: one per DATE (2026-08-21 revision — four grants share every quarter,
-    # so the per-tranche list quadrupled visually while saying one date four times). Grouping
-    # is exact, not approximate: every past tranche on a day priced at the SAME
-    # `_close_on_or_before(day)`, so the day's fmv is that one close and the day's value is
-    # close x summed shares — identical to summing the tranche values. A future day's value
-    # is the latest quote x summed shares, flagged as the estimate it is; the per-grant
-    # breakdown stays in `vests`, which the UI expands a date into.
+    # so the per-tranche list quadrupled visually while saying one date four times). Every
+    # past tranche on a day priced at the SAME `_close_on_or_before(day)`, so the day's fmv
+    # is that one close and the day's value is close x summed shares — the better figure,
+    # though it can sit up to half a cent per tranche off the SUM of the individually
+    # quantized tranche values (4dp closes, 2dp rows). A future day's value is the latest
+    # quote x summed shares, flagged as the estimate it is; the per-grant breakdown stays in
+    # `vests`, which the UI expands a date into.
     vest_days: list[VestDayOut] = []
     for day, group_iter in groupby(vests, key=lambda vest: vest.vest_date):
         group = list(group_iter)
@@ -552,14 +553,18 @@ async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingSchedul
     in_year = [vest for vest in vests if vest.is_past and vest.vest_date.year == today.year]
     priced_in_year = [vest.value for vest in in_year if vest.value is not None]
     unvested_shares = sum(vest.shares for vest in future)
+    # DAY-scoped, matching the grouped table (2026-08-21 revision review): with overlapping
+    # grants every quarter carries several tranches, and a tile that named one tranche's
+    # shares beside a badged row summing four of them would disagree with itself.
+    next_day = next((day for day in vest_days if not day.is_past), None)
     tiles = VestingTilesOut(
         next_vest=(
             NextVestOut(
-                vest_date=future[0].vest_date,
-                shares=future[0].shares,
-                est_value=_vest_value(latest_price, future[0].shares),
+                vest_date=next_day.vest_date,
+                shares=next_day.shares,
+                est_value=_vest_value(latest_price, next_day.shares),
             )
-            if future
+            if next_day is not None
             else None
         ),
         unvested_shares=unvested_shares,

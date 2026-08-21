@@ -138,6 +138,9 @@
   position: sticky;
   top: 0;
   background: var(--surface);
+  /* Collapsed borders do not travel with a stuck cell, so the header's hairline is redrawn
+     as a shadow — without it the pinned row floats borderless over the rows sliding under. */
+  box-shadow: 0 1px 0 var(--border);
 }
 
 /* Expansion rows read as children of the date row above them: indented, and their grant name

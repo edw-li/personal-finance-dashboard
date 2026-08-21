@@ -892,10 +892,12 @@ export interface VestOut {
 }
 
 // One vest DATE across every grant — the table's summary row (2026-08-21 revision). Every
-// past tranche on a day priced at the SAME close, so `fmv`/`value` are exact, not averages:
-// past days carry the day's close x summed shares, future days the latest quote x summed
-// shares — an estimate, and `value_is_estimate` is how the row says so. Unpriced either way
-// is null. The per-grant breakdown for a date is its `vests` entries.
+// past tranche on a day priced at the SAME close, so `fmv` is that one close (never an
+// average) and `value` is close x summed shares — which can differ from the sum of the
+// individually rounded tranche values by up to half a cent per tranche. Future days carry
+// the latest quote x summed shares — an estimate, and `value_is_estimate` is how the row
+// says so. Unpriced either way is null. The per-grant breakdown for a date is its `vests`
+// entries.
 export interface VestDayOut {
   vest_date: string
   is_past: boolean

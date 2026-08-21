@@ -496,6 +496,13 @@ async def test_schedule_groups_vests_into_one_row_per_date(
         ("Offer letter", 44, "6611.00"),
         ("2025 focal", 20, "3005.00"),
     ]
+    # The Next-vest tile is DAY-scoped to match the badged row (revision review I2): the
+    # first future day's summed shares, not one tranche's — 64 x 180 = 11520.00.
+    assert body["tiles"]["next_vest"] == {
+        "vest_date": "2025-09-17",
+        "shares": 64,
+        "est_value": "11520.00",
+    }
 
 
 async def test_schedule_warns_once_per_date_for_past_vests_with_no_stored_bar(

@@ -178,6 +178,12 @@ def _update_dividend_metadata(security: Security, bars: list[DailyBar], today: d
 # The deep window reaches a little past the earliest vest so the on-or-before lookup always
 # has a bar to land on even when the vest date itself was a holiday.
 EMPLOYER_BACKFILL_BUFFER_DAYS = 14
+# The watermark that makes the extinguish AIRTIGHT (branch review I1): when the provider's
+# own history starts after `needed` (an employer that listed later, a depth-capped feed),
+# the oldest-bar check alone would re-run the deep fetch on every refresh forever. After any
+# successful deep fetch the request's floor is recorded here, and a request no deeper than a
+# recorded one is skipped; an older grant lowers `needed` past the watermark and re-arms it.
+EMPLOYER_BACKFILL_KEY = "employer_backfill_floor"
 
 
 async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -> int:
@@ -186,13 +192,15 @@ async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -
     own vest-date closes, and the standing HISTORY_WINDOW_DAYS refresh window cannot reach a
     grant that began vesting years ago — those vests rendered "no stored price" forever).
 
-    Self-extinguishing: once the oldest stored bar sits on or before the earliest needed
-    date, every later call is two SELECTs and out; it re-arms only if an older grant is
-    added. Skips quietly when there is no employer ticker, no matching security, no grants,
-    or the security is manual-priced (its bars are hand entries, and a provider fetch would
-    be a second opinion about them). Bars upsert exactly like refresh_prices'; latest_prices
-    and the TTM dividend metadata are deliberately NOT touched — this is history repair, not
-    a quote refresh. Returns the number of bars written (0 on every skip). Caller commits.
+    Self-extinguishing two ways: the oldest stored bar reaching the needed date (the normal
+    case), or the recorded watermark saying this depth was already fetched (the provider's
+    history simply starts later). Either way a later call is a handful of point SELECTs and
+    out, re-arming only if an older grant is added. Skips quietly when there is no employer
+    ticker, no matching security, no grants, or the security is manual-priced (its bars are
+    hand entries, and a provider fetch would be a second opinion about them). Bars upsert
+    exactly like refresh_prices'; latest_prices and the TTM dividend metadata are
+    deliberately NOT touched — this is history repair, not a quote refresh. Returns the
+    number of bars written (0 on every skip). Caller commits.
     """
     setting = await db.get(AppSetting, "espp_ticker")
     if setting is None or not isinstance(setting.value, dict):
@@ -219,11 +227,15 @@ async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -
     ).scalar_one_or_none()
     if oldest_bar is not None and oldest_bar <= needed:
         return 0
+    if _watermark_covers(await db.get(AppSetting, EMPLOYER_BACKFILL_KEY), ticker, needed):
+        return 0
     bars = await asyncio.to_thread(provider.fetch_daily, security.ticker, needed)
     # Same de-dup and bounds as refresh_prices: the provider promises neither unique nor
     # ordered bars, and a duplicate date inside one INSERT is a CardinalityViolation.
     bars = list({b.bar_date: b for b in bars if 0 < b.close < PRICE_MAX_ABS}.values())
     if not bars:
+        # NOT watermarked: an empty answer is as likely a transient provider hiccup as a
+        # real floor, and retrying tomorrow costs one call.
         logger.info("employer backfill: %s returned no bars for the deep window", ticker)
         return 0
     stmt = pg_insert(PriceHistory).values(
@@ -236,14 +248,51 @@ async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -
         )
     )
     _expire_price_rows(db)
+    await _record_backfill_watermark(db, ticker, needed)
+    floor = min(b.bar_date for b in bars)
+    if floor > needed:
+        logger.info(
+            "employer backfill: %s history starts %s, after the needed %s — recorded; "
+            "no refetch unless an older grant appears",
+            ticker,
+            floor,
+            needed,
+        )
     logger.info(
-        "employer backfill: %d %s bars fetched back to %s (earliest vest %s)",
+        "employer backfill: %d %s bars fetched for the window from %s (earliest vest %s)",
         len(bars),
         ticker,
         needed,
         earliest_vest,
     )
     return len(bars)
+
+
+def _watermark_covers(setting: AppSetting | None, ticker: str, needed: date) -> bool:
+    """Whether a recorded deep fetch already reached at least as far back as `needed` for
+    THIS ticker. Envelope-degrading like every app_settings read: any unexpected shape reads
+    as "no watermark" and the fetch simply runs again."""
+    if setting is None or not isinstance(setting.value, dict):
+        return False
+    value = setting.value.get("value")
+    if not isinstance(value, dict) or value.get("ticker") != ticker:
+        return False
+    through = value.get("through")
+    if not isinstance(through, str):
+        return False
+    try:
+        return date.fromisoformat(through) <= needed
+    except ValueError:
+        return False
+
+
+async def _record_backfill_watermark(db: AsyncSession, ticker: str, needed: date) -> None:
+    payload = {"value": {"ticker": ticker, "through": needed.isoformat()}}
+    setting = await db.get(AppSetting, EMPLOYER_BACKFILL_KEY)
+    if setting is None:
+        db.add(AppSetting(key=EMPLOYER_BACKFILL_KEY, value=payload))
+    else:
+        setting.value = payload
 
 
 async def record_refresh_run(

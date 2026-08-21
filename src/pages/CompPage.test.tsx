@@ -731,8 +731,12 @@ describe('CompPage — vesting schedule', () => {
     const trancheLabels = () =>
       Array.from(document.querySelectorAll('td.vest-tranche-label')).map((el) => el.textContent)
 
-    // Opening the shared day reveals its per-grant tranches, in the feed's order.
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle the Nov 18, 2026 tranches' }))
+    // Opening the shared day reveals its per-grant tranches, in the feed's order — and the
+    // toggle says so to the keyboard (aria-expanded flips with the rows).
+    const sharedToggle = screen.getByRole('button', { name: 'Toggle the Nov 18, 2026 tranches' })
+    expect(sharedToggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(sharedToggle)
+    expect(sharedToggle.getAttribute('aria-expanded')).toBe('true')
     expect(trancheLabels()).toEqual(['FY24 new hire', 'FY26 refresh'])
     // A future tranche row shows the quote as an estimate and leaves its value to the day
     // row above (the server computed that one; this one would be client math).

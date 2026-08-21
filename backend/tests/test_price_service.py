@@ -921,3 +921,39 @@ async def test_run_refresh_backfills_employer_history_past_the_window(db):
         .all()
     )
     assert len(old) == 1 and old[0].close == D("115.0000")
+
+
+async def test_employer_backfill_watermarks_a_provider_floor_newer_than_needed(db):
+    # The airtight half of the extinguish (revision review I1): NVDA's feed here simply does
+    # not reach the needed 2024-09-04 — without the watermark, every refresh would re-run
+    # the deep fetch forever while the oldest-bar check never turned true.
+    await seed_employer(db)
+    db.add(rsu_grant(date(2024, 9, 18)))
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(date(2025, 3, 3), "130")]})
+
+    assert await backfill_employer_history(db, provider) == 1
+    await db.commit()
+    assert await backfill_employer_history(db, provider) == 0
+    assert len(provider.calls) == 1  # the watermark decided; the provider was not asked again
+
+    # An OLDER grant lowers the needed date past the watermark and re-arms the fetch.
+    db.add(rsu_grant(date(2023, 9, 20), label="Original offer"))
+    await db.commit()
+    assert await backfill_employer_history(db, provider) == 1
+    assert len(provider.calls) == 2
+    assert provider.calls[1] == ("NVDA", date(2023, 9, 20) - timedelta(days=14))
+
+
+async def test_employer_backfill_does_not_watermark_an_empty_answer(db):
+    # An empty deep answer is as likely a transient hiccup as a real floor: no watermark,
+    # so tomorrow's refresh retries at the cost of one call.
+    await seed_employer(db)
+    db.add(rsu_grant(date(2024, 9, 18)))
+    await db.commit()
+    provider = FakeProvider({"NVDA": []})
+
+    assert await backfill_employer_history(db, provider) == 0
+    await db.commit()
+    assert await backfill_employer_history(db, provider) == 0
+    assert len(provider.calls) == 2  # retried — nothing recorded the emptiness as final

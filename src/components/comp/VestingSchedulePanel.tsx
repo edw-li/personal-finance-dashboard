@@ -187,7 +187,7 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
                   ? undefined
                   : `${formatShares(nextVest.shares)} sh · ${formatCurrency(nextVest.est_value)}`
               }
-              hint={`The next tranche across every grant, valued at ${quoteSource}.`}
+              hint={`The next vest date across every grant, all of its tranches summed and valued at ${quoteSource} — the same row the table badges.`}
             />
             <StatTile
               label="Unvested"
