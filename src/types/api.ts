@@ -560,15 +560,20 @@ export interface WhatIfOut {
 // each break EXCLUDES that piece from the estimate and names itself in `warnings` rather
 // than failing the read, so the warnings are part of the number, not decoration.
 
+/** Withholding received so far vs the full-year estimate — the shape both legs below wear. */
+export interface WithholdingLegOut {
+  ytd: string
+  projected: string
+}
+
 export interface WithholdingOut {
   year: number
   // The engine's liability for the year — the same figure TaxSummaryOut.totals.total_tax
   // carries, verbatim.
   liability_total: string
-  // Withholding received so far (`ytd`) vs the full-year estimate (`projected`). The salary
-  // leg is all-in: the user's withholding_pct already carries its FICA, so no salary-side
-  // FICA is added anywhere.
-  salary: { ytd: string; projected: string }
+  // The salary leg is all-in: the user's withholding_pct already carries its FICA, so no
+  // salary-side FICA is added anywhere.
+  salary: WithholdingLegOut
   vest: {
     // The vest BASE (fmv x shares) the two tax legs below were computed on — reported so
     // the card can show its own inputs.
@@ -579,14 +584,16 @@ export interface WithholdingOut {
     fica_ytd: string
     fica_projected: string
   }
-  total: { ytd: string; projected: string }
+  total: WithholdingLegOut
   // liability_total - total.projected: POSITIVE means "will owe", negative is a refund.
   balance_projected: string
   // Paychecks received / expected this year — the progress denominator for the salary leg.
   checks_elapsed: number
   checks_total: number
-  // Null when the prior year has no summarizable row, or when its total tax is <= 0 (a
-  // zero threshold anything clears would be a false all-clear) — `warnings` says which.
+  // Null in two different silences. A MISSING prior year says nothing at all — a first year
+  // on the app has no comparison to make and no warning to raise. A prior year that EXISTS
+  // but computes a total tax <= 0 does warn, because a threshold anything clears would make
+  // a met=true badge a false all-clear.
   safe_harbor: {
     prior_year: number
     prior_total_tax: string
@@ -863,6 +870,13 @@ export interface RsuGrantCreate {
   notes?: string | null
 }
 
+// PATCH, and the split is RsuGrantCreate's own (NOT CompEventUpdate's): kind, label, shares,
+// grant_price, first_vest_date and cliff_pct are NOT NULL — send a value or omit, because an
+// explicit null on one of them is a server-side no-op. Only focal_year and notes are nullable
+// columns, where a null really CLEARS. The merged row is re-validated, so a PATCH gets a
+// POST's rules and a delta body must still satisfy them.
+export type RsuGrantUpdate = Partial<RsuGrantCreate>
+
 // One tranche of one grant. A past vest is priced at the stored close ON OR BEFORE its date
 // (what the stock was worth THEN); a future one is left unpriced here and valued at the
 // latest quote by the tiles only. Both money fields are null when no such bar exists, and a
@@ -875,6 +889,18 @@ export interface VestOut {
   fmv: string | null
   value: string | null // fmv x shares, 2dp
   is_past: boolean
+}
+
+// A prefill for a focal year that has refresh RSUs on its comp event but no grant yet — the
+// chips above the grants form, never a row the server wrote. `shares` is comp_events.refresh_rsus
+// verbatim at its 4dp scale (a string, unlike the whole-share ints above); the grant writer is
+// what enforces whole shares, so the chip's prefill has to land an integer in the box.
+export interface SeedCandidateOut {
+  focal_year: number
+  shares: string
+  grant_price: string
+  suggested_first_vest_date: string
+  suggested_label: string
 }
 
 // GET /comp/vesting-schedule — the whole Comp card set in one read-only payload, computed
@@ -892,20 +918,13 @@ export interface VestingScheduleOut {
     unvested_shares: number
     unvested_value: string | null
     vested_this_year_shares: number
-    // Null (not "0.00") when nothing vested this year could be priced: those vests happened
-    // and their value is unknown — a confident zero would be a different claim.
+    // The PRICED SUBSET ONLY — a vest whose date has no stored close is in the share count
+    // above and not in this figure. Null (not "0.00") when nothing vested this year could be
+    // priced at all: those vests happened and their value is unknown, and a confident zero
+    // would be a different claim.
     vested_this_year_income: string | null
   }
-  // Prefills for a focal year that has refresh RSUs on its comp event but no grant yet.
-  // `shares` is comp_events.refresh_rsus verbatim at its 4dp scale — a string, unlike the
-  // whole-share ints above — and the grant writer is what enforces whole shares.
-  seed_candidates: {
-    focal_year: number
-    shares: string
-    grant_price: string
-    suggested_first_vest_date: string
-    suggested_label: string
-  }[]
+  seed_candidates: SeedCandidateOut[]
   // Informational only: focal history and a grant disagreeing is a hint, never an error —
   // the grant is the vesting truth. Kept apart from `warnings` so the UI can tone them apart.
   drift_warnings: string[]

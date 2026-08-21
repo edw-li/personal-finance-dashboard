@@ -5,6 +5,7 @@ import type {
   CompEventUpdate,
   RsuGrantCreate,
   RsuGrantOut,
+  RsuGrantUpdate,
   VestingScheduleOut,
 } from '../types/api'
 
@@ -30,8 +31,9 @@ export function deleteEvent(id: number): Promise<void> {
 // --- RSU grants + the vesting schedule ---
 
 // The whole Comp card set in one read-only payload: grants, every vest, the tiles, the
-// seed prefills and both warning lists. Never rejects — the price chain degrades to nulls
-// plus warnings — so reload this after ANY grant write rather than patching state locally.
+// seed prefills and both warning lists. No domain 4xx — the price chain degrades to nulls
+// plus warnings rather than raising (a network or auth failure still rejects, like any other
+// call here) — so reload this after ANY grant write rather than patching state locally.
 export function fetchVestingSchedule(): Promise<VestingScheduleOut> {
   return api<VestingScheduleOut>('/comp/vesting-schedule')
 }
@@ -41,9 +43,8 @@ export function createRsuGrant(body: RsuGrantCreate): Promise<RsuGrantOut> {
   return api<RsuGrantOut>('/comp/rsu-grants', { method: 'POST', body: JSON.stringify(body) })
 }
 
-// The whole merged row is re-validated, so a PATCH gets a POST's rules. Only focal_year and
-// notes are nullable columns: an explicit null clears those two and is a no-op elsewhere.
-export function updateRsuGrant(id: number, body: Partial<RsuGrantCreate>): Promise<RsuGrantOut> {
+// The null semantics travel with the type (see RsuGrantUpdate).
+export function updateRsuGrant(id: number, body: RsuGrantUpdate): Promise<RsuGrantOut> {
   return api<RsuGrantOut>(`/comp/rsu-grants/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 

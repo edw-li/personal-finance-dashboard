@@ -1,13 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
-import { createEvent, deleteEvent, fetchEvents, updateEvent } from '../api/comp'
+import {
+  createEvent,
+  deleteEvent,
+  fetchEvents,
+  fetchVestingSchedule,
+  updateEvent,
+} from '../api/comp'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
+import RsuGrantsPanel from '../components/comp/RsuGrantsPanel'
+import VestingSchedulePanel from '../components/comp/VestingSchedulePanel'
 import {
   TC_CHART_LABEL,
   tcTrajectoryOption,
 } from '../components/comp/compChartOptions'
-import type { CompEventCreate, CompEventOut } from '../types/api'
+import type { CompEventCreate, CompEventOut, VestingScheduleOut } from '../types/api'
 import { formatCurrency, formatPct, formatShares } from '../utils/format'
 import '../components/panels.css'
 import './CompPage.css'
@@ -421,6 +429,14 @@ export default function CompPage() {
   // (the seqRef recipe — NetWorthPage/PortfolioPage).
   const seqRef = useRef(0)
 
+  // The SECOND, independent feed (EsppPage's multi-section pattern): grants and their computed
+  // schedule are a different entity from the focal history, so a 503 on one must not blank the
+  // other. Its own sequence guard, its own banner, its own busy flag.
+  const [schedule, setSchedule] = useState<VestingScheduleOut | null>(null)
+  const [scheduleError, setScheduleError] = useState<string | null>(null)
+  const [scheduleBusy, setScheduleBusy] = useState(true)
+  const scheduleSeq = useRef(0)
+
   // Promise callbacks only — no setState in an effect's synchronous body (react-hooks 7).
   // The mount fetch is covered by the initial busy value; the handlers below flip it.
   const load = () => {
@@ -444,8 +460,28 @@ export default function CompPage() {
       })
   }
 
+  const loadSchedule = () => {
+    const seq = ++scheduleSeq.current
+    fetchVestingSchedule()
+      .then((data) => {
+        if (seq !== scheduleSeq.current) return
+        setSchedule(data)
+        setScheduleError(null)
+      })
+      .catch((err: unknown) => {
+        if (seq !== scheduleSeq.current) return
+        // The previous payload is KEPT, like the events feed: a failed reload describes the
+        // same grants, and dropping them would destroy a half-typed row in the grants form.
+        setScheduleError(message(err, 'Failed to load the vesting schedule'))
+      })
+      .finally(() => {
+        if (seq === scheduleSeq.current) setScheduleBusy(false)
+      })
+  }
+
   useEffect(() => {
     load()
+    loadSchedule()
   }, [])
 
   // "We are fetching" flips live in the handlers that cause a fetch, never in the effect.
@@ -453,6 +489,21 @@ export default function CompPage() {
     setBusy(true)
     setError(null)
     load()
+  }
+
+  const reloadSchedule = () => {
+    setScheduleBusy(true)
+    setScheduleError(null)
+    loadSchedule()
+  }
+
+  // A comp event moves the schedule card WITHOUT moving any grant: the seed chips are built
+  // from focal years with refresh RSUs and no grant yet, and the drift warnings compare the
+  // two tables. So an event write reloads both feeds; a grant write (below) reloads only its
+  // own — grants never touch the focal history.
+  const onEventsChanged = () => {
+    reload()
+    reloadSchedule()
   }
 
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every
@@ -499,13 +550,44 @@ export default function CompPage() {
         </section>
       </div>
 
+      {scheduleError && (
+        <div className="error-banner" role="alert">
+          {schedule === null
+            ? scheduleError
+            : `${scheduleError} — the schedule may be showing earlier data.`}{' '}
+          <button
+            className="button"
+            aria-label="Retry loading the vesting schedule"
+            onClick={reloadSchedule}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {schedule === null ? (
+        scheduleBusy && <p className="empty-note">Loading the vesting schedule…</p>
+      ) : (
+        // One payload, one dim: the grants table below IS the schedule card's input, and a
+        // bright form over a card that says it may be stale would invite an edit against
+        // figures that are already gone. NOT keyed — a reload re-renders the grants panel
+        // with a replaced array, so its half-typed row survives.
+        <div className={`loading-dim${scheduleBusy ? ' is-loading' : ''}`}>
+          <VestingSchedulePanel schedule={schedule} />
+          <RsuGrantsPanel
+            grants={schedule.grants}
+            seedCandidates={schedule.seed_candidates}
+            onChanged={reloadSchedule}
+          />
+        </div>
+      )}
+
       {events === null ? (
         busy && <p className="empty-note">Loading comp events…</p>
       ) : (
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
           {/* NOT keyed: a reload re-renders this panel with a replaced array, so its
               half-typed row survives. */}
-          <EventsPanel events={events} onChanged={reload} />
+          <EventsPanel events={events} onChanged={onEventsChanged} />
         </div>
       )}
     </div>

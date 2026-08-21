@@ -59,6 +59,13 @@
   font-family: inherit;
 }
 
+/* Same reasoning for the grant-kind picker: a list of words wears the form's box, not the
+   right-aligned monospace the figures do. */
+.comp-form select.field-input {
+  text-align: left;
+  font-family: inherit;
+}
+
 .comp-form-actions {
   display: flex;
   align-items: end;
@@ -105,5 +112,29 @@
   font-size: 0.78rem;
   line-height: 1.45;
   color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* ── Vesting schedule ──────────────────────────────────────────────── */
+
+/* Past tranches recede: the table is read forwards, and the rows that already happened are
+   context for the ones that have not. */
+.vest-past td {
+  color: var(--muted);
+}
+
+/* The "est." marker beside a future row's price, and the payload's own warning sentences.
+   Deliberate near-twins of portfolio.css's `.sub` / `.hint` — that stylesheet travels with the
+   portfolio page and this one must not depend on it happening to be in the bundle (this
+   file's header rule). */
+.comp-page .sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.comp-page .hint {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 4px 0 10px;
   overflow-wrap: anywhere;
 }
