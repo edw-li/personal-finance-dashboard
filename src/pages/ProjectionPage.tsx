@@ -5,6 +5,7 @@ import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 import type { ProjectionParams } from '../api/projection'
 import EChart from '../components/EChart'
+import InfoHint from '../components/InfoHint'
 import { fitPolyTrend } from '../components/projection/polyTrend'
 import {
   netWorthProjectionOption,
@@ -295,18 +296,21 @@ export default function ProjectionPage() {
                     : `annual spend ÷ ${formatPct(data.swr_pct, { signed: false })} SWR`
                 }
                 tone="neutral"
+                hint="Annual spend ÷ withdrawal rate — the balance at which withdrawals could cover spending."
               />
               <StatTile
                 label="FI ratio"
                 value={
                   data.fi_ratio === null ? '—' : formatPct(data.fi_ratio, { signed: false })
                 }
+                hint="Investable balance as a share of the FI target."
               />
               <StatTile
                 label="Investable balance"
                 value={formatCurrency(data.starting_balance)}
                 delta={`as of ${formatMonth(data.base_month)}`}
                 tone="neutral"
+                hint="Pre-tax + post-tax + taxable + equity from the latest snapshot — cash and liabilities excluded."
               />
               <StatTile
                 label="Projected FI date"
@@ -317,6 +321,7 @@ export default function ProjectionPage() {
                     : `growth alone: ${formatMonth(data.coast_fi_month)}`
                 }
                 tone="neutral"
+                hint="First month the projected balance reaches the target; &quot;growth alone&quot; repeats it with contributions off."
               />
               <StatTile
                 label="FI probability"
@@ -335,6 +340,7 @@ export default function ProjectionPage() {
                       }`
                 }
                 tone="neutral"
+                hint="Share of 500 simulated paths reaching the target within the horizon, with median (p50) and pessimistic (p90) dates."
               />
             </div>
 
@@ -350,7 +356,10 @@ export default function ProjectionPage() {
 
             <section className="card projection-chart-card">
               <div className="projection-chart-header">
-                <h2 className="eyebrow">Net worth over time (projected)</h2>
+                <h2 className="eyebrow">
+                  Net worth over time (projected)
+                  <InfoHint text="Every snapshot as dots with a quadratic best-fit extended forward — momentum, not a plan. Log axis: equal steps are equal multiples." />
+                </h2>
                 <div className="segmented" role="group" aria-label="Trend span">
                   {TREND_SPANS.map((span) => (
                     <button
@@ -385,7 +394,10 @@ export default function ProjectionPage() {
             </section>
 
             <section className="card projection-chart-card">
-              <h2 className="eyebrow">Projected investable balance</h2>
+              <h2 className="eyebrow">
+                Projected investable balance
+                <InfoHint text="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes." />
+              </h2>
               {chart ? (
                 <EChart option={chart} height={340} />
               ) : (
@@ -402,7 +414,10 @@ export default function ProjectionPage() {
             </section>
 
             <section className="card">
-              <h2 className="eyebrow">Assumptions</h2>
+              <h2 className="eyebrow">
+                Assumptions
+                <InfoHint text="Every knob the projection runs on. Blank boxes use the greyed defaults or derive from your data on Recalculate." />
+              </h2>
               <p className="drill-hint">
                 Blank boxes re-derive from the data on Recalculate: contribution from the
                 trailing 12 months of (net pay − spend), annual spend from the trailing

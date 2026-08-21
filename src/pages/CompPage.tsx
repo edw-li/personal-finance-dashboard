@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import { createEvent, deleteEvent, fetchEvents, updateEvent } from '../api/comp'
 import EChart from '../components/EChart'
+import InfoHint from '../components/InfoHint'
 import {
   TC_CHART_LABEL,
   tcTrajectoryOption,
@@ -209,7 +210,10 @@ function EventsPanel({
 
   return (
     <section className="card">
-      <h2 className="eyebrow">Focal history</h2>
+      <h2 className="eyebrow">
+        Focal history
+        <InfoHint text="One row per focal year: base moves, grants, and the computed equity and TC deltas. Everything right of the notes is computed by the server." />
+      </h2>
       <p className="drill-hint">
         One row per focal year. The base is the salary the year started on and the new base
         is what it moved to — leave it blank for a year without a raise. RSU counts and
@@ -478,7 +482,10 @@ export default function CompPage() {
           data" would be the one thing the eye is on claiming to be current. */}
       <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
         <section className="card">
-          <h2 className="eyebrow">{TC_CHART_LABEL}</h2>
+          <h2 className="eyebrow">
+            {TC_CHART_LABEL}
+            <InfoHint text="Base salary stacked under the value of unvested equity, including the year&apos;s refresh — this app&apos;s total-comp proxy; the line is the server&apos;s own total." />
+          </h2>
           <p className="drill-hint">
             Total comp as this app defines it: the base the year landed on, stacked under
             the value of the unvested equity behind it (the sheet has no TC column — this is

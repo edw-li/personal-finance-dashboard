@@ -127,7 +127,10 @@ function renderPage() {
   )
 }
 
-const box = (label: RegExp) => screen.getByLabelText(label) as HTMLInputElement
+// A hint's aria-label is a label (and a name) too, so the three knobs whose words the tile
+// hints repeat — annual spend, withdrawal rate, horizon — are addressed by their EXACT label
+// rather than a substring, and the Recalculate button by an anchored name. Same controls.
+const box = (label: RegExp | string) => screen.getByLabelText(label) as HTMLInputElement
 
 // A tile is addressed through its label (OverviewPage's idiom).
 const tileFor = (label: string) => screen.getByText(label).closest('.stat-tile') as HTMLElement
@@ -162,9 +165,9 @@ describe('ProjectionPage', () => {
     renderPage()
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
     expect(box(/monthly contribution/i).value).toBe('4000.00')
-    expect(box(/annual spend/i).value).toBe('60000.00')
-    expect(box(/withdrawal rate/i).value).toBe('4')
-    expect(box(/horizon/i).value).toBe('30')
+    expect(box('Annual spend').value).toBe('60000.00')
+    expect(box('Withdrawal rate (%/yr)').value).toBe('4')
+    expect(box('Horizon (years)').value).toBe('30')
   })
 
   it('recalculates with fraction-shifted knobs and hands blanks through as omissions', async () => {
@@ -172,8 +175,8 @@ describe('ProjectionPage', () => {
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
     fireEvent.change(box(/annual return/i), { target: { value: '7' } })
-    fireEvent.change(box(/annual spend/i), { target: { value: '' } }) // re-derive server-side
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.change(box('Annual spend'), { target: { value: '' } }) // re-derive server-side
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
     await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
     expect(fetchProjection).toHaveBeenLastCalledWith({
@@ -192,10 +195,10 @@ describe('ProjectionPage', () => {
 
   it('refuses an out-of-range withdrawal rate in the box vocabulary, spending no request', async () => {
     renderPage()
-    await waitFor(() => expect(box(/withdrawal rate/i).value).toBe('4'))
+    await waitFor(() => expect(box('Withdrawal rate (%/yr)').value).toBe('4'))
 
-    fireEvent.change(box(/withdrawal rate/i), { target: { value: '150' } })
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.change(box('Withdrawal rate (%/yr)'), { target: { value: '150' } })
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
     expect(
       screen.getByText('Withdrawal rate % must be greater than 0 and at most 100'),
@@ -256,7 +259,7 @@ describe('ProjectionPage', () => {
     renderPage()
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
     await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
     expect(fetchTimeseries).toHaveBeenCalledTimes(1)
@@ -309,10 +312,10 @@ describe('ProjectionPage', () => {
 
   it('keeps the trend span fixed while the Horizon knob reshapes the chart below', async () => {
     renderPage()
-    await waitFor(() => expect(box(/horizon/i).value).toBe('30'))
+    await waitFor(() => expect(box('Horizon (years)').value).toBe('30'))
 
-    fireEvent.change(box(/horizon/i), { target: { value: '1' } })
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.change(box('Horizon (years)'), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
     await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
     expect(
@@ -380,7 +383,7 @@ describe('ProjectionPage', () => {
     fireEvent.change(box(/volatility/i), { target: { value: '15' } })
     fireEvent.change(box(/inflation/i), { target: { value: '3' } })
     fireEvent.change(box(/contribution growth/i), { target: { value: '2' } })
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
     await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
     expect(fetchProjection).toHaveBeenLastCalledWith(
@@ -397,7 +400,7 @@ describe('ProjectionPage', () => {
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
     fireEvent.change(box(/volatility/i), { target: { value: '0' } })
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
     // 0 is INSIDE the fence now, and a typed 0 is a value, not a blank: it must reach the
     // server, where it means "run no simulation".
@@ -410,7 +413,7 @@ describe('ProjectionPage', () => {
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
     fireEvent.change(box(/volatility/i), { target: { value: '150' } })
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
     expect(screen.getByText('Volatility % must be between 0 and 100')).toBeTruthy()
     expect(fetchProjection).toHaveBeenCalledTimes(1) // the mount load only
@@ -421,12 +424,12 @@ describe('ProjectionPage', () => {
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
     fireEvent.change(box(/inflation/i), { target: { value: '30' } })
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
     expect(screen.getByText('Inflation % must be between -10 and 25')).toBeTruthy()
 
     fireEvent.change(box(/inflation/i), { target: { value: '3' } }) // deflation is legal…
     fireEvent.change(box(/contribution growth/i), { target: { value: '-1' } }) // …a raise cut is not
-    fireEvent.click(screen.getByRole('button', { name: /recalculate/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
     expect(screen.getByText('Contribution growth % must be between 0 and 25')).toBeTruthy()
 
     expect(fetchProjection).toHaveBeenCalledTimes(1)
@@ -471,5 +474,23 @@ describe('ProjectionPage', () => {
 
     const charts = await screen.findAllByTestId('echart')
     expect(seriesOf(charts[1])).toEqual([...PROJECTION_SERIES])
+  })
+
+  // The app-wide ⓘ transcription's canary (spec §5): the copy is only a deliverable if it
+  // actually reaches the DOM, and this page carries both shapes — a tile label and two
+  // chart-card headings. The authored words ride in aria-label, which is what a screen
+  // reader hears and what the CSS bubble renders from data-tip.
+  it('hangs a hint on the FI-target tile and on both chart headings', async () => {
+    renderPage()
+    await screen.findByText('$1,500,000.00')
+
+    const fiHint = tileFor('FI target').querySelector('.stat-label button.info-hint')
+    expect(fiHint?.getAttribute('aria-label')).toMatch(/^Annual spend ÷ withdrawal rate/)
+    expect(
+      screen.getByText('Net worth over time (projected)').querySelector('button.info-hint'),
+    ).toBeTruthy()
+    expect(
+      screen.getByText('Projected investable balance').querySelector('button.info-hint'),
+    ).toBeTruthy()
   })
 })

@@ -58,8 +58,11 @@ const newPwBox = () => screen.getByLabelText('New password') as HTMLInputElement
 const confirmPwBox = () => screen.getByLabelText('Confirm new password') as HTMLInputElement
 // Named by a prefix that survives the busy label swap ('Save settings' -> 'Saving…',
 // 'Change password' -> 'Changing…'), so the in-flight tests can still find the button.
+// The password one is ANCHORED at both ends: the card's ⓘ hint is a button whose aria-label
+// ("Changes your login password…") is a name too, and a bare /^chang/i now matches both.
 const saveButton = () => screen.getByRole('button', { name: /^sav/i }) as HTMLButtonElement
-const pwButton = () => screen.getByRole('button', { name: /^chang/i }) as HTMLButtonElement
+const pwButton = () =>
+  screen.getByRole('button', { name: /^chang(e password|ing…)$/i }) as HTMLButtonElement
 const type = (box: HTMLInputElement, value: string) =>
   fireEvent.change(box, { target: { value } })
 
@@ -124,8 +127,10 @@ const APPLIED_NOTE = 'Other pages load the new data on their next visit.'
 const xlsx = (name = 'finances.xlsx') => new File(['xlsx bytes'], name)
 const fileBox = () => screen.getByLabelText('Workbook (.xlsx)') as HTMLInputElement
 // Prefix-stable like the two above, so the in-flight labels ('Dry run…', 'Applying…')
-// answer to the same query as the idle ones.
-const dryButton = () => screen.getByRole('button', { name: /^dry run/i }) as HTMLButtonElement
+// answer to the same query as the idle ones. Dry run is anchored at both ends for the same
+// reason as pwButton: the card's ⓘ hint aria-label also opens "Dry run …".
+const dryButton = () =>
+  screen.getByRole('button', { name: /^dry run…?$/i }) as HTMLButtonElement
 const applyButton = () => screen.getByRole('button', { name: /^appl/i }) as HTMLButtonElement
 // jsdom has no file picker: the change event carries the File list itself.
 const pick = (file: File) => fireEvent.change(fileBox(), { target: { files: [file] } })

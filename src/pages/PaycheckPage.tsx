@@ -7,6 +7,7 @@ import {
   fetchProfiles,
   updateProfile,
 } from '../api/paycheck'
+import InfoHint from '../components/InfoHint'
 import StatTile from '../components/StatTile'
 import type {
   PaycheckBreakdownOut,
@@ -67,6 +68,7 @@ function BreakdownPanel({ data }: { data: PaycheckBreakdownOut }) {
           profile's waterfall can never be read as another's. */}
       <h2 className="eyebrow">
         Per-check breakdown — effective {formatDate(data.profile.effective_date)}
+        <InfoHint text="One paycheck from gross to net in the sheet&apos;s order — pre-tax deductions, then withholding, then post-tax contributions. The net is authoritative; lines are display-rounded." />
       </h2>
       <p className="drill-hint">
         One paycheck at {data.profile.pay_periods_per_year} periods a year. Each line is
@@ -77,7 +79,12 @@ function BreakdownPanel({ data }: { data: PaycheckBreakdownOut }) {
           lands in a month. Deliberately the only tile — a second one showing `net_pay`
           would print the same number twice on one card. */}
       <div className="kpi-row">
-        <StatTile label="Monthly net" value={formatCurrency(data.monthly_net)} hero />
+        <StatTile
+          label="Monthly net"
+          value={formatCurrency(data.monthly_net)}
+          hint="Net pay per check × checks per year ÷ 12."
+          hero
+        />
       </div>
       {data.warnings.length > 0 && (
         // React text nodes, so the server's sentences are escaped by construction. NOT an
@@ -329,7 +336,10 @@ function ProfilesPanel({
 
   return (
     <section className="card">
-      <h2 className="eyebrow">Profile history</h2>
+      <h2 className="eyebrow">
+        Profile history
+        <InfoHint text="One profile per comp change; the breakdown uses the profile in force today unless a row is pinned." />
+      </h2>
       <p className="drill-hint">
         One row per comp change, newest first. A new profile starts as a copy of the current
         one — change what moved and give it the date it takes effect on. Percentages are

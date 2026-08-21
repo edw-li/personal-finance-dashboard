@@ -3,6 +3,7 @@ import { changePassword } from '../api/auth'
 import { ApiError } from '../api/client'
 import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
+import InfoHint from '../components/InfoHint'
 import ImportReportView from '../components/settings/ImportReportView'
 import type { AppSettingsOut, ImportReport } from '../types/api'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
@@ -259,7 +260,10 @@ export default function SettingsPage() {
       {loadedOnce && (
         <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
           <section className="card span-6">
-            <h2 className="eyebrow">App settings</h2>
+            <h2 className="eyebrow">
+              App settings
+              <InfoHint text="The withdrawal rate feeds the 4% line and FI target; the ESPP ticker prices lots; the cron schedules price refreshes (applied on save)." />
+            </h2>
             <form
               className="settings-form"
               onSubmit={(e) => {
@@ -327,7 +331,10 @@ export default function SettingsPage() {
           </section>
 
           <section className="card span-6">
-            <h2 className="eyebrow">Password</h2>
+            <h2 className="eyebrow">
+              Password
+              <InfoHint text="Changes your login password; existing sessions stay signed in until their token expires." />
+            </h2>
             <form
               className="settings-form"
               onSubmit={(e) => {
@@ -393,7 +400,10 @@ export default function SettingsPage() {
               API is unreachable, and an upload card that could only fail is not worth
               offering. */}
           <section className="card span-12">
-            <h2 className="eyebrow">Import workbook</h2>
+            <h2 className="eyebrow">
+              Import workbook
+              <InfoHint text="Dry run shows the diff without writing. Apply overwrites sheet-owned rows — dividends are never touched; taxes inside sheet-covered years reset to the sheet." />
+            </h2>
             <div className="settings-form">
               <label>
                 Workbook (.xlsx)

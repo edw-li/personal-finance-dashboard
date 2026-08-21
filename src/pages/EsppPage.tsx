@@ -13,6 +13,7 @@ import {
   updatePeriod,
 } from '../api/espp'
 import type { ModelerParams } from '../api/espp'
+import InfoHint from '../components/InfoHint'
 import type {
   EsppLotCreate,
   EsppLotOut,
@@ -193,7 +194,10 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
 
   return (
     <section className="card">
-      <h2 className="eyebrow">Lots</h2>
+      <h2 className="eyebrow">
+        Lots
+        <InfoHint text="Each semi-annual purchase: cost, value at the current quote (or its sale price), gain, and the qualifying-date countdown." />
+      </h2>
       {/* The quote the whole table was priced against. The date is rendered, not judged:
           freshness math on an instant flags a Friday bar early on Monday (Plan 4's
           "the UI compares dates only" note), and the lots table has no staleness rule of
@@ -449,7 +453,10 @@ function ModelerCard({
 
   return (
     <section className="card">
-      <h2 className="eyebrow">Purchase modeler{data === null ? '' : ` — ${data.year}`}</h2>
+      <h2 className="eyebrow">
+        Purchase modeler{data === null ? '' : ` — ${data.year}`}
+        <InfoHint text="What the current period will buy — contributions, estimated shares at the 15% discount, and the $25k IRS limit. Nothing here is stored." />
+      </h2>
       <p className="drill-hint">
         Nothing here is stored: the two prices and the opening carry-forward are what-if
         knobs over the periods below. Clear a price and the model falls back to the ESPP
@@ -537,11 +544,17 @@ function ModelerCard({
           </div>
           <div className="kpi-row">
             <div className="stat-tile">
-              <div className="stat-label">Out of pocket</div>
+              <div className="stat-label">
+                Out of pocket
+                <InfoHint text="Your contributions after the carry-forward — what the purchase actually costs you." />
+              </div>
               <div className="stat-value">{formatCurrency(data.totals.out_of_pocket_cost)}</div>
             </div>
             <div className="stat-tile">
-              <div className="stat-label">FMV of shares</div>
+              <div className="stat-label">
+                FMV of shares
+                <InfoHint text="The purchased shares valued at the period&apos;s fair market value." />
+              </div>
               <div className="stat-value">{formatCurrency(data.totals.fmv_of_shares)}</div>
             </div>
           </div>
@@ -698,7 +711,10 @@ function PeriodsPanel({
 
   return (
     <section className="card">
-      <h2 className="eyebrow">Offering periods</h2>
+      <h2 className="eyebrow">
+        Offering periods
+        <InfoHint text="The contribution windows behind the modeler: eligible base, extra payments, and your contribution percentage." />
+      </h2>
       <p className="drill-hint">
         The stored half of the model — the modeler chains these in period-end order, within
         one calendar year. Contribution is entered as a percent (14 = 14%) and stored as a

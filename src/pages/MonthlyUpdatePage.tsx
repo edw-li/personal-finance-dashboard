@@ -9,6 +9,7 @@ import {
   putMonthBalances,
 } from '../api/netWorth'
 import { fetchCategories, fetchSpendingMonth, putSpendingMonth } from '../api/spending'
+import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
 import type { AccountOut, CategoryOut } from '../types/api'
@@ -401,6 +402,7 @@ export default function MonthlyUpdatePage() {
         <div className="card">
           <h2 className="eyebrow">
             {monthExisted ? 'Edit balances' : 'Enter balances (pre-filled from last month)'}
+            <InfoHint text="Every account&apos;s balance for the month, pre-filled from the prior month; components are tracked inside their parent." />
           </h2>
           <div className="meta-row">
             <label>
@@ -472,7 +474,10 @@ export default function MonthlyUpdatePage() {
 
       {!loading && step === 'spending' && (
         <div className="card">
-          <h2 className="eyebrow">Spending & net pay</h2>
+          <h2 className="eyebrow">
+            Spending & net pay
+            <InfoHint text="The month&apos;s spend per category plus take-home pay — a blank net pay skips the cashflow row." />
+          </h2>
           <div className="meta-row">
             <label>
               Net pay (take-home)
@@ -521,7 +526,10 @@ export default function MonthlyUpdatePage() {
 
       {!loading && step === 'review' && (
         <div className="card">
-          <h2 className="eyebrow">Review & save — {formatMonth(month)}</h2>
+          <h2 className="eyebrow">
+            Review & save — {formatMonth(month)}
+            <InfoHint text="A client-side preview; the server&apos;s rounding is authoritative once saved." />
+          </h2>
           <div className="review-grid">
             <div>
               <div className="stat-label">Net worth (preview)</div>

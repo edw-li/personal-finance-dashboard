@@ -87,7 +87,9 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
   const foodInput = await screen.findByLabelText('Food')
   expect((foodInput as HTMLInputElement).value).toBe('0.00')
   fireEvent.change(foodInput, { target: { value: '250.00' } })
-  fireEvent.change(screen.getByLabelText(/net pay/i), { target: { value: '9000.00' } })
+  // The exact label, not /net pay/i: the step's ⓘ hint carries "net pay" in its aria-label,
+  // which getByLabelText reads as a label too — same box, tighter selector.
+  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '9000.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
 
   // Step 3: preview totals, then save.
