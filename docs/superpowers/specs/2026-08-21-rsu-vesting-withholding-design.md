@@ -243,6 +243,9 @@ Five changes after the user exercised the shipped feature with real grants:
    covers it; skips manual-priced employers; bars only (no latest-price/TTM side effects).
 5. **The vest chart's hover carries the bar's total** as its last row
    (`vestingTooltipFormatter` — a full HTML formatter, so grant labels are escapeHtml'd).
+6. **The Next-vest tile is DAY-scoped** (first future day's summed tranches at the quote),
+   so it always agrees with the row the grouped table badges — under overlapping grants the
+   old per-tranche scope named a quarter of the number shown directly below it.
 
 Known non-change: the dashboard's cumulative-floor split was validated to the share against
 three of the user's four real grants; the initial offer grant reads −3 vested vs the broker
