@@ -185,3 +185,43 @@ class WhatIfOut(BaseModel):
     sale_details: list[SaleDetailOut]
     espp_sale_details: list[EsppSaleDetailOut]
     warnings: list[str]
+
+
+# --- the "Will I owe?" tracker (2026-08-21 spec §4). Every figure is computed at read time
+# from stored profiles/grants/brackets; nothing below is ever persisted.
+
+
+class WithholdingLegOut(BaseModel):
+    ytd: Decimal
+    projected: Decimal
+
+
+class WithholdingVestOut(BaseModel):
+    # Income is the vest BASE (fmv x shares), reported alongside the tax it carries so the
+    # card can show what the supplemental/FICA figures were computed on.
+    income_ytd: Decimal
+    income_projected: Decimal
+    supplemental_ytd: Decimal
+    supplemental_projected: Decimal
+    fica_ytd: Decimal
+    fica_projected: Decimal
+
+
+class SafeHarborOut(BaseModel):
+    prior_year: int
+    prior_total_tax: Decimal
+    threshold: Decimal  # prior_total_tax x 1.10
+    met: bool  # projected total withholding >= threshold
+
+
+class WithholdingOut(BaseModel):
+    year: int
+    liability_total: Decimal
+    salary: WithholdingLegOut
+    vest: WithholdingVestOut
+    total: WithholdingLegOut
+    balance_projected: Decimal  # liability - projected withholding; positive = will owe
+    checks_elapsed: int
+    checks_total: int
+    safe_harbor: SafeHarborOut | None
+    warnings: list[str]

@@ -7,10 +7,23 @@ cap (a terminal 0-rate bracket) and additional Medicare interact with salary+ves
 free. Salary-side FICA is NOT added anywhere: the user's all-in withholding_pct already
 carries it (user decision, 2026-08-21).
 
+The marginal FICA split is an APPROXIMATION, and a deliberate one: vest income is stacked ON
+TOP of the salary gross as of `today` rather than interleaved with the checks by date, so when
+salary alone already crosses the SS wage base the vest leg is handed a zero SS marginal (a
+date-interleaved split would have given some of that cap room to the earlier vest instead).
+That is the CONSERVATIVE (owe-more) direction: the vest leg is the only FICA this module
+reports, so shifting cap room onto the salary side — where the all-in `withholding_pct` is
+presumed to cover it — understates the estimate and overstates what the card says you will
+owe. The YEAR TOTAL is order-invariant either way: FICA(salary + vests) telescopes regardless
+of which leg claims which slice.
+
 Preconditions (enforced at the API boundary, not here): every profile's
-`pay_periods_per_year` >= 1 — paycheck_calc's own divide-by-zero guard, which `check_dates`
-inherits — and the router has already split vests into past/future against the SAME `today`
-it passes in (nothing here re-reads a vest tuple's date)."""
+`pay_periods_per_year` >= 1 — paycheck_calc's own divide-by-zero guard; note the failure mode
+differs here, since `check_dates(year, 0)` does not divide by zero but returns [], and
+`estimate` then trips on `grid[0]` — vest tuples carry nonnegative shares and prices (nothing
+below clamps a negative into the FICA walks), and the router has already split vests into
+past/future against the SAME `today` it passes in (nothing here re-reads a vest tuple's
+date)."""
 
 from calendar import isleap
 from dataclasses import dataclass, field

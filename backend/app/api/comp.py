@@ -422,10 +422,13 @@ NO_TICKER_WARNING = "no ESPP/employer ticker configured — vest values are unav
 
 def _vest_value(price: Decimal | None, shares: int) -> Decimal | None:
     """price x shares at 2dp, null-safe. A PLAIN quantize (taxes.py's `_money` posture): a read
-    serializer must not trap on stored data the way money.py's bounded quantizers would."""
+    serializer must not trap on stored data the way money.py's bounded quantizers would.
+
+    `+ ZERO` completes that precedent: a hand-stored negative price (or a -0.00001 one) would
+    otherwise quantize to a SIGNED zero and reach the wire as "-0.00"."""
     if price is None:
         return None
-    return (price * shares).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    return (price * shares).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP) + ZERO
 
 
 async def _employer_bars(db: AsyncSession, ticker: str | None) -> tuple[list[date], list[Decimal]]:
@@ -510,9 +513,13 @@ async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingSchedul
     # Chronological across grants, with the same id tiebreak the grant list uses.
     vests.sort(key=lambda vest: (vest.vest_date, vest.grant_id))
     # One warning per unpriced DATE, not per row: two grants vesting the same day is one hole.
-    warnings.extend(
-        f"vest on {day} has no stored price — value unknown" for day in sorted(unpriced)
-    )
+    # Suppressed entirely when there is no ticker (Task 4 review): every past vest is unpriced
+    # then, and each line would just restate the no-ticker warning above. With a ticker
+    # configured they are the ONLY signal — a hole in the history the user can actually fix.
+    if ticker is not None:
+        warnings.extend(
+            f"vest on {day} has no stored price — value unknown" for day in sorted(unpriced)
+        )
 
     future = [vest for vest in vests if not vest.is_past]
     in_year = [vest for vest in vests if vest.is_past and vest.vest_date.year == today.year]
@@ -561,6 +568,9 @@ async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingSchedul
         and event.refresh_rsus is not None
         and event.refresh_rsus > ZERO
         and event.grant_price is not None
+        # `> ZERO`, not just "present": a stored 0.0000 price would prefill a grant POST that
+        # `_validated_grant` then 422s ("grant_price must be positive") — a dead-end offer.
+        and event.grant_price > ZERO
     ]
 
     drift_warnings: list[str] = []

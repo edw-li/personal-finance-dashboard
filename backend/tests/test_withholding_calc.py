@@ -209,6 +209,34 @@ def test_profile_effective_later_this_year_still_projects_a_full_year():
     assert result.vest_fica_ytd == D("0.00")
 
 
+def test_vests_without_any_profile_still_compute_against_a_zero_gross():
+    # The degraded shape the router hits when every stored profile is fenced out: the salary
+    # leg zeroes and warns, but the vest legs are still real money and must be estimated —
+    # against a gross of 0, so the whole vest income sits in the FIRST FICA bracket.
+    result = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[],
+        past_vests=[(date(2026, 6, 17), 100, D("500"))],
+        future_vests=[(date(2026, 9, 16), 100, D("520"))],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert result.salary_ytd == D("0.00")
+    assert result.salary_gross_projected == D("0.00")
+    assert (result.checks_elapsed, result.checks_total) == (0, 0)
+    assert any("paycheck profile" in w for w in result.warnings)
+    assert result.vest_income_ytd == D("50000.00")
+    assert result.vest_supplemental_ytd == D("16115.00")  # 50000 x 0.3223
+    # 50000 x (0.0145 + 0.062 + 0.011): nothing has used the SS cap, so it applies in full.
+    assert result.vest_fica_ytd == D("4375.00")
+    assert result.vest_income_projected == D("102000.00")
+    assert result.vest_supplemental_projected == D("32874.60")  # 102000 x 0.3223
+    # 102000 x 0.0145 + 102000 x 0.011 + 102000 x 0.062 = 1479 + 1122 + 6324.
+    assert result.vest_fica_projected == D("8925.00")
+
+
 def test_additional_medicare_tier_rides_the_bracket_walk():
     # Medicare with the 0.9% surtax tier at 200000; salary gross YTD 110000 + a 100000 vest
     # crosses it. medicare: (200000 x 0.0145 + 10000 x 0.0235) - 110000 x 0.0145 = 1540;

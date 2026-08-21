@@ -9,6 +9,11 @@ Write endpoints are bounded by the column families they land in — inputs Numer
 bracket rates Numeric(7,4) with the 0..1 mis-scale guard, thresholds Numeric(12,2) — while
 READ endpoints must never reject stored data: `_money` / `_effective_rate` below explain
 why the summary serializer cannot reuse money.py's bounded quantizers.
+
+The last endpoint, `/years/{year}/withholding` (2026-08-21 spec §4), is the one place this
+router reaches outside its own two tables: paycheck profiles, RSU grants and employer prices,
+all read through the routers that own them. It is a pure read with four soft links, so it
+degrades where the editors above raise — see its section comment.
 """
 
 from collections.abc import Iterable
@@ -20,14 +25,25 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Cross-router borrows, on app_settings.py's precedent (it imports portfolio.py's
+# _normalize_ticker): the espp router owns the espp_ticker -> securities -> latest_prices soft
+# link, the comp router owns the employer close history and the on-or-before lookup the vest
+# calendar reads, and the paycheck router owns THE divide-by-zero rule for a stored profile.
+# Every one of them is one concept with one owner — a second copy here could only drift.
+from app.api.comp import _close_on_or_before, _employer_bars
 from app.api.deps import get_current_user
-
-# The espp router owns the espp_ticker -> securities -> latest_prices soft link; the
-# what-if borrows it rather than minting a second copy (app_settings.py imports
-# portfolio.py's _normalize_ticker on the same precedent).
 from app.api.espp import _espp_quote
+from app.api.paycheck import MAX_PAY_PERIODS, MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE
 from app.database import get_db
-from app.models import EsppLot, TaxBracket, TaxInput, TaxInputDefinition, TaxYear
+from app.models import (
+    EsppLot,
+    PaycheckProfile,
+    RsuGrant,
+    TaxBracket,
+    TaxInput,
+    TaxInputDefinition,
+    TaxYear,
+)
 from app.schemas.taxes import (
     BracketIn,
     BracketOut,
@@ -37,6 +53,7 @@ from app.schemas.taxes import (
     ChangedInput,
     EsppSaleDetailOut,
     IncomeTaxOut,
+    SafeHarborOut,
     SaleDetailOut,
     TaxInputItemOut,
     TaxInputSectionOut,
@@ -50,7 +67,11 @@ from app.schemas.taxes import (
     WhatIfDelta,
     WhatIfIn,
     WhatIfOut,
+    WithholdingLegOut,
+    WithholdingOut,
+    WithholdingVestOut,
 )
+from app.services import rsu_vesting, withholding_calc
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     MONEY_MAX_ABS_14_4,
@@ -61,7 +82,9 @@ from app.services.money import (
     quantize_shares,
 )
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
+from app.services.scheduler import product_today
 from app.services.tax_service import (
+    JURISDICTION_WARN_MISSING,
     Bracket,
     JurisdictionResult,
     TaxBreakdown,
@@ -111,6 +134,27 @@ async def _ensure_year(db: AsyncSession, year: int) -> None:
 async def _stored_inputs(db: AsyncSession, year: int) -> dict[str, Decimal]:
     rows = (await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars()
     return {row.key: row.value for row in rows}
+
+
+async def _engine_tables(db: AsyncSession, year: int) -> dict[str, list[Bracket]]:
+    """One year's bracket tables in the shape `compute_breakdown` (and `walk`) take them.
+
+    ONE loader for every engine caller — the summary, the what-if and the withholding card —
+    so they can never disagree about which rows the engine saw. The full key order, not just
+    bracket_index: `walk`/`stack` sort defensively, so this pins one table order across all of
+    them rather than leaving it to whatever the planner returns.
+    """
+    rows = (
+        await db.execute(
+            select(TaxBracket)
+            .where(TaxBracket.year == year)
+            .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
+        )
+    ).scalars()
+    tables: dict[str, list[Bracket]] = {}
+    for row in rows:
+        tables.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
+    return tables
 
 
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
@@ -465,17 +509,8 @@ def _summary_out(breakdown: TaxBreakdown) -> TaxSummaryOut:
 @router.get("/years/{year}/summary", response_model=TaxSummaryOut)
 async def get_summary(year: YearPath, db: AsyncSession = Depends(get_db)) -> TaxSummaryOut:
     await _require_year(db, year)
-    rows = (
-        await db.execute(
-            select(TaxBracket)
-            .where(TaxBracket.year == year)
-            .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
-        )
-    ).scalars()
-    brackets: dict[str, list[Bracket]] = {}
-    for row in rows:
-        brackets.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
-    return _summary_out(compute_breakdown(year, await _stored_inputs(db, year), brackets))
+    tables = await _engine_tables(db, year)
+    return _summary_out(compute_breakdown(year, await _stored_inputs(db, year), tables))
 
 
 @router.get("/summary", response_model=TaxSummariesOut)
@@ -511,6 +546,180 @@ async def get_all_summaries(db: AsyncSession = Depends(get_db)) -> TaxSummariesO
     )
 
 
+# --- the "Will I owe?" tracker (2026-08-21 spec §4): the engine's liability for the year
+# against an all-in withholding ESTIMATE built from stored profiles, grants and prices.
+#
+# Nothing here is stored, and every input is a soft link that can break: the employer ticker,
+# a bar behind a vest date, a grant row `_validated_grant` would refuse, a profile the paycheck
+# writers would refuse. Each of those degrades to an exclusion plus a warning naming it — the
+# GET-never-rejects law, which binds harder here than on the summary because this payload is
+# assembled from four tables the taxes editors do not own.
+
+NON_CURRENT_YEAR_MESSAGE = "withholding tracking is only meaningful for the current year"
+NO_QUOTE_WARNING = "no current employer price — future vests are excluded from the projection"
+# The IRS prior-year safe harbor for high earners; "all-in" here, where the real rule is
+# per-jurisdiction (the card's copy says so).
+SAFE_HARBOR_MULTIPLIER = Decimal("1.10")
+# The three tables the marginal-FICA walks read. Named separately from the engine's own
+# jurisdiction sweep because an empty one is silent HERE: the summary would show a 0 medicare
+# line, but this card would show a 0 vest-FICA leg with nothing to explain it.
+FICA_JURISDICTIONS = ("medicare", "social_security", "disability")
+
+
+@router.get("/years/{year}/withholding", response_model=WithholdingOut)
+async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> WithholdingOut:
+    """Estimated all-in withholding for the CURRENT year vs the engine's liability.
+
+    `product_today` is the one clock this route reads (comp.py's note: the prod container runs
+    UTC, so date.today() is already tomorrow on a PT evening), and it is read ONCE — the
+    same day decides the year check, which checks have been received, and which vests are
+    behind us. `withholding_calc` never re-reads a vest tuple's date, so that single value is
+    what keeps the past/future split and the check grid consistent with each other.
+    """
+    today = product_today()
+    if year != today.year:
+        # Before `_require_year`: a settled year may well be stored and summarizable, and the
+        # reason this card cannot be drawn for it has nothing to do with whether it exists.
+        raise HTTPException(status_code=422, detail=NON_CURRENT_YEAR_MESSAGE)
+    await _require_year(db, year)
+
+    tables = await _engine_tables(db, year)
+    liability = compute_breakdown(year, await _stored_inputs(db, year), tables)
+    warnings: list[str] = [
+        JURISDICTION_WARN_MISSING.format(j=name, year=year)
+        for name in FICA_JURISDICTIONS
+        if not tables.get(name)
+    ]
+
+    # Profiles: the stored-data fence, mirroring paycheck.py's breakdown guard — same rule,
+    # same words (PAY_PERIODS_MESSAGE), read from the other end. BOTH bounds bind here, where
+    # paycheck.py's own read fences only the floor: `check_dates` builds one date — and one
+    # `breakdown` call — PER CHECK, so a hand-written 10^9 periods is not a slow answer, it is
+    # no answer at all. An excluded profile is dropped, never defaulted to 24: inventing a
+    # cadence would put a made-up salary figure next to a real liability.
+    profiles: list[PaycheckProfile] = []
+    for profile in (
+        await db.execute(select(PaycheckProfile).order_by(PaycheckProfile.effective_date))
+    ).scalars():
+        if not MIN_PAY_PERIODS <= profile.pay_periods_per_year <= MAX_PAY_PERIODS:
+            warnings.append(
+                f"paycheck profile effective {profile.effective_date} excluded: "
+                f"{PAY_PERIODS_MESSAGE}"
+            )
+            continue
+        profiles.append(profile)
+
+    # Vests: past ones are worth what the stock was worth THEN (the newest stored close on or
+    # before the vest), future ones ride the latest quote — comp.py's vest calendar makes the
+    # same two calls, and shares the helpers so the two pages cannot price a vest differently.
+    ticker, latest_price, _quoted_at = await _espp_quote(db)
+    bar_days, bar_closes = await _employer_bars(db, ticker)
+    grants = list(
+        (
+            await db.execute(select(RsuGrant).order_by(RsuGrant.first_vest_date, RsuGrant.id))
+        ).scalars()
+    )
+    past_vests: list[withholding_calc.VestTuple] = []
+    future_vests: list[withholding_calc.VestTuple] = []
+    unpriced: set[date] = set()
+    missing_quote = False
+    for grant in grants:
+        try:
+            vest_events = rsu_vesting.schedule(grant)
+        except (ValueError, OverflowError) as exc:
+            # A hand-edited row only — the writer enforces rsu_vesting's precondition. Name it
+            # and drop it (the vest calendar's posture), because the card still has to answer.
+            warnings.append(f"{grant.label}: stored grant cannot be scheduled — {exc}")
+            continue
+        for vest_date, shares in vest_events:
+            if vest_date.year != year:
+                continue  # a prior year's withholding is history; a later one is not this card
+            if vest_date <= today:
+                close = _close_on_or_before(bar_days, bar_closes, vest_date)
+                if close is None:
+                    # EXCLUDED, not valued at 0: the vest happened and its income is real —
+                    # a confident zero would understate the bill without saying so.
+                    unpriced.add(vest_date)
+                else:
+                    past_vests.append((vest_date, shares, close))
+            elif latest_price is None:
+                missing_quote = True
+            else:
+                future_vests.append((vest_date, shares, latest_price))
+    # One warning per unpriced DATE, not per row (two grants vesting the same day is one hole);
+    # the missing quote is one warning for the whole projection, not one per future vest.
+    warnings.extend(
+        f"vest on {day} has no stored price — excluded from the estimate"
+        for day in sorted(unpriced)
+    )
+    if missing_quote:
+        warnings.append(NO_QUOTE_WARNING)
+
+    estimated = withholding_calc.estimate(
+        year=year,
+        today=today,  # the SAME day the split above used — the service takes it on faith
+        profiles=profiles,
+        past_vests=past_vests,
+        future_vests=future_vests,
+        medicare=tables.get("medicare", []),
+        social_security=tables.get("social_security", []),
+        disability=tables.get("disability", []),
+    )
+    warnings.extend(estimated.warnings)
+
+    # Salary withholding + vest supplemental + vest marginal FICA. Salary-side FICA is NOT a
+    # term: the user's all-in withholding_pct already carries it (withholding_calc's note).
+    total_ytd = _money(
+        estimated.salary_ytd + estimated.vest_supplemental_ytd + estimated.vest_fica_ytd
+    )
+    total_projected = _money(
+        estimated.salary_projected
+        + estimated.vest_supplemental_projected
+        + estimated.vest_fica_projected
+    )
+    liability_total = _money(liability.totals.total_tax)
+
+    safe_harbor = None
+    if await db.get(TaxYear, year - 1) is not None:
+        prior = compute_breakdown(
+            year - 1, await _stored_inputs(db, year - 1), await _engine_tables(db, year - 1)
+        )
+        threshold = _money(prior.totals.total_tax * SAFE_HARBOR_MULTIPLIER)
+        safe_harbor = SafeHarborOut(
+            prior_year=year - 1,
+            prior_total_tax=_money(prior.totals.total_tax),
+            threshold=threshold,
+            # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so the
+            # badge can never contradict the two numbers rendered next to it.
+            met=total_projected >= threshold,
+        )
+
+    return WithholdingOut(
+        year=year,
+        liability_total=liability_total,
+        salary=WithholdingLegOut(
+            ytd=_money(estimated.salary_ytd),
+            projected=_money(estimated.salary_projected),
+        ),
+        vest=WithholdingVestOut(
+            income_ytd=_money(estimated.vest_income_ytd),
+            income_projected=_money(estimated.vest_income_projected),
+            supplemental_ytd=_money(estimated.vest_supplemental_ytd),
+            supplemental_projected=_money(estimated.vest_supplemental_projected),
+            fica_ytd=_money(estimated.vest_fica_ytd),
+            fica_projected=_money(estimated.vest_fica_projected),
+        ),
+        total=WithholdingLegOut(ytd=total_ytd, projected=total_projected),
+        # Both sides are already at cents, so this subtracts exactly; `_money` is here for the
+        # signed-zero collapse (withholding that lands ON the liability must read "0.00").
+        balance_projected=_money(liability_total - total_projected),
+        checks_elapsed=estimated.checks_elapsed,
+        checks_total=estimated.checks_total,
+        safe_harbor=safe_harbor,
+        warnings=warnings,
+    )
+
+
 @router.post("/what-if", response_model=WhatIfOut)
 async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfOut:
     """Baseline vs scenario through the engine — NOTHING is stored. today is read here
@@ -522,16 +731,7 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     today = date.today()
 
     stored = await _stored_inputs(db, year)
-    bracket_rows = (
-        await db.execute(
-            select(TaxBracket)
-            .where(TaxBracket.year == year)
-            .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
-        )
-    ).scalars()
-    brackets: dict[str, list[Bracket]] = {}
-    for row in bracket_rows:
-        brackets.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
+    brackets = await _engine_tables(db, year)
 
     # Overrides: the PUT-inputs vocabulary — unknown keys 422, values quantized 4dp.
     await _require_known_input_keys(db, body.overrides)

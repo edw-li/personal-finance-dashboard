@@ -526,9 +526,11 @@ async def test_schedule_offers_a_seed_candidate_until_a_grant_claims_the_focal_y
     await seed_focal_event(
         db, 2025, refresh_rsus=Decimal("500.0000"), grant_price=Decimal("118.2000")
     )
-    # Neither of these can be seeded: one has no grant price, the other granted nothing.
+    # None of these can be seeded: no grant price, nothing granted, and a stored 0.0000 price
+    # whose prefill the grant POST would 422 ("grant_price must be positive") — a dead end.
     await seed_focal_event(db, 2024, refresh_rsus=Decimal("400.0000"))
     await seed_focal_event(db, 2023, refresh_rsus=Decimal("0"), grant_price=Decimal("90.0000"))
+    await seed_focal_event(db, 2022, refresh_rsus=Decimal("300.0000"), grant_price=Decimal("0"))
 
     body = (await auth_client.get(SCHEDULE)).json()
     assert body["seed_candidates"] == [
@@ -589,6 +591,23 @@ async def test_schedule_without_a_ticker_degrades_to_nulls_and_one_warning(
         "shares": 175,
         "est_value": None,
     }
+
+
+async def test_schedule_without_a_ticker_suppresses_the_per_vest_price_warnings(
+    auth_client, frozen_schedule_today
+):
+    # Four past vests, none of them priceable — but with no ticker configured every one of
+    # those lines would just restate the no-ticker warning, so exactly ONE warning survives
+    # (Task 4 review). The per-date lines return the moment a ticker IS configured.
+    await create_grant(auth_client)
+    resp = await auth_client.get(SCHEDULE)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["warnings"] == [NO_TICKER]
+    assert body["tiles"]["vested_this_year_shares"] == 88
+    assert body["tiles"]["vested_this_year_income"] is None
+    assert all(v["fmv"] is None for v in body["vests"])
 
 
 async def test_schedule_on_an_empty_database(auth_client, frozen_schedule_today):
