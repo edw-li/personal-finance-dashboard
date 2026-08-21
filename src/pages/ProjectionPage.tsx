@@ -26,8 +26,8 @@ function message(err: unknown, fallback: string): string {
 // The eight what-if knobs, percent-form where the wire wants fractions ("5" = 5%/yr —
 // shiftPoint converts on the way out, the echo shifts back on the way in). Blank means
 // "let the server decide", which is the whole modeler contract: derived from the data for
-// the five older knobs, the planning DEFAULT for the three assumptions (which is why only
-// those three carry the echo as a placeholder). An explicit 0 is a value, not a blank —
+// the five older knobs, the planning DEFAULT for the three assumptions. All eight seed
+// from the echo (2026-08-20 user revision). An explicit 0 is a value, not a blank —
 // volatility 0 turns the fan off, inflation 0 reads nominal dollars.
 interface Knobs {
   annualReturn: string
@@ -102,13 +102,12 @@ export default function ProjectionPage() {
         setMissing(false)
         if (!knobsSeeded.current) {
           knobsSeeded.current = true
-          // The echo IS the seed for the five DERIVED knobs: the server answers with the
+          // The echo IS the seed, for all eight knobs alike: the server answers with the
           // values it actually used (derived or defaulted), shifted into the boxes'
           // percent vocabulary. Per-field, because the boxes are on screen throughout this
-          // first load (EsppPage's rule). The three ASSUMPTION knobs are deliberately
-          // absent from this block — they render as grey PLACEHOLDERS instead of filled
-          // boxes (see the inputs below), so blank keeps meaning "use the server's
-          // default" and the spread carries whatever the user has already typed.
+          // first load (EsppPage's rule). The three assumption knobs seeded like the rest
+          // (2026-08-20 user revision — the earlier placeholder treatment is retired);
+          // their null-echo guards are stale-backend armor, leaving those boxes blank.
           setKnobs((current) => ({
             ...current,
             annualReturn:
@@ -120,6 +119,18 @@ export default function ProjectionPage() {
             annualSpend: current.annualSpend === '' ? (res.annual_spend ?? '') : current.annualSpend,
             swr: current.swr === '' ? shiftPoint(res.swr_pct, 2) : current.swr,
             years: current.years === '' ? String(res.years) : current.years,
+            volatility:
+              current.volatility === '' && res.volatility != null
+                ? shiftPoint(res.volatility, 2)
+                : current.volatility,
+            inflation:
+              current.inflation === '' && res.inflation != null
+                ? shiftPoint(res.inflation, 2)
+                : current.inflation,
+            contributionGrowth:
+              current.contributionGrowth === '' && res.contribution_growth != null
+                ? shiftPoint(res.contribution_growth, 2)
+                : current.contributionGrowth,
           }))
         }
       })
@@ -416,16 +427,16 @@ export default function ProjectionPage() {
             <section className="card">
               <h2 className="eyebrow">
                 Assumptions
-                <InfoHint text="Every knob the projection runs on. Blank boxes use the greyed defaults or derive from your data on Recalculate." />
+                <InfoHint text="Every knob the projection runs on. Blank boxes restore their defaults or re-derive from your data on Recalculate." />
               </h2>
               <p className="drill-hint">
-                Blank boxes re-derive from the data on Recalculate: contribution from the
-                trailing 12 months of (net pay − spend), annual spend from the trailing
-                spend, the withdrawal rate from Settings. Percents are percents (5 = 5%).
-                Volatility turns on the bands; inflation converts everything to
-                today&apos;s dollars; contribution growth models raises. The three
-                assumption boxes grey in their defaults — blank uses them; 0 turns the fan
-                off (volatility) or reads nominal dollars (inflation).
+                Blank boxes re-derive on Recalculate: contribution from the trailing 12
+                months of (net pay − spend), annual spend from the trailing spend, the
+                withdrawal rate from Settings, and the three assumptions from their
+                defaults (15 / 3 / 3). Percents are percents (5 = 5%). Volatility turns on
+                the bands; inflation converts everything to today&apos;s dollars;
+                contribution growth models raises. 0 turns the fan off (volatility) or
+                reads nominal dollars (inflation).
               </p>
               <form
                 className="projection-form"
@@ -470,16 +481,11 @@ export default function ProjectionPage() {
                     onChange={(e) => setKnob('swr')(e.target.value)}
                   />
                 </label>
-                {/* The three assumptions: blank boxes carrying the ECHO as a placeholder,
-                    so the grey number is always exactly what the server just ran with. A
-                    null echo (a stale backend, before the defaults existed) leaves the
-                    placeholder empty rather than naming a value nothing used. */}
                 <label>
                   Volatility (%/yr)
                   <input
                     className="field-input"
                     inputMode="decimal"
-                    placeholder={data.volatility == null ? '' : shiftPoint(data.volatility, 2)}
                     value={knobs.volatility}
                     onChange={(e) => setKnob('volatility')(e.target.value)}
                   />
@@ -489,7 +495,6 @@ export default function ProjectionPage() {
                   <input
                     className="field-input"
                     inputMode="decimal"
-                    placeholder={data.inflation == null ? '' : shiftPoint(data.inflation, 2)}
                     value={knobs.inflation}
                     onChange={(e) => setKnob('inflation')(e.target.value)}
                   />
@@ -499,11 +504,6 @@ export default function ProjectionPage() {
                   <input
                     className="field-input"
                     inputMode="decimal"
-                    placeholder={
-                      data.contribution_growth == null
-                        ? ''
-                        : shiftPoint(data.contribution_growth, 2)
-                    }
                     value={knobs.contributionGrowth}
                     onChange={(e) => setKnob('contributionGrowth')(e.target.value)}
                   />

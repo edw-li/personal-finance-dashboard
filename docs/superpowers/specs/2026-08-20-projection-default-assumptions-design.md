@@ -43,6 +43,11 @@ render as placeholders instead of filled boxes).
 
 ## 3. Frontend (ProjectionPage)
 
+> **(Revised 2026-08-20, user request: the boxes seed ACTUAL VALUES from the echo like
+> every other assumption box — the placeholder treatment below is retired. Blank-on-
+> Recalculate still restores the defaults; null echoes — a stale backend — leave the
+> boxes blank. Server behavior in §2 is unchanged.)**
+
 - The three boxes are **not** echo-seeded (removed from the one-shot seed block); instead
   each `<input>` gains `placeholder={...}` derived from the latest echo
   (`shiftPoint(data.volatility, 2)` etc., empty string until the first echo lands).

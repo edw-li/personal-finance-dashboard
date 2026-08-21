@@ -184,11 +184,11 @@ describe('ProjectionPage', () => {
       monthlyContribution: '4000.00',
       annualSpend: '',
       swr: '0.04',
-      // Never sent as zeros: the assumption boxes are never SEEDED, so they are still
-      // blank — and blank is omitted, which is what asks for the server's defaults.
-      volatility: '',
-      inflation: '',
-      contributionGrowth: '',
+      // Seeded like every other knob (2026-08-20 revision), so the echoed defaults ride
+      // back out as explicit fractions; a CLEARED box is what asks for the default again.
+      volatility: '0.15',
+      inflation: '0.03',
+      contributionGrowth: '0.03',
       years: '30',
     })
   })
@@ -338,32 +338,28 @@ describe('ProjectionPage', () => {
     expect(screen.getAllByTestId('echart')).toHaveLength(1)
   })
 
-  it('greys the defaults into the three assumption boxes without filling them', async () => {
+  it('seeds the three assumption boxes from the echo like every other knob', async () => {
     renderPage()
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
-    // Blank VALUE (blank omits the param, which is what asks for the default) with the
-    // echo as the PLACEHOLDER, percent-shifted — so the grey number can never disagree
-    // with what the server actually ran.
-    expect(box(/volatility/i).value).toBe('')
-    expect(box(/inflation/i).value).toBe('')
-    expect(box(/contribution growth/i).value).toBe('')
-    expect(box(/volatility/i).placeholder).toBe('15')
-    expect(box(/inflation/i).placeholder).toBe('3')
-    expect(box(/contribution growth/i).placeholder).toBe('3')
+    // Filled VALUES, not placeholders (2026-08-20 user revision): the echo is the seed
+    // for all eight knobs, percent-shifted — so the box always names what the server
+    // actually ran.
+    expect(box(/volatility/i).value).toBe('15')
+    expect(box(/inflation/i).value).toBe('3')
+    expect(box(/contribution growth/i).value).toBe('3')
   })
 
-  it('leaves the assumption placeholders empty when a stale backend echoes null', async () => {
+  it('leaves the assumption boxes blank when a stale backend echoes null', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(staleEchoes())
     renderPage()
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
 
-    // A null echo names NOTHING — greying in a default the server never applied would
-    // be a lie about what is on the chart.
-    expect(box(/volatility/i).placeholder).toBe('')
-    expect(box(/inflation/i).placeholder).toBe('')
-    expect(box(/contribution growth/i).placeholder).toBe('')
+    // A null echo names NOTHING — seeding a default the server never applied would be a
+    // lie about what is on the chart.
     expect(box(/volatility/i).value).toBe('')
+    expect(box(/inflation/i).value).toBe('')
+    expect(box(/contribution growth/i).value).toBe('')
   })
 
   it('says in both hints that the defaults are what blank runs', async () => {
@@ -373,7 +369,9 @@ describe('ProjectionPage', () => {
     expect(
       screen.getByText(/reads in today's dollars by default \(inflation is modelled\)/),
     ).toBeTruthy()
-    expect(screen.getByText(/assumption boxes grey in their defaults/)).toBeTruthy()
+    expect(
+      screen.getByText(/the three assumptions from their defaults \(15 \/ 3 \/ 3\)/),
+    ).toBeTruthy()
   })
 
   it('recalculates with the Monte Carlo knobs shifted back to fractions', async () => {
