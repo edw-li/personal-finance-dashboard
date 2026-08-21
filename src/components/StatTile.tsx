@@ -1,3 +1,4 @@
+import InfoHint from './InfoHint'
 import './panels.css'
 
 // Stat-tile contract (dataviz): label · value · optional delta. A delta speaks on three
@@ -17,6 +18,7 @@ export default function StatTile({
   delta,
   tone,
   direction,
+  hint,
   hero = false,
 }: {
   label: string
@@ -24,6 +26,7 @@ export default function StatTile({
   delta?: string
   tone?: 'positive' | 'negative' | 'neutral'
   direction?: 'up' | 'down'
+  hint?: string
   hero?: boolean
 }) {
   const glyph =
@@ -38,7 +41,10 @@ export default function StatTile({
             : ''
   return (
     <div className={hero ? 'stat-tile stat-tile-hero' : 'stat-tile'}>
-      <div className="stat-label">{label}</div>
+      <div className="stat-label">
+        {label}
+        {hint !== undefined && <InfoHint text={hint} />}
+      </div>
       <div className="stat-value">{value}</div>
       {delta !== undefined && (
         <div className={`stat-delta stat-delta-${tone ?? 'neutral'}`}>

@@ -20,7 +20,7 @@
 - Create: `src/components/InfoHint.tsx`, `src/components/InfoHint.test.tsx`
 - Modify: `src/components/panels.css`, `src/components/StatTile.tsx`, `src/components/StatTile.test.tsx`
 
-- [ ] **Step 1:** `src/components/InfoHint.tsx`:
+- [x] **Step 1:** `src/components/InfoHint.tsx`:
 
 ```tsx
 import { Info } from 'lucide-react'
@@ -39,7 +39,7 @@ export default function InfoHint({ text }: { text: string }) {
 }
 ```
 
-- [ ] **Step 2:** Append to `src/components/panels.css`:
+- [x] **Step 2:** Append to `src/components/panels.css`:
 
 ```css
 /* InfoHint — the ⓘ beside titles/labels. The bubble is pure CSS from data-tip: shows on
@@ -96,7 +96,7 @@ export default function InfoHint({ text }: { text: string }) {
 }
 ```
 
-- [ ] **Step 3:** `StatTile.tsx` — add the prop and render it in the label (import InfoHint):
+- [x] **Step 3:** `StatTile.tsx` — add the prop and render it in the label (import InfoHint):
 
 ```tsx
   hint?: string
@@ -108,10 +108,10 @@ export default function InfoHint({ text }: { text: string }) {
       </div>
 ```
 
-- [ ] **Step 4:** Tests. `InfoHint.test.tsx`: renders a `type="button"` with `aria-label`
+- [x] **Step 4:** Tests. `InfoHint.test.tsx`: renders a `type="button"` with `aria-label`
   === text and `data-tip` === text; the svg icon is `aria-hidden`. `StatTile.test.tsx`:
   a tile with `hint` renders the info button inside the label; without it, no button.
-- [ ] **Step 5:** `npx vitest run src/components/InfoHint.test.tsx src/components/StatTile.test.tsx` → PASS; commit `feat: InfoHint component + StatTile hint prop`.
+- [x] **Step 5:** `npx vitest run src/components/InfoHint.test.tsx src/components/StatTile.test.tsx` → PASS; commit `feat: InfoHint component + StatTile hint prop`.
 
 ---
 

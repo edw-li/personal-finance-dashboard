@@ -93,3 +93,28 @@ describe('StatTile delta glyph', () => {
     expect(screen.getByText('24.7%')).toBeTruthy()
   })
 })
+
+// The `hint` prop is how ~40 of the app's ⓘ affordances get placed: pages pass a string,
+// the tile puts an InfoHint in the LABEL (never beside the value, where it would compete
+// with the figure the tile exists to show).
+describe('StatTile hint', () => {
+  const HINT = 'Assets minus liabilities from the latest monthly snapshot.'
+
+  it('renders the info button inside the label when a hint is passed', () => {
+    render(<StatTile label="Net worth" value="$1.00" hint={HINT} />)
+    const button = document.querySelector('.stat-label button.info-hint')
+    expect(button).toBeTruthy()
+    expect(button?.getAttribute('aria-label')).toBe(HINT)
+    // The label's own words survive untouched — the hint adds no text node, so every page
+    // test that queries the label by text keeps matching.
+    expect(document.querySelector('.stat-label')?.textContent).toBe('Net worth')
+    expect(screen.getByText('Net worth')).toBeTruthy()
+  })
+
+  it('renders no button at all without a hint', () => {
+    // Most tiles are self-explanatory; an empty ⓘ on every one of them would be noise.
+    render(<StatTile label="Net worth" value="$1.00" delta="$10.00 MoM" tone="positive" />)
+    expect(document.querySelector('.info-hint')).toBeNull()
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+})

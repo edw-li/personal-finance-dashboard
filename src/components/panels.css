@@ -368,3 +368,56 @@
   outline-offset: 2px;
   border-radius: 4px;
 }
+
+/* InfoHint — the ⓘ beside titles/labels. The bubble is pure CSS from data-tip: shows on
+   hover AND :focus-visible, so keyboard and touch (tap = focus) reach it without JS. The
+   resets matter: eyebrows are uppercase/letterspaced/muted, and the bubble must not
+   inherit any of that. */
+.info-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: help;
+  vertical-align: middle;
+}
+.info-hint:hover,
+.info-hint:focus-visible {
+  color: var(--text);
+}
+.info-hint:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.info-hint::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: -8px;
+  /* The codebase's one z-index: the bubble must float over chart canvases and table
+     rows; nothing else in the app stacks. */
+  z-index: 2;
+  display: none;
+  width: max-content;
+  max-width: 280px;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
+}
+.info-hint:hover::after,
+.info-hint:focus-visible::after {
+  display: block;
+}
