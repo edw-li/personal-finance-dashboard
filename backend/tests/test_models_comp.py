@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.models import AppSetting, CompEvent, EsppLot, EsppPeriod, PaycheckProfile
+from app.models import AppSetting, CompEvent, EsppLot, EsppPeriod, PaycheckProfile, RsuGrant
 
 
 async def test_espp_lot_roundtrip(db):
@@ -75,6 +75,26 @@ async def test_comp_event_and_period_and_setting(db):
     ev = (await db.execute(select(CompEvent))).scalar_one()
     # Numeric(14,4): the sheet's 6-dp unvested price rounds to 4 dp — documented and pinned
     assert ev.unvested_price == Decimal("129.5651")
+
+
+async def test_rsu_grant_roundtrip(db):
+    db.add(
+        RsuGrant(
+            kind="new_hire",
+            label="Offer letter",
+            focal_year=None,
+            shares=700,
+            grant_price=Decimal("45.1200"),
+            first_vest_date=date(2024, 9, 18),
+            cliff_pct=Decimal("0.2500"),
+            notes=None,
+        )
+    )
+    await db.commit()
+    grant = (await db.execute(select(RsuGrant))).scalar_one()
+    assert (grant.kind, grant.label, grant.shares) == ("new_hire", "Offer letter", 700)
+    assert grant.cliff_pct == Decimal("0.2500")
+    assert grant.first_vest_date == date(2024, 9, 18)
 
 
 async def test_focal_year_unique(db):

@@ -28,6 +28,7 @@ from app.models import (
     NetWorthSnapshot,
     PortfolioValueHistory,
     PositionTransaction,
+    RsuGrant,
     Security,
     SpendingCategory,
 )
@@ -884,3 +885,35 @@ async def test_importer_never_writes_dividends(db):
     }
     assert after == before
     assert "dividend_payments" not in report2.entities
+
+
+async def test_importer_never_writes_rsu_grants(db):
+    """Same ownership contract for equity grants (2026-08-21 spec): rsu_grants is
+    dashboard-only, so a re-import must leave it byte-identical. Runs the whole orchestrator
+    rather than the dividends pin's applier subset — the sheets that could plausibly reach a
+    comp table (ESPP, Paycheck Modeler, Focal History) only run under run_import."""
+    from app.importer.service import run_import
+
+    db.add(
+        RsuGrant(
+            kind="refresh",
+            label="2025 focal",
+            focal_year=2025,
+            shares=480,
+            grant_price=Decimal("121.5000"),
+            first_vest_date=date(2025, 6, 18),
+            cliff_pct=Decimal("0.0625"),
+            notes="pre-import row",
+        )
+    )
+    await db.commit()
+
+    report = await run_import(build_workbook(), db, dry_run=False)
+    assert report.applied is True  # a blocked import would pin nothing
+
+    rows = list(
+        (await db.execute(select(RsuGrant).execution_options(populate_existing=True))).scalars()
+    )
+    assert len(rows) == 1
+    assert (rows[0].label, rows[0].shares, rows[0].notes) == ("2025 focal", 480, "pre-import row")
+    assert all("rsu_grants" not in sheet.entities for sheet in report.sheets.values())

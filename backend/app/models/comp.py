@@ -65,3 +65,21 @@ class CompEvent(Base):
     refresh_rsus: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     grant_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class RsuGrant(Base):
+    """Dashboard-only equity grants (2026-08-21 spec). NOT in the spreadsheet: the importer
+    never reads or writes this table (pinned in test_importer_apply.py). Vest rows are never
+    stored — rsu_vesting computes the schedule from these parameters at read time."""
+
+    __tablename__ = "rsu_grants"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10))  # 'new_hire' | 'refresh' (API-validated)
+    label: Mapped[str] = mapped_column(String(60), unique=True)
+    focal_year: Mapped[int | None] = mapped_column()
+    shares: Mapped[int] = mapped_column()  # whole shares by definition
+    grant_price: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    first_vest_date: Mapped[date] = mapped_column(Date)
+    cliff_pct: Mapped[Decimal] = mapped_column(Numeric(7, 4))
+    notes: Mapped[str | None] = mapped_column(Text)

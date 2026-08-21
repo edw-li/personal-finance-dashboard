@@ -1,5 +1,5 @@
 from app.models.app_setting import AppSetting
-from app.models.comp import CompEvent, EsppLot, EsppPeriod, PaycheckProfile
+from app.models.comp import CompEvent, EsppLot, EsppPeriod, PaycheckProfile, RsuGrant
 from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.models.portfolio import (
     DIVIDEND_SOURCES,
@@ -38,6 +38,7 @@ __all__ = [
     "PortfolioValueHistory",
     "PositionTransaction",
     "PriceHistory",
+    "RsuGrant",
     "Security",
     "SpendingCategory",
     "TRANSACTION_SOURCES",
