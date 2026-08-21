@@ -4,6 +4,7 @@ import { PencilLine } from 'lucide-react'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { ApiError } from '../api/client'
 import EChart from '../components/EChart'
+import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
@@ -39,6 +40,10 @@ const MAX_DRILL = PALETTE.length
 // The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
 // the legend, the tooltip branch and the series stay in lockstep.
 const NOTES_SERIES = 'Notes'
+
+// The three group tiles are one map over one shape, so they share one hint — three copies
+// of the same sentence would be three chances to edit only two of them.
+const GROUP_TILE_HINT = "This group's latest total and its change from the prior snapshot."
 
 function pctChange(curr: string | null, prev: string | null): number | null {
   if (curr === null || prev === null || Number(prev) === 0) return null
@@ -328,6 +333,7 @@ export default function NetWorthPage() {
             // fold zero into positive; ratified Plan 6 Task 8 review — a green "▲ $0.00"
             // congratulates the user for standing still.
             tone={toneOf(summary.mom_delta)}
+            hint="Assets minus liabilities for the latest snapshot; liabilities are entered as negatives."
           />
           {(['taxable', 'pre_tax', 'liability'] as AccountGroup[]).map((group) => {
             const entry = summary.groups.find((g) => g.group === group)
@@ -340,6 +346,7 @@ export default function NetWorthPage() {
                 value={formatCurrency(entry.total)}
                 delta={delta === null ? undefined : `${formatCurrency(delta)} vs prior`}
                 tone={toneOf(delta)}
+                hint={GROUP_TILE_HINT}
               />
             )
           })}
@@ -349,7 +356,10 @@ export default function NetWorthPage() {
       <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
         <div className="card span-12">
           <div className="networth-chart-header">
-            <h2 className="eyebrow">By group over time</h2>
+            <h2 className="eyebrow">
+              By group over time
+              <InfoHint text="Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note." />
+            </h2>
             <div className="networth-chart-controls">
               {/* One window for the whole page: the drill-down below follows these chips
                   too (both charts share the month axis). */}
@@ -385,7 +395,10 @@ export default function NetWorthPage() {
         </div>
 
         <div className="card span-12">
-          <h2 className="eyebrow">Account drill-down</h2>
+          <h2 className="eyebrow">
+            Account drill-down
+            <InfoHint text="Individual account balances over time — toggle accounts here or by clicking table rows." />
+          </h2>
           <p className="drill-hint">
             Pick up to {MAX_DRILL} accounts to compare their history. Clicking rows in the
             accounts table below toggles them here too.
@@ -416,7 +429,10 @@ export default function NetWorthPage() {
         </div>
 
         <div className="card span-12">
-          <h2 className="eyebrow">Accounts — latest {granularity === 'quarterly' ? 'quarter' : 'month'}</h2>
+          <h2 className="eyebrow">
+            Accounts — latest {granularity === 'quarterly' ? 'quarter' : 'month'}
+            <InfoHint text="Each account's latest balance and change. Component accounts live inside a parent aggregate and are excluded from totals." />
+          </h2>
           <table className="data-table">
             <thead>
               <tr>

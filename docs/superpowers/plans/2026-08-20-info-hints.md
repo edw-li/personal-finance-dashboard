@@ -145,7 +145,7 @@ export default function InfoHint({ text }: { text: string }) {
 | 22 | "Category trends" h2 | Single-category history — pick up to 3 to compare. |
 | 23 | "Yearly rollups" h2 | Category totals per calendar year, with net pay and that year's savings rate. |
 
-- [ ] Transcribe, run `npm run test` (existing page tests must keep passing — headings gain no text nodes), commit `feat: info hints — overview, net worth, spending`.
+- [x] Transcribe, run `npm run test` (existing page tests must keep passing — headings gain no text nodes), commit `feat: info hints — overview, net worth, spending`.
 
 ---
 

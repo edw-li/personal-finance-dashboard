@@ -8,6 +8,7 @@ import { fetchRefreshStatus } from '../api/prices'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import EChart from '../components/EChart'
+import InfoHint from '../components/InfoHint'
 import { attentionItems } from '../components/overview/attention'
 import { ytdStats } from '../components/overview/ytd'
 import {
@@ -244,6 +245,7 @@ export default function OverviewPage() {
                   : undefined
               }
               tone={toneOf(summary?.mom_delta)}
+              hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
             />
             <StatTile
               label="Portfolio"
@@ -257,6 +259,7 @@ export default function OverviewPage() {
                   : undefined
               }
               tone={toneOf(totals?.day_change_amount)}
+              hint="Market value of every priced holding at the latest quotes, and today's move vs the prior close."
             />
             <StatTile
               label={stats?.month ? `Spending — ${formatMonth(stats.month)}` : 'Spending'}
@@ -264,16 +267,21 @@ export default function OverviewPage() {
               delta={spendDelta?.text}
               tone={spendDelta?.tone}
               direction={spendDelta?.direction}
+              hint="The latest entered month's total spend against your trailing 12-month average."
             />
             {/* A rate is a level, not a movement: no delta, no arrow. */}
             <StatTile
               label={taxLabel}
               value={tax === null ? '—' : formatPct(tax.totals.effective_rate, { signed: false })}
+              hint="Total tax ÷ gross income from the tax engine, for the year named in the label."
             />
           </div>
           {showYtd && ytd && (
             <section className="card ytd-card">
-              <h2 className="eyebrow">Year to date — {ytd.year}</h2>
+              <h2 className="eyebrow">
+                Year to date — {ytd.year}
+                <InfoHint text="The year so far: net-worth change since the last pre-January snapshot, plus spend, net pay, savings rate, and dividends." />
+              </h2>
               <dl className="ytd-facts">
                 <div className="ytd-fact">
                   <dt>Net worth</dt>
@@ -329,7 +337,10 @@ export default function OverviewPage() {
           )}
           <div className="card-grid">
             <section className="card span-12">
-              <h2 className="eyebrow">Net worth trend</h2>
+              <h2 className="eyebrow">
+                Net worth trend
+                <InfoHint text="Net worth at every monthly snapshot — the series the Net Worth page breaks down by group." />
+              </h2>
               <NavLink className="drill-hint" to="/net-worth">
                 Open net worth →
               </NavLink>
@@ -340,7 +351,10 @@ export default function OverviewPage() {
               )}
             </section>
             <section className="card span-12">
-              <h2 className="eyebrow">Portfolio performance</h2>
+              <h2 className="eyebrow">
+                Portfolio performance
+                <InfoHint text="Portfolio value vs cost basis over time. The S&P 500 line invests only the starting balance — contributions are not added to it." />
+              </h2>
               <NavLink className="drill-hint" to="/portfolio">
                 Open portfolio →
               </NavLink>
@@ -351,7 +365,10 @@ export default function OverviewPage() {
               )}
             </section>
             <section className="card span-12">
-              <h2 className="eyebrow">Recent spending</h2>
+              <h2 className="eyebrow">
+                Recent spending
+                <InfoHint text="Total spend for each of the last 12 entered months." />
+              </h2>
               <NavLink className="drill-hint" to="/spending">
                 Open spending →
               </NavLink>

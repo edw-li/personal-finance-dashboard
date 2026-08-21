@@ -5,6 +5,7 @@ import { ApiError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import EChart from '../components/EChart'
 import type { EChartEventParams, EChartsInstance } from '../components/EChart'
+import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
@@ -508,13 +509,23 @@ export default function SpendingPage() {
           <StatTile
             label={`Spend — ${formatMonth(kpis.month)}`}
             value={formatCurrency(kpis.total)}
+            hint="The latest entered month's total across all categories."
           />
-          <StatTile label="12-month average" value={formatCurrency(kpis.average)} />
+          <StatTile
+            label="12-month average"
+            value={formatCurrency(kpis.average)}
+            hint="Mean monthly spend over the last 12 entered months, including the latest."
+          />
           <StatTile
             label="Savings rate (actual)"
             value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
+            hint="(net pay − spend) ÷ net pay for the latest month."
           />
-          <StatTile label="Net pay" value={formatCurrency(kpis.netPay)} />
+          <StatTile
+            label="Net pay"
+            value={formatCurrency(kpis.netPay)}
+            hint="Take-home pay entered for the latest month."
+          />
         </div>
       )}
 
@@ -525,6 +536,7 @@ export default function SpendingPage() {
               {detailLabel
                 ? `Spending breakdown — ${detailLabel}`
                 : `Monthly spend vs net pay — top ${TOP_N} categories + other`}
+              <InfoHint text="Top categories stacked per month under your net-pay line; the dashed line is what your investable assets could sustainably fund each month. Click a bar for that month's breakdown." />
             </h2>
             {/* One slot, two modes: the drill-in's way back, or the page's time window
                 (a pie has no time axis, so the chips would be dead weight beside it). */}
@@ -577,7 +589,10 @@ export default function SpendingPage() {
 
         {movers.length > 0 && (
           <div className="card span-12">
-            <h2 className="eyebrow">What changed — {monthLabels[moversIndex]}</h2>
+            <h2 className="eyebrow">
+              What changed — {monthLabels[moversIndex]}
+              <InfoHint text="The month's biggest category moves, vs the prior month and vs each category's 12-month average." />
+            </h2>
             <table className="data-table">
               <thead>
                 <tr>
@@ -608,7 +623,10 @@ export default function SpendingPage() {
         )}
 
         <div className="card span-12">
-          <h2 className="eyebrow">Month × category heatmap</h2>
+          <h2 className="eyebrow">
+            Month × category heatmap
+            <InfoHint text="Spend per category per month on one shared scale — darker is more. Rows are ordered by all-time total." />
+          </h2>
           {heatmapOption && (
             <EChart
               option={heatmapOption}
@@ -620,7 +638,10 @@ export default function SpendingPage() {
         </div>
 
         <div className="card span-6">
-          <h2 className="eyebrow">Savings rate (actual)</h2>
+          <h2 className="eyebrow">
+            Savings rate (actual)
+            <InfoHint text="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent." />
+          </h2>
           {savingsOption && <EChart option={savingsOption} height={260} />}
           <p className="drill-hint">
             (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
@@ -629,7 +650,10 @@ export default function SpendingPage() {
         </div>
 
         <div className="card span-6">
-          <h2 className="eyebrow">Category trends</h2>
+          <h2 className="eyebrow">
+            Category trends
+            <InfoHint text="Single-category history — pick up to 3 to compare." />
+          </h2>
           <div className="chip-row">
             {matrix?.categories.map((category) => {
               const active = trend.find((t) => t.categoryId === category.id)
@@ -657,7 +681,10 @@ export default function SpendingPage() {
         </div>
 
         <div className="card span-12">
-          <h2 className="eyebrow">Yearly rollups</h2>
+          <h2 className="eyebrow">
+            Yearly rollups
+            <InfoHint text="Category totals per calendar year, with net pay and that year's savings rate." />
+          </h2>
           <div className="yearly-scroll">
             <table className="data-table">
               <thead>
