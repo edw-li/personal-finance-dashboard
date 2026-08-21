@@ -133,9 +133,11 @@ meaningful mid-year); 404 via `_require_year` when the year row doesn't exist. R
 - `safe_harbor` — null when no prior tax year is stored; else `{prior_year, prior_total_tax,
   threshold (=110%), met (projected withholding ≥ threshold)}`, flagged approximate in copy
   (real safe harbor is per-jurisdiction; this is the all-in version).
-- `checks_elapsed`, `checks_total`, `profile_count`, `warnings[]` (no profiles → salary leg 0
-  + warning; unpriced past vests excluded + named; no brackets → FICA leg 0 + engine-style
-  warning).
+- `checks_elapsed`, `checks_total`, `warnings[]` (no usable profiles → salary leg 0 + warning;
+  no ticker → one root-cause warning, vests excluded; unpriced past vests excluded + named;
+  no FICA brackets → engine-style warning). *(Amended 2026-08-21 to match the shipped plan:
+  `profile_count` dropped; the leg fields ship as `salary`/`vest`/`total` objects — the plan's
+  Task 6 schema is the wire contract.)*
 
 ## 5. Withholding math — pure service `backend/app/services/withholding_calc.py`
 
