@@ -556,10 +556,15 @@ async def get_all_summaries(db: AsyncSession = Depends(get_db)) -> TaxSummariesO
 # assembled from four tables the taxes editors do not own.
 
 NON_CURRENT_YEAR_MESSAGE = "withholding tracking is only meaningful for the current year"
+# The ROOT CAUSE, kept separate from the two symptom warnings below: with no ticker every vest
+# is unpriceable at once, and the per-date/no-quote lines would only restate this one. Same
+# call comp.py's vest calendar makes, in the same words (Task 6 review).
+NO_TICKER_WARNING = "no ESPP/employer ticker configured — vests are excluded from the estimate"
 NO_QUOTE_WARNING = "no current employer price — future vests are excluded from the projection"
 # The IRS prior-year safe harbor for high earners; "all-in" here, where the real rule is
 # per-jurisdiction (the card's copy says so).
 SAFE_HARBOR_MULTIPLIER = Decimal("1.10")
+SAFE_HARBOR_UNAVAILABLE = "prior year {year} has no computed tax — safe harbor unavailable"
 # The three tables the marginal-FICA walks read. Named separately from the engine's own
 # jurisdiction sweep because an empty one is silent HERE: the summary would show a 0 medicare
 # line, but this card would show a 0 vest-FICA leg with nothing to explain it.
@@ -646,14 +651,22 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
                 missing_quote = True
             else:
                 future_vests.append((vest_date, shares, latest_price))
-    # One warning per unpriced DATE, not per row (two grants vesting the same day is one hole);
-    # the missing quote is one warning for the whole projection, not one per future vest.
-    warnings.extend(
-        f"vest on {day} has no stored price — excluded from the estimate"
-        for day in sorted(unpriced)
-    )
-    if missing_quote:
-        warnings.append(NO_QUOTE_WARNING)
+    if ticker is None:
+        # One root cause instead of N symptoms: the soft link is broken at its FIRST hop, so
+        # every line below would be the same sentence with a different date on it. The
+        # exclusions themselves already happened above — this is what names them.
+        warnings.append(NO_TICKER_WARNING)
+    else:
+        # One warning per unpriced DATE, not per row (two grants vesting the same day is one
+        # hole), and they are the only signal here: a ticker IS configured, so a missing bar
+        # is a real gap in the price history rather than a setting nobody filled in. The
+        # missing quote is one warning for the whole projection, not one per future vest.
+        warnings.extend(
+            f"vest on {day} has no stored price — excluded from the estimate"
+            for day in sorted(unpriced)
+        )
+        if missing_quote:
+            warnings.append(NO_QUOTE_WARNING)
 
     estimated = withholding_calc.estimate(
         year=year,
@@ -684,15 +697,24 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         prior = compute_breakdown(
             year - 1, await _stored_inputs(db, year - 1), await _engine_tables(db, year - 1)
         )
-        threshold = _money(prior.totals.total_tax * SAFE_HARBOR_MULTIPLIER)
-        safe_harbor = SafeHarborOut(
-            prior_year=year - 1,
-            prior_total_tax=_money(prior.totals.total_tax),
-            threshold=threshold,
-            # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so the
-            # badge can never contradict the two numbers rendered next to it.
-            met=total_projected >= threshold,
-        )
+        # Quantize FIRST, then take 110% of that: the threshold has to be 1.10 x the number
+        # rendered beside it, not 1.10 x a full-precision figure nobody can see.
+        prior_total = _money(prior.totals.total_tax)
+        if prior_total <= ZERO:
+            # A bare tax_years row (or one whose credits swallowed the tax) makes the whole
+            # comparison vacuous: any withholding at all clears a zero-or-negative threshold,
+            # so a met=True badge would be a false all-clear. Say why instead.
+            warnings.append(SAFE_HARBOR_UNAVAILABLE.format(year=year - 1))
+        else:
+            threshold = _money(prior_total * SAFE_HARBOR_MULTIPLIER)
+            safe_harbor = SafeHarborOut(
+                prior_year=year - 1,
+                prior_total_tax=prior_total,
+                threshold=threshold,
+                # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so the
+                # badge can never contradict the two numbers rendered next to it.
+                met=total_projected >= threshold,
+            )
 
     return WithholdingOut(
         year=year,

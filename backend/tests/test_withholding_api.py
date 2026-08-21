@@ -40,6 +40,7 @@ PINNED_TODAY = date(2026, 7, 1)
 YEAR = PINNED_TODAY.year
 
 NON_CURRENT_YEAR = "withholding tracking is only meaningful for the current year"
+NO_TICKER_WARNING = "no ESPP/employer ticker configured — vests are excluded from the estimate"
 NO_QUOTE_WARNING = "no current employer price — future vests are excluded from the projection"
 
 # Small enough to hand-derive, real enough to exercise every walk: a flat federal/state pair,
@@ -353,19 +354,16 @@ async def test_withholding_excludes_future_vests_when_there_is_no_quote(
 async def test_withholding_without_an_employer_ticker_drops_the_whole_vest_leg(
     auth_client, db, definitions, frozen_today
 ):
-    # No `espp_ticker` setting at all: the soft link breaks at its first hop, so nothing can be
-    # priced. Every vest leaves the estimate — named per past DATE, once for the projection —
-    # and the salary side still answers in full.
+    # No `espp_ticker` setting at all: the soft link breaks at its FIRST hop, so nothing can be
+    # priced and every vest leaves the estimate. That is ONE root cause, not two per-date lines
+    # plus a no-quote line restating it (the vest calendar makes the same call) — and the
+    # salary side still answers in full.
     await seed_tax_year(db, YEAR, "600000.0000")
     await seed_profile(db)
     await seed_grants(db)
     body = await get_withholding(auth_client)
 
-    assert body["warnings"] == [
-        "vest on 2026-03-18 has no stored price — excluded from the estimate",
-        "vest on 2026-06-17 has no stored price — excluded from the estimate",
-        NO_QUOTE_WARNING,
-    ]
+    assert body["warnings"] == [NO_TICKER_WARNING]
     assert body["vest"] == {
         "income_ytd": "0.00",
         "income_projected": "0.00",
@@ -471,9 +469,30 @@ async def test_withholding_safe_harbor_is_110_pct_of_the_prior_year(
         "threshold": "88718.52",  # 80653.20 x 1.10, at cents
         "met": True,  # projected withholding 96883.00 clears it
     }
+    # 110% of the DISPLAYED prior figure, not of a full-precision one nobody can see: the two
+    # numbers render side by side and the multiplication between them has to check out.
     assert Decimal(body["safe_harbor"]["threshold"]) == (
         Decimal(prior_tax) * Decimal("1.10")
     ).quantize(Decimal("0.01"))
+
+
+async def test_withholding_safe_harbor_is_unavailable_when_the_prior_year_computes_nothing(
+    auth_client, db, world, frozen_today
+):
+    # A bare tax_years row — the shape `_ensure_year` leaves behind, or a year created and
+    # never filled in. 110% of nothing is nothing, and ANY withholding clears a zero
+    # threshold, so a met=True badge here would be a false all-clear rather than a result.
+    db.add(TaxYear(year=YEAR - 1))
+    await db.commit()
+    body = await get_withholding(auth_client)
+
+    assert body["safe_harbor"] is None
+    assert body["warnings"] == [
+        f"prior year {YEAR - 1} has no computed tax — safe harbor unavailable"
+    ]
+    # The rest of the card is unaffected — this is one missing comparison, not a degradation.
+    assert body["liability_total"] == "115753.20"
+    assert body["total"]["projected"] == "96883.00"
 
 
 async def test_withholding_safe_harbor_not_met_when_the_prior_year_was_bigger(

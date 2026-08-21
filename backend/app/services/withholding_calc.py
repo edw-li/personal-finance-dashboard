@@ -37,7 +37,10 @@ ZERO = Decimal("0")
 CENT = Decimal("0.01")
 FED_SUPPLEMENTAL = Decimal("0.22")  # federal supplemental rate (under $1M cumulative)
 CA_SUPPLEMENTAL = Decimal("0.1023")  # CA stock/bonus supplemental rate
-NO_PROFILES_WARNING = "no paycheck profile stored — salary withholding estimated as 0"
+# "no usable", not "none stored": the router hands over only the profiles that survived its
+# pay-periods fence, so an empty list can equally mean every stored row was hand-edited into
+# something `breakdown` cannot divide by (Task 6 review).
+NO_PROFILES_WARNING = "no usable paycheck profile — salary withholding estimated as 0"
 EARLY_CHECKS_WARNING = "checks before the first profile's effective date use that profile"
 
 # (vest date, shares, price) — past vests carry the vest-date FMV, future ones a quote.
