@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AppSetting, LatestPrice, PriceHistory, Security
+from app.models import AppSetting, LatestPrice, PriceHistory, RsuGrant, Security
 from app.services.price_provider import DailyBar, PriceProvider
 from app.services.scheduler import product_today
 
@@ -175,6 +175,77 @@ def _update_dividend_metadata(security: Security, bars: list[DailyBar], today: d
     security.ex_div_date = max((b.bar_date for b in events), default=None)
 
 
+# The deep window reaches a little past the earliest vest so the on-or-before lookup always
+# has a bar to land on even when the vest date itself was a holiday.
+EMPLOYER_BACKFILL_BUFFER_DAYS = 14
+
+
+async def backfill_employer_history(db: AsyncSession, provider: PriceProvider) -> int:
+    """One-time deep backfill of the employer ticker's daily closes, back past the earliest
+    RSU grant's first vest (2026-08-21: the vesting schedule prices past tranches at their
+    own vest-date closes, and the standing HISTORY_WINDOW_DAYS refresh window cannot reach a
+    grant that began vesting years ago — those vests rendered "no stored price" forever).
+
+    Self-extinguishing: once the oldest stored bar sits on or before the earliest needed
+    date, every later call is two SELECTs and out; it re-arms only if an older grant is
+    added. Skips quietly when there is no employer ticker, no matching security, no grants,
+    or the security is manual-priced (its bars are hand entries, and a provider fetch would
+    be a second opinion about them). Bars upsert exactly like refresh_prices'; latest_prices
+    and the TTM dividend metadata are deliberately NOT touched — this is history repair, not
+    a quote refresh. Returns the number of bars written (0 on every skip). Caller commits.
+    """
+    setting = await db.get(AppSetting, "espp_ticker")
+    if setting is None or not isinstance(setting.value, dict):
+        return 0
+    raw = setting.value.get("value")
+    ticker = raw.strip().upper() if isinstance(raw, str) else ""
+    if not ticker:
+        return 0
+    security = (
+        (await db.execute(select(Security).where(Security.ticker == ticker))).scalars().first()
+    )
+    if security is None or security.is_manual_priced:
+        return 0
+    earliest_vest = (
+        await db.execute(select(func.min(RsuGrant.first_vest_date)))
+    ).scalar_one_or_none()
+    if earliest_vest is None:
+        return 0
+    needed = earliest_vest - timedelta(days=EMPLOYER_BACKFILL_BUFFER_DAYS)
+    oldest_bar = (
+        await db.execute(
+            select(func.min(PriceHistory.price_date)).where(PriceHistory.security_id == security.id)
+        )
+    ).scalar_one_or_none()
+    if oldest_bar is not None and oldest_bar <= needed:
+        return 0
+    bars = await asyncio.to_thread(provider.fetch_daily, security.ticker, needed)
+    # Same de-dup and bounds as refresh_prices: the provider promises neither unique nor
+    # ordered bars, and a duplicate date inside one INSERT is a CardinalityViolation.
+    bars = list({b.bar_date: b for b in bars if 0 < b.close < PRICE_MAX_ABS}.values())
+    if not bars:
+        logger.info("employer backfill: %s returned no bars for the deep window", ticker)
+        return 0
+    stmt = pg_insert(PriceHistory).values(
+        [{"security_id": security.id, "price_date": b.bar_date, "close": b.close} for b in bars]
+    )
+    await db.execute(
+        stmt.on_conflict_do_update(
+            index_elements=["security_id", "price_date"],
+            set_={"close": stmt.excluded.close},
+        )
+    )
+    _expire_price_rows(db)
+    logger.info(
+        "employer backfill: %d %s bars fetched back to %s (earliest vest %s)",
+        len(bars),
+        ticker,
+        needed,
+        earliest_vest,
+    )
+    return len(bars)
+
+
 async def record_refresh_run(
     db: AsyncSession,
     result: RefreshResult,
@@ -229,6 +300,14 @@ async def run_refresh(
 
     today = today or product_today()
     result = await refresh_prices(db, provider, today=today)
+    # Deep employer history first (its own savepoint, its own quiet failure): the vest
+    # calendar prices past tranches at their own closes, and this is the one step that can
+    # reach bars older than the refresh window. Self-extinguishing after the first success.
+    try:
+        async with db.begin_nested():
+            await backfill_employer_history(db, provider)
+    except Exception:
+        logger.exception("employer history backfill failed — the price refresh stands")
     # Backfill first — missed Mondays extend the series chronologically off the bar
     # window refresh_prices just healed — then the Monday leg for today itself. Either
     # movement flips the payload's history_appended flag. One savepoint EACH ("each

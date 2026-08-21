@@ -891,6 +891,21 @@ export interface VestOut {
   is_past: boolean
 }
 
+// One vest DATE across every grant — the table's summary row (2026-08-21 revision). Every
+// past tranche on a day priced at the SAME close, so `fmv`/`value` are exact, not averages:
+// past days carry the day's close x summed shares, future days the latest quote x summed
+// shares — an estimate, and `value_is_estimate` is how the row says so. Unpriced either way
+// is null. The per-grant breakdown for a date is its `vests` entries.
+export interface VestDayOut {
+  vest_date: string
+  is_past: boolean
+  tranche_count: number
+  shares: number
+  fmv: string | null
+  value: string | null
+  value_is_estimate: boolean
+}
+
 // A prefill for a focal year that has refresh RSUs on its comp event but no grant yet — the
 // chips above the grants form, never a row the server wrote. `shares` is comp_events.refresh_rsus
 // verbatim at its 4dp scale (a string, unlike the whole-share ints above); the grant writer is
@@ -913,6 +928,7 @@ export interface VestingScheduleOut {
   quoted_at: string | null
   grants: RsuGrantOut[]
   vests: VestOut[] // chronological across grants, past and future together
+  vest_days: VestDayOut[] // `vests` grouped by date — the table's rows (2026-08-21 revision)
   tiles: {
     next_vest: { vest_date: string; shares: number; est_value: string | null } | null
     unvested_shares: number

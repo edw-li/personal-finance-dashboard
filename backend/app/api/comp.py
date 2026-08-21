@@ -24,6 +24,7 @@ come back 200 with a warning.
 from bisect import bisect_right
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from itertools import groupby
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response
@@ -47,6 +48,7 @@ from app.schemas.comp import (
     RsuGrantOut,
     RsuGrantUpdate,
     SeedCandidateOut,
+    VestDayOut,
     VestingScheduleOut,
     VestingTilesOut,
     VestOut,
@@ -521,6 +523,31 @@ async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingSchedul
             f"vest on {day} has no stored price — value unknown" for day in sorted(unpriced)
         )
 
+    # The table's rows: one per DATE (2026-08-21 revision — four grants share every quarter,
+    # so the per-tranche list quadrupled visually while saying one date four times). Grouping
+    # is exact, not approximate: every past tranche on a day priced at the SAME
+    # `_close_on_or_before(day)`, so the day's fmv is that one close and the day's value is
+    # close x summed shares — identical to summing the tranche values. A future day's value
+    # is the latest quote x summed shares, flagged as the estimate it is; the per-grant
+    # breakdown stays in `vests`, which the UI expands a date into.
+    vest_days: list[VestDayOut] = []
+    for day, group_iter in groupby(vests, key=lambda vest: vest.vest_date):
+        group = list(group_iter)
+        day_shares = sum(vest.shares for vest in group)
+        is_past = group[0].is_past
+        day_fmv = group[0].fmv if is_past else latest_price
+        vest_days.append(
+            VestDayOut(
+                vest_date=day,
+                is_past=is_past,
+                tranche_count=len(group),
+                shares=day_shares,
+                fmv=day_fmv,
+                value=_vest_value(day_fmv, day_shares),
+                value_is_estimate=not is_past and day_fmv is not None,
+            )
+        )
+
     future = [vest for vest in vests if not vest.is_past]
     in_year = [vest for vest in vests if vest.is_past and vest.vest_date.year == today.year]
     priced_in_year = [vest.value for vest in in_year if vest.value is not None]
@@ -592,6 +619,7 @@ async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingSchedul
         quoted_at=quoted_at,
         grants=grant_rows,
         vests=vests,
+        vest_days=vest_days,
         tiles=tiles,
         seed_candidates=seed_candidates,
         drift_warnings=drift_warnings,

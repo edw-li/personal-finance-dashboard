@@ -123,6 +123,29 @@
   color: var(--muted);
 }
 
+/* The vest table's own scroller (2026-08-21 revision): four grants make a decade of quarters,
+   and the card was swallowing the page. Capped rather than paginated — everything stays one
+   scroll away — with the header pinned so a row deep in 2029 still says what its columns are.
+   Sticky cells are positioned, so they paint above the (non-positioned) rows without touching
+   the codebase's one z-index (panels.css's InfoHint note); the background is what stops rows
+   showing through. */
+.vest-scroll {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.vest-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+/* Expansion rows read as children of the date row above them: indented, and their grant name
+   sits where the date would otherwise repeat. */
+.vest-tranche .vest-tranche-label {
+  padding-left: 1.6rem;
+}
+
 /* The "est." marker beside a future row's price, and the payload's own warning sentences.
    Deliberate near-twins of portfolio.css's `.sub` / `.hint` — that stylesheet travels with the
    portfolio page and this one must not depend on it happening to be in the bundle (this

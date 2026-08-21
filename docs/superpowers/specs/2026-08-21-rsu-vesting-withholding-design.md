@@ -223,6 +223,32 @@ removed anywhere; new endpoints are purely additive, so old frontend + new backe
 reverse both degrade gracefully. `espp_ticker` doubles as the employer/RSU ticker — the
 schedule card's hint says so. Frontend chunk budget: no new ECharts registrations.
 
+## 8.1 Revision — 2026-08-21 (post-deploy user feedback, same day)
+
+Five changes after the user exercised the shipped feature with real grants:
+
+1. **Comp page order** is now Focal History → the TC chart → RSU grants → Vesting schedule
+   (entered history first, then the computed surfaces; grants before the schedule they
+   produce).
+2. **The vest table groups one row per DATE** (`vest_days` on the schedule payload — a new
+   additive field, server-computed since every tranche on a past day prices at the same
+   close): summary rows carry the day's tranche count, summed shares, close/quote and
+   value (future days flagged `value_is_estimate`); clicking a date expands its per-grant
+   tranches, one date open at a time. The flat `vests` list stays as the expansion's feed.
+3. **The table scrolls** past ~420px (sticky header) instead of swallowing the page.
+4. **Employer history backfill** (`price_service.backfill_employer_history`, run inside
+   `run_refresh` under its own savepoint): vests older than the 370-day refresh window had
+   no stored closes ("no stored price" forever). One deep provider fetch reaches back to a
+   buffer before the earliest grant's first vest; self-extinguishing once the oldest bar
+   covers it; skips manual-priced employers; bars only (no latest-price/TTM side effects).
+5. **The vest chart's hover carries the bar's total** as its last row
+   (`vestingTooltipFormatter` — a full HTML formatter, so grant labels are escapeHtml'd).
+
+Known non-change: the dashboard's cumulative-floor split was validated to the share against
+three of the user's four real grants; the initial offer grant reads −3 vested vs the broker
+and no uniform rounding rule reproduces it from aggregates — awaiting per-vest broker data
+before any change (per-vest overrides remain the v2 answer if needed).
+
 ## 9. Out of scope (v2 candidates)
 
 Editable per-vest share overrides (broker reconciliation); UI knobs for the supplemental

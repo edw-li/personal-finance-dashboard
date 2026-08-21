@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { INK, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import type { RsuGrantOut, VestOut } from '../../types/api'
-import { OTHER_GRANT_LABEL, vestingChartOption } from './vestingChartOptions'
+import {
+  OTHER_GRANT_LABEL,
+  vestingChartOption,
+  vestingTooltipFormatter,
+} from './vestingChartOptions'
 
 // --- the golden schedule ----------------------------------------------------------------
 // Wire shape of GET /comp/vesting-schedule's `grants` / `vests` halves. Two grants, four
@@ -75,9 +79,9 @@ function categoriesOf(option: EChartsOption | null): string[] {
   return (option as unknown as { xAxis: { data: string[] } }).xAxis.data
 }
 
-function valueFormatterOf(option: EChartsOption | null): (v: unknown) => string {
-  return (option as unknown as { tooltip: { valueFormatter: (v: unknown) => string } }).tooltip
-    .valueFormatter
+function tooltipFormatterOf(option: EChartsOption | null): (params: unknown) => string {
+  return (option as unknown as { tooltip: { formatter: (params: unknown) => string } }).tooltip
+    .formatter
 }
 
 function moneyAxisLabelOf(option: EChartsOption | null): (value: number) => string {
@@ -258,10 +262,31 @@ describe('vestingChartOption', () => {
     expect(categoriesOf(option)).toEqual(['Nov 20, 2024', 'Feb 19, 2025', 'Nov 18, 2026'])
   })
 
-  it('formats the money on both the tooltip and the axis', () => {
+  it('formats the axis and wires the total-carrying tooltip formatter', () => {
     const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE)
-    expect(valueFormatterOf(option)(11207.5)).toBe('$11,207.50')
-    expect(valueFormatterOf(option)(null)).toBe('—')
     expect(moneyAxisLabelOf(option)(11207.5)).toBe('$11.2K')
+    // The exported formatter itself, not a per-value one: the hover's last row is the
+    // stack's TOTAL (2026-08-21 user request), which needs the whole params list.
+    expect(tooltipFormatterOf(option)).toBe(vestingTooltipFormatter)
+  })
+
+  it('totals the hovered bar and escapes user-text grant labels', () => {
+    const html = vestingTooltipFormatter([
+      {
+        seriesName: '<b>Offer</b> letter',
+        marker: '<span class="m"></span>',
+        axisValueLabel: 'Nov 18, 2026',
+        value: 100.5,
+      },
+      { seriesName: 'Refresh', marker: '', value: 49.5 },
+    ])
+    expect(html).toContain('<strong>Nov 18, 2026</strong>')
+    // A grant label is user text: it must arrive entity-encoded, never as live markup.
+    expect(html).toContain('&lt;b&gt;Offer&lt;/b&gt; letter: $100.50')
+    expect(html).not.toContain('<b>Offer</b>')
+    expect(html).toContain('Refresh: $49.50')
+    expect(html).toContain('<strong>Total: $150.00</strong>')
+    // Nothing finite under the pointer (echarts can hand an empty hover) -> no tooltip.
+    expect(vestingTooltipFormatter([{ value: undefined }])).toBe('')
   })
 })

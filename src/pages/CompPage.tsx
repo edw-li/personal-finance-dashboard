@@ -528,8 +528,21 @@ export default function CompPage() {
         </div>
       )}
 
-      {/* Dimmed by the SAME flag as the table below it: both are drawn from one payload,
-          and a chart left bright while the table under it says "may be showing earlier
+      {/* Page order (2026-08-21 user revision): the ENTERED history first — Focal History,
+          then the chart it draws — and the computed vesting surfaces after: grants (the
+          input), then the schedule they produce. */}
+      {events === null ? (
+        busy && <p className="empty-note">Loading comp events…</p>
+      ) : (
+        <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
+          {/* NOT keyed: a reload re-renders this panel with a replaced array, so its
+              half-typed row survives. */}
+          <EventsPanel events={events} onChanged={onEventsChanged} />
+        </div>
+      )}
+
+      {/* Dimmed by the SAME flag as the table above it: both are drawn from one payload,
+          and a chart left bright while the table beside it says "may be showing earlier
           data" would be the one thing the eye is on claiming to be current. */}
       <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
         <section className="card">
@@ -545,7 +558,7 @@ export default function CompPage() {
           {trajectory ? (
             <EChart option={trajectory} height={320} />
           ) : (
-            events !== null && <p className="empty-note">No comp events yet — add one below.</p>
+            events !== null && <p className="empty-note">No comp events yet — add one above.</p>
           )}
         </section>
       </div>
@@ -567,27 +580,18 @@ export default function CompPage() {
       {schedule === null ? (
         scheduleBusy && <p className="empty-note">Loading the vesting schedule…</p>
       ) : (
-        // One payload, one dim: the grants table below IS the schedule card's input, and a
-        // bright form over a card that says it may be stale would invite an edit against
-        // figures that are already gone. NOT keyed — a reload re-renders the grants panel
-        // with a replaced array, so its half-typed row survives.
+        // One payload, one dim: the grants table IS the schedule card's input, and a bright
+        // form beside a card that says it may be stale would invite an edit against figures
+        // that are already gone. NOT keyed — a reload re-renders the grants panel with a
+        // replaced array, so its half-typed row survives. Grants before the schedule (the
+        // 2026-08-21 order): the inputs, then what they compute.
         <div className={`loading-dim${scheduleBusy ? ' is-loading' : ''}`}>
-          <VestingSchedulePanel schedule={schedule} />
           <RsuGrantsPanel
             grants={schedule.grants}
             seedCandidates={schedule.seed_candidates}
             onChanged={reloadSchedule}
           />
-        </div>
-      )}
-
-      {events === null ? (
-        busy && <p className="empty-note">Loading comp events…</p>
-      ) : (
-        <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          {/* NOT keyed: a reload re-renders this panel with a replaced array, so its
-              half-typed row survives. */}
-          <EventsPanel events={events} onChanged={onEventsChanged} />
+          <VestingSchedulePanel schedule={schedule} />
         </div>
       )}
     </div>

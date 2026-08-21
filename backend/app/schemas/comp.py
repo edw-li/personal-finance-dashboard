@@ -130,6 +130,26 @@ class VestOut(BaseModel):
     is_past: bool
 
 
+class VestDayOut(BaseModel):
+    """One vest DATE across every grant — the table's summary row (2026-08-21 revision: the
+    per-tranche list grew four rows per quarter and the user asked for date grouping). All
+    tranches on one past day price at the SAME close (one bar per security per day), so a
+    single fmv/value pair is exact, not an average; the per-grant breakdown stays in `vests`.
+    """
+
+    vest_date: date
+    is_past: bool
+    tranche_count: int
+    shares: int  # every grant's tranche on this date, summed
+    # Past day: the day's shared close (null when the history has no bar behind it).
+    # Future day: the latest quote the estimate below was priced at (null without one).
+    fmv: Decimal | None
+    # Past day: fmv x shares, 2dp. Future day: latest quote x shares — an ESTIMATE, and
+    # `value_is_estimate` is how the UI knows to say so.
+    value: Decimal | None
+    value_is_estimate: bool
+
+
 class NextVestOut(BaseModel):
     vest_date: date
     shares: int
@@ -160,6 +180,9 @@ class VestingScheduleOut(BaseModel):
     quoted_at: datetime | None
     grants: list[RsuGrantOut]
     vests: list[VestOut]
+    # `vests` grouped by date, chronological — the table renders THESE rows and expands a
+    # date into its `vests` entries on demand (2026-08-21 revision).
+    vest_days: list[VestDayOut]
     tiles: VestingTilesOut
     seed_candidates: list[SeedCandidateOut]
     # Informational only: focal history and a grant disagreeing is a hint, never an error —

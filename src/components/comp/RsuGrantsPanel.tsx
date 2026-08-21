@@ -222,7 +222,7 @@ export default function RsuGrantsPanel({
         <InfoHint text="Grant parameters only — the schedule is computed. Dashboard-only: workbook imports never touch grants." />
       </h2>
       <p className="drill-hint">
-        Parameters, not tranches: the vest rows above are recomputed on every read from these
+        Parameters, not tranches: the schedule below is recomputed on every read from these
         seven fields. The cliff comes with the kind — a new hire holds 25% back for a year and
         then vests 6.25% a quarter, a refresh vests 6.25% a quarter from its first date — so
         there is no cliff box to get wrong. The focal year is only a tag that lines a grant up

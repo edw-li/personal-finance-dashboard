@@ -1,17 +1,105 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import EChart from '../EChart'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
-import type { VestingScheduleOut } from '../../types/api'
+import type { VestDayOut, VestingScheduleOut, VestOut } from '../../types/api'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { vestingChartOption } from './vestingChartOptions'
 
 /**
- * The computed half of the Comp page: three tiles, the vesting calendar, and every tranche of
- * every grant in one table. Pure display — it writes nothing and derives nothing, because the
- * whole payload is recomputed server-side on each read against the SERVER's day (the vested
- * split moves on its own between reads, so a figure re-derived here would disagree with the
- * one beside it).
+ * One vest date's rows: the summary row (the server's `vest_days` grouping, rendered
+ * verbatim) and, while expanded, its per-grant tranche rows filtered from the flat feed.
+ * The date cell is a real button (the accounts-table `.row-toggle` recipe) so the keyboard
+ * reaches the expansion; the whole row stays clickable for the mouse.
+ */
+function DayRows({
+  day,
+  isNext,
+  expanded,
+  onToggle,
+  tranches,
+  latestPrice,
+}: {
+  day: VestDayOut
+  isNext: boolean
+  expanded: boolean
+  onToggle: () => void
+  tranches: VestOut[]
+  latestPrice: string | null
+}) {
+  return (
+    <>
+      <tr
+        className={day.is_past ? 'vest-past' : undefined}
+        onClick={onToggle}
+        style={{ cursor: 'pointer', background: expanded ? 'var(--surface-2)' : undefined }}
+      >
+        <td>
+          <button
+            type="button"
+            className="row-toggle"
+            aria-expanded={expanded}
+            aria-label={`Toggle the ${formatDate(day.vest_date)} tranches`}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggle()
+            }}
+          >
+            {formatDate(day.vest_date)}
+          </button>
+          {isNext && <span className="badge">next</span>}
+        </td>
+        <td className="num">{day.tranche_count}</td>
+        <td className="num">{formatShares(day.shares)}</td>
+        {/* Both money cells are the server's own grouping: a past day's close (every tranche
+            on one day priced at the SAME bar, so this is exact), a future day's quote — with
+            the est. marker carrying the difference. Null renders as the em dash either way. */}
+        <td className="num">
+          {formatCurrency(day.fmv)}
+          {day.value_is_estimate && <span className="sub"> est.</span>}
+        </td>
+        <td className="num">
+          {formatCurrency(day.value)}
+          {day.value_is_estimate && <span className="sub"> est.</span>}
+        </td>
+      </tr>
+      {tranches.map((vest) => (
+        <tr
+          key={`${vest.grant_id}-${vest.vest_date}`}
+          className={vest.is_past ? 'vest-tranche vest-past' : 'vest-tranche'}
+        >
+          {/* The grant's name sits where the date would repeat — the expansion is the
+              breakdown OF the date above it, and repeating the date four times is exactly
+              the clutter the grouping retired. */}
+          <td className="vest-tranche-label">{vest.label}</td>
+          <td className="num" />
+          <td className="num">{formatShares(vest.shares)}</td>
+          <td className="num">
+            {vest.is_past ? (
+              formatCurrency(vest.fmv)
+            ) : latestPrice === null ? (
+              '—'
+            ) : (
+              <>
+                {formatCurrency(latestPrice)} <span className="sub">est.</span>
+              </>
+            )}
+          </td>
+          {/* A past tranche's value is the server's; a future one's estimate lives on the
+              day row above, where the server computed it — never multiplied out here. */}
+          <td className="num">{vest.is_past ? formatCurrency(vest.value) : '—'}</td>
+        </tr>
+      ))}
+    </>
+  )
+}
+
+/**
+ * The computed half of the Comp page: three tiles, the vesting calendar, and the vest table
+ * grouped one row per date (2026-08-21 revision), each date expandable into its per-grant
+ * tranches. Pure display — it writes nothing and derives nothing, because the whole payload
+ * is recomputed server-side on each read against the SERVER's day (the vested split moves on
+ * its own between reads, so a figure re-derived here would disagree with the one beside it).
  */
 export default function VestingSchedulePanel({ schedule }: { schedule: VestingScheduleOut }) {
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every render
@@ -25,9 +113,17 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
   // Named once, so all three tiles' hints say the same thing about the same quote.
   const quoteSource = ticker === null ? 'the latest employer quote' : `the latest ${ticker} quote`
   const nextVest = tiles.next_vest
-  // The first tranche still ahead — the row the "next" badge belongs on. The feed is
-  // chronological, so this is the same vest the tile names.
-  const nextIndex = schedule.vests.findIndex((vest) => !vest.is_past)
+  // The first DATE still ahead — the row the "next" badge belongs on. The feed is
+  // chronological, so this is the day the tile's tranche lands on.
+  const nextDayIndex = schedule.vest_days.findIndex((day) => !day.is_past)
+
+  // The expanded date (2026-08-21 revision, the user's own design): one date's tranches open
+  // at a time — clicking another date swaps the expansion rather than stacking a second one,
+  // and re-clicking the open date folds it. Stored as the DATE, never an index, so a reload
+  // that reshapes the day list cannot mis-target (SpendingPage's detailMonth posture).
+  const [expandedDate, setExpandedDate] = useState<string | null>(null)
+  const toggleDay = (date: string) =>
+    setExpandedDate((current) => (current === date ? null : date))
 
   // Rendered in BOTH branches below: a grant too broken to schedule is dropped from `grants`
   // with a warning naming it, so the zero-grant empty state is exactly where a warning is most
@@ -76,7 +172,7 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
       {schedule.grants.length === 0 ? (
         <>
           {warningNotes}
-          <p className="empty-note">No grants yet — add one below to see the schedule.</p>
+          <p className="empty-note">No grants yet — add one above to see the schedule.</p>
         </>
       ) : (
         <>
@@ -115,54 +211,36 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
           {calendar && <EChart option={calendar} height={260} />}
           {warningNotes}
           <p className="drill-hint">
-            Every tranche of every grant, past and future together. A past row carries the
-            close it actually vested at; a future one has no close yet, so its value is left
-            blank — the estimate at today&apos;s quote is in the tile and the chart above.
+            One row per vest date, every grant summed (past days at their own close, future
+            days at today&apos;s quote, marked est.). Click a date to expand its per-grant
+            tranches — opening another date folds the first.
           </p>
-          <div className="comp-scroll">
+          <div className="vest-scroll">
             <table className="data-table">
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Grant</th>
+                  <th className="num">Tranches</th>
                   <th className="num">Shares</th>
                   <th className="num">Price</th>
                   <th className="num">Value</th>
                 </tr>
               </thead>
               <tbody>
-                {schedule.vests.map((vest, index) => (
-                  // A grant vests at most once on a date, so the pair is the row's identity.
-                  <tr
-                    key={`${vest.grant_id}-${vest.vest_date}`}
-                    className={vest.is_past ? 'vest-past' : undefined}
-                  >
-                    <td>
-                      {formatDate(vest.vest_date)}
-                      {index === nextIndex && <span className="badge">next</span>}
-                    </td>
-                    <td>{vest.label}</td>
-                    <td className="num">{formatShares(vest.shares)}</td>
-                    {/* A past tranche was priced at the close on or before its own day; a
-                        future one has no close at all, so the live quote is shown as the
-                        estimate it is — and as nothing when there is no quote. */}
-                    <td className="num">
-                      {vest.is_past ? (
-                        formatCurrency(vest.fmv)
-                      ) : latestPrice === null ? (
-                        '—'
-                      ) : (
-                        <>
-                          {formatCurrency(latestPrice)} <span className="sub">est.</span>
-                        </>
-                      )}
-                    </td>
-                    {/* Server-verbatim or nothing. A future tranche's value would have to be
-                        multiplied out here, and this column sits beside figures the server
-                        computed — the estimate lives in the tile and the chart above, where it
-                        is labelled as one. */}
-                    <td className="num">{vest.is_past ? formatCurrency(vest.value) : '—'}</td>
-                  </tr>
+                {schedule.vest_days.map((day, index) => (
+                  <DayRows
+                    key={day.vest_date}
+                    day={day}
+                    isNext={index === nextDayIndex}
+                    expanded={expandedDate === day.vest_date}
+                    onToggle={() => toggleDay(day.vest_date)}
+                    tranches={
+                      expandedDate === day.vest_date
+                        ? schedule.vests.filter((vest) => vest.vest_date === day.vest_date)
+                        : []
+                    }
+                    latestPrice={latestPrice}
+                  />
                 ))}
               </tbody>
             </table>

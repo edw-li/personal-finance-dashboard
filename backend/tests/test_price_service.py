@@ -5,16 +5,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models import (
+    AppSetting,
     DividendPayment,
     LatestPrice,
     PortfolioValueHistory,
     PositionTransaction,
     PriceHistory,
+    RsuGrant,
     Security,
 )
 from app.services.dividend_ingest import DividendIngestResult
 from app.services.price_provider import DailyBar
 from app.services.price_service import (
+    backfill_employer_history,
     read_last_refresh,
     refresh_prices,
     run_refresh,
@@ -787,3 +790,134 @@ async def test_backdated_manual_price_does_not_move_import_seeded_latest(db):
     assert latest.price == D("2500.0000")
     assert latest.quoted_at.date() == date(2026, 8, 13)
     assert len((await db.execute(select(PriceHistory))).scalars().all()) == 1
+
+
+# --- employer history backfill (2026-08-21: deep closes for the vest calendar) ---
+
+
+class WindowedProvider(FakeProvider):
+    """Bars filtered by the requested start — the real provider's behavior, which the plain
+    FakeProvider (returns everything regardless of start) cannot exercise here: the deep
+    backfill only fires when the standing 370-day window genuinely misses the old bars."""
+
+    def fetch_daily(self, ticker, start):
+        bars = super().fetch_daily(ticker, start)
+        return [b for b in bars if b.bar_date >= start]
+
+
+def rsu_grant(first_vest, *, shares=700, label=None):
+    return RsuGrant(
+        kind="new_hire",
+        label=label or f"Grant {first_vest}",
+        focal_year=None,
+        shares=shares,
+        grant_price=D("45.1200"),
+        first_vest_date=first_vest,
+        cliff_pct=D("0.2500"),
+    )
+
+
+async def seed_employer(db, *, manual=False):
+    db.add(AppSetting(key="espp_ticker", value={"value": "NVDA"}))
+    return await seed_security(db, "NVDA", manual=manual)
+
+
+async def test_employer_backfill_fetches_bars_back_to_the_earliest_grant(db):
+    sec = await seed_employer(db)
+    db.add(PriceHistory(security_id=sec.id, price_date=date(2026, 8, 10), close=D("180")))
+    db.add(rsu_grant(date(2024, 9, 18)))
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(date(2024, 9, 4), "115"), bar(date(2025, 1, 2), "120")]})
+
+    written = await backfill_employer_history(db, provider)
+    await db.commit()
+
+    assert written == 2
+    # The deep window starts a buffer BEFORE the earliest vest, so the vest calendar's
+    # on-or-before lookup always has a bar to land on even across a holiday.
+    assert provider.calls == [("NVDA", date(2024, 9, 18) - timedelta(days=14))]
+    days = (
+        (await db.execute(select(PriceHistory.price_date).order_by(PriceHistory.price_date)))
+        .scalars()
+        .all()
+    )
+    assert days == [date(2024, 9, 4), date(2025, 1, 2), date(2026, 8, 10)]
+
+
+async def test_employer_backfill_self_extinguishes_once_history_reaches_the_grant(db):
+    await seed_employer(db)
+    db.add(rsu_grant(date(2024, 9, 18)))
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(date(2024, 9, 4), "115")]})
+
+    assert await backfill_employer_history(db, provider) == 1
+    await db.commit()
+    # The oldest stored bar now sits on the window's start: the second call decides on the
+    # SELECTs alone and never reaches the provider.
+    assert await backfill_employer_history(db, provider) == 0
+    assert len(provider.calls) == 1
+
+
+async def test_employer_backfill_skips_quietly_when_there_is_nothing_to_do(db):
+    provider = FakeProvider({"NVDA": [bar(date(2024, 9, 4), "115")]})
+    # No espp_ticker setting at all.
+    assert await backfill_employer_history(db, provider) == 0
+    # Ticker + security, but no grants whose vests would need old closes.
+    await seed_employer(db)
+    assert await backfill_employer_history(db, provider) == 0
+    assert provider.calls == []
+
+
+async def test_employer_backfill_respects_manual_priced_employers(db):
+    # A manual-priced employer's bars are hand entries; a provider fetch would be a second
+    # opinion about them (set_manual_price's territory).
+    await seed_employer(db, manual=True)
+    db.add(rsu_grant(date(2024, 9, 18)))
+    await db.commit()
+    provider = FakeProvider({"NVDA": [bar(date(2024, 9, 4), "115")]})
+
+    assert await backfill_employer_history(db, provider) == 0
+    assert provider.calls == []
+
+
+async def test_employer_backfill_failure_degrades_alone_in_run_refresh(db, monkeypatch):
+    # Same source-module patch as the value-history failure tests: run_refresh looks the
+    # name up on its own module at call time.
+    sec = await seed_security(db, "NVDA")
+    db.add(buy(sec.id))
+    await db.commit()
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("deep fetch exploded")
+
+    monkeypatch.setattr("app.services.price_service.backfill_employer_history", boom)
+    provider = FakeProvider({"NVDA": [bar(MONDAY, "120")]})
+
+    result, appended, _dividends = await run_refresh(
+        db, provider, trigger="scheduled", today=MONDAY
+    )
+
+    assert result.updated == ["NVDA"]
+    assert appended is True  # the Monday value snapshot stands
+
+
+async def test_run_refresh_backfills_employer_history_past_the_window(db):
+    await seed_employer(db)
+    db.add(rsu_grant(date(2024, 9, 18)))
+    await db.commit()
+    provider = WindowedProvider({"NVDA": [bar(date(2024, 9, 4), "115"), bar(MONDAY, "120")]})
+
+    await run_refresh(db, provider, trigger="manual", today=MONDAY)
+
+    # Two fetches: the standing 370-day window (which cannot see 2024), then the deep one
+    # anchored a buffer before the earliest vest.
+    assert provider.calls == [
+        ("NVDA", MONDAY - timedelta(days=370)),
+        ("NVDA", date(2024, 9, 4)),
+    ]
+    old = (
+        (await db.execute(select(PriceHistory).where(PriceHistory.price_date == date(2024, 9, 4))))
+        .scalars()
+        .all()
+    )
+    assert len(old) == 1 and old[0].close == D("115.0000")

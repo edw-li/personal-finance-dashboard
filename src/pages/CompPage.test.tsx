@@ -1,7 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { CompEventOut, RsuGrantOut, VestOut, VestingScheduleOut } from '../types/api'
+import type {
+  CompEventOut,
+  RsuGrantOut,
+  VestDayOut,
+  VestingScheduleOut,
+  VestOut,
+} from '../types/api'
 import CompPage from './CompPage'
 
 vi.mock('../api/comp', () => ({
@@ -125,6 +131,7 @@ const EMPTY_SCHEDULE: VestingScheduleOut = {
   quoted_at: null,
   grants: [],
   vests: [],
+  vest_days: [],
   tiles: {
     next_vest: null,
     unvested_shares: 0,
@@ -183,12 +190,26 @@ const VESTS: VestOut[] = [
     fmv: null, value: null, is_past: false },
 ]
 
+// VESTS grouped by date, the way the server does it: the shared 2026-11-18 day sums both
+// grants' tranches and carries the ESTIMATE at the latest quote (105 x 191.44 = 20101.20).
+const VEST_DAYS: VestDayOut[] = [
+  { vest_date: '2024-11-20', is_past: true, tranche_count: 1, shares: 300,
+    fmv: '112.0750', value: '33622.50', value_is_estimate: false },
+  { vest_date: '2025-02-19', is_past: true, tranche_count: 1, shares: 75,
+    fmv: null, value: null, value_is_estimate: false },
+  { vest_date: '2026-02-18', is_past: true, tranche_count: 1, shares: 75,
+    fmv: '176.0000', value: '13200.00', value_is_estimate: false },
+  { vest_date: '2026-11-18', is_past: false, tranche_count: 2, shares: 105,
+    fmv: '191.4400', value: '20101.20', value_is_estimate: true },
+]
+
 const SCHEDULE: VestingScheduleOut = {
   ticker: 'NVDA',
   latest_price: '191.4400',
   quoted_at: '2026-08-20',
   grants: [GRANT_NEW_HIRE, GRANT_REFRESH],
   vests: VESTS,
+  vest_days: VEST_DAYS,
   tiles: {
     // 105 shares on the shared day, at 191.44.
     next_vest: { vest_date: '2026-11-18', shares: 105, est_value: '20101.20' },
@@ -318,7 +339,7 @@ describe('CompPage — events table', () => {
     vi.mocked(fetchEvents).mockResolvedValue([])
     render(<CompPage />)
 
-    expect(await screen.findByText('No comp events yet — add one below.')).toBeTruthy()
+    expect(await screen.findByText('No comp events yet — add one above.')).toBeTruthy()
     expect(screen.queryByTestId('echart')).toBeNull()
   })
 })
@@ -683,21 +704,63 @@ describe('CompPage — vesting schedule', () => {
     expect(dates.split(/,(?=[A-Z])/)).toHaveLength(4)
   })
 
-  it('marks the first future row and keeps the vest table server-verbatim', async () => {
+  it('groups the table one row per date, badges the next day, and scrolls', async () => {
     render(<CompPage />)
     await screen.findByText('Vesting schedule')
 
-    // One badge, on the first row that has not happened yet.
+    // Four day rows for five tranches (the 2026-11-18 day merges two grants), collapsed by
+    // default: no per-grant rows until a date is opened.
+    expect(document.querySelectorAll('tr.vest-tranche')).toHaveLength(0)
+    // One badge, on the first day that has not happened yet.
     expect(screen.getAllByText('next')).toHaveLength(1)
-    // Three past rows recede; both future rows carry the live quote marked as an estimate.
+    // Three past day rows recede.
     expect(document.querySelectorAll('tr.vest-past')).toHaveLength(3)
+    // The future day carries the SERVER's estimate at the quote, marked as one in both money
+    // cells — 105 x 191.44, computed server-side, never multiplied out here.
     expect(screen.getAllByText('est.')).toHaveLength(2)
-    // The two future price cells (the quote line above them is one text node, so it is not
-    // one of these) — the live quote never reaches a PAST row, which was priced at its own.
-    expect(screen.getAllByText('$191.44')).toHaveLength(2)
-    // Past values are the server's own; a future one is left blank rather than multiplied
-    // out beside them.
+    expect(screen.getByText('$20,101.20')).toBeTruthy()
+    // A past day's value is its own close x its summed shares, verbatim.
     expect(screen.getByText('$33,622.50')).toBeTruthy()
+    // The scroller that keeps a decade of quarters from swallowing the page (2026-08-21).
+    expect(document.querySelector('.vest-scroll')).toBeTruthy()
+  })
+
+  it('expands one date at a time and folds it on a second click', async () => {
+    render(<CompPage />)
+    await screen.findByText('Vesting schedule')
+    const trancheLabels = () =>
+      Array.from(document.querySelectorAll('td.vest-tranche-label')).map((el) => el.textContent)
+
+    // Opening the shared day reveals its per-grant tranches, in the feed's order.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle the Nov 18, 2026 tranches' }))
+    expect(trancheLabels()).toEqual(['FY24 new hire', 'FY26 refresh'])
+    // A future tranche row shows the quote as an estimate and leaves its value to the day
+    // row above (the server computed that one; this one would be client math).
+    expect(document.querySelectorAll('tr.vest-tranche')).toHaveLength(2)
+
+    // Opening another date FOLDS the first — one expansion at a time, the user's own design.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle the Nov 20, 2024 tranches' }))
+    expect(trancheLabels()).toEqual(['FY24 new hire'])
+
+    // Re-clicking the open date folds it back to the summary rows alone.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle the Nov 20, 2024 tranches' }))
+    expect(trancheLabels()).toEqual([])
+  })
+
+  it('orders the page focal history → trajectory → grants → schedule', async () => {
+    // The 2026-08-21 revision's page order: the entered history and its chart first, then
+    // the computed vesting surfaces — grants (the input) before the schedule they produce.
+    render(<CompPage />)
+    await screen.findByText('Vesting schedule')
+    const eyebrows = Array.from(document.querySelectorAll('h2.eyebrow')).map(
+      (el) => el.textContent,
+    )
+    expect(eyebrows).toEqual([
+      'Focal history',
+      'Base + unvested equity value',
+      'RSU grants',
+      'Vesting schedule',
+    ])
   })
 
   it('renders the drift warnings and the payload’s own warnings', async () => {
@@ -724,7 +787,7 @@ describe('CompPage — vesting schedule', () => {
     render(<CompPage />)
 
     expect(
-      await screen.findByText('No grants yet — add one below to see the schedule.'),
+      await screen.findByText('No grants yet — add one above to see the schedule.'),
     ).toBeTruthy()
     expect(
       screen.getByText('FY24 new hire: stored grant cannot be scheduled — cliff_pct out of range'),

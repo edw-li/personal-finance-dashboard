@@ -432,6 +432,72 @@ async def test_schedule_resolves_fmv_from_the_newest_bar_on_or_before_each_past_
     assert (body["grants"][0]["vested_shares"], body["grants"][0]["unvested_shares"]) == (306, 394)
 
 
+async def test_schedule_groups_vests_into_one_row_per_date(
+    auth_client, priced_employer, frozen_schedule_today
+):
+    """2026-08-21 revision: the table renders `vest_days` — one row per DATE across grants —
+    and expands a date into its `vests` tranches. The grouping is exact: every past tranche
+    on a day priced at the same close, so the day's value is close x summed shares."""
+    await create_grant(auth_client)  # Offer letter: 700 @ 25%, first vest 2024-09-18
+    # A refresh sharing the quarterly grid from 2025-06-18: 320 x 6.25% = an even 20/quarter.
+    await create_grant(
+        auth_client,
+        label="2025 focal",
+        kind="refresh",
+        shares=320,
+        cliff_pct="0.0625",
+        first_vest_date="2025-06-18",
+    )
+    resp = await auth_client.get(SCHEDULE)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    days = body["vest_days"]
+    # 13 offer dates + 16 refresh dates - 10 shared (2025-06 .. 2027-09 inclusive grid).
+    assert len(days) == 19
+    assert [d["vest_date"] for d in days] == sorted(d["vest_date"] for d in days)
+
+    # A single-tranche past day carries its own close verbatim.
+    assert days[0] == {
+        "vest_date": "2024-09-18",
+        "is_past": True,
+        "tranche_count": 1,
+        "shares": 175,
+        "fmv": "120.0000",
+        "value": "21000.00",
+        "value_is_estimate": False,
+    }
+    # The shared 2025-06-18 day: 44 (offer) + 20 (refresh) at the one 150.25 close —
+    # 150.25 x 64 = 9616.00, exactly the sum of the tranche values (6611.00 + 3005.00).
+    shared = next(d for d in days if d["vest_date"] == "2025-06-18")
+    assert shared == {
+        "vest_date": "2025-06-18",
+        "is_past": True,
+        "tranche_count": 2,
+        "shares": 64,
+        "fmv": "150.2500",
+        "value": "9616.00",
+        "value_is_estimate": False,
+    }
+    # A future day is an ESTIMATE at the latest quote and says so: 64 x 180 = 11520.00.
+    future = next(d for d in days if d["vest_date"] == "2025-09-17")
+    assert future == {
+        "vest_date": "2025-09-17",
+        "is_past": False,
+        "tranche_count": 2,
+        "shares": 64,
+        "fmv": "180.0000",
+        "value": "11520.00",
+        "value_is_estimate": True,
+    }
+    # The per-grant breakdown is still the flat list the expansion reads from.
+    shared_tranches = [v for v in body["vests"] if v["vest_date"] == "2025-06-18"]
+    assert [(v["label"], v["shares"], v["value"]) for v in shared_tranches] == [
+        ("Offer letter", 44, "6611.00"),
+        ("2025 focal", 20, "3005.00"),
+    ]
+
+
 async def test_schedule_warns_once_per_date_for_past_vests_with_no_stored_bar(
     auth_client, priced_employer, frozen_schedule_today
 ):
@@ -464,6 +530,18 @@ async def test_schedule_warns_once_per_date_for_past_vests_with_no_stored_bar(
     assert [(v["fmv"], v["value"]) for v in body["vests"][:4]] == [(None, None)] * 4
     # The 2024-09-18 vests DO have a bar behind them (120.0000 x 10 and x 5).
     assert [v["value"] for v in body["vests"][4:6]] == ["1200.00", "600.00"]
+    # The grouped row for an unpriced past day is honest the same way its tranches are:
+    # shares are real, value is unknown — never a confident zero, never an estimate.
+    unpriced_day = body["vest_days"][0]
+    assert unpriced_day == {
+        "vest_date": "2024-03-20",
+        "is_past": True,
+        "tranche_count": 2,
+        "shares": 15,  # 10 + 5
+        "fmv": None,
+        "value": None,
+        "value_is_estimate": False,
+    }
 
 
 async def test_schedule_tiles_price_the_future_at_the_latest_quote(
