@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { JURISDICTIONS, putTaxBrackets } from '../../api/taxes'
 import type { Jurisdiction } from '../../api/taxes'
+import InfoHint from '../InfoHint'
 import type { TaxBracketOut, TaxBracketsOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
@@ -220,7 +221,10 @@ export default function BracketsEditor({
 
   return (
     <section className="card">
-      <h2 className="eyebrow">Bracket tables — {brackets.year}</h2>
+      <h2 className="eyebrow">
+        Bracket tables — {brackets.year}
+        <InfoHint text="The rate tables the engine walks, one per jurisdiction; thresholds are inclusive floors and must ascend from 0." />
+      </h2>
       <p className="drill-hint">
         Rates are entered as percents (37 = 37%) and stored as fractions with 4 decimal
         places, so a percent keeps 2 (37.005 saves as 37.01%); thresholds keep 2 as well.

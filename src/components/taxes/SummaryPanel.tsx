@@ -3,6 +3,7 @@ import { ApiError } from '../../api/client'
 import { fetchAllTaxSummaries } from '../../api/taxes'
 import EChart from '../EChart'
 import type { EChartEventParams } from '../EChart'
+import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type { TaxSummaryOut } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
@@ -92,17 +93,33 @@ export default function SummaryPanel({
   return (
     <>
       <section className="card">
-        <h2 className="eyebrow">Totals — {summary.year}</h2>
+        <h2 className="eyebrow">
+          Totals — {summary.year}
+          <InfoHint text="The engine&apos;s answer for this year, computed from the stored inputs and bracket tables below." />
+        </h2>
         <div className="kpi-row">
           {/* Every figure is the engine's, rendered as it arrived (global rule 9). */}
-          <StatTile label="Gross income" value={formatCurrency(totals.gross_income)} />
-          <StatTile label="Total tax" value={formatCurrency(totals.total_tax)} />
+          <StatTile
+            label="Gross income"
+            value={formatCurrency(totals.gross_income)}
+            hint="Every income component summed before any tax — the waterfall&apos;s opening bar."
+          />
+          <StatTile
+            label="Total tax"
+            value={formatCurrency(totals.total_tax)}
+            hint="All six jurisdictions summed: federal, state, Medicare, Social Security, SDI, and capital gains."
+          />
           {/* Same size as its three siblings: the hero treatment belongs to pages with ONE
               headline figure, and here it just made take-home shout over the row. */}
-          <StatTile label="Take-home" value={formatCurrency(totals.take_home)} />
+          <StatTile
+            label="Take-home"
+            value={formatCurrency(totals.take_home)}
+            hint="Gross income minus total tax."
+          />
           <StatTile
             label="Effective rate"
             value={formatPct(totals.effective_rate, { signed: false })}
+            hint="Total tax ÷ gross income."
           />
         </div>
 
@@ -120,7 +137,10 @@ export default function SummaryPanel({
         )}
 
         <div className="tax-chart-block">
-          <h3 className="eyebrow">Where {summary.year}&apos;s gross income went</h3>
+          <h3 className="eyebrow">
+            Where {summary.year}&apos;s gross income went
+            <InfoHint text="Gross income walked down to take-home — each floating bar is one jurisdiction&apos;s bite." />
+          </h3>
           {waterfall ? (
             <EChart option={waterfall} height={320} />
           ) : (
@@ -138,6 +158,7 @@ export default function SummaryPanel({
             {detailSummary
               ? `Tax breakdown — ${detailSummary.year}`
               : 'Tax composition and effective rate by year'}
+            <InfoHint text="Tax composition per year stacked by jurisdiction, with the overall effective rate on the right axis. Click a year for its breakdown." />
           </h2>
           {detailSummary && (
             <button className="button" onClick={() => setDetailYear(null)}>

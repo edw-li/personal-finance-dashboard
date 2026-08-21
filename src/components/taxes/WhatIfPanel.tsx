@@ -3,6 +3,7 @@ import { ApiError } from '../../api/client'
 import { fetchLots } from '../../api/espp'
 import { fetchHoldings } from '../../api/portfolio'
 import { runWhatIf } from '../../api/whatif'
+import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type {
   EsppLotOut,
@@ -319,7 +320,10 @@ export default function WhatIfPanel({
   return (
     <section className="card">
       <div className="tax-chart-header">
-        <h2 className="eyebrow">What if — {year}</h2>
+        <h2 className="eyebrow">
+          What if — {year}
+          <InfoHint text="Model prospective sales or input changes against this year&apos;s stored return — nothing is saved." />
+        </h2>
         <button type="button" className="button" aria-expanded={open} onClick={toggle}>
           {open ? 'Close what-if' : 'Open what-if'}
         </button>
@@ -519,6 +523,7 @@ export default function WhatIfPanel({
                       }
                       tone={inverted(taxTone)}
                       direction={directionOf(taxTone)}
+                      hint="Scenario total tax minus baseline — positive means the scenario owes more."
                     />
                     <StatTile
                       label="Δ take-home"
@@ -527,6 +532,7 @@ export default function WhatIfPanel({
                         result.scenario.totals.take_home,
                       )}`}
                       tone={takeHomeTone}
+                      hint="Scenario take-home minus baseline."
                     />
                     {/* A rate is a level, not a movement: both sides, no arrow. */}
                     <StatTile
@@ -534,6 +540,7 @@ export default function WhatIfPanel({
                       value={`${formatPct(result.baseline.totals.effective_rate, {
                         signed: false,
                       })} → ${formatPct(result.scenario.totals.effective_rate, { signed: false })}`}
+                      hint="Overall effective rate, baseline → scenario."
                     />
                   </div>
 

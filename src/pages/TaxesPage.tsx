@@ -10,6 +10,7 @@ import {
   fetchTaxYears,
   putTaxInputs,
 } from '../api/taxes'
+import InfoHint from '../components/InfoHint'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import InputsForm from '../components/taxes/InputsForm'
 import SummaryPanel from '../components/taxes/SummaryPanel'
@@ -381,7 +382,10 @@ export default function TaxesPage() {
       )}
 
       <section className="card">
-        <h2 className="eyebrow">Tax year</h2>
+        <h2 className="eyebrow">
+          Tax year
+          <InfoHint text="One column of inputs and bracket tables per year. Creating a year copies the newest year&apos;s brackets." />
+        </h2>
         {years.length > 0 && (
           <div className="chip-row">
             {years.map((y) => (

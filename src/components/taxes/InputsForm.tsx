@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { putTaxInputs } from '../../api/taxes'
+import InfoHint from '../InfoHint'
 import type { TaxInputsOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 import './taxes.css'
@@ -96,7 +97,10 @@ export default function InputsForm({
 
   return (
     <section className="card">
-      <h2 className="eyebrow">Tax inputs — {inputs.year}</h2>
+      <h2 className="eyebrow">
+        Tax inputs — {inputs.year}
+        <InfoHint text="The year&apos;s income and deduction line items — the old sheet&apos;s white cells. Grey suggestions derive from other lines and never auto-apply." />
+      </h2>
       <p className="drill-hint">
         Stored values feed the engine; the chips are the sheet&apos;s formulas, offered and
         never applied for you. Clearing a field unsets that input.
