@@ -61,7 +61,7 @@ describe('parseAmount', () => {
     expect(parseAmount('$1,234.56')).toEqual({ canonical: '1234.56' })
     expect(parseAmount('-$500')).toEqual({ canonical: '-500' })
     expect(parseAmount('$ 1,234')).toEqual({ canonical: '1234' })
-    // Comma POSITIONS are not validated (spec §4.1 tolerance).
+    // Comma POSITIONS are not validated (spec §3.1 tolerance).
     expect(parseAmount('1,2,3')).toEqual({ canonical: '123' })
     // Interior spaces are grouping too ("1 234,56" locales paste them).
     expect(parseAmount('1 234.56')).toEqual({ canonical: '1234.56' })
