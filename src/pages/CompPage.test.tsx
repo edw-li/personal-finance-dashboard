@@ -891,7 +891,9 @@ describe('CompPage — RSU grant writes', () => {
     expect(field('First vest').value).toBe('2024-11-20')
     expect(field('Vest rounding').value).toBe('10')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save grant' }))
+    // The query must retry: this button's own text (Add → Save) flips on the same
+    // edit-mode re-render, which races parallel-load scheduling under the full suite.
+    fireEvent.click(await screen.findByRole('button', { name: 'Save grant' }))
     await waitFor(() => expect(vi.mocked(updateRsuGrant)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(updateRsuGrant).mock.calls[0][0]).toBe(11)
     // The column's own 4dp string, NOT the '0.25' this client would derive: an old grant may
@@ -913,7 +915,7 @@ describe('CompPage — RSU grant writes', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the FY24 new hire grant' }))
     fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'refresh' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save grant' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save grant' }))
     await waitFor(() => expect(vi.mocked(updateRsuGrant)).toHaveBeenCalledTimes(2))
     // A new-hire cliff on a refresh grant is the wrong schedule outright.
     expect(vi.mocked(updateRsuGrant).mock.calls[1][1].cliff_pct).toBe('0.0625')
