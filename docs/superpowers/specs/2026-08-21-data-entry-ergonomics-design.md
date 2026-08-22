@@ -142,6 +142,13 @@ paste stays native (and now parses tolerantly anyway).
   unmatched: …" — and a brief highlight flash on filled cells.
 - **Undo:** the existing draft machinery already covers a bad paste — the restore banner's
   "Discard" returns to the server seed; no new undo system.
+- *Implementation amendments (2026-08-22, Phase 2 reviews):* (a) EMPTY cells are skipped and
+  counted ("N blanks skipped"), never blanked into a filled field — a refinement of the
+  filled-verbatim rule for the one value class where verbatim would destroy data; (b) a
+  multi-cell paste targeting a NON-cell input inside a scope (the wizard's Notes box) stays
+  native — the interception applies to entry cells and container backgrounds only; (c) the
+  bracket tables are excluded pending a 2D positional mode: their rows are position-keyed
+  rate/threshold pairs with no labels, which the column/keyed model cannot serve.
 
 ### 4.2 The wizard becomes a table (`MonthlyUpdatePage`)
 
