@@ -4,6 +4,7 @@ import { JURISDICTIONS, putTaxBrackets } from '../../api/taxes'
 import type { Jurisdiction } from '../../api/taxes'
 import InfoHint from '../InfoHint'
 import type { TaxBracketOut, TaxBracketsOut } from '../../types/api'
+import { quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import './taxes.css'
@@ -29,45 +30,6 @@ function label(name: string): string {
   return LABELS[name] ?? name
 }
 
-/**
- * Round a decimal string to `places` decimals (>= 1) exactly the way the server will —
- * Decimal.quantize(..., ROUND_HALF_UP), i.e. ties away from zero.
- *
- * The API quantizes BEFORE it checks the bracket rules (app/api/taxes.py: quantize_price
- * at 4dp for the rate, quantize_money at 2dp for the threshold, then first-is-0 and
- * strictly-ascending). Validating the raw text would disagree with it in both directions:
- * "100.001" and "100.002" both land on 100.00 and are NOT ascending, while a first
- * threshold of "0.001" lands on 0.00 and IS legal. Same digits, same verdict.
- *
- * Anything that is not a plain decimal is handed back untouched — `isPlainDecimal` refuses
- * it first, so no rounding has to guess at it.
- */
-function quantize(raw: string, places: number): string {
-  const text = raw.trim()
-  const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(text)
-  if (!match) return text
-  const [, sign, whole, frac = ''] = match
-  if (`${whole}${frac}` === '') return text
-  const kept = `${whole === '' ? '0' : whole}${frac.slice(0, places).padEnd(places, '0')}`
-  // HALF_UP reads exactly one dropped digit: 5..9 rounds the magnitude away from zero.
-  const digits = frac.charAt(places) >= '5' ? addOne(kept) : kept
-  const point = digits.length - places
-  return `${sign}${digits.slice(0, point).replace(/^0+(?=\d)/, '')}.${digits.slice(point)}`
-}
-
-/** +1 on a digit string, carrying left and growing by one digit on an all-nines carry. */
-function addOne(digits: string): string {
-  const out = [...digits]
-  let i = out.length - 1
-  while (i >= 0 && out[i] === '9') {
-    out[i] = '0'
-    i -= 1
-  }
-  if (i < 0) return `1${out.join('')}`
-  out[i] = String(Number(out[i]) + 1)
-  return out.join('')
-}
-
 function rowsOf(rows: TaxBracketOut[]): RowState[] {
   return rows.map((row) => ({ rate: shiftPoint(row.rate, 2), threshold: row.threshold }))
 }
@@ -83,9 +45,14 @@ function tablesOf(brackets: TaxBracketsOut): Record<string, RowState[]> {
  * afterwards, rate within range (stated in percent, because that is what is on screen).
  * The messages that have a server twin are worded identically — one vocabulary.
  *
- * Every comparison is made on the QUANTIZED value, because that is the number the server
- * compares (see quantize): a percent survives 2 decimals (the rate column keeps 4 as a
- * fraction) and a threshold 2.
+ * Every comparison is made on the QUANTIZED value (utils/amount's quantize, the server's
+ * ROUND_HALF_UP), because that is the number the server compares: a percent survives 2
+ * decimals (the rate column keeps 4 as a fraction) and a threshold 2. The API quantizes
+ * BEFORE it checks the bracket rules (app/api/taxes.py: quantize_price at 4dp for the
+ * rate, quantize_money at 2dp for the threshold, then first-is-0 and strictly-ascending),
+ * so validating the raw text would disagree with it in both directions: "100.001" and
+ * "100.002" both land on 100.00 and are NOT ascending, while a first threshold of "0.001"
+ * lands on 0.00 and IS legal. Same digits, same verdict.
  */
 function validate(name: string, rows: RowState[]): string | null {
   if (rows.length > MAX_BRACKETS) {
