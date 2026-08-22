@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMonthSlices, monthMovers } from './spending'
+import { buildMonthSlices, monthMovers, typicalSpend } from './spending'
 
 const categories = [
   { id: 1, name: 'Rent', slug: 'rent', sort_order: 1, is_active: true },
@@ -92,5 +92,33 @@ describe('monthMovers', () => {
     expect(monthMovers(m, 0)).toEqual([]) // nothing before it to move against
     expect(monthMovers(m, 1)).toEqual([]) // the month itself was never entered
     expect(monthMovers(m, -1)).toEqual([])
+  })
+})
+
+describe('typicalSpend', () => {
+  const matrix = {
+    months: ['2026-04-01', '2026-05-01', '2026-06-01', '2026-07-01'],
+    categories: [],
+    series: [
+      { category_id: 7, values: ['10.00', '30.00', null, '20.00'] },
+      { category_id: 8, values: [null, null, null, null] },
+    ],
+    totals: [],
+    net_pay: [],
+    savings_rate: [],
+    four_pct_rule: [],
+  }
+  it('takes the median of the up-to-3 latest non-null values strictly before the month', () => {
+    // Before 2026-08: candidates are 20.00 (Jul), 30.00 (May), 10.00 (Apr) → median 20.
+    expect(typicalSpend(matrix, '2026-08-01', 7)).toBe(20)
+    // Before 2026-06: candidates 30, 10 → even count, mean of the middle pair = 20.
+    expect(typicalSpend(matrix, '2026-06-01', 7)).toBe(20)
+    // Before 2026-05: only 10 → 10.
+    expect(typicalSpend(matrix, '2026-05-01', 7)).toBe(10)
+  })
+  it('returns null with no history', () => {
+    expect(typicalSpend(matrix, '2026-08-01', 8)).toBeNull()
+    expect(typicalSpend(matrix, '2026-04-01', 7)).toBeNull() // nothing strictly before
+    expect(typicalSpend(matrix, '2026-08-01', 99)).toBeNull() // unknown category
   })
 })

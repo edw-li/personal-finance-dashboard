@@ -88,3 +88,28 @@ export function monthMovers(
     .sort((a, b) => magnitude(b) - magnitude(a))
     .slice(0, top)
 }
+
+/**
+ * The spending step's "Typical" reference: the median of the up-to-3 latest non-null
+ * matrix values STRICTLY before `month`. Spending is a flow, so seeds stay 0.00 — this
+ * column is the context prefill would fake (spec §4.2). Number() here is display-side
+ * math on server strings, same license as the chart builders.
+ */
+export function typicalSpend(
+  matrix: SpendingMatrix,
+  month: string,
+  categoryId: number,
+): number | null {
+  const series = matrix.series.find((s) => s.category_id === categoryId)
+  if (series === undefined) return null
+  const values: number[] = []
+  for (let i = matrix.months.length - 1; i >= 0 && values.length < 3; i -= 1) {
+    if (matrix.months[i] >= month) continue // ISO strings — string compare IS date compare
+    const value = series.values[i]
+    if (value !== null) values.push(Number(value))
+  }
+  if (values.length === 0) return null
+  values.sort((a, b) => a - b)
+  const mid = Math.floor(values.length / 2)
+  return values.length % 2 === 1 ? values[mid] : (values[mid - 1] + values[mid]) / 2
+}
