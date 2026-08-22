@@ -369,6 +369,75 @@ export default function SettingsPage() {
 
       {loadedOnce && (
         <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
+          {/* Full width: a diff of nine sheets is a table, not a form field. It shares the
+              two forms' `loadedOnce` gate on purpose — a settings GET that failed means the
+              API is unreachable, and an upload card that could only fail is not worth
+              offering. */}
+          <section className="card span-12">
+            <h2 className="eyebrow">
+              Import workbook
+              <InfoHint text="Dry run shows the diff without writing. Apply overwrites sheet-owned rows — dividends are never touched; taxes inside sheet-covered years reset to the sheet." />
+            </h2>
+            <div className="settings-form">
+              <label>
+                Workbook (.xlsx)
+                {/* Uncontrolled by design — a file input's value belongs to the browser;
+                    `file` state is what the change event handed us. */}
+                <input
+                  className="field-input"
+                  type="file"
+                  accept=".xlsx"
+                  disabled={importBusy !== null}
+                  onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              <p className="settings-note">
+                Dry run parses the workbook and shows what would change — nothing is written.
+                Applying overwrites imported rows: taxes inputs and brackets edited here for
+                sheet-covered years are reset to the sheet.
+              </p>
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={file === null || importBusy !== null}
+                  onClick={() => runImport(true)}
+                >
+                  {importBusy === 'dry' ? 'Dry run…' : 'Dry run'}
+                </button>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={!canApply}
+                  onClick={applyImport}
+                >
+                  {importBusy === 'apply' ? 'Applying…' : 'Apply import'}
+                </button>
+              </div>
+            </div>
+            {importError && (
+              <>
+                <div className="error-banner" role="alert">
+                  {importError}
+                </div>
+                {/* Said under EVERY import failure, because the likeliest cause does not
+                    look like itself: a File is a lazy handle on a disk offset, and saving
+                    the workbook again from Excel invalidates it — the browser then fails to
+                    read the bytes at upload time and the message that surfaces is a
+                    network-looking one. Re-picking the file is the whole fix. */}
+                <p className="settings-note">
+                  If you changed the workbook after choosing it, pick the file again.
+                </p>
+              </>
+            )}
+            {report && <ImportReportView report={report} />}
+            {report?.applied && (
+              // Not a live region of its own: the report's own header announces (role=status)
+              // at the same moment, and two regions would read the news twice.
+              <p className="settings-note">Other pages load the new data on their next visit.</p>
+            )}
+          </section>
+
           <section className="card span-6">
             <h2 className="eyebrow">
               App settings
@@ -579,75 +648,6 @@ export default function SettingsPage() {
                   </p>
                 </div>
               </div>
-            )}
-          </section>
-
-          {/* Full width: a diff of nine sheets is a table, not a form field. It shares the
-              two forms' `loadedOnce` gate on purpose — a settings GET that failed means the
-              API is unreachable, and an upload card that could only fail is not worth
-              offering. */}
-          <section className="card span-12">
-            <h2 className="eyebrow">
-              Import workbook
-              <InfoHint text="Dry run shows the diff without writing. Apply overwrites sheet-owned rows — dividends are never touched; taxes inside sheet-covered years reset to the sheet." />
-            </h2>
-            <div className="settings-form">
-              <label>
-                Workbook (.xlsx)
-                {/* Uncontrolled by design — a file input's value belongs to the browser;
-                    `file` state is what the change event handed us. */}
-                <input
-                  className="field-input"
-                  type="file"
-                  accept=".xlsx"
-                  disabled={importBusy !== null}
-                  onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
-                />
-              </label>
-              <p className="settings-note">
-                Dry run parses the workbook and shows what would change — nothing is written.
-                Applying overwrites imported rows: taxes inputs and brackets edited here for
-                sheet-covered years are reset to the sheet.
-              </p>
-              <div className="settings-actions">
-                <button
-                  type="button"
-                  className="button"
-                  disabled={file === null || importBusy !== null}
-                  onClick={() => runImport(true)}
-                >
-                  {importBusy === 'dry' ? 'Dry run…' : 'Dry run'}
-                </button>
-                <button
-                  type="button"
-                  className="button button-primary"
-                  disabled={!canApply}
-                  onClick={applyImport}
-                >
-                  {importBusy === 'apply' ? 'Applying…' : 'Apply import'}
-                </button>
-              </div>
-            </div>
-            {importError && (
-              <>
-                <div className="error-banner" role="alert">
-                  {importError}
-                </div>
-                {/* Said under EVERY import failure, because the likeliest cause does not
-                    look like itself: a File is a lazy handle on a disk offset, and saving
-                    the workbook again from Excel invalidates it — the browser then fails to
-                    read the bytes at upload time and the message that surfaces is a
-                    network-looking one. Re-picking the file is the whole fix. */}
-                <p className="settings-note">
-                  If you changed the workbook after choosing it, pick the file again.
-                </p>
-              </>
-            )}
-            {report && <ImportReportView report={report} />}
-            {report?.applied && (
-              // Not a live region of its own: the report's own header announces (role=status)
-              // at the same moment, and two regions would read the news twice.
-              <p className="settings-note">Other pages load the new data on their next visit.</p>
             )}
           </section>
         </div>
