@@ -168,6 +168,28 @@ describe('BracketsEditor', () => {
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
   })
 
+  it('evaluates an =-expression in a threshold, which IS a money cell', async () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(threshold('Federal', 2), { target: { value: '=100000+68600' } })
+    fireEvent.click(save('Federal'))
+
+    // The other half of the asymmetry above, and the reason it is an asymmetry rather than
+    // an oversight: the threshold is money, so expressions stay ON there deliberately (the
+    // plan amendment names only the NON-money belts for the opt-out). This pin is what
+    // breaks if someone "harmonizes" the two legs to { expressions: false }; the rate
+    // beside it rides through as a plain percent either way.
+    await waitFor(() =>
+      expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        jurisdictions: {
+          federal: [
+            { rate: '0.1', threshold: '0.00' },
+            { rate: '0.37', threshold: '168600.00' },
+          ],
+        },
+      }),
+    )
+  })
+
   it('echoes a threshold in money WHILE it is typed, in every accepted form', () => {
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
     // No blur here: this span is the only echo visible mid-keystroke, so it has to read the

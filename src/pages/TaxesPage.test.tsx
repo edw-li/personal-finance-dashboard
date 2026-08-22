@@ -604,13 +604,15 @@ describe('TaxesPage', () => {
     )
   })
 
-  it('advances on Enter and saves on Ctrl+Enter in the tax inputs form', async () => {
+  it('lands on the form primary from the last cell, and saves on Ctrl+Enter', async () => {
     renderPage()
     await screen.findByLabelText('Annual Salary')
     fireEvent.change(salary(), { target: { value: '210000' } })
 
     // The scope preventDefaults Enter, so it never implicit-submits; on the LAST cell it
-    // hands focus to the form's primary instead. This is the documented behavior change.
+    // hands focus to the form's primary instead. This page fixture holds ONE line item, so
+    // that cell is both first and last — the multi-cell walk across sections is pinned in
+    // InputsForm.test.tsx, against a fixture with four items in three sections.
     act(() => salary().focus())
     fireEvent.keyDown(salary(), { key: 'Enter' })
     expect(document.activeElement).toBe(saveInputs())

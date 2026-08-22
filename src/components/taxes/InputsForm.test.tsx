@@ -129,6 +129,35 @@ describe('InputsForm', () => {
     )
   })
 
+  it('evaluates an =-expression into the PUT body', async () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(field('Annual Salary'), { target: { value: '=1200+400' } })
+    fireEvent.click(saveButton())
+
+    // Every tax input is money, so "=" arithmetic stays ON here deliberately — the plan
+    // amendment names only the NON-money belts for the opt-out (BracketsEditor's percent
+    // rate is one). No blur fired, so canonicalAmount at the wire boundary is what
+    // evaluates it; this pin is what breaks if someone "harmonizes" that call to
+    // { expressions: false }.
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
+        values: { annual_salary: '1600.00' },
+      }),
+    )
+  })
+
+  it('walks the column on Enter, across the section boundaries', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    act(() => field('Annual Salary').focus())
+
+    // ONE scope for the whole form, so the walk follows cell order rather than section
+    // structure: the second Enter steps out of Ordinary income and into Deductions.
+    fireEvent.keyDown(field('Annual Salary'), { key: 'Enter' })
+    expect(document.activeElement).toBe(field('Gross Paycheck'))
+    fireEvent.keyDown(field('Gross Paycheck'), { key: 'Enter' })
+    expect(document.activeElement).toBe(field('HSA Contributions'))
+  })
+
   it('sends null for a blanked value', async () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
     fireEvent.change(field('HSA Contributions'), { target: { value: '' } })

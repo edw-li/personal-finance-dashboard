@@ -155,7 +155,7 @@ export default function InputsForm({
                     </span>
                     <AmountInput
                       id={id}
-                      className={value !== '' && !isAmount(value) ? 'invalid' : undefined}
+                      className={value.trim() !== '' && !isAmount(value) ? 'invalid' : undefined}
                       value={value}
                       onValueChange={(next) =>
                         setValues((current) => ({ ...current, [item.key]: next }))

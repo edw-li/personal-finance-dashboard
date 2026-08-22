@@ -179,7 +179,7 @@ export default function BracketsEditor({
       jurisdictions: {
         [name]: rows.map((row) => ({
           rate: shiftPoint(row.rate, -2),
-          threshold: row.threshold.trim(),
+          threshold: row.threshold,
         })),
       },
     })
@@ -274,11 +274,13 @@ export default function BracketsEditor({
                             value={row.threshold}
                             onValueChange={(next) => setRow(name, index, 'threshold', next)}
                           />
-                          {/* Money echo of what is being typed, in any accepted form
-                              ("$1,234" reads back "$1,234.00" before any blur); skipped
-                              while the text is not a number yet, so a half-typed value
-                              never reads "$NaN". The blurred in-input echo does not cover
-                              this — it only appears once the cell is left. */}
+                          {/* Money echo of what is being typed, in any accepted
+                              NON-EXPRESSION form ("$1,234" reads back "$1,234.00" before
+                              any blur); skipped while the text is not a number yet, so a
+                              half-typed value never reads "$NaN", and an "=" entry echoes
+                              nothing until it commits — nothing evaluates live anywhere in
+                              this layer. The blurred in-input echo does not cover this: it
+                              only appears once the cell is left. */}
                           <span className="drill-hint">
                             {parsedThreshold ? formatCurrency(parsedThreshold.canonical) : ''}
                           </span>
