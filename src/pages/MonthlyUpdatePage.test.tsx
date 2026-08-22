@@ -25,6 +25,12 @@ const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
   sort_order: 1, is_active: true, is_component: false, parent_account_id: null,
 }
+// The default fixture is one account, which cannot show ORDER — the paste tests that care
+// about where a range lands opt into this second row.
+const savings = {
+  id: 2, name: 'Savings', slug: 'savings', group: 'cash' as const,
+  sort_order: 2, is_active: true, is_component: false, parent_account_id: null,
+}
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 
 beforeEach(() => {
@@ -412,6 +418,10 @@ it('clears a previously saved net pay when the box is blanked', async () => {
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
     month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [],
   })
+  vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', created: 0, updated: 0, unchanged: 1,
+    net_pay_set: false, net_pay_cleared: true,
+  })
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   const netPayBox = await screen.findByLabelText('Net pay (take-home)')
@@ -424,6 +434,35 @@ it('clears a previously saved net pay when the box is blanked', async () => {
       expect.objectContaining({ net_pay: null }),
     )
   })
+  // A deletion the user asked for by BLANKING a box deserves saying out loud — the counts
+  // sentence alone never mentions the cashflow row that just went away.
+  await screen.findByText(/net pay cleared/i)
+})
+
+it('keeps sending the clear on the retry after a failed save', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [],
+  })
+  // The balances PUT resolves normally both times; only the spending half fails first.
+  vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Net pay (take-home)'), { target: { value: '' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByRole('alert')
+
+  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+  await waitFor(() => {
+    expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(2)
+  })
+  // hadNetPay describes the SERVER's state, so it may only be adopted where the server
+  // confirmed it — the success path. Hoisting that adoption above the awaits would make
+  // this retry omit net_pay entirely and leave the stale 9,000 in every savings-rate
+  // denominator, with the user looking at a "saved" wizard.
+  expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls[1][1]).toEqual(
+    expect.objectContaining({ net_pay: null }),
+  )
 })
 
 it('never sends net_pay for a month that had none and stays blank', async () => {
@@ -463,4 +502,159 @@ it('a post-save blur never resurrects a phantom draft', async () => {
   })
   fireEvent.blur(again)
   expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toBeNull()
+})
+
+it('still enters the month when the typical-history fetch fails', async () => {
+  vi.mocked(spendingApi.fetchMatrix).mockRejectedValue(new Error('matrix down'))
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const food = await screen.findByLabelText('Food')
+
+  // '—' is the Typical column's DESIGNED degraded state (a month with no history shows the
+  // same thing), so a failed matrix costs the entry aid and nothing else. Blocking the
+  // whole wizard on a comparison figure would be the tail wagging the dog.
+  const cells = within(food.closest('tr') as HTMLElement).getAllByRole('cell')
+  expect(cells[1].textContent).toBe('—')
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('leaves an exactly-typical month untoned instead of painting float residue', async () => {
+  // Two samples → the median is their MEAN, and (0.10 + 0.20) / 2 is 0.15000000000000002 in
+  // doubles. Typing the typical figure exactly lands the raw delta at -2.8e-17: formatted it
+  // is "-$0.00", and toned by its raw sign it paints the overspend colour over a zero.
+  vi.mocked(spendingApi.fetchMatrix).mockResolvedValue({
+    months: ['2026-06-01', '2026-07-01'],
+    categories: [],
+    series: [{ category_id: 7, values: ['0.10', '0.20'] }],
+    totals: [],
+    net_pay: [],
+    savings_rate: [],
+    four_pct_rule: [],
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const food = await screen.findByLabelText('Food')
+  fireEvent.change(food, { target: { value: '0.15' } })
+  const cells = within(food.closest('tr') as HTMLElement).getAllByRole('cell')
+  expect(cells[3].textContent).toBe('$0.00') // never "-$0.00"
+  expect(cells[3].className).not.toMatch(/delta-(positive|negative)/)
+})
+
+// --- range paste (spec §4.1) ---
+// jsdom has no clipboard: fireEvent.paste's init object is what RTL defines onto the event,
+// and React hands it through as e.clipboardData.
+
+it('fills down from the pasted-into cell on a column paste', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, savings])
+  renderWizard()
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  fireEvent.paste(checking, { clipboardData: { getData: () => '1,000\n2000' } })
+
+  // Pasted text lands RAW, exactly as if typed — the focused cell shows what arrived, and
+  // Savings (blurred) shows AmountInput's echo of the same state.
+  expect(checking.value).toBe('1,000')
+  const savingsBox = screen.getByLabelText('Savings') as HTMLInputElement
+  expect(savingsBox.value).toBe('$2,000.00')
+  // Which cells moved, shown as well as narrated — the class merges alongside the
+  // validity one rather than replacing it.
+  expect(savingsBox.className).toBe('field-input pasted-flash')
+  // getByText, not getByRole('status'): the live-totals bar is a status node too, so the
+  // note is deliberately located by its words.
+  expect(screen.getByText(/pasted 2 of 2 values/i)).toBeDefined()
+})
+
+it('fills a transposed horizontal range the same way', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, savings])
+  renderWizard()
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  // The source sheet stores months as ROWS, so a copied month arrives horizontal; it has to
+  // fill the same column a vertical range does.
+  fireEvent.paste(checking, { clipboardData: { getData: () => '1000\t2000' } })
+
+  expect(checking.value).toBe('1000')
+  expect((screen.getByLabelText('Savings') as HTMLInputElement).value).toBe('$2,000.00')
+})
+
+it('keyed paste matches names regardless of focus and reports misses', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, savings])
+  renderWizard()
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  fireEvent.paste(checking, {
+    clipboardData: { getData: () => 'savings\t2500\nChequing\t9\nChecking\t1750' },
+  })
+
+  // The label decides the target, not the focused cell — and case never matters.
+  expect((screen.getByLabelText('Savings') as HTMLInputElement).value).toBe('$2,500.00')
+  expect(checking.value).toBe('1750')
+  // A miss is named, never guessed at: filling the wrong account with the right number is
+  // worse than filling nothing.
+  expect(screen.getByText(/pasted 2 of 2 values · 1 unmatched: Chequing/i)).toBeDefined()
+})
+
+it('reports pasted values that run off the end instead of dropping them', async () => {
+  renderWizard() // the single-account fixture
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  fireEvent.paste(checking, { clipboardData: { getData: () => '1\n2\n3' } })
+
+  expect(checking.value).toBe('1')
+  expect(screen.getByText(/pasted 1 of 1 values · 2 values didn't fit/i)).toBeDefined()
+})
+
+it('skips an empty pasted value rather than blanking the cell', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, savings])
+  renderWizard()
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  // A trailing-empty cell is what a sheet's blank month looks like. NOTE the two-row form:
+  // a lone "label<TAB>" is a single row of one non-empty cell, which classifies as a native
+  // single-cell paste — the skip only exists inside a real keyed block.
+  fireEvent.paste(checking, { clipboardData: { getData: () => 'Checking\t\nSavings\t2500' } })
+
+  // Paste must never BLANK a filled cell: the seeded prior-month figure survives untouched.
+  expect(checking.value).toBe('1500.00')
+  expect((screen.getByLabelText('Savings') as HTMLInputElement).value).toBe('$2,500.00')
+  expect(screen.getByText(/pasted 1 of 2 values · 1 blank skipped/i)).toBeDefined()
+})
+
+it('leaves a single-value paste to the browser', async () => {
+  renderWizard()
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  const notPrevented = fireEvent.paste(checking, {
+    clipboardData: { getData: () => '1234.56' },
+  })
+
+  // Not default-prevented: native insertion plus the tolerant parse already handle one cell,
+  // and intercepting would break pasting into the middle of a half-typed number.
+  expect(notPrevented).toBe(true)
+  expect(checking.value).toBe('1500.00')
+  expect(screen.queryByText(/pasted/i)).toBeNull()
+})
+
+it('leaves a multi-line paste in the notes box to the browser', async () => {
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  const notPrevented = fireEvent.paste(screen.getByLabelText(/notes/i), {
+    clipboardData: { getData: () => 'line one\nline two' },
+  })
+
+  // The scope's handler owns the CELLS, not every field inside the card: a two-line note is
+  // a legitimate single-field paste, and hijacking it would swallow the note AND scatter its
+  // lines across the balance cells.
+  expect(notPrevented).toBe(true)
+  expect(screen.queryByText(/pasted/i)).toBeNull()
+  expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1500.00')
+})
+
+it('pastes into the spending step and drops the note on the way out', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const food = (await screen.findByLabelText('Food')) as HTMLInputElement
+  fireEvent.paste(food, { clipboardData: { getData: () => 'Food\t250\nRent\t900' } })
+
+  // Net pay autofocuses this step, so Food is blurred and shows its echo.
+  expect(food.value).toBe('$250.00')
+  expect(screen.getByText(/pasted 1 of 1 values · 1 unmatched: Rent/i)).toBeDefined()
+  // One note state serves both steps, so it must not follow the user off this one.
+  fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
+  await screen.findByLabelText('Checking')
+  expect(screen.queryByText(/pasted 1 of 1 values/i)).toBeNull()
 })

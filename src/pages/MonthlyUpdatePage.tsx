@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
+import type { ClipboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarCheck, CalendarPlus } from 'lucide-react'
 import { ApiError } from '../api/client'
@@ -23,6 +24,7 @@ import { nestComponents } from '../utils/accounts'
 import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
+import { classifyPaste, matchLabel } from '../utils/paste'
 import { typicalSpend } from '../utils/spending'
 import '../components/panels.css'
 import './MonthlyUpdatePage.css'
@@ -133,16 +135,26 @@ export default function MonthlyUpdatePage() {
   const [baseline, setBaseline] = useState<{ month: string; data: string } | null>(null)
   // A draft was restored over the seed this load — the banner's flag.
   const [restored, setRestored] = useState(false)
+  // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
+  // next paste and dropped on any step or month change. The flashed ids are the cells it
+  // wrote (input ids, e.g. 'bal-3'), so one Set serves both tables.
+  const [pasteNote, setPasteNote] = useState<string | null>(null)
+  const [flashIds, setFlashIds] = useState<Set<string>>(new Set())
 
   // Both keys are always written together, so the step never loses the month (and any
   // unrelated query param a deep link carried survives the copy).
-  const setStep = (next: Step) =>
+  const setStep = (next: Step) => {
+    // The note narrates a fill on the step being LEFT, and the flash is a 700 ms beat on
+    // cells that are about to unmount — neither may follow the user to the next step.
+    setPasteNote(null)
+    setFlashIds(new Set())
     setParams((current) => {
       const copy = new URLSearchParams(current)
       copy.set('month', month)
       copy.set('step', next)
       return copy
     })
+  }
 
   // Promise callbacks, no setState in the effect's synchronous body
   // (react-hooks/set-state-in-effect) — same discipline as the module pages. Those
@@ -161,7 +173,10 @@ export default function MonthlyUpdatePage() {
       fetchMonthBalances(addMonths(month, -1)),
       fetchSpendingMonth(month),
       fetchTimeseries(),
-      fetchMatrix(),
+      // The Typical column is an entry AID, and '—' is its designed degraded state: a
+      // matrix that fails must never take the whole wizard down with it, because the
+      // month still has to be enterable without any history to compare against.
+      fetchMatrix().catch((): SpendingMatrix | null => null),
     ])
       .then(([
         accountList,
@@ -278,6 +293,14 @@ export default function MonthlyUpdatePage() {
     }
   }, [balances, amounts, netPay, recordedOn, notes, baseline, month, loading])
 
+  // The flash is a one-shot: the timer callback clears it, so the effect body itself never
+  // sets state (a set here would re-run the effect on its own write).
+  useEffect(() => {
+    if (flashIds.size === 0) return
+    const timer = setTimeout(() => setFlashIds(new Set()), 700)
+    return () => clearTimeout(timer)
+  }, [flashIds])
+
   // Back to the server's seed, forgetting the draft — the restore banner's exit.
   const discardDraft = () => {
     if (baseline === null || baseline.month !== month) return
@@ -361,7 +384,11 @@ export default function MonthlyUpdatePage() {
       setSaved(
         `Balances: ${balanceResult.created} added, ${balanceResult.updated} changed, ` +
           `${balanceResult.unchanged} unchanged. Spending: ${spendResult.created} added, ` +
-          `${spendResult.updated} changed, ${spendResult.unchanged} unchanged.`,
+          `${spendResult.updated} changed, ${spendResult.unchanged} unchanged.` +
+          // A DELETION the user asked for by blanking a box: the counts sentence above
+          // never mentions the cashflow row that just went away, so the confirmation says
+          // it — and says it from the server's own flag, not from what we hoped we sent.
+          (spendResult.net_pay_cleared ? ' Net pay cleared.' : ''),
       )
       // What the wire received IS what the boxes now hold. Adopting the canonical values
       // into the STATE as well as the baseline is load-bearing: a cell advanced past by
@@ -402,6 +429,9 @@ export default function MonthlyUpdatePage() {
     // The banner describes the month being LEFT; the new load re-derives it. The typed
     // work itself needs no goodbye — the draft effect has been persisting it all along.
     setRestored(false)
+    // Same reason the step change clears them: the note counts the OLD month's rows.
+    setPasteNote(null)
+    setFlashIds(new Set())
     setParams(() => new URLSearchParams({ month: m, step: 'balances' }))
   }
 
@@ -413,8 +443,90 @@ export default function MonthlyUpdatePage() {
   const nextEntryMonth = latestCovered === undefined ? current : addMonths(latestCovered, 1)
   const anchor = nextEntryMonth > current ? nextEntryMonth : current
 
-  // The first RENDERED cell (groups render in GROUP_ORDER, not array order).
-  const firstBalanceId = GROUP_ORDER.flatMap((g) => accounts.filter((a) => a.group === g))[0]?.id
+  // The balances rows in RENDERED order (groups render in GROUP_ORDER, not array order) —
+  // the same walk the table below performs. Hoisted because three things must agree on it:
+  // the autofocus target, the Enter/arrow protocol's DOM order, and where a positional
+  // paste puts its first value. Deriving it twice is how those three drift apart.
+  const orderedBalanceRows = GROUP_ORDER.flatMap((g) => accounts.filter((a) => a.group === g))
+  const firstBalanceId = orderedBalanceRows[0]?.id
+
+  // Range paste (spec §4.1): the PARENT owns the entry state, so the scope container does
+  // the filling — an AmountInput cannot write its siblings. A single-cell clipboard
+  // classifies as null and falls through to native insertion, which the tolerant parse
+  // already handles. Pasted text lands RAW, exactly as if typed: garbage shows the standard
+  // .invalid, and canonicalAmount at the wire boundary is still what the server sees. The
+  // draft effect watches the same state, so pasted work is persisted the moment it lands —
+  // and the draft-discard affordance is therefore also paste's undo (no new undo system).
+  const handlePaste = (
+    e: ClipboardEvent<HTMLDivElement>,
+    rows: { id: number; name: string }[],
+    idOf: (rowId: number) => string,
+    setRecord: (updater: (cur: Record<number, string>) => Record<number, string>) => void,
+  ) => {
+    const cell = (e.target as HTMLElement).closest<HTMLInputElement>('input[data-entry-cell]')
+    // A paste that lands in a NON-cell field is that field's own: the Notes box legitimately
+    // takes multi-line text, and hijacking it would swallow the note AND scatter its lines
+    // across the balance cells. A paste with no input under it at all still fills from the
+    // top — that is a click on the table itself, which has nowhere better to start.
+    if (cell === null && (e.target as HTMLElement).closest('input, textarea') !== null) return
+    const plan = classifyPaste(e.clipboardData.getData('text/plain'))
+    if (plan === null) return
+    e.preventDefault()
+    const fills: Record<number, string> = {}
+    const flashed = new Set<string>()
+    const unmatched: string[] = []
+    let overflow = 0
+    // An empty pasted cell SKIPS its target instead of blanking it: a stray trailing tab
+    // must never wipe a figure that is already entered.
+    let blank = 0
+    if (plan.mode === 'positional') {
+      // Fill from the pasted-into cell onward, down the rendered column — the way Enter
+      // walks it. The net-pay box is outside the table and so is never a fill target (a
+      // keyed paste cannot reach it either: accounts/categories only, spec §4.1).
+      const ids = rows.map((row) => idOf(row.id))
+      const startAt = cell === null ? 0 : Math.max(0, ids.indexOf(cell.id))
+      plan.values.forEach((value, i) => {
+        const slot = startAt + i
+        if (slot >= rows.length) {
+          overflow += 1
+          return
+        }
+        // The slot is consumed either way — a skipped blank must not shift the rest up.
+        // (classifyPaste drops empty cells from a positional plan today; this keeps the
+        // rule true of the array itself rather than of one caller's luck.)
+        if (value === '') {
+          blank += 1
+          return
+        }
+        fills[rows[slot].id] = value
+        flashed.add(ids[slot])
+      })
+    } else {
+      for (const { label, value } of plan.rows) {
+        const id = matchLabel(rows, label)
+        if (id === null) {
+          unmatched.push(label)
+        } else if (value === '') {
+          blank += 1
+        } else {
+          fills[id] = value
+          flashed.add(idOf(id))
+        }
+      }
+      overflow = plan.skipped
+    }
+    if (Object.keys(fills).length > 0) setRecord((cur) => ({ ...cur, ...fills }))
+    setFlashIds(flashed)
+    const parts = [`Pasted ${Object.keys(fills).length} of ${rows.length} values`]
+    if (unmatched.length > 0) {
+      const shown = unmatched.slice(0, 4).join(', ')
+      const more = unmatched.length > 4 ? `, +${unmatched.length - 4} more` : ''
+      parts.push(`${unmatched.length} unmatched: ${shown}${more}`)
+    }
+    if (overflow > 0) parts.push(`${overflow} value${overflow === 1 ? '' : 's'} didn't fit`)
+    if (blank > 0) parts.push(`${blank} blank${blank === 1 ? '' : 's'} skipped`)
+    setPasteNote(parts.join(' · '))
+  }
 
   // Committed value of one cell for the live columns — the preview memo's rule.
   const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
@@ -498,7 +610,11 @@ export default function MonthlyUpdatePage() {
       )}
 
       {!loading && step === 'balances' && (
-        <div className="card" data-entry-scope="">
+        <div
+          className="card"
+          data-entry-scope=""
+          onPaste={(e) => handlePaste(e, orderedBalanceRows, (id) => `bal-${id}`, setBalances)}
+        >
           <h2 className="eyebrow">
             {monthExisted ? 'Edit balances' : 'Enter balances (pre-filled from last month)'}
             <InfoHint text="Every account&apos;s balance for the month, pre-filled from the prior month; components are tracked inside their parent." />
@@ -564,7 +680,11 @@ export default function MonthlyUpdatePage() {
                           <td className="num entry-cell-col">
                             <AmountInput
                               id={`bal-${account.id}`}
-                              className={isAmount(value) ? undefined : 'invalid'}
+                              className={
+                                `${isAmount(value) ? '' : 'invalid'}${
+                                  flashIds.has(`bal-${account.id}`) ? ' pasted-flash' : ''
+                                }`.trim() || undefined
+                              }
                               autoFocus={account.id === firstBalanceId}
                               value={value}
                               onValueChange={(next) =>
@@ -609,6 +729,11 @@ export default function MonthlyUpdatePage() {
           <p className="drill-hint">
             Liabilities are stored signed — enter card balances as negative numbers.
           </p>
+          {pasteNote && (
+            <p className="drill-hint" role="status" aria-live="polite">
+              {pasteNote}
+            </p>
+          )}
           {/* Named, not just role="status": the draft banner (and Phase 2's paste note)
               are status nodes too, so screen readers — and every selector — need this one
               to say WHAT it is announcing. */}
@@ -639,7 +764,11 @@ export default function MonthlyUpdatePage() {
       )}
 
       {!loading && step === 'spending' && (
-        <div className="card" data-entry-scope="">
+        <div
+          className="card"
+          data-entry-scope=""
+          onPaste={(e) => handlePaste(e, categories, (id) => `amt-${id}`, setAmounts)}
+        >
           <h2 className="eyebrow">
             Spending & net pay
             <InfoHint text="The month&apos;s spend per category plus take-home pay — a blank net pay skips the cashflow row." />
@@ -673,6 +802,13 @@ export default function MonthlyUpdatePage() {
                 const typical = matrix === null ? null : typicalSpend(matrix, month, category.id)
                 const delta =
                   typical === null ? null : (Number(canonicalAmount(value)) || 0) - typical
+                // CENTS decide both the tone and the text. A two-sample median averages
+                // inexact doubles ((0.10 + 0.20) / 2 is 0.15000000000000002), so a month
+                // that matches typical exactly lands at ±1e-14 — enough to paint a
+                // formatted $0.00 in the overspend colour. Rounding first also fixes the
+                // text, since Intl prints "-$0.00" for a negative zero; the === 0 branch
+                // is what hands formatCurrency a positive one.
+                const deltaCents = delta === null ? null : Math.round(delta * 100)
                 return (
                   <tr key={category.id}>
                     <td>
@@ -684,7 +820,11 @@ export default function MonthlyUpdatePage() {
                     <td className="num entry-cell-col">
                       <AmountInput
                         id={`amt-${category.id}`}
-                        className={isAmount(value) ? undefined : 'invalid'}
+                        className={
+                          `${isAmount(value) ? '' : 'invalid'}${
+                            flashIds.has(`amt-${category.id}`) ? ' pasted-flash' : ''
+                          }`.trim() || undefined
+                        }
                         value={value}
                         onValueChange={(next) =>
                           setAmounts((cur) => ({ ...cur, [category.id]: next }))
@@ -696,20 +836,27 @@ export default function MonthlyUpdatePage() {
                         — so the sign→color mapping is the mirror of a rising balance's. */}
                     <td
                       className={`num entry-delta${
-                        delta === null || delta === 0
+                        deltaCents === null || deltaCents === 0
                           ? ''
-                          : delta > 0
+                          : deltaCents > 0
                             ? ' delta-negative' /* overspend vs typical reads as the bad direction */
                             : ' delta-positive'
                       }`}
                     >
-                      {delta === null ? '—' : formatCurrency(delta)}
+                      {deltaCents === null
+                        ? '—'
+                        : formatCurrency(deltaCents === 0 ? 0 : deltaCents / 100)}
                     </td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
+          {pasteNote && (
+            <p className="drill-hint" role="status" aria-live="polite">
+              {pasteNote}
+            </p>
+          )}
           <div className="entry-footer" role="status" aria-label="Live totals">
             <span>
               Total spend (live): <strong>{formatCurrency(preview.totalSpend)}</strong>

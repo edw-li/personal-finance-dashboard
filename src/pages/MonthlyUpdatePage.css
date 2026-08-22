@@ -38,10 +38,31 @@
   font-size: 0.7rem;
 }
 
-/* (.entry-grid/.entry-field died with the card grids both entry steps replaced; the
-   inputs' width now comes from the table's .entry-cell-col column.) */
+/* (The old per-field card-grid rules died with the card grids both entry steps replaced;
+   an input's width now comes from the table's .entry-cell-col column.) */
 .field-input.invalid {
   border-color: var(--negative);
+}
+
+/* Paste feedback: filled cells flash once (0.7s, matching the class's decay timer) while
+   the status line narrates the fill. Same pair as taxes.css's — a copy by design, like
+   .field-input.invalid above; @keyframes are global, so the two must stay identical. The
+   `from` is declared twice on purpose: color-mix wants Chrome 111+/Safari 16.2, past this
+   build's target floor, so an older engine drops that line and keeps the plain surface
+   tint rather than showing no flash at all. The end colour is .field-input's own
+   background, so the animation lands exactly where the box already sits. */
+@keyframes pasted-flash {
+  from {
+    background: var(--surface-2);
+    background: color-mix(in srgb, var(--accent) 25%, var(--bg));
+  }
+  to {
+    background: var(--bg);
+  }
+}
+
+.field-input.pasted-flash {
+  animation: pasted-flash 0.7s ease-out;
 }
 
 /* The single-column entry table: Tab/Enter walk straight down one visual column,
@@ -71,9 +92,10 @@
    is load-bearing, not redundant: the muted default above is `.entry-table .entry-delta`
    (0,2,0) on the SAME <td>, so a bare `.delta-positive` (0,1,0) loses and the Δ column
    would read muted whatever the sign. The footer's span, outside the table, takes the
-   bare one — and the bare halves DO duplicate panels.css:205-206 verbatim; they stay so
-   this sheet is self-contained if the page ever drops the panels import. Only the
-   .entry-table-scoped twins carry weight the shared rule cannot. */
+   bare one — and the bare halves DO duplicate the bare .delta-positive/.delta-negative
+   one-liners in panels.css verbatim; they stay so this sheet is self-contained if the
+   page ever drops the panels import. Only the .entry-table-scoped twins carry weight the
+   shared rule cannot. */
 .delta-positive,
 .entry-table .delta-positive {
   color: var(--positive);
