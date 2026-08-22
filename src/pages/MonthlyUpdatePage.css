@@ -70,8 +70,51 @@
   border-color: var(--negative);
 }
 
-.group-block {
-  margin-bottom: 1.1rem;
+/* The single-column entry table: Tab/Enter walk straight down one visual column,
+   the way the sheet's muscle memory expects (spec §4.2). (.group-block died with the
+   per-group cards this table replaced.) */
+.entry-table { width: 100%; }
+.entry-table td, .entry-table th { padding: 0.3rem 0.6rem; }
+.entry-table .entry-cell-col { width: 160px; }
+.entry-table .entry-ref, .entry-table .entry-delta { width: 130px; color: var(--muted); }
+.entry-table label { cursor: pointer; }
+.entry-component label { padding-left: 1.1rem; }
+.entry-group-row th {
+  text-align: left;
+  padding-top: 0.9rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.entry-subtotal-row td {
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+/* The same two variables .stat-delta-positive/-negative use (panels.css) — one delta
+   palette across the app; the Δ column and the footer share these. */
+.delta-positive { color: var(--positive); }
+.delta-negative { color: var(--negative); }
+
+/* Live totals ride the viewport bottom while the column scrolls (the sheet's total row). */
+.entry-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0.9rem;
+  margin-top: 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+/* Narrow viewports: the label + input column always survives. */
+@media (max-width: 720px) {
+  .entry-table .entry-ref, .entry-table .entry-delta { display: none; }
 }
 
 .wizard-footer {

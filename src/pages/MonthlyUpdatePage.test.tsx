@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MonthlyUpdatePage from './MonthlyUpdatePage'
@@ -304,6 +304,47 @@ it('autofocuses the first balance cell on load', async () => {
   renderWizard()
   const balanceInput = await screen.findByLabelText('Checking')
   expect(document.activeElement).toBe(balanceInput)
+})
+
+it('shows last month beside the cell and a live delta as you type', async () => {
+  renderWizard()
+  const balanceInput = await screen.findByLabelText('Checking')
+  const row = balanceInput.closest('tr') as HTMLElement
+  expect(within(row).getByText('$1,500.00')).toBeDefined() // last-month reference
+  fireEvent.change(balanceInput, { target: { value: '1600.00' } })
+  expect(within(row).getByText('$100.00')).toBeDefined() // live Δ
+})
+
+it('excludes components from the group subtotal and the live net worth', async () => {
+  const brokerage = {
+    id: 2, name: 'Brokerage', slug: 'brokerage', group: 'taxable' as const,
+    sort_order: 2, is_active: true, is_component: false, parent_account_id: null,
+  }
+  const brokerageCash = {
+    id: 3, name: 'Brokerage cash', slug: 'brokerage-cash', group: 'taxable' as const,
+    sort_order: 3, is_active: true, is_component: true, parent_account_id: 2,
+  }
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, brokerage, brokerageCash])
+  renderWizard()
+  // The badge lives inside the label, so the component's accessible name carries it too.
+  const component = await screen.findByLabelText(/^Brokerage cash/)
+  fireEvent.change(screen.getByLabelText('Brokerage'), { target: { value: '1000' } })
+  fireEvent.change(component, { target: { value: '250' } })
+
+  // nestComponents puts the child right after its parent, so the subtotal row follows it.
+  const subtotal = (component.closest('tr') as HTMLElement).nextElementSibling as HTMLElement
+  const cells = within(subtotal).getAllByRole('cell')
+  expect(cells[0].textContent).toBe('Subtotal')
+  expect(cells[2].textContent).toBe('$1,000.00') // the component's 250 is tracked INSIDE it
+  // Same rule at the bottom line: 1,500 checking + 1,000 brokerage, component excluded.
+  expect(within(screen.getByRole('status')).getByText('$2,500.00')).toBeDefined()
+})
+
+it('keeps the live net-worth footer in sync while entering balances', async () => {
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2000' } })
+  const footer = screen.getByRole('status')
+  expect(within(footer).getByText('$2,000.00')).toBeDefined()
 })
 
 it('a post-save blur never resurrects a phantom draft', async () => {

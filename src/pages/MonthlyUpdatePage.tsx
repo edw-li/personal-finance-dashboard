@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarCheck, CalendarPlus } from 'lucide-react'
 import { ApiError } from '../api/client'
@@ -104,6 +104,10 @@ export default function MonthlyUpdatePage() {
   const [recordedOn, setRecordedOn] = useState(todayIso())
   const [notes, setNotes] = useState('')
   const [prevNetWorth, setPrevNetWorth] = useState<number | null>(null)
+  // The prior month's per-account balances — the table's "Last month" column and the
+  // reference every live Δ is measured against. The prior fetch already ran for the seed
+  // and prevNetWorth; this keeps its per-account detail instead of discarding it.
+  const [priorBalances, setPriorBalances] = useState<Record<number, string>>({})
   const [monthExisted, setMonthExisted] = useState(false)
   const [coveredMonths, setCoveredMonths] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
@@ -176,6 +180,11 @@ export default function MonthlyUpdatePage() {
             }, 0)
           : null
         setPrevNetWorth(prevSum)
+        setPriorBalances(
+          priorMonth.exists
+            ? Object.fromEntries(priorMonth.balances.map((b) => [b.account_id, b.balance]))
+            : {},
+        )
 
         const activeCategories = categoryList.filter((c) => c.is_active)
         const spendById = new Map(spendMonth.amounts.map((a) => [a.category_id, a.amount]))
@@ -371,6 +380,20 @@ export default function MonthlyUpdatePage() {
   // The first RENDERED cell (groups render in GROUP_ORDER, not array order).
   const firstBalanceId = GROUP_ORDER.flatMap((g) => accounts.filter((a) => a.group === g))[0]?.id
 
+  // Committed value of one cell for the live columns — the preview memo's rule.
+  const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
+
+  // Per-group live subtotal + its prior twin (components excluded, exactly like net worth).
+  const groupTotals = (group: (typeof GROUP_ORDER)[number]) => {
+    const rows = accounts.filter((a) => a.group === group && !a.is_component)
+    const now = rows.reduce((acc, a) => acc + committed(balances[a.id]), 0)
+    const prior = rows.reduce(
+      (acc, a) => acc + (priorBalances[a.id] === undefined ? 0 : Number(priorBalances[a.id])),
+      0,
+    )
+    return { now, prior }
+  }
+
   return (
     <div className="page">
       <div className="page-header">
@@ -460,40 +483,95 @@ export default function MonthlyUpdatePage() {
               />
             </label>
           </div>
-          {GROUP_ORDER.map((group) => {
-            const groupAccounts = accounts.filter((a) => a.group === group)
-            if (groupAccounts.length === 0) return null
-            return (
-              <div key={group} className="group-block">
-                <h3 className="eyebrow">{GROUP_LABELS[group]}</h3>
-                <div className="entry-grid">
-                  {groupAccounts.map((account) => {
-                    const value = balances[account.id] ?? ''
-                    return (
-                      <div key={account.id} className="entry-field">
-                        <label htmlFor={`bal-${account.id}`}>
-                          {account.name}
-                          {account.is_component && <span className="badge">component</span>}
-                        </label>
-                        <AmountInput
-                          id={`bal-${account.id}`}
-                          className={isAmount(value) ? undefined : 'invalid'}
-                          autoFocus={account.id === firstBalanceId}
-                          value={value}
-                          onValueChange={(next) =>
-                            setBalances((cur) => ({ ...cur, [account.id]: next }))
-                          }
-                        />
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )
-          })}
+          {/* One table, not a card per group: cells sit in a single visual column so the
+              Phase 1 Enter/arrow protocol (DOM order = this GROUP_ORDER walk) goes straight
+              down, the way the sheet's muscle memory expects (spec §4.2). */}
+          <table className="data-table entry-table">
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th className="num entry-ref">Last month</th>
+                <th className="num">This month</th>
+                <th className="num entry-delta">Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {GROUP_ORDER.map((group) => {
+                const groupAccounts = accounts.filter((a) => a.group === group)
+                if (groupAccounts.length === 0) return null
+                const totals = groupTotals(group)
+                return (
+                  <Fragment key={group}>
+                    <tr className="entry-group-row">
+                      <th colSpan={4}>{GROUP_LABELS[group]}</th>
+                    </tr>
+                    {groupAccounts.map((account) => {
+                      const value = balances[account.id] ?? ''
+                      const prior = priorBalances[account.id]
+                      const delta = prior === undefined ? null : committed(value) - Number(prior)
+                      return (
+                        <tr key={account.id}>
+                          <td className={account.is_component ? 'entry-component' : undefined}>
+                            <label htmlFor={`bal-${account.id}`}>
+                              {account.name}
+                              {account.is_component && <span className="badge">component</span>}
+                            </label>
+                          </td>
+                          <td className="num entry-ref">
+                            {prior === undefined ? '—' : formatCurrency(prior)}
+                          </td>
+                          <td className="num entry-cell-col">
+                            <AmountInput
+                              id={`bal-${account.id}`}
+                              className={isAmount(value) ? undefined : 'invalid'}
+                              autoFocus={account.id === firstBalanceId}
+                              value={value}
+                              onValueChange={(next) =>
+                                setBalances((cur) => ({ ...cur, [account.id]: next }))
+                              }
+                            />
+                          </td>
+                          <td
+                            className={`num entry-delta${
+                              delta === null || delta === 0
+                                ? ''
+                                : delta > 0
+                                  ? ' delta-positive'
+                                  : ' delta-negative'
+                            }`}
+                          >
+                            {/* Typo tripwire: a fat-fingered digit shows a huge Δ instantly. */}
+                            {delta === null ? '—' : formatCurrency(delta)}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    <tr className="entry-subtotal-row">
+                      <td>Subtotal</td>
+                      <td className="num entry-ref">{formatCurrency(totals.prior)}</td>
+                      <td className="num">{formatCurrency(totals.now)}</td>
+                      <td className="num entry-delta">{formatCurrency(totals.now - totals.prior)}</td>
+                    </tr>
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
           <p className="drill-hint">
             Liabilities are stored signed — enter card balances as negative numbers.
           </p>
+          <div className="entry-footer" role="status">
+            <span>
+              Net worth (live): <strong>{formatCurrency(preview.netWorth)}</strong>
+            </span>
+            {preview.delta !== null && (
+              <span className={preview.delta >= 0 ? 'delta-positive' : 'delta-negative'}>
+                {/* Glyph + color, never color alone (Global visual rule; StatTile's pattern). */}
+                <span aria-hidden="true">{preview.delta >= 0 ? '▲ ' : '▼ '}</span>
+                {formatCurrency(preview.delta)} vs prior month
+              </span>
+            )}
+          </div>
           <div className="wizard-footer">
             <span />
             <button
