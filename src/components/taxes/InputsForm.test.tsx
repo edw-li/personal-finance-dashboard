@@ -194,6 +194,9 @@ describe('InputsForm', () => {
     fireEvent.change(field('Annual Salary'), { target: { value: '1e5' } })
     fireEvent.click(saveButton())
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toContain('Annual Salary')
+    // "a number", not "a plain number": "$1,234" is valid entry now, so the old wording
+    // named a stricter rule than the form actually enforces. Client-local sentence, no
+    // server twin — the one-vocabulary rule has nothing to say about it.
+    expect(screen.getByRole('alert').textContent).toContain('Enter a number for: Annual Salary')
   })
 })

@@ -5,7 +5,7 @@ import type { Jurisdiction } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import type { TaxBracketOut, TaxBracketsOut } from '../../types/api'
-import { canonicalAmount, quantize } from '../../utils/amount'
+import { canonicalAmount, parseAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import './taxes.css'
@@ -150,8 +150,12 @@ export default function BracketsEditor({
     // click) would otherwise hand "$100,000" to isPlainDecimal and be refused for a shape
     // the entry layer accepts. Garbage comes back verbatim, so it still trips the same
     // worded errors below, and the PUT ships exactly what validate() judged.
+    // The rate cell is kind="percent", whose component refuses "=" outright, so the save
+    // must not evaluate what the cell itself marked invalid — left to the money default,
+    // "=1/8" would quantize to 0.13 and store a 0.13% rate nobody typed. The threshold IS a
+    // money cell, so an expression there is legitimate and keeps the default.
     const rows = (tables[name] ?? []).map((row) => ({
-      rate: canonicalAmount(row.rate),
+      rate: canonicalAmount(row.rate, { expressions: false }),
       threshold: canonicalAmount(row.threshold),
     }))
     const message = validate(name, rows)
@@ -244,45 +248,54 @@ export default function BracketsEditor({
                   {/* Position IS the identity here — the server renumbers bracket_index on
                       every replace — and both inputs are controlled from this array, so an
                       index key cannot strand a typed value in a reused row. */}
-                  {rows.map((row, index) => (
-                    <tr key={index}>
-                      <td>{index + 1}</td>
-                      <td className="num">
-                        {/* The column header carries the visible label; a per-cell one
-                            would repeat it on every row, so the accessible name is an
-                            aria-label — and with no <label htmlFor> to point at it, an id
-                            here would be dead weight. */}
-                        <AmountInput
-                          aria-label={`${label(name)} bracket ${index + 1} rate (%)`}
-                          kind="percent"
-                          value={row.rate}
-                          onValueChange={(next) => setRow(name, index, 'rate', next)}
-                        />
-                      </td>
-                      <td className="num">
-                        <AmountInput
-                          aria-label={`${label(name)} bracket ${index + 1} threshold`}
-                          value={row.threshold}
-                          onValueChange={(next) => setRow(name, index, 'threshold', next)}
-                        />
-                        {/* Money echo of what was typed — skipped while the text is not a
-                            number yet, so a half-typed value never reads "$NaN". */}
-                        <span className="drill-hint">
-                          {isPlainDecimal(row.threshold) ? formatCurrency(row.threshold) : ''}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="button"
-                          aria-label={`Remove ${label(name)} bracket ${index + 1}`}
-                          onClick={() => removeRow(name, index)}
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {rows.map((row, index) => {
+                    // Parsed for the live echo below, which is the one thing on screen that
+                    // reads the threshold MID-KEYSTROKE — so it has to speak every form the
+                    // box accepts, not just the plain decimals the wire ends up carrying.
+                    const parsedThreshold = parseAmount(row.threshold)
+                    return (
+                      <tr key={index}>
+                        <td>{index + 1}</td>
+                        <td className="num">
+                          {/* The column header carries the visible label; a per-cell one
+                              would repeat it on every row, so the accessible name is an
+                              aria-label — and with no <label htmlFor> to point at it, an id
+                              here would be dead weight. */}
+                          <AmountInput
+                            aria-label={`${label(name)} bracket ${index + 1} rate (%)`}
+                            kind="percent"
+                            value={row.rate}
+                            onValueChange={(next) => setRow(name, index, 'rate', next)}
+                          />
+                        </td>
+                        <td className="num">
+                          <AmountInput
+                            aria-label={`${label(name)} bracket ${index + 1} threshold`}
+                            value={row.threshold}
+                            onValueChange={(next) => setRow(name, index, 'threshold', next)}
+                          />
+                          {/* Money echo of what is being typed, in any accepted form
+                              ("$1,234" reads back "$1,234.00" before any blur); skipped
+                              while the text is not a number yet, so a half-typed value
+                              never reads "$NaN". The blurred in-input echo does not cover
+                              this — it only appears once the cell is left. */}
+                          <span className="drill-hint">
+                            {parsedThreshold ? formatCurrency(parsedThreshold.canonical) : ''}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="button"
+                            aria-label={`Remove ${label(name)} bracket ${index + 1}`}
+                            onClick={() => removeRow(name, index)}
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             )}

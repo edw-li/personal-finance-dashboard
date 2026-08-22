@@ -156,6 +156,26 @@ describe('BracketsEditor', () => {
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
   })
 
+  it('refuses an =-expression in a rate, which the percent cell already marked invalid', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    fireEvent.change(rate('Federal', 2), { target: { value: '=1/8' } })
+    fireEvent.click(save('Federal'))
+
+    // The rate box is kind="percent", whose component refuses "=" outright — so the save
+    // must not evaluate behind its back. Left to the money default, "=1/8" would quantize
+    // to 0.13 and ship a 0.13% rate the user never saw.
+    expect(screen.getByRole('alert').textContent).toContain('federal[2]: rate must be a number')
+    expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
+  })
+
+  it('echoes a threshold in money WHILE it is typed, in every accepted form', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
+    // No blur here: this span is the only echo visible mid-keystroke, so it has to read the
+    // same tolerant forms the box accepts — not just the plain decimals it used to gate on.
+    fireEvent.change(threshold('Federal', 2), { target: { value: '$1,234' } })
+    expect(screen.getByText('$1,234.00').className).toContain('drill-hint')
+  })
+
   it('adds rows, saves them, and removes one', async () => {
     const echo = bracketsFixture()
     echo.jurisdictions.social_security = [

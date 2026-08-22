@@ -70,7 +70,10 @@ export default function InputsForm({
 
   const submit = () => {
     if (invalid.length > 0) {
-      setError(`Enter a plain number for: ${invalid.join(', ')}`)
+      // "a number", not "a plain number": grouping, "$" and "=" arithmetic are all valid
+      // entry now (spec §3.1/§3.2), so the older wording named a stricter rule than this
+      // form enforces. Client-local sentence with no server twin, so it is ours to word.
+      setError(`Enter a number for: ${invalid.join(', ')}`)
       return
     }
     if (changedCount === 0) return
