@@ -784,6 +784,58 @@ it('offers the computed balance as an Apply chip on the anchor month', async () 
   expect(within(row).queryByRole('button', { name: /apply suggested balance/i })).toBeNull()
 })
 
+it('counts a whole-dollar entry as already holding the suggested value', async () => {
+  const { anchor } = seedAnchorFixture()
+  vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({
+    suggestions: [{ account_id: 1, source: 'portfolio:RH Taxable', value: '2500.00' }],
+    warnings: [],
+  })
+  renderAt(anchor)
+
+  const box = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  const row = box.closest('tr') as HTMLElement
+  const chip = () => within(row).queryByRole('button', { name: /apply suggested balance/i })
+  expect(chip()).not.toBeNull()
+
+  // THE HOLE a raw canonical comparison leaves: '2500' canonicalizes VERBATIM (idempotence
+  // — parseAmount never rescales), so it is not the string '2500.00' even though the box
+  // echoes both as $2,500.00. The chip would sit there offering the number already on
+  // screen, which is precisely what decision 5 exists to prevent.
+  fireEvent.change(box, { target: { value: '2500' } })
+  expect(chip()).toBeNull()
+  // Every tolerant spelling of the same number is the same number.
+  fireEvent.change(box, { target: { value: '$2,500' } })
+  expect(chip()).toBeNull()
+  fireEvent.change(box, { target: { value: '=2500' } })
+  expect(chip()).toBeNull()
+  // Hide-when-EQUAL, not hide-forever: a different figure brings the offer back.
+  fireEvent.change(box, { target: { value: '2400' } })
+  expect(chip()).not.toBeNull()
+})
+
+it('never offers a suggestion the seeded balance already matches', async () => {
+  const { anchor } = seedAnchorFixture()
+  // The month is already entered AT the computed figure — the common shape of a second
+  // visit, and the one place a chip would appear before the user has touched anything.
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === anchor,
+    recorded_on: null,
+    notes: null,
+    balances: month === anchor ? [{ account_id: 1, balance: '2500.00' }] : [],
+  }))
+  vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({
+    suggestions: [{ account_id: 1, source: 'vesting:unvested', value: '2500.00' }],
+    warnings: [],
+  })
+  renderAt(anchor)
+
+  const box = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  expect(box.value).toBe('2500.00')
+  // Suppressed at FIRST PAINT, not merely after an Apply click.
+  expect(screen.queryByRole('button', { name: /apply suggested balance/i })).toBeNull()
+})
+
 it('never offers a suggestion on a backfill month', async () => {
   const { backfill } = seedAnchorFixture()
   vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({

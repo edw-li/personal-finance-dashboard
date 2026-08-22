@@ -22,7 +22,7 @@ import MonthRibbon from '../components/MonthRibbon'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
 import type { AccountOut, CategoryOut, SpendingMatrix, SuggestionsOut } from '../types/api'
 import { nestComponents } from '../utils/accounts'
-import { canonicalAmount, isAmount } from '../utils/amount'
+import { canonicalAmount, isAmount, quantize } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import { classifyPaste, matchLabel } from '../utils/paste'
@@ -715,12 +715,20 @@ export default function MonthlyUpdatePage() {
                       const delta = prior === undefined ? null : committed(value) - Number(prior)
                       const suggested = suggestedBalances.get(account.id)
                       // Hide-when-equal (decision 5): a chip offering the number already in
-                      // the box is a click that changes nothing. Compared CANONICALLY, so a
-                      // cell still holding the tolerant "$2,500" the user typed counts as
-                      // matching the suggested "2500.00" it would commit to.
+                      // the box is a click that changes nothing. Compared at the SERVER'S
+                      // 2dp SCALE, not merely canonically — canonicalAmount is idempotent
+                      // and never rescales, so a typed "2500" stays "2500" while the box
+                      // echoes it as $2,500.00, and a raw string test would leave the chip
+                      // offering the very figure on screen. Quantized, "2500", "$2,500",
+                      // "$2,500.00" and "=2500" all match a suggested "2500.00", while
+                      // garbage passes through quantize untouched and still shows the chip
+                      // (typo → offer, which is the useful direction). The suggested side is
+                      // already server-quantized (decision 3); re-quantizing it is a
+                      // one-call belt so a scale change on the wire could never freeze a
+                      // chip on screen that nothing can dismiss.
                       const suggestionApplied =
                         suggested !== undefined &&
-                        canonicalAmount(value) === canonicalAmount(suggested)
+                        quantize(canonicalAmount(value), 2) === quantize(suggested, 2)
                       return (
                         <tr key={account.id}>
                           <td className={account.is_component ? 'entry-component' : undefined}>
