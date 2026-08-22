@@ -703,6 +703,11 @@ describe('TaxesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
     expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1)
+    // The switch itself must LAND (not just be called) before the save below: this races
+    // parallel-load scheduling under the full suite, so the assertion must retry — saving
+    // against the still-mounted 2024 editor would echo year 2024, which onInputsSaved
+    // drops as stale, and the trend refetch this test is about would never fire.
+    await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
 
     // A save does move it: this year's column just changed.
     fireEvent.change(salary(), { target: { value: '210000' } })
