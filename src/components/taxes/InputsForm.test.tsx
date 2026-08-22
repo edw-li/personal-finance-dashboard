@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { TaxInputsOut } from '../../types/api'
@@ -70,8 +70,17 @@ describe('InputsForm', () => {
     // Server order, not alphabetical: the sections arrive ordered by tax_keys.SECTIONS.
     const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
     expect(headings).toEqual(['Ordinary income', 'Deductions', 'Capital gains'])
+    // A BLURRED box reads AmountInput's formatted echo (spec §3.3), which is display only.
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(field('Gross Paycheck').value).toBe('$7,000.00')
+    // The STATE underneath is still the server's 4dp string, which a real focus reveals —
+    // and blurring it back writes nothing, because canonicalizing a server seed is a no-op
+    // (utils/amount's idempotence guarantee) and the Save below is still disabled.
+    // act(), not fireEvent.focus: only a real .focus() moves document.activeElement, and
+    // only act flushes the state change that swaps the echo for the raw text.
+    act(() => field('Annual Salary').focus())
     expect(field('Annual Salary').value).toBe('200000.0000')
-    expect(field('Gross Paycheck').value).toBe('7000.0000')
+    act(() => field('Annual Salary').blur())
     // A null stored value is a BLANK input, never "null"/"0" — blank is what unsets it.
     expect(field('Qualified Dividends').value).toBe('')
     // Nothing edited yet: the diff is empty, so there is nothing to PUT.
@@ -94,15 +103,21 @@ describe('InputsForm', () => {
     expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
       values: { annual_salary: '210000' },
     })
-    // The server's 4dp echo is authoritative — the typed "210000" is replaced by it.
-    await waitFor(() => expect(field('Annual Salary').value).toBe('210000.0000'))
+    // The server's 4dp echo is authoritative — the typed "210000" is replaced by it. Read
+    // FOCUSED: both strings blur to the same "$210,000.00", so only the raw state tells the
+    // server's value apart from the text that was typed.
+    await waitFor(() => expect(field('Annual Salary').value).toBe('$210,000.00'))
+    act(() => field('Annual Salary').focus())
+    expect(field('Annual Salary').value).toBe('210000.0000')
   })
 
   it('Apply fills the input locally without saving', async () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Apply suggestion for Gross Paycheck' }))
 
-    expect(field('Gross Paycheck').value).toBe('8333.3333')
+    // Blurred, so the applied value shows as its echo; the PUT body below is what pins the
+    // full 4dp suggestion reaching the wire intact.
+    expect(field('Gross Paycheck').value).toBe('$8,333.33')
     // Advisory, never auto-applied: the save stays explicit (suggestions contract).
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
 
@@ -139,7 +154,7 @@ describe('InputsForm', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('values.gross_paycheck must be at most 10000000000')
     // The edit survives the rejection: re-enabled, still holding the applied value.
-    expect(field('Gross Paycheck').value).toBe('8333.3333')
+    expect(field('Gross Paycheck').value).toBe('$8,333.33')
     await waitFor(() => expect(saveButton().disabled).toBe(false))
   })
 
@@ -173,7 +188,10 @@ describe('InputsForm', () => {
 
   it('blocks a non-numeric entry before calling the API', () => {
     render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
-    fireEvent.change(field('Annual Salary'), { target: { value: '200,000' } })
+    // Spreadsheet grouping and a stray "$" are ACCEPTED entry now (spec §3.1), so the text
+    // this gate is for is exponent notation: Decimal("1e5") is a perfectly legal 100000, so
+    // nothing downstream would refuse it — this form is the only thing between the two.
+    fireEvent.change(field('Annual Salary'), { target: { value: '1e5' } })
     fireEvent.click(saveButton())
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
     expect(screen.getByRole('alert').textContent).toContain('Annual Salary')

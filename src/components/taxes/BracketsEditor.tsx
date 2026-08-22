@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { JURISDICTIONS, putTaxBrackets } from '../../api/taxes'
 import type { Jurisdiction } from '../../api/taxes'
+import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import type { TaxBracketOut, TaxBracketsOut } from '../../types/api'
-import { quantize } from '../../utils/amount'
+import { canonicalAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import './taxes.css'
@@ -145,7 +146,14 @@ export default function BracketsEditor({
   }
 
   const save = (name: string) => {
-    const rows = tables[name] ?? []
+    // Canonicalize BEFORE validating: a save reached without a blur (Ctrl+Enter, a jsdom
+    // click) would otherwise hand "$100,000" to isPlainDecimal and be refused for a shape
+    // the entry layer accepts. Garbage comes back verbatim, so it still trips the same
+    // worded errors below, and the PUT ships exactly what validate() judged.
+    const rows = (tables[name] ?? []).map((row) => ({
+      rate: canonicalAmount(row.rate),
+      threshold: canonicalAmount(row.threshold),
+    }))
     const message = validate(name, rows)
     if (message !== null) {
       setErrors((current) => ({ ...current, [name]: message }))
@@ -201,10 +209,14 @@ export default function BracketsEditor({
       {JURISDICTIONS.map((name) => {
         const rows = tables[name] ?? []
         const message = errors[name]
+        // One scope PER jurisdiction, matching the one Save each table has: Enter walks
+        // this table's rate/threshold cells and stops at its own Save, never wandering into
+        // the next jurisdiction's rows.
         return (
           <form
             key={name}
             className="bracket-block"
+            data-entry-scope=""
             onSubmit={(e) => {
               e.preventDefault()
               save(name)
@@ -240,21 +252,18 @@ export default function BracketsEditor({
                             would repeat it on every row, so the accessible name is an
                             aria-label — and with no <label htmlFor> to point at it, an id
                             here would be dead weight. */}
-                        <input
+                        <AmountInput
                           aria-label={`${label(name)} bracket ${index + 1} rate (%)`}
-                          className="field-input"
-                          inputMode="decimal"
+                          kind="percent"
                           value={row.rate}
-                          onChange={(e) => setRow(name, index, 'rate', e.target.value)}
+                          onValueChange={(next) => setRow(name, index, 'rate', next)}
                         />
                       </td>
                       <td className="num">
-                        <input
+                        <AmountInput
                           aria-label={`${label(name)} bracket ${index + 1} threshold`}
-                          className="field-input"
-                          inputMode="decimal"
                           value={row.threshold}
-                          onChange={(e) => setRow(name, index, 'threshold', e.target.value)}
+                          onValueChange={(next) => setRow(name, index, 'threshold', next)}
                         />
                         {/* Money echo of what was typed — skipped while the text is not a
                             number yet, so a half-typed value never reads "$NaN". */}
@@ -289,6 +298,7 @@ export default function BracketsEditor({
               </button>
               <button
                 type="submit"
+                data-entry-primary=""
                 className="button button-primary"
                 aria-label={`Save ${label(name)} brackets`}
                 disabled={saving !== null}

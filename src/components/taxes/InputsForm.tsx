@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { putTaxInputs } from '../../api/taxes'
+import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import type { TaxInputsOut } from '../../types/api'
+import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import './taxes.css'
 
@@ -18,11 +20,6 @@ const SECTION_LABELS: Record<string, string> = {
 function sectionLabel(name: string): string {
   return SECTION_LABELS[name] ?? name.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase())
 }
-
-// The API accepts what pydantic's Decimal parses; this is the plain-decimal subset, which
-// keeps a thousands separator or an accidental "$" out of a round trip that would come
-// back as an opaque 422. Exponent notation is refused rather than converted.
-const PLAIN_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/
 
 function valuesOf(inputs: TaxInputsOut): Record<string, string> {
   const values: Record<string, string> = {}
@@ -59,7 +56,7 @@ export default function InputsForm({
       const next = (values[item.key] ?? '').trim()
       if (next === (baseline[item.key] ?? '')) continue
       changed[item.key] = next === '' ? null : next
-      if (next !== '' && !PLAIN_DECIMAL.test(next)) invalid.push(item.label)
+      if (next !== '' && !isAmount(next)) invalid.push(item.label)
     }
   }
   const changedCount = Object.keys(changed).length
@@ -79,7 +76,17 @@ export default function InputsForm({
     if (changedCount === 0) return
     setSaving(true)
     setError(null)
-    putTaxInputs(inputs.year, { values: changed })
+    // The wire gets CANONICAL text, the on-screen diff above keeps counting the raw: a save
+    // reached without a blur (Ctrl+Enter, a jsdom click) must not ship "$1,600" or
+    // "=1200+400" to a Decimal column.
+    putTaxInputs(inputs.year, {
+      values: Object.fromEntries(
+        Object.entries(changed).map(([key, text]) => [
+          key,
+          text === null ? null : canonicalAmount(text),
+        ]),
+      ),
+    })
       .then((echo) => {
         // The echo is authoritative (4dp, and fresh suggestions): adopt it as both the
         // shown value and the new baseline, so a second save sends nothing.
@@ -110,7 +117,11 @@ export default function InputsForm({
           {error}
         </div>
       )}
+      {/* One entry scope for every line item the server sent: Enter/ArrowDown walks the
+          column across section boundaries, and from the last cell lands on Save — so Enter
+          here ADVANCES rather than submitting, and Ctrl+Enter is what saves (spec §3.4). */}
       <form
+        data-entry-scope=""
         onSubmit={(e) => {
           e.preventDefault()
           submit()
@@ -139,15 +150,12 @@ export default function InputsForm({
                       </label>
                       {item.is_derived && <span className="badge">derived</span>}
                     </span>
-                    <input
+                    <AmountInput
                       id={id}
-                      className={`field-input${
-                        value !== '' && !PLAIN_DECIMAL.test(value.trim()) ? ' invalid' : ''
-                      }`}
-                      inputMode="decimal"
+                      className={value !== '' && !isAmount(value) ? 'invalid' : undefined}
                       value={value}
-                      onChange={(e) =>
-                        setValues((current) => ({ ...current, [item.key]: e.target.value }))
+                      onValueChange={(next) =>
+                        setValues((current) => ({ ...current, [item.key]: next }))
                       }
                     />
                     {/* The track is reserved whether or not a suggestion is showing, so a
@@ -185,6 +193,7 @@ export default function InputsForm({
         <div className="tax-form-actions">
           <button
             type="submit"
+            data-entry-primary=""
             className="button button-primary"
             disabled={saving || changedCount === 0}
           >

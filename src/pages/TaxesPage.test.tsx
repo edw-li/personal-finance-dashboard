@@ -197,6 +197,10 @@ const MISSING_21 =
   'state_exemption_credits, ltcg_total, ltcg_brokerage, qualified_dividends, ' +
   'other_capital_gains'
 
+// The tax inputs and the bracket cells are AmountInputs now, so a BLURRED box reads its
+// formatted echo, not its raw state (spec §3.3): "999" shows as "$999.00", and a percent
+// cell's "10" as "10%". Every `.value` pin below is on a box nothing has focused — the
+// echo IS what the user sees — while the wire-body pins stay canonical plain decimals.
 const salary = () => screen.getByLabelText('Annual Salary') as HTMLInputElement
 const saveInputs = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
 const deleteYearButton = () =>
@@ -370,13 +374,13 @@ describe('TaxesPage', () => {
     expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
     // Declined: nothing was refetched and nothing was lost.
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
-    expect(salary().value).toBe('999')
+    expect(salary().value).toBe('$999.00')
 
     confirmSpy.mockReturnValue(true)
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
     // A REAL switch remounts the editors, which is what discards the work.
-    await waitFor(() => expect(salary().value).toBe('200000.0000'))
+    await waitFor(() => expect(salary().value).toBe('$200,000.00'))
   })
 
   it('asks before creating a year that would discard typed work', async () => {
@@ -391,7 +395,7 @@ describe('TaxesPage', () => {
     // Declined BEFORE the request: no year was created, nothing was lost.
     expect(vi.mocked(cloneBrackets)).not.toHaveBeenCalled()
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
-    expect(salary().value).toBe('999')
+    expect(salary().value).toBe('$999.00')
   })
 
   it('keeps typed work across a same-year reload', async () => {
@@ -412,7 +416,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(2))
     // Same year, so the editors were never remounted and their state seeds from a
     // useState initializer — the replaced payload cannot reach into it.
-    expect(salary().value).toBe('4242')
+    expect(salary().value).toBe('$4,242.00')
   })
 
   it('lets only the newest totals refresh land', async () => {
@@ -508,7 +512,7 @@ describe('TaxesPage', () => {
     expect(screen.getByRole('button', { name: '2023' }).getAttribute('aria-pressed')).toBe('true')
     // 2023's table is untouched — and no totals refetch was spent on the year that is gone.
     const rate = screen.getByLabelText('Federal bracket 1 rate (%)') as HTMLInputElement
-    expect(rate.value).toBe('10')
+    expect(rate.value).toBe('10%')
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
   })
 
@@ -566,6 +570,74 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(thisYear, { values: {} }))
     expect(vi.mocked(cloneBrackets)).not.toHaveBeenCalled()
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(thisYear))
+  })
+
+  // --- AmountInput adoption: entry scopes and the wire boundary -------------------------
+
+  it('canonicalizes spreadsheet-formatted entry into both PUT bodies', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    // A jsdom click never blurs, so the blur-time canonicalization never runs here: the
+    // wire boundary in submit() is the only thing between "$210,000" and a Decimal column.
+    fireEvent.change(salary(), { target: { value: '$210,000' } })
+    fireEvent.click(saveInputs())
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
+        values: { annual_salary: '210000' },
+      }),
+    )
+
+    // Same boundary in the bracket editor, which canonicalizes BEFORE it validates — so
+    // "$0" is judged as the 0 first threshold the API demands, not refused as a shape.
+    fireEvent.change(screen.getByLabelText('Federal bracket 1 threshold'), {
+      target: { value: '$0' },
+    })
+    fireEvent.change(screen.getByLabelText('Federal bracket 1 rate (%)'), {
+      target: { value: '12' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
+    await waitFor(() =>
+      expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        jurisdictions: { federal: [{ rate: '0.12', threshold: '0' }] },
+      }),
+    )
+  })
+
+  it('advances on Enter and saves on Ctrl+Enter in the tax inputs form', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+    fireEvent.change(salary(), { target: { value: '210000' } })
+
+    // The scope preventDefaults Enter, so it never implicit-submits; on the LAST cell it
+    // hands focus to the form's primary instead. This is the documented behavior change.
+    act(() => salary().focus())
+    fireEvent.keyDown(salary(), { key: 'Enter' })
+    expect(document.activeElement).toBe(saveInputs())
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+
+    // Ctrl+Enter from inside a cell is what preserves the old save habit.
+    act(() => salary().focus())
+    fireEvent.keyDown(salary(), { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+  })
+
+  it('walks a bracket row on Enter and stops at the Save of that jurisdiction', async () => {
+    renderPage()
+    const rate = await screen.findByLabelText('Federal bracket 1 rate (%)')
+    const threshold = screen.getByLabelText('Federal bracket 1 threshold')
+
+    act(() => rate.focus())
+    fireEvent.keyDown(rate, { key: 'Enter' })
+    expect(document.activeElement).toBe(threshold)
+
+    // Last cell of THIS scope: each jurisdiction is its own form, so the walk ends on
+    // Federal's Save rather than wandering into the next table's rows.
+    fireEvent.keyDown(threshold, { key: 'Enter' })
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'Save Federal brackets' }),
+    )
+    expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
   })
 
   // --- the summary panel (Task 7) ------------------------------------------------------
@@ -749,7 +821,7 @@ describe('TaxesPage', () => {
     expect(confirmSpy).toHaveBeenCalledWith(DELETE_2024_CONFIRM)
     // Declined: no request, and the typed work is still there.
     expect(vi.mocked(deleteTaxYear)).not.toHaveBeenCalled()
-    expect(salary().value).toBe('999')
+    expect(salary().value).toBe('$999.00')
     // And no busy leaked out of a question that was answered "no" — the door is open for a
     // second thought.
     expect(deleteYearButton().disabled).toBe(false)
@@ -836,7 +908,7 @@ describe('TaxesPage', () => {
     expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('button', { name: '2023' })).toBeTruthy()
-    expect(salary().value).toBe('200000.0000')
+    expect(salary().value).toBe('$200,000.00')
     // The door is open again for a second try.
     await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
   })

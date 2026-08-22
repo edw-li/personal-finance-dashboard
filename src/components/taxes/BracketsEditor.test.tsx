@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { TaxBracketsOut } from '../../types/api'
@@ -61,12 +61,14 @@ describe('BracketsEditor', () => {
       'Disability brackets',
       'Capital gains brackets',
     ])
-    // rate * 100, trimmed — the stored fraction is never shown to the user.
-    expect(rate('Federal', 1).value).toBe('10')
-    expect(rate('Federal', 2).value).toBe('37')
-    expect(rate('State', 1).value).toBe('9.3')
-    expect(rate('Medicare', 1).value).toBe('1.45')
-    expect(threshold('Federal', 2).value).toBe('100000.00')
+    // rate * 100, trimmed — the stored fraction is never shown to the user. A blurred cell
+    // adds AmountInput's echo on top of that (spec §3.3): a percent-kind box speaks "%",
+    // the threshold speaks money, and neither reaches state or the wire.
+    expect(rate('Federal', 1).value).toBe('10%')
+    expect(rate('Federal', 2).value).toBe('37%')
+    expect(rate('State', 1).value).toBe('9.3%')
+    expect(rate('Medicare', 1).value).toBe('1.45%')
+    expect(threshold('Federal', 2).value).toBe('$100,000.00')
     // The hint states the precision the columns keep, because it decides what a typed
     // percent becomes (37.005 -> 37.01) and therefore which saves are refused.
     expect(screen.getByText(/stored as fractions with 4 decimal places/)).toBeTruthy()
@@ -164,8 +166,9 @@ describe('BracketsEditor', () => {
     render(<BracketsEditor brackets={bracketsFixture()} onSaved={vi.fn()} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Add Social Security bracket' }))
-    // The first row of an empty table is seeded with the threshold the API demands.
-    expect(threshold('Social Security', 1).value).toBe('0')
+    // The first row of an empty table is seeded with the threshold the API demands (the
+    // seed is the literal "0" the PUT body below carries; "$0.00" is its blurred echo).
+    expect(threshold('Social Security', 1).value).toBe('$0.00')
     fireEvent.change(rate('Social Security', 1), { target: { value: '6.2' } })
 
     fireEvent.click(screen.getByRole('button', { name: 'Add Social Security bracket' }))
@@ -183,8 +186,14 @@ describe('BracketsEditor', () => {
         },
       }),
     )
-    // The echo is authoritative: the typed "0" comes back as the stored "0.00".
-    await waitFor(() => expect(threshold('Social Security', 1).value).toBe('0.00'))
+    // The server echo is authoritative: the typed "0" comes back as the stored "0.00". Read
+    // FOCUSED — both strings display as "$0.00", so only the raw state tells them apart.
+    // act(), not fireEvent.focus: only a real .focus() moves document.activeElement, and
+    // only act flushes the state change that swaps the echo for the raw text.
+    await waitFor(() => expect(threshold('Social Security', 1).value).toBe('$0.00'))
+    act(() => threshold('Social Security', 1).focus())
+    expect(threshold('Social Security', 1).value).toBe('0.00')
+    act(() => threshold('Social Security', 1).blur())
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove Social Security bracket 2' }))
     expect(screen.queryByLabelText('Social Security bracket 2 rate (%)')).toBeNull()
