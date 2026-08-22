@@ -316,6 +316,20 @@ function ProfilesPanel({
     const request = editingId !== null ? updateProfile(editingId, body) : createProfile(body)
     request
       .then((echo) => {
+        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1).
+        // BEFORE the reseed, and that order is load-bearing: this form carries no
+        // data-entry-scope, so Enter is the browser's implicit submit and the caret is
+        // still sitting in an AmountInput when this lands. Moving it BLURS that box
+        // synchronously, and the blur's commit closes over the box's PRE-reset text —
+        // canonicalizing a "$150,000" into an enqueued write. Focusing first aims that
+        // write at the state the full-object reseed below then replaces; the other order
+        // lets it land on the reseeded form, where a resurrected salary would read as
+        // carry-forward and be indistinguishable from one. One shape across all five
+        // panels (EsppPage/CompPage/RsuGrantsPanel), so the order cannot drift here.
+        // getElementById is the house DOM protocol (like data-entry-scope), so AmountInput
+        // keeps its no-ref API; the target is a plain <input type="date">, so focusing it
+        // runs no React handler of its own.
+        document.getElementById('paycheck-effective-date')?.focus()
         // Back to "new profile", seeded from whichever row is newest NOW — the stored list
         // with the echo standing in for its own row (a create is not in it yet, so it is
         // appended). Comparing the echo against the OLD `latest` instead would reseed from
@@ -324,11 +338,6 @@ function ProfilesPanel({
         // forward anyway (review M3). Editing a historical row still leaves the real latest
         // in place, which is the case the comparison was written for.
         stopEditing(latestOf([...profiles.filter((p) => p.id !== echo.id), echo]))
-        // AFTER the reseed, and the reseed's other half: the next entry starts here — the
-        // sheet's row-to-row rhythm (spec §5.1). getElementById is the house DOM protocol
-        // (like data-entry-scope), so AmountInput keeps its no-ref API; this box is a plain
-        // <input type="date">, so focusing it runs no React handler at all.
-        document.getElementById('paycheck-effective-date')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))

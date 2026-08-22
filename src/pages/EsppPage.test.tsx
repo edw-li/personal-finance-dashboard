@@ -840,6 +840,10 @@ describe('EsppPage — periods', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
 
     await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
+    // Both halves of onPeriodsChanged are awaited BEFORE the caret is read, or the claim
+    // below would be about a moment the reload had not reached yet.
+    await waitFor(() => expect(vi.mocked(fetchPeriods)).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
     // Spec §5.1, the same ritual as the lots form above — and the period save also re-runs
     // the modeler, so this pins that the chain's reload does not steal the caret back.
     await waitFor(() => expect(document.activeElement).toBe(field('Label')))

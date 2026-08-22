@@ -209,13 +209,20 @@ function EventsPanel({
     const request = editingId !== null ? updateEvent(editingId, body) : createEvent(body)
     request
       .then(() => {
+        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1).
+        // BEFORE the reset, and that order is load-bearing: this form carries no
+        // data-entry-scope, so Enter is the browser's implicit submit and the caret is
+        // still sitting in an AmountInput when this lands. Moving it BLURS that box
+        // synchronously, and the blur's commit closes over the box's PRE-reset text —
+        // canonicalizing a "$188,930" into an enqueued write. Focusing first aims that
+        // write at the state the full-object reset below then replaces; the other order
+        // lets it land on the emptied form and resurrect the row that was just saved.
+        // getElementById is the house DOM protocol (like data-entry-scope), so AmountInput
+        // keeps its no-ref API; the target is a plain <input>, so focusing it runs no
+        // React handler of its own.
+        document.getElementById('comp-focal-year')?.focus()
         setForm(EMPTY_EVENT)
         setEditingId(null)
-        // AFTER the reset: the next entry starts here — the sheet's row-to-row rhythm
-        // (spec §5.1). getElementById is the house DOM protocol (like data-entry-scope),
-        // so AmountInput keeps its no-ref API; this box is a plain <input>, so focusing it
-        // runs no React handler at all.
-        document.getElementById('comp-focal-year')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))

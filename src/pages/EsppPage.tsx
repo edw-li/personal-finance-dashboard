@@ -177,13 +177,20 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
     }
     request
       .then(() => {
+        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1).
+        // BEFORE the reset, and that order is load-bearing: this form carries no
+        // data-entry-scope, so Enter is the browser's implicit submit and the caret is
+        // still sitting in an AmountInput when this lands. Moving it BLURS that box
+        // synchronously, and the blur's commit closes over the box's PRE-reset text —
+        // canonicalizing a "$150.00" into an enqueued write. Focusing first aims that write
+        // at the state the full-object reset below then replaces; the other order lets it
+        // land on the emptied form and resurrect one figure of the lot just saved.
+        // getElementById is the house DOM protocol (like data-entry-scope), so AmountInput
+        // keeps its no-ref API; the target is a plain <input type="date">, so focusing it
+        // runs no React handler of its own.
+        document.getElementById('lot-purchase-date')?.focus()
         setForm(EMPTY_LOT)
         setEditingId(null)
-        // AFTER the reset: the next entry starts here — the sheet's row-to-row rhythm
-        // (spec §5.1). getElementById is the house DOM protocol (like data-entry-scope),
-        // so AmountInput keeps its no-ref API; this box is a plain <input type="date">, so
-        // focusing it runs no React handler at all.
-        document.getElementById('lot-purchase-date')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
@@ -703,12 +710,14 @@ function PeriodsPanel({
     const request = editingId !== null ? updatePeriod(editingId, body) : createPeriod(body)
     request
       .then(() => {
+        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1), BEFORE
+        // the reset for the blur-commit reason in LotsPanel's note: the transfer's blur has
+        // to write into state this reset is about to replace, not onto the emptied form.
+        // onChanged also re-runs the modeler, but nothing in that reload remounts this
+        // form, so the caret stays where it was just put.
+        document.getElementById('period-label')?.focus()
         setForm(EMPTY_PERIOD)
         setEditingId(null)
-        // AFTER the reset: the next entry starts here — the sheet's row-to-row rhythm
-        // (spec §5.1). onChanged also re-runs the modeler, but nothing in that reload
-        // remounts this form, so the caret stays where it was just put.
-        document.getElementById('period-label')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))

@@ -384,6 +384,30 @@ describe('CompPage — writes', () => {
     expect(field('Focal year').value).toBe('')
   })
 
+  it('never resurrects the pre-reset text when the caret was still in a money box', async () => {
+    render(<CompPage />)
+    await screen.findByText('$601,854.46')
+
+    type('Focal year', '2028')
+    // A REAL focus, not fireEvent.focus: only this moves jsdom's activeElement, and the
+    // caret's position at the moment the save lands is the whole subject here. This form
+    // carries no data-entry-scope, so Enter is the browser's implicit submit and leaves the
+    // caret exactly here — and jsdom's click does not move focus either, so the click below
+    // models that Enter faithfully.
+    act(() => field('Current base').focus())
+    type('Current base', '$188,930')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+
+    await waitFor(() => expect(vi.mocked(createEvent)).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(document.activeElement).toBe(field('Focal year')))
+    // The focus transfer BLURS this box synchronously, and its onBlur commit closes over the
+    // pre-reset "$188,930" — canonicalizing it into an enqueued write. Focusing after the
+    // reset would let that write land on top of the emptied form and resurrect the row that
+    // was just saved, in the one column this panel requires: the next Add event would ship a
+    // base the user never typed for it, looking for all the world like carry-forward.
+    expect(field('Current base').value).toBe('')
+  })
+
   it('PATCHes the FULL row, and a blanked column travels as an explicit null', async () => {
     render(<CompPage />)
     await screen.findByText('$601,854.46')
@@ -955,7 +979,6 @@ describe('CompPage — RSU grant writes', () => {
     // form opens on a <select>, and a refocused select is one accidental wheel-scroll from
     // silently changing a grant's kind — which is its whole vesting schedule.
     await waitFor(() => expect(document.activeElement).toBe(field('Label')))
-    expect(document.activeElement).not.toBe(screen.getByLabelText('Kind'))
     expect(field('Label').value).toBe('')
   })
 

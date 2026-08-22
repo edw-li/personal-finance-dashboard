@@ -221,15 +221,24 @@ export default function RsuGrantsPanel({
     const request = editingId !== null ? updateRsuGrant(editingId, body) : createRsuGrant(body)
     request
       .then(() => {
+        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1).
+        // The LABEL, not the form's literal first field: that one is the Kind <select>, and
+        // a refocused select is one accidental wheel-scroll from silently changing a grant's
+        // kind — which is its whole vesting schedule. So the caret goes to the first box
+        // that is actually TYPED into.
+        // BEFORE the reset, and that order is load-bearing: this form carries no
+        // data-entry-scope, so Enter is the browser's implicit submit and the caret can
+        // still be sitting in the price AmountInput when this lands. Moving it BLURS that
+        // box synchronously, and the blur's commit closes over the box's PRE-reset text —
+        // canonicalizing a "$129.57" into an enqueued write. Focusing first aims that write
+        // at the state the full-object reset below then replaces; the other order lets it
+        // land on the emptied form and resurrect the price of the grant just saved.
+        // getElementById is the house DOM protocol (like data-entry-scope), so AmountInput
+        // keeps its no-ref API; the target is a plain <input>, so focusing it runs no React
+        // handler of its own.
+        document.getElementById('grant-label')?.focus()
         setForm(EMPTY_GRANT)
         setEditingId(null)
-        // AFTER the reset: the next entry starts here — the sheet's row-to-row rhythm
-        // (spec §5.1). The LABEL, not the form's literal first field: that one is the Kind
-        // <select>, and a refocused select is one accidental wheel-scroll from silently
-        // changing a grant's kind — which is its whole vesting schedule. So the caret goes
-        // to the first box that is actually TYPED into. getElementById is the house DOM
-        // protocol (like data-entry-scope), so AmountInput keeps its no-ref API.
-        document.getElementById('grant-label')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
