@@ -62,26 +62,39 @@ export function parseAmount(raw: string): ParsedAmount | null {
   return { canonical: `${negative ? '-' : ''}${text}` }
 }
 
+interface AmountOptions {
+  /**
+   * Whether a leading "=" is an evaluable expression. MONEY BOXES ONLY (spec §3.2):
+   * the evaluator quantizes to 2dp, so letting "=1/8" through a 6dp shares or
+   * split-factor path would commit 0.13 where 0.125 was meant — a silent wrong
+   * number. Non-money callers pass { expressions: false } and "=…" stays verbatim
+   * (invalid), for the existing validators to word.
+   */
+  expressions?: boolean
+}
+
 /**
  * The wire-boundary belt: canonical form when parseable, trimmed original otherwise
- * (existing validators still catch the garbage and word the error). EVERY payload builder
- * goes through this — blur usually canonicalized already, but a submit reached without a
- * blur (Ctrl+Enter, jsdom clicks) must not ship "$1,600" to a Decimal column.
+ * (existing validators still catch the garbage and word the error), with "="-entries
+ * evaluated only where expressions are opted in. EVERY payload builder goes through this —
+ * blur usually canonicalized already, but a submit reached without a blur (Ctrl+Enter,
+ * jsdom clicks) must not ship "$1,600" to a Decimal column.
  *
  * Extended for "="-entries: an expression canonicalizes to its evaluated 2dp result, so a
  * submit that never saw a blur ships 1234.56 rather than the literal text "=1200+34.56".
  */
-export function canonicalAmount(raw: string): string {
+export function canonicalAmount(raw: string, { expressions = true }: AmountOptions = {}): string {
   const trimmed = raw.trim()
-  if (trimmed.startsWith('=')) return evaluateAmount(trimmed) ?? trimmed
+  if (trimmed.startsWith('=')) return expressions ? (evaluateAmount(trimmed) ?? trimmed) : trimmed
   return parseAmount(trimmed)?.canonical ?? trimmed
 }
 
 /**
- * Round a plain decimal string to `places` decimals exactly the way the server will —
+ * Round a plain decimal string to `places` decimals (>= 1) exactly the way the server will —
  * Decimal.quantize(..., ROUND_HALF_UP), ties away from zero. Lifted VERBATIM from
  * BracketsEditor (whose validate() must keep agreeing with the API's post-quantize
- * comparisons); non-plain text is handed back untouched.
+ * comparisons); non-plain text is handed back untouched. `places` >= 1 is a precondition —
+ * with places 0 the output carries a trailing dot; every caller passes 2 or 4.
  */
 export function quantize(raw: string, places: number): string {
   const text = raw.trim()
@@ -113,9 +126,14 @@ function addOne(digits: string): string {
 // bounds, far below where Number.toFixed loses the plot.
 const EXPRESSION_MAX = 1e12
 
+// Pathological unary chains ("=+++…+5") recurse once per sign; a legitimate receipt
+// formula never approaches this length, so fence the INPUT instead of counting depth.
+const EXPRESSION_MAX_LENGTH = 200
+
 /**
  * Evaluate a leading-"=" arithmetic entry ("=1200+34.56") to a 2dp HALF_UP plain decimal
- * string, or null when the text is not a well-formed expression. Float math is fine here
+ * string, or null when the text is not a well-formed expression, when the result is
+ * non-finite, or when it exceeds the magnitude fence. Float math is fine here
  * (receipt-scale sums); the RESULT is quantized through the same HALF_UP the server uses.
  * Grammar: expr = term (('+'|'-') term)*; term = factor (('*'|'/') factor)*;
  * factor = number | '(' expr ')' | ('+'|'-') factor. Plain decimal literals only —
@@ -124,6 +142,7 @@ const EXPRESSION_MAX = 1e12
 export function evaluateAmount(raw: string): string | null {
   const text = raw.trim()
   if (!text.startsWith('=')) return null
+  if (text.length > EXPRESSION_MAX_LENGTH) return null
   const result = evalExpression(text.slice(1))
   if (result === null || !Number.isFinite(result) || Math.abs(result) >= EXPRESSION_MAX) {
     return null
@@ -192,7 +211,8 @@ function evalExpression(source: string): number | null {
   return pos === source.length ? result : null
 }
 
-/** One committable-entry test for validity gating: tolerant amount OR expression. */
-export function isAmount(raw: string): boolean {
-  return raw.trim().startsWith('=') ? evaluateAmount(raw) !== null : parseAmount(raw) !== null
+/** One committable-entry test for validity gating: tolerant amount OR (money) expression. */
+export function isAmount(raw: string, { expressions = true }: AmountOptions = {}): boolean {
+  if (raw.trim().startsWith('=')) return expressions && evaluateAmount(raw) !== null
+  return parseAmount(raw) !== null
 }

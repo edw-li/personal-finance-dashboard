@@ -108,6 +108,20 @@ describe('evaluateAmount', () => {
   it('fences absurd magnitudes', () => {
     expect(evaluateAmount('=999999999999999*9')).toBeNull()
   })
+  it('precedence, associativity, and negative results are pinned', () => {
+    expect(evaluateAmount('=2+3*4')).toBe('14.00')
+    expect(evaluateAmount('=100-10*5')).toBe('50.00')
+    expect(evaluateAmount('=10-2-3')).toBe('5.00')
+    expect(evaluateAmount('=12/3/2')).toBe('2.00')
+    expect(evaluateAmount('=2*-3')).toBe('-6.00')
+    expect(evaluateAmount('=2-5')).toBe('-3.00')
+  })
+  it('negative zero from an expression mirrors the parens policy', () => {
+    expect(evaluateAmount('=0-0.001')).toBe('-0.00')
+  })
+  it('fences pathological unary chains instead of overflowing the stack', () => {
+    expect(evaluateAmount(`=${'+'.repeat(10_000)}5`)).toBeNull()
+  })
 })
 
 describe('isAmount', () => {
@@ -116,5 +130,16 @@ describe('isAmount', () => {
   })
   it('rejects blanks, garbage, exponents, broken expressions', () => {
     for (const bad of ['', 'abc', '1e5', '=x', '=1+']) expect(isAmount(bad)).toBe(false)
+  })
+})
+
+describe('expressions opt (money boxes only — spec §3.2)', () => {
+  it('isAmount refuses "=" when expressions are off', () => {
+    expect(isAmount('=1+2', { expressions: false })).toBe(false)
+    expect(isAmount('$5', { expressions: false })).toBe(true)
+  })
+  it('canonicalAmount leaves "=" verbatim when expressions are off', () => {
+    expect(canonicalAmount('=1/8', { expressions: false })).toBe('=1/8')
+    expect(canonicalAmount('$1,600', { expressions: false })).toBe('1600')
   })
 })
