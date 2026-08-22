@@ -305,18 +305,27 @@ describe('PaycheckPage — the profile form', () => {
     await screen.findByText('$3,384.16')
 
     // The comp-change ritual: everything carries over except the date it takes effect on.
+    // Every figure box is an AmountInput, so a BLURRED one shows its formatted echo
+    // (display rule §3.3) — the shifted percent strings themselves are what is in state.
     expect(field('Effective date').value).toBe('')
-    expect(field('Annual salary').value).toBe('188930.00')
+    expect(field('Annual salary').value).toBe('$188,930.00')
+    // Pay periods is a whole-number box and stays a plain input.
     expect(field('Pay periods per year').value).toBe('24')
-    // 0.130000000 comes back as "13", not 13.000000000000002.
-    expect(field('Traditional 401(k) %').value).toBe('13')
-    expect(field('Roth 401(k) %').value).toBe('0')
-    expect(field('After-tax 401(k) %').value).toBe('3')
-    expect(field('ESPP %').value).toBe('11')
-    expect(field('Withholding %').value).toBe('33.4009167')
-    expect(field('Dental & vision').value).toBe('12.50')
-    expect(field('HSA').value).toBe('100.00')
+    // 0.130000000 comes back as "13", not 13.000000000000002 — echoed "13%".
+    expect(field('Traditional 401(k) %').value).toBe('13%')
+    expect(field('Roth 401(k) %').value).toBe('0%')
+    expect(field('After-tax 401(k) %').value).toBe('3%')
+    expect(field('ESPP %').value).toBe('11%')
+    expect(field('Withholding %').value).toBe('33.4009167%')
+    expect(field('Dental & vision').value).toBe('$12.50')
+    expect(field('HSA').value).toBe('$100.00')
     expect(field('Notes').value).toBe('')
+
+    // The other half of the display rule: focus swaps the echo for the raw state, which is
+    // the human-scale percent the wire body shifts. (fireEvent.focus fires React's onFocus,
+    // which is all this swap turns on — it does not move activeElement, and need not.)
+    fireEvent.focus(field('Traditional 401(k) %'))
+    expect(field('Traditional 401(k) %').value).toBe('13')
   })
 
   it('posts the full profile with every percent shifted, never divided', async () => {
@@ -505,6 +514,42 @@ describe('PaycheckPage — the profile form', () => {
     expect(vi.mocked(createProfile).mock.calls[0][0].trad_401k_pct).toBe('0.00001')
   })
 
+  it('canonicalizes a grouped salary at the wire boundary, with no blur', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    type('Effective date', '2026-07-01')
+    type('Annual salary', '$150,000')
+    type('Traditional 401(k) %', '13')
+    // Typed and clicked, never blurred — a mouse user who fills the form and presses Add
+    // produces exactly this sequence, so the payload BELT in submit(), not AmountInput's
+    // blur commit, is what keeps "$150,000" out of a Decimal column. The percent travels
+    // the same belt and is still SHIFTED, never divided.
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(createProfile).mock.calls[0][0]
+    expect(body.annual_salary).toBe('150000')
+    expect(body.trad_401k_pct).toBe('0.13')
+  })
+
+  it('refuses an =-expression in a percent box, which the box itself will not evaluate', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    type('Effective date', '2026-07-01')
+    type('Traditional 401(k) %', '=13')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+
+    // THE consistency rule: these boxes render kind="percent", which refuses a leading "="
+    // outright — the evaluator quantizes to 2dp, and these columns are 9dp fractions, so
+    // "=1/8" would store 0.0013 where an eighth of a percent (0.00125) was meant. A gate
+    // left on the money default would green-light text the cell itself marks invalid, and
+    // the belt beside it would then evaluate it. Both sides pass { expressions: false }.
+    expect(await screen.findByText('Traditional 401(k) % must be a number')).toBeTruthy()
+    expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
+  })
+
   it('reseeds the form from the row that is newest AFTER the save', async () => {
     // The latest profile's date moves BACKWARD, behind the 2025 row. The echo is no longer
     // the newest thing in the table, so the next new profile must copy the 2025 row —
@@ -520,10 +565,11 @@ describe('PaycheckPage — the profile form', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }))
 
     await waitFor(() => expect(vi.mocked(updateProfile)).toHaveBeenCalledTimes(1))
-    // The 2025 row's numbers, in the new-profile form: salary, and its own 10% traditional.
-    await waitFor(() => expect(field('Annual salary').value).toBe('162000.00'))
-    expect(field('Traditional 401(k) %').value).toBe('10')
-    expect(field('ESPP %').value).toBe('15')
+    // The 2025 row's numbers, in the new-profile form: salary, and its own 10% traditional
+    // — blurred, so each box shows its formatted echo (display rule §3.3).
+    await waitFor(() => expect(field('Annual salary').value).toBe('$162,000.00'))
+    expect(field('Traditional 401(k) %').value).toBe('10%')
+    expect(field('ESPP %').value).toBe('15%')
     // The two things a new profile never inherits.
     expect(field('Effective date').value).toBe('')
     expect(field('Notes').value).toBe('')

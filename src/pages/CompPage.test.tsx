@@ -375,10 +375,18 @@ describe('CompPage — writes', () => {
     await screen.findByText('$601,854.46')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
-    // The boxes seed from the row, verbatim — these are the server's own quantized strings.
-    expect(field('Current base').value).toBe('162000.00')
-    expect(field('New base').value).toBe('188930.00')
+    // The boxes seed from the row verbatim, and a BLURRED AmountInput shows the formatted
+    // echo of that seed (display rule §3.3) — the server's own quantized string is what is
+    // in state behind it, which is why the PATCH below sends it back unchanged.
+    expect(field('Current base').value).toBe('$162,000.00')
+    expect(field('New base').value).toBe('$188,930.00')
+    expect(field('Unvested price').value).toBe('$183.25')
+    // The echo is DISPLAY-ONLY, and it rounds: focusing the cell hands back the 4dp string
+    // the column actually holds. (fireEvent.focus fires React's onFocus, which is all the
+    // raw/echo swap turns on — it does not move activeElement, and does not need to.)
+    fireEvent.focus(field('Unvested price'))
     expect(field('Unvested price').value).toBe('183.2508')
+    // The notes box is free text and stays a plain input.
     expect(field('Notes').value).toBe('FY26 refresh')
 
     // The raise that never happened: clearing new_base has to CLEAR the column, which on
@@ -414,6 +422,42 @@ describe('CompPage — writes', () => {
 
     await waitFor(() => expect(vi.mocked(updateEvent)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(updateEvent).mock.calls[0][1].notes).toBeNull()
+  })
+
+  it('canonicalizes a grouped base at the wire boundary, with no blur', async () => {
+    render(<CompPage />)
+    await screen.findByText('$601,854.46')
+
+    type('Focal year', '2028')
+    type('Current base', '$188,930')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+
+    await waitFor(() => expect(vi.mocked(createEvent)).toHaveBeenCalledTimes(1))
+    // Typed and clicked, never blurred: the belt in submit(), not AmountInput's blur
+    // commit, is what strips the grouping comma a Decimal column would reject.
+    expect(vi.mocked(createEvent).mock.calls[0][0].current_base).toBe('188930')
+  })
+
+  it('ships an =-expression typed into a COUNT box verbatim — the belt never evaluates it', async () => {
+    render(<CompPage />)
+    await screen.findByText('$601,854.46')
+
+    fillNewEvent()
+    type('Unvested RSUs', '=2*100')
+    type('Unvested price', '190.0000')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+
+    await waitFor(() => expect(vi.mocked(createEvent)).toHaveBeenCalledTimes(1))
+    // The { expressions: false } contract (TransactionsPanel's pin): unvested_rsus is a 4dp
+    // count rendered as kind="shares", and the evaluator quantizes to 2dp — "=1/8" would
+    // commit 0.13 where 0.125 was meant. The text therefore travels VERBATIM, deliberately
+    // NOT '200'. The panel still submits it because only the two NOT NULL columns are
+    // gated here, so this garbage 422s server-side exactly as 'abc' typed into the same box
+    // does today; the server error is the backstop, and no client-side evaluation is
+    // allowed to invent a number the cell itself marks invalid.
+    expect(vi.mocked(createEvent).mock.calls[0][0].unvested_rsus).toBe('=2*100')
+    // ...while the money box beside it keeps the money default and canonicalizes normally.
+    expect(vi.mocked(createEvent).mock.calls[0][0].unvested_price).toBe('190.0000')
   })
 
   it('deletes an event only after the confirm is accepted', async () => {
@@ -464,7 +508,9 @@ describe('CompPage — writes', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
 
     expect(await screen.findByText('a comp event for 2028 already exists')).toBeTruthy()
-    expect(field('Current base').value).toBe('188930')
+    // The typed row survives the 409 — shown as the blurred money echo of the '188930' in
+    // state (display rule §3.3).
+    expect(field('Current base').value).toBe('$188,930.00')
     expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(1)
   })
 })
@@ -834,6 +880,10 @@ describe('CompPage — RSU grant writes', () => {
     // refresh_rsus arrives as "480.0000" and the column behind the box is whole shares.
     expect(field('Shares').value).toBe('480')
     expect(field('Grant focal year').value).toBe('2026')
+    // The chip writes the seed's own 4dp string; the blurred box shows its money echo, and
+    // focusing it hands the full precision back (display rule §3.3).
+    expect(field('Price at grant').value).toBe('$129.57')
+    fireEvent.focus(field('Price at grant'))
     expect(field('Price at grant').value).toBe('129.5651')
     expect(field('First vest').value).toBe('2026-09-16')
     // An offer, not a write: the grant it becomes is the vesting truth for years afterwards.
@@ -887,7 +937,9 @@ describe('CompPage — RSU grant writes', () => {
     // real offer grant, vesting in tens).
     expect(field('Label').value).toBe('FY24 new hire')
     expect(field('Shares').value).toBe('1200')
-    expect(field('Price at grant').value).toBe('112.0750')
+    // Blurred, so the money echo of the stored 112.0750 (display rule §3.3) — the 4dp
+    // string itself is still in state, and travels on the PATCH below.
+    expect(field('Price at grant').value).toBe('$112.08')
     expect(field('First vest').value).toBe('2024-11-20')
     expect(field('Vest rounding').value).toBe('10')
 

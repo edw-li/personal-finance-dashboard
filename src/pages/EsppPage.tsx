@@ -13,6 +13,7 @@ import {
   updatePeriod,
 } from '../api/espp'
 import type { ModelerParams } from '../api/espp'
+import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import type {
   EsppLotCreate,
@@ -23,8 +24,9 @@ import type {
   EsppPeriodCreate,
   EsppPeriodOut,
 } from '../types/api'
+import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../utils/format'
-import { isPlainDecimal, shiftPoint } from '../utils/percent'
+import { shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 import './EsppPage.css'
 
@@ -98,9 +100,16 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
   }
 
   const submit = () => {
-    const shares = form.shares.trim()
-    const subscription = form.subscription_price.trim()
-    const fmv = form.purchase_fmv.trim()
+    // Canonicalized at the READ site, so the presence checks, the blank-vs-null branches
+    // and both bodies below all see the one text the column will store — a submit reached
+    // without a blur (type, then click Save) must not ship "$85.50" to a Decimal column.
+    // Blank canonicalizes to blank, so every '' test downstream keeps its meaning exactly.
+    // `shares` is the odd one out: a 4dp count rendered as kind="shares", where the 2dp
+    // evaluator has no business — { expressions: false } leaves "=1/8" verbatim for the
+    // server's 422 rather than committing 0.13 (TransactionsPanel's rule).
+    const shares = canonicalAmount(form.shares.trim(), { expressions: false })
+    const subscription = canonicalAmount(form.subscription_price.trim())
+    const fmv = canonicalAmount(form.purchase_fmv.trim())
     if (!form.purchase_date || !form.qualifying_date || !shares || !subscription || !fmv) {
       // An empty string reaches the API as `""` and 422s as an opaque decimal-parse error
       // (TransactionsPanel's Task 14 review M2 lesson).
@@ -115,14 +124,14 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
       return
     }
     const soldDate = form.sold_date.trim()
-    const soldPrice = form.sold_price.trim()
+    const soldPrice = canonicalAmount(form.sold_price.trim())
     if ((soldDate === '') !== (soldPrice === '')) {
       // The server's own sentence, one vocabulary — its 422 is the backstop, this is the
       // round trip saved (BracketsEditor's rule).
       setError('sold_date and sold_price must be set together')
       return
     }
-    const price = form.purchase_price.trim()
+    const price = canonicalAmount(form.purchase_price.trim())
     const notes = form.notes.trim() || null
     setBusy(true)
     setError(null)
@@ -253,41 +262,27 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
             onChange={(e) => set('qualifying_date')(e.target.value)}
           />
         </label>
+        {/* The figure boxes are AmountInputs: select-all on focus, canonical on blur, a
+            formatted echo while blurred. No data-entry-scope on this form — it is one lot
+            row, so Enter stays the browser's own implicit submit. */}
         <label>
           Shares
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.shares}
-            onChange={(e) => set('shares')(e.target.value)}
-          />
+          <AmountInput kind="shares" value={form.shares} onValueChange={set('shares')} />
         </label>
         <label>
           Subscription
-          <input
-            className="field-input"
-            inputMode="decimal"
+          <AmountInput
             value={form.subscription_price}
-            onChange={(e) => set('subscription_price')(e.target.value)}
+            onValueChange={set('subscription_price')}
           />
         </label>
         <label>
           FMV
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.purchase_fmv}
-            onChange={(e) => set('purchase_fmv')(e.target.value)}
-          />
+          <AmountInput value={form.purchase_fmv} onValueChange={set('purchase_fmv')} />
         </label>
         <label>
           Purchase price
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.purchase_price}
-            onChange={(e) => set('purchase_price')(e.target.value)}
-          />
+          <AmountInput value={form.purchase_price} onValueChange={set('purchase_price')} />
         </label>
         <label>
           Sold date
@@ -300,12 +295,7 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
         </label>
         <label>
           Sold price
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.sold_price}
-            onChange={(e) => set('sold_price')(e.target.value)}
-          />
+          <AmountInput value={form.sold_price} onValueChange={set('sold_price')} />
         </label>
         <label className="span-2">
           Notes
@@ -469,32 +459,20 @@ function ModelerCard({
           onRecalculate()
         }}
       >
+        {/* All three knobs are money, so all three take the default kind — including the
+            "=" arithmetic, which is exactly the sort of thing a what-if knob invites.
+            Nothing here is stored; the canonical belt is at runModeler's read site. */}
         <label>
           Subscription price
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={knobs.subscription}
-            onChange={(e) => setKnob('subscription')(e.target.value)}
-          />
+          <AmountInput value={knobs.subscription} onValueChange={setKnob('subscription')} />
         </label>
         <label>
           Purchase FMV
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={knobs.fmv}
-            onChange={(e) => setKnob('fmv')(e.target.value)}
-          />
+          <AmountInput value={knobs.fmv} onValueChange={setKnob('fmv')} />
         </label>
         <label>
           Carry-forward
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={knobs.carry}
-            onChange={(e) => setKnob('carry')(e.target.value)}
-          />
+          <AmountInput value={knobs.carry} onValueChange={setKnob('carry')} />
         </label>
         <div className="espp-form-actions">
           <button type="submit" className="button button-primary" disabled={busy}>
@@ -638,8 +616,13 @@ function PeriodsPanel({
 
   const submit = () => {
     const label = form.label.trim()
-    const base = form.semi_annual_base.trim()
-    const pct = form.contribution_pct.trim()
+    // Canonical at the READ site (LotsPanel's note): the presence checks, the gate below
+    // and the body all see the one text the column will store. `pct` renders as
+    // kind="percent", which refuses a leading "=" — the evaluator quantizes to 2dp and this
+    // column is a 9dp fraction, so an evaluated "=1/8" would store 0.0013 where an eighth
+    // of a percent (0.00125) was meant. The gate must refuse what the cell marks invalid.
+    const base = canonicalAmount(form.semi_annual_base.trim())
+    const pct = canonicalAmount(form.contribution_pct.trim(), { expressions: false })
     if (!label || !form.period_start || !form.period_end || !base || !pct) {
       setError('Label, both dates, the base and the contribution % are required')
       return
@@ -650,12 +633,12 @@ function PeriodsPanel({
       setError('period_end must be after period_start')
       return
     }
-    if (!isPlainDecimal(pct)) {
+    if (!isAmount(pct, { expressions: false })) {
       // Anything shiftPoint will not convert stops HERE, before the range check that
       // Number() would happily pass it through: "1e-3" travels verbatim, parses on the
       // server as a perfectly legal Decimal 0.001, and stores a tenth of a percent where
       // the box said a thousandth of one. There is no 422 behind this gate — it is the
-      // only thing between that text and the column (src/utils/percent.ts).
+      // only thing between that text and the column (src/utils/amount.ts).
       setError('contribution % must be a number')
       return
     }
@@ -678,7 +661,10 @@ function PeriodsPanel({
       period_end: form.period_end,
       semi_annual_base: base,
       // Blank is a real zero here, not "leave it alone": the box was prefilled from the row.
-      additional_payments: form.additional_payments.trim() || '0',
+      // The '0' default stays OUTSIDE the belt, so blank is still a zero rather than an
+      // empty string canonicalized into one.
+      additional_payments: canonicalAmount(form.additional_payments.trim() || '0'),
+      // `pct` is already canonical, so the shift lands on the digits shiftPoint can move.
       contribution_pct: shiftPoint(pct, -2),
     }
     const request = editingId !== null ? updatePeriod(editingId, body) : createPeriod(body)
@@ -760,29 +746,26 @@ function PeriodsPanel({
         </label>
         <label>
           Semi-annual base
-          <input
-            className="field-input"
-            inputMode="decimal"
+          <AmountInput
             value={form.semi_annual_base}
-            onChange={(e) => set('semi_annual_base')(e.target.value)}
+            onValueChange={set('semi_annual_base')}
           />
         </label>
         <label>
           Additional payments
-          <input
-            className="field-input"
-            inputMode="decimal"
+          <AmountInput
             value={form.additional_payments}
-            onChange={(e) => set('additional_payments')(e.target.value)}
+            onValueChange={set('additional_payments')}
           />
         </label>
         <label>
           Contribution %
-          <input
-            className="field-input"
-            inputMode="decimal"
+          {/* State stays HUMAN-scale ("14" = 14%, echoed "14%"); the shift to the stored
+              fraction happens at the wire, in submit. */}
+          <AmountInput
+            kind="percent"
             value={form.contribution_pct}
-            onChange={(e) => set('contribution_pct')(e.target.value)}
+            onValueChange={set('contribution_pct')}
           />
         </label>
         <div className="espp-form-actions">
@@ -992,10 +975,13 @@ export default function EsppPage() {
     // literal "null — add one below…" for the whole of the re-run that adding the first
     // period just caused. Both are re-derived when this load answers.
     setModelerMissing(false)
+    // The query-string belt, the same shape as every payload one: a knob typed and
+    // Recalculated without a blur must not put "$170.79" in the URL for Decimal() to
+    // choke on. canonicalAmount leaves blank blank, so the omit-me path above is intact.
     loadModeler({
-      subscriptionPrice: knobs.subscription.trim(),
-      purchaseFmv: knobs.fmv.trim(),
-      carryForward: knobs.carry.trim(),
+      subscriptionPrice: canonicalAmount(knobs.subscription.trim()),
+      purchaseFmv: canonicalAmount(knobs.fmv.trim()),
+      carryForward: canonicalAmount(knobs.carry.trim()),
     })
   }
 

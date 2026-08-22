@@ -7,6 +7,7 @@ import {
   fetchVestingSchedule,
   updateEvent,
 } from '../api/comp'
+import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import RsuGrantsPanel from '../components/comp/RsuGrantsPanel'
@@ -16,6 +17,7 @@ import {
   tcTrajectoryOption,
 } from '../components/comp/compChartOptions'
 import type { CompEventCreate, CompEventOut, VestingScheduleOut } from '../types/api'
+import { canonicalAmount } from '../utils/amount'
 import { formatCurrency, formatPct, formatShares } from '../utils/format'
 import '../components/panels.css'
 import './CompPage.css'
@@ -170,16 +172,36 @@ function EventsPanel({
     // Every nullable column travels as an explicit null when its box is blank — on PATCH
     // that is comp's ratified CLEAR (the one router where null is not a no-op), and on
     // POST it is simply the column's own default said out loud.
-    const blank = (field: keyof EventFormState) => form[field].trim() || null
+    //
+    // TWO belts, because the two kinds of box disagree about "=": the money columns take
+    // the default (their AmountInput evaluates an expression, so the belt must too, for the
+    // submit that never saw a blur), while the two COUNT columns are 4dp Numerics rendered
+    // as kind="shares" — the evaluator quantizes to 2dp, so an evaluated "=1/8" would
+    // commit 0.13 where 0.125 was meant. { expressions: false } leaves that text verbatim
+    // for the server's 422 to answer. The '' -> null rule is identical on both.
+    //
+    // Each takes only the fields it is FOR, rather than `keyof EventFormState`: handing a
+    // count column to the money belt is the exact silent bug this pair exists to prevent,
+    // so it is a compile error rather than a comment.
+    const blankMoney = (field: 'new_base' | 'unvested_price' | 'grant_price') => {
+      const text = form[field].trim()
+      return text === '' ? null : canonicalAmount(text)
+    }
+    const blankCount = (field: 'unvested_rsus' | 'refresh_rsus') => {
+      const text = form[field].trim()
+      return text === '' ? null : canonicalAmount(text, { expressions: false })
+    }
     const body: CompEventCreate = {
       focal_year: year,
-      current_base: base,
-      new_base: blank('new_base'),
-      unvested_rsus: blank('unvested_rsus'),
-      unvested_price: blank('unvested_price'),
-      refresh_rsus: blank('refresh_rsus'),
-      grant_price: blank('grant_price'),
-      notes: blank('notes'),
+      current_base: canonicalAmount(base),
+      new_base: blankMoney('new_base'),
+      unvested_rsus: blankCount('unvested_rsus'),
+      unvested_price: blankMoney('unvested_price'),
+      refresh_rsus: blankCount('refresh_rsus'),
+      grant_price: blankMoney('grant_price'),
+      // Free text, and the one nullable column that is NOT a number: it keeps the plain
+      // '' -> null rule and never touches an amount belt.
+      notes: form.notes.trim() || null,
     }
     const request = editingId !== null ? updateEvent(editingId, body) : createEvent(body)
     request
@@ -260,59 +282,41 @@ function EventsPanel({
             onChange={(e) => set('focal_year')(e.target.value)}
           />
         </label>
+        {/* The six figure boxes are AmountInputs: select-all on focus, canonical on blur,
+            a formatted echo while blurred. No data-entry-scope on this form — it is one
+            row, so Enter stays the browser's own implicit submit. The two COUNT boxes wear
+            kind="shares" (6dp echo, and no "=" arithmetic — see submit's belts). */}
         <label>
           Current base
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.current_base}
-            onChange={(e) => set('current_base')(e.target.value)}
-          />
+          <AmountInput value={form.current_base} onValueChange={set('current_base')} />
         </label>
         <label>
           New base
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.new_base}
-            onChange={(e) => set('new_base')(e.target.value)}
-          />
+          <AmountInput value={form.new_base} onValueChange={set('new_base')} />
         </label>
         <label>
           Unvested RSUs
-          <input
-            className="field-input"
-            inputMode="decimal"
+          <AmountInput
+            kind="shares"
             value={form.unvested_rsus}
-            onChange={(e) => set('unvested_rsus')(e.target.value)}
+            onValueChange={set('unvested_rsus')}
           />
         </label>
         <label>
           Unvested price
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.unvested_price}
-            onChange={(e) => set('unvested_price')(e.target.value)}
-          />
+          <AmountInput value={form.unvested_price} onValueChange={set('unvested_price')} />
         </label>
         <label>
           Refresh RSUs
-          <input
-            className="field-input"
-            inputMode="decimal"
+          <AmountInput
+            kind="shares"
             value={form.refresh_rsus}
-            onChange={(e) => set('refresh_rsus')(e.target.value)}
+            onValueChange={set('refresh_rsus')}
           />
         </label>
         <label>
           Grant price
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.grant_price}
-            onChange={(e) => set('grant_price')(e.target.value)}
-          />
+          <AmountInput value={form.grant_price} onValueChange={set('grant_price')} />
         </label>
         <label className="span-2">
           Notes

@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { ApiError } from '../../api/client'
 import { createRsuGrant, deleteRsuGrant, updateRsuGrant } from '../../api/comp'
+import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import type { RsuGrantCreate, RsuGrantOut, SeedCandidateOut } from '../../types/api'
+import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
-import { isPlainDecimal } from '../../utils/percent'
 
 type GrantKind = RsuGrantOut['kind']
 
@@ -151,14 +152,18 @@ export default function RsuGrantsPanel({
       setError(`shares must be between 1 and ${SHARES_MAX}`)
       return
     }
-    if (!isPlainDecimal(price)) {
+    if (!isAmount(price)) {
       // Exponent notation has NO 422 behind it: "1e-3" parses server-side as a perfectly
-      // legal Decimal 0.001 and is stored (src/utils/percent.ts). This gate is the only
-      // thing between that text and the column.
+      // legal Decimal 0.001 and is stored (src/utils/amount.ts refuses exponents for that
+      // exact reason). This gate is the only thing between that text and the column. The
+      // MONEY default, matching the box: a "$" or a grouped "1,205.50" is legitimate here,
+      // and so is an "=" expression the cell itself evaluates.
       setError('Price at grant must be a number')
       return
     }
-    if (Number(price) <= 0) {
+    if (Number(canonicalAmount(price)) <= 0) {
+      // The CANONICAL value, not the typed text: Number('$129.57') is NaN, and NaN <= 0 is
+      // false — a tolerant entry would slip straight past a raw comparison.
       setError('grant_price must be positive')
       return
     }
@@ -197,7 +202,9 @@ export default function RsuGrantsPanel({
       label,
       focal_year: year,
       shares: Number(shares),
-      grant_price: price,
+      // The wire belt: blur usually canonicalized already, but a submit reached without one
+      // (a mouse user who types and clicks Save) must not ship "$129.57" to a Decimal column.
+      grant_price: canonicalAmount(price),
       first_vest_date: form.first_vest_date,
       cliff_pct: cliff,
       vest_quantum: Number(quantumText),
@@ -332,12 +339,10 @@ export default function RsuGrantsPanel({
         </label>
         <label>
           Price at grant
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.grant_price}
-            onChange={(e) => set('grant_price')(e.target.value)}
-          />
+          {/* The one figure box on this form: select-all on focus, canonical on blur, a
+              money echo while blurred. Shares, the focal year and the vest rounding are
+              WHOLE-number boxes and stay plain inputs with their own integer gates. */}
+          <AmountInput value={form.grant_price} onValueChange={set('grant_price')} />
         </label>
         <label>
           First vest

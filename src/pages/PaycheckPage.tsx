@@ -7,6 +7,7 @@ import {
   fetchProfiles,
   updateProfile,
 } from '../api/paycheck'
+import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import StatTile from '../components/StatTile'
 import type {
@@ -14,8 +15,9 @@ import type {
   PaycheckProfileCreate,
   PaycheckProfileOut,
 } from '../types/api'
+import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatDate, formatPct } from '../utils/format'
-import { isPlainDecimal, shiftPoint } from '../utils/percent'
+import { shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 import './PaycheckPage.css'
 
@@ -254,16 +256,23 @@ function ProfilesPanel({
       // to refuse — but anything else that shiftPoint will not convert has to stop HERE.
       // "1e-3" is the case that matters: it would travel verbatim, parse server-side as a
       // perfectly legal Decimal 0.001, and store a tenth of a percent where the box said a
-      // thousandth of one. There is no 422 behind this gate (isPlainDecimal's note).
-      if (text !== '' && !isPlainDecimal(text)) {
+      // thousandth of one. There is no 422 behind this gate (isAmount's note).
+      //
+      // { expressions: false }, matching the kind="percent" box: the cell refuses a leading
+      // "=" because the evaluator quantizes to 2dp and these columns are 9dp fractions
+      // ("=1/8" would store 0.0013 for an eighth of a percent). The gate must refuse what
+      // the cell marks invalid, or the belt below would evaluate it anyway.
+      if (text !== '' && !isAmount(text, { expressions: false })) {
         // The InputsForm/BracketsEditor sentence, in this box's own vocabulary.
         setError(`${label} must be a number`)
         return
       }
-      // Everything left is a plain decimal (or blank), so Number() is exact here — and an
-      // absurd 400-digit one that overflows to Infinity is caught by the range, not waved
-      // through by a finiteness test.
-      const value = Number(text)
+      // The CANONICAL value: a tolerant entry arrives here exactly as typed, and
+      // Number('1,205.50') is NaN — which is neither < 0 nor > 100, so it would pass this
+      // range unremarked and the belt below would then ship 12.0550. Everything left
+      // converts exactly, and an absurd 400-digit one that overflows to Infinity is caught
+      // by the range, not waved through by a finiteness test.
+      const value = Number(canonicalAmount(text, { expressions: false }))
       if (value < 0 || value > 100) {
         // NOT the server's "espp_pct must be between 0 and 1": that sentence is in the
         // STORED fraction's vocabulary, and this box is labelled "ESPP %" and holds 11 for
@@ -279,21 +288,29 @@ function ProfilesPanel({
     // so clearing one is a decision. (It also cannot be omitted — the paycheck router
     // reads an explicit null as a no-op, so a blank that meant "stop contributing" would
     // silently keep contributing.)
-    const pct = (field: PctField) => shiftPoint(form[field].trim() || '0', -2)
+    // Canonical BEFORE the shift, and with the box's own { expressions: false }: shiftPoint
+    // hands back anything that is not already a plain decimal, so a no-blur "$13" would
+    // travel as "$13" and 422 on the far side.
+    const pct = (field: PctField) =>
+      shiftPoint(canonicalAmount(form[field].trim() || '0', { expressions: false }), -2)
     // The FULL profile on both verbs (Task 4 review M6's BINDING): the router validates
     // the MERGED row, so a delta PATCH would 422 on a stored field this form never
     // touched. `notes` is the one column whose null really clears.
     const body: PaycheckProfileCreate = {
       effective_date: form.effective_date,
-      annual_salary: salary,
+      // The wire belt: blur usually canonicalized already, but a submit reached without one
+      // must not ship "$150,000" to a Decimal column. Money kind, so the default applies.
+      annual_salary: canonicalAmount(salary),
       pay_periods_per_year: periods,
       trad_401k_pct: pct('trad_401k_pct'),
       roth_401k_pct: pct('roth_401k_pct'),
       after_tax_401k_pct: pct('after_tax_401k_pct'),
       espp_pct: pct('espp_pct'),
       withholding_pct: pct('withholding_pct'),
-      dental_vision_per_check: form.dental_vision_per_check.trim() || '0',
-      hsa_per_check: form.hsa_per_check.trim() || '0',
+      // The '0' default stays OUTSIDE the belt, so a blank box is still a real zero rather
+      // than an empty string canonicalized to one.
+      dental_vision_per_check: canonicalAmount(form.dental_vision_per_check.trim() || '0'),
+      hsa_per_check: canonicalAmount(form.hsa_per_check.trim() || '0'),
       notes: form.notes.trim() || null,
     }
     const request = editingId !== null ? updateProfile(editingId, body) : createProfile(body)
@@ -367,14 +384,13 @@ function ProfilesPanel({
             onChange={(e) => set('effective_date')(e.target.value)}
           />
         </label>
+        {/* The figure boxes are AmountInputs: select-all on focus, canonical on blur, a
+            formatted echo while blurred (the percents echo "13%", the money boxes
+            "$188,930.00"). No data-entry-scope on this form — it is one profile, so Enter
+            stays the browser's own implicit submit. */}
         <label>
           Annual salary
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.annual_salary}
-            onChange={(e) => set('annual_salary')(e.target.value)}
-          />
+          <AmountInput value={form.annual_salary} onValueChange={set('annual_salary')} />
         </label>
         <label>
           Pay periods per year
@@ -388,31 +404,21 @@ function ProfilesPanel({
         {PCT_FIELDS.map(({ field, label }) => (
           <label key={field}>
             {label}
-            <input
-              className="field-input"
-              inputMode="decimal"
-              value={form[field]}
-              onChange={(e) => set(field)(e.target.value)}
-            />
+            {/* State stays HUMAN-scale ("13" = 13%); the shift to the stored fraction
+                happens at the wire, in submit's `pct`. */}
+            <AmountInput kind="percent" value={form[field]} onValueChange={set(field)} />
           </label>
         ))}
         <label>
           Dental &amp; vision
-          <input
-            className="field-input"
-            inputMode="decimal"
+          <AmountInput
             value={form.dental_vision_per_check}
-            onChange={(e) => set('dental_vision_per_check')(e.target.value)}
+            onValueChange={set('dental_vision_per_check')}
           />
         </label>
         <label>
           HSA
-          <input
-            className="field-input"
-            inputMode="decimal"
-            value={form.hsa_per_check}
-            onChange={(e) => set('hsa_per_check')(e.target.value)}
-          />
+          <AmountInput value={form.hsa_per_check} onValueChange={set('hsa_per_check')} />
         </label>
         <label className="span-2">
           Notes
