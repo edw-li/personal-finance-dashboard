@@ -290,7 +290,12 @@ async def put_month(
         )
         for entry in body.amounts
     }
-    net_pay_provided = "net_pay" in body.model_fields_set and body.net_pay is not None
+    # net_pay is tri-state (the notes-null convention, spec 2026-08-21 §4.2 rider):
+    # omitted = leave it alone; a string = upsert; an EXPLICIT null = clear the month's
+    # cashflow row. model_fields_set is what tells an omitted field from a null one.
+    net_pay_present = "net_pay" in body.model_fields_set
+    net_pay_provided = net_pay_present and body.net_pay is not None
+    net_pay_clear = net_pay_present and body.net_pay is None
     net_pay_value = (
         quantize_money(body.net_pay, "net_pay", max_abs=MONEY_MAX_ABS_12_2)
         if net_pay_provided
@@ -327,12 +332,18 @@ async def put_month(
             updated += 1
         else:
             unchanged += 1
+    net_pay_cleared = False
     if net_pay_provided:
         cashflow = await db.get(MonthlyCashflow, month)
         if cashflow is None:
             db.add(MonthlyCashflow(month=month, net_pay=net_pay_value))
         else:
             cashflow.net_pay = net_pay_value
+    elif net_pay_clear:
+        cashflow = await db.get(MonthlyCashflow, month)
+        if cashflow is not None:
+            await db.delete(cashflow)
+            net_pay_cleared = True
     await db.commit()
     return SpendingUpsertResult(
         month=month,
@@ -340,4 +351,5 @@ async def put_month(
         updated=updated,
         unchanged=unchanged,
         net_pay_set=net_pay_provided,
+        net_pay_cleared=net_pay_cleared,
     )

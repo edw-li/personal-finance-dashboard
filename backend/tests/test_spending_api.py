@@ -193,6 +193,7 @@ async def test_put_spending_month_upserts_and_net_pay_optional(auth_client, db):
         "updated": 0,
         "unchanged": 0,
         "net_pay_set": True,
+        "net_pay_cleared": False,
     }
     read = (await auth_client.get(put)).json()
     assert read["net_pay"] == "9000.01"  # HALF_UP
@@ -211,6 +212,7 @@ async def test_put_spending_month_upserts_and_net_pay_optional(auth_client, db):
         "updated": 0,
         "unchanged": 1,
         "net_pay_set": False,
+        "net_pay_cleared": False,
     }
     assert (await auth_client.get(put)).json()["net_pay"] == "9000.01"
 
@@ -268,3 +270,38 @@ async def test_put_spending_month_validation(auth_client, db):
     assert (
         await auth_client.put(put, json={"net_pay": "10000000000", "amounts": []})
     ).status_code == 422
+
+
+async def test_put_spending_month_net_pay_null_clears(auth_client):
+    # Arrange: a month with net_pay set.
+    put = "/api/v1/spending/months/2026-08-01"
+    resp = await auth_client.put(put, json={"net_pay": "9000.00", "amounts": []})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["net_pay_set"] is True
+
+    # Act: an EXPLICIT null clears it (deletes the cashflow row), unlike an omitted field.
+    cleared = await auth_client.put(put, json={"net_pay": None, "amounts": []})
+    assert cleared.status_code == 200, cleared.text
+    body = cleared.json()
+    assert body["net_pay_set"] is False
+    assert body["net_pay_cleared"] is True
+
+    got = (await auth_client.get(put)).json()
+    assert got["net_pay"] is None
+    assert got["exists"] is False  # no amounts either -> the month is gone entirely
+
+
+async def test_put_spending_month_net_pay_omitted_is_still_a_no_op(auth_client):
+    put = "/api/v1/spending/months/2026-07-01"
+    await auth_client.put(put, json={"net_pay": "5000.00", "amounts": []})
+    result = (await auth_client.put(put, json={"amounts": []})).json()
+    assert result["net_pay_set"] is False
+    assert result["net_pay_cleared"] is False
+    assert (await auth_client.get(put)).json()["net_pay"] == "5000.00"
+
+
+async def test_put_spending_month_net_pay_null_on_a_month_without_one_is_harmless(auth_client):
+    put = "/api/v1/spending/months/2026-06-01"
+    result = await auth_client.put(put, json={"net_pay": None, "amounts": []})
+    assert result.status_code == 200, result.text
+    assert result.json()["net_pay_cleared"] is False  # nothing existed to clear

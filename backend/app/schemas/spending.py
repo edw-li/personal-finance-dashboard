@@ -51,6 +51,9 @@ class SpendingUpsertResult(BaseModel):
     updated: int
     unchanged: int
     net_pay_set: bool
+    # True only when an explicit null actually deleted a cashflow row; a null on a
+    # month that had none is a harmless no-op, so it reports False.
+    net_pay_cleared: bool = False
 
 
 class CategorySeries(BaseModel):
