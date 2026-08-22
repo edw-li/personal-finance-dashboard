@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MonthlyUpdatePage from './MonthlyUpdatePage'
@@ -89,6 +89,8 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
   // autofocused one). State is unchanged either way; only the rendering differs.
   const foodInput = await screen.findByLabelText('Food')
   expect((foodInput as HTMLInputElement).value).toBe('$0.00')
+  // The step's own autofocus, pinned rather than merely implied by the echo above.
+  expect(document.activeElement).toBe(screen.getByLabelText('Net pay (take-home)'))
   fireEvent.change(foodInput, { target: { value: '250.00' } })
   // The exact label, not /net pay/i: the step's ⓘ hint carries "net pay" in its aria-label,
   // which getByLabelText reads as a label too — same box, tighter selector.
@@ -277,16 +279,56 @@ it('accepts spreadsheet-formatted text as valid entry', async () => {
   ).toBe(false)
 })
 
-it('Enter on the last balance cell lands on the step primary', async () => {
+it('Enter on the last cell of each step lands on that step primary', async () => {
   renderWizard()
   const balanceInput = await screen.findByLabelText('Checking')
-  balanceInput.focus()
+  act(() => {
+    balanceInput.focus()
+  })
   fireEvent.keyDown(balanceInput, { key: 'Enter' })
-  expect(document.activeElement).toBe(screen.getByRole('button', { name: /next: spending/i }))
+  const balancesPrimary = screen.getByRole('button', { name: /next: spending/i })
+  expect(document.activeElement).toBe(balancesPrimary)
+
+  // The spending card is its own scope with its own primary — netPay precedes Food in DOM
+  // order, so Food is that scope's last cell and Enter there finishes the step.
+  fireEvent.click(balancesPrimary)
+  const food = await screen.findByLabelText('Food')
+  act(() => {
+    food.focus()
+  })
+  fireEvent.keyDown(food, { key: 'Enter' })
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: /next: review/i }))
 })
 
 it('autofocuses the first balance cell on load', async () => {
   renderWizard()
   const balanceInput = await screen.findByLabelText('Checking')
   expect(document.activeElement).toBe(balanceInput)
+})
+
+it('a post-save blur never resurrects a phantom draft', async () => {
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  // Tolerant text advanced past by CLICKS — no blur, so state keeps the raw '9,000'
+  // while the wire (and the server) got the canonical '9000'.
+  const netPay = await screen.findByLabelText('Net pay (take-home)')
+  fireEvent.change(netPay, { target: { value: '9,000' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+
+  // Back to the cell and through it once. A blur here canonicalizes state to '9000';
+  // if the post-save baseline still held the RAW '9,000' the snapshot would differ from
+  // it and file a draft for work that is fully saved — the next visit would then greet
+  // the user with "Restored unsaved entries — they are not saved yet" about nothing.
+  fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
+  const again = await screen.findByLabelText('Net pay (take-home)')
+  act(() => {
+    // Bare .focus() outside act queues the focused re-render without flushing it
+    // (React 19 emits no warning) — the blur would then run against stale render state.
+    again.focus()
+  })
+  fireEvent.blur(again)
+  expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toBeNull()
 })

@@ -258,6 +258,10 @@ export default function MonthlyUpdatePage() {
     sessionStorage.removeItem(draftKey(month))
   }
 
+  // Every wizard cell is an AmountInput of the default kind="money", so the page's
+  // option-less isAmount/canonicalAmount (expressions ON) agree with what the component
+  // accepts and commits. A non-money cell added here must switch BOTH sides to
+  // { expressions: false }, or the page would green-light an "=" the box never evaluates.
   const balancesValid = accounts.every((a) => isAmount(balances[a.id] ?? ''))
   const amountsValid =
     categories.every((c) => isAmount(amounts[c.id] ?? '')) &&
@@ -288,29 +292,49 @@ export default function MonthlyUpdatePage() {
   const save = async () => {
     setSaving(true)
     setError(null)
+    // canonicalAmount, not .trim(): a cell committed by blur is already canonical, but a save
+    // reached without one (Ctrl+Enter, or a click in jsdom) must not ship "$1,600.00" or
+    // "=200+50" to a Decimal column. Computed ONCE, then spent three ways — the wire, the
+    // boxes and the baseline — which is what keeps those three from drifting apart below.
+    // `?? ''` so a key missing from the record can never throw inside the payload builder.
+    const canonBalances: Record<number, string> = Object.fromEntries(
+      accounts.map((a) => [a.id, canonicalAmount(balances[a.id] ?? '')]),
+    )
+    const canonAmounts: Record<number, string> = Object.fromEntries(
+      categories.map((c) => [c.id, canonicalAmount(amounts[c.id] ?? '')]),
+    )
+    const canonNetPay = netPay.trim() === '' ? '' : canonicalAmount(netPay)
     try {
       const balanceResult = await putMonthBalances(month, {
         recorded_on: recordedOn === '' ? undefined : recordedOn,
         // null (not undefined): blanking the field must CLEAR a previously saved note.
         notes: notes.trim() === '' ? null : notes,
-        // canonicalAmount, not .trim(): a cell committed by blur is already canonical, but a
-        // save reached without one (Ctrl+Enter, or a click in jsdom) must not ship "$1,600.00"
-        // or "=200+50" to a Decimal column.
-        balances: accounts.map((a) => ({ account_id: a.id, balance: canonicalAmount(balances[a.id]) })),
+        balances: accounts.map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
       })
       const body: { net_pay?: string; amounts: { category_id: number; amount: string }[] } = {
-        amounts: categories.map((c) => ({ category_id: c.id, amount: canonicalAmount(amounts[c.id]) })),
+        amounts: categories.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
       }
-      if (netPay.trim() !== '') body.net_pay = canonicalAmount(netPay)
+      if (netPay.trim() !== '') body.net_pay = canonNetPay
       const spendResult = await putSpendingMonth(month, body)
       setSaved(
         `Balances: ${balanceResult.created} added, ${balanceResult.updated} changed, ` +
           `${balanceResult.unchanged} unchanged. Spending: ${spendResult.created} added, ` +
           `${spendResult.updated} changed, ${spendResult.unchanged} unchanged.`,
       )
-      // What is on screen IS saved now: adopting it as the baseline makes the wizard
-      // clean, and the draft effect deletes the stored copy on the same render.
-      setBaseline({ month, data: snapshotOf(balances, amounts, netPay, recordedOn, notes) })
+      // What the wire received IS what the boxes now hold. Adopting the canonical values
+      // into the STATE as well as the baseline is load-bearing: a cell advanced past by
+      // clicks still held raw text ("9,000"), and a baseline taken from that raw state
+      // would differ from the "9000" the next focus+blur commits — filing a draft for
+      // fully saved work, so the following visit announced "Restored unsaved entries —
+      // they are not saved yet" about nothing. Canonical on both sides makes that blur a
+      // no-op, and the draft effect deletes the stored copy on the same render.
+      setBalances(canonBalances)
+      setAmounts(canonAmounts)
+      setNetPay(canonNetPay)
+      setBaseline({
+        month,
+        data: snapshotOf(canonBalances, canonAmounts, canonNetPay, recordedOn, notes),
+      })
       setRestored(false)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Saving failed — nothing was lost, retry')
