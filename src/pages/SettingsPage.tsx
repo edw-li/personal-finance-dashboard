@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { changePassword } from '../api/auth'
 import { ApiError } from '../api/client'
 import { importXlsx } from '../api/importer'
+import { fetchAccounts, updateAccount } from '../api/netWorth'
+import { fetchAllocation } from '../api/portfolio'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
 import ImportReportView from '../components/settings/ImportReportView'
-import type { AppSettingsOut, ImportReport } from '../types/api'
+import type { AccountOut, AppSettingsOut, ImportReport } from '../types/api'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 // The settings family sheet, not only the component's: this page renders .settings-note
@@ -27,6 +29,24 @@ function boxesFor(s: AppSettingsOut) {
     ticker: s.espp_ticker ?? '',
     cron: s.price_refresh_cron,
   }
+}
+
+// The two shipped suggestion kinds (spec §5.2): `vesting:unvested` is static, the portfolio
+// ones are one per allocation BUCKET — the labels the ledger's transactions actually hold
+// under, which is what the endpoint resolves a mapping against.
+const VESTING_SOURCE = 'vesting:unvested'
+const PORTFOLIO_PREFIX = 'portfolio:'
+
+// What a stored mapping reads as when today's buckets do not contain it — the label was
+// renamed in the ledger, or its last holding was sold. Written out rather than dropped: a
+// controlled <select> whose value has no option silently coerces to None, and the next
+// change event anywhere on the page would then look like the user clearing a mapping they
+// never touched. The raw column value stands in for anything else — a guess about a kind
+// this build does not know would be worse than what is stored.
+function unresolvedText(value: string) {
+  return value.startsWith(PORTFOLIO_PREFIX)
+    ? `Portfolio: ${value.slice(PORTFOLIO_PREFIX.length)} (unresolved)`
+    : `${value} (unresolved)`
 }
 
 export default function SettingsPage() {
@@ -56,7 +76,19 @@ export default function SettingsPage() {
   const [report, setReport] = useState<ImportReport | null>(null)
   const [importBusy, setImportBusy] = useState<'dry' | 'apply' | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
+  // Balance-suggestions card — the account rows it maps, the allocation labels its options
+  // come from, one busy flag for the single in-flight PATCH, one error slot for both of the
+  // card's requests (the load and the PATCH, as the import card does for its two).
+  const [suggestAccounts, setSuggestAccounts] = useState<AccountOut[] | null>(null)
+  const [suggestBuckets, setSuggestBuckets] = useState<string[]>([])
+  const [suggestLoading, setSuggestLoading] = useState(true)
+  const [suggestBusy, setSuggestBusy] = useState(false)
+  const [suggestError, setSuggestError] = useState<string | null>(null)
   const seqRef = useRef(0)
+  // Its OWN sequence guard, banner and flags: this card's two GETs are a different pair of
+  // endpoints, and a portfolio that is down must not cost the user the settings form, the
+  // password form or the importer (EsppPage's three independent loads).
+  const suggestSeqRef = useRef(0)
 
   // ~15 setters: the load chain stays a PLAIN function called from the mount effect and
   // Retry — a useCallback here trips preserve-manual-memoization (Plan 3 wall).
@@ -81,9 +113,37 @@ export default function SettingsPage() {
       })
   }
 
+  // Same recipe, second card. The two GETs travel together because a row without its option
+  // list is not a control anyone can use — but they are ONE chain, separate from the
+  // settings load above, and they run on mount whatever that load does: the card is behind
+  // the same `loadedOnce` gate as the import one, so a settings Retry that finally opens the
+  // grid finds these rows already there.
+  const loadSuggestSources = () => {
+    const seq = ++suggestSeqRef.current
+    Promise.all([fetchAccounts(), fetchAllocation('account')])
+      .then(([accountList, allocation]) => {
+        if (seq !== suggestSeqRef.current) return
+        // The wizard's own filter: a closed account has no balance to enter, and a component
+        // is entered under its parent — rows the chips would never reach.
+        setSuggestAccounts(accountList.filter((a) => a.is_active && !a.is_component))
+        setSuggestBuckets(allocation.slices.map((s) => s.key))
+        setSuggestError(null)
+      })
+      .catch((err: unknown) => {
+        if (seq !== suggestSeqRef.current) return
+        setSuggestError(
+          err instanceof ApiError ? err.message : 'Could not load the suggestion sources.',
+        )
+      })
+      .finally(() => {
+        if (seq === suggestSeqRef.current) setSuggestLoading(false)
+      })
+  }
+
   useEffect(() => {
     load()
-    // mount-only: load is a plain function over stable setters (house idiom)
+    loadSuggestSources()
+    // mount-only: both are plain functions over stable setters (house idiom)
   }, [])
 
   // Every settings keystroke retires both sentences under the form: they describe the
@@ -232,6 +292,56 @@ export default function SettingsPage() {
     if (!ok) return
     runImport(false)
   }
+
+  // A pick IS the save (there is no button to press): the row goes to the new value at once
+  // so the select shows what is in flight, and a refusal puts the old one back.
+  const changeSuggestSource = (account: AccountOut, value: string) => {
+    const previous = account.suggest_source
+    // '' is the None option. Explicitly null, never undefined: JSON.stringify drops an
+    // undefined value, and the server tells "clear this mapping" from "I did not send the
+    // field" by model_fields_set alone — so an omitted key would leave the old source
+    // running while the box said None.
+    const next = value === '' ? null : value
+    const write = (id: number, source: string | null) =>
+      setSuggestAccounts(
+        (cur) => cur && cur.map((a) => (a.id === id ? { ...a, suggest_source: source } : a)),
+      )
+    write(account.id, next)
+    setSuggestBusy(true)
+    setSuggestError(null)
+    // No seq guard on this chain, unlike the load: every select is disabled while
+    // `suggestBusy` is set, so a second PATCH cannot start behind the first one (the import
+    // card's posture).
+    updateAccount(account.id, { suggest_source: next })
+      .then((saved) => {
+        // The stored row, not the optimistic guess — the server owns what a mapping ends up
+        // as, exactly as the settings PUT re-seeds its boxes from the response.
+        setSuggestAccounts((cur) => cur && cur.map((a) => (a.id === saved.id ? saved : a)))
+        setSuggestError(null)
+      })
+      .catch((err: unknown) => {
+        // A selection left showing a mapping the server refused would be a lie about which
+        // source the wizard is going to suggest from.
+        write(account.id, previous)
+        // Verbatim: the 422 here names the two legal shapes, which no paraphrase does.
+        setSuggestError(
+          err instanceof ApiError ? err.message : 'Could not save the suggestion source.',
+        )
+      })
+      .finally(() => setSuggestBusy(false))
+  }
+
+  // None, one option per allocation bucket, then the static vesting kind. Rebuilt per render
+  // from the loaded buckets — the list is the portfolio's, and an account mapped to a label
+  // that has left it is handled per row below.
+  const suggestOptions = [
+    { value: '', text: 'None' },
+    ...suggestBuckets.map((label) => ({
+      value: `${PORTFOLIO_PREFIX}${label}`,
+      text: `Portfolio: ${label}`,
+    })),
+    { value: VESTING_SOURCE, text: 'Unvested RSUs' },
+  ]
 
   return (
     <div className="page settings-page">
@@ -394,6 +504,82 @@ export default function SettingsPage() {
                 Existing sessions stay signed in until their token expires (~24 h).
               </p>
             </form>
+          </section>
+
+          <section className="card span-6">
+            <h2 className="eyebrow">
+              Balance suggestions
+              <InfoHint text="Maps an account to a computed value — a portfolio label's market value, or the unvested RSU total. The wizard offers it as an Apply chip; nothing is ever filled in for you." />
+            </h2>
+            {suggestError && (
+              <div className="error-banner" role="alert">
+                {suggestError}{' '}
+                {/* Only when the LOAD is what failed: with rows on screen the recovery for a
+                    refused PATCH is picking an option again, and a Retry button beside that
+                    sentence would offer to re-run a request that is not the one that broke. */}
+                {suggestAccounts === null && (
+                  <button
+                    className="button"
+                    aria-label="Retry loading balance suggestions"
+                    onClick={() => {
+                      setSuggestLoading(true)
+                      loadSuggestSources()
+                    }}
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+            {suggestAccounts === null ? (
+              suggestLoading && <p className="empty-note">Loading…</p>
+            ) : (
+              // Dimmed while a PATCH is in flight, like every other in-flight body on the
+              // page — the selects are disabled underneath it.
+              <div className={`loading-dim${suggestBusy ? ' is-loading' : ''}`}>
+                <div className="settings-form">
+                  {suggestAccounts.length === 0 ? (
+                    <p className="empty-note">No active accounts to map yet.</p>
+                  ) : (
+                    suggestAccounts.map((account) => {
+                      const current = account.suggest_source ?? ''
+                      const known = suggestOptions.some((o) => o.value === current)
+                      return (
+                        <label key={account.id}>
+                          {account.name}
+                          <select
+                            className="field-input"
+                            // The name carries the ACCOUNT: a column of selects all reading
+                            // "Suggestion source" would be identical controls to a screen
+                            // reader. It overrides the visible label, which is why that
+                            // label's text is inside it verbatim (label-in-name: saying
+                            // "Checking" still reaches this control by voice).
+                            aria-label={`Suggestion source for ${account.name}`}
+                            value={current}
+                            disabled={suggestBusy}
+                            onChange={(e) => changeSuggestSource(account, e.target.value)}
+                          >
+                            {suggestOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.text}
+                              </option>
+                            ))}
+                            {!known && <option value={current}>{unresolvedText(current)}</option>}
+                          </select>
+                        </label>
+                      )
+                    })
+                  )}
+                  {/* The one thing the controls cannot say for themselves: a suggestion is
+                      today's figure, so the wizard only offers it where today's figure is the
+                      right answer. */}
+                  <p className="settings-note">
+                    Suggestions appear in the Monthly update wizard on the newest month only —
+                    a backfilled month never sees them.
+                  </p>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Full width: a diff of nine sheets is a table, not a form field. It shares the
