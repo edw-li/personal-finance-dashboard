@@ -161,15 +161,30 @@ it('autoFocus mounts focused, raw, and fully selected', () => {
 it('keeps the focus select-all through the click that focused the field', () => {
   render(<Harness initial="1500.00" />)
   expect(fireEvent.mouseUp(box())).toBe(true) // unfocused: no selection to protect
+  // The real click order: mousedown lands while the field is still UNfocused (so it cannot
+  // disarm the guard), focus arms it, and the mouseup that completes the click is swallowed.
+  fireEvent.mouseDown(box())
   fireEvent.focus(box())
-  // The mouseup completing the focusing click is swallowed, so the select-all survives.
   expect(fireEvent.mouseUp(box())).toBe(false)
   // Click-then-click on an already-focused field places the caret, like a spreadsheet.
   expect(fireEvent.mouseUp(box())).toBe(true)
   fireEvent.blur(box())
   expect(fireEvent.mouseUp(box())).toBe(true)
+  fireEvent.mouseDown(box())
   fireEvent.focus(box())
   expect(fireEvent.mouseUp(box())).toBe(false) // every refocus re-arms the guard
+})
+
+it('a click on an ALREADY-focused field positions the caret normally', () => {
+  render(<Harness initial="1500.00" />)
+  // A REAL .focus(), not fireEvent.focus: this test turns on document.activeElement, and
+  // fireEvent.focus only dispatches the event — it never moves focus.
+  box().focus()
+  // The mousedown of a click on a focused field disarms the one-shot guard…
+  fireEvent.mouseDown(box())
+  // …so its mouseup is NOT prevented and the browser may place the caret. Without this,
+  // a keyboard (Tab) focus would leave the guard armed until some later, unrelated click.
+  expect(fireEvent.mouseUp(box())).toBe(true)
 })
 
 it('a half-typed percent echoes without the orphan point', () => {

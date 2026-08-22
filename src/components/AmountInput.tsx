@@ -49,7 +49,8 @@ export default function AmountInput({
   const [focused, setFocused] = useState(false)
   // What the field held when focus arrived — Escape's restore point.
   const atFocus = useRef(value)
-  // Armed at focus, spent on the next mouseup — see onMouseUp.
+  // Armed at focus, disarmed by an already-focused mousedown, spent by the focusing click's
+  // mouseup — see onMouseDown/onMouseUp.
   const selectPending = useRef(false)
   const expressions = kind === 'money'
 
@@ -134,6 +135,11 @@ export default function AmountInput({
         atFocus.current = value
         selectPending.current = true // re-armed on EVERY focus, so every click-in selects
         setFocused(true)
+      }}
+      onMouseDown={() => {
+        // A focusing click's mousedown fires BEFORE focus, so the guard survives it; a click
+        // on an ALREADY-focused field disarms here, before its own mouseup places the caret.
+        if (document.activeElement === inputRef.current) selectPending.current = false
       }}
       onMouseUp={(e) => {
         // Browsers place the caret on the mouseup that COMPLETES a focusing click, which
