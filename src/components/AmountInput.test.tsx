@@ -90,3 +90,208 @@ it('Escape restores the value the field had on focus', () => {
   fireEvent.keyDown(box(), { key: 'Escape' })
   expect(box().value).toBe('1500.00')
 })
+
+// A parent that COUNTS writes. Upstream, every onValueChange marks the draft dirty (and
+// some setters do more), so "how many times" is itself part of the contract, not just
+// "what value" — these tests would pass on a component that writes a no-op change.
+function CountingHarness({ initial, onWrite }: { initial: string; onWrite: () => void }) {
+  const [value, setValue] = useState(initial)
+  return (
+    <AmountInput
+      aria-label="Amount"
+      value={value}
+      onValueChange={(next) => {
+        onWrite()
+        setValue(next)
+      }}
+    />
+  )
+}
+
+it('an untouched focus+blur writes nothing (draft-dirt guarantee, component half)', () => {
+  let writes = 0
+  render(<CountingHarness initial="1500.00" onWrite={() => (writes += 1)} />)
+  fireEvent.focus(box())
+  fireEvent.blur(box())
+  expect(writes).toBe(0)
+})
+
+it('Escape on an untouched cell is left to the container', () => {
+  let writes = 0
+  render(<CountingHarness initial="1500.00" onWrite={() => (writes += 1)} />)
+  fireEvent.focus(box())
+  // Not consumed: a parent modal's Escape-to-close must still see it.
+  expect(fireEvent.keyDown(box(), { key: 'Escape' })).toBe(true)
+  expect(writes).toBe(0)
+})
+
+it('Escape that actually reverts consumes the event', () => {
+  render(<Harness initial="1500.00" />)
+  fireEvent.focus(box())
+  fireEvent.change(box(), { target: { value: '9' } })
+  // fireEvent returns false when preventDefault was called: the cancelled edit is OURS,
+  // it must not also close the dialog around us.
+  expect(fireEvent.keyDown(box(), { key: 'Escape' })).toBe(false)
+  expect(box().value).toBe('1500.00')
+})
+
+it('Escape reselects the restored value after the microtask', async () => {
+  render(<Harness initial="1500.00" />)
+  fireEvent.focus(box())
+  fireEvent.change(box(), { target: { value: '9' } })
+  fireEvent.keyDown(box(), { key: 'Escape' })
+  await Promise.resolve() // the reselect is queued as a microtask, after React's flush
+  expect(box().value).toBe('1500.00')
+  expect(box().selectionStart).toBe(0)
+  expect(box().selectionEnd).toBe('1500.00'.length)
+})
+
+it('autoFocus mounts focused, raw, and fully selected', () => {
+  function AutoHarness() {
+    const [value, setValue] = useState('1500.00')
+    return <AmountInput autoFocus aria-label="Amount" value={value} onValueChange={setValue} />
+  }
+  render(<AutoHarness />)
+  expect(document.activeElement).toBe(box())
+  expect(box().value).toBe('1500.00') // raw, not the '$1,500.00' echo
+  expect(box().selectionStart).toBe(0)
+  expect(box().selectionEnd).toBe('1500.00'.length)
+})
+
+it('keeps the focus select-all through the click that focused the field', () => {
+  render(<Harness initial="1500.00" />)
+  expect(fireEvent.mouseUp(box())).toBe(true) // unfocused: no selection to protect
+  fireEvent.focus(box())
+  // The mouseup completing the focusing click is swallowed, so the select-all survives.
+  expect(fireEvent.mouseUp(box())).toBe(false)
+  // Click-then-click on an already-focused field places the caret, like a spreadsheet.
+  expect(fireEvent.mouseUp(box())).toBe(true)
+  fireEvent.blur(box())
+  expect(fireEvent.mouseUp(box())).toBe(true)
+  fireEvent.focus(box())
+  expect(fireEvent.mouseUp(box())).toBe(false) // every refocus re-arms the guard
+})
+
+it('a half-typed percent echoes without the orphan point', () => {
+  render(<Harness initial="13." kind="percent" />)
+  expect(box().value).toBe('13%') // display-only: the state stays the verbatim '13.'
+  fireEvent.focus(box())
+  expect(box().value).toBe('13.')
+})
+
+// ─── The data-entry-scope keyboard protocol (spec §3.4) ──────────────────────────────
+// `primaryDisabled` is the only addition to the planned harness: it feeds the dead-end
+// pin below without a second near-identical copy of this markup.
+function ScopeHarness({
+  onPrimary,
+  primaryDisabled,
+}: {
+  onPrimary?: () => void
+  primaryDisabled?: boolean
+}) {
+  const [a, setA] = useState('1.00')
+  const [b, setB] = useState('2.00')
+  return (
+    <div data-entry-scope="">
+      <AmountInput aria-label="First" value={a} onValueChange={setA} />
+      <AmountInput aria-label="Second" value={b} onValueChange={setB} />
+      <button type="button" data-entry-primary="" disabled={primaryDisabled} onClick={onPrimary}>
+        Next step
+      </button>
+    </div>
+  )
+}
+
+const first = () => screen.getByLabelText('First') as HTMLInputElement
+const second = () => screen.getByLabelText('Second') as HTMLInputElement
+
+it('Enter advances to the next cell; Shift+Enter goes back', () => {
+  render(<ScopeHarness />)
+  first().focus()
+  fireEvent.keyDown(first(), { key: 'Enter' })
+  expect(document.activeElement).toBe(second())
+  fireEvent.keyDown(second(), { key: 'Enter', shiftKey: true })
+  expect(document.activeElement).toBe(first())
+})
+
+it('ArrowDown/ArrowUp traverse like Enter', () => {
+  render(<ScopeHarness />)
+  first().focus()
+  fireEvent.keyDown(first(), { key: 'ArrowDown' })
+  expect(document.activeElement).toBe(second())
+  fireEvent.keyDown(second(), { key: 'ArrowUp' })
+  expect(document.activeElement).toBe(first())
+})
+
+it('a modified arrow is left to the browser (Shift+ArrowDown selects, it does not traverse)', () => {
+  render(<ScopeHarness />)
+  first().focus()
+  expect(fireEvent.keyDown(first(), { key: 'ArrowDown', shiftKey: true })).toBe(true)
+  expect(document.activeElement).toBe(first())
+})
+
+it('an Enter confirming an IME composition does not traverse', () => {
+  render(<ScopeHarness />)
+  first().focus()
+  fireEvent.keyDown(first(), { key: 'Enter', isComposing: true })
+  expect(document.activeElement).toBe(first())
+})
+
+it('Enter on the last cell focuses the primary action', () => {
+  render(<ScopeHarness />)
+  second().focus()
+  fireEvent.keyDown(second(), { key: 'Enter' })
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Next step' }))
+})
+
+it('a disabled primary is a dead end: focus stays on the last cell', () => {
+  // The decided behavior, not an accident of focus(): the wizard's Next disables while the
+  // step is invalid, and Enter must not fling focus to somewhere arbitrary.
+  render(<ScopeHarness primaryDisabled />)
+  second().focus()
+  fireEvent.keyDown(second(), { key: 'Enter' })
+  expect(document.activeElement).toBe(second())
+})
+
+it('Ctrl+Enter and Ctrl+S click the primary action from any cell', () => {
+  let clicks = 0
+  render(<ScopeHarness onPrimary={() => (clicks += 1)} />)
+  first().focus()
+  fireEvent.keyDown(first(), { key: 'Enter', ctrlKey: true })
+  fireEvent.keyDown(first(), { key: 's', ctrlKey: true })
+  expect(clicks).toBe(2)
+})
+
+it('commits the edited cell when Enter moves focus away', () => {
+  render(<ScopeHarness />)
+  fireEvent.focus(first())
+  fireEvent.change(first(), { target: { value: '$1,600' } })
+  fireEvent.keyDown(first(), { key: 'Enter' })
+  fireEvent.blur(first()) // jsdom does not blur on .focus() of another node — simulate it
+  fireEvent.focus(first())
+  expect(first().value).toBe('1600')
+})
+
+it('outside a scope, Enter is left to native implicit submission', () => {
+  let submitted = 0
+  function RowForm() {
+    const [v, setV] = useState('')
+    return (
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          submitted += 1
+        }}
+      >
+        <AmountInput aria-label="Amount" value={v} onValueChange={setV} />
+        <button type="submit">Add</button>
+      </form>
+    )
+  }
+  render(<RowForm />)
+  // jsdom does not run implicit submission itself; the contract under test is that the
+  // component did NOT preventDefault outside a scope.
+  const event = fireEvent.keyDown(box(), { key: 'Enter' })
+  expect(event).toBe(true) // fireEvent returns false when preventDefault was called
+  expect(submitted).toBe(0)
+})

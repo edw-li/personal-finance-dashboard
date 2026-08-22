@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { canonicalAmount, isAmount, parseAmount } from '../utils/amount'
 import { formatCurrency, formatShares } from '../utils/format'
@@ -10,7 +10,9 @@ export type AmountKind = 'money' | 'shares' | 'percent' | 'plain'
 function echoOf(kind: AmountKind, canonical: string): string {
   if (kind === 'money') return formatCurrency(canonical)
   if (kind === 'shares') return formatShares(canonical)
-  if (kind === 'percent') return `${canonical}%`
+  // A half-typed "13." would echo as "13.%"; the orphan point is display noise, so it is
+  // dropped HERE only — parseAmount keeps "13." verbatim in state (idempotence contract).
+  if (kind === 'percent') return `${canonical.replace(/\.$/, '')}%`
   return canonical
 }
 
@@ -47,12 +49,16 @@ export default function AmountInput({
   const [focused, setFocused] = useState(false)
   // What the field held when focus arrived — Escape's restore point.
   const atFocus = useRef(value)
+  // Armed at focus, spent on the next mouseup — see onMouseUp.
+  const selectPending = useRef(false)
   const expressions = kind === 'money'
 
   // Select AFTER the focused re-render swapped echo → raw: selecting inside onFocus would
-  // select the echo text, and the swap would then collapse the selection. A DOM call, no
-  // setState — the effect-body rule has nothing to say.
-  useEffect(() => {
+  // select the echo text, and the swap would then collapse the selection. Layout, not
+  // passive: the selection must land in the same frame the raw text appears, or a fast
+  // tab-through paints one frame of unselected text and the first keystroke appends
+  // instead of replacing. A DOM call, no setState — the effect-body rule has nothing to say.
+  useLayoutEffect(() => {
     if (focused) inputRef.current?.select()
   }, [focused])
 
@@ -64,7 +70,16 @@ export default function AmountInput({
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    // An Enter that CONFIRMS an IME composition belongs to the input method, not to us.
+    if (e.nativeEvent.isComposing) return
     if (e.key === 'Escape') {
+      // The first Escape cancels the CELL edit and is consumed, like a spreadsheet's; an
+      // Escape on an untouched cell belongs to the container instead — it must reach a
+      // parent modal to close it, and must not write back through onValueChange, whose
+      // upstream setters mark the draft dirty.
+      if (value === atFocus.current) return
+      e.preventDefault()
+      e.stopPropagation()
       onValueChange(atFocus.current)
       // Reselect once the restored value has rendered (microtasks run after React's
       // synchronous discrete-event flush).
@@ -78,8 +93,12 @@ export default function AmountInput({
       scope.querySelector<HTMLElement>('[data-entry-primary]')?.click()
       return
     }
-    const backward = (e.key === 'Enter' && e.shiftKey) || e.key === 'ArrowUp'
-    const forward = (e.key === 'Enter' && !e.shiftKey) || e.key === 'ArrowDown'
+    // Arrows traverse only UNMODIFIED: Shift+Arrow selects text, Alt/Ctrl/Meta+Arrow are
+    // the platform's word/line jumps, and hijacking them would break editing inside a cell.
+    // Enter keeps its Shift pairing — Shift+Enter is the protocol's "go back".
+    const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+    const backward = (e.key === 'Enter' && e.shiftKey) || (e.key === 'ArrowUp' && plain)
+    const forward = (e.key === 'Enter' && !e.shiftKey) || (e.key === 'ArrowDown' && plain)
     if (!backward && !forward) return
     e.preventDefault() // Enter inside a scope ADVANCES — it must not implicit-submit
     const cells = Array.from(scope.querySelectorAll<HTMLElement>('[data-entry-cell]'))
@@ -113,7 +132,18 @@ export default function AmountInput({
       onChange={(e) => onValueChange(e.target.value)}
       onFocus={() => {
         atFocus.current = value
+        selectPending.current = true // re-armed on EVERY focus, so every click-in selects
         setFocused(true)
+      }}
+      onMouseUp={(e) => {
+        // Browsers place the caret on the mouseup that COMPLETES a focusing click, which
+        // collapses the selection focus just applied. Swallowing that one mouseup keeps
+        // type-to-replace working for mouse users; the NEXT click (field already focused)
+        // positions the caret normally — a spreadsheet's click-then-click-to-edit.
+        if (selectPending.current) {
+          e.preventDefault()
+          selectPending.current = false
+        }
       }}
       onBlur={() => {
         setFocused(false)
