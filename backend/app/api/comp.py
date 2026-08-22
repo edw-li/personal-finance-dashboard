@@ -478,6 +478,38 @@ def _close_on_or_before(days: list[date], closes: list[Decimal], day: date) -> D
     return closes[index] if index >= 0 else None
 
 
+def _unvested_shares(grants: list[RsuGrant], today: date) -> int:
+    """Shares not yet vested as of `today`, summed across every SCHEDULABLE grant — the one
+    definition behind both the /vesting-schedule tile and net-worth's suggestion chips.
+
+    A grant `rsu_vesting` refuses is skipped exactly as the schedule route drops it (there
+    is no honest share count for a row whose schedule cannot be computed); the route names
+    it in a warning, which is why nothing is raised here."""
+    total = 0
+    for grant in grants:
+        try:
+            vest_events = rsu_vesting.schedule(grant)
+        except (ValueError, OverflowError):
+            continue
+        total += sum(shares for vest_date, shares in vest_events if vest_date > today)
+    return total
+
+
+async def _unvested_value(db: AsyncSession) -> Decimal | None:
+    """The /vesting-schedule `unvested_value` tile computed standalone, for cross-router
+    callers that want the number without the payload (net-worth's suggestion chips import
+    it the way taxes imports `_employer_bars`).
+
+    Null in exactly the cases the tile is null — no employer quote to price the shares
+    with — and 0.00, not null, when everything granted has already vested: that is a
+    known value, not a missing one."""
+    _ticker, latest_price, _quoted_at = await _espp_quote(db)
+    if latest_price is None:
+        return None
+    grants = list((await db.execute(select(RsuGrant))).scalars())
+    return _vest_value(latest_price, _unvested_shares(grants, product_today()))
+
+
 @router.get("/vesting-schedule", response_model=VestingScheduleOut)
 async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingScheduleOut:
     # One clock for the whole payload (list_grants' note): every `is_past` flag, the grant
@@ -565,10 +597,13 @@ async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingSchedul
             )
         )
 
-    future = [vest for vest in vests if not vest.is_past]
     in_year = [vest for vest in vests if vest.is_past and vest.vest_date.year == today.year]
     priced_in_year = [vest.value for vest in in_year if vest.value is not None]
-    unvested_shares = sum(vest.shares for vest in future)
+    # Through the shared helper rather than summing `vests` in place: net-worth's suggestion
+    # chips serve this same number, and ONE definition is what keeps the chip and this tile
+    # from ever disagreeing. It reschedules the grants a second time — pure arithmetic over a
+    # handful of rows, no extra query — which is the cheap half of that trade.
+    unvested_shares = _unvested_shares(grants, today)
     # DAY-scoped, matching the grouped table (2026-08-21 revision review): with overlapping
     # grants every quarter carries several tranches, and a tile that named one tranche's
     # shares beside a badged row summing four of them would disagree with itself.

@@ -1,7 +1,20 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from app.models import Account, AccountBalance, NetWorthSnapshot
+from app.models import (
+    Account,
+    AccountBalance,
+    AppSetting,
+    LatestPrice,
+    NetWorthSnapshot,
+    PositionTransaction,
+    RsuGrant,
+    Security,
+)
+
+SUGGESTIONS = "/api/v1/net-worth/suggestions"
+SCHEDULE = "/api/v1/comp/vesting-schedule"
+QUOTED_AT = datetime(2026, 8, 21, 20, 0, tzinfo=UTC)
 
 
 async def test_net_worth_requires_auth(client):
@@ -440,3 +453,152 @@ async def test_put_month_refuses_empty_create_but_allows_meta_update(auth_client
     read = (await auth_client.get(put)).json()
     assert read["notes"] == "meta only"
     assert len(read["balances"]) == 1
+
+
+async def test_suggestions_empty_when_nothing_mapped(auth_client):
+    resp = await auth_client.get(SUGGESTIONS)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"suggestions": [], "warnings": []}
+
+
+async def test_suggestions_resolve_portfolio_and_warn_on_unknown(auth_client, db):
+    security = Security(ticker="VOO", name="Vanguard S&P 500", holding_type="etf")
+    db.add(security)
+    await db.flush()
+    db.add_all(
+        [
+            PositionTransaction(
+                security_id=security.id,
+                account="RH Taxable",
+                type="buy",
+                txn_date=date(2025, 1, 15),
+                shares=Decimal("10"),
+                price=Decimal("400.0000"),
+            ),
+            LatestPrice(
+                security_id=security.id,
+                price=Decimal("500.0000"),
+                quoted_at=QUOTED_AT,
+                source="manual",
+            ),
+        ]
+    )
+    robinhood = Account(
+        name="Robinhood",
+        slug="robinhood",
+        group="taxable",
+        sort_order=1,
+        suggest_source="portfolio:RH Taxable",
+    )
+    ghosted = Account(
+        name="Ghosted",
+        slug="ghosted",
+        group="taxable",
+        sort_order=2,
+        suggest_source="portfolio:Ghost Label",
+    )
+    # Deactivated accounts are off the wizard's table entirely — no suggestion, and no
+    # warning either: an archived mapping is not a problem the user needs to fix.
+    closed = Account(
+        name="Closed Broker",
+        slug="closed-broker",
+        group="taxable",
+        sort_order=3,
+        is_active=False,
+        suggest_source="portfolio:RH Taxable",
+    )
+    unmapped = Account(name="Checking", slug="checking", group="cash", sort_order=4)
+    db.add_all([robinhood, ghosted, closed, unmapped])
+    await db.commit()
+
+    body = (await auth_client.get(SUGGESTIONS)).json()
+    by_id = {s["account_id"]: s for s in body["suggestions"]}
+    assert by_id[robinhood.id]["value"] == "5000.00"  # 10 shares x the 500.0000 latest quote
+    assert by_id[robinhood.id]["source"] == "portfolio:RH Taxable"
+    assert set(by_id) == {robinhood.id}  # ghost, deactivated and unmapped all absent
+    # The unresolvable mapping is NAMED, never silently skipped (locked decision 3).
+    assert body["warnings"] == ["Ghosted: no holdings under portfolio label 'Ghost Label'"]
+
+
+async def test_suggestions_price_unvested_rsus_off_the_vesting_tile(auth_client, db):
+    """The value IS /comp/vesting-schedule's unvested_value tile — asserted against the tile
+    itself, so the two computations cannot drift apart while both stay green."""
+    db.add(AppSetting(key="espp_ticker", value={"value": "NVDA"}))
+    security = Security(ticker="NVDA", name="NVIDIA", holding_type="stock")
+    db.add(security)
+    await db.flush()
+    equity = Account(
+        name="Unvested RSUs",
+        slug="unvested-rsus",
+        group="equity",
+        sort_order=1,
+        suggest_source="vesting:unvested",
+    )
+    db.add_all(
+        [
+            LatestPrice(
+                security_id=security.id,
+                price=Decimal("200.0000"),
+                quoted_at=QUOTED_AT,
+                source="yfinance",
+            ),
+            # Every vest sits ahead of ANY clock, so the whole grant is unvested and the
+            # expectation is price x shares — no frozen-today fixture needed.
+            RsuGrant(
+                kind="refresh",
+                label="2030 focal",
+                focal_year=2030,
+                shares=100,
+                grant_price=Decimal("150.0000"),
+                first_vest_date=date(2030, 6, 19),
+                cliff_pct=Decimal("0.25"),
+            ),
+            equity,
+        ]
+    )
+    await db.commit()
+
+    body = (await auth_client.get(SUGGESTIONS)).json()
+    assert body["warnings"] == []
+    assert body["suggestions"] == [
+        {"account_id": equity.id, "source": "vesting:unvested", "value": "20000.00"}
+    ]
+    tiles = (await auth_client.get(SCHEDULE)).json()["tiles"]
+    assert body["suggestions"][0]["value"] == tiles["unvested_value"]
+
+
+async def test_suggestions_warn_when_the_vesting_value_is_unpriceable(auth_client, db):
+    # No espp_ticker setting: the tile itself reads null here, so the chip must not.
+    db.add(
+        Account(
+            name="Unvested RSUs",
+            slug="unvested-rsus",
+            group="equity",
+            sort_order=1,
+            suggest_source="vesting:unvested",
+        )
+    )
+    await db.commit()
+
+    body = (await auth_client.get(SUGGESTIONS)).json()
+    assert body["suggestions"] == []
+    assert body["warnings"] == ["Unvested RSUs: vesting schedule has no priceable value"]
+
+
+async def test_suggestions_warn_on_a_hand_edited_unknown_source(auth_client, db):
+    """PATCH cannot store this shape — only a hand-edited row can. It must still degrade to a
+    named warning: never a 500, and never a silent skip that costs the user a chip."""
+    db.add(
+        Account(
+            name="Mystery Map",
+            slug="mystery-map",
+            group="other",
+            sort_order=1,
+            suggest_source="prices:VOO",
+        )
+    )
+    await db.commit()
+
+    body = (await auth_client.get(SUGGESTIONS)).json()
+    assert body["suggestions"] == []
+    assert body["warnings"] == ["Mystery Map: unrecognized suggestion source 'prices:VOO'"]

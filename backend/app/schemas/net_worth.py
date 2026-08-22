@@ -124,3 +124,17 @@ class SummaryOut(BaseModel):
     mom_delta: Decimal | None
     mom_pct: Decimal | None
     groups: list[GroupSummary]
+
+
+class SuggestionOut(BaseModel):
+    account_id: int
+    # Echoed back so the client can label the chip without re-reading the account list.
+    source: str
+    value: Decimal
+
+
+class SuggestionsOut(BaseModel):
+    suggestions: list[SuggestionOut]
+    # One line per mapping that could not be resolved, naming the account. Advisory: the
+    # wizard shows them above the table and still renders every other chip.
+    warnings: list[str]
