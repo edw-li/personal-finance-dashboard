@@ -25,6 +25,8 @@
 7. **Test display rule:** a focused cell asserts raw text, a blurred cell asserts the formatted echo. The **first cell of each wizard step autofocuses**, so in the wizard fixture (`Checking` is the only account) `Checking` shows raw on load while `Food` (spending step, netPay autofocuses) shows `$0.00`.
 8. Text-y fields adopted onto `.field-input` (account, notes, ticker…) inherit its right-aligned monospace look — the comp/paycheck notes boxes already do this today; no new alignment CSS in this phase.
 
+> **Amendment (post-Task-2 quality review, controller-decided):** `=`-arithmetic is MONEY-ONLY end to end, enforcing spec §3.2's letter. `isAmount(raw, { expressions = true })` and `canonicalAmount(raw, { expressions = true })` gain an opt; `AmountInput` passes `expressions: kind === 'money'`; Tasks 7-8's NON-money payload belts (shares, split_factor, RSU counts, percent fields) call the helpers with `{ expressions: false }` so a no-blur `=1/8` can never commit a 2dp-quantized `0.13` into a 6dp shares/factor column. Also folded into Task 3: an input-length fence in `evaluateAmount` (pathological `=+++…` unary chains previously threw RangeError), six evaluator precedence/associativity/negative-result pins, and two JSDoc completions (quantize `places >= 1`; evaluateAmount's non-finite/fence null clause).
+
 ---
 
 ### Task 1: `parseAmount` + `canonicalAmount` (`src/utils/amount.ts`)
