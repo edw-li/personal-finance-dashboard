@@ -181,6 +181,19 @@ paste stays native (and now parses tolerantly anyway).
   `PATCH /portfolio/dividends/{id}` exists; add if not) and the same carry-forward
   (keep security/account/pay_date, clear amount).
 - Focus-return-after-save lands on every panel (paycheck, ESPP, comp, grants).
+- *Implementation amendments (2026-08-22, Phase 3 reviews):* (a) **the focus-before-reset
+  invariant** — a save-success handler that moves focus must do so BEFORE it resets/reseeds
+  form state: the transfer synchronously blurs a still-focused `AmountInput`, whose blur
+  commit closes over the box's pre-reset text, and the other order lets that enqueued write
+  land on the cleared form and resurrect the row just saved. Ordered and commented on all
+  seven save paths (paycheck, ESPP lots, ESPP periods, comp events, RSU grants, and the two
+  ledgers); regression-pinned where a reorder is observable today (comp events + both
+  ledgers). (b) Focus-return targets the first TYPED field: the grants form skips its Kind
+  select (a refocused select is one wheel-scroll from silently rewriting a vesting
+  schedule), and the transactions target follows the row type (split factor vs shares).
+  (c) SecuritiesPanel stays outside the sweep per this section's list — a setup surface,
+  not an entry session — and performs no focus transfer, so the invariant has no purchase
+  there.
 
 ### 5.2 Computed balance suggestions (wizard chips) — beyond sheet parity
 
@@ -200,7 +213,11 @@ dashboard already computes them.
   input; never auto-applied. Shown **only on the ribbon's anchor month** (the newest
   enterable month) — suggestions are "now" values and would be wrong for backfills.
 - **Config:** a minimal mapping editor (accounts list + suggest_source selector) — placement
-  is an open item (no accounts admin UI exists today; likely a Settings card).
+  is an open item (no accounts admin UI exists today; likely a Settings card). *Resolved
+  (Phase 3):* the Settings "Balance suggestions" card — active non-component accounts, one
+  `<select>` each (None / the live allocation buckets / the static vesting kind), immediate
+  single-flight PATCH with the server echo adopted; a stored source today's options no
+  longer contain renders as its own "(unresolved)" option rather than coercing to None.
 
 ## 6. Cross-cutting invariants
 
@@ -234,8 +251,8 @@ dashboard already computes them.
 | Enter behavior change on the tax form (was save-all, becomes advance) | Deliberate and documented; Ctrl+Enter preserves the save habit |
 | Arrow-key hijack inside text inputs | Standard for cell-style UIs; Left/Right untouched; scoped containers only |
 | Ctrl+S browser default | preventDefault with listeners scoped to entry containers |
-| Dividends PATCH may not exist | Verify during Phase 3 planning; add route if missing |
-| Suggestion mapping needs a config surface | Open item — decide placement (Settings card) in Phase 3 planning |
+| Dividends PATCH may not exist | Verify during Phase 3 planning; add route if missing — *resolved: the route existed unwired; Phase 3 wired it (edit path + `updateDividend` client)* |
+| Suggestion mapping needs a config surface | Open item — decide placement (Settings card) in Phase 3 planning — *resolved: the Settings "Balance suggestions" card (§5.2)* |
 | Extra wizard fetch for spending medians | One request against an existing endpoint; acceptable |
 
 ## 9. Out of scope
