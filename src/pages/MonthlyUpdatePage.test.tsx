@@ -11,6 +11,7 @@ vi.mock('../api/netWorth', () => ({
 }))
 vi.mock('../api/spending', () => ({
   fetchCategories: vi.fn(),
+  fetchMatrix: vi.fn(),
   fetchSpendingMonth: vi.fn(),
   putSpendingMonth: vi.fn(),
 }))
@@ -51,11 +52,23 @@ beforeEach(() => {
     notes: [null],
   })
   vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category])
+  // One prior month of history for Food — the spending step's "Typical" column reads it
+  // (a single sample IS its own median).
+  vi.mocked(spendingApi.fetchMatrix).mockResolvedValue({
+    months: ['2026-07-01'],
+    categories: [],
+    series: [{ category_id: 7, values: ['300.00'] }],
+    totals: [],
+    net_pay: [],
+    savings_rate: [],
+    four_pct_rule: [],
+  })
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
     month: '2026-08-01', exists: false, net_pay: null, amounts: [],
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', created: 1, updated: 0, unchanged: 0, net_pay_set: true,
+    month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
+    net_pay_set: true, net_pay_cleared: false,
   })
 })
 
@@ -312,7 +325,10 @@ it('shows last month beside the cell and a live delta as you type', async () => 
   const row = balanceInput.closest('tr') as HTMLElement
   expect(within(row).getByText('$1,500.00')).toBeDefined() // last-month reference
   fireEvent.change(balanceInput, { target: { value: '1600.00' } })
-  expect(within(row).getByText('$100.00')).toBeDefined() // live Δ
+  const deltaCell = within(row).getByText('$100.00') // live Δ
+  // Tone, not just the number: on BALANCES a rise is the good direction (the spending
+  // table deliberately inverts this, and only a class pin can tell the two apart).
+  expect(deltaCell.className).toContain('delta-positive')
 })
 
 it('excludes components from the group subtotal and the live net worth', async () => {
@@ -337,14 +353,89 @@ it('excludes components from the group subtotal and the live net worth', async (
   expect(cells[0].textContent).toBe('Subtotal')
   expect(cells[2].textContent).toBe('$1,000.00') // the component's 250 is tracked INSIDE it
   // Same rule at the bottom line: 1,500 checking + 1,000 brokerage, component excluded.
-  expect(within(screen.getByRole('status')).getByText('$2,500.00')).toBeDefined()
+  const footer = screen.getByRole('status', { name: /live totals/i })
+  expect(within(footer).getByText('$2,500.00')).toBeDefined()
+})
+
+it('leaves the subtotal prior and Δ blank for a first-ever month', async () => {
+  // No prior month exists at all. A $0.00 prior would be a fabrication that reads as
+  // "you had nothing last month" and paints the whole first entry as pure growth.
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month, exists: false, recorded_on: null, notes: null, balances: [],
+  }))
+  renderWizard()
+  const row = (await screen.findByLabelText('Checking')).closest('tr') as HTMLElement
+  const cells = within(row.nextElementSibling as HTMLElement).getAllByRole('cell')
+  expect(cells[0].textContent).toBe('Subtotal')
+  expect(cells[1].textContent).toBe('—') // prior
+  expect(cells[2].textContent).toBe('$0.00') // this month, seeded
+  expect(cells[3].textContent).toBe('—') // Δ
 })
 
 it('keeps the live net-worth footer in sync while entering balances', async () => {
   renderWizard()
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2000' } })
-  const footer = screen.getByRole('status')
+  // By NAME, not by bare role: the draft banner and (Task 5) the paste note are status
+  // nodes too — the label is what keeps this selector pointed at the totals bar.
+  const footer = screen.getByRole('status', { name: /live totals/i })
   expect(within(footer).getByText('$2,000.00')).toBeDefined()
+  // The footer's own Δ against the prior month's 1,500 — the number AND its tone.
+  const delta = within(footer).getByText('$500.00 vs prior month')
+  expect(delta.className).toContain('delta-positive')
+})
+
+it('shows the typical column and a live delta against it', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const food = await screen.findByLabelText('Food')
+  const row = food.closest('tr') as HTMLElement
+  expect(within(row).getByText('$300.00')).toBeDefined() // 3-mo median (one sample)
+  fireEvent.change(food, { target: { value: '250.00' } })
+  const deltaCell = within(row).getByText('-$50.00') // under typical
+  // The INVERSION: on spending, less than typical is the good direction, so a negative
+  // Δ carries the positive tone (the balances table's Δ pins the opposite mapping).
+  expect(deltaCell.className).toContain('delta-positive')
+})
+
+it('keeps the live spending footer in sync while entering amounts', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '250' } })
+  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '1000' } })
+  // Same lesson as the balances footer: select the totals bar by its label, not by role.
+  const footer = screen.getByRole('status', { name: /live totals/i })
+  expect(within(footer).getByText('$250.00')).toBeDefined()
+  expect(within(footer).getByText(/savings rate: 75\.0%/i)).toBeDefined()
+})
+
+it('clears a previously saved net pay when the box is blanked', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [],
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const netPayBox = await screen.findByLabelText('Net pay (take-home)')
+  fireEvent.change(netPayBox, { target: { value: '' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() => {
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({ net_pay: null }),
+    )
+  })
+})
+
+it('never sends net_pay for a month that had none and stays blank', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() => {
+    const body = vi.mocked(spendingApi.putSpendingMonth).mock.calls[0][1]
+    expect('net_pay' in body).toBe(false)
+  })
 })
 
 it('a post-save blur never resurrects a phantom draft', async () => {

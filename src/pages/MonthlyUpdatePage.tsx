@@ -8,16 +8,22 @@ import {
   fetchTimeseries,
   putMonthBalances,
 } from '../api/netWorth'
-import { fetchCategories, fetchSpendingMonth, putSpendingMonth } from '../api/spending'
+import {
+  fetchCategories,
+  fetchMatrix,
+  fetchSpendingMonth,
+  putSpendingMonth,
+} from '../api/spending'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
-import type { AccountOut, CategoryOut } from '../types/api'
+import type { AccountOut, CategoryOut, SpendingMatrix } from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
+import { typicalSpend } from '../utils/spending'
 import '../components/panels.css'
 import './MonthlyUpdatePage.css'
 
@@ -108,6 +114,13 @@ export default function MonthlyUpdatePage() {
   // reference every live Δ is measured against. The prior fetch already ran for the seed
   // and prevNetWorth; this keeps its per-account detail instead of discarding it.
   const [priorBalances, setPriorBalances] = useState<Record<number, string>>({})
+  // The spending history behind the "Typical" column. Spending is a flow, so its cells
+  // seed at 0.00 — this is the context a prefill would have to fake (spec §4.2).
+  const [matrix, setMatrix] = useState<SpendingMatrix | null>(null)
+  // Did the LOADED month carry a net pay? The tri-state rider's whole question: only a
+  // value that existed on the server can be cleared, and only then is `null` sent.
+  // Server-derived like `matrix` — deliberately NOT part of the draft snapshot.
+  const [hadNetPay, setHadNetPay] = useState(false)
   const [monthExisted, setMonthExisted] = useState(false)
   const [coveredMonths, setCoveredMonths] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
@@ -148,8 +161,17 @@ export default function MonthlyUpdatePage() {
       fetchMonthBalances(addMonths(month, -1)),
       fetchSpendingMonth(month),
       fetchTimeseries(),
+      fetchMatrix(),
     ])
-      .then(([accountList, categoryList, thisMonth, priorMonth, spendMonth, timeseries]) => {
+      .then(([
+        accountList,
+        categoryList,
+        thisMonth,
+        priorMonth,
+        spendMonth,
+        timeseries,
+        matrixData,
+      ]) => {
         setError(null)
         setSaved(null)
         // Nested order: component inputs sit right after their aggregate's input
@@ -159,6 +181,8 @@ export default function MonthlyUpdatePage() {
         setCategories(categoryList.filter((c) => c.is_active))
         setMonthExisted(thisMonth.exists)
         setCoveredMonths(new Set(timeseries.months))
+        setMatrix(matrixData)
+        setHadNetPay(spendMonth.net_pay !== null)
 
         // Pre-fill: the month's own values win; otherwise the prior month's (the sheet
         // ritual starts from last month's numbers); otherwise 0.00.
@@ -320,10 +344,19 @@ export default function MonthlyUpdatePage() {
         notes: notes.trim() === '' ? null : notes,
         balances: accounts.map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
       })
-      const body: { net_pay?: string; amounts: { category_id: number; amount: string }[] } = {
+      const body: {
+        net_pay?: string | null
+        amounts: { category_id: number; amount: string }[]
+      } = {
         amounts: categories.map((c) => ({ category_id: c.id, amount: canonAmounts[c.id] })),
       }
-      if (netPay.trim() !== '') body.net_pay = canonNetPay
+      if (netPay.trim() !== '') {
+        body.net_pay = canonNetPay
+      } else if (hadNetPay) {
+        // Tri-state rider (spec §4.2): blanking a previously saved net pay must CLEAR it —
+        // omitting would silently keep the stale figure in every savings-rate denominator.
+        body.net_pay = null
+      }
       const spendResult = await putSpendingMonth(month, body)
       setSaved(
         `Balances: ${balanceResult.created} added, ${balanceResult.updated} changed, ` +
@@ -340,6 +373,9 @@ export default function MonthlyUpdatePage() {
       setBalances(canonBalances)
       setAmounts(canonAmounts)
       setNetPay(canonNetPay)
+      // The server's state is now what we just sent: a cleared month has no net pay to
+      // clear twice, and a freshly typed one becomes clearable without a reload.
+      setHadNetPay(canonNetPay !== '')
       setBaseline({
         month,
         data: snapshotOf(canonBalances, canonAmounts, canonNetPay, recordedOn, notes),
@@ -384,6 +420,11 @@ export default function MonthlyUpdatePage() {
   const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
 
   // Per-group live subtotal + its prior twin (components excluded, exactly like net worth).
+  // DELIBERATE scope divergence, not an oversight: prevNetWorth (and so the footer's "vs
+  // prior month") reduces over the RAW accountList — inactive accounts included — because
+  // that is the true net-worth delta; these subtotals and the Last-month column cover the
+  // ACTIVE rows on screen only, because they are an entry aid. "Fixing" the footer to
+  // match active-only would falsify the delta the month is actually judged by.
   const groupTotals = (group: (typeof GROUP_ORDER)[number]) => {
     const rows = accounts.filter((a) => a.group === group && !a.is_component)
     const now = rows.reduce((acc, a) => acc + committed(balances[a.id]), 0)
@@ -548,9 +589,17 @@ export default function MonthlyUpdatePage() {
                     })}
                     <tr className="entry-subtotal-row">
                       <td>Subtotal</td>
-                      <td className="num entry-ref">{formatCurrency(totals.prior)}</td>
+                      {/* No prior month at all (the first-ever entry) means there is no
+                          prior subtotal — '—', never a fabricated $0.00 that would read
+                          as "you had nothing" and make every Δ look like pure growth.
+                          Per-row cells already say '—' via the missing priorBalances. */}
+                      <td className="num entry-ref">
+                        {prevNetWorth === null ? '—' : formatCurrency(totals.prior)}
+                      </td>
                       <td className="num">{formatCurrency(totals.now)}</td>
-                      <td className="num entry-delta">{formatCurrency(totals.now - totals.prior)}</td>
+                      <td className="num entry-delta">
+                        {prevNetWorth === null ? '—' : formatCurrency(totals.now - totals.prior)}
+                      </td>
                     </tr>
                   </Fragment>
                 )
@@ -560,7 +609,10 @@ export default function MonthlyUpdatePage() {
           <p className="drill-hint">
             Liabilities are stored signed — enter card balances as negative numbers.
           </p>
-          <div className="entry-footer" role="status">
+          {/* Named, not just role="status": the draft banner (and Phase 2's paste note)
+              are status nodes too, so screen readers — and every selector — need this one
+              to say WHAT it is announcing. */}
+          <div className="entry-footer" role="status" aria-label="Live totals">
             <span>
               Net worth (live): <strong>{formatCurrency(preview.netWorth)}</strong>
             </span>
@@ -604,23 +656,68 @@ export default function MonthlyUpdatePage() {
               />
             </label>
           </div>
-          <div className="entry-grid">
-            {categories.map((category) => {
-              const value = amounts[category.id] ?? ''
-              return (
-                <div key={category.id} className="entry-field">
-                  <label htmlFor={`amt-${category.id}`}>{category.name}</label>
-                  <AmountInput
-                    id={`amt-${category.id}`}
-                    className={isAmount(value) ? undefined : 'invalid'}
-                    value={value}
-                    onValueChange={(next) =>
-                      setAmounts((cur) => ({ ...cur, [category.id]: next }))
-                    }
-                  />
-                </div>
-              )
-            })}
+          {/* Same single visual column as the balances step — DOM order is the categories'
+              render order, so the Phase 1 Enter/arrow protocol walks straight down. */}
+          <table className="data-table entry-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th className="num entry-ref">Typical (3-mo median)</th>
+                <th className="num">This month</th>
+                <th className="num entry-delta">Δ vs typical</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categories.map((category) => {
+                const value = amounts[category.id] ?? ''
+                const typical = matrix === null ? null : typicalSpend(matrix, month, category.id)
+                const delta =
+                  typical === null ? null : (Number(canonicalAmount(value)) || 0) - typical
+                return (
+                  <tr key={category.id}>
+                    <td>
+                      <label htmlFor={`amt-${category.id}`}>{category.name}</label>
+                    </td>
+                    <td className="num entry-ref">
+                      {typical === null ? '—' : formatCurrency(typical)}
+                    </td>
+                    <td className="num entry-cell-col">
+                      <AmountInput
+                        id={`amt-${category.id}`}
+                        className={isAmount(value) ? undefined : 'invalid'}
+                        value={value}
+                        onValueChange={(next) =>
+                          setAmounts((cur) => ({ ...cur, [category.id]: next }))
+                        }
+                      />
+                    </td>
+                    {/* TONE INVERSION vs the balances Δ, deliberately: a POSITIVE delta
+                        here is overspending against the typical month — the BAD direction
+                        — so the sign→color mapping is the mirror of a rising balance's. */}
+                    <td
+                      className={`num entry-delta${
+                        delta === null || delta === 0
+                          ? ''
+                          : delta > 0
+                            ? ' delta-negative' /* overspend vs typical reads as the bad direction */
+                            : ' delta-positive'
+                      }`}
+                    >
+                      {delta === null ? '—' : formatCurrency(delta)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <div className="entry-footer" role="status" aria-label="Live totals">
+            <span>
+              Total spend (live): <strong>{formatCurrency(preview.totalSpend)}</strong>
+            </span>
+            <span>
+              Savings rate:{' '}
+              {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
+            </span>
           </div>
           <div className="wizard-footer">
             <button className="button" onClick={() => setStep('balances')}>

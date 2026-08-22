@@ -38,34 +38,8 @@
   font-size: 0.7rem;
 }
 
-.entry-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 0.6rem 1.25rem;
-}
-
-.entry-field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.entry-field label {
-  font-size: 0.82rem;
-  color: var(--text);
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.entry-field .field-input {
-  width: 130px;
-  flex: none;
-}
-
+/* (.entry-grid/.entry-field died with the card grids both entry steps replaced; the
+   inputs' width now comes from the table's .entry-cell-col column.) */
 .field-input.invalid {
   border-color: var(--negative);
 }
@@ -97,7 +71,9 @@
    is load-bearing, not redundant: the muted default above is `.entry-table .entry-delta`
    (0,2,0) on the SAME <td>, so a bare `.delta-positive` (0,1,0) loses and the Δ column
    would read muted whatever the sign. The footer's span, outside the table, takes the
-   bare one. */
+   bare one — and the bare halves DO duplicate panels.css:205-206 verbatim; they stay so
+   this sheet is self-contained if the page ever drops the panels import. Only the
+   .entry-table-scoped twins carry weight the shared rule cannot. */
 .delta-positive,
 .entry-table .delta-positive {
   color: var(--positive);

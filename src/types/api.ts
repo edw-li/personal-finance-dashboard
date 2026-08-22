@@ -120,6 +120,8 @@ export interface SpendingUpsertResult {
   updated: number
   unchanged: number
   net_pay_set: boolean
+  /** An explicit `net_pay: null` deleted the month's cashflow row (the blank-clears rider). */
+  net_pay_cleared: boolean
 }
 
 export interface YearRollup {
