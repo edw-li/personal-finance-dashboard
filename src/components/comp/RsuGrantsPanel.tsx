@@ -152,6 +152,10 @@ export default function RsuGrantsPanel({
       setError(`shares must be between 1 and ${SHARES_MAX}`)
       return
     }
+    // Canonicalized ONCE, above the gate, and used by both the positivity check and the
+    // body: two separate calls could be given different options by a later edit, and the
+    // check would then be judging text the wire never sees.
+    const canonical = canonicalAmount(price, { expressions: false })
     if (!isAmount(price, { expressions: false })) {
       // Exponent notation has NO 422 behind it: "1e-3" parses server-side as a perfectly
       // legal Decimal 0.001 and is stored (src/utils/amount.ts refuses exponents for that
@@ -164,7 +168,7 @@ export default function RsuGrantsPanel({
       setError('Price at grant must be a number')
       return
     }
-    if (Number(canonicalAmount(price, { expressions: false })) <= 0) {
+    if (Number(canonical) <= 0) {
       // The CANONICAL value, not the typed text: Number('$129.57') is NaN, and NaN <= 0 is
       // false — a tolerant entry would slip straight past a raw comparison.
       setError('grant_price must be positive')
@@ -208,7 +212,7 @@ export default function RsuGrantsPanel({
       // The wire belt: blur usually canonicalized already, but a submit reached without one
       // (a mouse user who types and clicks Save) must not ship "$129.57" to a Decimal
       // column. Expressionless, like the gate above and the box itself.
-      grant_price: canonicalAmount(price, { expressions: false }),
+      grant_price: canonical,
       first_vest_date: form.first_vest_date,
       cliff_pct: cliff,
       vest_quantum: Number(quantumText),

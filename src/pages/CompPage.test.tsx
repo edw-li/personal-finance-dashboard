@@ -434,6 +434,24 @@ describe('CompPage — writes', () => {
     expect(vi.mocked(createEvent).mock.calls[0][0].current_base).toBe('188930')
   })
 
+  it('EVALUATES an =-expression typed into the money base — the other half of the split', async () => {
+    render(<CompPage />)
+    await screen.findByText('$601,854.46')
+
+    type('Focal year', '2028')
+    type('Current base', '=188000+930')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+
+    await waitFor(() => expect(vi.mocked(createEvent)).toHaveBeenCalledTimes(1))
+    // The deliberate OTHER side of the kind-scale split, pinned so the two halves cannot be
+    // "harmonized" into one: current_base and new_base are Numeric(12,2), so their boxes are
+    // kind="money" and their belt (submit's `blankMoney`, and the current_base line beside
+    // it) keeps expressions ON — the 2dp evaluator is exactly right for a 2dp column, and a
+    // raise typed as a sum is the reason the feature exists. Flip that belt to
+    // { expressions: false } and this body carries the literal '=188000+930' instead.
+    expect(vi.mocked(createEvent).mock.calls[0][0].current_base).toBe('188930.00')
+  })
+
   it('ships an =-expression typed into a COUNT box verbatim — the belt never evaluates it', async () => {
     render(<CompPage />)
     await screen.findByText('$601,854.46')
@@ -452,7 +470,8 @@ describe('CompPage — writes', () => {
     // does today; the server error is the backstop, and no client-side evaluation is
     // allowed to invent a number the cell itself marks invalid.
     expect(vi.mocked(createEvent).mock.calls[0][0].unvested_rsus).toBe('=2*100')
-    // ...while the money box beside it keeps the money default and canonicalizes normally.
+    // ...while the plain-kind price box beside it ships its canonical text unchanged
+    // (blankFine is expressionless too).
     expect(vi.mocked(createEvent).mock.calls[0][0].unvested_price).toBe('190.0000')
   })
 
