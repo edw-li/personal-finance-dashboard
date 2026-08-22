@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { createDividend, deleteDividend } from '../../api/portfolio'
+import AmountInput from '../AmountInput'
 import EChart from '../EChart'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type { DividendOut, SecurityOut } from '../../types/api'
+import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { todayIso } from '../../utils/months'
 import { incomeStats, monthlyIncomeOption } from './dividendChartOptions'
@@ -43,7 +45,9 @@ export default function DividendsPanel({
       security_id: Number(form.security_id),
       account: form.account.trim() || null,
       pay_date: form.pay_date,
-      amount: form.amount,
+      // The wire belt: a submit reached without a blur (a click straight off the keyboard)
+      // must not ship "$1,050" to a Decimal column.
+      amount: canonicalAmount(form.amount),
       notes: form.notes.trim() || null,
     })
       .then(() => {
@@ -109,19 +113,21 @@ export default function DividendsPanel({
         </label>
         <label>
           Account
-          <input value={form.account} onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))} />
+          {/* .field-input by hand: the shared chrome used to arrive from `.entry-form input`,
+              which is now select-only — every plain text control in this form states it. */}
+          <input className="field-input" value={form.account} onChange={(e) => setForm((f) => ({ ...f, account: e.target.value }))} />
         </label>
         <label>
           Pay date
-          <input type="date" value={form.pay_date} onChange={(e) => setForm((f) => ({ ...f, pay_date: e.target.value }))} />
+          <input className="field-input" type="date" value={form.pay_date} onChange={(e) => setForm((f) => ({ ...f, pay_date: e.target.value }))} />
         </label>
         <label>
           Amount
-          <input value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} inputMode="decimal" />
+          <AmountInput value={form.amount} onValueChange={(next) => setForm((f) => ({ ...f, amount: next }))} />
         </label>
         <label className="notes-field">
           Notes
-          <input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
+          <input className="field-input" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
         </label>
         <div className="form-actions">
           <button type="submit" disabled={busy}>Add dividend</button>

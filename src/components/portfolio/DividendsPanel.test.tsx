@@ -147,4 +147,17 @@ describe('DividendsPanel manual entry', () => {
       security_id: 1, account: 'Fidelity', pay_date: '2026-08-03', amount: '4.10',
     })
   })
+
+  it('canonicalizes a grouped amount at the wire boundary with no blur', async () => {
+    const onChanged = vi.fn()
+    renderPanel([], '432.10', onChanged)
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '1,050' } })
+    // Typed and clicked, never blurred — the belt in submit() is what strips the grouping
+    // comma a Decimal column would reject.
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(vi.mocked(createDividend).mock.calls[0][0]).toMatchObject({ amount: '1050' })
+  })
 })

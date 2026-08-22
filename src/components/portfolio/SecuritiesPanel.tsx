@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { ApiError } from '../../api/client'
 import { createSecurity, deleteSecurity, updateSecurity } from '../../api/portfolio'
 import { putManualPrice } from '../../api/prices'
+import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import type { HoldingType, SecurityOut } from '../../types/api'
+import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate } from '../../utils/format'
 import './portfolio.css'
 
@@ -78,7 +80,9 @@ export default function SecuritiesPanel({
             name: form.name.trim(),
             industry: form.industry.trim() || null,
             holding_type: form.holding_type,
-            annual_dividend: form.annual_dividend.trim() || null,
+            // The wire belt (blank still means null, never "0"). Canonicalizing a server
+            // seed is a no-op, so a hidden field's stored "0.0400" rides back untouched.
+            annual_dividend: form.annual_dividend.trim() ? canonicalAmount(form.annual_dividend) : null,
             is_manual_priced: form.is_manual_priced,
             is_active: form.is_active,
           })
@@ -128,7 +132,8 @@ export default function SecuritiesPanel({
     }
     setBusy(true)
     setError(null)
-    putManualPrice(security.ticker, { price })
+    // The wire belt: this mini-form is typed and clicked, often without a blur.
+    putManualPrice(security.ticker, { price: canonicalAmount(price) })
       .then(() => {
         setPricingId(null)
         setPrice('')
@@ -164,7 +169,12 @@ export default function SecuritiesPanel({
       >
         <label>
           Ticker
+          {/* .field-input by hand: the shared chrome used to arrive from `.entry-form input`,
+              which is now select-only — every plain text control in this form states it.
+              The two checkboxes below deliberately keep their own `.entry-form
+              input[type='checkbox']` sizing rule instead. */}
           <input
+            className="field-input"
             value={form.ticker}
             onChange={(e) => set('ticker')(e.target.value)}
             disabled={editingId !== null}
@@ -172,11 +182,11 @@ export default function SecuritiesPanel({
         </label>
         <label>
           Name
-          <input value={form.name} onChange={(e) => set('name')(e.target.value)} />
+          <input className="field-input" value={form.name} onChange={(e) => set('name')(e.target.value)} />
         </label>
         <label>
           Industry
-          <input value={form.industry} onChange={(e) => set('industry')(e.target.value)} />
+          <input className="field-input" value={form.industry} onChange={(e) => set('industry')(e.target.value)} />
         </label>
         <label>
           Holding type
@@ -201,10 +211,9 @@ export default function SecuritiesPanel({
         {editingId !== null && form.is_manual_priced && (
           <label>
             Annual dividend
-            <input
+            <AmountInput
               value={form.annual_dividend}
-              onChange={(e) => set('annual_dividend')(e.target.value)}
-              inputMode="decimal"
+              onValueChange={set('annual_dividend')}
             />
           </label>
         )}
@@ -288,11 +297,7 @@ export default function SecuritiesPanel({
                     >
                       <label>
                         Price
-                        <input
-                          value={price}
-                          onChange={(e) => setPrice(e.target.value)}
-                          inputMode="decimal"
-                        />
+                        <AmountInput value={price} onValueChange={setPrice} />
                       </label>
                       <button type="submit" disabled={busy}>Save price</button>
                       <button type="button" onClick={() => setPricingId(null)}>Cancel</button>

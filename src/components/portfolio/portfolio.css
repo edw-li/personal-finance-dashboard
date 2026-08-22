@@ -63,8 +63,13 @@
 
 .entry-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; align-items: end; }
 .entry-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.entry-form input, .entry-form select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 6px; }
-/* Column-flex labels stretch their control: a checkbox has to opt out. */
+/* Select-only since the panels adopted AmountInput: every text control in these forms now
+   carries panels.css's shared .field-input, and a blanket `.entry-form input` would fight
+   it (two different backgrounds/paddings for the same box). Selects have no shared class,
+   so their chrome stays here. */
+.entry-form select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 6px; }
+/* Column-flex labels stretch their control: a checkbox has to opt out. Still matches — the
+   checkboxes are the one control left as a plain <input> with no .field-input. */
 .entry-form input[type='checkbox'] { width: 16px; height: 16px; padding: 0; align-self: start; }
 .entry-form .notes-field { grid-column: span 2; }
 .form-actions { display: flex; gap: 8px; }

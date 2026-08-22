@@ -83,6 +83,41 @@ describe('TransactionsPanel', () => {
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
   })
 
+  it('canonicalizes the wire body with no blur, and leaves blank fees null', async () => {
+    const onChanged = vi.fn()
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/shares/i), '10')
+    change(screen.getByLabelText(/price/i), '$1,205.50')
+    // No blur is ever fired here — a mouse user who types and clicks Save produces exactly
+    // this sequence, so the payload BELT (canonicalAmount in toPayload), not AmountInput's
+    // blur commit, is what keeps "$1,205.50" out of a Decimal column.
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(vi.mocked(createTransaction).mock.calls[0][0]).toMatchObject({
+      shares: '10', price: '1205.50', fees: null,
+    })
+  })
+
+  it('ships an =-expression typed into shares verbatim — the belt never evaluates it', async () => {
+    const onChanged = vi.fn()
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/shares/i), '=5*2')
+    change(screen.getByLabelText(/price/i), '150')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    // What is pinned is the { expressions: false } contract: shares is a 6dp column and the
+    // evaluator quantizes to 2dp, so "=1/8" would silently commit 0.13 where 0.125 was meant.
+    // The text therefore travels VERBATIM — it is deliberately NOT '10'. The panel still
+    // submits it because presence validation only checks non-empty, so this garbage 422s
+    // server-side exactly as 'abc' typed into the same field does today; the server error is
+    // the backstop, and no client-side evaluation is allowed to invent a number.
+    expect(vi.mocked(createTransaction).mock.calls[0][0]).toMatchObject({ shares: '=5*2' })
+  })
+
   it('split without a factor is refused client-side', () => {
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={() => {}} />)
     change(screen.getByLabelText(/security/i), '1')

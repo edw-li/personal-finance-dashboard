@@ -5,8 +5,10 @@ import {
   deleteTransaction,
   updateTransaction,
 } from '../../api/portfolio'
+import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
+import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import './portfolio.css'
 
@@ -43,13 +45,22 @@ function toPayload(form: FormState) {
   }
   if (form.type === 'split') {
     // Plan 1 dummy convention: split rows store shares/price 0 and carry no fees.
-    return { ...base, split_factor: form.split_factor.trim(), shares: '0', price: '0', fees: null }
+    return {
+      ...base,
+      split_factor: canonicalAmount(form.split_factor, { expressions: false }),
+      shares: '0',
+      price: '0',
+      fees: null,
+    }
   }
   return {
     ...base,
-    shares: form.shares,
-    price: form.price,
-    fees: form.fees.trim() ? form.fees : null,
+    // shares and split_factor are 6dp columns: { expressions: false } keeps a no-blur
+    // "=1/8" from being evaluated and 2dp-quantized into 0.13. The text stays verbatim and
+    // the server's 422 remains the backstop, exactly as it is for any other garbage.
+    shares: canonicalAmount(form.shares, { expressions: false }),
+    price: canonicalAmount(form.price),
+    fees: form.fees.trim() ? canonicalAmount(form.fees) : null,
     split_factor: null,
   }
 }
@@ -171,7 +182,13 @@ export default function TransactionsPanel({
         </label>
         <label>
           Account
-          <input value={form.account} onChange={(e) => set('account')(e.target.value)} />
+          {/* .field-input by hand: the shared chrome used to arrive from `.entry-form input`,
+              which is now select-only — every plain text control in this form states it. */}
+          <input
+            className="field-input"
+            value={form.account}
+            onChange={(e) => set('account')(e.target.value)}
+          />
         </label>
         <label>
           Type
@@ -188,6 +205,7 @@ export default function TransactionsPanel({
         <label>
           Date
           <input
+            className="field-input"
             type="date"
             value={form.txn_date}
             onChange={(e) => set('txn_date')(e.target.value)}
@@ -196,43 +214,37 @@ export default function TransactionsPanel({
         {form.type === 'split' ? (
           <label>
             Factor
-            <input
+            {/* kind="plain": a split factor is a bare ratio — no $ echo, and no
+                2dp-quantizing "=" arithmetic on a 6dp column. */}
+            <AmountInput
+              kind="plain"
               value={form.split_factor}
-              onChange={(e) => set('split_factor')(e.target.value)}
-              inputMode="decimal"
+              onValueChange={set('split_factor')}
             />
           </label>
         ) : (
           <>
             <label>
               Shares
-              <input
-                value={form.shares}
-                onChange={(e) => set('shares')(e.target.value)}
-                inputMode="decimal"
-              />
+              <AmountInput kind="shares" value={form.shares} onValueChange={set('shares')} />
             </label>
             <label>
               Price
-              <input
-                value={form.price}
-                onChange={(e) => set('price')(e.target.value)}
-                inputMode="decimal"
-              />
+              <AmountInput value={form.price} onValueChange={set('price')} />
             </label>
             <label>
               Fees
-              <input
-                value={form.fees}
-                onChange={(e) => set('fees')(e.target.value)}
-                inputMode="decimal"
-              />
+              <AmountInput value={form.fees} onValueChange={set('fees')} />
             </label>
           </>
         )}
         <label className="notes-field">
           Notes
-          <input value={form.notes} onChange={(e) => set('notes')(e.target.value)} />
+          <input
+            className="field-input"
+            value={form.notes}
+            onChange={(e) => set('notes')(e.target.value)}
+          />
         </label>
         <div className="form-actions">
           <button type="submit" disabled={busy}>

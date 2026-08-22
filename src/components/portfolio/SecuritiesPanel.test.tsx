@@ -12,6 +12,7 @@ vi.mock('../../api/prices', () => ({
   putManualPrice: vi.fn().mockResolvedValue({}),
 }))
 import { updateSecurity } from '../../api/portfolio'
+import { putManualPrice } from '../../api/prices'
 
 afterEach(cleanup)
 // Call counts are per-test; clearAllMocks keeps the factory's mockResolvedValue.
@@ -53,6 +54,20 @@ describe('SecuritiesPanel', () => {
       is_manual_priced: false,
       is_active: true,
     })
+  })
+
+  it('canonicalizes a manual price at the wire boundary with no blur', async () => {
+    const onChanged = vi.fn()
+    render(<SecuritiesPanel securities={[manualPriced]} onChanged={onChanged} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Set price' }))
+    // Exact 'Price': the entry form's checkbox label reads "Manual price", which a loose
+    // /price/i would match too.
+    fireEvent.change(screen.getByLabelText('Price'), { target: { value: '$123.4567' } })
+    // Typed and clicked, never blurred. The blurred money ECHO would show $123.46, but the
+    // echo is display-only — the belt sends the full 4dp the price column stores.
+    fireEvent.click(screen.getByRole('button', { name: 'Save price' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(vi.mocked(putManualPrice)).toHaveBeenCalledWith('HOUSE', { price: '123.4567' })
   })
 
   it('confirm-deleting the row being edited resets the form to create mode', async () => {
