@@ -55,11 +55,15 @@ function toPayload(form: FormState) {
   }
   return {
     ...base,
-    // shares and split_factor are 6dp columns: { expressions: false } keeps a no-blur
-    // "=1/8" from being evaluated and 2dp-quantized into 0.13. The text stays verbatim and
-    // the server's 422 remains the backstop, exactly as it is for any other garbage.
+    // Every sub-cent column opts out of "=": the evaluator quantizes to 2dp, so a no-blur
+    // "=1/8" would be committed as 0.13 where 0.125 was meant. shares is Numeric(16, 6),
+    // price Numeric(14, 4) and split_factor Numeric(10, 4) — all finer than the evaluator,
+    // all expressionless, each paired with a non-money input kind so the cell cannot
+    // evaluate what the belt refuses. fees alone is Numeric(10, 2) and stays money.
+    // The text stays verbatim and the server's 422 remains the backstop, exactly as it is
+    // for any other garbage.
     shares: canonicalAmount(form.shares, { expressions: false }),
-    price: canonicalAmount(form.price),
+    price: canonicalAmount(form.price, { expressions: false }),
     fees: form.fees.trim() ? canonicalAmount(form.fees) : null,
     split_factor: null,
   }
@@ -215,7 +219,7 @@ export default function TransactionsPanel({
           <label>
             Factor
             {/* kind="plain": a split factor is a bare ratio — no $ echo, and no
-                2dp-quantizing "=" arithmetic on a 6dp column. */}
+                2dp-quantizing "=" arithmetic on a Numeric(10, 4) column. */}
             <AmountInput
               kind="plain"
               value={form.split_factor}
@@ -230,10 +234,15 @@ export default function TransactionsPanel({
             </label>
             <label>
               Price
-              <AmountInput value={form.price} onValueChange={set('price')} />
+              {/* kind="plain", not money: price is Numeric(14, 4), so the $-echo would
+                  render "$123.46" over a stored 123.4567 and hide two digits — and plain
+                  also refuses the 2dp "=" evaluator the belt refuses. */}
+              <AmountInput kind="plain" value={form.price} onValueChange={set('price')} />
             </label>
             <label>
               Fees
+              {/* The one money box here: fees is Numeric(10, 2), so the $-echo is lossless
+                  and "=" arithmetic (a sum of commissions) costs no precision. */}
               <AmountInput value={form.fees} onValueChange={set('fees')} />
             </label>
           </>
