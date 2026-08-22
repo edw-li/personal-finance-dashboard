@@ -83,9 +83,12 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
   fireEvent.change(balanceInput, { target: { value: '1600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
 
-  // Step 2: category input defaults to 0.00; net pay empty.
+  // Step 2: category input defaults to 0.00; net pay empty. Net pay autofocuses on this
+  // step, so Food is BLURRED and shows AmountInput's formatted echo — "$0.00" here is the
+  // display of the very same "0.00" state the balances step showed raw (that cell is the
+  // autofocused one). State is unchanged either way; only the rendering differs.
   const foodInput = await screen.findByLabelText('Food')
-  expect((foodInput as HTMLInputElement).value).toBe('0.00')
+  expect((foodInput as HTMLInputElement).value).toBe('$0.00')
   fireEvent.change(foodInput, { target: { value: '250.00' } })
   // The exact label, not /net pay/i: the step's ⓘ hint carries "net pay" in its aria-label,
   // which getByLabelText reads as a label too — same box, tighter selector.
@@ -239,4 +242,51 @@ it('offers starting the month after the latest covered month', async () => {
   await screen.findByText(/enter balances \(pre-filled from last month\)/i)
   expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
   expect(netWorthApi.fetchMonthBalances).toHaveBeenCalledWith(next)
+})
+
+it('canonicalizes tolerant and =-expression entries into the PUT bodies', async () => {
+  renderWizard()
+  const balanceInput = await screen.findByLabelText('Checking')
+  fireEvent.change(balanceInput, { target: { value: '$1,600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '=200+50' } })
+  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '9,000' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() => {
+    // No blur ever fired (jsdom clicks do not blur): canonicalAmount at the wire
+    // boundary is what keeps "$1,600.00" off a Decimal column.
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        balances: [{ account_id: 1, balance: '1600.00' }],
+      }),
+    )
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      net_pay: '9000',
+      amounts: [{ category_id: 7, amount: '250.00' }],
+    })
+  })
+})
+
+it('accepts spreadsheet-formatted text as valid entry', async () => {
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '$1,234.56' } })
+  expect(
+    (screen.getByRole('button', { name: /next: spending/i }) as HTMLButtonElement).disabled,
+  ).toBe(false)
+})
+
+it('Enter on the last balance cell lands on the step primary', async () => {
+  renderWizard()
+  const balanceInput = await screen.findByLabelText('Checking')
+  balanceInput.focus()
+  fireEvent.keyDown(balanceInput, { key: 'Enter' })
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: /next: spending/i }))
+})
+
+it('autofocuses the first balance cell on load', async () => {
+  renderWizard()
+  const balanceInput = await screen.findByLabelText('Checking')
+  expect(document.activeElement).toBe(balanceInput)
 })

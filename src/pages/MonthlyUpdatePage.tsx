@@ -9,11 +9,13 @@ import {
   putMonthBalances,
 } from '../api/netWorth'
 import { fetchCategories, fetchSpendingMonth, putSpendingMonth } from '../api/spending'
+import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
 import type { AccountOut, CategoryOut } from '../types/api'
 import { nestComponents } from '../utils/accounts'
+import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import '../components/panels.css'
@@ -30,10 +32,6 @@ const STEP_LABELS: Record<Step, string> = {
   balances: 'Balances',
   spending: 'Spending',
   review: 'Review',
-}
-
-function isNumeric(raw: string): boolean {
-  return raw.trim() !== '' && !Number.isNaN(Number(raw))
 }
 
 function todayIso(): string {
@@ -260,18 +258,25 @@ export default function MonthlyUpdatePage() {
     sessionStorage.removeItem(draftKey(month))
   }
 
-  const balancesValid = accounts.every((a) => isNumeric(balances[a.id] ?? ''))
+  const balancesValid = accounts.every((a) => isAmount(balances[a.id] ?? ''))
   const amountsValid =
-    categories.every((c) => isNumeric(amounts[c.id] ?? '')) &&
-    (netPay.trim() === '' || isNumeric(netPay))
+    categories.every((c) => isAmount(amounts[c.id] ?? '')) &&
+    (netPay.trim() === '' || isAmount(netPay))
 
+  // Sums the COMMITTED values, not the raw ones: a cell still holding "$1,600" or "=200+50"
+  // (no blur yet — jsdom clicks and Ctrl+Enter never fire one) would read as NaN → 0 and
+  // preview a wrong net worth for the number that is about to be saved.
   const preview = useMemo(() => {
     const netWorth = accounts.reduce(
-      (acc, a) => (a.is_component ? acc : acc + (Number(balances[a.id]) || 0)),
+      (acc, a) =>
+        a.is_component ? acc : acc + (Number(canonicalAmount(balances[a.id] ?? '')) || 0),
       0,
     )
-    const totalSpend = categories.reduce((acc, c) => acc + (Number(amounts[c.id]) || 0), 0)
-    const pay = netPay.trim() === '' ? null : Number(netPay)
+    const totalSpend = categories.reduce(
+      (acc, c) => acc + (Number(canonicalAmount(amounts[c.id] ?? '')) || 0),
+      0,
+    )
+    const pay = netPay.trim() === '' ? null : Number(canonicalAmount(netPay))
     return {
       netWorth,
       delta: prevNetWorth === null ? null : netWorth - prevNetWorth,
@@ -288,12 +293,15 @@ export default function MonthlyUpdatePage() {
         recorded_on: recordedOn === '' ? undefined : recordedOn,
         // null (not undefined): blanking the field must CLEAR a previously saved note.
         notes: notes.trim() === '' ? null : notes,
-        balances: accounts.map((a) => ({ account_id: a.id, balance: balances[a.id].trim() })),
+        // canonicalAmount, not .trim(): a cell committed by blur is already canonical, but a
+        // save reached without one (Ctrl+Enter, or a click in jsdom) must not ship "$1,600.00"
+        // or "=200+50" to a Decimal column.
+        balances: accounts.map((a) => ({ account_id: a.id, balance: canonicalAmount(balances[a.id]) })),
       })
       const body: { net_pay?: string; amounts: { category_id: number; amount: string }[] } = {
-        amounts: categories.map((c) => ({ category_id: c.id, amount: amounts[c.id].trim() })),
+        amounts: categories.map((c) => ({ category_id: c.id, amount: canonicalAmount(amounts[c.id]) })),
       }
-      if (netPay.trim() !== '') body.net_pay = netPay.trim()
+      if (netPay.trim() !== '') body.net_pay = canonicalAmount(netPay)
       const spendResult = await putSpendingMonth(month, body)
       setSaved(
         `Balances: ${balanceResult.created} added, ${balanceResult.updated} changed, ` +
@@ -335,6 +343,9 @@ export default function MonthlyUpdatePage() {
   const latestCovered = [...coveredMonths].sort().at(-1)
   const nextEntryMonth = latestCovered === undefined ? current : addMonths(latestCovered, 1)
   const anchor = nextEntryMonth > current ? nextEntryMonth : current
+
+  // The first RENDERED cell (groups render in GROUP_ORDER, not array order).
+  const firstBalanceId = GROUP_ORDER.flatMap((g) => accounts.filter((a) => a.group === g))[0]?.id
 
   return (
     <div className="page">
@@ -399,7 +410,7 @@ export default function MonthlyUpdatePage() {
       )}
 
       {!loading && step === 'balances' && (
-        <div className="card">
+        <div className="card" data-entry-scope="">
           <h2 className="eyebrow">
             {monthExisted ? 'Edit balances' : 'Enter balances (pre-filled from last month)'}
             <InfoHint text="Every account&apos;s balance for the month, pre-filled from the prior month; components are tracked inside their parent." />
@@ -440,13 +451,13 @@ export default function MonthlyUpdatePage() {
                           {account.name}
                           {account.is_component && <span className="badge">component</span>}
                         </label>
-                        <input
+                        <AmountInput
                           id={`bal-${account.id}`}
-                          className={`field-input${isNumeric(value) ? '' : ' invalid'}`}
-                          inputMode="decimal"
+                          className={isAmount(value) ? undefined : 'invalid'}
+                          autoFocus={account.id === firstBalanceId}
                           value={value}
-                          onChange={(e) =>
-                            setBalances((cur) => ({ ...cur, [account.id]: e.target.value }))
+                          onValueChange={(next) =>
+                            setBalances((cur) => ({ ...cur, [account.id]: next }))
                           }
                         />
                       </div>
@@ -463,6 +474,7 @@ export default function MonthlyUpdatePage() {
             <span />
             <button
               className="button button-primary"
+              data-entry-primary=""
               disabled={loading || accounts.length === 0 || !balancesValid}
               onClick={() => setStep('spending')}
             >
@@ -473,7 +485,7 @@ export default function MonthlyUpdatePage() {
       )}
 
       {!loading && step === 'spending' && (
-        <div className="card">
+        <div className="card" data-entry-scope="">
           <h2 className="eyebrow">
             Spending & net pay
             <InfoHint text="The month&apos;s spend per category plus take-home pay — a blank net pay skips the cashflow row." />
@@ -481,11 +493,11 @@ export default function MonthlyUpdatePage() {
           <div className="meta-row">
             <label>
               Net pay (take-home)
-              <input
-                className={`field-input${netPay.trim() === '' || isNumeric(netPay) ? '' : ' invalid'}`}
-                inputMode="decimal"
+              <AmountInput
+                className={netPay.trim() === '' || isAmount(netPay) ? undefined : 'invalid'}
+                autoFocus
                 value={netPay}
-                onChange={(e) => setNetPay(e.target.value)}
+                onValueChange={setNetPay}
                 placeholder="leave blank to skip"
               />
             </label>
@@ -496,13 +508,12 @@ export default function MonthlyUpdatePage() {
               return (
                 <div key={category.id} className="entry-field">
                   <label htmlFor={`amt-${category.id}`}>{category.name}</label>
-                  <input
+                  <AmountInput
                     id={`amt-${category.id}`}
-                    className={`field-input${isNumeric(value) ? '' : ' invalid'}`}
-                    inputMode="decimal"
+                    className={isAmount(value) ? undefined : 'invalid'}
                     value={value}
-                    onChange={(e) =>
-                      setAmounts((cur) => ({ ...cur, [category.id]: e.target.value }))
+                    onValueChange={(next) =>
+                      setAmounts((cur) => ({ ...cur, [category.id]: next }))
                     }
                   />
                 </div>
@@ -515,6 +526,7 @@ export default function MonthlyUpdatePage() {
             </button>
             <button
               className="button button-primary"
+              data-entry-primary=""
               disabled={!amountsValid}
               onClick={() => setStep('review')}
             >
