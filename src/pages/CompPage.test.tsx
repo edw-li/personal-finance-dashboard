@@ -375,16 +375,12 @@ describe('CompPage — writes', () => {
     await screen.findByText('$601,854.46')
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit the 2026 comp event' }))
-    // The boxes seed from the row verbatim, and a BLURRED AmountInput shows the formatted
-    // echo of that seed (display rule §3.3) — the server's own quantized string is what is
-    // in state behind it, which is why the PATCH below sends it back unchanged.
+    // The boxes seed from the row, verbatim — these are the server's own quantized strings.
+    // The two Numeric(12,2) bases are kind="money" and show the blurred money echo of that
+    // seed (display rule §3.3); the Numeric(14,4) price is kind="plain" by the scale rule,
+    // so it shows all four decimals as stored rather than a rounded "$183.25".
     expect(field('Current base').value).toBe('$162,000.00')
     expect(field('New base').value).toBe('$188,930.00')
-    expect(field('Unvested price').value).toBe('$183.25')
-    // The echo is DISPLAY-ONLY, and it rounds: focusing the cell hands back the 4dp string
-    // the column actually holds. (fireEvent.focus fires React's onFocus, which is all the
-    // raw/echo swap turns on — it does not move activeElement, and does not need to.)
-    fireEvent.focus(field('Unvested price'))
     expect(field('Unvested price').value).toBe('183.2508')
     // The notes box is free text and stays a plain input.
     expect(field('Notes').value).toBe('FY26 refresh')
@@ -880,10 +876,8 @@ describe('CompPage — RSU grant writes', () => {
     // refresh_rsus arrives as "480.0000" and the column behind the box is whole shares.
     expect(field('Shares').value).toBe('480')
     expect(field('Grant focal year').value).toBe('2026')
-    // The chip writes the seed's own 4dp string; the blurred box shows its money echo, and
-    // focusing it hands the full precision back (display rule §3.3).
-    expect(field('Price at grant').value).toBe('$129.57')
-    fireEvent.focus(field('Price at grant'))
+    // The chip writes the seed's own 4dp string, and the box is kind="plain" (Numeric(14,4)
+    // — a money echo would show "$129.57" over it), so all four decimals stand.
     expect(field('Price at grant').value).toBe('129.5651')
     expect(field('First vest').value).toBe('2026-09-16')
     // An offer, not a write: the grant it becomes is the vesting truth for years afterwards.
@@ -937,9 +931,9 @@ describe('CompPage — RSU grant writes', () => {
     // real offer grant, vesting in tens).
     expect(field('Label').value).toBe('FY24 new hire')
     expect(field('Shares').value).toBe('1200')
-    // Blurred, so the money echo of the stored 112.0750 (display rule §3.3) — the 4dp
-    // string itself is still in state, and travels on the PATCH below.
-    expect(field('Price at grant').value).toBe('$112.08')
+    // kind="plain" over a Numeric(14,4): the stored string stands as it arrived, and
+    // travels on the PATCH below unchanged.
+    expect(field('Price at grant').value).toBe('112.0750')
     expect(field('First vest').value).toBe('2024-11-20')
     expect(field('Vest rounding').value).toBe('10')
 

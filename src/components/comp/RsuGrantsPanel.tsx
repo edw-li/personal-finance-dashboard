@@ -152,16 +152,19 @@ export default function RsuGrantsPanel({
       setError(`shares must be between 1 and ${SHARES_MAX}`)
       return
     }
-    if (!isAmount(price)) {
+    if (!isAmount(price, { expressions: false })) {
       // Exponent notation has NO 422 behind it: "1e-3" parses server-side as a perfectly
       // legal Decimal 0.001 and is stored (src/utils/amount.ts refuses exponents for that
-      // exact reason). This gate is the only thing between that text and the column. The
-      // MONEY default, matching the box: a "$" or a grouped "1,205.50" is legitimate here,
-      // and so is an "=" expression the cell itself evaluates.
+      // exact reason). This gate is the only thing between that text and the column.
+      //
+      // { expressions: false } throughout, matching the kind="plain" box: grant_price is a
+      // Numeric(14,4) and the evaluator quantizes to 2dp, so an evaluated "=1/8" would
+      // store 0.13 for an eighth. Tolerant entry still applies — "$129.57" and a grouped
+      // "1,205.50" are accepted and canonicalized; only "=" is refused.
       setError('Price at grant must be a number')
       return
     }
-    if (Number(canonicalAmount(price)) <= 0) {
+    if (Number(canonicalAmount(price, { expressions: false })) <= 0) {
       // The CANONICAL value, not the typed text: Number('$129.57') is NaN, and NaN <= 0 is
       // false — a tolerant entry would slip straight past a raw comparison.
       setError('grant_price must be positive')
@@ -203,8 +206,9 @@ export default function RsuGrantsPanel({
       focal_year: year,
       shares: Number(shares),
       // The wire belt: blur usually canonicalized already, but a submit reached without one
-      // (a mouse user who types and clicks Save) must not ship "$129.57" to a Decimal column.
-      grant_price: canonicalAmount(price),
+      // (a mouse user who types and clicks Save) must not ship "$129.57" to a Decimal
+      // column. Expressionless, like the gate above and the box itself.
+      grant_price: canonicalAmount(price, { expressions: false }),
       first_vest_date: form.first_vest_date,
       cliff_pct: cliff,
       vest_quantum: Number(quantumText),
@@ -339,10 +343,13 @@ export default function RsuGrantsPanel({
         </label>
         <label>
           Price at grant
-          {/* The one figure box on this form: select-all on focus, canonical on blur, a
-              money echo while blurred. Shares, the focal year and the vest rounding are
-              WHOLE-number boxes and stay plain inputs with their own integer gates. */}
-          <AmountInput value={form.grant_price} onValueChange={set('grant_price')} />
+          {/* The one figure box on this form: select-all on focus, canonical on blur.
+              kind="plain" by the app-wide scale rule — grant_price is a Numeric(14,4), so a
+              "$112.08" money echo over a stored 112.0750 would be a lie, and plain also
+              refuses the 2dp "=" evaluator this column has no use for. Shares, the focal
+              year and the vest rounding are WHOLE-number boxes and stay plain inputs with
+              their own integer gates. */}
+          <AmountInput kind="plain" value={form.grant_price} onValueChange={set('grant_price')} />
         </label>
         <label>
           First vest

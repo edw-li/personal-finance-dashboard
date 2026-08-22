@@ -361,11 +361,8 @@ describe('EsppPage — lots', () => {
     // Edit the qualified lot and clear its price: on PATCH an explicit null is the
     // documented re-derive (the one null the server does NOT treat as a no-op).
     fireEvent.click(screen.getByRole('button', { name: 'Edit lot from Feb 29, 2024' }))
-    // Blurred, so the money echo of the stored 5dp price (display rule §3.3); focusing the
-    // cell hands the full precision back — the echo rounds, the state never does.
-    // (fireEvent.focus fires React's onFocus, which is all the raw/echo swap turns on.)
-    expect(field('Purchase price').value).toBe('$41.23')
-    fireEvent.focus(field('Purchase price'))
+    // kind="plain" over a Numeric(14,5): the stored 5dp string stands as it arrived, where
+    // a money echo would have rounded it on screen to "$41.23".
     expect(field('Purchase price').value).toBe('41.23265')
     type('Purchase price', '')
     fireEvent.click(screen.getByRole('button', { name: 'Save lot' }))
@@ -387,6 +384,30 @@ describe('EsppPage — lots', () => {
     // Typed and clicked, never blurred: the belt at submit()'s trim site, not AmountInput's
     // blur commit, is what keeps a "$" out of a Decimal column.
     expect(vi.mocked(createLot).mock.calls[0][0].subscription_price).toBe('85.50')
+  })
+
+  it('leaves an =-expression in a lot price verbatim, flagged, for the server to refuse', async () => {
+    renderPage()
+    await screen.findByText('$10,720.49')
+
+    fillNewLot()
+    const box = field('Subscription')
+    fireEvent.change(box, { target: { value: '=1/8' } })
+    fireEvent.blur(box)
+    // THE kind-scale rule: subscription_price is Numeric(14,5) and the evaluator quantizes
+    // to 2dp, so an eighth would commit as 0.13. The box is therefore kind="plain" — it
+    // neither evaluates the entry nor rewrites it on blur, shows it verbatim (no money echo
+    // to round a 5dp column into a lie), and marks it invalid for the user to see.
+    expect(box.value).toBe('=1/8')
+    expect(box.getAttribute('aria-invalid')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add lot' }))
+    await waitFor(() => expect(vi.mocked(createLot)).toHaveBeenCalledTimes(1))
+    // LotsPanel gates presence only, so the text still travels — and 422s server-side
+    // exactly as 'abc' typed into the same box does today. What the belt's
+    // { expressions: false } guarantees is that no number nobody typed is invented on the
+    // way out (TransactionsPanel's pin, one decimal place further out).
+    expect(vi.mocked(createLot).mock.calls[0][0].subscription_price).toBe('=1/8')
   })
 
   it('PATCHes the FULL lot row, and clears BOTH sold fields to un-sell one', async () => {
@@ -417,8 +438,7 @@ describe('EsppPage — lots', () => {
     // is a no-op on PATCH, so a body that dropped them would leave the lot sold.
     fireEvent.click(screen.getByRole('button', { name: 'Edit lot from Aug 30, 2024' }))
     expect(field('Sold date').value).toBe('2025-10-15')
-    // Blurred money echo of the stored '120.00000' (display rule §3.3).
-    expect(field('Sold price').value).toBe('$120.00')
+    expect(field('Sold price').value).toBe('120.00000')
     type('Sold date', '')
     type('Sold price', '')
     fireEvent.click(screen.getByRole('button', { name: 'Save lot' }))
@@ -562,14 +582,11 @@ describe('EsppPage — modeler', () => {
     await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')
 
     // The knobs seed from the response echo — the server's QUANTIZED strings, not the
-    // "170.79" that was sent (5dp prices, 2dp carry-forward). Blurred, so each shows its
-    // money echo (display rule §3.3); focusing one hands the seeded 5dp string back, which
-    // is what the re-run below sends. (fireEvent.focus fires React's onFocus, which is all
-    // the raw/echo swap turns on.)
-    expect(field('Subscription price').value).toBe('$170.79')
-    fireEvent.focus(field('Subscription price'))
+    // "170.79" that was sent (5dp prices, 2dp carry-forward). The two 5dp prices are
+    // kind="plain" and stand verbatim, which is what makes the re-run below send them back
+    // unchanged; the 2dp carry-forward is genuinely money and shows the money echo.
     expect(field('Subscription price').value).toBe('170.79000')
-    expect(field('Purchase FMV').value).toBe('$171.00')
+    expect(field('Purchase FMV').value).toBe('171.00000')
     expect(field('Carry-forward').value).toBe('$0.00')
 
     type('Carry-forward', '25')
@@ -619,10 +636,11 @@ describe('EsppPage — modeler', () => {
     resolve(modelerResponse())
 
     await waitFor(() => expect(screen.getByRole('meter')).toBeTruthy())
-    // Blurred money echoes throughout (display rule §3.3): '200' typed, '$200.00' shown.
-    expect(field('Subscription price').value).toBe('$200.00')
-    // The untouched knobs still take the echo.
-    expect(field('Purchase FMV').value).toBe('$171.00')
+    // kind="plain", so what was typed is what is shown — no "$200.00" over a 5dp knob.
+    expect(field('Subscription price').value).toBe('200')
+    // The untouched knobs still take the echo (the 2dp carry-forward is money, and shows
+    // the money echo of it).
+    expect(field('Purchase FMV').value).toBe('171.00000')
     expect(field('Carry-forward').value).toBe('$0.00')
   })
 
@@ -727,9 +745,9 @@ describe('EsppPage — modeler', () => {
       pending.resolve(modelerResponse())
     })
     expect(screen.getByRole('meter')).toBeTruthy()
-    // First success of the page, so this is also where the knobs finally seed — blurred,
-    // so the money echo of the seeded '170.79000' (display rule §3.3).
-    expect(field('Subscription price').value).toBe('$170.79')
+    // First success of the page, so this is also where the knobs finally seed — verbatim,
+    // the box being kind="plain" over the server's 5dp string.
+    expect(field('Subscription price').value).toBe('170.79000')
   })
 
   it('keeps the lots table (and its typed row) when the modeler 422s', async () => {

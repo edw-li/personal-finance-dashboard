@@ -173,21 +173,24 @@ function EventsPanel({
     // that is comp's ratified CLEAR (the one router where null is not a no-op), and on
     // POST it is simply the column's own default said out loud.
     //
-    // TWO belts, because the two kinds of box disagree about "=": the money columns take
-    // the default (their AmountInput evaluates an expression, so the belt must too, for the
-    // submit that never saw a blur), while the two COUNT columns are 4dp Numerics rendered
-    // as kind="shares" — the evaluator quantizes to 2dp, so an evaluated "=1/8" would
-    // commit 0.13 where 0.125 was meant. { expressions: false } leaves that text verbatim
-    // for the server's 422 to answer. The '' -> null rule is identical on both.
+    // TWO belts, split by the COLUMN'S SCALE (the app-wide kind rule): `new_base` is a
+    // Numeric(12,2) like the base beside it, so its box is kind="money" and its belt
+    // evaluates "=" exactly as the box does. The four equity columns keep MORE than two
+    // decimals — Numeric(12,4) counts and Numeric(14,4) prices — and the evaluator
+    // quantizes to 2dp, so an evaluated "=1/8" would commit 0.13 where 0.125 was meant.
+    // Those boxes are kind="shares"/"plain", neither of which evaluates, and their belt
+    // must agree: { expressions: false } leaves the text verbatim for the server's 422 to
+    // answer. The '' -> null rule is identical on both.
     //
     // Each takes only the fields it is FOR, rather than `keyof EventFormState`: handing a
-    // count column to the money belt is the exact silent bug this pair exists to prevent,
-    // so it is a compile error rather than a comment.
-    const blankMoney = (field: 'new_base' | 'unvested_price' | 'grant_price') => {
+    // fine-grained column to the money belt is the exact silent bug this pair exists to
+    // prevent, so it is a compile error rather than a comment. `EquityField` is already
+    // precisely the set of >2dp columns on this form.
+    const blankMoney = (field: 'new_base') => {
       const text = form[field].trim()
       return text === '' ? null : canonicalAmount(text)
     }
-    const blankCount = (field: 'unvested_rsus' | 'refresh_rsus') => {
+    const blankFine = (field: EquityField) => {
       const text = form[field].trim()
       return text === '' ? null : canonicalAmount(text, { expressions: false })
     }
@@ -195,10 +198,10 @@ function EventsPanel({
       focal_year: year,
       current_base: canonicalAmount(base),
       new_base: blankMoney('new_base'),
-      unvested_rsus: blankCount('unvested_rsus'),
-      unvested_price: blankMoney('unvested_price'),
-      refresh_rsus: blankCount('refresh_rsus'),
-      grant_price: blankMoney('grant_price'),
+      unvested_rsus: blankFine('unvested_rsus'),
+      unvested_price: blankFine('unvested_price'),
+      refresh_rsus: blankFine('refresh_rsus'),
+      grant_price: blankFine('grant_price'),
       // Free text, and the one nullable column that is NOT a number: it keeps the plain
       // '' -> null rule and never touches an amount belt.
       notes: form.notes.trim() || null,
@@ -284,8 +287,12 @@ function EventsPanel({
         </label>
         {/* The six figure boxes are AmountInputs: select-all on focus, canonical on blur,
             a formatted echo while blurred. No data-entry-scope on this form — it is one
-            row, so Enter stays the browser's own implicit submit. The two COUNT boxes wear
-            kind="shares" (6dp echo, and no "=" arithmetic — see submit's belts). */}
+            row, so Enter stays the browser's own implicit submit.
+            KIND BY COLUMN SCALE (the app-wide rule): only the two Numeric(12,2) bases are
+            kind="money". The counts are Numeric(12,4) and the two prices Numeric(14,4), so
+            a "$183.25" echo over a stored 183.2508 would be a lie and the 2dp "="
+            evaluator would coarsen the column — those wear shares/plain, which show the
+            text verbatim and refuse "=" outright (submit's belts agree). */}
         <label>
           Current base
           <AmountInput value={form.current_base} onValueChange={set('current_base')} />
@@ -304,7 +311,11 @@ function EventsPanel({
         </label>
         <label>
           Unvested price
-          <AmountInput value={form.unvested_price} onValueChange={set('unvested_price')} />
+          <AmountInput
+            kind="plain"
+            value={form.unvested_price}
+            onValueChange={set('unvested_price')}
+          />
         </label>
         <label>
           Refresh RSUs
@@ -316,7 +327,11 @@ function EventsPanel({
         </label>
         <label>
           Grant price
-          <AmountInput value={form.grant_price} onValueChange={set('grant_price')} />
+          <AmountInput
+            kind="plain"
+            value={form.grant_price}
+            onValueChange={set('grant_price')}
+          />
         </label>
         <label className="span-2">
           Notes

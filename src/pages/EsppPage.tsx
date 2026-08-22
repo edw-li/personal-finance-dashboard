@@ -104,12 +104,16 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
     // and both bodies below all see the one text the column will store — a submit reached
     // without a blur (type, then click Save) must not ship "$85.50" to a Decimal column.
     // Blank canonicalizes to blank, so every '' test downstream keeps its meaning exactly.
-    // `shares` is the odd one out: a 4dp count rendered as kind="shares", where the 2dp
-    // evaluator has no business — { expressions: false } leaves "=1/8" verbatim for the
-    // server's 422 rather than committing 0.13 (TransactionsPanel's rule).
+    //
+    // EVERY figure on this form is { expressions: false }, by the app-wide kind rule: not
+    // one of these columns is 2dp. shares is a Numeric(12,4) and all four prices are
+    // Numeric(14,5), while the evaluator quantizes to 2dp — an evaluated "=1/8" would
+    // commit 0.13 where 0.125 was meant. The boxes are kind="shares"/"plain" and refuse
+    // "=" themselves; the belts agree, and the text travels verbatim for the server's 422
+    // (TransactionsPanel's rule, one decimal place further out).
     const shares = canonicalAmount(form.shares.trim(), { expressions: false })
-    const subscription = canonicalAmount(form.subscription_price.trim())
-    const fmv = canonicalAmount(form.purchase_fmv.trim())
+    const subscription = canonicalAmount(form.subscription_price.trim(), { expressions: false })
+    const fmv = canonicalAmount(form.purchase_fmv.trim(), { expressions: false })
     if (!form.purchase_date || !form.qualifying_date || !shares || !subscription || !fmv) {
       // An empty string reaches the API as `""` and 422s as an opaque decimal-parse error
       // (TransactionsPanel's Task 14 review M2 lesson).
@@ -124,14 +128,14 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
       return
     }
     const soldDate = form.sold_date.trim()
-    const soldPrice = canonicalAmount(form.sold_price.trim())
+    const soldPrice = canonicalAmount(form.sold_price.trim(), { expressions: false })
     if ((soldDate === '') !== (soldPrice === '')) {
       // The server's own sentence, one vocabulary — its 422 is the backstop, this is the
       // round trip saved (BracketsEditor's rule).
       setError('sold_date and sold_price must be set together')
       return
     }
-    const price = canonicalAmount(form.purchase_price.trim())
+    const price = canonicalAmount(form.purchase_price.trim(), { expressions: false })
     const notes = form.notes.trim() || null
     setBusy(true)
     setError(null)
@@ -262,9 +266,13 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
             onChange={(e) => set('qualifying_date')(e.target.value)}
           />
         </label>
-        {/* The figure boxes are AmountInputs: select-all on focus, canonical on blur, a
-            formatted echo while blurred. No data-entry-scope on this form — it is one lot
-            row, so Enter stays the browser's own implicit submit. */}
+        {/* The figure boxes are AmountInputs: select-all on focus, canonical on blur. No
+            data-entry-scope on this form — it is one lot row, so Enter stays the browser's
+            own implicit submit.
+            NOT ONE of them is kind="money", by the app-wide scale rule: the four prices are
+            Numeric(14,5), so a "$41.23" echo over a stored 41.23265 would be a lie and the
+            2dp "=" evaluator would coarsen the column. kind="plain" shows the text verbatim
+            and refuses "=" (submit's belts agree). Shares is the 4dp count. */}
         <label>
           Shares
           <AmountInput kind="shares" value={form.shares} onValueChange={set('shares')} />
@@ -272,17 +280,26 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
         <label>
           Subscription
           <AmountInput
+            kind="plain"
             value={form.subscription_price}
             onValueChange={set('subscription_price')}
           />
         </label>
         <label>
           FMV
-          <AmountInput value={form.purchase_fmv} onValueChange={set('purchase_fmv')} />
+          <AmountInput
+            kind="plain"
+            value={form.purchase_fmv}
+            onValueChange={set('purchase_fmv')}
+          />
         </label>
         <label>
           Purchase price
-          <AmountInput value={form.purchase_price} onValueChange={set('purchase_price')} />
+          <AmountInput
+            kind="plain"
+            value={form.purchase_price}
+            onValueChange={set('purchase_price')}
+          />
         </label>
         <label>
           Sold date
@@ -295,7 +312,7 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
         </label>
         <label>
           Sold price
-          <AmountInput value={form.sold_price} onValueChange={set('sold_price')} />
+          <AmountInput kind="plain" value={form.sold_price} onValueChange={set('sold_price')} />
         </label>
         <label className="span-2">
           Notes
@@ -459,16 +476,24 @@ function ModelerCard({
           onRecalculate()
         }}
       >
-        {/* All three knobs are money, so all three take the default kind — including the
-            "=" arithmetic, which is exactly the sort of thing a what-if knob invites.
-            Nothing here is stored; the canonical belt is at runModeler's read site. */}
+        {/* Nothing here is stored, but the knobs still carry the columns' scales: the
+            server echoes the two prices at the espp 5dp ("170.79000") and the carry-forward
+            at money's 2dp ("0.00"). So the prices are kind="plain" by the app-wide rule — a
+            "$170.79" echo would round the seed the next Recalculate sends straight back —
+            while the carry-forward is genuinely money and keeps the default, "="
+            arithmetic included (exactly the sort of thing a what-if knob invites). The
+            canonical belts are at runModeler's read site. */}
         <label>
           Subscription price
-          <AmountInput value={knobs.subscription} onValueChange={setKnob('subscription')} />
+          <AmountInput
+            kind="plain"
+            value={knobs.subscription}
+            onValueChange={setKnob('subscription')}
+          />
         </label>
         <label>
           Purchase FMV
-          <AmountInput value={knobs.fmv} onValueChange={setKnob('fmv')} />
+          <AmountInput kind="plain" value={knobs.fmv} onValueChange={setKnob('fmv')} />
         </label>
         <label>
           Carry-forward
@@ -978,9 +1003,12 @@ export default function EsppPage() {
     // The query-string belt, the same shape as every payload one: a knob typed and
     // Recalculated without a blur must not put "$170.79" in the URL for Decimal() to
     // choke on. canonicalAmount leaves blank blank, so the omit-me path above is intact.
+    // Each belt matches its box's kind: the two 5dp prices are expressionless (the 2dp
+    // evaluator would coarsen the price the whole chain is modelled at), the 2dp
+    // carry-forward keeps the money default.
     loadModeler({
-      subscriptionPrice: canonicalAmount(knobs.subscription.trim()),
-      purchaseFmv: canonicalAmount(knobs.fmv.trim()),
+      subscriptionPrice: canonicalAmount(knobs.subscription.trim(), { expressions: false }),
+      purchaseFmv: canonicalAmount(knobs.fmv.trim(), { expressions: false }),
       carryForward: canonicalAmount(knobs.carry.trim()),
     })
   }
