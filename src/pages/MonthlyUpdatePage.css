@@ -93,9 +93,19 @@
   font-size: 0.8rem;
 }
 /* The same two variables .stat-delta-positive/-negative use (panels.css) — one delta
-   palette across the app; the Δ column and the footer share these. */
-.delta-positive { color: var(--positive); }
-.delta-negative { color: var(--negative); }
+   palette across the app; the Δ column and the footer share these. The table-scoped twin
+   is load-bearing, not redundant: the muted default above is `.entry-table .entry-delta`
+   (0,2,0) on the SAME <td>, so a bare `.delta-positive` (0,1,0) loses and the Δ column
+   would read muted whatever the sign. The footer's span, outside the table, takes the
+   bare one. */
+.delta-positive,
+.entry-table .delta-positive {
+  color: var(--positive);
+}
+.delta-negative,
+.entry-table .delta-negative {
+  color: var(--negative);
+}
 
 /* Live totals ride the viewport bottom while the column scrolls (the sheet's total row). */
 .entry-footer {
