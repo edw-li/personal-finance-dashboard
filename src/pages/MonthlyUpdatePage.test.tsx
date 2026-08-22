@@ -378,6 +378,40 @@ it('leaves the subtotal prior and Δ blank for a first-ever month', async () => 
   expect(cells[3].textContent).toBe('—') // Δ
 })
 
+it('reads a conserving transfer as a flat zero, not as signed dust', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, savings])
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-07-01',
+    recorded_on: null,
+    notes: null,
+    balances:
+      month === '2026-07-01'
+        ? [
+            { account_id: 1, balance: '1000.07' },
+            { account_id: 2, balance: '200.03' },
+          ]
+        : [],
+  }))
+  renderWizard()
+  // $100 moved between two accounts: the total is CONSERVED, but each side is a SUM of
+  // doubles and these two sums land 2.3e-13 apart — a raw sign turns that into "▼ -$0.00"
+  // on the very month whose whole point is that nothing changed. (The cents are chosen so
+  // the residue actually reproduces; most pairs cancel exactly.)
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '900.07' } })
+  fireEvent.change(screen.getByLabelText('Savings'), { target: { value: '300.03' } })
+
+  const subtotal = (screen.getByLabelText('Savings').closest('tr') as HTMLElement)
+    .nextElementSibling as HTMLElement
+  const cells = within(subtotal).getAllByRole('cell')
+  expect(cells[0].textContent).toBe('Subtotal')
+  expect(cells[3].textContent).toBe('$0.00')
+  const footer = screen.getByRole('status', { name: /live totals/i })
+  expect(footer.textContent).not.toContain('-$0.00')
+  // The glyph reads the same rounded number, so ▲/▼ and the text can never disagree.
+  expect(within(footer).getByText('$0.00 vs prior month')).toBeDefined()
+})
+
 it('keeps the live net-worth footer in sync while entering balances', async () => {
   renderWizard()
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '2000' } })
@@ -521,7 +555,8 @@ it('still enters the month when the typical-history fetch fails', async () => {
 it('leaves an exactly-typical month untoned instead of painting float residue', async () => {
   // Two samples → the median is their MEAN, and (0.10 + 0.20) / 2 is 0.15000000000000002 in
   // doubles. Typing the typical figure exactly lands the raw delta at -2.8e-17: formatted it
-  // is "-$0.00", and toned by its raw sign it paints the overspend colour over a zero.
+  // is "-$0.00", and toned by its raw sign (negative here) it paints the UNDER-typical
+  // colour over a zero — a month that matched typical exactly, congratulated for saving.
   vi.mocked(spendingApi.fetchMatrix).mockResolvedValue({
     months: ['2026-06-01', '2026-07-01'],
     categories: [],
@@ -642,6 +677,20 @@ it('leaves a multi-line paste in the notes box to the browser', async () => {
   expect(notPrevented).toBe(true)
   expect(screen.queryByText(/pasted/i)).toBeNull()
   expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1500.00')
+})
+
+it('starts a column paste at the first row when the pasted-into cell is outside the table', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const netPayBox = (await screen.findByLabelText('Net pay (take-home)')) as HTMLInputElement
+  fireEvent.paste(netPayBox, { clipboardData: { getData: () => '10\n20' } })
+
+  // Net pay is an AmountInput like any other, but it sits OUTSIDE the table and carries no
+  // row id, so it is never a fill target (spec §4.1) — the column lands from the first
+  // category down and the box keeps whatever it held.
+  expect((screen.getByLabelText('Food') as HTMLInputElement).value).toBe('$10.00')
+  expect(netPayBox.value).toBe('')
+  expect(screen.getByText(/pasted 1 of 1 values · 1 value didn't fit/i)).toBeDefined()
 })
 
 it('pastes into the spending step and drops the note on the way out', async () => {

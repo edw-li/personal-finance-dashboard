@@ -337,9 +337,15 @@ export default function MonthlyUpdatePage() {
       0,
     )
     const pay = netPay.trim() === '' ? null : Number(canonicalAmount(netPay))
+    // CENTS decide this delta, and it is load-bearing twice over: it feeds the sticky
+    // footer AND the review step, where the ▲/▼ glyph is picked from `delta >= 0`. Both
+    // sides are sums of ~26 doubles, so a CONSERVING transfer between two accounts lands a
+    // few ulp off zero rather than on it. The rounded zero is forced POSITIVE, because -0
+    // formats as "-$0.00" while `-0 >= 0` still picks ▲ — glyph and text must agree.
+    const deltaCents = prevNetWorth === null ? null : Math.round((netWorth - prevNetWorth) * 100)
     return {
       netWorth,
-      delta: prevNetWorth === null ? null : netWorth - prevNetWorth,
+      delta: deltaCents === null ? null : deltaCents === 0 ? 0 : deltaCents / 100,
       totalSpend,
       savings: pay === null || pay === 0 ? null : (pay - totalSpend) / pay,
     }
@@ -657,6 +663,11 @@ export default function MonthlyUpdatePage() {
                 const groupAccounts = accounts.filter((a) => a.group === group)
                 if (groupAccounts.length === 0) return null
                 const totals = groupTotals(group)
+                // Same cents rule as the footer's delta above (and the spending Δ below):
+                // two sums of doubles that ought to cancel can miss by a few ulp, and this
+                // row is exactly where a conserving transfer shows up. Text only — the
+                // subtotal Δ carries no tone class, so rounding here fixes the "-$0.00".
+                const subCents = Math.round((totals.now - totals.prior) * 100)
                 return (
                   <Fragment key={group}>
                     <tr className="entry-group-row">
@@ -718,7 +729,9 @@ export default function MonthlyUpdatePage() {
                       </td>
                       <td className="num">{formatCurrency(totals.now)}</td>
                       <td className="num entry-delta">
-                        {prevNetWorth === null ? '—' : formatCurrency(totals.now - totals.prior)}
+                        {prevNetWorth === null
+                          ? '—'
+                          : formatCurrency(subCents === 0 ? 0 : subCents / 100)}
                       </td>
                     </tr>
                   </Fragment>
@@ -804,10 +817,10 @@ export default function MonthlyUpdatePage() {
                   typical === null ? null : (Number(canonicalAmount(value)) || 0) - typical
                 // CENTS decide both the tone and the text. A two-sample median averages
                 // inexact doubles ((0.10 + 0.20) / 2 is 0.15000000000000002), so a month
-                // that matches typical exactly lands at ±1e-14 — enough to paint a
-                // formatted $0.00 in the overspend colour. Rounding first also fixes the
-                // text, since Intl prints "-$0.00" for a negative zero; the === 0 branch
-                // is what hands formatCurrency a positive one.
+                // that matches typical exactly lands at ±1e-14 — enough to tone a formatted
+                // $0.00 in whichever delta colour the residue's sign picks. Rounding first
+                // also fixes the text, since Intl prints "-$0.00" for a negative zero; the
+                // === 0 branch is what hands formatCurrency a positive one.
                 const deltaCents = delta === null ? null : Math.round(delta * 100)
                 return (
                   <tr key={category.id}>
