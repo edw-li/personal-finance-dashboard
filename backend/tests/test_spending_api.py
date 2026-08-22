@@ -304,4 +304,31 @@ async def test_put_spending_month_net_pay_null_on_a_month_without_one_is_harmles
     put = "/api/v1/spending/months/2026-06-01"
     result = await auth_client.put(put, json={"net_pay": None, "amounts": []})
     assert result.status_code == 200, result.text
-    assert result.json()["net_pay_cleared"] is False  # nothing existed to clear
+    body = result.json()
+    assert body["net_pay_cleared"] is False  # nothing existed to clear
+    assert body["net_pay_set"] is False
+
+
+async def test_put_spending_month_net_pay_null_rides_along_with_amounts(auth_client, db):
+    # The wizard's production payload: it always ships the full amounts list, and a null
+    # net_pay rides along when a saved one was blanked. The delete and the upserts share
+    # ONE transaction — an early-return refactor of the clear branch would regress exactly
+    # this (the amounts would be dropped, or the clear would never commit).
+    food, _rent = await _seed_spending(db)
+    put = "/api/v1/spending/months/2026-09-01"
+    entry = {"category_id": food.id, "amount": "250.00"}
+    first = await auth_client.put(put, json={"net_pay": "9000.00", "amounts": [entry]})
+    assert first.status_code == 200, first.text
+    assert first.json()["net_pay_set"] is True
+
+    cleared = await auth_client.put(put, json={"net_pay": None, "amounts": [entry]})
+    assert cleared.status_code == 200, cleared.text
+    body = cleared.json()
+    assert body["net_pay_cleared"] is True
+    assert body["net_pay_set"] is False
+    assert body["unchanged"] == 1  # the amount rode through the clear untouched
+
+    got = (await auth_client.get(put)).json()
+    assert got["exists"] is True  # the month survives on its amounts alone
+    assert got["net_pay"] is None
+    assert {a["category_id"]: a["amount"] for a in got["amounts"]} == {food.id: "250.00"}
