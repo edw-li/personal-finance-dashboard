@@ -255,11 +255,9 @@ export interface DividendCreate {
 
 /**
  * The dividends PATCH body — createDividend's minus the immutable security_id, the same
- * formula TransactionUpdate applies above. `updateDividend` in src/api/portfolio.ts spells
- * this expression inline (it predates the name); the two are identical by construction, so
- * that signature can be swapped to this alias whenever the file is next touched.
- * (The server refuses an explicit null for amount/pay_date — 422 — so a sparse caller may
- * omit them but must not blank them.)
+ * formula TransactionUpdate applies above; `updateDividend` in src/api/portfolio.ts is
+ * its consumer. (The server refuses an explicit null for amount/pay_date — 422 — so a
+ * sparse caller may omit them but must not blank them.)
  */
 export type DividendUpdate = Partial<Omit<DividendCreate, 'security_id'>>
 
