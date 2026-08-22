@@ -73,6 +73,11 @@ One tolerant parser replacing the three divergent validators for money/decimal b
   already proven in BracketsEditor (lifted into `utils`). Malformed expressions leave the raw
   text in place and mark the field invalid.
 - Money boxes only — not integers, dates, or percents.
+- *Implementation amendment (2026-08-21, Phase 1 reviews):* "money boxes" means genuinely
+  2dp columns. >2dp columns (4dp/5dp prices, NAV values) render `kind="plain"` — verbatim
+  display, no `$`-2dp echo that would hide stored digits — and their gates/belts pass
+  `{ expressions: false }` so the 2dp evaluator never coarsens a finer column (the
+  kind-scale rule; both directions test-pinned). See the plan's Amendment 2.
 
 ### 3.3 `<AmountInput>` (`src/components/AmountInput.tsx`)
 
