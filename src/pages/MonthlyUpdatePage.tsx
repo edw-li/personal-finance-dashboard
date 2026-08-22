@@ -6,6 +6,7 @@ import { ApiError } from '../api/client'
 import {
   fetchAccounts,
   fetchMonthBalances,
+  fetchSuggestions,
   fetchTimeseries,
   putMonthBalances,
 } from '../api/netWorth'
@@ -19,7 +20,7 @@ import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
-import type { AccountOut, CategoryOut, SpendingMatrix } from '../types/api'
+import type { AccountOut, CategoryOut, SpendingMatrix, SuggestionsOut } from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
@@ -119,6 +120,11 @@ export default function MonthlyUpdatePage() {
   // The spending history behind the "Typical" column. Spending is a flow, so its cells
   // seed at 0.00 — this is the context a prefill would have to fake (spec §4.2).
   const [matrix, setMatrix] = useState<SpendingMatrix | null>(null)
+  // Computed "now" balances for accounts mapped via suggest_source (spec §5.2), kept as
+  // the WHOLE payload rather than a derived id→value record: the warnings ride the same
+  // response and describe the same fetch, so splitting them into two states would only
+  // create a pair that can disagree. null = never arrived (unmapped is `[]`, not null).
+  const [suggestions, setSuggestions] = useState<SuggestionsOut | null>(null)
   // Did the LOADED month carry a net pay? The tri-state rider's whole question: only a
   // value that existed on the server can be cleared, and only then is `null` sent.
   // Server-derived like `matrix` — deliberately NOT part of the draft snapshot.
@@ -177,6 +183,12 @@ export default function MonthlyUpdatePage() {
       // matrix that fails must never take the whole wizard down with it, because the
       // month still has to be enterable without any history to compare against.
       fetchMatrix().catch((): SpendingMatrix | null => null),
+      // Same degradation, same reason (the chips are an aid too). The fetch is
+      // UNCONDITIONAL while the chips are anchor-month-only: gating it would mean either
+      // a second effect or deriving the anchor before the timeseries payload it depends
+      // on has landed, and decision 4's rule is about what may be OFFERED. The cost of
+      // the simpler shape is one advisory read-only GET on a backfill month.
+      fetchSuggestions().catch((): SuggestionsOut | null => null),
     ])
       .then(([
         accountList,
@@ -186,6 +198,7 @@ export default function MonthlyUpdatePage() {
         spendMonth,
         timeseries,
         matrixData,
+        suggestionData,
       ]) => {
         setError(null)
         setSaved(null)
@@ -197,6 +210,7 @@ export default function MonthlyUpdatePage() {
         setMonthExisted(thisMonth.exists)
         setCoveredMonths(new Set(timeseries.months))
         setMatrix(matrixData)
+        setSuggestions(suggestionData)
         setHadNetPay(spendMonth.net_pay !== null)
 
         // Pre-fill: the month's own values win; otherwise the prior month's (the sheet
@@ -449,6 +463,17 @@ export default function MonthlyUpdatePage() {
   const nextEntryMonth = latestCovered === undefined ? current : addMonths(latestCovered, 1)
   const anchor = nextEntryMonth > current ? nextEntryMonth : current
 
+  // Suggested values are what the portfolio/vesting math says TODAY, so the anchor month
+  // is the only month they describe (spec §5.2, decision 4): offering this morning's
+  // brokerage total as March's balance would put a wrong number into history one click
+  // deep. The warnings are gated on the same flag — a diagnostic about chips that cannot
+  // appear here has no referent on a backfill month.
+  const showSuggestions = month === anchor
+  const suggestedBalances = useMemo(
+    () => new Map((suggestions?.suggestions ?? []).map((s) => [s.account_id, s.value])),
+    [suggestions],
+  )
+
   // The balances rows in RENDERED order (groups render in GROUP_ORDER, not array order) —
   // the same walk the table below performs. Hoisted because three things must agree on it:
   // the autofocus target, the Enter/arrow protocol's DOM order, and where a positional
@@ -646,6 +671,17 @@ export default function MonthlyUpdatePage() {
               />
             </label>
           </div>
+          {/* A mapping that resolved to nothing, in the server's own words — it names the
+              account AND the label that came up empty, which IS the repair instruction
+              (the fix lives in Settings). No role="status": the whole card renders after
+              the load's Promise.all, so these sentences are on screen at first paint
+              rather than announced into it like the paste note. */}
+          {showSuggestions &&
+            suggestions?.warnings.map((warning) => (
+              <p key={warning} className="drill-hint">
+                {warning}
+              </p>
+            ))}
           {/* One table, not a card per group: cells sit in a single visual column so the
               Phase 1 Enter/arrow protocol (DOM order = this GROUP_ORDER walk) goes straight
               down, the way the sheet's muscle memory expects (spec §4.2). */}
@@ -677,6 +713,14 @@ export default function MonthlyUpdatePage() {
                       const value = balances[account.id] ?? ''
                       const prior = priorBalances[account.id]
                       const delta = prior === undefined ? null : committed(value) - Number(prior)
+                      const suggested = suggestedBalances.get(account.id)
+                      // Hide-when-equal (decision 5): a chip offering the number already in
+                      // the box is a click that changes nothing. Compared CANONICALLY, so a
+                      // cell still holding the tolerant "$2,500" the user typed counts as
+                      // matching the suggested "2500.00" it would commit to.
+                      const suggestionApplied =
+                        suggested !== undefined &&
+                        canonicalAmount(value) === canonicalAmount(suggested)
                       return (
                         <tr key={account.id}>
                           <td className={account.is_component ? 'entry-component' : undefined}>
@@ -702,6 +746,25 @@ export default function MonthlyUpdatePage() {
                                 setBalances((cur) => ({ ...cur, [account.id]: next }))
                               }
                             />
+                            {/* Manual, never auto (decision 5; the tax form's pattern): the
+                                computed figure is an offer under the box, and the click is
+                                the user's consent to it. */}
+                            {showSuggestions && suggested !== undefined && !suggestionApplied && (
+                              <span className="entry-suggestion">
+                                suggested {formatCurrency(suggested)}
+                                <button
+                                  type="button"
+                                  className="chip"
+                                  aria-label={`Apply suggested balance for ${account.name}`}
+                                  title={`Apply ${formatCurrency(suggested)}`}
+                                  onClick={() =>
+                                    setBalances((cur) => ({ ...cur, [account.id]: suggested }))
+                                  }
+                                >
+                                  Apply
+                                </button>
+                              </span>
+                            )}
                           </td>
                           <td
                             className={`num entry-delta${

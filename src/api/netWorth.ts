@@ -8,6 +8,7 @@ import type {
   MonthUpsertResult,
   NetWorthSummary,
   NetWorthTimeseries,
+  SuggestionsOut,
 } from '../types/api'
 
 export function fetchAccounts(): Promise<AccountOut[]> {
@@ -36,6 +37,13 @@ export function fetchTimeseries(
 
 export function fetchSummary(): Promise<NetWorthSummary> {
   return api<NetWorthSummary>('/net-worth/summary')
+}
+
+// Advisory "now" values for accounts mapped via suggest_source (spec §5.2) — read-only,
+// takes no month: the figures are today's, which is why the wizard only offers them on the
+// anchor month.
+export function fetchSuggestions(): Promise<SuggestionsOut> {
+  return api<SuggestionsOut>('/net-worth/suggestions')
 }
 
 export function fetchMonthBalances(month: string): Promise<MonthBalances> {
