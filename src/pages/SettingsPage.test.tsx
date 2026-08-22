@@ -812,6 +812,27 @@ describe('SettingsPage — balance suggestions', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
+  it('lands on the source the SERVER echoes, not the one that was picked', async () => {
+    // The echo that disagrees with the pick — the only shape that can tell a re-seed from a
+    // box left holding its optimistic guess. Every other mock here answers with exactly what
+    // was sent, so deleting the .then re-seed would pass them all.
+    vi.mocked(updateAccount).mockResolvedValue({
+      ...CHECKING,
+      suggest_source: 'portfolio:RH Taxable',
+    })
+    render(<SettingsPage />)
+    await screen.findByLabelText('Suggestion source for Checking')
+
+    pickSource('Checking', 'portfolio:Fidelity 401k')
+
+    await waitFor(() => expect(vi.mocked(updateAccount)).toHaveBeenCalledTimes(1))
+    // The server owns what a mapping ends up as (it normalizes, and it may have stored
+    // something else entirely), exactly as the settings PUT re-seeds its boxes from the
+    // response. A box still showing the pick would be describing a mapping nobody has.
+    await waitFor(() => expect(sourceBox('Checking').value).toBe('portfolio:RH Taxable'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('sends suggest_source: null EXPLICITLY when a mapping is set back to None', async () => {
     render(<SettingsPage />)
     await screen.findByLabelText('Suggestion source for Brokerage')
@@ -850,6 +871,10 @@ describe('SettingsPage — balance suggestions', () => {
     // The wizard is still suggesting from the OLD source, so the box must say so: a
     // selection left showing a mapping the server refused is a lie about what runs.
     await waitFor(() => expect(sourceBox('Brokerage').value).toBe('portfolio:RH Taxable'))
+    // No Retry beside THIS sentence: the rows loaded fine, and the way back from a refused
+    // PATCH is picking an option again — a button offering to re-run the load would be
+    // pointing at a request that never broke.
+    expect(screen.queryByRole('button', { name: 'Retry loading balance suggestions' })).toBeNull()
   })
 
   it('shuts every select while one PATCH is in flight', async () => {
@@ -901,6 +926,19 @@ describe('SettingsPage — balance suggestions', () => {
     await waitFor(() => expect(vi.mocked(updateAccount)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(updateAccount).mock.calls[0][0]).toBe(1)
     expect(sourceBox('Brokerage').value).toBe('portfolio:Ghost Label')
+  })
+
+  it('shows a stored source of a kind this build does not know, raw', async () => {
+    // A mapping written by a LATER build (or by hand): the card cannot name the kind, and a
+    // guess would be worse than the column. Same rule as the ghost label — it stays on
+    // screen, so it cannot be cleared by a change nobody made.
+    vi.mocked(fetchAccounts).mockResolvedValue([{ ...CHECKING, suggest_source: 'prices:VOO' }])
+    render(<SettingsPage />)
+    await screen.findByLabelText('Suggestion source for Checking')
+
+    expect(sourceBox('Checking').value).toBe('prices:VOO')
+    expect(optionTexts(sourceBox('Checking'))).toContain('prices:VOO (unresolved)')
+    expect(vi.mocked(updateAccount)).not.toHaveBeenCalled()
   })
 
   it('banners a failed mapping load, offers a Retry, and leaves the other cards up', async () => {
