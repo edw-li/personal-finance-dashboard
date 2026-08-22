@@ -228,4 +228,80 @@ describe('InputsForm', () => {
     // server twin — the one-vocabulary rule has nothing to say about it.
     expect(screen.getByRole('alert').textContent).toContain('Enter a number for: Annual Salary')
   })
+
+  // --- range paste (spec §4.1) ---
+  // jsdom has no clipboard: fireEvent.paste's init object is what RTL defines onto the
+  // event, and React hands it through as e.clipboardData.
+
+  it('column paste fills down the flattened sections from the pasted-into cell', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('Annual Salary'), {
+      clipboardData: { getData: () => '200000\n8333.33' },
+    })
+
+    // Positional order is the RENDERED one — the fill walks out of Ordinary income into the
+    // next section exactly as Enter does. Blurred, so both read as their echo (nothing is
+    // focused in jsdom).
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(field('Gross Paycheck').value).toBe('$8,333.33')
+    expect(screen.getByText(/pasted 2 of 4 values/i)).toBeDefined()
+    // Pasted text lands in state exactly like typed text, so it counts into the changed-key
+    // diff: the save is armed with no further interaction.
+    expect(saveButton().disabled).toBe(false)
+  })
+
+  it('reports values that run off the end instead of dropping them silently', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('HSA Contributions'), {
+      clipboardData: { getData: () => '1\n2\n3' },
+    })
+
+    // Started at item 3 of 4: one lands, two have nowhere to go.
+    expect(field('HSA Contributions').value).toBe('$1.00')
+    expect(field('Qualified Dividends').value).toBe('$2.00')
+    expect(screen.getByText(/pasted 2 of 4 values · 1 value didn't fit/i)).toBeDefined()
+  })
+
+  it('keyed paste matches item labels regardless of where it was pasted', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('Annual Salary'), {
+      clipboardData: { getData: () => 'HSA Contributions\t4300\nNot A Line\t1' },
+    })
+
+    // The label decides the target, not the focused cell — Annual Salary keeps its value.
+    expect(field('HSA Contributions').value).toBe('$4,300.00')
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    // A miss is named, never guessed at: "Not A Line" fills nothing.
+    expect(screen.getByText(/pasted 1 of 4 values · 1 unmatched: Not A Line/i)).toBeDefined()
+  })
+
+  it('skips an empty pasted value rather than blanking the field', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    // A trailing-empty cell is what a sheet's blank month looks like. NOTE the second row:
+    // a lone "label<TAB>" is a single row of one non-empty cell, which classifies as a
+    // native single-cell paste — the skip only exists inside a real keyed block.
+    fireEvent.paste(field('Annual Salary'), {
+      clipboardData: { getData: () => 'Annual Salary\t\nHSA Contributions\t4300' },
+    })
+
+    // Paste must never BLANK a filled input (blank is the wire's "unset this key"), so the
+    // empty cell leaves the stored value alone and says so.
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(field('HSA Contributions').value).toBe('$4,300.00')
+    expect(screen.getByText(/pasted 1 of 4 values · 1 blank skipped/i)).toBeDefined()
+  })
+
+  it('leaves a single-cell paste to the browser', () => {
+    render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+    const notPrevented = fireEvent.paste(field('Annual Salary'), {
+      clipboardData: { getData: () => '1234.56' },
+    })
+
+    // Not default-prevented: native insertion plus the tolerant parse already handle one
+    // cell, and intercepting would break pasting into the middle of a half-typed number.
+    expect(notPrevented).toBe(true)
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(saveButton().disabled).toBe(true)
+    expect(screen.queryByText(/pasted/i)).toBeNull()
+  })
 })

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ClipboardEvent } from 'react'
 import { ApiError } from '../../api/client'
 import { putTaxInputs } from '../../api/taxes'
 import AmountInput from '../AmountInput'
@@ -6,6 +7,7 @@ import InfoHint from '../InfoHint'
 import type { TaxInputsOut } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
+import { classifyPaste, matchLabel } from '../../utils/paste'
 import './taxes.css'
 
 // The three sections the seed ships (tax_keys.SECTIONS). A section added later still
@@ -48,16 +50,23 @@ export default function InputsForm({
   const [baseline, setBaseline] = useState<Record<string, string>>(() => valuesOf(inputs))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
+  // next paste and dropped by the save echo. The flashed keys are the cells it wrote.
+  const [pasteNote, setPasteNote] = useState<string | null>(null)
+  const [flashKeys, setFlashKeys] = useState<Set<string>>(new Set())
+
+  // Every line item the server sent, in RENDER order — the order Enter walks and the order a
+  // positional paste fills. The diff below shares it, so "what paste can write" and "what a
+  // save can send" are structurally the same set of keys.
+  const flatItems = inputs.sections.flatMap((section) => section.items)
 
   const changed: Record<string, string | null> = {}
   const invalid: string[] = []
-  for (const section of inputs.sections) {
-    for (const item of section.items) {
-      const next = (values[item.key] ?? '').trim()
-      if (next === (baseline[item.key] ?? '')) continue
-      changed[item.key] = next === '' ? null : next
-      if (next !== '' && !isAmount(next)) invalid.push(item.label)
-    }
+  for (const item of flatItems) {
+    const next = (values[item.key] ?? '').trim()
+    if (next === (baseline[item.key] ?? '')) continue
+    changed[item.key] = next === '' ? null : next
+    if (next !== '' && !isAmount(next)) invalid.push(item.label)
   }
   const changedCount = Object.keys(changed).length
 
@@ -67,6 +76,14 @@ export default function InputsForm({
   useEffect(() => {
     onDirtyChange?.(changedCount > 0)
   }, [changedCount, onDirtyChange])
+
+  // The flash is a one-shot: the timer callback clears it, so the effect body itself never
+  // sets state (a set here would re-run the effect on its own write).
+  useEffect(() => {
+    if (flashKeys.size === 0) return
+    const timer = setTimeout(() => setFlashKeys(new Set()), 700)
+    return () => clearTimeout(timer)
+  }, [flashKeys])
 
   const submit = () => {
     if (invalid.length > 0) {
@@ -95,6 +112,9 @@ export default function InputsForm({
         // shown value and the new baseline, so a second save sends nothing.
         setValues(valuesOf(echo))
         setBaseline(valuesOf(echo))
+        // The note described a pending fill that the echo just replaced — it would be
+        // narrating values that are no longer on screen.
+        setPasteNote(null)
         onSaved(echo)
       })
       .catch((err: unknown) => {
@@ -103,6 +123,73 @@ export default function InputsForm({
         setError(err instanceof ApiError ? err.message : 'Save failed')
       })
       .finally(() => setSaving(false))
+  }
+
+  // Range paste (spec §4.1): this FORM owns the values record, so the scope container does
+  // the filling — an AmountInput cannot write its siblings. A single-cell clipboard
+  // classifies as null and falls through to native insertion, which the tolerant parse
+  // already handles. Pasted text lands RAW, exactly as if typed: garbage shows the standard
+  // .invalid, and canonicalAmount at the wire boundary is still what the server sees.
+  const handlePaste = (e: ClipboardEvent<HTMLFormElement>) => {
+    const plan = classifyPaste(e.clipboardData.getData('text/plain'))
+    if (plan === null) return
+    e.preventDefault()
+    const fills: Record<string, string> = {}
+    const flashed = new Set<string>()
+    const unmatched: string[] = []
+    let overflow = 0
+    // An empty pasted cell SKIPS its target instead of blanking it: a blank here is the
+    // wire's "unset this input", and a stray trailing tab must never delete a stored value.
+    let blank = 0
+    if (plan.mode === 'positional') {
+      // Fill from the pasted-into cell onward, down the rendered column — across section
+      // boundaries, the way Enter walks it.
+      const ids = flatItems.map((item) => `tax-input-${item.key}`)
+      const target = (e.target as HTMLElement).closest<HTMLInputElement>('input[data-entry-cell]')
+      const startAt = target === null ? 0 : Math.max(0, ids.indexOf(target.id))
+      plan.values.forEach((value, i) => {
+        const slot = startAt + i
+        if (slot >= flatItems.length) {
+          overflow += 1
+          return
+        }
+        // The slot is consumed either way — a skipped blank must not shift the rest up.
+        // (classifyPaste drops empty cells from a positional plan today; this keeps the
+        // rule true of the array itself rather than of one caller's luck.)
+        if (value === '') {
+          blank += 1
+          return
+        }
+        fills[flatItems[slot].key] = value
+        flashed.add(flatItems[slot].key)
+      })
+    } else {
+      // matchLabel keys on numeric ids, so the INDEX into flatItems serves as one.
+      const labelled = flatItems.map((item, i) => ({ id: i, name: item.label }))
+      for (const { label, value } of plan.rows) {
+        const index = matchLabel(labelled, label)
+        if (index === null) {
+          unmatched.push(label)
+        } else if (value === '') {
+          blank += 1
+        } else {
+          fills[flatItems[index].key] = value
+          flashed.add(flatItems[index].key)
+        }
+      }
+      overflow = plan.skipped
+    }
+    if (Object.keys(fills).length > 0) setValues((current) => ({ ...current, ...fills }))
+    setFlashKeys(flashed)
+    const parts = [`Pasted ${Object.keys(fills).length} of ${flatItems.length} values`]
+    if (unmatched.length > 0) {
+      const shown = unmatched.slice(0, 4).join(', ')
+      const more = unmatched.length > 4 ? `, +${unmatched.length - 4} more` : ''
+      parts.push(`${unmatched.length} unmatched: ${shown}${more}`)
+    }
+    if (overflow > 0) parts.push(`${overflow} value${overflow === 1 ? '' : 's'} didn't fit`)
+    if (blank > 0) parts.push(`${blank} blank${blank === 1 ? '' : 's'} skipped`)
+    setPasteNote(parts.join(' · '))
   }
 
   return (
@@ -125,6 +212,7 @@ export default function InputsForm({
           here ADVANCES rather than submitting, and Ctrl+Enter is what saves (spec §3.4). */}
       <form
         data-entry-scope=""
+        onPaste={handlePaste}
         onSubmit={(e) => {
           e.preventDefault()
           submit()
@@ -155,7 +243,11 @@ export default function InputsForm({
                     </span>
                     <AmountInput
                       id={id}
-                      className={value.trim() !== '' && !isAmount(value) ? 'invalid' : undefined}
+                      className={
+                        `${value.trim() !== '' && !isAmount(value) ? 'invalid' : ''}${
+                          flashKeys.has(item.key) ? ' pasted-flash' : ''
+                        }`.trim() || undefined
+                      }
                       value={value}
                       onValueChange={(next) =>
                         setValues((current) => ({ ...current, [item.key]: next }))
@@ -193,6 +285,11 @@ export default function InputsForm({
             </div>
           </div>
         ))}
+        {pasteNote && (
+          <p className="drill-hint" role="status" aria-live="polite">
+            {pasteNote}
+          </p>
+        )}
         <div className="tax-form-actions">
           <button
             type="submit"
