@@ -136,7 +136,10 @@ export default function TransactionsPanel({
     // Queued, unlike the save path's direct call below: a duplicate can flip the form's
     // TYPE, and the cell the new type renders does not exist until React re-renders.
     // Microtasks run after React's synchronous discrete-event flush — the ordering
-    // AmountInput's Escape-reselect already leans on.
+    // AmountInput's Escape-reselect already leans on. The save path's focus-before-reset
+    // rule has nothing to say here: the click on this button already blurred whatever cell
+    // held the caret (and committed it), so this transfer blurs nothing and the microtask
+    // runs after the seed has flushed — there is no pre-reset text left to resurrect.
     queueMicrotask(() => focusFirstAmount(txn.type))
   }
 
@@ -161,15 +164,25 @@ export default function TransactionsPanel({
     request
       .then(() => {
         if (editingId === null) {
-          // Carry-forward (spec §5.1): a lot is rarely entered alone — the security, the
-          // account, the type and the day are the SESSION; only the numbers describing
-          // THIS lot are cleared. `kept` then says so out loud, because a form that keeps
-          // its values after a save otherwise reads as a save that never happened.
-          setForm((f) => ({ ...f, shares: '', price: '', fees: '', split_factor: '', notes: '' }))
-          setKept(true)
+          // The next lot starts here — BEFORE the reset, and that order is load-bearing
+          // (998f05c's invariant, proven on the paycheck/comp/ESPP panels). This form
+          // carries no data-entry-scope, so Enter is the browser's implicit submit and the
+          // caret is still sitting in an AmountInput when this lands. Moving it BLURS that
+          // box synchronously, and the blur's commit closes over the box's PRE-reset text —
+          // canonicalizing a "$1,205.50" into an enqueued write. Focusing first aims that
+          // write at the state the clearing update below then replaces; the other order
+          // lets it land on the cleared form, where a resurrected price reads exactly like
+          // carry-forward and is indistinguishable from it.
           // Direct, no queue: the type is kept, so the cell being focused is already in the
           // DOM and React re-renders it (cleared) around the focus without remounting it.
           focusFirstAmount(form.type)
+          // Carry-forward (spec §5.1): a lot is rarely entered alone — the security, the
+          // account, the type and the day are the SESSION; only the numbers describing
+          // THIS lot are cleared. Functional, so it composes over the blur's write above
+          // rather than racing it. `kept` then says so out loud, because a form that keeps
+          // its values after a save otherwise reads as a save that never happened.
+          setForm((f) => ({ ...f, shares: '', price: '', fees: '', split_factor: '', notes: '' }))
+          setKept(true)
         } else {
           // An edit is a one-off correction rather than a session: full reset, create mode
           // back, cue down.
@@ -374,19 +387,25 @@ export default function TransactionsPanel({
                   <span className="badge">{t.source === 'import' ? 'sheet' : 'manual'}</span>
                 </td>
                 <td className="notes-cell">{t.notes ?? ''}</td>
+                {/* disabled={busy} on all three: submit()'s .then closes over editingId and
+                    the form as they were when it fired, so a row action taken mid-flight is
+                    undone by the reset that lands after it — a seeded edit silently wiped,
+                    or worse, a PATCH aimed at whatever editingId the closure still holds.
+                    Shutting the row for the duration of a save is the cheap fix. */}
                 <td className="row-actions">
-                  <button type="button" onClick={() => startEdit(t)}>Edit</button>
+                  <button type="button" disabled={busy} onClick={() => startEdit(t)}>Edit</button>
                   {/* aria-label: "Duplicate" alone never says what is being duplicated, and
                       the type is the row's shortest distinguishing word. Edit/Delete keep
                       their bare names — Delete's confirm() sentence names the row first. */}
                   <button
                     type="button"
+                    disabled={busy}
                     aria-label={`Duplicate this ${t.type}`}
                     onClick={() => duplicate(t)}
                   >
                     Duplicate
                   </button>
-                  <button type="button" onClick={() => remove(t)}>Delete</button>
+                  <button type="button" disabled={busy} onClick={() => remove(t)}>Delete</button>
                 </td>
               </tr>
             ))}

@@ -214,6 +214,32 @@ describe('TransactionsPanel entry session', () => {
     expect(screen.getByText(/security, account and date kept/i)).toBeTruthy()
   })
 
+  it('never resurrects the pre-reset text when the caret was still in a numeric box', async () => {
+    const onChanged = vi.fn()
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/shares/i), '2')
+    // A REAL focus, not fireEvent.focus: only this moves jsdom's activeElement, and where
+    // the caret sits when the save lands is the whole subject here. This form carries no
+    // data-entry-scope, so Enter is the browser's implicit submit and leaves the caret
+    // exactly here — and jsdom's click does not move focus either, so the click below
+    // models that Enter faithfully.
+    const price = screen.getByLabelText(/price/i) as HTMLInputElement
+    act(() => price.focus())
+    change(price, '$1,205.50')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(/shares/i)))
+    // The focus transfer BLURS the price box synchronously, and its onBlur commit closes
+    // over the box's PRE-reset "$1,205.50" — canonicalizing it into an enqueued write.
+    // Focusing AFTER the carry-forward reset lets that write land on top of the cleared
+    // box and resurrect the lot just saved: the next Add another would ship a price the
+    // user never typed for it, indistinguishable from carry-forward (998f05c's invariant,
+    // proven on the paycheck/comp/ESPP panels).
+    expect(price.value).toBe('')
+  })
+
   it('carries a split session forward onto the factor box', async () => {
     const onChanged = vi.fn()
     render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
@@ -283,6 +309,54 @@ describe('TransactionsPanel entry session', () => {
     change(screen.getByLabelText(/security/i), '')
     expect(screen.queryByText(/kept/i)).toBeNull()
     expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
+  })
+
+  it('keeps the cue and every typed value when the NEXT add fails', async () => {
+    const onChanged = vi.fn()
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
+    addOneBuy()
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    vi.mocked(createTransaction).mockRejectedValueOnce(new Error('network'))
+    change(screen.getByLabelText(/shares/i), '3')
+    change(screen.getByLabelText(/price/i), '151')
+    fireEvent.click(screen.getByRole('button', { name: /add another/i }))
+    await waitFor(() => expect(screen.getByText('Save failed')).toBeTruthy())
+    // Nothing reached the ledger, so nothing is cleared and nothing is re-narrated: the cue
+    // still describes the form truthfully (the kept context is the FIRST add's and is still
+    // standing), and the numbers just typed survive for the retry. A cue that vanished on
+    // failure would read as "your session ended" over a form that still holds it.
+    expect(screen.getByText(/security, account and date kept/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /add another/i })).toBeTruthy()
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('Robinhood')
+    expect((screen.getByLabelText(/date/i) as HTMLInputElement).value).toBe('2026-08-03')
+    expect((screen.getByLabelText(/shares/i) as HTMLInputElement).value).toBe('3')
+  })
+
+  it('gates the row actions while a save is in flight', () => {
+    // A create that never settles: busy stays true for the rest of the test.
+    vi.mocked(createTransaction).mockReturnValueOnce(new Promise<never>(() => {}))
+    render(
+      <TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={() => {}} />,
+    )
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/shares/i), '2')
+    change(screen.getByLabelText(/price/i), '150')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    // The in-flight save's .then closes over editingId as it was at SUBMIT time, so a
+    // mid-flight Edit would have its seed wiped by the reset that lands afterwards (and a
+    // mid-flight Duplicate the same) — the row buttons are simply shut for the duration.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate this buy' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
+    // Still the typed row, not the ledger row's 'Schwab' seed.
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('Robinhood')
+    expect((screen.getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      (screen.getByRole('button', { name: 'Duplicate this buy' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+    expect((screen.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('a successful edit still resets the whole form — carry-forward is create-only', async () => {

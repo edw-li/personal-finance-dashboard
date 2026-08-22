@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DividendOut, SecurityOut } from '../../types/api'
 import DividendsPanel from './DividendsPanel'
@@ -191,7 +191,11 @@ describe('DividendsPanel editing', () => {
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } })
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
-    // Exact, not toMatchObject: an extra security_id here would 422 the sparse PATCH.
+    // Exact, not toMatchObject — and NOT because the server would refuse a leaked
+    // security_id: DividendUpdate is a plain BaseModel, so pydantic's default config
+    // IGNORES extra keys and one would travel entirely unnoticed. That silence is the
+    // reason the body is pinned whole: a stray key costs nothing today and quietly starts
+    // being honoured the day the schema grows a field by that name.
     expect(updateDividend).toHaveBeenCalledWith(1, {
       account: 'RH Taxable', pay_date: '2025-12-15', amount: '125.50', notes: null,
     })
@@ -249,6 +253,50 @@ describe('DividendsPanel entry session', () => {
     expect(document.activeElement).toBe(amount)
     expect(screen.getByRole('button', { name: /add another/i })).toBeTruthy()
     expect(screen.getByText(/security, account and date kept/i)).toBeTruthy()
+  })
+
+  it('never resurrects the pre-reset amount when the caret was still in the money box', async () => {
+    const onChanged = vi.fn()
+    renderPanel([], '432.10', onChanged)
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
+    // A REAL focus, not fireEvent.focus: only this moves jsdom's activeElement. The form
+    // carries no data-entry-scope, so Enter is the browser's implicit submit and leaves the
+    // caret in this box — and jsdom's click does not move focus either, so the click below
+    // models that Enter faithfully.
+    const amount = screen.getByLabelText('Amount') as HTMLInputElement
+    act(() => amount.focus())
+    fireEvent.change(amount, { target: { value: '$1,050' } })
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    // Here the focus target IS the box the caret is in, so today's transfer fires no blur
+    // at all and there is nothing to resurrect. The pin is the guard on that coincidence:
+    // it holds the panel to 998f05c's ordering the day this form grows a second committing
+    // box (a per-share entry, say) or moves the focus target off the amount.
+    expect(amount.value).toBe('')
+    expect(document.activeElement).toBe(amount)
+  })
+
+  it('gates the row actions while a save is in flight', () => {
+    // A create that never settles: busy stays true for the rest of the test.
+    vi.mocked(createDividend).mockReturnValueOnce(new Promise<never>(() => {}))
+    renderPanel([dividend()])
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    // The in-flight save's .then closes over editingId as it was at SUBMIT time, so a
+    // mid-flight Edit would have its seed wiped by the reset that lands afterwards — the
+    // row buttons are simply shut for the duration (TransactionsPanel's rule).
+    fireEvent.click(screen.getByRole('button', { name: 'Edit this dividend' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
+    // Still the typed row, not the ledger row's 2025-12-15 seed.
+    expect((screen.getByLabelText(/pay date/i) as HTMLInputElement).value).toBe('2026-08-03')
+    expect(
+      (screen.getByRole('button', { name: 'Edit this dividend' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+    expect((screen.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('drops the kept cue when the security changes', async () => {

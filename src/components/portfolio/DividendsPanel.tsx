@@ -99,17 +99,27 @@ export default function DividendsPanel({
     request
       .then(() => {
         if (editingId === null) {
-          // Carry-forward (spec §5.1): a quarter's dividends arrive as a run of rows that
-          // share a security, an account and a pay date — only the payment changes. `kept`
-          // says so out loud, because a form that keeps its values after a save otherwise
-          // reads as a save that never happened.
-          setForm((f) => ({ ...f, amount: '', notes: '' }))
-          setKept(true)
+          // The next payment starts here — BEFORE the reset, and that order is load-bearing
+          // (998f05c's invariant, proven on the paycheck/comp/ESPP panels). This form
+          // carries no data-entry-scope, so Enter is the browser's implicit submit and the
+          // caret is still sitting in an AmountInput when this lands. Moving it BLURS that
+          // box synchronously, and the blur's commit closes over the box's PRE-reset text —
+          // canonicalizing a "$1,050" into an enqueued write that would land on top of the
+          // cleared box and resurrect the payment just saved. Today's target IS the only
+          // committing box on this form, so the transfer is a no-op that fires no blur at
+          // all; the order is still stated, because the day this form grows a second money
+          // cell the bug would otherwise arrive silently.
           // The focus-return DOM protocol (spec §5.1, plan decision 6): AmountInput exposes
           // no ref API by design, so the panel addresses its first entry cell through a
           // stable id — the arrangement `data-entry-cell` uses for the keyboard protocol.
-          // The box is already in the DOM; React re-renders it (cleared) around the focus.
           document.getElementById('div-amount')?.focus()
+          // Carry-forward (spec §5.1): a quarter's dividends arrive as a run of rows that
+          // share a security, an account and a pay date — only the payment changes.
+          // Functional, so it composes over any blur write above rather than racing it.
+          // `kept` says so out loud, because a form that keeps its values after a save
+          // otherwise reads as a save that never happened.
+          setForm((f) => ({ ...f, amount: '', notes: '' }))
+          setKept(true)
         } else {
           // An edit is a one-off correction rather than a session: full reset, create mode
           // back, cue down.
@@ -280,18 +290,24 @@ export default function DividendsPanel({
                   )}
                 </td>
                 <td className="notes-cell">{d.notes ?? ''}</td>
+                {/* disabled={busy} on both: submit()'s .then closes over editingId and the
+                    form as they were when it fired, so a row action taken mid-flight is
+                    undone by the reset that lands after it — a seeded edit silently wiped,
+                    or worse, a PATCH aimed at whatever editingId the closure still holds.
+                    Shutting the row for the duration of a save is the cheap fix. */}
                 <td className="row-actions">
                   {/* aria-label: a row button named just "Edit" tells a screen-reader user
                       nothing about what it edits. Delete keeps its bare name — its
                       confirm() sentence names the row before anything happens. */}
                   <button
                     type="button"
+                    disabled={busy}
                     aria-label="Edit this dividend"
                     onClick={() => startEdit(d)}
                   >
                     Edit
                   </button>
-                  <button type="button" onClick={() => remove(d)}>Delete</button>
+                  <button type="button" disabled={busy} onClick={() => remove(d)}>Delete</button>
                 </td>
               </tr>
             ))}
