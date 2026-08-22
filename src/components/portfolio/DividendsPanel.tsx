@@ -35,7 +35,9 @@ export default function DividendsPanel({
   const stats = incomeStats(dividends, todayIso())
 
   const submit = () => {
-    if (!form.security_id || !form.pay_date || !form.amount) {
+    // .trim() on the amount, matching TransactionsPanel's guard: whitespace is not a
+    // number, and untrimmed it reaches the API as "" — an opaque pydantic decimal error.
+    if (!form.security_id || !form.pay_date || !form.amount.trim()) {
       setError('Security, pay date and amount are required')
       return
     }

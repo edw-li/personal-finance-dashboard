@@ -82,7 +82,14 @@ export default function SecuritiesPanel({
             holding_type: form.holding_type,
             // The wire belt (blank still means null, never "0"). Canonicalizing a server
             // seed is a no-op, so a hidden field's stored "0.0400" rides back untouched.
-            annual_dividend: form.annual_dividend.trim() ? canonicalAmount(form.annual_dividend) : null,
+            // { expressions: false }: annual_dividend is a 4dp column and the evaluator
+            // quantizes to 2dp, so "=" must never be evaluated into it (the shares
+            // rationale, one decimal place further out). The input is kind="plain" to
+            // match — a belt that refuses what the cell already evaluated would be no
+            // guard at all.
+            annual_dividend: form.annual_dividend.trim()
+              ? canonicalAmount(form.annual_dividend, { expressions: false })
+              : null,
             is_manual_priced: form.is_manual_priced,
             is_active: form.is_active,
           })
@@ -133,7 +140,9 @@ export default function SecuritiesPanel({
     setBusy(true)
     setError(null)
     // The wire belt: this mini-form is typed and clicked, often without a blur.
-    putManualPrice(security.ticker, { price: canonicalAmount(price) })
+    // { expressions: false } for the same reason as annual_dividend above — price is a 4dp
+    // column and the 2dp evaluator would coarsen it.
+    putManualPrice(security.ticker, { price: canonicalAmount(price, { expressions: false }) })
       .then(() => {
         setPricingId(null)
         setPrice('')
@@ -211,7 +220,11 @@ export default function SecuritiesPanel({
         {editingId !== null && form.is_manual_priced && (
           <label>
             Annual dividend
+            {/* kind="plain", not money: a 4dp column's $-echo would render "$1.23" over a
+                stored 1.2345 and hide two digits. Verbatim display is the honest one here,
+                and plain also refuses the 2dp "=" evaluator the belt refuses. */}
             <AmountInput
+              kind="plain"
               value={form.annual_dividend}
               onValueChange={set('annual_dividend')}
             />
@@ -297,7 +310,16 @@ export default function SecuritiesPanel({
                     >
                       <label>
                         Price
-                        <AmountInput value={price} onValueChange={setPrice} />
+                        {/* kind="plain" for the 4dp reason above. price-mini bounds the
+                            width: this is the one AmountInput NOT inside a column-flex
+                            label, so .field-input's width:100% would stretch it across
+                            this nowrap actions cell and push the buttons past the panel. */}
+                        <AmountInput
+                          kind="plain"
+                          className="price-mini"
+                          value={price}
+                          onValueChange={setPrice}
+                        />
                       </label>
                       <button type="submit" disabled={busy}>Save price</button>
                       <button type="button" onClick={() => setPricingId(null)}>Cancel</button>

@@ -96,7 +96,7 @@ describe('TransactionsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(vi.mocked(createTransaction).mock.calls[0][0]).toMatchObject({
-      shares: '10', price: '1205.50', fees: null,
+      shares: '10', price: '1205.50', fees: null, split_factor: null,
     })
   })
 
@@ -111,7 +111,8 @@ describe('TransactionsPanel', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     // What is pinned is the { expressions: false } contract: shares is a 6dp column and the
     // evaluator quantizes to 2dp, so "=1/8" would silently commit 0.13 where 0.125 was meant.
-    // The text therefore travels VERBATIM — it is deliberately NOT '10'. The panel still
+    // The text therefore travels VERBATIM — it is deliberately NOT '10.00' (the evaluator
+    // quantizes, which is the whole reason a 6dp column opts out). The panel still
     // submits it because presence validation only checks non-empty, so this garbage 422s
     // server-side exactly as 'abc' typed into the same field does today; the server error is
     // the backstop, and no client-side evaluation is allowed to invent a number.

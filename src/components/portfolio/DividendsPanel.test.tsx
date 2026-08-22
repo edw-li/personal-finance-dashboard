@@ -160,4 +160,16 @@ describe('DividendsPanel manual entry', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(vi.mocked(createDividend).mock.calls[0][0]).toMatchObject({ amount: '1050' })
   })
+
+  it('refuses a whitespace-only amount client-side', () => {
+    renderPanel([])
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '   ' } })
+    // Spaces are not a number: the guard trims, matching TransactionsPanel's. Untrimmed it
+    // would reach the API as "" and 422 as an opaque pydantic decimal-parse error.
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    expect(screen.getByText('Security, pay date and amount are required')).toBeTruthy()
+    expect(createDividend).not.toHaveBeenCalled()
+  })
 })

@@ -74,6 +74,9 @@
 .entry-form .notes-field { grid-column: span 2; }
 .form-actions { display: flex; gap: 8px; }
 .row-actions button { margin-right: 6px; }
+/* SecuritiesPanel's manual-price mini-form: the one .field-input outside a column-flex
+   label, so its width:100% would stretch this nowrap cell past the panel edge. */
+.row-actions .price-mini { width: 12ch; }
 /* The panel action buttons carry no shared .button class, and a native control renders
    as light chrome on the dark surface — same tokens as panels.css .button. */
 .form-actions button, .row-actions button { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font-size: 0.85rem; padding: 0.35rem 0.75rem; cursor: pointer; }
