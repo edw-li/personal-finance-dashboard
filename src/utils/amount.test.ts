@@ -20,6 +20,16 @@ describe('parseAmount', () => {
     // Interior spaces are grouping too ("1 234,56" locales paste them).
     expect(parseAmount('1 234.56')).toEqual({ canonical: '1234.56' })
   })
+  it('strips NBSP and narrow-NBSP grouping (Excel/Sheets paste separators)', () => {
+    // Written as escapes, never as the literal characters: an invisible U+00A0 in a test
+    // string is unreviewable, and one stray normal space would make this pass vacuously
+    // against the plain-space stripping that was already here.
+    expect(parseAmount('1\u00A0234.56')).toEqual({ canonical: '1234.56' })
+    expect(parseAmount('$1\u00A0234.56')).toEqual({ canonical: '1234.56' })
+    expect(parseAmount('1\u202F234.56')).toEqual({ canonical: '1234.56' })
+    // Surrounding NBSP is already String.trim()'s job — pinned so that stays true.
+    expect(parseAmount('\u00A01500\u00A0')).toEqual({ canonical: '1500' })
+  })
   it('reads accounting parentheses as negative', () => {
     expect(parseAmount('(1,234.56)')).toEqual({ canonical: '-1234.56' })
     expect(parseAmount('($500)')).toEqual({ canonical: '-500' })

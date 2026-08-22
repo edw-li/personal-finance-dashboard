@@ -44,6 +44,9 @@ export function parseAmount(raw: string): ParsedAmount | null {
   }
   if (text.startsWith('$')) text = text.slice(1)
   text = text.replaceAll(',', '').replaceAll(' ', '')
+  // Excel/Sheets and several locales paste NBSP (U+00A0) or narrow NBSP (U+202F) as the
+  // thousands separator — the same grouping role the plain space plays above.
+  text = text.replaceAll('\u00A0', '').replaceAll('\u202F', '')
   const match = PLAIN_AMOUNT.exec(text)
   // A surviving sign here ("$-500") means the sign sat in an unconventional spot; the
   // conventional forms ("-$500", "($500)") were consumed above.
