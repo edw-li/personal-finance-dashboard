@@ -69,6 +69,33 @@ function toPayload(form: FormState) {
   }
 }
 
+// The row → form seed, shared by Edit and Duplicate: the two differ only in what becomes
+// of editingId (an edit PATCHes that row, a duplicate POSTs a new one), never in the seed.
+// Split rows deliberately leave shares/price blank — the stored 0/0 are Plan 1's dummy
+// convention rather than user data, and toPayload re-emits them on the way out.
+function seedFrom(txn: TransactionOut): FormState {
+  return {
+    security_id: String(txn.security_id),
+    account: txn.account,
+    type: txn.type,
+    txn_date: txn.txn_date ?? '',
+    shares: txn.type === 'split' ? '' : txn.shares,
+    price: txn.type === 'split' ? '' : txn.price,
+    fees: txn.fees ?? '',
+    split_factor: txn.split_factor ?? '',
+    notes: txn.notes ?? '',
+  }
+}
+
+// The focus-return DOM protocol (spec §5.1, plan decision 6): AmountInput exposes no ref
+// API by design, so the panel addresses its first entry cell through a stable id — the
+// same arrangement `data-entry-scope`/`data-entry-cell` use for the keyboard protocol.
+// Which id depends on the TYPE: a split form renders a factor where the others render
+// shares, so hard-coding one would leave split entry with no focus return at all.
+function focusFirstAmount(type: TransactionType): void {
+  document.getElementById(type === 'split' ? 'txn-split-factor' : 'txn-shares')?.focus()
+}
+
 export default function TransactionsPanel({
   securities,
   transactions,
@@ -80,6 +107,9 @@ export default function TransactionsPanel({
 }) {
   const [form, setForm] = useState<FormState>(EMPTY)
   const [editingId, setEditingId] = useState<number | null>(null)
+  // True while the form holds a just-saved row's context rather than a blank slate — the
+  // one piece of state the carry-forward cue and the submit label read.
+  const [kept, setKept] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
@@ -90,17 +120,24 @@ export default function TransactionsPanel({
 
   const startEdit = (txn: TransactionOut) => {
     setEditingId(txn.id)
-    setForm({
-      security_id: String(txn.security_id),
-      account: txn.account,
-      type: txn.type,
-      txn_date: txn.txn_date ?? '',
-      shares: txn.type === 'split' ? '' : txn.shares,
-      price: txn.type === 'split' ? '' : txn.price,
-      fees: txn.fees ?? '',
-      split_factor: txn.split_factor ?? '',
-      notes: txn.notes ?? '',
-    })
+    // The form now describes ONE stored row, not a run of new ones — the create session,
+    // and the cue that narrates it, are over.
+    setKept(false)
+    setForm(seedFrom(txn))
+  }
+
+  const duplicate = (txn: TransactionOut) => {
+    // editingId stays null, so the next submit POSTs a NEW row (plan decision 8) — the one
+    // difference from Edit. Adding another lot of something already in the ledger is the
+    // common case, and re-picking security/account/type/date by hand was its whole cost.
+    setEditingId(null)
+    setKept(false)
+    setForm(seedFrom(txn))
+    // Queued, unlike the save path's direct call below: a duplicate can flip the form's
+    // TYPE, and the cell the new type renders does not exist until React re-renders.
+    // Microtasks run after React's synchronous discrete-event flush — the ordering
+    // AmountInput's Escape-reselect already leans on.
+    queueMicrotask(() => focusFirstAmount(txn.type))
   }
 
   const submit = () => {
@@ -123,8 +160,23 @@ export default function TransactionsPanel({
         : createTransaction({ ...payload, security_id: Number(form.security_id) })
     request
       .then(() => {
-        setForm(EMPTY)
-        setEditingId(null)
+        if (editingId === null) {
+          // Carry-forward (spec §5.1): a lot is rarely entered alone — the security, the
+          // account, the type and the day are the SESSION; only the numbers describing
+          // THIS lot are cleared. `kept` then says so out loud, because a form that keeps
+          // its values after a save otherwise reads as a save that never happened.
+          setForm((f) => ({ ...f, shares: '', price: '', fees: '', split_factor: '', notes: '' }))
+          setKept(true)
+          // Direct, no queue: the type is kept, so the cell being focused is already in the
+          // DOM and React re-renders it (cleared) around the focus without remounting it.
+          focusFirstAmount(form.type)
+        } else {
+          // An edit is a one-off correction rather than a session: full reset, create mode
+          // back, cue down.
+          setForm(EMPTY)
+          setEditingId(null)
+          setKept(false)
+        }
         onChanged()
       })
       .catch((err: unknown) => {
@@ -143,6 +195,8 @@ export default function TransactionsPanel({
           setEditingId(null)
           setForm(EMPTY)
         }
+        // The ledger just changed under the cue — whatever entry session it narrated is over.
+        setKept(false)
         onChanged()
       })
       .catch((err: unknown) => {
@@ -162,6 +216,15 @@ export default function TransactionsPanel({
         here are never touched by imports.
       </p>
       {error && <div className="error-banner" role="alert">{error}</div>}
+      {kept && (
+        // role=status: the cue appears in the same beat the focus jumps into the shares
+        // box, so a screen-reader user would otherwise never learn why the form is still
+        // full (InputsForm's live-region idiom). No new colors or motion — plain
+        // .drill-hint, per decision 7.
+        <p className="drill-hint" role="status" aria-live="polite">
+          Security, account and date kept — enter the next lot.
+        </p>
+      )}
       <form
         className="entry-form"
         onSubmit={(e) => {
@@ -173,7 +236,12 @@ export default function TransactionsPanel({
           Security
           <select
             value={form.security_id}
-            onChange={(e) => set('security_id')(e.target.value)}
+            onChange={(e) => {
+              // The cue claims the security was kept; the moment it is changed the
+              // sentence stops being true, so it comes down with the change.
+              setKept(false)
+              set('security_id')(e.target.value)
+            }}
             disabled={editingId !== null}
           >
             <option value="">Select…</option>
@@ -221,6 +289,7 @@ export default function TransactionsPanel({
             {/* kind="plain": a split factor is a bare ratio — no $ echo, and no
                 2dp-quantizing "=" arithmetic on a Numeric(10, 4) column. */}
             <AmountInput
+              id="txn-split-factor"
               kind="plain"
               value={form.split_factor}
               onValueChange={set('split_factor')}
@@ -230,7 +299,12 @@ export default function TransactionsPanel({
           <>
             <label>
               Shares
-              <AmountInput kind="shares" value={form.shares} onValueChange={set('shares')} />
+              <AmountInput
+                id="txn-shares"
+                kind="shares"
+                value={form.shares}
+                onValueChange={set('shares')}
+              />
             </label>
             <label>
               Price
@@ -257,7 +331,9 @@ export default function TransactionsPanel({
         </label>
         <div className="form-actions">
           <button type="submit" disabled={busy}>
-            {editingId !== null ? 'Save changes' : 'Add transaction'}
+            {/* The label is the second half of the carry-forward cue: "Add another" is what
+                a form still holding the last row's context is actually about to do. */}
+            {editingId !== null ? 'Save changes' : kept ? 'Add another' : 'Add transaction'}
           </button>
           {editingId !== null && (
             <button
@@ -265,6 +341,7 @@ export default function TransactionsPanel({
               onClick={() => {
                 setEditingId(null)
                 setForm(EMPTY)
+                setKept(false)
               }}
             >
               Cancel
@@ -299,6 +376,16 @@ export default function TransactionsPanel({
                 <td className="notes-cell">{t.notes ?? ''}</td>
                 <td className="row-actions">
                   <button type="button" onClick={() => startEdit(t)}>Edit</button>
+                  {/* aria-label: "Duplicate" alone never says what is being duplicated, and
+                      the type is the row's shortest distinguishing word. Edit/Delete keep
+                      their bare names — Delete's confirm() sentence names the row first. */}
+                  <button
+                    type="button"
+                    aria-label={`Duplicate this ${t.type}`}
+                    onClick={() => duplicate(t)}
+                  >
+                    Duplicate
+                  </button>
                   <button type="button" onClick={() => remove(t)}>Delete</button>
                 </td>
               </tr>

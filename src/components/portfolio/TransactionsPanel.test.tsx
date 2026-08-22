@@ -8,7 +8,7 @@ vi.mock('../../api/portfolio', () => ({
   updateTransaction: vi.fn().mockResolvedValue({}),
   deleteTransaction: vi.fn().mockResolvedValue(undefined),
 }))
-import { createTransaction } from '../../api/portfolio'
+import { createTransaction, updateTransaction } from '../../api/portfolio'
 
 afterEach(cleanup)
 // Call counts are per-test: the "not called" assertion below would otherwise see the
@@ -29,6 +29,13 @@ const importTxn: TransactionOut = {
 // price is Numeric(14, 4): a stored price really can carry four decimals, which is the
 // precision the box must not round away.
 const fourDpTxn: TransactionOut = { ...importTxn, id: 8, price: '123.4567' }
+
+// A split row's stored shape: the Plan 1 dummy convention (shares/price 0, no fees) plus
+// the factor that actually carries the event.
+const splitTxn: TransactionOut = {
+  ...importTxn, id: 9, type: 'split', shares: '0.000000', price: '0.0000',
+  split_factor: '10.0000',
+}
 
 // fireEvent, not user-event: @testing-library/user-event is not a devDependency here
 // (plan Task 13 sanctions this substitution; zero lockfile churn). Same reason there are
@@ -165,5 +172,138 @@ describe('TransactionsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
     expect(screen.getByText(/split factor is required/i)).toBeTruthy()
     expect(createTransaction).not.toHaveBeenCalled()
+  })
+})
+
+// Spec §5.1: entering a lot is a SESSION — several lots of the same security, in the same
+// account, on the same day. The context therefore survives the save and only the
+// per-lot numbers are cleared.
+describe('TransactionsPanel entry session', () => {
+  function addOneBuy(): void {
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/date/i), '2026-08-03')
+    change(screen.getByLabelText(/shares/i), '2')
+    change(screen.getByLabelText(/price/i), '150')
+    change(screen.getByLabelText(/fees/i), '1')
+    change(screen.getByLabelText(/notes/i), 'first lot')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+  }
+
+  it('keeps security/account/type/date after an add, clears the numbers, focuses shares', async () => {
+    const onChanged = vi.fn()
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
+    addOneBuy()
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    // The context the next lot shares, still standing…
+    expect((screen.getByLabelText(/security/i) as HTMLSelectElement).value).toBe('1')
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('Robinhood')
+    expect((screen.getByLabelText(/type/i) as HTMLSelectElement).value).toBe('buy')
+    expect((screen.getByLabelText(/date/i) as HTMLInputElement).value).toBe('2026-08-03')
+    // …and everything that describes the LOT, gone.
+    const shares = screen.getByLabelText(/shares/i) as HTMLInputElement
+    expect(shares.value).toBe('')
+    expect((screen.getByLabelText(/price/i) as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText(/fees/i) as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText(/notes/i) as HTMLInputElement).value).toBe('')
+    // The DOM-protocol focus return (decision 6): the caret is already in the first cleared
+    // cell, so the next lot is pure typing. Real .focus() moves activeElement in jsdom.
+    expect(document.activeElement).toBe(shares)
+    // The cue that the form is not blank by accident (decision 7).
+    expect(screen.getByRole('button', { name: /add another/i })).toBeTruthy()
+    expect(screen.getByText(/security, account and date kept/i)).toBeTruthy()
+  })
+
+  it('carries a split session forward onto the factor box', async () => {
+    const onChanged = vi.fn()
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
+    change(screen.getByLabelText(/security/i), '1')
+    change(screen.getByLabelText(/account/i), 'Robinhood')
+    change(screen.getByLabelText(/type/i), 'split')
+    change(screen.getByLabelText(/factor/i), '4')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    // A split form renders no shares box at all, so the focus return has to name the field
+    // this type actually starts on — decision 6 is "the FIRST entry field", not "shares".
+    const factor = screen.getByLabelText(/factor/i) as HTMLInputElement
+    expect(factor.value).toBe('')
+    expect(document.activeElement).toBe(factor)
+  })
+
+  it('duplicates a row into a fresh POST — never a PATCH of the source', async () => {
+    const onChanged = vi.fn()
+    render(
+      <TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={onChanged} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate this buy' }))
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('Schwab')
+    // The focus is queued: React must render the seeded form (a duplicate can flip the
+    // type, and with it which numeric boxes exist) before the id can be found — the
+    // queueMicrotask idiom AmountInput's Escape-reselect already relies on.
+    const shares = screen.getByLabelText(/shares/i) as HTMLInputElement
+    await waitFor(() => expect(document.activeElement).toBe(shares))
+    // Focused, so the box shows the raw seed rather than the shares echo.
+    expect(shares.value).toBe('10.000000')
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    // The whole point: editingId stayed null, so this is a NEW row, not an edit of id 7.
+    expect(updateTransaction).not.toHaveBeenCalled()
+    expect(vi.mocked(createTransaction).mock.calls[0][0]).toMatchObject({
+      security_id: 1, account: 'Schwab', type: 'buy',
+      shares: '10.000000', price: '100.0000', fees: null, split_factor: null,
+    })
+  })
+
+  it('duplicates a split with its factor and no shares/price', async () => {
+    const onChanged = vi.fn()
+    render(
+      <TransactionsPanel securities={securities} transactions={[splitTxn]} onChanged={onChanged} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate this split' }))
+    const factor = screen.getByLabelText(/factor/i) as HTMLInputElement
+    await waitFor(() => expect(document.activeElement).toBe(factor))
+    expect(factor.value).toBe('10.0000')
+    // The stored 0/0 dummies are NOT seeded back into shares/price (startEdit's rule): the
+    // payload builder re-emits them, and a split form has nowhere to put them anyway.
+    expect(screen.queryByLabelText(/shares/i)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(vi.mocked(createTransaction).mock.calls[0][0]).toMatchObject({
+      security_id: 1, type: 'split', split_factor: '10.0000', shares: '0', price: '0', fees: null,
+    })
+  })
+
+  it('drops the kept cue when the security changes', async () => {
+    const onChanged = vi.fn()
+    render(<TransactionsPanel securities={securities} transactions={[]} onChanged={onChanged} />)
+    addOneBuy()
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(screen.getByText(/security, account and date kept/i)).toBeTruthy()
+    // The cue names the security as kept; the moment it is changed the sentence is a lie.
+    change(screen.getByLabelText(/security/i), '')
+    expect(screen.queryByText(/kept/i)).toBeNull()
+    expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
+  })
+
+  it('a successful edit still resets the whole form — carry-forward is create-only', async () => {
+    const onChanged = vi.fn()
+    render(
+      <TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={onChanged} />,
+    )
+    addOneBuy()
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: /add another/i })).toBeTruthy()
+    // Entering edit mode ends the create session: the form now describes ONE stored row.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(screen.queryByText(/kept/i)).toBeNull()
+    change(screen.getByLabelText(/shares/i), '11')
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateTransaction).toHaveBeenCalled())
+    // An edit is a one-off correction, not a session — today's full reset stands.
+    expect((screen.getByLabelText(/security/i) as HTMLSelectElement).value).toBe('')
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText(/date/i) as HTMLInputElement).value).toBe('')
+    expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
+    expect(screen.queryByText(/kept/i)).toBeNull()
   })
 })

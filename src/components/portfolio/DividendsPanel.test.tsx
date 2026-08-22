@@ -5,6 +5,7 @@ import DividendsPanel from './DividendsPanel'
 
 vi.mock('../../api/portfolio', () => ({
   createDividend: vi.fn().mockResolvedValue({}),
+  updateDividend: vi.fn().mockResolvedValue({}),
   deleteDividend: vi.fn().mockResolvedValue(undefined),
 }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what the bars
@@ -20,7 +21,7 @@ vi.mock('../EChart', async () => {
       }),
   }
 })
-import { createDividend } from '../../api/portfolio'
+import { createDividend, deleteDividend, updateDividend } from '../../api/portfolio'
 
 const securities: SecurityOut[] = [{
   id: 1, ticker: 'NVDA', name: 'NVIDIA', industry: 'Semis', holding_type: 'stock',
@@ -171,5 +172,97 @@ describe('DividendsPanel manual entry', () => {
     fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
     expect(screen.getByText('Security, pay date and amount are required')).toBeTruthy()
     expect(createDividend).not.toHaveBeenCalled()
+  })
+})
+
+// Spec §5.1: the log was append-and-delete only — a typo'd amount cost a delete and a
+// retype. The form-swap edit is TransactionsPanel's, mirrored.
+describe('DividendsPanel editing', () => {
+  it('round-trips a row through PATCH with the exact body', async () => {
+    const onChanged = vi.fn()
+    renderPanel([dividend()], '432.10', onChanged)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit this dividend' }))
+    // Seeded from the SERVER strings, verbatim (the plain text boxes show them as stored).
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('RH Taxable')
+    expect((screen.getByLabelText(/pay date/i) as HTMLInputElement).value).toBe('2025-12-15')
+    // The security is frozen: DividendUpdate carries no security_id, so a row cannot be
+    // moved between tickers by an edit (TransactionsPanel's rule).
+    expect((screen.getByLabelText(/security/i) as HTMLSelectElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } })
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    // Exact, not toMatchObject: an extra security_id here would 422 the sparse PATCH.
+    expect(updateDividend).toHaveBeenCalledWith(1, {
+      account: 'RH Taxable', pay_date: '2025-12-15', amount: '125.50', notes: null,
+    })
+    expect(createDividend).not.toHaveBeenCalled()
+    // An edit is a one-off correction: the form resets whole, and the security is free again.
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('')
+    expect(screen.getByRole('button', { name: /add dividend/i })).toBeTruthy()
+  })
+
+  it('Cancel abandons the edit and re-arms the create form', () => {
+    renderPanel([dividend()])
+    fireEvent.click(screen.getByRole('button', { name: 'Edit this dividend' }))
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('')
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
+    expect((screen.getByLabelText(/security/i) as HTMLSelectElement).disabled).toBe(false)
+  })
+
+  it('deleting the row being edited resets the form — on success only', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const onChanged = vi.fn()
+    renderPanel([dividend()], '432.10', onChanged)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit this dividend' }))
+    // A FAILED delete leaves the row standing, so the edit session must survive it.
+    vi.mocked(deleteDividend).mockRejectedValueOnce(new Error('network'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(screen.getByText('Delete failed')).toBeTruthy())
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy()
+    expect(onChanged).not.toHaveBeenCalled()
+    // The successful one takes the row away — a stale editingId would PATCH a 404 next save.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: /add dividend/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
+  })
+})
+
+describe('DividendsPanel entry session', () => {
+  it('keeps security/account/pay date after an add, clears the payment, focuses amount', async () => {
+    const onChanged = vi.fn()
+    renderPanel([], '432.10', onChanged)
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/account/i), { target: { value: 'Fidelity' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+    fireEvent.change(screen.getByLabelText(/notes/i), { target: { value: 'Q3' } })
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect((screen.getByLabelText(/security/i) as HTMLSelectElement).value).toBe('1')
+    expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('Fidelity')
+    expect((screen.getByLabelText(/pay date/i) as HTMLInputElement).value).toBe('2026-08-03')
+    const amount = screen.getByLabelText('Amount') as HTMLInputElement
+    expect(amount.value).toBe('')
+    expect((screen.getByLabelText(/notes/i) as HTMLInputElement).value).toBe('')
+    expect(document.activeElement).toBe(amount)
+    expect(screen.getByRole('button', { name: /add another/i })).toBeTruthy()
+    expect(screen.getByText(/security, account and date kept/i)).toBeTruthy()
+  })
+
+  it('drops the kept cue when the security changes', async () => {
+    const onChanged = vi.fn()
+    renderPanel([], '432.10', onChanged)
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/pay date/i), { target: { value: '2026-08-03' } })
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '4.10' } })
+    fireEvent.click(screen.getByRole('button', { name: /add dividend/i }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(screen.getByText(/security, account and date kept/i)).toBeTruthy()
+    // The cue names the security as kept; the moment it is changed the sentence is a lie.
+    fireEvent.change(screen.getByLabelText(/security/i), { target: { value: '' } })
+    expect(screen.queryByText(/kept/i)).toBeNull()
+    expect(screen.getByRole('button', { name: /add dividend/i })).toBeTruthy()
   })
 })

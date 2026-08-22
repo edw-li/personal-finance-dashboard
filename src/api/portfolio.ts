@@ -64,6 +64,24 @@ export function createDividend(body: DividendCreate): Promise<DividendOut> {
   return api<DividendOut>('/portfolio/dividends', { method: 'POST', body: JSON.stringify(body) })
 }
 
+/**
+ * The dividend PATCH shipped server-side unwired; this is its first caller. The route's
+ * DividendUpdate schema is all-optional account/pay_date/amount/notes — createDividend's
+ * body minus the immutable security_id, which is exactly the formula types/api.ts already
+ * applies for TransactionUpdate. Derived here rather than restated, so the two can never
+ * drift apart. (The server refuses an explicit null for amount/pay_date — 422, "cannot be
+ * null" — so a sparse caller may omit them but must not blank them.)
+ */
+export function updateDividend(
+  id: number,
+  body: Partial<Omit<DividendCreate, 'security_id'>>,
+): Promise<DividendOut> {
+  return api<DividendOut>(`/portfolio/dividends/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
 export function deleteDividend(id: number): Promise<void> {
   return api<void>(`/portfolio/dividends/${id}`, { method: 'DELETE' })
 }
