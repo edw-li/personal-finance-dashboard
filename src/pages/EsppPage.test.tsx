@@ -348,6 +348,20 @@ describe('EsppPage — lots', () => {
     await waitFor(() => expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(2))
   })
 
+  it('puts the caret back on the purchase date after a save', async () => {
+    renderPage()
+    await screen.findByText('$10,720.49')
+
+    fillNewLot()
+    fireEvent.click(screen.getByRole('button', { name: 'Add lot' }))
+
+    await waitFor(() => expect(vi.mocked(createLot)).toHaveBeenCalledTimes(1))
+    // Spec §5.1: the emptied form's FIRST box takes the caret, so the next lot off the
+    // statement is typed rather than clicked into — without it focus strands on Add lot.
+    await waitFor(() => expect(document.activeElement).toBe(field('Purchase date')))
+    expect(field('Purchase date').value).toBe('')
+  })
+
   it('sends a typed purchase price, and blanking it on an edit re-derives the default', async () => {
     renderPage()
     await screen.findByText('$10,720.49')
@@ -816,6 +830,20 @@ describe('EsppPage — periods', () => {
       purchaseFmv: '171.00000',
       carryForward: '0.00',
     })
+  })
+
+  it('puts the caret back on the label after a save', async () => {
+    renderPage()
+    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
+
+    fillNewPeriod()
+    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
+
+    await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
+    // Spec §5.1, the same ritual as the lots form above — and the period save also re-runs
+    // the modeler, so this pins that the chain's reload does not steal the caret back.
+    await waitFor(() => expect(document.activeElement).toBe(field('Label')))
+    expect(field('Label').value).toBe('')
   })
 
   it('edits a period with the full row shape and the pct shifted back', async () => {

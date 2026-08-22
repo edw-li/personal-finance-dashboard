@@ -179,6 +179,11 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
       .then(() => {
         setForm(EMPTY_LOT)
         setEditingId(null)
+        // AFTER the reset: the next entry starts here — the sheet's row-to-row rhythm
+        // (spec §5.1). getElementById is the house DOM protocol (like data-entry-scope),
+        // so AmountInput keeps its no-ref API; this box is a plain <input type="date">, so
+        // focusing it runs no React handler at all.
+        document.getElementById('lot-purchase-date')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
@@ -251,6 +256,9 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
         <label>
           Purchase date
           <input
+            // The form's first entry field, so the save-success path can hand the caret
+            // back to it by id (spec §5.1's focus-return).
+            id="lot-purchase-date"
             className="field-input"
             type="date"
             value={form.purchase_date}
@@ -697,6 +705,10 @@ function PeriodsPanel({
       .then(() => {
         setForm(EMPTY_PERIOD)
         setEditingId(null)
+        // AFTER the reset: the next entry starts here — the sheet's row-to-row rhythm
+        // (spec §5.1). onChanged also re-runs the modeler, but nothing in that reload
+        // remounts this form, so the caret stays where it was just put.
+        document.getElementById('period-label')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
@@ -746,6 +758,9 @@ function PeriodsPanel({
         <label>
           Label
           <input
+            // The form's first entry field, so the save-success path can hand the caret
+            // back to it by id (spec §5.1's focus-return).
+            id="period-label"
             className="field-input"
             value={form.label}
             onChange={(e) => set('label')(e.target.value)}

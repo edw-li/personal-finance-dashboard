@@ -324,6 +324,11 @@ function ProfilesPanel({
         // forward anyway (review M3). Editing a historical row still leaves the real latest
         // in place, which is the case the comparison was written for.
         stopEditing(latestOf([...profiles.filter((p) => p.id !== echo.id), echo]))
+        // AFTER the reseed, and the reseed's other half: the next entry starts here — the
+        // sheet's row-to-row rhythm (spec §5.1). getElementById is the house DOM protocol
+        // (like data-entry-scope), so AmountInput keeps its no-ref API; this box is a plain
+        // <input type="date">, so focusing it runs no React handler at all.
+        document.getElementById('paycheck-effective-date')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
@@ -378,6 +383,9 @@ function ProfilesPanel({
         <label>
           Effective date
           <input
+            // The form's first entry field, so the save-success path can hand the caret
+            // back to it by id (spec §5.1's focus-return).
+            id="paycheck-effective-date"
             className="field-input"
             type="date"
             value={form.effective_date}

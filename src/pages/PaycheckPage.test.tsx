@@ -576,6 +576,22 @@ describe('PaycheckPage — the profile form', () => {
     expect(screen.getByRole('button', { name: 'Add profile' })).toBeTruthy()
   })
 
+  it('puts the caret back on the effective date after a save', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    type('Effective date', '2026-07-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    // The reseed and the focus are ONE ritual (spec §5.1): the carry-forward form refills
+    // from the newest row, and the caret lands on the one box a new profile never inherits
+    // — so the next comp change is typed, not clicked into. Without it the caret strands on
+    // the Add button, which is where the last entry session ended, not where the next starts.
+    await waitFor(() => expect(document.activeElement).toBe(field('Effective date')))
+    expect(field('Effective date').value).toBe('')
+  })
+
   it('renders a 409 verbatim and keeps the typed row', async () => {
     vi.mocked(createProfile).mockRejectedValue(
       new ApiError('a paycheck profile for 2026-07-01 already exists', 409),

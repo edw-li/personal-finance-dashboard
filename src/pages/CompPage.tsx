@@ -211,6 +211,11 @@ function EventsPanel({
       .then(() => {
         setForm(EMPTY_EVENT)
         setEditingId(null)
+        // AFTER the reset: the next entry starts here — the sheet's row-to-row rhythm
+        // (spec §5.1). getElementById is the house DOM protocol (like data-entry-scope),
+        // so AmountInput keeps its no-ref API; this box is a plain <input>, so focusing it
+        // runs no React handler at all.
+        document.getElementById('comp-focal-year')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
@@ -279,6 +284,9 @@ function EventsPanel({
         <label>
           Focal year
           <input
+            // The form's first entry field, so the save-success path can hand the caret
+            // back to it by id (spec §5.1's focus-return).
+            id="comp-focal-year"
             className="field-input"
             inputMode="numeric"
             value={form.focal_year}

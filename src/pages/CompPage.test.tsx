@@ -370,6 +370,20 @@ describe('CompPage — writes', () => {
     await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
   })
 
+  it('puts the caret back on the focal year after a save', async () => {
+    render(<CompPage />)
+    await screen.findByText('$601,854.46')
+
+    fillNewEvent()
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+
+    await waitFor(() => expect(vi.mocked(createEvent)).toHaveBeenCalledTimes(1))
+    // Spec §5.1: the emptied form's first box takes the caret, so the next focal year is
+    // typed rather than clicked into — without it focus strands on Add event.
+    await waitFor(() => expect(document.activeElement).toBe(field('Focal year')))
+    expect(field('Focal year').value).toBe('')
+  })
+
   it('PATCHes the FULL row, and a blanked column travels as an explicit null', async () => {
     render(<CompPage />)
     await screen.findByText('$601,854.46')
@@ -927,6 +941,22 @@ describe('CompPage — RSU grant writes', () => {
     // A grant write moves the schedule and nothing else: the focal history is untouched.
     await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2))
     expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(1)
+  })
+
+  it('puts the caret back on the LABEL after a save, never on the kind select', async () => {
+    render(<CompPage />)
+    await screen.findByText('RSU grants')
+
+    fillNewGrant()
+    fireEvent.click(screen.getByRole('button', { name: 'Add grant' }))
+
+    await waitFor(() => expect(vi.mocked(createRsuGrant)).toHaveBeenCalledTimes(1))
+    // The first TYPED field, not the first field (spec §5.1 as applied to this form): the
+    // form opens on a <select>, and a refocused select is one accidental wheel-scroll from
+    // silently changing a grant's kind — which is its whole vesting schedule.
+    await waitFor(() => expect(document.activeElement).toBe(field('Label')))
+    expect(document.activeElement).not.toBe(screen.getByLabelText('Kind'))
+    expect(field('Label').value).toBe('')
   })
 
   it('derives the refresh cliff when the kind says refresh', async () => {

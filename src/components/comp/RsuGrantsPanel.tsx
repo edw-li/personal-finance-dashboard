@@ -223,6 +223,13 @@ export default function RsuGrantsPanel({
       .then(() => {
         setForm(EMPTY_GRANT)
         setEditingId(null)
+        // AFTER the reset: the next entry starts here — the sheet's row-to-row rhythm
+        // (spec §5.1). The LABEL, not the form's literal first field: that one is the Kind
+        // <select>, and a refocused select is one accidental wheel-scroll from silently
+        // changing a grant's kind — which is its whole vesting schedule. So the caret goes
+        // to the first box that is actually TYPED into. getElementById is the house DOM
+        // protocol (like data-entry-scope), so AmountInput keeps its no-ref API.
+        document.getElementById('grant-label')?.focus()
         onChanged()
       })
       .catch((err: unknown) => setError(message(err, 'Save failed')))
@@ -322,6 +329,10 @@ export default function RsuGrantsPanel({
         <label>
           Label
           <input
+            // The form's first TYPED entry field (the Kind select above it is deliberately
+            // skipped), so the save-success path can hand the caret back to it by id —
+            // spec §5.1's focus-return.
+            id="grant-label"
             className="field-input"
             value={form.label}
             onChange={(e) => set('label')(e.target.value)}
