@@ -1,9 +1,15 @@
+import re
 from datetime import date
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import ACCOUNT_GROUPS
+
+# The two suggestion kinds shipped in v1 (spec 2026-08-21 §5.2): a portfolio bucket keyed
+# by its transactions `account` label, and the vesting schedule's unvested value. The
+# label is free text, so anything non-empty passes; the kind vocabulary is closed.
+SUGGEST_SOURCE_SHAPE = re.compile(r"^(portfolio:.+|vesting:unvested)$")
 
 
 def _check_group(value: str) -> str:
@@ -23,6 +29,7 @@ class AccountOut(BaseModel):
     is_active: bool
     is_component: bool
     parent_account_id: int | None
+    suggest_source: str | None
 
 
 class AccountCreate(BaseModel):
@@ -41,11 +48,23 @@ class AccountUpdate(BaseModel):
     sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
     is_active: bool | None = None
     is_component: bool | None = None
+    # Bounded to the column width (name's rule): an over-long label must 422 here, never
+    # surface asyncpg's "value too long for type character varying(200)" as a 500.
+    suggest_source: str | None = Field(default=None, max_length=200)
 
     @field_validator("group")
     @classmethod
     def group_known(cls, value: str | None) -> str | None:
         return None if value is None else _check_group(value)
+
+    @field_validator("suggest_source")
+    @classmethod
+    def suggest_source_known(cls, value: str | None) -> str | None:
+        # The two shipped kinds (spec §5.2). An explicit null is the CLEAR and is
+        # distinguished from omitted by model_fields_set in the handler.
+        if value is None or SUGGEST_SOURCE_SHAPE.fullmatch(value):
+            return value
+        raise ValueError("suggest_source must be 'portfolio:<account-label>' or 'vesting:unvested'")
 
 
 class BalanceEntry(BaseModel):

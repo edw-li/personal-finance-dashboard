@@ -148,6 +148,68 @@ async def test_patch_account_name_rules(auth_client):
     assert resp.json()["name"] == "Alpha"
 
 
+async def test_account_suggest_source_round_trip(auth_client):
+    created = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "RH Taxable Acct", "group": "taxable"}
+        )
+    ).json()
+    assert created["suggest_source"] is None
+
+    patched = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{created['id']}",
+        json={"suggest_source": "portfolio:RH Taxable"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["suggest_source"] == "portfolio:RH Taxable"
+
+    # Unlike every other patchable column (all NOT NULL, where null is a no-op), an
+    # EXPLICIT null here is the CLEAR — the tri-state model_fields_set precedent.
+    cleared = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{created['id']}", json={"suggest_source": None}
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["suggest_source"] is None
+
+
+async def test_account_suggest_source_shape_is_validated(auth_client):
+    created = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Shape Check", "group": "cash"}
+        )
+    ).json()
+    # Only the two shipped kinds: an empty portfolio label, an unknown kind, an unknown
+    # vesting parameter, and a kind with no parameter at all.
+    for bad in ["portfolio:", "prices:VOO", "vesting:vested", "portfolio"]:
+        resp = await auth_client.patch(
+            f"/api/v1/net-worth/accounts/{created['id']}", json={"suggest_source": bad}
+        )
+        assert resp.status_code == 422, bad
+    # Past String(200): a 422, not asyncpg's "value too long" as a 500 (name's rule).
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{created['id']}",
+        json={"suggest_source": "portfolio:" + "x" * 200},
+    )
+    assert resp.status_code == 422
+
+
+async def test_account_suggest_source_survives_an_unrelated_patch(auth_client):
+    """A PATCH that omits suggest_source leaves it alone — sparse-PATCH, not a silent clear."""
+    created = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Sparse Patch", "group": "equity"}
+        )
+    ).json()
+    await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{created['id']}", json={"suggest_source": "vesting:unvested"}
+    )
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{created['id']}", json={"sort_order": 4}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["suggest_source"] == "vesting:unvested"
+
+
 async def _seed_timeseries(db):
     """3 months x {aggregate, component, liability} — enough to exercise every rule."""
     agg = Account(name="Agg", slug="agg", group="pre_tax", sort_order=1)

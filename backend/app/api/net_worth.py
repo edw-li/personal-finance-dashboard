@@ -30,6 +30,11 @@ router = APIRouter(
     prefix="/net-worth", tags=["net-worth"], dependencies=[Depends(get_current_user)]
 )
 
+# Patchable account columns whose EXPLICIT null is a clear rather than a no-op — i.e. the
+# nullable ones. Every other patchable column is NOT NULL, so "name": null must never
+# reach the ORM as a NULL write (see update_account).
+NULLABLE_ACCOUNT_FIELDS = frozenset({"suggest_source"})
+
 
 @router.get("/accounts", response_model=list[AccountOut])
 async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
@@ -83,12 +88,14 @@ async def update_account(
     account_id: int, body: AccountUpdate, db: AsyncSession = Depends(get_db)
 ) -> Account:
     account = await _get_account(db, account_id)
-    # Drop explicit nulls: every patchable column is NOT NULL, so "name": null is a
-    # no-op request, not a write of NULL.
+    # Drop explicit nulls on the NOT NULL columns: "name": null is a no-op request, not a
+    # write of NULL. The nullable ones are tri-state (the spending net_pay precedent) —
+    # exclude_unset is model_fields_set, so an omitted field is left alone while a
+    # provided null falls through below and writes None = clear.
     updates = {
         field: value
         for field, value in body.model_dump(exclude_unset=True).items()
-        if value is not None
+        if value is not None or field in NULLABLE_ACCOUNT_FIELDS
     }
     new_name = updates.get("name")
     if new_name is not None and not slugify(new_name):
