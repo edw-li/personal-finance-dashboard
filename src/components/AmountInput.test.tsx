@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, expect, it } from 'vitest'
 import AmountInput from './AmountInput'
@@ -135,6 +135,25 @@ it('Escape that actually reverts consumes the event', () => {
   expect(box().value).toBe('1500.00')
 })
 
+it('a reverting Escape is withheld from the container; an untouched one reaches it', () => {
+  let seen = 0
+  function ModalHarness() {
+    const [value, setValue] = useState('1500.00')
+    return (
+      <div onKeyDown={() => (seen += 1)}>
+        <AmountInput aria-label="Amount" value={value} onValueChange={setValue} />
+      </div>
+    )
+  }
+  render(<ModalHarness />)
+  fireEvent.focus(box())
+  fireEvent.keyDown(box(), { key: 'Escape' })
+  expect(seen).toBe(1) // untouched: the container's Escape-to-close still fires
+  fireEvent.change(box(), { target: { value: '9' } })
+  fireEvent.keyDown(box(), { key: 'Escape' })
+  expect(seen).toBe(1) // the revert is ours — the dialog around us must not also close
+})
+
 it('Escape reselects the restored value after the microtask', async () => {
   render(<Harness initial="1500.00" />)
   fireEvent.focus(box())
@@ -187,6 +206,16 @@ it('a click on an ALREADY-focused field positions the caret normally', () => {
   expect(fireEvent.mouseUp(box())).toBe(true)
 })
 
+it('only the left button drives the select guard', () => {
+  render(<Harness initial="1500.00" />)
+  box().focus()
+  // A right-click must neither disarm the one-shot (its mousedown) nor be swallowed (its
+  // mouseup opens the context menu) — the still-pending left click has a selection to keep.
+  fireEvent.mouseDown(box(), { button: 2 })
+  expect(fireEvent.mouseUp(box(), { button: 2 })).toBe(true)
+  expect(fireEvent.mouseUp(box())).toBe(false)
+})
+
 it('a half-typed percent echoes without the orphan point', () => {
   render(<Harness initial="13." kind="percent" />)
   expect(box().value).toBe('13%') // display-only: the state stays the verbatim '13.'
@@ -217,8 +246,25 @@ function ScopeHarness({
   )
 }
 
+// A scope whose middle cell is disabled — the case that stalls a naive index walk.
+function DisabledCellHarness() {
+  const [a, setA] = useState('1.00')
+  const [c, setC] = useState('3.00')
+  return (
+    <div data-entry-scope="">
+      <AmountInput aria-label="First" value={a} onValueChange={setA} />
+      <AmountInput aria-label="Middle" value="2.00" onValueChange={() => {}} disabled />
+      <AmountInput aria-label="Last" value={c} onValueChange={setC} />
+      <button type="button" data-entry-primary="">
+        Next step
+      </button>
+    </div>
+  )
+}
+
 const first = () => screen.getByLabelText('First') as HTMLInputElement
 const second = () => screen.getByLabelText('Second') as HTMLInputElement
+const last = () => screen.getByLabelText('Last') as HTMLInputElement
 
 it('Enter advances to the next cell; Shift+Enter goes back', () => {
   render(<ScopeHarness />)
@@ -242,6 +288,22 @@ it('a modified arrow is left to the browser (Shift+ArrowDown selects, it does no
   render(<ScopeHarness />)
   first().focus()
   expect(fireEvent.keyDown(first(), { key: 'ArrowDown', shiftKey: true })).toBe(true)
+  expect(document.activeElement).toBe(first())
+})
+
+it('a chorded Enter does not traverse (Alt+Enter is the platform’s, not ours)', () => {
+  render(<ScopeHarness />)
+  first().focus()
+  expect(fireEvent.keyDown(first(), { key: 'Enter', altKey: true })).toBe(true)
+  expect(document.activeElement).toBe(first())
+})
+
+it('traversal skips a disabled cell instead of stalling on it', () => {
+  render(<DisabledCellHarness />)
+  first().focus()
+  fireEvent.keyDown(first(), { key: 'Enter' })
+  expect(document.activeElement).toBe(last())
+  fireEvent.keyDown(last(), { key: 'Enter', shiftKey: true })
   expect(document.activeElement).toBe(first())
 })
 
@@ -277,14 +339,35 @@ it('Ctrl+Enter and Ctrl+S click the primary action from any cell', () => {
   expect(clicks).toBe(2)
 })
 
+it('Ctrl+Shift+S belongs to the browser (Edge Web Capture / Firefox screenshot), not to save', () => {
+  let clicks = 0
+  render(<ScopeHarness onPrimary={() => (clicks += 1)} />)
+  first().focus()
+  expect(fireEvent.keyDown(first(), { key: 's', ctrlKey: true, shiftKey: true })).toBe(true)
+  expect(clicks).toBe(0)
+})
+
+it('Ctrl+Enter with a disabled primary is a no-op', () => {
+  let clicks = 0
+  render(<ScopeHarness primaryDisabled onPrimary={() => (clicks += 1)} />)
+  first().focus()
+  fireEvent.keyDown(first(), { key: 'Enter', ctrlKey: true })
+  expect(clicks).toBe(0) // click() on a disabled control dispatches nothing — no half-submit
+})
+
 it('commits the edited cell when Enter moves focus away', () => {
+  // Real .focus() throughout: fireEvent.focus dispatches the event without moving
+  // activeElement, and this test needs jsdom's genuine focus transfer — the traversal's
+  // second().focus() is what blurs first(), and that blur is what commits.
   render(<ScopeHarness />)
-  fireEvent.focus(first())
+  first().focus()
   fireEvent.change(first(), { target: { value: '$1,600' } })
   fireEvent.keyDown(first(), { key: 'Enter' })
-  fireEvent.blur(first()) // jsdom does not blur on .focus() of another node — simulate it
-  fireEvent.focus(first())
-  expect(first().value).toBe('1600')
+  expect(document.activeElement).toBe(second())
+  // act(): a bare .focus() only QUEUES the focused re-render here, and it is precisely the
+  // echo → raw swap that exposes the committed state.
+  act(() => first().focus())
+  expect(first().value).toBe('1600') // canonical, so the traversal really did commit
 })
 
 it('outside a scope, Enter is left to native implicit submission', () => {

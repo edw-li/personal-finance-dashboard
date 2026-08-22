@@ -77,7 +77,10 @@ export default function AmountInput({
       // The first Escape cancels the CELL edit and is consumed, like a spreadsheet's; an
       // Escape on an untouched cell belongs to the container instead — it must reach a
       // parent modal to close it, and must not write back through onValueChange, whose
-      // upstream setters mark the draft dirty.
+      // upstream setters mark the draft dirty. Caveat: stopPropagation cannot reach a
+      // CAPTURE-phase listener (onKeyDownCapture, or a native capture listener on
+      // document) — a modal that wants this courtesy must listen in the bubble phase, or
+      // check defaultPrevented.
       if (value === atFocus.current) return
       e.preventDefault()
       e.stopPropagation()
@@ -89,20 +92,30 @@ export default function AmountInput({
     }
     const scope = e.currentTarget.closest<HTMLElement>('[data-entry-scope]')
     if (scope === null) return // ledger rows: native Enter = implicit submit, arrows native
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'Enter' || e.key.toLowerCase() === 's')) {
+    // EXACTLY Ctrl/Cmd + Enter/S: Ctrl+Shift+S is Edge's Web Capture and Firefox's
+    // screenshot, and saving the step out from under either would be a nasty surprise.
+    const chord = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey
+    if (chord && (e.key === 'Enter' || e.key.toLowerCase() === 's')) {
       e.preventDefault() // Ctrl+S must never reach the browser's save dialog
       scope.querySelector<HTMLElement>('[data-entry-primary]')?.click()
       return
     }
-    // Arrows traverse only UNMODIFIED: Shift+Arrow selects text, Alt/Ctrl/Meta+Arrow are
-    // the platform's word/line jumps, and hijacking them would break editing inside a cell.
-    // Enter keeps its Shift pairing — Shift+Enter is the protocol's "go back".
-    const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
-    const backward = (e.key === 'Enter' && e.shiftKey) || (e.key === 'ArrowUp' && plain)
-    const forward = (e.key === 'Enter' && !e.shiftKey) || (e.key === 'ArrowDown' && plain)
+    // Enter's ONLY modifier is Shift (the direction toggle); arrows take none at all —
+    // Shift+Arrow selects text and Alt/Ctrl/Meta+Arrow are the platform's word/line jumps,
+    // and hijacking either would break editing inside a cell. Ctrl/Cmd+Enter never reaches
+    // here (the chord above consumed it), but Alt+Enter would without the guard.
+    const chorded = e.ctrlKey || e.metaKey || e.altKey
+    const plainArrow = !chorded && !e.shiftKey
+    const backward =
+      (e.key === 'Enter' && e.shiftKey && !chorded) || (e.key === 'ArrowUp' && plainArrow)
+    const forward =
+      (e.key === 'Enter' && !e.shiftKey && !chorded) || (e.key === 'ArrowDown' && plainArrow)
     if (!backward && !forward) return
     e.preventDefault() // Enter inside a scope ADVANCES — it must not implicit-submit
-    const cells = Array.from(scope.querySelectorAll<HTMLElement>('[data-entry-cell]'))
+    // focus() on a disabled element silently no-ops — skip those cells, don't stall on them.
+    const cells = Array.from(scope.querySelectorAll<HTMLElement>('[data-entry-cell]')).filter(
+      (cell) => !cell.matches(':disabled'),
+    )
     const index = cells.indexOf(e.currentTarget)
     if (index === -1) return
     if (forward && index === cells.length - 1) {
@@ -136,7 +149,10 @@ export default function AmountInput({
         selectPending.current = true // re-armed on EVERY focus, so every click-in selects
         setFocused(true)
       }}
-      onMouseDown={() => {
+      onMouseDown={(e) => {
+        // Left button only: a right-click opens the context menu without moving the caret,
+        // so it must leave the pending left click's selection alone.
+        if (e.button !== 0) return
         // A focusing click's mousedown fires BEFORE focus, so the guard survives it; a click
         // on an ALREADY-focused field disarms here, before its own mouseup places the caret.
         if (document.activeElement === inputRef.current) selectPending.current = false
@@ -146,7 +162,7 @@ export default function AmountInput({
         // collapses the selection focus just applied. Swallowing that one mouseup keeps
         // type-to-replace working for mouse users; the NEXT click (field already focused)
         // positions the caret normally — a spreadsheet's click-then-click-to-edit.
-        if (selectPending.current) {
+        if (e.button === 0 && selectPending.current) {
           e.preventDefault()
           selectPending.current = false
         }
