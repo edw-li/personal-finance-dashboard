@@ -28,10 +28,6 @@ class Account(Base):
     parent_account_id: Mapped[int | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="SET NULL"), default=None
     )
-    # Where the wizard's balance suggestion for this account comes from (spec 2026-08-21
-    # §5.2): "portfolio:<account-label>" or "vesting:unvested". Dashboard-only and
-    # user-owned — the importer never reads or writes it (same posture as is_component).
-    suggest_source: Mapped[str | None] = mapped_column(String(200), default=None)
 
 
 class NetWorthSnapshot(Base):

@@ -1,15 +1,11 @@
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# The comp router owns the vest calendar; the suggestion chips borrow its unvested tile
-# rather than minting a second copy of the math (taxes.py imports `_employer_bars` on the
-# same precedent).
-from app.api.comp import _unvested_value
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
@@ -24,23 +20,15 @@ from app.schemas.net_worth import (
     MonthBalancesOut,
     MonthUpsert,
     MonthUpsertResult,
-    SuggestionOut,
-    SuggestionsOut,
     SummaryOut,
     TimeseriesOut,
 )
 from app.services.money import mom_pct, quantize_money, require_first_of_month
 from app.services.net_worth_calc import group_totals_for, load_balance_matrix, net_worth_for
-from app.services.portfolio_calc import allocation, fold_transactions, load_portfolio
 
 router = APIRouter(
     prefix="/net-worth", tags=["net-worth"], dependencies=[Depends(get_current_user)]
 )
-
-# Patchable account columns whose EXPLICIT null is a clear rather than a no-op — i.e. the
-# nullable ones. Every other patchable column is NOT NULL, so "name": null must never
-# reach the ORM as a NULL write (see update_account).
-NULLABLE_ACCOUNT_FIELDS = frozenset({"suggest_source"})
 
 
 @router.get("/accounts", response_model=list[AccountOut])
@@ -95,14 +83,12 @@ async def update_account(
     account_id: int, body: AccountUpdate, db: AsyncSession = Depends(get_db)
 ) -> Account:
     account = await _get_account(db, account_id)
-    # Drop explicit nulls on the NOT NULL columns: "name": null is a no-op request, not a
-    # write of NULL. The nullable ones are tri-state (the spending net_pay precedent) —
-    # exclude_unset is model_fields_set, so an omitted field is left alone while a
-    # provided null falls through below and writes None = clear.
+    # Every patchable account column is NOT NULL, so an explicit null is always a no-op
+    # request rather than a write of NULL: "name": null must never reach the ORM.
     updates = {
         field: value
         for field, value in body.model_dump(exclude_unset=True).items()
-        if value is not None or field in NULLABLE_ACCOUNT_FIELDS
+        if value is not None
     }
     new_name = updates.get("name")
     if new_name is not None and not slugify(new_name):
@@ -320,81 +306,3 @@ async def put_month(
         updated=updated,
         unchanged=unchanged,
     )
-
-
-PORTFOLIO_KIND = "portfolio:"
-VESTING_KIND = "vesting:unvested"
-
-
-@router.get("/suggestions", response_model=SuggestionsOut)
-async def suggestions(db: AsyncSession = Depends(get_db)) -> SuggestionsOut:
-    """Advisory 'now' values for accounts with a `suggest_source` mapping (spec §5.2).
-
-    Read-only and never authoritative: the wizard offers them as Apply chips on the anchor
-    month only — a backfill of March must not be handed today's balances. A mapping that
-    cannot be resolved becomes a WARNING naming the account, never a 500 and never a silent
-    skip, so a stale label is visible instead of quietly costing the user their chip.
-    """
-    mapped = list(
-        (
-            await db.execute(
-                select(Account)
-                .where(Account.is_active, Account.suggest_source.is_not(None))
-                .order_by(Account.sort_order, Account.id)
-            )
-        ).scalars()
-    )
-    if not mapped:
-        # The common case (nothing mapped yet): answer without touching the portfolio or
-        # the vest calendar at all.
-        return SuggestionsOut(suggestions=[], warnings=[])
-
-    # Both sides are computed AT MOST ONCE for the whole payload, however many accounts map
-    # to them — the wizard asks for this on every anchor-month load.
-    buckets: dict[str, Decimal] = {}
-    if any(account.suggest_source.startswith(PORTFOLIO_KIND) for account in mapped):
-        securities, txns, latest, _history, _dividends = await load_portfolio(
-            db, with_history=False, with_dividends=False
-        )
-        buckets = {
-            label: value
-            for label, value, _holdings in allocation(
-                fold_transactions(txns), securities, latest, "account"
-            )
-        }
-    unvested = (
-        await _unvested_value(db)
-        if any(account.suggest_source == VESTING_KIND for account in mapped)
-        else None
-    )
-
-    out: list[SuggestionOut] = []
-    warnings: list[str] = []
-    for account in mapped:
-        source = account.suggest_source
-        if source.startswith(PORTFOLIO_KIND):
-            label = source[len(PORTFOLIO_KIND) :]
-            value = buckets.get(label)
-            if value is None:
-                warnings.append(f"{account.name}: no holdings under portfolio label '{label}'")
-                continue
-        elif source == VESTING_KIND:
-            value = unvested
-            if value is None:
-                warnings.append(f"{account.name}: vesting schedule has no priceable value")
-                continue
-        else:
-            # Unreachable through the API (AccountUpdate validates the shape) — this is the
-            # hand-edited-row branch, degraded like comp.py degrades an unschedulable grant.
-            warnings.append(f"{account.name}: unrecognized suggestion source '{source}'")
-            continue
-        out.append(
-            SuggestionOut(
-                account_id=account.id,
-                source=source,
-                # Both producers already quantize to 2dp; restated here so the wire contract
-                # is this endpoint's own promise rather than a borrowed one.
-                value=value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-            )
-        )
-    return SuggestionsOut(suggestions=out, warnings=warnings)
