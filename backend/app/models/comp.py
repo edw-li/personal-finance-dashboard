@@ -87,3 +87,24 @@ class RsuGrant(Base):
     # offer grant vests in tens (broker-verified 2026-08-21, spec §8.2).
     vest_quantum: Mapped[int] = mapped_column(default=1, server_default="1")
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class EsppOffering(Base):
+    """A ~24-month ESPP enrollment window: the subscription price fixed at its start.
+
+    Dashboard-only — the workbook has no offerings concept, so the importer never reads
+    or writes this table (rsu_grants' posture, pinned by test). Purchase periods link to
+    offerings BY DATE, never FK: a period's offering is the row with the greatest
+    offering_start <= period_start (espp_calc.plan_year_rows), so adding an offering
+    retroactively re-prices later periods with zero re-linking and a mid-cycle reset is
+    just another row.
+    """
+
+    __tablename__ = "espp_offerings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    offering_start: Mapped[date] = mapped_column(Date, unique=True)
+    # Numeric(14,5): the espp lot price family (espp_lots.subscription_price), NOT the
+    # app-wide 4dp — the two columns hold the same real-world number.
+    subscription_price: Mapped[Decimal] = mapped_column(Numeric(14, 5))
+    notes: Mapped[str | None] = mapped_column(Text)
