@@ -958,6 +958,53 @@ async def test_modeler_reports_mixed_when_only_one_slot_is_covered(auth_client, 
     assert body["quoted_at"] is not None  # a value fell back to the stored quote
 
 
+async def test_saving_a_derived_row_materializes_it_in_the_next_modeler_read(auth_client):
+    """The Save round trip the frontend performs (spec §8): POST a derived row's own body
+    verbatim, and the next read hands the same slot back stored, with an id."""
+    await create_period(
+        auth_client,
+        label="2025 H2",
+        period_start="2025-03-01",
+        period_end="2025-08-29",
+        semi_annual_base="94465",
+        contribution_pct="0.11",
+    )
+    params = {"subscription_price": "170.79", "purchase_fmv": "171", "year": "2026"}
+    derived = (await auth_client.get(MODELER, params=params)).json()["periods"][0]
+    assert (derived["stored"], derived["id"]) == (False, None)
+    assert derived["label"] == "Sep 2025–Feb 2026"  # the en dash IS the stored label
+    assert derived["period_start"] == "2025-09-01"
+    assert derived["period_end"] == "2026-02-27"  # the last weekday of Feb 2026
+
+    saved = await auth_client.post(
+        PERIODS,
+        json={
+            key: derived[key]
+            for key in (
+                "label",
+                "period_start",
+                "period_end",
+                "semi_annual_base",
+                "additional_payments",
+                "contribution_pct",
+            )
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    row = (await auth_client.get(MODELER, params=params)).json()["periods"][0]
+    assert row["stored"] is True
+    assert isinstance(row["id"], int)
+    assert row["id"] == saved.json()["id"]
+    assert row["label"] == "Sep 2025–Feb 2026"
+    assert row["period_start"] == "2025-09-01"
+    assert row["period_end"] == "2026-02-27"
+    assert row["semi_annual_base"] == "94465.00"
+    assert row["additional_payments"] == "0.00"
+    assert row["contribution_pct"] == "0.110000000"
+    assert row["shares"] == derived["shares"]  # same inputs, so materializing computes nothing new
+
+
 async def test_modeler_rejects_an_out_of_century_year(auth_client):
     await seed_real_periods(auth_client)
     resp = await auth_client.get(

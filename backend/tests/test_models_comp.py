@@ -149,6 +149,15 @@ async def test_espp_offering_roundtrip_and_unique_start(db):
     await db.rollback()
 
 
+async def test_espp_offering_subscription_price_must_be_positive(db):
+    # The API rejects <= 0 before this fires; the CHECK is what stops a hand-edited row
+    # from reaching run_modeler's division by the subscription price.
+    db.add(EsppOffering(offering_start=date(2023, 9, 1), subscription_price=Decimal("0")))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
 async def test_focal_year_unique(db):
     db.add(CompEvent(focal_year=2025, current_base=Decimal("1")))
     await db.commit()

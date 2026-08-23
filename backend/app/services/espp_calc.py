@@ -77,9 +77,9 @@ def last_weekday_of(year: int, month: int) -> date:
 
 @dataclass(frozen=True)
 class OfferingInfo:
-    """One espp_offerings row, as the router hands it over. Callers pass these sorted
-    ascending by offering_start — resolution takes the LAST one at or before a period's
-    start."""
+    """One espp_offerings row, as the router hands it over. Input order does not matter:
+    resolution takes the GREATEST offering_start at or before a period's start, and
+    offering_start is UNIQUE, so no tie can exist."""
 
     offering_start: date
     subscription_price: Decimal
@@ -93,6 +93,7 @@ class RowPlan:
     row (no covering offering, no quote, no override) — the router turns that into the
     422; run_modeler refuses it as a programming error."""
 
+    # Constructor invariant, relied on by every consumer: stored == (period_id is not None).
     period_id: int | None
     stored: bool
     label: str
@@ -116,10 +117,11 @@ def _resolve_subscription(
     offering provenance; a gap falls back to the quote; no quote leaves it unpriced."""
     if override is not None:
         return override, None
-    covering: OfferingInfo | None = None
-    for offering in offerings:
-        if offering.offering_start <= period_start:
-            covering = offering
+    covering = max(
+        (o for o in offerings if o.offering_start <= period_start),
+        key=lambda o: o.offering_start,
+        default=None,
+    )
     if covering is not None:
         return covering.subscription_price, covering.offering_start
     return latest_quote, None

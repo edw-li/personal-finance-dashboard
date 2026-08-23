@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Date, Numeric, String, Text
+from sqlalchemy import CheckConstraint, Date, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -101,6 +101,11 @@ class EsppOffering(Base):
     """
 
     __tablename__ = "espp_offerings"
+    # run_modeler DIVIDES by the subscription price; the API rejects <= 0, but nothing else
+    # stops a hand-edited row from reaching that division.
+    __table_args__ = (
+        CheckConstraint("subscription_price > 0", name="subscription_price_positive"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     offering_start: Mapped[date] = mapped_column(Date, unique=True)

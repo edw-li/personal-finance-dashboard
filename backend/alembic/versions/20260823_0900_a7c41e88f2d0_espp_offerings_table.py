@@ -30,6 +30,10 @@ def upgrade() -> None:
         sa.Column("offering_start", sa.Date(), nullable=False),
         sa.Column("subscription_price", sa.Numeric(precision=14, scale=5), nullable=False),
         sa.Column("notes", sa.Text(), nullable=True),
+        sa.CheckConstraint(
+            "subscription_price > 0",
+            name=op.f("ck_espp_offerings_subscription_price_positive"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_espp_offerings")),
         sa.UniqueConstraint("offering_start", name=op.f("uq_espp_offerings_offering_start")),
     )
