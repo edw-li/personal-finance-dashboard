@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import AppSetting, EsppLot, EsppPeriod, LatestPrice, Security
+from app.models import AppSetting, EsppLot, EsppOffering, EsppPeriod, LatestPrice, Security
 from app.schemas.espp import (
     LotIn,
     LotOut,
@@ -34,6 +34,9 @@ from app.schemas.espp import (
     ModelerOut,
     ModelerPeriodOut,
     ModelerTotalsOut,
+    OfferingIn,
+    OfferingOut,
+    OfferingUpdate,
     PeriodIn,
     PeriodOut,
     PeriodUpdate,
@@ -418,6 +421,77 @@ async def update_period(
 @router.delete("/periods/{period_id}", status_code=204)
 async def delete_period(period_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
     await db.delete(await _get_period(db, period_id))
+    await db.commit()
+    return Response(status_code=204)
+
+
+# --- offerings ---
+
+
+async def _get_offering(db: AsyncSession, offering_id: int) -> EsppOffering:
+    offering = await db.get(EsppOffering, offering_id)
+    if offering is None:
+        raise HTTPException(status_code=404, detail="espp offering not found")
+    return offering
+
+
+async def _require_free_offering_start(db: AsyncSession, start: date) -> None:
+    taken = (
+        (await db.execute(select(EsppOffering).where(EsppOffering.offering_start == start)))
+        .scalars()
+        .first()
+    )
+    if taken is not None:
+        raise HTTPException(
+            status_code=409, detail=f"espp offering starting {start.isoformat()} already exists"
+        )
+
+
+@router.get("/offerings", response_model=list[OfferingOut])
+async def list_offerings(db: AsyncSession = Depends(get_db)) -> list[EsppOffering]:
+    # Ascending offering_start — the resolution order plan_year_rows expects.
+    return list(
+        (await db.execute(select(EsppOffering).order_by(EsppOffering.offering_start))).scalars()
+    )
+
+
+@router.post("/offerings", response_model=OfferingOut, status_code=201)
+async def create_offering(body: OfferingIn, db: AsyncSession = Depends(get_db)) -> EsppOffering:
+    require_reasonable_date(body.offering_start, "offering_start")
+    price = _positive_price(body.subscription_price, "subscription_price")
+    await _require_free_offering_start(db, body.offering_start)
+    offering = EsppOffering(
+        offering_start=body.offering_start, subscription_price=price, notes=body.notes
+    )
+    db.add(offering)
+    await db.commit()
+    return offering
+
+
+@router.patch("/offerings/{offering_id}", response_model=OfferingOut)
+async def update_offering(
+    offering_id: IdPath, body: OfferingUpdate, db: AsyncSession = Depends(get_db)
+) -> EsppOffering:
+    offering = await _get_offering(db, offering_id)
+    provided = body.model_dump(exclude_unset=True)
+    start = _merged(provided, "offering_start", offering.offering_start)
+    require_reasonable_date(start, "offering_start")
+    raw_price = _merged(provided, "subscription_price", offering.subscription_price)
+    price = _positive_price(raw_price, "subscription_price")
+    if start != offering.offering_start:
+        await _require_free_offering_start(db, start)
+    # Every raise is behind us — mutate only now (update_lot's posture).
+    offering.offering_start = start
+    offering.subscription_price = price
+    if "notes" in provided:
+        offering.notes = provided["notes"]  # explicit null clears (nullable column)
+    await db.commit()
+    return offering
+
+
+@router.delete("/offerings/{offering_id}", status_code=204)
+async def delete_offering(offering_id: IdPath, db: AsyncSession = Depends(get_db)) -> Response:
+    await db.delete(await _get_offering(db, offering_id))
     await db.commit()
     return Response(status_code=204)
 

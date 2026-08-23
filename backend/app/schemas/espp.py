@@ -82,6 +82,29 @@ class LotsOut(BaseModel):
     lots: list[LotOut]
 
 
+class OfferingIn(BaseModel):
+    offering_start: date
+    subscription_price: Decimal
+    notes: str | None = None
+
+
+class OfferingUpdate(BaseModel):
+    # offering_start / subscription_price are NOT NULL: send a value or omit (an explicit
+    # null is a no-op). notes is the nullable one — its explicit null CLEARS.
+    offering_start: date | None = None
+    subscription_price: Decimal | None = None
+    notes: str | None = None
+
+
+class OfferingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    offering_start: date
+    subscription_price: Decimal
+    notes: str | None
+
+
 class PeriodIn(BaseModel):
     label: str = Field(min_length=1, max_length=60)
     period_start: date

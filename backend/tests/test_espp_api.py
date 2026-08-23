@@ -20,6 +20,7 @@ from app.models import AppSetting, EsppLot, EsppPeriod, LatestPrice, Security
 
 LOTS = "/api/v1/espp/lots"
 PERIODS = "/api/v1/espp/periods"
+OFFERINGS = "/api/v1/espp/offerings"
 MODELER = "/api/v1/espp/modeler"
 
 D = Decimal
@@ -548,6 +549,53 @@ async def test_patch_period_404_and_delete_404(auth_client):
     assert (await auth_client.delete(f"{PERIODS}/99999999999")).status_code == 422
 
 
+# --- offerings ---
+
+
+async def test_offerings_crud_roundtrip(auth_client):
+    created = await auth_client.post(
+        OFFERINGS,
+        json={"offering_start": "2023-09-01", "subscription_price": "48.509", "notes": "first"},
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["subscription_price"] == "48.50900"  # 5dp — the lot price family
+    assert body["notes"] == "first"
+
+    dup = await auth_client.post(
+        OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "1"}
+    )
+    assert dup.status_code == 409
+
+    listed = await auth_client.get(OFFERINGS)
+    assert [row["offering_start"] for row in listed.json()] == ["2023-09-01"]
+
+    patched = await auth_client.patch(
+        f"{OFFERINGS}/{body['id']}", json={"subscription_price": "50", "notes": None}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["subscription_price"] == "50.00000"
+    assert patched.json()["notes"] is None  # explicit null CLEARS the nullable column
+
+    gone = await auth_client.delete(f"{OFFERINGS}/{body['id']}")
+    assert gone.status_code == 204
+    assert (await auth_client.get(OFFERINGS)).json() == []
+
+
+async def test_offering_validation(auth_client):
+    bad_price = await auth_client.post(
+        OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "0"}
+    )
+    assert bad_price.status_code == 422
+    assert "subscription_price must be positive" in bad_price.json()["detail"]
+    bad_date = await auth_client.post(
+        OFFERINGS, json={"offering_start": "1850-01-01", "subscription_price": "1"}
+    )
+    assert bad_date.status_code == 422
+    missing = await auth_client.patch(f"{OFFERINGS}/999", json={"notes": "x"})
+    assert missing.status_code == 404
+
+
 # --- modeler ---
 
 
@@ -770,4 +818,12 @@ async def test_espp_endpoints_require_auth(client):
     assert (await client.post(PERIODS, json=period_payload())).status_code == 401
     assert (await client.patch(f"{PERIODS}/1", json={"label": "x"})).status_code == 401
     assert (await client.delete(f"{PERIODS}/1")).status_code == 401
+    assert (await client.get(OFFERINGS)).status_code == 401
+    assert (
+        await client.post(
+            OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "1"}
+        )
+    ).status_code == 401
+    assert (await client.patch(f"{OFFERINGS}/1", json={"notes": "x"})).status_code == 401
+    assert (await client.delete(f"{OFFERINGS}/1")).status_code == 401
     assert (await client.get(MODELER)).status_code == 401
