@@ -495,21 +495,6 @@ def _unvested_shares(grants: list[RsuGrant], today: date) -> int:
     return total
 
 
-async def _unvested_value(db: AsyncSession) -> Decimal | None:
-    """The /vesting-schedule `unvested_value` tile computed standalone, for cross-router
-    callers that want the number without the payload (net-worth's suggestion chips import
-    it the way taxes imports `_employer_bars`).
-
-    Null in exactly the cases the tile is null — no employer quote to price the shares
-    with — and 0.00, not null, when everything granted has already vested: that is a
-    known value, not a missing one."""
-    _ticker, latest_price, _quoted_at = await _espp_quote(db)
-    if latest_price is None:
-        return None
-    grants = list((await db.execute(select(RsuGrant))).scalars())
-    return _vest_value(latest_price, _unvested_shares(grants, product_today()))
-
-
 @router.get("/vesting-schedule", response_model=VestingScheduleOut)
 async def vesting_schedule(db: AsyncSession = Depends(get_db)) -> VestingScheduleOut:
     # One clock for the whole payload (list_grants' note): every `is_past` flag, the grant

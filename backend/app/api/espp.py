@@ -458,7 +458,8 @@ async def _require_free_offering_start(db: AsyncSession, start: date) -> None:
 
 @router.get("/offerings", response_model=list[OfferingOut])
 async def list_offerings(db: AsyncSession = Depends(get_db)) -> list[EsppOffering]:
-    # Ascending offering_start — the resolution order plan_year_rows expects.
+    # Ascending offering_start: display order, and the modeler's first-purchase-year
+    # math reads offerings[0] as the earliest (resolution itself is order-free).
     return list(
         (await db.execute(select(EsppOffering).order_by(EsppOffering.offering_start))).scalars()
     )
