@@ -7,6 +7,7 @@ import type {
   EsppLotsResponse,
   EsppModelerOut,
   EsppModelerPeriod,
+  EsppOfferingOut,
   EsppPeriodOut,
 } from '../types/api'
 import EsppPage from './EsppPage'
@@ -18,28 +19,40 @@ vi.mock('../api/espp', () => ({
   createLot: vi.fn(),
   updateLot: vi.fn(),
   deleteLot: vi.fn(),
-  fetchPeriods: vi.fn(),
+  fetchOfferings: vi.fn(),
+  createOffering: vi.fn(),
+  updateOffering: vi.fn(),
+  deleteOffering: vi.fn(),
   createPeriod: vi.fn(),
   updatePeriod: vi.fn(),
   deletePeriod: vi.fn(),
   fetchModeler: vi.fn(),
 }))
+// The offerings panel's "use close" chip reads the employer's daily bars — one lazy call
+// off the lots payload's ticker.
+vi.mock('../api/prices', () => ({
+  fetchPriceHistory: vi.fn(),
+}))
 import {
   createLot,
+  createOffering,
   createPeriod,
   deleteLot,
+  deleteOffering,
   deletePeriod,
   fetchLots,
   fetchModeler,
-  fetchPeriods,
+  fetchOfferings,
   updateLot,
+  updateOffering,
   updatePeriod,
 } from '../api/espp'
+import { fetchPriceHistory } from '../api/prices'
 
 // --- fixtures -------------------------------------------------------------------------
-// The two modeler periods and the priced lot are the sheet's own numbers (plan §Workbook
-// reference, sanctioned for golden fixtures). The SOLD rows are invented: no real lot has
-// ever been sold, and the badge branch still has to be pinned.
+// The priced lot is the sheet's own numbers (plan §Workbook reference, sanctioned for
+// golden fixtures). The SOLD rows are invented: no real lot has ever been sold, and the
+// badge branch still has to be pinned.
 
 function lot(over: Partial<EsppLotOut> = {}): EsppLotOut {
   return {
@@ -119,77 +132,95 @@ function lotsResponse(over: Partial<EsppLotsResponse> = {}): EsppLotsResponse {
   }
 }
 
-const febPeriod: EsppPeriodOut = {
+// The 2023 enrollment: one offering covering both 2024 periods, at the 5dp price the
+// lots carry.
+const septOffering: EsppOfferingOut = {
   id: 1,
-  label: 'Feb 2026',
-  period_start: '2025-08-16',
-  period_end: '2026-02-15',
-  semi_annual_base: '81000.00',
+  offering_start: '2023-09-01',
+  subscription_price: '48.50900',
+  notes: null,
+}
+
+// The STORED half of the 2024 plan — what the modeler's PATCH path writes back.
+const storedPeriod: EsppPeriodOut = {
+  id: 1,
+  label: '1H24',
+  period_start: '2023-09-01',
+  period_end: '2024-02-29',
+  semi_annual_base: '60000.00',
   additional_payments: '0.00',
   contribution_pct: '0.140000000',
 }
-const augPeriod: EsppPeriodOut = {
-  id: 2,
-  label: 'Aug 2026',
-  period_start: '2026-02-16',
-  period_end: '2026-08-15',
-  semi_annual_base: '94465.00',
-  additional_payments: '0.00',
-  contribution_pct: '0.110000000',
-}
 
-const febChain: EsppModelerPeriod = {
-  ...febPeriod,
-  eligible_earnings: '81000.00',
-  contribution: '11340.00',
-  available: '11340.00',
-  purchase_price: '145.18',
-  shares_before_limit: '78',
+// Two rows, one of each kind: a stored period and the derived slot-filler that finishes
+// the year (id null, stored false — it materializes only when its cells are saved).
+const storedRow: EsppModelerPeriod = {
+  ...storedPeriod,
+  stored: true,
+  subscription_price: '48.50900',
+  offering_start: '2023-09-01',
+  eligible_earnings: '60000.00',
+  contribution: '8400.00',
+  available: '8400.00',
+  purchase_price: '41.23265',
+  shares_before_limit: '203',
   unused_25k: '25000.00',
-  max_shares_25k: '146',
+  max_shares_25k: '515',
   over_limit: false,
-  shares: '78',
-  cost: '11324.04',
-  carry_forward_out: '15.96',
+  shares: '203',
+  cost: '8370.22',
+  carry_forward_out: '29.78',
   refund: '0.00',
-  value_25k: '13321.62',
+  value_25k: '9847.00',
 }
-const augChain: EsppModelerPeriod = {
-  ...augPeriod,
-  eligible_earnings: '94465.00',
-  contribution: '10391.15',
-  available: '10407.11',
-  purchase_price: '145.18',
-  shares_before_limit: '71',
-  unused_25k: '11678.38',
-  max_shares_25k: '68',
+const derivedRow: EsppModelerPeriod = {
+  id: null,
+  stored: false,
+  label: 'Mar–Aug 2024',
+  period_start: '2024-03-01',
+  period_end: '2024-08-30',
+  semi_annual_base: '60000.00',
+  additional_payments: '0.00',
+  contribution_pct: '0.140000000',
+  subscription_price: '48.50900',
+  offering_start: '2023-09-01',
+  eligible_earnings: '60000.00',
+  contribution: '8412.00',
+  available: '8441.78',
+  purchase_price: '41.50000',
+  shares_before_limit: '203',
+  unused_25k: '15153.00',
+  max_shares_25k: '187',
   over_limit: true,
-  shares: '68',
-  cost: '9872.24',
+  shares: '187',
+  cost: '7760.50',
   carry_forward_out: '0.00',
-  refund: '534.87',
-  value_25k: '11613.72',
+  refund: '681.28',
+  value_25k: '9070.13',
 }
 
 function modelerResponse(over: Partial<EsppModelerOut> = {}): EsppModelerOut {
   return {
-    year: 2026,
+    year: 2024,
     espp_ticker: 'NVDA',
+    // Legacy field, stale-tab armor only — the UI reads the two source fields below.
     price_source: 'latest_price',
+    subscription_source: 'offering',
+    fmv_source: 'latest_price',
     quoted_at: '2026-08-15T20:00:00Z',
-    // The echo is QUANTIZED, never the text that was sent: the prices come back at the
-    // espp 5dp and the carry-forward at money's 2dp, exactly as the backend pins them
-    // (backend/tests/test_espp_api.py, the golden chain — "170.79000" / "171.00000" /
-    // "0.00"). The knobs seed from these strings, so the boxes show them verbatim.
-    subscription_price: '170.79000',
+    // null: nothing was overridden, so there is no echo — and the knob boxes are never
+    // seeded from it anyway (spec §6.2).
+    subscription_price: null,
     purchase_fmv: '171.00000',
     carry_forward: '0.00',
-    periods: [febChain, augChain],
+    available_years: [2024, 2025],
+    warnings: [],
+    periods: [storedRow, derivedRow],
     totals: {
-      total_25k_value: '24935.34',
-      out_of_pocket_cost: '21196.28',
-      fmv_of_shares: '24966.00',
-      remaining_25k: '64.66',
+      total_25k_value: '18917.13',
+      out_of_pocket_cost: '16130.72',
+      fmv_of_shares: '19200.00',
+      remaining_25k: '6082.87',
     },
     ...over,
   }
@@ -200,9 +231,9 @@ function totalsUsing(used: string): EsppModelerOut {
   return modelerResponse({
     totals: {
       total_25k_value: used,
-      out_of_pocket_cost: '21196.28',
-      fmv_of_shares: '24966.00',
-      remaining_25k: '64.66',
+      out_of_pocket_cost: '16130.72',
+      fmv_of_shares: '19200.00',
+      remaining_25k: '6082.87',
     },
   })
 }
@@ -225,20 +256,22 @@ const field = (label: string) => screen.getByLabelText(label) as HTMLInputElemen
 const type = (label: string, value: string) =>
   fireEvent.change(field(label), { target: { value } })
 
+// "Subscription price" labels BOTH the offerings form and the modeler knob, so the two
+// cards are addressed by their own headings and everything inside is scoped with `within`.
+const cardFor = (heading: RegExp) =>
+  screen.getByRole('heading', { name: heading }).closest('section') as HTMLElement
+const offeringsCard = () => cardFor(/Subscription offerings/)
+const modelerCard = () => cardFor(/Purchase modeler/)
+// A modeler row, found through the one label only it carries.
+const rowFor = (label: string) =>
+  screen.getByLabelText(`${label} semi-annual base`).closest('tr') as HTMLTableRowElement
+
 function fillNewLot() {
   type('Purchase date', '2026-02-27')
   type('Qualifying date', '2027-02-27')
   type('Shares', '100')
   type('Subscription', '150.00')
   type('FMV', '160.00')
-}
-
-function fillNewPeriod() {
-  type('Label', 'Feb 2027')
-  type('Period start', '2026-08-16')
-  type('Period end', '2027-02-15')
-  type('Semi-annual base', '99000')
-  type('Contribution %', '11')
 }
 
 const confirmSpy = vi.spyOn(window, 'confirm')
@@ -249,13 +282,20 @@ const renderPage = () => render(<EsppPage />, { wrapper: MemoryRouter })
 
 beforeEach(() => {
   vi.mocked(fetchLots).mockResolvedValue(lotsResponse())
-  vi.mocked(fetchPeriods).mockResolvedValue([febPeriod, augPeriod])
+  vi.mocked(fetchOfferings).mockResolvedValue([septOffering])
   vi.mocked(fetchModeler).mockResolvedValue(modelerResponse())
+  vi.mocked(fetchPriceHistory).mockResolvedValue({
+    ticker: 'NVDA',
+    points: [{ d: '2023-09-01', c: '48.509' }],
+  })
   vi.mocked(createLot).mockResolvedValue(qualifiedLot)
   vi.mocked(updateLot).mockResolvedValue(qualifiedLot)
   vi.mocked(deleteLot).mockResolvedValue(undefined)
-  vi.mocked(createPeriod).mockResolvedValue(febPeriod)
-  vi.mocked(updatePeriod).mockResolvedValue(febPeriod)
+  vi.mocked(createOffering).mockResolvedValue(septOffering)
+  vi.mocked(updateOffering).mockResolvedValue(septOffering)
+  vi.mocked(deleteOffering).mockResolvedValue(undefined)
+  vi.mocked(createPeriod).mockResolvedValue(storedPeriod)
+  vi.mocked(updatePeriod).mockResolvedValue(storedPeriod)
   vi.mocked(deletePeriod).mockResolvedValue(undefined)
   confirmSpy.mockReturnValue(true)
 })
@@ -563,6 +603,206 @@ describe('EsppPage — lots', () => {
     expect(screen.getByText('$10,720.49')).toBeTruthy()
     expect(field('Notes').value).toBe('half-typed lot')
   })
+
+  it('prefills subscription and qualifying date on purchase-date entry', async () => {
+    renderPage()
+    await screen.findByText('$10,720.49')
+    // The offerings feed is what the prefill reads — wait for it to have landed.
+    await waitFor(() => expect(vi.mocked(fetchOfferings)).toHaveBeenCalledTimes(1))
+
+    type('Purchase date', '2024-02-29')
+
+    // The covering offering's price, verbatim at 5dp (kind="plain", no money echo).
+    expect(field('Subscription').value).toBe('48.50900')
+    // §423: the later of offering start + 2y (2025-09-01) and purchase + 1y (2025-02-28).
+    expect(field('Qualifying date').value).toBe('2025-09-01')
+
+    // Prefill, not authority: an edited box is never re-written by a second date change.
+    type('Subscription', '50')
+    type('Purchase date', '2024-03-01')
+    expect(field('Subscription').value).toBe('50')
+    expect(field('Qualifying date').value).toBe('2025-09-01')
+  })
+
+  it('prefills NEITHER box when no offering covers the purchase date', async () => {
+    renderPage()
+    await screen.findByText('$10,720.49')
+    await waitFor(() => expect(vi.mocked(fetchOfferings)).toHaveBeenCalledTimes(1))
+
+    // Before the earliest enrollment (2023-09-01), so nothing covers it — and spec §6.4 is
+    // "no covering offering → no prefill", for the qualifying date too. purchase + 1y alone
+    // is only the §423 LOWER bound, so filling it here would hand the user an optimistically
+    // early date computed as if it were the answer.
+    type('Purchase date', '2023-01-15')
+
+    expect(field('Subscription').value).toBe('')
+    expect(field('Qualifying date').value).toBe('')
+  })
+})
+
+describe('EsppPage — offerings', () => {
+  it('renders the three sections in order: lots, offerings, modeler', async () => {
+    renderPage()
+    const lots = await screen.findByRole('heading', { name: /^Lots/ })
+    const offerings = screen.getByRole('heading', { name: /Subscription offerings/ })
+    const modeler = screen.getByRole('heading', { name: /Purchase modeler/ })
+
+    // Offerings sit BETWEEN the lots and the modeler they price (spec §5).
+    const following = Node.DOCUMENT_POSITION_FOLLOWING
+    expect(lots.compareDocumentPosition(offerings) & following).toBeTruthy()
+    expect(offerings.compareDocumentPosition(modeler) & following).toBeTruthy()
+  })
+
+  it('lists each offering with its coverage window', async () => {
+    vi.mocked(fetchOfferings).mockResolvedValue([
+      septOffering,
+      { id: 2, offering_start: '2025-09-02', subscription_price: '167.02000', notes: 'reset' },
+    ])
+    renderPage()
+    await screen.findByRole('button', { name: 'Edit offering from Sep 1, 2023' })
+    const card = offeringsCard()
+
+    // 5dp prices, verbatim — never a 2dp currency echo over a Numeric(14,5) column.
+    expect(within(card).getByText('48.50900')).toBeTruthy()
+    expect(within(card).getByText('167.02000')).toBeTruthy()
+    // The first offering is closed by the next one; the last runs its two years out.
+    expect(within(card).getByText('→ Sep 2, 2025')).toBeTruthy()
+    expect(within(card).getByText('through Sep 2, 2027')).toBeTruthy()
+  })
+
+  it('offers the close-on-date chip and applies it only on click', async () => {
+    renderPage()
+    const heading = await screen.findByRole('heading', { name: /Subscription offerings/ })
+    const card = heading.closest('section') as HTMLElement
+    fireEvent.change(within(card).getByLabelText('Offering start'), {
+      target: { value: '2023-09-01' },
+    })
+    const chip = await within(card).findByText(/close on/)
+    expect(chip.textContent).toContain('48.509')
+    const priceBox = within(card).getByLabelText('Subscription price') as HTMLInputElement
+    expect(priceBox.value).toBe('') // never auto-applied
+    fireEvent.click(within(card).getByRole('button', { name: /Use the/ }))
+    expect(priceBox.value).toBe('48.509')
+  })
+
+  it('never asks for bars without an employer ticker, and offers no chip', async () => {
+    vi.mocked(fetchLots).mockResolvedValue(lotsResponse({ espp_ticker: null }))
+    renderPage()
+    // The bars are a LAZY call off the lots payload's ticker, so wait for that payload.
+    await screen.findByText(
+      'No ESPP ticker configured — set the espp_ticker setting to price these lots.',
+    )
+    const card = offeringsCard()
+
+    // No ticker named, nothing to ask for: the chip's whole source is that one call.
+    expect(vi.mocked(fetchPriceHistory)).not.toHaveBeenCalled()
+    fireEvent.change(within(card).getByLabelText('Offering start'), {
+      target: { value: '2023-09-01' },
+    })
+    expect(within(card).queryByText(/close on/)).toBeNull()
+  })
+
+  it('offers no chip when every bar is AFTER the typed start date', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: /Subscription offerings/ })
+    await waitFor(() => expect(vi.mocked(fetchPriceHistory)).toHaveBeenCalledTimes(1))
+    const card = offeringsCard()
+
+    // The suggestion is the last close ON OR BEFORE the date, and the fixture's only bar is
+    // the day AFTER — so there is nothing to suggest, and no later bar is offered in its
+    // place (a close from after the enrollment is not the price that enrollment fixed).
+    fireEvent.change(within(card).getByLabelText('Offering start'), {
+      target: { value: '2023-08-31' },
+    })
+    expect(within(card).queryByText(/close on/)).toBeNull()
+  })
+
+  it('posts a canonical price, returns the caret to the start date and re-runs the model', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: /Subscription offerings/ })
+    const section = offeringsCard()
+
+    fireEvent.change(within(section).getByLabelText('Offering start'), {
+      target: { value: '2025-09-02' },
+    })
+    fireEvent.change(within(section).getByLabelText('Subscription price'), {
+      target: { value: '$167.02' },
+    })
+    fireEvent.change(within(section).getByLabelText('Offering notes'), {
+      target: { value: 'reset' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add offering' }))
+
+    await waitFor(() => expect(vi.mocked(createOffering)).toHaveBeenCalledTimes(1))
+    // Typed and clicked, never blurred: the belt at submit()'s read site is what keeps a
+    // "$" out of a Decimal column.
+    expect(vi.mocked(createOffering).mock.calls[0][0]).toEqual({
+      offering_start: '2025-09-02',
+      subscription_price: '167.02',
+      notes: 'reset',
+    })
+    // Spec §5.1: focus lands on the emptied form's first box, and it is emptied AFTER.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(section).getByLabelText('Offering start')),
+    )
+    expect((within(section).getByLabelText('Offering start') as HTMLInputElement).value).toBe('')
+    // An offering re-prices every period after it, so the chain is re-run.
+    await waitFor(() => expect(vi.mocked(fetchOfferings)).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
+  })
+
+  it('edits an offering through PATCH and deletes one after a confirm', async () => {
+    renderPage()
+    await screen.findByRole('button', { name: 'Edit offering from Sep 1, 2023' })
+    const section = offeringsCard()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit offering from Sep 1, 2023' }))
+    const priceBox = within(section).getByLabelText('Subscription price') as HTMLInputElement
+    expect(priceBox.value).toBe('48.50900')
+    fireEvent.change(priceBox, { target: { value: '48.51' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save offering' }))
+
+    await waitFor(() => expect(vi.mocked(updateOffering)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateOffering).mock.calls[0][0]).toBe(1)
+    expect(vi.mocked(updateOffering).mock.calls[0][1]).toEqual({
+      offering_start: '2023-09-01',
+      subscription_price: '48.51',
+      notes: null,
+    })
+
+    confirmSpy.mockReturnValue(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete offering from Sep 1, 2023' }))
+    expect(vi.mocked(deleteOffering)).not.toHaveBeenCalled()
+
+    confirmSpy.mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete offering from Sep 1, 2023' }))
+    await waitFor(() => expect(vi.mocked(deleteOffering)).toHaveBeenCalledWith(1))
+  })
+
+  it('renders an offering 409 verbatim', async () => {
+    vi.mocked(createOffering).mockRejectedValue(
+      new ApiError('an espp offering starting 2023-09-01 already exists', 409),
+    )
+    renderPage()
+    await screen.findByRole('heading', { name: /Subscription offerings/ })
+    const section = offeringsCard()
+
+    fireEvent.change(within(section).getByLabelText('Offering start'), {
+      target: { value: '2023-09-01' },
+    })
+    fireEvent.change(within(section).getByLabelText('Subscription price'), {
+      target: { value: '48.50900' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add offering' }))
+
+    expect(
+      await screen.findByText('an espp offering starting 2023-09-01 already exists'),
+    ).toBeTruthy()
+    // The typed row survives its own rejection.
+    expect(
+      (within(section).getByLabelText('Subscription price') as HTMLInputElement).value,
+    ).toBe('48.50900')
+  })
 })
 
 describe('EsppPage — modeler', () => {
@@ -570,92 +810,311 @@ describe('EsppPage — modeler', () => {
     renderPage()
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledWith({}))
 
-    expect(await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')).toBeTruthy()
+    // Blank knobs resolved to the offerings + the latest quote, and the line says so.
+    expect(
+      await screen.findByText(
+        'subscription from your offerings · FMV from the latest quote (as of Aug 15, 2026)',
+      ),
+    ).toBeTruthy()
 
-    // Per-period chain (server values).
-    expect(screen.getByText('$11,324.04')).toBeTruthy()
-    expect(screen.getByText('$534.87')).toBeTruthy()
-    expect(screen.getByText('$13,321.62')).toBeTruthy()
-    expect(screen.getByText('$11,613.72')).toBeTruthy()
-    // Only the August period breaches the limit.
+    // Per-period chain (server values), and the derived row's own badge.
+    expect(screen.getByText('$8,370.22')).toBeTruthy()
+    expect(screen.getByText('$9,847.00')).toBeTruthy()
+    expect(screen.getByText('$681.28')).toBeTruthy()
+    expect(screen.getByText('$9,070.13')).toBeTruthy()
+    expect(screen.getByText('derived')).toBeTruthy()
+    // Only the second period breaches the limit.
     expect(screen.getAllByText('Over limit')).toHaveLength(1)
 
-    // The gauge: 24935.34 / 25000 = 99.74%, and "remaining" is the SERVER's number.
+    // The gauge: 18917.13 / 25000 = 75.67%, and "remaining" is the SERVER's number.
     const meter = screen.getByRole('meter')
-    expect(meter.getAttribute('aria-valuenow')).toBe('24935.34')
+    expect(meter.getAttribute('aria-valuenow')).toBe('18917.13')
     expect(meter.getAttribute('aria-valuemin')).toBe('0')
     expect(meter.getAttribute('aria-valuemax')).toBe('25000')
     const fill = meter.querySelector('.gauge-fill') as HTMLElement
-    expect(fill.style.width).toBe('99.74%')
-    expect(screen.getByText('$24,935.34 used')).toBeTruthy()
-    expect(screen.getByText('$64.66 left')).toBeTruthy()
+    expect(fill.style.width).toBe('75.67%')
+    expect(screen.getByText('$18,917.13 used')).toBeTruthy()
+    expect(screen.getByText('$6,082.87 left')).toBeTruthy()
   })
 
-  it('recalculates with the typed knobs', async () => {
+  it('does not seed the knob boxes from the modeler echo', async () => {
+    vi.mocked(fetchModeler).mockResolvedValue(
+      // Even with an echo to seed FROM, the boxes stay empty: blank IS the smart default,
+      // and a seeded box would pin next year's run to this year's prices (spec §6.2).
+      modelerResponse({ subscription_price: '48.50900', carry_forward: '125.00' }),
+    )
     renderPage()
-    await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')
+    await screen.findByRole('meter')
+    const card = modelerCard()
 
-    // The knobs seed from the response echo — the server's QUANTIZED strings, not the
-    // "170.79" that was sent (5dp prices, 2dp carry-forward). The two 5dp prices are
-    // kind="plain" and stand verbatim, which is what makes the re-run below send them back
-    // unchanged; the 2dp carry-forward is genuinely money and shows the money echo.
-    expect(field('Subscription price').value).toBe('170.79000')
-    expect(field('Purchase FMV').value).toBe('171.00000')
-    expect(field('Carry-forward').value).toBe('$0.00')
+    expect((within(card).getByLabelText('Subscription price') as HTMLInputElement).value).toBe('')
+    expect((within(card).getByLabelText('Purchase FMV') as HTMLInputElement).value).toBe('')
+    expect((within(card).getByLabelText('Carry-forward') as HTMLInputElement).value).toBe('')
+  })
 
-    type('Carry-forward', '25')
-    fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }))
+  it('shows per-row subscription provenance', async () => {
+    renderPage()
+    await screen.findByRole('meter')
+    const row = rowFor('1H24')
+
+    // The 5dp price the row was chained at, verbatim, and which offering set it.
+    expect(within(row).getByText('48.50900')).toBeTruthy()
+    expect(within(row).getByText('Sep 1, 2023 offering')).toBeTruthy()
+    expect(within(row).getByText('Sep 1, 2023 – Feb 29, 2024')).toBeTruthy()
+  })
+
+  it('saves a dirty stored row through updatePeriod and re-runs the model', async () => {
+    renderPage()
+    const base = await screen.findByLabelText('1H24 semi-annual base')
+    fireEvent.change(base, { target: { value: '65000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+    await waitFor(() =>
+      expect(updatePeriod).toHaveBeenCalledWith(1, {
+        label: '1H24',
+        period_start: '2023-09-01',
+        period_end: '2024-02-29',
+        semi_annual_base: '65000',
+        additional_payments: '0.00',
+        contribution_pct: '0.14', // "14" at human scale, shifted back to the stored fraction
+      }),
+    )
+    // Save success re-runs the model; blank knobs stay omitted from the params.
+    await waitFor(() => expect(vi.mocked(fetchModeler).mock.calls.length).toBeGreaterThan(1))
+    expect(vi.mocked(createPeriod)).not.toHaveBeenCalled()
+  })
+
+  it('materializes a derived row through createPeriod with its derived label and dates', async () => {
+    renderPage()
+    const pct = await screen.findByLabelText('Mar–Aug 2024 contribution percent')
+    fireEvent.change(pct, { target: { value: '15' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+    await waitFor(() =>
+      expect(createPeriod).toHaveBeenCalledWith({
+        label: 'Mar–Aug 2024',
+        period_start: '2024-03-01',
+        period_end: '2024-08-30',
+        semi_annual_base: '60000.00',
+        additional_payments: '0.00',
+        contribution_pct: '0.15',
+      }),
+    )
+    // Only the touched row is written — the stored one was never dirty.
+    expect(vi.mocked(updatePeriod)).not.toHaveBeenCalled()
+  })
+
+  it('says the chain is stale while a cell is dirty, and stops once it is saved', async () => {
+    renderPage()
+    const base = await screen.findByLabelText('1H24 semi-annual base')
+    // Nothing is dirty on arrival, so nothing claims to be stale.
+    expect(screen.queryByText(/unsaved edits/)).toBeNull()
+
+    fireEvent.change(base, { target: { value: '65000' } })
+    expect(
+      screen.getByText(
+        '1 period has unsaved edits — the chain below is stale until you save & recalculate.',
+      ),
+    ).toBeTruthy()
+    // The chain columns are NOT recomputed behind the note — they stay the server's.
+    expect(screen.getByText('$8,370.22')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+    await waitFor(() => expect(vi.mocked(updatePeriod)).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.queryByText(/unsaved edits/)).toBeNull())
+  })
+
+  it('leaves an untouched table alone and just re-runs the chain', async () => {
+    renderPage()
+    await screen.findByRole('meter')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(updatePeriod)).not.toHaveBeenCalled()
+    expect(vi.mocked(createPeriod)).not.toHaveBeenCalled()
+  })
+
+  it('recalculates with the typed knobs, omitting the blank ones', async () => {
+    renderPage()
+    await screen.findByRole('meter')
+
+    fireEvent.change(within(modelerCard()).getByLabelText('Carry-forward'), {
+      target: { value: '25' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
 
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
-    // The seeded boxes go back out exactly as they came in: a re-run with an untouched
-    // knob is the same query, and the server re-quantizes its own output to itself.
+    // The blanks travel as '' and the client drops them (src/api/espp.ts) — that IS the
+    // offerings-drive-the-price path.
     expect(vi.mocked(fetchModeler).mock.calls[1][0]).toEqual({
-      subscriptionPrice: '170.79000',
-      purchaseFmv: '171.00000',
+      subscriptionPrice: '',
+      purchaseFmv: '',
       carryForward: '25',
     })
     // The lots table is a sibling component: a modeler refetch never touches it.
     expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(1)
   })
 
-  it('passes blank knobs through for the client to omit (falling back to the quote)', async () => {
+  it('year chips call the modeler with the picked year', async () => {
     renderPage()
-    await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')
+    await screen.findByRole('meter')
 
-    type('Subscription price', '')
-    type('Purchase FMV', '')
-    fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }))
-
+    fireEvent.click(screen.getByRole('button', { name: '2025' }))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
     expect(vi.mocked(fetchModeler).mock.calls[1][0]).toEqual({
       subscriptionPrice: '',
       purchaseFmv: '',
-      carryForward: '0.00',
+      carryForward: '',
+      year: 2025,
     })
   })
 
-  it('never lets the echo seed overwrite a knob typed while the first load is in flight', async () => {
-    // A promise this test settles by hand: the knobs are on screen for the WHOLE of the
-    // first load, so the seed has to lose to anything typed into them meanwhile.
-    let resolve!: (value: EsppModelerOut) => void
-    vi.mocked(fetchModeler).mockReturnValue(
-      new Promise<EsppModelerOut>((res) => {
-        resolve = res
+  it('reset deletes a stored row after confirm and re-runs', async () => {
+    renderPage()
+    await screen.findByRole('meter')
+
+    confirmSpy.mockReturnValue(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Reset 1H24 to derived values' }))
+    expect(vi.mocked(deletePeriod)).not.toHaveBeenCalled()
+
+    confirmSpy.mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Reset 1H24 to derived values' }))
+    await waitFor(() => expect(vi.mocked(deletePeriod)).toHaveBeenCalledWith(1))
+    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
+    // A derived row has nothing stored to delete, so it is offered no Reset at all.
+    expect(
+      screen.queryByRole('button', { name: 'Reset Mar–Aug 2024 to derived values' }),
+    ).toBeNull()
+  })
+
+  it('bounds the contribution in the box’s own vocabulary, not the fraction’s', async () => {
+    renderPage()
+    const pct = await screen.findByLabelText('1H24 contribution percent')
+
+    fireEvent.change(pct, { target: { value: '140' } }) // 14% typed as a fraction's worth
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+
+    // NOT the server's "contribution_pct must be between 0 and 1": this box holds 14 for
+    // 14%, so the stored fraction's sentence would call a good 14 out of range.
+    expect(
+      await screen.findByText('1H24: contribution % must be between 0 and 100'),
+    ).toBeTruthy()
+    expect(vi.mocked(updatePeriod)).not.toHaveBeenCalled()
+
+    // The guard is a range, not a suspicion: the whole 100 is a legal contribution.
+    fireEvent.change(pct, { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+    await waitFor(() => expect(vi.mocked(updatePeriod)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updatePeriod).mock.calls[0][1].contribution_pct).toBe('1')
+  })
+
+  it('renders a period save 409 verbatim, and keeps the edit', async () => {
+    vi.mocked(updatePeriod).mockRejectedValue(
+      new ApiError("espp period '1H24' already exists", 409),
+    )
+    renderPage()
+    const base = await screen.findByLabelText('1H24 semi-annual base')
+    fireEvent.change(base, { target: { value: '65000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+
+    expect(await screen.findByText("espp period '1H24' already exists")).toBeTruthy()
+    // The typed cell stands — the edits are NOT cleared on a failure, so the retry writes
+    // what the user is still looking at, and the row still reads as dirty.
+    expect((screen.getByLabelText('1H24 semi-annual base') as HTMLInputElement).value).toBe(
+      '$65,000.00',
+    )
+    expect(screen.getByText(/1 period has unsaved edits/)).toBeTruthy()
+    // ONE reconcile refetch, and no more: a failure re-reads the server rather than trusting
+    // the table, because a sibling write in the same batch may have landed (see the partial
+    // save test below). The chain that comes back is the server's, not the typed one.
+    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('$8,370.22')).toBeTruthy()
+  })
+
+  it('refetches to reconcile the ids when only PART of a multi-row save lands', async () => {
+    // The stored row's PATCH fails; the derived row's POST (the default mock) succeeds.
+    vi.mocked(updatePeriod).mockRejectedValueOnce(
+      new ApiError('espp period 1H24 could not be saved', 500),
+    )
+    renderPage()
+    const storedBase = await screen.findByLabelText('1H24 semi-annual base')
+    fireEvent.change(storedBase, { target: { value: '65000' } })
+    fireEvent.change(screen.getByLabelText('Mar–Aug 2024 semi-annual base'), {
+      target: { value: '61000' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+
+    // The failure is the server's own sentence, verbatim...
+    expect(await screen.findByText('espp period 1H24 could not be saved')).toBeTruthy()
+    await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
+    // ...but Promise.all only rejects on the FIRST failure: that POST still materialized a
+    // period, and the row on screen still says `id: null`. Without this refetch the next
+    // save POSTs the same label again and 409s forever.
+    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
+    // The failed row keeps its typed text for the retry (keyed by the id it already has).
+    expect((screen.getByLabelText('1H24 semi-annual base') as HTMLInputElement).value).toBe(
+      '$65,000.00',
+    )
+  })
+
+  it('names an overridden subscription price in the provenance, year and row', async () => {
+    renderPage()
+    await screen.findByRole('meter')
+    // The NEXT run is the overridden one: a knob price wins for every period, so the server
+    // answers with no covering offering on any row.
+    vi.mocked(fetchModeler).mockResolvedValueOnce(
+      modelerResponse({
+        subscription_source: 'override',
+        subscription_price: '55',
+        periods: [
+          { ...storedRow, subscription_price: '55.00000', offering_start: null },
+          { ...derivedRow, subscription_price: '55.00000', offering_start: null },
+        ],
+      }),
+    )
+
+    fireEvent.change(within(modelerCard()).getByLabelText('Subscription price'), {
+      target: { value: '55' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
+
+    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(fetchModeler).mock.calls[1][0]).toEqual({
+      subscriptionPrice: '55',
+      purchaseFmv: '',
+      carryForward: '',
+    })
+    // The year's line names the override; the FMV half still resolved to the quote.
+    expect(
+      await screen.findByText(
+        'custom subscription price · FMV from the latest quote (as of Aug 15, 2026)',
+      ),
+    ).toBeTruthy()
+    // And per row: offering_start is null, so the sub-line has to say WHICH null this is —
+    // the knob, not the "latest quote" fallback a row without an offering otherwise gets.
+    expect(within(rowFor('1H24')).getByText('override')).toBeTruthy()
+    expect(within(rowFor('1H24')).getByText('55.00000')).toBeTruthy()
+  })
+
+  it('renders server warnings in the advisory register, not as an error', async () => {
+    vi.mocked(fetchModeler).mockResolvedValue(
+      modelerResponse({
+        subscription_source: 'mixed',
+        warnings: ['no offering covers Mar–Aug 2024; used the latest NVDA quote'],
       }),
     )
     renderPage()
-    await screen.findByText('$10,720.49')
 
-    type('Subscription price', '200')
-    resolve(modelerResponse())
-
-    await waitFor(() => expect(screen.getByRole('meter')).toBeTruthy())
-    // kind="plain", so what was typed is what is shown — no "$200.00" over a 5dp knob.
-    expect(field('Subscription price').value).toBe('200')
-    // The untouched knobs still take the echo (the 2dp carry-forward is money, and shows
-    // the money echo of it).
-    expect(field('Purchase FMV').value).toBe('171.00000')
-    expect(field('Carry-forward').value).toBe('$0.00')
+    const warning = await screen.findByText(
+      'no offering covers Mar–Aug 2024; used the latest NVDA quote',
+    )
+    expect(warning.className).toContain('espp-warning')
+    // Advisory, not a failure: no banner, and the chain is on screen.
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('meter')).toBeTruthy()
+    expect(
+      screen.getByText(
+        'subscription mixed — offerings where they cover, latest quote elsewhere · FMV from the latest quote (as of Aug 15, 2026)',
+      ),
+    ).toBeTruthy()
   })
 
   it('lets only the NEWEST of two overlapping runs land', async () => {
@@ -663,16 +1122,16 @@ describe('EsppPage — modeler', () => {
     const fast = deferred<EsppModelerOut>()
     vi.mocked(fetchModeler)
       .mockResolvedValueOnce(modelerResponse()) // the mount
-      .mockReturnValueOnce(slow.promise) // the Recalculate
-      .mockReturnValueOnce(fast.promise) // the period delete's re-run
+      .mockReturnValueOnce(slow.promise) // the 2025 chip
+      .mockReturnValueOnce(fast.promise) // the 2024 chip
     renderPage()
-    await screen.findByText('$24,935.34 used')
+    await screen.findByText('$18,917.13 used')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }))
+    // The primary is disabled while a run is in flight; the year chips are not, so they
+    // are what puts two runs on the wire at once.
+    fireEvent.click(screen.getByRole('button', { name: '2025' }))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
-    // The Recalculate button is disabled while it is busy, so the SECOND run comes from
-    // the other thing that re-runs the chain: a period changing under it.
-    fireEvent.click(screen.getByRole('button', { name: 'Delete period Aug 2026' }))
+    fireEvent.click(screen.getByRole('button', { name: '2024' }))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(3))
 
     fast.resolve(totalsUsing('22222.22'))
@@ -681,8 +1140,8 @@ describe('EsppPage — modeler', () => {
     await act(async () => {
       slow.resolve(totalsUsing('11111.11'))
     })
-    // The older run answers LAST and must not roll the gauge back to the periods it was
-    // asked about — the seq ref, not the network, decides which chain is on screen.
+    // The older run answers LAST and must not roll the gauge back to the year it was asked
+    // about — the seq ref, not the network, decides which chain is on screen.
     expect(screen.queryByText('$11,111.11 used')).toBeNull()
     expect(screen.getByText('$22,222.22 used')).toBeTruthy()
   })
@@ -691,14 +1150,14 @@ describe('EsppPage — modeler', () => {
     const stale = deferred<EsppModelerOut>()
     vi.mocked(fetchModeler)
       .mockResolvedValueOnce(modelerResponse()) // the mount
-      .mockReturnValueOnce(stale.promise) // the Recalculate
-      .mockResolvedValueOnce(totalsUsing('22222.22')) // the period delete's re-run
+      .mockReturnValueOnce(stale.promise) // the 2025 chip
+      .mockResolvedValueOnce(totalsUsing('22222.22')) // the 2024 chip
     renderPage()
-    await screen.findByText('$24,935.34 used')
+    await screen.findByText('$18,917.13 used')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }))
+    fireEvent.click(screen.getByRole('button', { name: '2025' }))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete period Aug 2026' }))
+    fireEvent.click(screen.getByRole('button', { name: '2024' }))
     expect(await screen.findByText('$22,222.22 used')).toBeTruthy()
 
     await act(async () => {
@@ -712,59 +1171,7 @@ describe('EsppPage — modeler', () => {
     expect(screen.getByText('$22,222.22 used')).toBeTruthy()
   })
 
-  it('says "custom prices" when both prices came from the query', async () => {
-    vi.mocked(fetchModeler).mockResolvedValue(
-      modelerResponse({ price_source: 'params', quoted_at: null }),
-    )
-    renderPage()
-
-    expect(await screen.findByText('custom prices')).toBeTruthy()
-    expect(screen.queryByText(/using latest/)).toBeNull()
-  })
-
-  it('shows an empty state pointing at the periods section when the modeler 404s', async () => {
-    vi.mocked(fetchModeler).mockRejectedValue(new ApiError('no espp periods', 404))
-    vi.mocked(fetchPeriods).mockResolvedValue([])
-    renderPage()
-
-    expect(
-      await screen.findByText('no espp periods — add one below to run the $25,000 model.'),
-    ).toBeTruthy()
-    // No knobs to turn, and no half-drawn gauge.
-    expect(screen.queryByRole('meter')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Recalculate' })).toBeNull()
-    // Error isolation: the lots table is a separate load and is untouched.
-    expect(screen.getByText('$10,720.49')).toBeTruthy()
-  })
-
-  it('never renders the 404 sentence as "null" while the first period is being modeled', async () => {
-    const pending = deferred<EsppModelerOut>()
-    vi.mocked(fetchModeler)
-      .mockRejectedValueOnce(new ApiError('no espp periods', 404))
-      .mockReturnValueOnce(pending.promise)
-    vi.mocked(fetchPeriods).mockResolvedValue([])
-    renderPage()
-    await screen.findByText('no espp periods — add one below to run the $25,000 model.')
-
-    fillNewPeriod()
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
-
-    // The empty state renders `modelerError` as prose, so "missing" is cleared with it:
-    // the re-run the new period just caused shows the card, never "null — add one below".
-    expect(screen.queryByText(/null/)).toBeNull()
-    expect(screen.getByRole('button', { name: 'Modeling…' })).toBeTruthy()
-
-    await act(async () => {
-      pending.resolve(modelerResponse())
-    })
-    expect(screen.getByRole('meter')).toBeTruthy()
-    // First success of the page, so this is also where the knobs finally seed — verbatim,
-    // the box being kind="plain" over the server's 5dp string.
-    expect(field('Subscription price').value).toBe('170.79000')
-  })
-
-  it('keeps the lots table (and its typed row) when the modeler 422s', async () => {
+  it('keeps the lots table (and the knobs) when the modeler 422s', async () => {
     vi.mocked(fetchModeler).mockRejectedValue(
       new ApiError('no live price for NVDA; pass subscription_price and purchase_fmv', 422),
     )
@@ -777,180 +1184,18 @@ describe('EsppPage — modeler', () => {
     ).toBeTruthy()
     expect(screen.getByText('$10,720.49')).toBeTruthy()
     // The knobs stay on screen: typing prices into them IS the way out of this 422.
-    expect(screen.getByRole('button', { name: 'Recalculate' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Save & recalculate' })).toBeTruthy()
+    expect(screen.queryByRole('meter')).toBeNull()
   })
 
   it('does not remount the lots panel when the modeler reloads', async () => {
     renderPage()
-    await screen.findByText('using latest NVDA quote (as of Aug 15, 2026)')
+    await screen.findByRole('meter')
 
     type('Notes', 'half-typed lot')
-    fireEvent.click(screen.getByRole('button', { name: 'Recalculate' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
 
     expect(field('Notes').value).toBe('half-typed lot')
-  })
-})
-
-describe('EsppPage — periods', () => {
-  it('lists the stored periods with the contribution shown as a percent', async () => {
-    renderPage()
-
-    // Via the row action, not the label cell: the modeler's mini-table names the same
-    // periods, and only these buttons belong to this section alone.
-    expect(await screen.findByRole('button', { name: 'Edit period Feb 2026' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Edit period Aug 2026' })).toBeTruthy()
-    expect(screen.getByText('14.0%')).toBeTruthy()
-    expect(screen.getByText('11.0%')).toBeTruthy()
-    expect(screen.getByText('$81,000.00')).toBeTruthy()
-  })
-
-  it('posts a new period with the percent converted to a fraction, then refetches the model', async () => {
-    renderPage()
-    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
-
-    fillNewPeriod()
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-
-    await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(createPeriod).mock.calls[0][0]).toEqual({
-      label: 'Feb 2027',
-      period_start: '2026-08-16',
-      period_end: '2027-02-15',
-      semi_annual_base: '99000',
-      additional_payments: '0',
-      // Shifted, not divided: 11 / 100 is 0.11000000000000001 in binary.
-      contribution_pct: '0.11',
-    })
-    // The chain is a function of the periods, so it is refetched with the current knobs.
-    await waitFor(() => expect(vi.mocked(fetchPeriods)).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
-    expect(vi.mocked(fetchModeler).mock.calls[1][0]).toEqual({
-      subscriptionPrice: '170.79000',
-      purchaseFmv: '171.00000',
-      carryForward: '0.00',
-    })
-  })
-
-  it('puts the caret back on the label after a save', async () => {
-    renderPage()
-    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
-
-    fillNewPeriod()
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-
-    await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
-    // Both halves of onPeriodsChanged are awaited BEFORE the caret is read, or the claim
-    // below would be about a moment the reload had not reached yet.
-    await waitFor(() => expect(vi.mocked(fetchPeriods)).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
-    // Spec §5.1, the same ritual as the lots form above — and the period save also re-runs
-    // the modeler, so this pins that the chain's reload does not steal the caret back.
-    await waitFor(() => expect(document.activeElement).toBe(field('Label')))
-    expect(field('Label').value).toBe('')
-  })
-
-  it('edits a period with the full row shape and the pct shifted back', async () => {
-    renderPage()
-    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Edit period Feb 2026' }))
-    // 0.140000000 comes back as "14", not 14.000000000000002 — and the box is a
-    // kind="percent" AmountInput, so blurred it echoes "14%" (display rule §3.3).
-    expect(field('Contribution %').value).toBe('14%')
-    type('Contribution %', '12.5')
-    fireEvent.click(screen.getByRole('button', { name: 'Save period' }))
-
-    await waitFor(() => expect(vi.mocked(updatePeriod)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(updatePeriod).mock.calls[0][0]).toBe(1)
-    // A FULL row (Task 4 review M6's binding): whole-row validation 422s a delta PATCH
-    // against any stored field the form never touched.
-    expect(vi.mocked(updatePeriod).mock.calls[0][1]).toEqual({
-      label: 'Feb 2026',
-      period_start: '2025-08-16',
-      period_end: '2026-02-15',
-      semi_annual_base: '81000.00',
-      additional_payments: '0.00',
-      contribution_pct: '0.125',
-    })
-  })
-
-  it('answers a period that does not end after it starts before it reaches the server', async () => {
-    renderPage()
-    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
-
-    fillNewPeriod()
-    type('Period end', '2026-08-16') // the same day as the start — "after", not "on"
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-
-    expect(await screen.findByText('period_end must be after period_start')).toBeTruthy()
-    expect(vi.mocked(createPeriod)).not.toHaveBeenCalled()
-  })
-
-  it('bounds the contribution in the box’s own vocabulary, not the fraction’s', async () => {
-    renderPage()
-    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
-
-    fillNewPeriod()
-    type('Contribution %', '140') // 14% typed as a fraction's worth of percent
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-
-    // NOT the server's "contribution_pct must be between 0 and 1": this box is labelled
-    // "Contribution %" and holds 14 for 14%, so the stored fraction's sentence would call
-    // a perfectly good 14 out of range and let a 0.5 (half a percent) through unremarked.
-    expect(await screen.findByText('contribution % must be between 0 and 100')).toBeTruthy()
-    expect(vi.mocked(createPeriod)).not.toHaveBeenCalled()
-
-    // The guard is a range, not a suspicion: the whole 100 is a legal contribution.
-    type('Contribution %', '100')
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-    await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(createPeriod).mock.calls[0][0].contribution_pct).toBe('1')
-  })
-
-  it('refuses exponent notation in the contribution box, client-side', async () => {
-    renderPage()
-    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
-
-    fillNewPeriod()
-    type('Contribution %', '1e-3')
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-
-    // Not a case the server rescues: shiftPoint hands "1e-3" back untouched and
-    // Decimal("1e-3") is a perfectly legal 0.001, so a box that said a thousandth of a
-    // percent would be stored as a tenth of one, with no 422 on the round trip.
-    expect(await screen.findByText('contribution % must be a number')).toBeTruthy()
-    expect(vi.mocked(createPeriod)).not.toHaveBeenCalled()
-
-    // The same digits as a plain decimal are converted, not refused.
-    type('Contribution %', '0.001')
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-    await waitFor(() => expect(vi.mocked(createPeriod)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(createPeriod).mock.calls[0][0].contribution_pct).toBe('0.00001')
-  })
-
-  it('deletes a period after a confirm and refetches the model', async () => {
-    renderPage()
-    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete period Aug 2026' }))
-    await waitFor(() => expect(vi.mocked(deletePeriod)).toHaveBeenCalledWith(2))
-    await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
-    expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(1)
-  })
-
-  it('renders a period 409 verbatim', async () => {
-    vi.mocked(createPeriod).mockRejectedValue(
-      new ApiError("espp period 'Feb 2026' already exists", 409),
-    )
-    renderPage()
-    await screen.findByRole('button', { name: 'Edit period Feb 2026' })
-
-    fillNewPeriod()
-    type('Label', 'Feb 2026')
-    fireEvent.click(screen.getByRole('button', { name: 'Add period' }))
-
-    expect(await screen.findByText("espp period 'Feb 2026' already exists")).toBeTruthy()
-    expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(1)
   })
 })

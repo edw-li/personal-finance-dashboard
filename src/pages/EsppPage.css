@@ -101,6 +101,26 @@
   text-overflow: ellipsis;
 }
 
+/* Editable cells inside the modeler table — narrow boxes, table stays scannable. */
+.espp-cell .field-input {
+  width: 110px;
+}
+
+/* The dates under a period label and the provenance under its subscription price: a
+   second line inside the cell, not a paragraph. */
+.espp-period-dates {
+  display: block;
+  margin: 0;
+  font-size: 0.7rem;
+}
+
+/* Advisory register (net-worth-projection precedent): amber, not the error banner. */
+.espp-warning {
+  color: #c98500;
+}
+
+/* Year chips reuse the app's segmented control look; panels.css owns .segmented. */
+
 /* ── $25k gauge ────────────────────────────────────────────────────── */
 
 .gauge {

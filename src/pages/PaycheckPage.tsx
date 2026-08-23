@@ -575,7 +575,8 @@ export default function PaycheckPage() {
   const [breakdown, setBreakdown] = useState<PaycheckBreakdownOut | null>(null)
   const [breakdownError, setBreakdownError] = useState<string | null>(null)
   // The 404 branch is not a failure to recover from — it is "there is nothing to model
-  // yet", and its answer is the form below (EsppPage's `modelerMissing`).
+  // yet", so it gets its own flag rather than the error banner: an empty seed has no
+  // profile to break down, and the answer on screen is the form below, not a Retry.
   const [breakdownMissing, setBreakdownMissing] = useState(false)
   const [breakdownBusy, setBreakdownBusy] = useState(true)
   // An OBJECT, not a bare id: a fresh identity re-runs the load effect, so a write can
