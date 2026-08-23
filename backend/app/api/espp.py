@@ -41,7 +41,14 @@ from app.schemas.espp import (
     PeriodOut,
     PeriodUpdate,
 )
-from app.services.espp_calc import DISCOUNT, StoredPeriod, lot_metrics, run_modeler
+from app.services.espp_calc import (
+    DISCOUNT,
+    OfferingInfo,
+    StoredPeriod,
+    lot_metrics,
+    plan_year_rows,
+    run_modeler,
+)
 from app.services.money import (
     DATE_MAX,
     DATE_MIN,
@@ -246,7 +253,9 @@ async def _require_free_purchase_date(db: AsyncSession, purchase_date: date) -> 
 @router.get("/lots", response_model=LotsOut)
 async def list_lots(db: AsyncSession = Depends(get_db)) -> LotsOut:
     ticker, current_price, quoted_at = await _espp_quote(db)
-    today = date.today()  # the ONLY clock read in this module
+    # One of the module's two `date.today()` reads (the modeler's year default is the
+    # other); container-local by design (spec §9).
+    today = date.today()
     rows = (await db.execute(select(EsppLot).order_by(EsppLot.purchase_date, EsppLot.id))).scalars()
     return LotsOut(
         espp_ticker=ticker,
@@ -507,55 +516,48 @@ async def modeler(
     year: YearQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> ModelerOut:
-    """The sheet's what-if: one calendar year of periods chained against the 25k limit.
-
-    Nothing here is stored — the prices and the seed carry_forward are knobs. They
-    default to the espp ticker's latest quote, so the page opens on a live model.
+    """One calendar year chained against the 25k limit, rows planned by stored-wins /
+    derive-to-fill (spec 2026-08-23 §3.3, §5.2). Nothing here is stored; a derived row
+    materializes only when the user saves it. Knobs: blank subscription = per-period
+    offering resolution (quote fallback + warning); blank FMV = latest quote; blank
+    carry = 0. The old 404s are gone — derived rows always exist.
     """
-    rows = list(
+    stored = list(
         (
             await db.execute(select(EsppPeriod).order_by(EsppPeriod.period_end, EsppPeriod.id))
         ).scalars()
     )
-    if not rows:
-        raise HTTPException(status_code=404, detail="no espp periods")
-    # The limit is per calendar YEAR, keyed on period_end (a period that straddles New
-    # Year's counts against the year it PURCHASES in).
-    target_year = year if year is not None else max(row.period_end.year for row in rows)
-    selected = [row for row in rows if row.period_end.year == target_year]
-    if not selected:
-        # Same class as "no espp periods", narrowed: an explicitly requested year with
-        # nothing in it is a missing resource, not an empty-but-valid model.
-        raise HTTPException(status_code=404, detail=f"no espp periods in {target_year}")
-
+    offerings = list(
+        (await db.execute(select(EsppOffering).order_by(EsppOffering.offering_start))).scalars()
+    )
+    today = date.today()
+    target_year = year if year is not None else today.year
     ticker, latest_price, quoted_at = await _espp_quote(db)
-    from_params = subscription_price is not None and purchase_fmv is not None
-    if not from_params and latest_price is None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"no live price for {ticker or 'the espp ticker'}; "
-                "pass subscription_price and purchase_fmv"
-            ),
-        )
     # MODELER_PRICE_MAX_ABS, not the lot family's 10^9: these values are never stored, and
     # they DEFAULT to latest_prices.price — a 10^9 fence here would let the price job write
     # a quote that 422s a no-param GET. Lots keep 10^9, which is their real column limit.
-    subscription = _positive_price(
-        subscription_price if subscription_price is not None else latest_price,
-        "subscription_price",
-        MODELER_PRICE_MAX_ABS,
+    sub_override = (
+        None
+        if subscription_price is None
+        else _positive_price(subscription_price, "subscription_price", MODELER_PRICE_MAX_ABS)
     )
-    fmv = _positive_price(
-        purchase_fmv if purchase_fmv is not None else latest_price,
-        "purchase_fmv",
-        MODELER_PRICE_MAX_ABS,
+    fmv_override = (
+        None
+        if purchase_fmv is None
+        else _positive_price(purchase_fmv, "purchase_fmv", MODELER_PRICE_MAX_ABS)
     )
+    fmv = fmv_override if fmv_override is not None else latest_price
+    if fmv is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"no live price for {ticker or 'the espp ticker'}; pass purchase_fmv",
+        )
     carry = _non_negative_money(
         carry_forward if carry_forward is not None else ZERO, "carry_forward"
     )
 
-    result = run_modeler(
+    rows, warnings = plan_year_rows(
+        target_year,
         [
             StoredPeriod(
                 id=row.id,
@@ -566,31 +568,76 @@ async def modeler(
                 additional_payments=row.additional_payments,
                 contribution_pct=row.contribution_pct,
             )
-            for row in selected
+            for row in stored
         ],
-        subscription_price=subscription,
-        purchase_fmv=fmv,
-        carry_forward=carry,
+        [
+            OfferingInfo(
+                offering_start=row.offering_start, subscription_price=row.subscription_price
+            )
+            for row in offerings
+        ],
+        latest_price,
+        sub_override,
+    )
+    unpriced = [row.label for row in rows if row.subscription_price is None]
+    if unpriced:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"no offering covers {', '.join(unpriced)} and no live price for "
+                f"{ticker or 'the espp ticker'}; pass subscription_price"
+            ),
+        )
+
+    result = run_modeler(rows, purchase_fmv=fmv, carry_forward=carry)
+
+    # Year chips (spec §5.2): stored years ∪ offering-covered purchase years ∪ now/next.
+    years = {row.period_end.year for row in stored} | {today.year, today.year + 1}
+    if offerings:
+        first = offerings[0].offering_start
+        # An offering's first purchase: Sep–Dec starts buy next Feb; earlier starts buy
+        # within their own calendar year.
+        first_purchase_year = first.year + 1 if first.month >= 9 else first.year
+        years.update(range(first_purchase_year, today.year + 1))
+
+    sub_sources = {"offering" if row.offering_start is not None else "latest_price" for row in rows}
+    subscription_source = (
+        "override"
+        if sub_override is not None
+        else (sub_sources.pop() if len(sub_sources) == 1 else "mixed")
+    )
+    fmv_source = "override" if fmv_override is not None else "latest_price"
+    # Provenance, not data: the quote is only behind these numbers when a value actually
+    # fell back to it.
+    used_quote = fmv_override is None or (
+        sub_override is None and any(row.offering_start is None for row in rows)
     )
     return ModelerOut(
         year=target_year,
         espp_ticker=ticker,
-        price_source="params" if from_params else "latest_price",
-        # Provenance, not data: the quote is only behind these numbers when a price
-        # actually fell back to it.
-        quoted_at=None if from_params else quoted_at,
-        subscription_price=result.subscription_price,
+        price_source=(
+            "params" if sub_override is not None and fmv_override is not None else "latest_price"
+        ),
+        subscription_source=subscription_source,
+        fmv_source=fmv_source,
+        quoted_at=quoted_at if used_quote else None,
+        subscription_price=sub_override,
         purchase_fmv=result.purchase_fmv,
         carry_forward=result.carry_forward,
+        available_years=sorted(years),
+        warnings=warnings,
         periods=[
             ModelerPeriodOut(
-                id=row.period.id,
+                id=row.period.period_id,
+                stored=row.period.stored,
                 label=row.period.label,
                 period_start=row.period.period_start,
                 period_end=row.period.period_end,
                 semi_annual_base=row.period.semi_annual_base,
                 additional_payments=row.period.additional_payments,
                 contribution_pct=row.period.contribution_pct,
+                subscription_price=row.period.subscription_price,
+                offering_start=row.period.offering_start,
                 eligible_earnings=row.eligible_earnings,
                 contribution=row.contribution,
                 available=row.available,
