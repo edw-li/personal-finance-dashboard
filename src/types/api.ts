@@ -25,12 +25,6 @@ export interface AccountOut {
   is_active: boolean
   is_component: boolean
   parent_account_id: number | null
-  /**
-   * Where the wizard's balance suggestion for this account is computed from (spec §5.2):
-   * `portfolio:<account-label>` or `vesting:unvested`, null when unmapped. Dashboard-only
-   * and user-owned — the importer never writes it (the is_component posture).
-   */
-  suggest_source: string | null
 }
 
 export interface AccountCreate {
@@ -39,16 +33,6 @@ export interface AccountCreate {
   sort_order?: number
   is_component?: boolean
 }
-
-// suggest_source rides the same sparse PATCH: OMITTING it leaves the mapping alone, an
-// explicit null CLEARS it (the server tells the two apart by model_fields_set, and
-// JSON.stringify drops undefined but keeps null — so the difference survives the wire).
-export type AccountUpdate = Partial<
-  Pick<
-    AccountOut,
-    'name' | 'group' | 'sort_order' | 'is_active' | 'is_component' | 'suggest_source'
-  >
->
 
 export interface BalanceEntry {
   account_id: number
@@ -94,26 +78,6 @@ export interface MonthUpsertResult {
   created: number
   updated: number
   unchanged: number
-}
-
-/**
- * One computed "now" value for a mapped account (spec §5.2). `value` is a 2dp money
- * STRING like every other amount on the wire (pydantic serializes Decimal that way);
- * `source` echoes the account's suggest_source so the client needn't re-read the account.
- */
-export interface SuggestionOut {
-  account_id: number
-  source: string
-  value: string
-}
-
-export interface SuggestionsOut {
-  suggestions: SuggestionOut[]
-  /**
-   * One sentence per mapping that resolved to nothing, naming the account. Advisory: a
-   * broken mapping never fails the request and never silently disappears.
-   */
-  warnings: string[]
 }
 
 export interface CategoryOut {
