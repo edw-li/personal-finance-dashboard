@@ -22,6 +22,10 @@ Balance Suggestions (Settings mapping card + wizard Apply chips, shipped 2026-08
 - **Balance Suggestions: remove the entire feature** — Settings card, wizard chips, endpoint, `suggest_source` column (drop migration). Confirmed with the note that the adding migration never deployed.
 - **Profile suggestion chips on the base/% cells: out.** (The user removed a chips feature the same day; revisit only on request.)
 
+### Plan mechanics (user-provided, 2026-08-23, pre-implementation)
+
+Authoritative NVDA ESPP behavior, for tie-breaking during implementation: enrollment happens in the hire month or an official Feb/Aug enrollment period; contribution election is 1–25% of salary via payroll deduction; the **offering price is the closing price on the first trading day after the enrollment month** and holds for **up to two years spanning four purchase periods**; each purchase buys at a **15% discount on the lower of the offering price or the closing price on the last trading day of the purchase period**; the $25K annual limit caps shares per calendar year. This confirms the shipped chain math (`0.85 × min(sub, fmv)`, limit valued at the subscription price) and the date-containment resolution (an off-cycle hire-month offering is just a row with a non-Sep/Mar start). Note the "up to": an off-cycle offering ends at its 4th purchase, sooner than start + 24 months — the offerings table's coverage label (§6.1) is therefore approximate for off-cycle rows; display-only, accepted.
+
 ## 2. Data model — two migrations
 
 ### 2.1 `espp_offerings` (new)
@@ -117,7 +121,7 @@ Page order: **Lots → Subscription offerings → Purchase modeler.** `PeriodsPa
 
 ### 6.1 Offerings card
 
-Form: Offering start (date) · Subscription price (`AmountInput kind="plain"` — 5dp column, kind-scale rule) · Notes. Table: Start · Subscription price (5dp-faithful display, not `formatCurrency`) · Coverage — display-only client derivation: "→ {next offering start − 1 day}" or "through {start + 24 mo}" · Notes · Edit / Delete (confirm). Edit/carry-forward ergonomics follow the lots form patterns (focus-before-reset on save).
+Form: Offering start (date) · Subscription price (`AmountInput kind="plain"` — 5dp column, kind-scale rule) · Notes. Table: Start · Subscription price (5dp-faithful display, not `formatCurrency`) · Coverage — display-only client derivation: "→ {next offering start}" (reads "runs until the next offering starts") or "through {start + 24 mo}" · Notes · Edit / Delete (confirm). Edit/carry-forward ergonomics follow the lots form patterns (focus-before-reset on save).
 
 **"Use close" chip:** once a start date is entered, if the employer ticker is known (`LotsOut.espp_ticker`) the card lazily fetches `GET /prices/history/{ticker}?days=3650` (once per mount) and offers "close on {last bar ≤ date}: {price} — Use". A chip, never auto-applied; absent when the ticker is unset or no bar exists on/before the date.
 
