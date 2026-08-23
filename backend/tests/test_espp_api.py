@@ -740,6 +740,31 @@ async def test_modeler_422_when_no_offering_no_quote_and_no_subscription(auth_cl
     assert "pass subscription_price" in detail
 
 
+async def test_modeler_treats_a_non_positive_quote_as_no_quote(auth_client, db, priced_ticker):
+    """`run_modeler` DIVIDES by the subscription price (its documented boundary
+    precondition), so a 0 quote could only reach it as a 500. It degrades to "no quote"
+    instead and the 422s name the params that fix it — a GET still never rejects the
+    stored row itself, it just cannot model on it."""
+    latest = await db.get(LatestPrice, priced_ticker.id)
+    latest.price = D("0.0000")
+    await db.commit()
+    await seed_real_periods(auth_client)
+
+    resp = await auth_client.get(MODELER, params={"year": "2026"})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "no live price for NVDA; pass purchase_fmv"
+    # ... and with the FMV supplied, the unpriced ROWS are what is still missing.
+    rows_only = await auth_client.get(MODELER, params={"purchase_fmv": "171", "year": "2026"})
+    assert rows_only.status_code == 422, rows_only.text
+    assert "pass subscription_price" in rows_only.json()["detail"]
+    # Both params typed: nothing needs the quote, so the model runs.
+    priced = await auth_client.get(
+        MODELER, params={"subscription_price": "170.79", "purchase_fmv": "171", "year": "2026"}
+    )
+    assert priced.status_code == 200, priced.text
+    assert priced.json()["quoted_at"] is None
+
+
 async def test_modeler_runs_on_params_alone_without_any_ticker(auth_client):
     await seed_real_periods(auth_client)
     resp = await auth_client.get(

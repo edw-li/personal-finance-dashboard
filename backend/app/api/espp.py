@@ -533,6 +533,13 @@ async def modeler(
     today = date.today()
     target_year = year if year is not None else today.year
     ticker, latest_price, quoted_at = await _espp_quote(db)
+    if latest_price is not None and latest_price <= 0:
+        # run_modeler's documented precondition is a POSITIVE price (it divides by both
+        # the subscription price and the derived purchase price). A quote that cannot
+        # price a purchase reads as NO quote — the 422s below then name the param that
+        # fixes it, which is the honest answer and never a 500 on a GET. The typed knobs
+        # keep their own `_positive_price` fence.
+        latest_price, quoted_at = None, None
     # MODELER_PRICE_MAX_ABS, not the lot family's 10^9: these values are never stored, and
     # they DEFAULT to latest_prices.price — a 10^9 fence here would let the price job write
     # a quote that 422s a no-param GET. Lots keep 10^9, which is their real column limit.
