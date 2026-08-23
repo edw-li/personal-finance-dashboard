@@ -22,6 +22,7 @@ from app.models import (
     Account,
     AccountBalance,
     DividendPayment,
+    EsppOffering,
     LatestPrice,
     MonthlyCashflow,
     MonthlySpending,
@@ -971,3 +972,38 @@ async def test_importer_never_writes_account_suggest_source(db):
         await db.execute(select(Account.suggest_source).where(Account.slug == "checking"))
     ).scalar_one()
     assert stored == "portfolio:RH Taxable"
+
+
+def offering_row(row: EsppOffering) -> tuple:
+    """EVERY stored column, as grant_row above — an offerings column added later is
+    covered by the pin below without anyone editing it."""
+    return tuple(getattr(row, column.key) for column in EsppOffering.__table__.columns)
+
+
+async def test_importer_never_writes_espp_offerings(db):
+    """espp_offerings is dashboard-only (2026-08-23 spec §2.1, the rsu_grants posture):
+    the workbook has no offerings concept, so an import must neither create, update nor
+    delete a row."""
+    from app.importer.service import run_import
+
+    db.add(EsppOffering(offering_start=date(2023, 9, 1), subscription_price=Decimal("48.509")))
+    await db.commit()
+    before = {
+        row.id: offering_row(row) for row in (await db.execute(select(EsppOffering))).scalars()
+    }
+    assert len(before) == 1
+
+    for _ in range(2):
+        report = await run_import(build_workbook(), db, dry_run=False)
+        assert report.applied is True  # a blocked import would pin nothing
+
+    # populate_existing, or the identity map would hand back the pre-import objects and this
+    # would pass even if the import had rewritten every column (the dividends pin's note).
+    after = {
+        row.id: offering_row(row)
+        for row in (
+            await db.execute(select(EsppOffering).execution_options(populate_existing=True))
+        ).scalars()
+    }
+    assert after == before
+    assert all("espp_offerings" not in sheet.entities for sheet in report.sheets.values())
