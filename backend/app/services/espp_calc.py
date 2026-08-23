@@ -65,9 +65,6 @@ class StoredPeriod:
     contribution_pct: Decimal
 
 
-PeriodInputs = StoredPeriod  # transitional alias, removed in the modeler-rewrite task
-
-
 def last_weekday_of(year: int, month: int) -> date:
     """The last Mon–Fri of a month — the documented approximation of "last trading day"
     (spec 2026-08-23 §3.2). No NYSE holiday falls on the last weekday of Feb or Aug, and
@@ -215,7 +212,7 @@ def plan_year_rows(
 
 @dataclass(frozen=True)
 class PeriodResult:
-    period: PeriodInputs
+    period: RowPlan
     eligible_earnings: Decimal
     contribution: Decimal
     available: Decimal
@@ -241,7 +238,6 @@ class ModelerTotals:
 
 @dataclass(frozen=True)
 class ModelerResult:
-    subscription_price: Decimal
     purchase_fmv: Decimal
     carry_forward: Decimal
     periods: list[PeriodResult]
@@ -249,16 +245,18 @@ class ModelerResult:
 
 
 def run_modeler(
-    periods: list[PeriodInputs],
-    subscription_price: Decimal,
+    rows: list[RowPlan],
     purchase_fmv: Decimal,
     carry_forward: Decimal,
 ) -> ModelerResult:
     """The sheet's chained per-period model over ONE calendar year.
 
-    `periods` must already be filtered to that year and sorted by period_end — the chain
-    is order-dependent: each period spends the previous one's unspent contribution
-    (carry_forward) against what is left of the 25k limit (unused_25k).
+    The subscription price is PER ROW now — offerings resolve it per period (2026-08-23
+    spec §4), so a mid-cycle reset year chains two different prices. This is the day the
+    old "computed once, echoed per period" shape was kept for. purchase_fmv stays one
+    knob for the year, which keeps r31's every-share-at-the-last-FMV quirk a no-op by
+    construction. `rows` must already be the target year's, in chain order; every row
+    must be priced (the router 422s unpriced rows before calling).
 
     The two branches are the whole model. Under the limit, the leftover cash CARRIES into
     the next period; at or over it, the purchase is capped at `max_shares_25k` and the
@@ -267,28 +265,29 @@ def run_modeler(
     """
     unused = ANNUAL_LIMIT
     carry = carry_forward
-    # 0.85 x min(sub, fmv), rounded UP to a cent (r18). Both knobs are per-year what-ifs,
-    # so this is constant across the chain — computed once, echoed per period.
-    purchase_price = ceil2(DISCOUNT * min(subscription_price, purchase_fmv))
     results: list[PeriodResult] = []
-    for period in periods:
-        eligible = period.semi_annual_base + period.additional_payments
-        contribution = half_up2(eligible * period.contribution_pct)
+    for row in rows:
+        if row.subscription_price is None:
+            raise ValueError(f"unpriced row {row.label!r} reached run_modeler")
+        # 0.85 x min(sub, fmv), rounded UP to a cent (r18) — per period, per its offering.
+        purchase_price = ceil2(DISCOUNT * min(row.subscription_price, purchase_fmv))
+        eligible = row.semi_annual_base + row.additional_payments
+        contribution = half_up2(eligible * row.contribution_pct)
         available = contribution + carry
         shares_before_limit = floor_int(available / purchase_price)
-        max_shares = floor_int(unused / subscription_price)
+        max_shares = floor_int(unused / row.subscription_price)
         over_limit = shares_before_limit >= max_shares
         shares = min(shares_before_limit, max_shares)
         cost = ceil2(Decimal(shares) * purchase_price)
         # The 25k limit is valued at the SUBSCRIPTION price, never at the discounted
         # purchase price — that is what makes max_shares_25k bite before the cash does.
-        value_25k = half_up2(Decimal(shares) * subscription_price)
+        value_25k = half_up2(Decimal(shares) * row.subscription_price)
         # ONE expression for "what rolls into the next period": the reported
         # carry_forward_out and the chained `carry` must never be able to drift apart.
         carry_next = ZERO if over_limit else available - cost
         results.append(
             PeriodResult(
-                period=period,
+                period=row,
                 eligible_earnings=eligible,
                 contribution=contribution,
                 available=available,
@@ -310,7 +309,6 @@ def run_modeler(
     total_shares = sum(row.shares for row in results)
     total_value = half_up2(sum((row.value_25k for row in results), ZERO))
     return ModelerResult(
-        subscription_price=subscription_price,
         purchase_fmv=purchase_fmv,
         carry_forward=carry_forward,
         periods=results,
@@ -318,8 +316,7 @@ def run_modeler(
             total_25k_value=total_value,
             out_of_pocket_cost=half_up2(sum((row.cost for row in results), ZERO)),
             # r31 values EVERY share at the LAST period's FMV — a faithful sheet quirk
-            # that happens to be a no-op here, since one purchase_fmv knob drives the
-            # whole year. Kept as the documented shape for the day that changes.
+            # that stays a no-op while one purchase_fmv knob drives the whole year.
             fmv_of_shares=half_up2(Decimal(total_shares) * purchase_fmv),
             remaining_25k=half_up2(ANNUAL_LIMIT - total_value),
         ),

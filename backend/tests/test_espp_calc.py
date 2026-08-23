@@ -12,10 +12,13 @@ runs; only the endpoint reads `date.today()`.
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from app.models import EsppLot
 from app.services.espp_calc import (
     ANNUAL_LIMIT,
     OfferingInfo,
+    RowPlan,
     StoredPeriod,
     ceil2,
     floor_int,
@@ -42,17 +45,22 @@ def period(
     add: str = "0.00",
     start: date = date(2026, 1, 1),
     end: date = date(2026, 6, 30),
-) -> StoredPeriod:
+    sub: Decimal = SUB,
+) -> RowPlan:
     """Column-scale values, as the router hands them over: base/add Numeric(12,2),
-    contribution_pct Numeric(10,9)."""
-    return StoredPeriod(
-        id=id,
+    contribution_pct Numeric(10,9). `sub` defaults to the golden's single price, so the
+    chain tests below pin the same numbers they did before the price went per-row."""
+    return RowPlan(
+        period_id=id,
+        stored=True,
         label=label,
         period_start=start,
         period_end=end,
         semi_annual_base=D(base),
         additional_payments=D(add),
         contribution_pct=D(pct),
+        subscription_price=sub,
+        offering_start=None,
     )
 
 
@@ -116,10 +124,8 @@ def test_annual_limit_is_the_25k_ceiling_at_money_scale():
 
 
 def test_two_period_golden_chain_pins_every_intermediate():
-    result = run_modeler(
-        REAL_PERIODS, subscription_price=SUB, purchase_fmv=FMV, carry_forward=D("0.00")
-    )
-    assert result.subscription_price == SUB
+    result = run_modeler(REAL_PERIODS, purchase_fmv=FMV, carry_forward=D("0.00"))
+    assert all(row.period.subscription_price == SUB for row in result.periods)
     assert result.purchase_fmv == FMV
     assert result.carry_forward == D("0.00")
 
@@ -161,9 +167,7 @@ def test_two_period_golden_chain_pins_every_intermediate():
 
 
 def test_single_period_chain_and_the_carry_forward_seed():
-    zero_carry = run_modeler(
-        REAL_PERIODS[:1], subscription_price=SUB, purchase_fmv=FMV, carry_forward=D("0.00")
-    )
+    zero_carry = run_modeler(REAL_PERIODS[:1], purchase_fmv=FMV, carry_forward=D("0.00"))
     (only,) = zero_carry.periods
     assert only.available == D("11340.00")
     assert only.shares == 78
@@ -174,9 +178,7 @@ def test_single_period_chain_and_the_carry_forward_seed():
     assert zero_carry.totals.remaining_25k == D("11678.38")
 
     # The seed carry is spendable cash in the FIRST period and nowhere else.
-    seeded = run_modeler(
-        REAL_PERIODS[:1], subscription_price=SUB, purchase_fmv=FMV, carry_forward=D("100.00")
-    )
+    seeded = run_modeler(REAL_PERIODS[:1], purchase_fmv=FMV, carry_forward=D("100.00"))
     (funded,) = seeded.periods
     assert funded.available == D("11440.00")
     assert funded.shares == 78  # 79 shares would cost 11469.22 — still short
@@ -186,16 +188,11 @@ def test_single_period_chain_and_the_carry_forward_seed():
 
 def test_three_period_chain_decrements_unused_25k_cumulatively():
     periods = [
-        period(10, "P1", "10000.00", "0.100000000", end=date(2026, 3, 31)),
-        period(11, "P2", "10000.00", "0.100000000", end=date(2026, 7, 31)),
-        period(12, "P3", "10000.00", "0.100000000", end=date(2026, 11, 30)),
+        period(10, "P1", "10000.00", "0.100000000", end=date(2026, 3, 31), sub=D("100.00000")),
+        period(11, "P2", "10000.00", "0.100000000", end=date(2026, 7, 31), sub=D("100.00000")),
+        period(12, "P3", "10000.00", "0.100000000", end=date(2026, 11, 30), sub=D("100.00000")),
     ]
-    result = run_modeler(
-        periods,
-        subscription_price=D("100.00000"),
-        purchase_fmv=D("100.00000"),
-        carry_forward=D("0.00"),
-    )
+    result = run_modeler(periods, purchase_fmv=D("100.00000"), carry_forward=D("0.00"))
     p1, p2, p3 = result.periods
     assert [p.unused_25k for p in result.periods] == [
         D("25000.00"),
@@ -220,8 +217,7 @@ def test_three_period_chain_decrements_unused_25k_cumulatively():
 
 def test_over_limit_branch_swaps_carry_forward_for_a_refund():
     result = run_modeler(
-        [period(20, "rich", "400000.00", "0.100000000")],
-        subscription_price=D("100.00000"),
+        [period(20, "rich", "400000.00", "0.100000000", sub=D("100.00000"))],
         purchase_fmv=D("100.00000"),
         carry_forward=D("0.00"),
     )
@@ -241,8 +237,7 @@ def test_over_limit_triggers_on_equality_not_strict_excess():
     # shares_before_limit == max_shares_25k: the sheet's `>=` still refunds the change
     # instead of carrying it (a `>` here would report carry 50.00 / refund 0.00).
     result = run_modeler(
-        [period(21, "exact", "213000.00", "0.100000000")],
-        subscription_price=D("100.00000"),
+        [period(21, "exact", "213000.00", "0.100000000", sub=D("100.00000"))],
         purchase_fmv=D("100.00000"),
         carry_forward=D("0.00"),
     )
@@ -260,10 +255,9 @@ def test_an_over_limit_period_refunds_its_change_instead_of_funding_the_next_one
     # would be spent twice — once back to the employee, once in the next period.
     result = run_modeler(
         [
-            period(40, "over", "100000.00", "0.500000000", end=date(2026, 3, 31)),
-            period(41, "after", "10000.00", "0.100000000", end=date(2026, 9, 30)),
+            period(40, "over", "100000.00", "0.500000000", end=date(2026, 3, 31), sub=D("100")),
+            period(41, "after", "10000.00", "0.100000000", end=date(2026, 9, 30), sub=D("100")),
         ],
-        subscription_price=D("100.00000"),
         purchase_fmv=D("100.00000"),
         carry_forward=D("0.00"),
     )
@@ -295,10 +289,7 @@ def test_an_over_limit_period_refunds_its_change_instead_of_funding_the_next_one
 
 def test_purchase_price_takes_the_lower_of_subscription_and_fmv():
     lower_fmv = run_modeler(
-        REAL_PERIODS[:1],
-        subscription_price=D("170.79000"),
-        purchase_fmv=D("100.00000"),
-        carry_forward=D("0.00"),
+        REAL_PERIODS[:1], purchase_fmv=D("100.00000"), carry_forward=D("0.00")
     )
     assert lower_fmv.periods[0].purchase_price == D("85.00")  # CEIL2(0.85 x 100)
     # ... while the 25k valuation always runs on the SUBSCRIPTION price.
@@ -308,7 +299,6 @@ def test_purchase_price_takes_the_lower_of_subscription_and_fmv():
 def test_additional_payments_join_eligible_earnings():
     result = run_modeler(
         [period(30, "bonus", "81000.00", "0.140000000", add="9000.00")],
-        subscription_price=SUB,
         purchase_fmv=FMV,
         carry_forward=D("0.00"),
     )
@@ -318,12 +308,98 @@ def test_additional_payments_join_eligible_earnings():
 
 
 def test_empty_period_list_models_an_untouched_year():
-    result = run_modeler([], subscription_price=SUB, purchase_fmv=FMV, carry_forward=D("0.00"))
+    result = run_modeler([], purchase_fmv=FMV, carry_forward=D("0.00"))
     assert result.periods == []
     assert result.totals.total_25k_value == D("0.00")
     assert result.totals.out_of_pocket_cost == D("0.00")
     assert result.totals.fmv_of_shares == D("0.00")
     assert result.totals.remaining_25k == D("25000.00")
+
+
+def _plan(
+    label: str,
+    start: date,
+    end: date,
+    sub: str,
+    base: str = "60000",
+    additional: str = "0",
+    pct: str = "0.140000000",
+) -> RowPlan:
+    """A planned row carrying its OWN subscription price — what the planner hands the
+    modeler once offerings resolve per period."""
+    return RowPlan(
+        period_id=None,
+        stored=False,
+        label=label,
+        period_start=start,
+        period_end=end,
+        semi_annual_base=D(base),
+        additional_payments=D(additional),
+        contribution_pct=D(pct),
+        subscription_price=D(sub),
+        offering_start=None,
+    )
+
+
+def test_run_modeler_prices_each_period_at_its_own_subscription():
+    rows = [
+        _plan("H1", date(2025, 9, 1), date(2026, 2, 27), "48.509"),
+        _plan("H2", date(2026, 3, 1), date(2026, 8, 31), "120"),
+    ]
+    result = run_modeler(rows, purchase_fmv=D("180"), carry_forward=D("0"))
+    # 0.85 x min(sub, fmv), ROUNDUP to a cent — per row now.
+    assert result.periods[0].purchase_price == D("41.24")  # ceil2(0.85*48.509)
+    assert result.periods[1].purchase_price == D("102.00")  # ceil2(0.85*120)
+    # The 25k cap is valued at each period's OWN subscription price.
+    assert result.periods[0].max_shares_25k == 515  # floor(25000/48.509)
+    remaining = D("25000.00") - result.periods[0].value_25k
+    assert result.periods[1].max_shares_25k == int(remaining / D("120"))
+    # value_25k = shares x that period's subscription price (half_up2'd).
+    assert result.periods[0].value_25k == half_up2(D(result.periods[0].shares) * D("48.509"))
+
+
+def test_run_modeler_uniform_subscription_matches_the_old_single_knob_chain():
+    """Back-compat pin (spec §8): all-same-subscription rows reproduce the pre-offerings
+    chain byte for byte."""
+    rows = [
+        _plan(
+            "1H24", date(2023, 9, 1), date(2024, 2, 29), "170.79000",
+            base="60000", pct="0.140000000",
+        ),
+        _plan(
+            "2H24", date(2024, 3, 1), date(2024, 8, 30), "170.79000",
+            base="60000", pct="0.140000000",
+        ),
+    ]
+    result = run_modeler(rows, purchase_fmv=D("170.79000"), carry_forward=D("100.00"))
+    purchase_price = result.periods[0].purchase_price
+    assert purchase_price == D("145.18")  # ceil2(0.85 * 170.79)
+    first = result.periods[0]
+    assert first.contribution == D("8400.00")
+    assert first.available == D("8500.00")
+    assert first.shares == 58
+    assert first.cost == D("8420.44")
+    assert first.carry_forward_out == D("79.56")
+    assert result.totals.remaining_25k == D("25000.00") - result.totals.total_25k_value
+
+
+def test_run_modeler_refuses_an_unpriced_row():
+    row = RowPlan(
+        period_id=None,
+        stored=False,
+        label="H1",
+        period_start=date(2025, 9, 1),
+        period_end=date(2026, 2, 27),
+        semi_annual_base=D("1"),
+        additional_payments=D("0"),
+        contribution_pct=D("0.1"),
+        subscription_price=None,
+        offering_start=None,
+    )
+    # The router 422s an unpriced row long before here, so reaching the modeler with one
+    # is a programming error, not user data.
+    with pytest.raises(ValueError, match="unpriced row"):
+        run_modeler([row], purchase_fmv=D("1"), carry_forward=D("0"))
 
 
 # --- lot metrics ---

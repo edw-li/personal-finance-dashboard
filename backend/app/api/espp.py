@@ -38,7 +38,7 @@ from app.schemas.espp import (
     PeriodOut,
     PeriodUpdate,
 )
-from app.services.espp_calc import DISCOUNT, PeriodInputs, lot_metrics, run_modeler
+from app.services.espp_calc import DISCOUNT, StoredPeriod, lot_metrics, run_modeler
 from app.services.money import (
     DATE_MAX,
     DATE_MIN,
@@ -483,7 +483,7 @@ async def modeler(
 
     result = run_modeler(
         [
-            PeriodInputs(
+            StoredPeriod(
                 id=row.id,
                 label=row.label,
                 period_start=row.period_start,
