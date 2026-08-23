@@ -288,9 +288,7 @@ def test_an_over_limit_period_refunds_its_change_instead_of_funding_the_next_one
 
 
 def test_purchase_price_takes_the_lower_of_subscription_and_fmv():
-    lower_fmv = run_modeler(
-        REAL_PERIODS[:1], purchase_fmv=D("100.00000"), carry_forward=D("0.00")
-    )
+    lower_fmv = run_modeler(REAL_PERIODS[:1], purchase_fmv=D("100.00000"), carry_forward=D("0.00"))
     assert lower_fmv.periods[0].purchase_price == D("85.00")  # CEIL2(0.85 x 100)
     # ... while the 25k valuation always runs on the SUBSCRIPTION price.
     assert lower_fmv.periods[0].max_shares_25k == 146
@@ -363,12 +361,20 @@ def test_run_modeler_uniform_subscription_matches_the_old_single_knob_chain():
     chain byte for byte."""
     rows = [
         _plan(
-            "1H24", date(2023, 9, 1), date(2024, 2, 29), "170.79000",
-            base="60000", pct="0.140000000",
+            "1H24",
+            date(2023, 9, 1),
+            date(2024, 2, 29),
+            "170.79000",
+            base="60000",
+            pct="0.140000000",
         ),
         _plan(
-            "2H24", date(2024, 3, 1), date(2024, 8, 30), "170.79000",
-            base="60000", pct="0.140000000",
+            "2H24",
+            date(2024, 3, 1),
+            date(2024, 8, 30),
+            "170.79000",
+            base="60000",
+            pct="0.140000000",
         ),
     ]
     result = run_modeler(rows, purchase_fmv=D("170.79000"), carry_forward=D("100.00"))
