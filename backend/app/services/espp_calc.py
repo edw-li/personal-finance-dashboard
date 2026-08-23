@@ -19,8 +19,9 @@ Preconditions (enforced at the API boundary, not here): subscription_price > 0 a
 purchase_fmv > 0, so `purchase_price` is at least 0.01 and neither division can trap.
 """
 
+import calendar
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 ZERO = Decimal("0")
@@ -51,8 +52,9 @@ def _pct6(value: Decimal) -> Decimal:
 
 
 @dataclass(frozen=True)
-class PeriodInputs:
-    """One `espp_periods` row, as the router hands it over (already at column scale)."""
+class StoredPeriod:
+    """One `espp_periods` row, as the router hands it over (already at column scale) — the
+    PLANNER's input; `RowPlan` is the modeler's."""
 
     id: int
     label: str
@@ -61,6 +63,154 @@ class PeriodInputs:
     semi_annual_base: Decimal
     additional_payments: Decimal
     contribution_pct: Decimal
+
+
+PeriodInputs = StoredPeriod  # transitional alias, removed in the modeler-rewrite task
+
+
+def last_weekday_of(year: int, month: int) -> date:
+    """The last Mon–Fri of a month — the documented approximation of "last trading day"
+    (spec 2026-08-23 §3.2). No NYSE holiday falls on the last weekday of Feb or Aug, and
+    the date is derivation/display only."""
+    day = date(year, month, calendar.monthrange(year, month)[1])
+    while day.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
+        day -= timedelta(days=1)
+    return day
+
+
+@dataclass(frozen=True)
+class OfferingInfo:
+    """One espp_offerings row, as the router hands it over. Callers pass these sorted
+    ascending by offering_start — resolution takes the LAST one at or before a period's
+    start."""
+
+    offering_start: date
+    subscription_price: Decimal
+
+
+@dataclass(frozen=True)
+class RowPlan:
+    """One modeler row for the target year — a stored period verbatim, or a derived row
+    filling an empty half-year slot (stored=False, period_id=None; it materializes only
+    when the user saves it). subscription_price is None ONLY when nothing could price the
+    row (no covering offering, no quote, no override) — the router turns that into the
+    422; run_modeler refuses it as a programming error."""
+
+    period_id: int | None
+    stored: bool
+    label: str
+    period_start: date
+    period_end: date
+    semi_annual_base: Decimal
+    additional_payments: Decimal
+    contribution_pct: Decimal
+    subscription_price: Decimal | None
+    offering_start: date | None  # None = quote fallback or an override priced it
+
+
+def _resolve_subscription(
+    offerings: list[OfferingInfo],
+    period_start: date,
+    latest_quote: Decimal | None,
+    override: Decimal | None,
+) -> tuple[Decimal | None, date | None]:
+    """Greatest offering_start <= period_start wins (<=: an offering starting the same
+    day the period does covers it — spec §3.1). Override beats everything and carries no
+    offering provenance; a gap falls back to the quote; no quote leaves it unpriced."""
+    if override is not None:
+        return override, None
+    covering: OfferingInfo | None = None
+    for offering in offerings:
+        if offering.offering_start <= period_start:
+            covering = offering
+    if covering is not None:
+        return covering.subscription_price, covering.offering_start
+    return latest_quote, None
+
+
+def plan_year_rows(
+    year: int,
+    stored_rows: list[StoredPeriod],
+    offerings: list[OfferingInfo],
+    latest_quote: Decimal | None,
+    subscription_override: Decimal | None,
+) -> tuple[list[RowPlan], list[str]]:
+    """The modeled year's rows: stored wins, derive to fill (spec §3.3).
+
+    `stored_rows` is EVERY stored period in chain order (period_end, id) — the whole list,
+    not just the year's, because derived rows seed base/additional/pct from the latest
+    stored period overall. Slots: H1 = period_end month 1–6 (the Feb purchase), H2 = 7–12
+    (Aug). A half with more than one stored row is anomalous data and passes through
+    verbatim with no derived filling — a GET never rejects what is stored.
+    """
+    warnings: list[str] = []
+
+    def resolve(label: str, period_start: date) -> tuple[Decimal | None, date | None]:
+        sub, off_start = _resolve_subscription(
+            offerings, period_start, latest_quote, subscription_override
+        )
+        if sub is not None and off_start is None and subscription_override is None:
+            warnings.append(
+                f"no offering covers {label}; subscription defaulted to the latest quote"
+            )
+        return sub, off_start
+
+    def planned(row: StoredPeriod) -> RowPlan:
+        sub, off_start = resolve(row.label, row.period_start)
+        return RowPlan(
+            period_id=row.id,
+            stored=True,
+            label=row.label,
+            period_start=row.period_start,
+            period_end=row.period_end,
+            semi_annual_base=row.semi_annual_base,
+            additional_payments=row.additional_payments,
+            contribution_pct=row.contribution_pct,
+            subscription_price=sub,
+            offering_start=off_start,
+        )
+
+    year_rows = [row for row in stored_rows if row.period_end.year == year]
+    h1 = [row for row in year_rows if row.period_end.month <= 6]
+    h2 = [row for row in year_rows if row.period_end.month > 6]
+    if len(h1) > 1 or len(h2) > 1:
+        return [planned(row) for row in year_rows], warnings
+
+    seed = stored_rows[-1] if stored_rows else None
+    if seed is None and (not h1 or not h2):
+        warnings.append(
+            "no stored purchase periods yet — derived rows are seeded at 0; "
+            "edit and save them below"
+        )
+
+    def derived(label: str, start: date, end: date) -> RowPlan:
+        sub, off_start = resolve(label, start)
+        return RowPlan(
+            period_id=None,
+            stored=False,
+            label=label,
+            period_start=start,
+            period_end=end,
+            semi_annual_base=seed.semi_annual_base if seed else ZERO,
+            additional_payments=seed.additional_payments if seed else ZERO,
+            contribution_pct=seed.contribution_pct if seed else ZERO,
+            subscription_price=sub,
+            offering_start=off_start,
+        )
+
+    # The labels are the derived rows' identity in espp_periods (String(60)); the en dash
+    # is the app's range separator.
+    first = (
+        planned(h1[0])
+        if h1
+        else derived(f"Sep {year - 1}–Feb {year}", date(year - 1, 9, 1), last_weekday_of(year, 2))
+    )
+    second = (
+        planned(h2[0])
+        if h2
+        else derived(f"Mar–Aug {year}", date(year, 3, 1), last_weekday_of(year, 8))
+    )
+    return [first, second], warnings
 
 
 @dataclass(frozen=True)

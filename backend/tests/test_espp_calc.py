@@ -15,11 +15,14 @@ from decimal import Decimal
 from app.models import EsppLot
 from app.services.espp_calc import (
     ANNUAL_LIMIT,
-    PeriodInputs,
+    OfferingInfo,
+    StoredPeriod,
     ceil2,
     floor_int,
     half_up2,
+    last_weekday_of,
     lot_metrics,
+    plan_year_rows,
     run_modeler,
 )
 
@@ -39,10 +42,10 @@ def period(
     add: str = "0.00",
     start: date = date(2026, 1, 1),
     end: date = date(2026, 6, 30),
-) -> PeriodInputs:
+) -> StoredPeriod:
     """Column-scale values, as the router hands them over: base/add Numeric(12,2),
     contribution_pct Numeric(10,9)."""
-    return PeriodInputs(
+    return StoredPeriod(
         id=id,
         label=label,
         period_start=start,
@@ -424,3 +427,126 @@ def test_lot_metrics_treats_a_sold_row_missing_its_price_as_unpriced():
     assert metrics["gain_amount"] is None
     assert metrics["gain_pct"] is None
     assert metrics["days_until_qualified"] is None
+
+
+# --- the purchase calendar and the year planner ---
+
+
+def _stored(
+    id_: int,
+    label: str,
+    start: date,
+    end: date,
+    base: str = "60000",
+    additional: str = "0",
+    pct: str = "0.140000000",
+) -> StoredPeriod:
+    """A stored espp_periods row for the PLANNER: both dates are positional because the
+    planner slots rows by period_end and resolves offerings by period_start."""
+    return StoredPeriod(
+        id=id_,
+        label=label,
+        period_start=start,
+        period_end=end,
+        semi_annual_base=D(base),
+        additional_payments=D(additional),
+        contribution_pct=D(pct),
+    )
+
+
+def test_last_weekday_of_weekday_and_weekend_ends():
+    assert last_weekday_of(2026, 2) == date(2026, 2, 27)  # Feb 28 2026 is a Saturday
+    assert last_weekday_of(2025, 8) == date(2025, 8, 29)  # Aug 31 2025 is a Sunday
+    assert last_weekday_of(2024, 2) == date(2024, 2, 29)  # leap Feb ending on a Thursday
+
+
+def test_plan_year_rows_stored_rows_win_verbatim():
+    stored = [
+        _stored(1, "1H24", date(2023, 9, 1), date(2024, 2, 29)),
+        _stored(2, "2H24", date(2024, 3, 1), date(2024, 8, 30)),
+    ]
+    offerings = [OfferingInfo(offering_start=date(2023, 9, 1), subscription_price=D("48.50900"))]
+    rows, warnings = plan_year_rows(2024, stored, offerings, D("180"), None)
+    assert warnings == []
+    assert [r.label for r in rows] == ["1H24", "2H24"]
+    assert all(r.stored and r.period_id is not None for r in rows)
+    # Boundary: period_start == offering_start resolves to that offering (<=, not <).
+    assert rows[0].subscription_price == D("48.50900")
+    assert rows[0].offering_start == date(2023, 9, 1)
+
+
+def test_plan_year_rows_derives_empty_slots_with_carried_values():
+    stored = [
+        _stored(1, "2H25", date(2025, 3, 1), date(2025, 8, 29), base="70000", pct="0.150000000")
+    ]
+    offerings = [
+        OfferingInfo(offering_start=date(2023, 9, 1), subscription_price=D("48.509")),
+        OfferingInfo(offering_start=date(2025, 9, 1), subscription_price=D("175.25")),
+    ]
+    rows, warnings = plan_year_rows(2026, stored, offerings, None, None)
+    assert warnings == []
+    assert [r.stored for r in rows] == [False, False]
+    assert rows[0].label == "Sep 2025–Feb 2026"
+    assert rows[0].period_start == date(2025, 9, 1)
+    assert rows[0].period_end == last_weekday_of(2026, 2)
+    assert rows[1].label == "Mar–Aug 2026"
+    assert rows[1].period_start == date(2026, 3, 1)
+    assert rows[1].period_end == last_weekday_of(2026, 8)
+    # Values carry forward from the latest stored period overall.
+    assert rows[0].semi_annual_base == D("70000")
+    assert rows[0].contribution_pct == D("0.150000000")
+    # Both slots start on/after 2025-09-01, so both wear the reset offering's price.
+    assert all(r.subscription_price == D("175.25") for r in rows)
+    assert all(r.offering_start == date(2025, 9, 1) for r in rows)
+
+
+def test_plan_year_rows_mixed_year_after_a_mid_cycle_reset():
+    offerings = [
+        OfferingInfo(offering_start=date(2023, 9, 1), subscription_price=D("48.509")),
+        OfferingInfo(offering_start=date(2026, 3, 1), subscription_price=D("120")),
+    ]
+    rows, _ = plan_year_rows(2026, [], offerings, None, None)
+    assert rows[0].subscription_price == D("48.509")  # Sep 2025 start: old offering
+    assert rows[1].subscription_price == D("120")  # Mar 2026 start: reset offering
+
+
+def test_plan_year_rows_gap_falls_back_to_quote_with_warning():
+    rows, warnings = plan_year_rows(2024, [], [], D("99.9900"), None)
+    assert all(r.subscription_price == D("99.9900") and r.offering_start is None for r in rows)
+    assert any("no offering covers" in w for w in warnings)
+    # And with no quote either, the rows are unpriced (the router's 422 case).
+    rows2, _ = plan_year_rows(2024, [], [], None, None)
+    assert all(r.subscription_price is None for r in rows2)
+
+
+def test_plan_year_rows_override_prices_every_row_silently():
+    offerings = [OfferingInfo(offering_start=date(2023, 9, 1), subscription_price=D("48.509"))]
+    stored = [_stored(1, "1H24", date(2023, 9, 1), date(2024, 2, 29))]
+    rows, warnings = plan_year_rows(2024, stored, offerings, None, D("55"))
+    # Stored row and derived slot alike: the override beats the covering offering and
+    # carries none of its provenance.
+    assert [r.stored for r in rows] == [True, False]
+    assert all(r.subscription_price == D("55") and r.offering_start is None for r in rows)
+    assert warnings == []
+    # ... and with no offering at all it silences the fallback warning both rows would
+    # otherwise raise.
+    gap_rows, gap_warnings = plan_year_rows(2024, stored, [], None, D("55"))
+    assert all(r.subscription_price == D("55") for r in gap_rows)
+    assert gap_warnings == []
+
+
+def test_plan_year_rows_zero_history_seeds_zero_with_warning():
+    rows, warnings = plan_year_rows(2026, [], [], D("1"), None)
+    assert all(r.semi_annual_base == D("0") and r.contribution_pct == D("0") for r in rows)
+    assert any("no stored purchase periods" in w for w in warnings)
+
+
+def test_plan_year_rows_anomalous_half_passes_through_verbatim():
+    stored = [
+        _stored(1, "A", date(2023, 9, 1), date(2024, 1, 15)),
+        _stored(2, "B", date(2023, 10, 1), date(2024, 2, 29)),  # two rows in H1
+    ]
+    rows, _ = plan_year_rows(2024, stored, [], D("1"), None)
+    # No derived filling for the year — stored data passes through in chain order.
+    assert [r.label for r in rows] == ["A", "B"]
+    assert all(r.stored for r in rows)
