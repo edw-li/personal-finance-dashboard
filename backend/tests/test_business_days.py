@@ -7,6 +7,7 @@ from datetime import date
 from app.services.business_days import (
     next_business_day,
     previous_business_day,
+    semi_monthly_paydays,
     us_bank_holidays,
 )
 
@@ -65,3 +66,26 @@ def test_business_day_stepping_over_weekends_and_holidays():
     # Weekend + holiday chain: Sat Jan 15 2028 -> Sun 16 -> Mon 17 (MLK) -> Tue Jan 18.
     # (The real IRS roll-forward for that Q4 due date.)
     assert next_business_day(date(2028, 1, 15)) == date(2028, 1, 18)
+
+
+def test_semi_monthly_paydays_plain_weekday_month():
+    # June 2026: the 15th is a Monday, the 30th a Tuesday — nothing adjusts (and July 4
+    # falling on a Saturday moves nothing anywhere near it).
+    assert semi_monthly_paydays(2026, 6) == (date(2026, 6, 15), date(2026, 6, 30))
+
+
+def test_semi_monthly_paydays_weekend_adjustments():
+    # Aug 2026: Sat 15th -> Fri 14th; Mon 31st stands.
+    assert semi_monthly_paydays(2026, 8) == (date(2026, 8, 14), date(2026, 8, 31))
+    # Feb 2026: Sun 15th -> Fri 13th; Sat 28th -> Fri 27th.
+    assert semi_monthly_paydays(2026, 2) == (date(2026, 2, 13), date(2026, 2, 27))
+    # May 2026: Fri 15th stands; Sun 31st -> Fri 29th.
+    assert semi_monthly_paydays(2026, 5) == (date(2026, 5, 15), date(2026, 5, 29))
+    # Jan 2027: Fri 15th stands (the spec's named check); Sun 31st -> Fri 29th.
+    assert semi_monthly_paydays(2027, 1) == (date(2027, 1, 15), date(2027, 1, 29))
+
+
+def test_semi_monthly_payday_on_a_bank_holiday():
+    # May 2027: the 31st IS Memorial Day (a Monday) — the end-of-month payday crosses
+    # the holiday AND the weekend back to Fri May 28. The 15th is a Saturday -> Fri 14th.
+    assert semi_monthly_paydays(2027, 5) == (date(2027, 5, 14), date(2027, 5, 28))

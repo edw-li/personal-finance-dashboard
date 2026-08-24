@@ -72,3 +72,12 @@ def next_business_day(day: date) -> date:
     while not _is_business_day(day):
         day += timedelta(days=1)
     return day
+
+
+def semi_monthly_paydays(year: int, month: int) -> tuple[date, date]:
+    """The 15th and the last day of the month, each adjusted BACKWARD (spec §4: payroll
+    convention — pay lands the business day BEFORE a weekend/holiday payday, never
+    after)."""
+    mid = previous_business_day(date(year, month, 15))
+    eom = previous_business_day(date(year, month, calendar.monthrange(year, month)[1]))
+    return mid, eom
