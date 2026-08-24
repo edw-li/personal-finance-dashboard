@@ -86,3 +86,17 @@ class YearRollup(BaseModel):
 
 class YearlyOut(BaseModel):
     years: list[YearRollup]
+
+
+class BudgetPut(BaseModel):
+    # amount is REQUIRED but nullable: null is the dated "budget ends here" marker
+    # (spec §2), not an omitted field — there is no tri-state here.
+    amount: Decimal | None
+    effective_month: date
+
+
+class BudgetHistoryEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    effective_month: date
+    amount: Decimal | None

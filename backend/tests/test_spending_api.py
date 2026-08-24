@@ -332,3 +332,70 @@ async def test_put_spending_month_net_pay_null_rides_along_with_amounts(auth_cli
     assert got["exists"] is True  # the month survives on its amounts alone
     assert got["net_pay"] is None
     assert {a["category_id"]: a["amount"] for a in got["amounts"]} == {food.id: "250.00"}
+
+
+async def test_budget_put_upserts_and_returns_full_history(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    first = await auth_client.put(url, json={"amount": "400.005", "effective_month": "2026-01-01"})
+    assert first.status_code == 200, first.text
+    assert first.json() == [{"effective_month": "2026-01-01", "amount": "400.01"}]  # HALF_UP
+
+    second = await auth_client.put(url, json={"amount": "450", "effective_month": "2026-03-01"})
+    assert second.json() == [
+        {"effective_month": "2026-01-01", "amount": "400.01"},
+        {"effective_month": "2026-03-01", "amount": "450.00"},
+    ]
+
+    # Same (category, month) again = upsert, not a duplicate — last write wins.
+    third = await auth_client.put(url, json={"amount": "500", "effective_month": "2026-03-01"})
+    assert third.json() == [
+        {"effective_month": "2026-01-01", "amount": "400.01"},
+        {"effective_month": "2026-03-01", "amount": "500.00"},
+    ]
+
+    # NULL amount is the dated end-of-budget marker and stores as a real history row.
+    ended = await auth_client.put(url, json={"amount": None, "effective_month": "2026-06-01"})
+    assert ended.json()[-1] == {"effective_month": "2026-06-01", "amount": None}
+
+
+async def test_budget_put_validation(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    assert (
+        await auth_client.put(url, json={"amount": "1", "effective_month": "2026-01-15"})
+    ).status_code == 422
+    assert (
+        await auth_client.put(url, json={"amount": "-1", "effective_month": "2026-01-01"})
+    ).status_code == 422
+    # Numeric(12,2) holds only 10 integer digits — same pre-write bound as monthly amounts.
+    assert (
+        await auth_client.put(url, json={"amount": "10000000000", "effective_month": "2026-01-01"})
+    ).status_code == 422
+    # amount is REQUIRED (nullable, not omittable): {} must 422, not silently mean null.
+    assert (await auth_client.put(url, json={"effective_month": "2026-01-01"})).status_code == 422
+    assert (
+        await auth_client.put(
+            "/api/v1/spending/categories/999/budget",
+            json={"amount": "1", "effective_month": "2026-01-01"},
+        )
+    ).status_code == 404
+
+
+async def test_budget_delete_removes_a_history_row(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    await auth_client.put(url, json={"amount": "400", "effective_month": "2026-01-01"})
+    await auth_client.put(url, json={"amount": "450", "effective_month": "2026-03-01"})
+
+    gone = await auth_client.delete(f"{url}/2026-03-01")
+    assert gone.status_code == 204
+    # The next PUT's echoed history shows only the surviving row.
+    after = await auth_client.put(url, json={"amount": "400", "effective_month": "2026-01-01"})
+    assert after.json() == [{"effective_month": "2026-01-01", "amount": "400.00"}]
+
+    assert (await auth_client.delete(f"{url}/2026-03-01")).status_code == 404
+    assert (await auth_client.delete(f"{url}/2026-03-15")).status_code == 422
+    assert (
+        await auth_client.delete("/api/v1/spending/categories/999/budget/2026-01-01")
+    ).status_code == 404

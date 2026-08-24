@@ -8,9 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.models import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
 from app.schemas.spending import (
     AmountEntry,
+    BudgetHistoryEntry,
+    BudgetPut,
     CategoryCreate,
     CategoryOut,
     CategorySeries,
@@ -136,6 +138,85 @@ async def delete_category(category_id: int, db: AsyncSession = Depends(get_db)) 
             detail=f"category has {row_count} monthly rows — deactivate it instead",
         )
     await db.delete(category)
+    await db.commit()
+    return Response(status_code=204)
+
+
+# --- category budgets ---
+
+
+async def _budget_history(db: AsyncSession, category_id: int) -> list[CategoryBudget]:
+    return list(
+        (
+            await db.execute(
+                select(CategoryBudget)
+                .where(CategoryBudget.category_id == category_id)
+                .order_by(CategoryBudget.effective_month)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _get_budget_row(
+    db: AsyncSession, category_id: int, effective_month: date
+) -> CategoryBudget | None:
+    return (
+        (
+            await db.execute(
+                select(CategoryBudget).where(
+                    CategoryBudget.category_id == category_id,
+                    CategoryBudget.effective_month == effective_month,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
+@router.put("/categories/{category_id}/budget", response_model=list[BudgetHistoryEntry])
+async def put_category_budget(
+    category_id: int, body: BudgetPut, db: AsyncSession = Depends(get_db)
+) -> list[CategoryBudget]:
+    """Upsert one (category, effective_month) budget row — last write wins (single-user
+    TOCTOU posture, spec §3). Returns the category's FULL history, ascending by month, so
+    the editor renders it without a second fetch."""
+    await _get_category(db, category_id)
+    require_first_of_month(body.effective_month)
+    amount: Decimal | None = None
+    if body.amount is not None:
+        amount = quantize_money(body.amount, "amount", max_abs=MONEY_MAX_ABS_12_2)
+        if amount < 0:
+            # Unlike monthly amounts (signed: refunds), a budget is a target — a
+            # negative target is nonsense, not data.
+            raise HTTPException(status_code=422, detail="amount must be non-negative")
+    existing = await _get_budget_row(db, category_id, body.effective_month)
+    if existing is None:
+        db.add(
+            CategoryBudget(
+                category_id=category_id, effective_month=body.effective_month, amount=amount
+            )
+        )
+    else:
+        existing.amount = amount
+    await db.commit()
+    return await _budget_history(db, category_id)
+
+
+@router.delete("/categories/{category_id}/budget/{effective_month}", status_code=204)
+async def delete_category_budget(
+    category_id: int, effective_month: date, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """Remove one HISTORY row (fixing a mis-dated entry) — distinct from the NULL-amount
+    "budget ended" marker, which is itself a stored row (spec §3)."""
+    await _get_category(db, category_id)
+    require_first_of_month(effective_month)
+    row = await _get_budget_row(db, category_id, effective_month)
+    if row is None:
+        raise HTTPException(status_code=404, detail="budget row not found")
+    await db.delete(row)
     await db.commit()
     return Response(status_code=204)
 
