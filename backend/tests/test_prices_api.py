@@ -45,6 +45,11 @@ class FakeProvider:
             raise self.errors[ticker]
         return self.data.get(ticker, [])
 
+    def fetch_next_ex_div(self, ticker):
+        # The announced-date leg is pinned in test_price_service; here it only needs the
+        # Protocol shape so a full refresh runs whole.
+        return None
+
 
 def bar(day, close, dividend="0"):
     return DailyBar(bar_date=day, close=D(close), dividend=D(dividend))

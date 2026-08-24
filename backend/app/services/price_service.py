@@ -53,6 +53,10 @@ class RefreshResult:
     # Per-security dividend events seen in this run's bars (updated tickers only) —
     # run_refresh hands them to dividend_ingest so the Yahoo fetch happens exactly once.
     dividend_events: dict[int, list[DailyBar]] = field(default_factory=dict)
+    # Announced-ex-div leg (calendar spec §3.3): fetch attempts that answered vs raised.
+    # Deliberately NOT in failed[] — a calendar hiccup must not read as a price failure.
+    ex_div_fetched: int = 0
+    ex_div_failed: int = 0
 
 
 def _expire_price_rows(db: AsyncSession) -> None:
@@ -86,6 +90,16 @@ async def refresh_prices(
             )
         ).scalars()
     )
+    for security in securities:
+        # §3.3, independent of any fetch and BEFORE it: a stored announced date that has
+        # passed is cleared for every loaded (active) security — manual-priced and
+        # about-to-fail tickers included — because the event has occurred and the
+        # historical bars own it now (ex_div_date's territory). The last-good posture in
+        # the loop below therefore only ever preserves a still-FUTURE date. Inactive
+        # securities are not loaded here; their stale dates are invisible to the
+        # calendar (it reads active holdings) and clear on reactivation's next run.
+        if security.next_ex_div_date is not None and security.next_ex_div_date < today:
+            security.next_ex_div_date = None
     latest_rows: list[dict] = []
     for security in securities:
         if security.is_manual_priced:
@@ -130,6 +144,22 @@ async def refresh_prices(
             }
         )
         _update_dividend_metadata(security, bars, today)
+        if security.annual_dividend is not None and security.annual_dividend > 0:
+            # Active + auto-priced are already this loop's population; dividend-paying
+            # (per the TTM metadata just written) gates the extra HTTP call (§3.3).
+            try:
+                announced = await asyncio.to_thread(provider.fetch_next_ex_div, security.ticker)
+            except Exception:
+                # Last-good: the (already swept) stored value stands; never the batch's
+                # problem and never failed[] — prices and announcements fail separately.
+                result.ex_div_failed += 1
+            else:
+                result.ex_div_fetched += 1
+                # Store only a confirmed UPCOMING date; "nothing announced" and an
+                # already-past announcement both leave NULL (spec §3.3).
+                security.next_ex_div_date = (
+                    announced if announced is not None and announced >= today else None
+                )
         # ALWAYS recorded for an updated ticker, even when empty: the self-heal scope is
         # "returned bars this run" (spec §2), so a book whose in-window events all
         # vanished from the feed still gets its stale auto rows removed. A transient feed
@@ -313,6 +343,8 @@ async def record_refresh_run(
         "failed": dict(sorted(result.failed.items())),
         "skipped_manual": len(result.skipped_manual),
         "history_appended": history_appended,
+        "ex_div_fetched": result.ex_div_fetched,
+        "ex_div_failed": result.ex_div_failed,
         "dividends_ingested": dividends.ingested if dividends is not None else 0,
         "dividends_removed": dividends.removed if dividends is not None else 0,
         "dividends_skipped_overlap": (

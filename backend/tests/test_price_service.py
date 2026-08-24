@@ -32,16 +32,25 @@ MONDAY = date(2026, 8, 17)
 
 
 class FakeProvider:
-    def __init__(self, data=None, errors=None):
+    def __init__(self, data=None, errors=None, next_ex_div=None, next_ex_div_errors=None):
         self.data = data or {}
         self.errors = errors or {}
+        self.next_ex_div = next_ex_div or {}
+        self.next_ex_div_errors = next_ex_div_errors or {}
         self.calls: list[tuple[str, date]] = []
+        self.ex_div_calls: list[str] = []
 
     def fetch_daily(self, ticker, start):
         self.calls.append((ticker, start))
         if ticker in self.errors:
             raise self.errors[ticker]
         return self.data.get(ticker, [])
+
+    def fetch_next_ex_div(self, ticker):
+        self.ex_div_calls.append(ticker)
+        if ticker in self.next_ex_div_errors:
+            raise self.next_ex_div_errors[ticker]
+        return self.next_ex_div.get(ticker)
 
 
 def bar(day, close, dividend="0"):
@@ -969,3 +978,88 @@ async def test_security_next_ex_div_date_roundtrip(db):
     await db.refresh(sec)
     assert sec.next_ex_div_date == date(2026, 9, 3)
     assert sec.ex_div_date is None  # the two columns are independent
+
+
+async def test_refresh_stores_a_future_announced_ex_div(db):
+    sec = await seed_security(db, "DIVX")
+    provider = FakeProvider(
+        {"DIVX": [bar(TODAY - timedelta(days=30), "100", "0.75"), bar(TODAY, "110")]},
+        next_ex_div={"DIVX": TODAY + timedelta(days=20)},
+    )
+    result = await refresh_prices(db, provider, today=TODAY)
+    assert result.updated == ["DIVX"]
+    assert (result.ex_div_fetched, result.ex_div_failed) == (1, 0)
+    assert provider.ex_div_calls == ["DIVX"]
+    await db.refresh(sec)
+    assert sec.next_ex_div_date == TODAY + timedelta(days=20)
+
+
+async def test_refresh_clears_when_the_feed_stops_announcing(db):
+    # §3.3: a SUCCESSFUL fetch that answers "nothing upcoming" clears a stored future
+    # date — Yahoo withdrew or never re-announced it, and confirmed-only means gone.
+    sec = await seed_security(db, "DIVX")
+    sec.next_ex_div_date = TODAY + timedelta(days=5)
+    await db.commit()
+    provider = FakeProvider(
+        {"DIVX": [bar(TODAY - timedelta(days=30), "100", "0.75"), bar(TODAY, "110")]},
+    )
+    await refresh_prices(db, provider, today=TODAY)
+    await db.refresh(sec)
+    assert sec.next_ex_div_date is None
+
+
+async def test_refresh_treats_a_past_announcement_as_nothing(db):
+    sec = await seed_security(db, "DIVX")
+    provider = FakeProvider(
+        {"DIVX": [bar(TODAY - timedelta(days=30), "100", "0.75"), bar(TODAY, "110")]},
+        next_ex_div={"DIVX": TODAY - timedelta(days=1)},  # fetched but already past
+    )
+    await refresh_prices(db, provider, today=TODAY)
+    await db.refresh(sec)
+    assert sec.next_ex_div_date is None  # store only >= today, else NULL (spec §3.3)
+
+
+async def test_refresh_sweeps_stale_dates_on_manual_and_non_payers(db):
+    # The clear is INDEPENDENT of the fetch: manual-priced (skipped) and non-dividend
+    # securities never fetch, but a stored date that has passed is cleared anyway — the
+    # event occurred and the historical bars own it now.
+    manual = await seed_security(db, "PRIV", manual=True)
+    manual.next_ex_div_date = TODAY - timedelta(days=3)
+    nodiv = await seed_security(db, "GROW")
+    nodiv.next_ex_div_date = TODAY - timedelta(days=1)
+    await db.commit()
+    provider = FakeProvider({"GROW": [bar(TODAY, "50")]})  # bars carry no dividends
+    result = await refresh_prices(db, provider, today=TODAY)
+    assert provider.ex_div_calls == []  # neither is a dividend payer — no fetch at all
+    assert (result.ex_div_fetched, result.ex_div_failed) == (0, 0)
+    await db.refresh(manual)
+    await db.refresh(nodiv)
+    assert manual.next_ex_div_date is None and nodiv.next_ex_div_date is None
+
+
+async def test_refresh_ex_div_failure_keeps_a_future_stored_date(db):
+    sec = await seed_security(db, "DIVX")
+    sec.next_ex_div_date = TODAY + timedelta(days=10)
+    await db.commit()
+    provider = FakeProvider(
+        {"DIVX": [bar(TODAY - timedelta(days=30), "100", "0.75"), bar(TODAY, "110")]},
+        next_ex_div_errors={"DIVX": RuntimeError("calendar endpoint down")},
+    )
+    result = await refresh_prices(db, provider, today=TODAY)
+    assert result.updated == ["DIVX"]  # the PRICE refresh stands (never fails the run)
+    assert result.failed == {}  # ex-div failures wear their own counter, not failed[]
+    assert (result.ex_div_fetched, result.ex_div_failed) == (0, 1)
+    await db.refresh(sec)
+    assert sec.next_ex_div_date == TODAY + timedelta(days=10)  # last-good
+
+
+async def test_run_refresh_records_ex_div_counts_in_the_blob(db):
+    await seed_security(db, "DIVX")
+    provider = FakeProvider(
+        {"DIVX": [bar(MONDAY - timedelta(days=30), "100", "0.75"), bar(MONDAY, "110")]},
+        next_ex_div={"DIVX": MONDAY + timedelta(days=14)},
+    )
+    await run_refresh(db, provider, trigger="scheduled", today=MONDAY)
+    payload = await read_last_refresh(db)
+    assert payload["ex_div_fetched"] == 1
+    assert payload["ex_div_failed"] == 0
