@@ -21,6 +21,7 @@ from app.importer.report import SheetReport
 from app.models import (
     Account,
     AccountBalance,
+    CategoryBudget,
     DividendPayment,
     EsppOffering,
     LatestPrice,
@@ -965,3 +966,51 @@ async def test_importer_never_writes_espp_offerings(db):
     }
     assert after == before
     assert all("espp_offerings" not in sheet.entities for sheet in report.sheets.values())
+
+
+def budget_row(row: CategoryBudget) -> tuple:
+    """EVERY stored column, as grant_row above — a budgets column added later is covered
+    by the pin below without anyone editing it."""
+    return tuple(getattr(row, column.key) for column in CategoryBudget.__table__.columns)
+
+
+async def test_importer_never_writes_category_budgets(db):
+    """category_budgets is dashboard-only (2026-08-24 spec §2, the rsu_grants posture):
+    the workbook has no budgets concept, so a re-import must neither create, update nor
+    delete a row — even while it UPDATES the very category the budget hangs off."""
+    from app.importer.service import run_import
+
+    # Slug "food" matches the workbook's Food column, and sort_order 99 does NOT match:
+    # the import diff-updates the category row itself, which makes the pin sharp — the
+    # parent table moves, the budgets table must not (categories are upserted by slug,
+    # never deleted, so the CASCADE can't fire through an import).
+    cat = SpendingCategory(name="Food", slug="food", sort_order=99)
+    db.add(cat)
+    await db.flush()
+    db.add(
+        CategoryBudget(
+            category_id=cat.id, effective_month=date(2026, 1, 1), amount=Decimal("400.00")
+        )
+    )
+    db.add(CategoryBudget(category_id=cat.id, effective_month=date(2026, 6, 1), amount=None))
+    await db.commit()
+    before = {
+        row.id: budget_row(row) for row in (await db.execute(select(CategoryBudget))).scalars()
+    }
+    assert len(before) == 2
+
+    for _ in range(2):
+        report = await run_import(build_workbook(), db, dry_run=False)
+        assert report.applied is True  # a blocked import would pin nothing
+
+    # populate_existing, or the identity map would hand back the pre-import objects and
+    # this would pass even if the import had rewritten every column (the dividends pin's
+    # note).
+    after = {
+        row.id: budget_row(row)
+        for row in (
+            await db.execute(select(CategoryBudget).execution_options(populate_existing=True))
+        ).scalars()
+    }
+    assert after == before
+    assert all("category_budgets" not in sheet.entities for sheet in report.sheets.values())
