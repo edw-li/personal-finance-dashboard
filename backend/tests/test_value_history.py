@@ -162,3 +162,33 @@ def test_live_extension_recompute_is_idempotent_and_prefix_stable():
     )
     assert extended[:2] == first
     assert extended == [D("1000.00"), D("1120.00"), D("1141.96")]  # 1120 x 520/510, 0 flow
+
+
+def test_drain_clamp_wins_over_a_barless_step():
+    rows = [
+        _row("2026-01-05", "1000.00", "2000.00"),
+        _row("2026-01-12", "0.00", "500.00"),
+        _row("2026-01-19", "300.00", "800.00"),
+    ]
+    # 2026-01-19 has NO close: an overdrawn balance crossing a BARLESS step still
+    # recovers to flow-only (drain clamp before the missing-close arm). The reordered
+    # arms would carry -500 flat and answer -200.00.
+    closes = {date(2026, 1, 5): D("100.00"), date(2026, 1, 12): D("100.00")}
+    assert contribution_benchmark(rows, closes) == [D("1000.00"), D("-500.00"), D("300.00")]
+
+
+def test_chaining_consumes_the_quantized_value():
+    rows = [
+        _row("2026-02-02", "1000.00", "1000.00"),
+        _row("2026-02-09", "1010.00", "1000.00"),
+        _row("2026-02-16", "10100.00", "1000.00"),
+    ]
+    closes = {
+        date(2026, 2, 2): D("100.94"),
+        date(2026, 2, 9): D("101.95"),  # 1000 x 101.95/100.94 = 1010.0059... -> 1010.01
+        date(2026, 2, 16): D("1019.50"),  # exactly x10: the NEXT step amplifies the cent
+    }
+    # Chaining on the QUANTIZED value (the docstring's claim): 1010.01 x 10 = 10100.10.
+    # A chain carried at full precision would answer 10100.06 — the amplified step is
+    # what makes the difference observable.
+    assert contribution_benchmark(rows, closes) == [D("1000.00"), D("1010.01"), D("10100.10")]
