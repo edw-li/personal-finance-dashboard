@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMonthSlices, monthMovers, typicalSpend } from './spending'
+import { budgetProgress, buildMonthSlices, hasVsBudget, monthMovers, typicalSpend } from './spending'
 
 const categories = [
   { id: 1, name: 'Rent', slug: 'rent', sort_order: 1, is_active: true },
@@ -66,8 +66,8 @@ describe('monthMovers', () => {
       4: [null, null, '30.00'], // new spend: +30 vs prior's implicit 0, no history for avg
     })
     expect(monthMovers(m, 2, 2)).toEqual([
-      { categoryId: 1, value: 400, deltaPrior: 300, deltaAvg: 300 },
-      { categoryId: 2, value: 20, deltaPrior: -60, deltaAvg: -45 },
+      { categoryId: 1, value: 400, deltaPrior: 300, deltaAvg: 300, deltaBudget: null },
+      { categoryId: 2, value: 20, deltaPrior: -60, deltaAvg: -45, deltaBudget: null },
     ])
     // Unclipped, the new spend ranks third and the flat category never appears.
     expect(monthMovers(m, 2).map((mv) => mv.categoryId)).toEqual([1, 2, 4])
@@ -77,7 +77,7 @@ describe('monthMovers', () => {
     // Same as last month, but the trailing mean is 100: the avg delta alone ranks it.
     const m = matrix({ 1: ['100.00', '100.00', '250.00', '250.00'] })
     expect(monthMovers(m, 3)).toEqual([
-      { categoryId: 1, value: 250, deltaPrior: 0, deltaAvg: 100 },
+      { categoryId: 1, value: 250, deltaPrior: 0, deltaAvg: 100, deltaBudget: null },
     ])
   })
 
@@ -89,8 +89,8 @@ describe('monthMovers', () => {
     })
     // Averages skip the hole: cat 1's window is [100] -> avg 100, cat 2's [20] -> avg 20.
     expect(monthMovers(m, 2)).toEqual([
-      { categoryId: 1, value: 400, deltaPrior: null, deltaAvg: 300 },
-      { categoryId: 2, value: 30, deltaPrior: null, deltaAvg: 10 },
+      { categoryId: 1, value: 400, deltaPrior: null, deltaAvg: 300, deltaBudget: null },
+      { categoryId: 2, value: 30, deltaPrior: null, deltaAvg: 10, deltaBudget: null },
     ])
   })
 
@@ -132,5 +132,75 @@ describe('typicalSpend', () => {
     expect(typicalSpend(matrix, '2026-08-01', 8)).toBeNull()
     expect(typicalSpend(matrix, '2026-04-01', 7)).toBeNull() // nothing strictly before
     expect(typicalSpend(matrix, '2026-08-01', 99)).toBeNull() // unknown category
+  })
+})
+
+describe('budget movers', () => {
+  it('adds a vs-budget delta when the month has a resolved budget', () => {
+    const m = matrix(
+      { 1: ['100.00', '400.00'], 2: ['50.00', '20.00'] },
+      { 1: ['300.00', '300.00'] },
+    )
+    const movers = monthMovers(m, 1)
+    expect(movers.find((mv) => mv.categoryId === 1)?.deltaBudget).toBe(100) // 400 - 300
+    expect(movers.find((mv) => mv.categoryId === 2)?.deltaBudget).toBeNull()
+    expect(hasVsBudget(movers)).toBe(true)
+  })
+
+  it('hides the column when no mover has a budget that month', () => {
+    const m = matrix({ 1: ['100.00', '400.00'] })
+    expect(hasVsBudget(monthMovers(m, 1))).toBe(false)
+    expect(hasVsBudget([])).toBe(false)
+  })
+})
+
+describe('budgetProgress', () => {
+  it('fills proportionally and clamps at 100%', () => {
+    expect(budgetProgress('200.00', '400.00')).toEqual({
+      spent: 200,
+      budget: 400,
+      fillPct: 50,
+      over: false,
+    })
+    expect(budgetProgress('600.00', '400.00')).toEqual({
+      spent: 600,
+      budget: 400,
+      fillPct: 100,
+      over: true,
+    })
+  })
+
+  it('treats a missing month value as zero spend and floors refund months at empty', () => {
+    expect(budgetProgress(null, '400.00')).toEqual({
+      spent: 0,
+      budget: 400,
+      fillPct: 0,
+      over: false,
+    })
+    expect(budgetProgress('-25.00', '400.00')).toEqual({
+      spent: -25,
+      budget: 400,
+      fillPct: 0,
+      over: false,
+    })
+  })
+
+  it('returns null for an unbudgeted category', () => {
+    expect(budgetProgress('200.00', null)).toBeNull()
+  })
+
+  it('handles a zero budget: any spend is over, none is empty', () => {
+    expect(budgetProgress('10.00', '0.00')).toEqual({
+      spent: 10,
+      budget: 0,
+      fillPct: 100,
+      over: true,
+    })
+    expect(budgetProgress('0.00', '0.00')).toEqual({
+      spent: 0,
+      budget: 0,
+      fillPct: 0,
+      over: false,
+    })
   })
 })
