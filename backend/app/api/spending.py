@@ -383,11 +383,19 @@ async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> Spending
         .all()
     )
     cashflow = await db.get(MonthlyCashflow, month)
+    budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
+    resolved = _resolve_budgets(budget_rows, [month])
+    budgets = [
+        AmountEntry(category_id=category_id, amount=values[0])
+        for category_id, values in sorted(resolved.items())
+        if values[0] is not None
+    ]
     return SpendingMonthOut(
         month=month,
         exists=bool(rows) or cashflow is not None,
         net_pay=None if cashflow is None else cashflow.net_pay,
         amounts=[AmountEntry(category_id=r.category_id, amount=r.amount) for r in rows],
+        budgets=budgets,
     )
 
 

@@ -43,6 +43,11 @@ class SpendingMonthOut(BaseModel):
     exists: bool
     net_pay: Decimal | None
     amounts: list[AmountEntry]
+    # Resolved budgets for THIS month (spec §2 rule) — the wizard's "of {budget}" subtext
+    # needs the ENTRY month, which is usually not on the matrix's entered-months axis
+    # (spec §4.1; the one addition beyond §3's endpoint list). Only categories with a
+    # non-null resolved budget appear.
+    budgets: list[AmountEntry]
 
 
 class SpendingUpsertResult(BaseModel):

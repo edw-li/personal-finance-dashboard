@@ -169,6 +169,7 @@ async def test_get_spending_month(auth_client, db):
         "exists": False,
         "net_pay": None,
         "amounts": [],
+        "budgets": [],
     }
     assert (await auth_client.get("/api/v1/spending/months/2030-01-02")).status_code == 422
 
@@ -446,3 +447,20 @@ async def test_matrix_budget_null_marker_and_redated_past_row(auth_client, db):
         "450.00",
         None,
     ]
+
+
+async def test_get_month_resolves_budgets_for_arbitrary_months(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    await auth_client.put(url, json={"amount": "450.00", "effective_month": "2026-03-01"})
+    # 2026-04 is NOT an entered month (no matrix row) — the wizard's usual case: the
+    # budget effective in March must still resolve for it (spec §4.1).
+    body = (await auth_client.get("/api/v1/spending/months/2026-04-01")).json()
+    assert body["budgets"] == [{"category_id": food.id, "amount": "450.00"}]
+    # Before the first effective row: unbudgeted, and unbudgeted categories are OMITTED.
+    body = (await auth_client.get("/api/v1/spending/months/2026-02-01")).json()
+    assert body["budgets"] == []
+    # A NULL end-marker removes it from that month on.
+    await auth_client.put(url, json={"amount": None, "effective_month": "2026-05-01"})
+    body = (await auth_client.get("/api/v1/spending/months/2026-05-01")).json()
+    assert body["budgets"] == []
