@@ -62,3 +62,103 @@ def test_no_bars_at_all_is_all_none():
 def test_empty_rows_are_empty():
     assert contribution_benchmark([], {}) == []
     assert contribution_benchmark([], {date(2026, 1, 5): D("1")}) == []
+
+
+def test_missing_close_carries_flat_and_still_lands_the_flow():
+    rows = [
+        _row("2026-01-05", "1000.00", "1000.00"),
+        _row("2026-01-12", "1150.00", "1200.00"),
+        _row("2026-01-19", "1400.00", "1200.00"),
+    ]
+    closes = {date(2026, 1, 5): D("100.00"), date(2026, 1, 19): D("120.00")}
+    # Step INTO the gap: factor 1, the +200 flow lands. Step OUT of it: the previous end
+    # is the missing one, so factor 1 again — no invented move on either side of a
+    # barless step (spec §2, _extended_baseline's own rule).
+    assert contribution_benchmark(rows, closes) == [D("1000.00"), D("1200.00"), D("1200.00")]
+
+
+def test_leading_rows_before_the_first_bar_carry_the_seed_flat():
+    rows = [
+        _row("2026-01-05", "1000.00", "1000.00"),
+        _row("2026-01-12", "1105.00", "1100.00"),
+        _row("2026-01-19", "1210.00", "1200.00"),
+        _row("2026-01-26", "1400.00", "1200.00"),
+    ]
+    # The first two dates precede every VOO bar (absent from the map): the seed rides
+    # flat and the flows land — flats, not holes (spec §4).
+    closes = {date(2026, 1, 19): D("200.00"), date(2026, 1, 26): D("210.00")}
+    assert contribution_benchmark(rows, closes) == [
+        D("1000.00"),
+        D("1100.00"),
+        D("1200.00"),
+        D("1260.00"),  # growth finally engages: 1200 x 210/200
+    ]
+
+
+def test_drain_clamp_zeroes_growth_not_the_flow():
+    rows = [
+        _row("2026-01-05", "1000.00", "2000.00"),
+        _row("2026-01-12", "0.00", "500.00"),
+        _row("2026-01-19", "300.00", "800.00"),
+    ]
+    closes = {
+        date(2026, 1, 5): D("100.00"),
+        date(2026, 1, 12): D("100.00"),
+        date(2026, 1, 19): D("200.00"),
+    }
+    # t1 drains past zero at cost (flow -1500): overdrawn on paper is legal output. t2's
+    # doubling close must NOT double a negative balance — the growth TERM clamps to 0
+    # (spec §2's guard: never negative VIA MULTIPLICATION) and the +300 flow lands alone.
+    assert contribution_benchmark(rows, closes) == [D("1000.00"), D("-500.00"), D("300.00")]
+
+
+def test_golden_six_row_series_to_the_cent():
+    """End to end: seed, growth, a flow, a barless gap (both step ends), a negative
+    flow, an exact-ratio step, and a genuinely rounding step — pinned to the cent."""
+    rows = [
+        _row("2025-09-01", "1000.00", "800.00"),
+        _row("2025-09-08", "1300.00", "1050.00"),
+        _row("2025-09-15", "1290.00", "1050.00"),
+        _row("2025-09-22", "1120.00", "900.00"),
+        _row("2025-09-29", "1105.00", "900.00"),
+        _row("2025-10-06", "1225.00", "1000.00"),
+    ]
+    closes = {
+        date(2025, 9, 1): D("100.00"),
+        date(2025, 9, 8): D("103.00"),
+        # 2025-09-15 has no bar: the gap step AND the step out of it run at factor 1.
+        date(2025, 9, 22): D("103.00"),
+        date(2025, 9, 29): D("100.94"),  # 103.00 x 0.98 exactly
+        date(2025, 10, 6): D("101.95"),
+    }
+    assert contribution_benchmark(rows, closes) == [
+        D("1000.00"),  # seed = mv[0]
+        D("1280.00"),  # 1000 x 1.03 + 250
+        D("1280.00"),  # gap: factor 1, zero flow
+        D("1130.00"),  # out of the gap: factor 1, flow -150
+        D("1107.40"),  # 1130 x 0.98
+        D("1218.48"),  # 1107.40 x 101.95/100.94 + 100 = 1218.4805... -> HALF_UP
+    ]
+
+
+def test_live_extension_recompute_is_idempotent_and_prefix_stable():
+    rows = [
+        _row("2026-08-10", "1000.00", "1000.00"),
+        _row("2026-08-17", "1120.00", "1100.00"),
+    ]
+    closes = {date(2026, 8, 10): D("500.00"), date(2026, 8, 17): D("510.00")}
+    first = contribution_benchmark(rows, closes)
+    assert first == [D("1000.00"), D("1120.00")]
+    # Same-day recompute: the Monday appender upserts the same row on a re-run and the
+    # read-time series re-derives to the same numbers — _extended_baseline's idempotence,
+    # inherited by construction because the recurrence reads stored rows only (spec §2's
+    # live-extension bullet: the step IS the implied-shares method, benchmark[t-1]/
+    # close[t-1] shares x close[t], anchored on the computed series' last value).
+    assert contribution_benchmark(rows, closes) == first
+    # Extending by the next live Monday never rewrites history.
+    extended = contribution_benchmark(
+        rows + [_row("2026-08-24", "1150.00", "1100.00")],
+        {**closes, date(2026, 8, 24): D("520.00")},
+    )
+    assert extended[:2] == first
+    assert extended == [D("1000.00"), D("1120.00"), D("1141.96")]  # 1120 x 520/510, 0 flow

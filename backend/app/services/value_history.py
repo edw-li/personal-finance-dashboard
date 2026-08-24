@@ -198,9 +198,20 @@ def contribution_benchmark(
             value = market_value.quantize(MONEY_Q, rounding=ROUND_HALF_UP)
         else:
             flow = cost_basis - prev_cost
-            value = (prev_value * (close / prev_close) + flow).quantize(
-                MONEY_Q, rounding=ROUND_HALF_UP
-            )
+            if prev_value <= 0:
+                # Drain clamp (spec §2): growth on an emptied — or overdrawn-at-cost —
+                # hypothetical account is 0; only the flow moves it. Without this, a
+                # negative balance would compound through every later close move.
+                growth = ZERO
+            elif close is None or prev_close is None or prev_close == 0:
+                # A close missing at EITHER end of the step: factor 1 — carry flat, land
+                # the flow. Covers rows before the first bar (production's only gap; the
+                # loader carries forward past it) and any literal-driven mid-series gap.
+                growth = prev_value
+            else:
+                growth = prev_value * (close / prev_close)
+            # + ZERO strips a rounding-born negative zero before it can reach the wire.
+            value = (growth + flow).quantize(MONEY_Q, rounding=ROUND_HALF_UP) + ZERO
         series.append(value)
         prev_value = value
         prev_cost = cost_basis
