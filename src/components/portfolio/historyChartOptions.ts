@@ -84,14 +84,18 @@ export function portfolioHistoryOption(
   if (extendAxis) categories.push(liveLabel)
 
   // Lines end at the last IMPORTED point: the live category (when present) gets null,
-  // never an extrapolated value.
-  const lineData = (values: string[]): (number | null)[] =>
-    extendAxis ? [...values.map(Number), null] : values.map(Number)
+  // never an extrapolated value. Null entries pass through untouched — the benchmark's
+  // degraded rows must become chart nulls, not NaN.
+  const lineData = (values: (string | null)[]): (number | null)[] => {
+    const parsed = values.map((v) => (v === null ? null : Number(v)))
+    return extendAxis ? [...parsed, null] : parsed
+  }
 
   // Fixed validated palette slots (charts/theme.ts law): value=slot 1 blue, cost
-  // basis=slot 2 orange, S&P=slot 3 aqua. The wash rides the value line ONLY — the
-  // Excel original's three overlapping opaque areas occlude each other (spec: rejected).
-  const lineSeries = (name: string, values: string[], color: string, wash: boolean) => ({
+  // basis=slot 2 orange, S&P=slot 3 aqua, contribution benchmark=slot 4 yellow. The wash
+  // rides the value line ONLY — the Excel original's three overlapping opaque areas
+  // occlude each other (spec: rejected).
+  const lineSeries = (name: string, values: (string | null)[], color: string, wash: boolean) => ({
     type: 'line' as const,
     name,
     symbol: 'none' as const,
@@ -100,6 +104,12 @@ export function portfolioHistoryOption(
     ...(wash ? { areaStyle: { opacity: 0.12 } } : {}),
     data: lineData(values),
   })
+
+  // Stale-tab armor: a payload cached from the pre-benchmark API omits the field.
+  // Treat omitted like the server's all-null degradation — no fourth series at all,
+  // because an all-null line draws nothing yet still ghost-occupies the legend.
+  const benchmark = history.benchmark ?? []
+  const showBenchmark = benchmark.some((v) => v !== null)
 
   return {
     grid: { left: 70, right: 16, top: 32, bottom: 28 },
@@ -115,6 +125,11 @@ export function portfolioHistoryOption(
       lineSeries('Portfolio value', history.market_value, PALETTE[0], true),
       lineSeries('Cost basis', history.cost_basis, PALETTE[1], false),
       lineSeries('S&P 500 baseline', history.sp500, PALETTE[2], false),
+      // Legend-only disambiguation (spec §4): the two benchmark names must explain
+      // themselves side by side — "baseline" = starting balance only, this = every flow.
+      ...(showBenchmark
+        ? [lineSeries('VOO (your contributions)', benchmark, PALETTE[3], false)]
+        : []),
       ...(livePt
         ? [
             {
