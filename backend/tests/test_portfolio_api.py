@@ -1303,7 +1303,13 @@ async def test_computed_views_require_auth(client):
 async def test_history_empty_is_empty_arrays_not_404(auth_client):
     resp = await auth_client.get(HISTORY)
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"dates": [], "market_value": [], "cost_basis": [], "sp500": []}
+    assert resp.json() == {
+        "dates": [],
+        "market_value": [],
+        "cost_basis": [],
+        "sp500": [],
+        "benchmark": [],
+    }
 
 
 async def test_history_returns_parallel_arrays_ordered_by_date(auth_client, db):
@@ -1332,3 +1338,45 @@ async def test_history_returns_parallel_arrays_ordered_by_date(auth_client, db):
     assert body["market_value"] == ["53619.00", "53413.36"]
     assert body["cost_basis"] == ["53619.00", "55212.09"]
     assert body["sp500"] == ["53619.00", "53001.35"]
+    # No VOO bars at all in this seed: the benchmark leg is ALL-null — the one degraded
+    # shape (spec §4). Nulls, never a 500: the GET still answers.
+    assert body["benchmark"] == [None, None]
+
+
+async def test_history_carries_the_contribution_benchmark(auth_client, db):
+    voo = Security(ticker="VOO", name="Vanguard S&P 500 ETF", holding_type="etf")
+    db.add(voo)
+    await db.flush()
+    db.add_all(
+        [
+            PriceHistory(
+                security_id=voo.id, price_date=date(2023, 10, 23), close=Decimal("400.0000")
+            ),
+            PriceHistory(
+                security_id=voo.id, price_date=date(2023, 10, 30), close=Decimal("440.0000")
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            PortfolioValueHistory(
+                snapshot_date=date(2023, 10, 23),
+                market_value=Decimal("1000.00"),
+                cost_basis=Decimal("1000.00"),
+                sp500_value=Decimal("1000.00"),
+            ),
+            PortfolioValueHistory(
+                snapshot_date=date(2023, 10, 30),
+                market_value=Decimal("1150.00"),
+                cost_basis=Decimal("1200.00"),
+                sp500_value=Decimal("1100.00"),
+            ),
+        ]
+    )
+    await db.commit()
+
+    body = (await auth_client.get(HISTORY)).json()
+    # Parity seed = mv[0]; then 1000 x 440/400 + (1200 - 1000) = 1300. Decimal strings
+    # on the wire, aligned index-for-index with dates.
+    assert body["benchmark"] == ["1000.00", "1300.00"]
+    assert len(body["benchmark"]) == len(body["dates"])
