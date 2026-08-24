@@ -957,3 +957,15 @@ async def test_employer_backfill_does_not_watermark_an_empty_answer(db):
     await db.commit()
     assert await backfill_employer_history(db, provider) == 0
     assert len(provider.calls) == 2  # retried — nothing recorded the emptiness as final
+
+
+async def test_security_next_ex_div_date_roundtrip(db):
+    """§3.1: a NEW nullable column — ex_div_date keeps its most-recent-PAST-event
+    semantics untouched; this one carries the ANNOUNCED upcoming date."""
+    sec = await seed_security(db, "NVDA")
+    assert sec.next_ex_div_date is None  # fresh securities carry no announcement
+    sec.next_ex_div_date = date(2026, 9, 3)
+    await db.commit()
+    await db.refresh(sec)
+    assert sec.next_ex_div_date == date(2026, 9, 3)
+    assert sec.ex_div_date is None  # the two columns are independent

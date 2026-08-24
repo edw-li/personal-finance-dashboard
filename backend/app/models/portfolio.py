@@ -35,6 +35,12 @@ class Security(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
     annual_dividend: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     ex_div_date: Mapped[date | None] = mapped_column(Date)
+    # ex_div_date (above) is the most recent PAST event — maintained from historical
+    # bars by price_service._update_dividend_metadata, always behind us. This one is the
+    # ANNOUNCED upcoming date from the provider's forward calendar (2026-08-24 calendar
+    # spec §3.1): a new column, not an overload, so ex_div_date's consumers (Securities
+    # panel, TTM metadata) keep their semantics. The refresh clears it once it passes.
+    next_ex_div_date: Mapped[date | None] = mapped_column(Date)
 
 
 class PositionTransaction(Base):
