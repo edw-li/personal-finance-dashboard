@@ -1,6 +1,6 @@
 # Contribution-Matched Benchmark Line — Design Spec
 
-**Date:** 2026-08-24 · **Status:** approved, not yet implemented
+**Date:** 2026-08-24 · **Status:** implemented 2026-08-24 (branch contribution-benchmark)
 **Touches:** `services/value_history.py` (new pure computation), `api/portfolio.py` history endpoint + `schemas/portfolio.py`, `src/types/api.ts`, `src/components/portfolio/historyChartOptions.ts` (+ tests). **No migration; no stored state.**
 
 ## 1. Context & goals

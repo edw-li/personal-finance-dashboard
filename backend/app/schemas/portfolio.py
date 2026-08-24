@@ -247,11 +247,16 @@ class LatestPriceOut(BaseModel):
 
 
 class PortfolioHistoryOut(BaseModel):
-    """Parallel arrays (net-worth TimeseriesOut posture): index i across all four lists
+    """Parallel arrays (net-worth TimeseriesOut posture): index i across all five lists
     is one weekly imported point. sp500 is the sheet's baseline — the STARTING balance
-    benchmarked into VOO shares, not contribution-matched."""
+    benchmarked into VOO shares, not contribution-matched. benchmark is the
+    contribution-matched leg, derived at read time (value_history.contribution_benchmark):
+    every inferred contribution buys VOO instead. Rows are Decimal wherever computable —
+    rows before the first VOO bar carry the seed flat; ALL-None only when VOO has no bars
+    at all (nulls, never a 500)."""
 
     dates: list[date]
     market_value: list[Decimal]
     cost_basis: list[Decimal]
     sp500: list[Decimal]
+    benchmark: list[Decimal | None]

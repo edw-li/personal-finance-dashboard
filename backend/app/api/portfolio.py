@@ -45,6 +45,7 @@ from app.services.portfolio_calc import (
     fold_transactions,
     load_portfolio,
 )
+from app.services.value_history import baseline_closes_for, contribution_benchmark
 
 router = APIRouter(
     prefix="/portfolio", tags=["portfolio"], dependencies=[Depends(get_current_user)]
@@ -536,7 +537,10 @@ async def allocation_view(
 @router.get("/history", response_model=PortfolioHistoryOut)
 async def value_history(db: AsyncSession = Depends(get_db)) -> PortfolioHistoryOut:
     """The imported weekly series behind the performance chart — empty arrays (not 404)
-    until a workbook carrying the Portfolio sheet's value-history columns is imported."""
+    until a workbook carrying the Portfolio sheet's value-history columns is imported.
+    The benchmark leg is derived HERE, at read time: a stored column would go stale the
+    moment a re-import overrides history rows (apply_portfolio_history's contract), and
+    ~190 multiply-adds are free per request (2026-08-24 spec §2)."""
     rows = (
         (
             await db.execute(
@@ -546,11 +550,16 @@ async def value_history(db: AsyncSession = Depends(get_db)) -> PortfolioHistoryO
         .scalars()
         .all()
     )
+    snapshot_dates = [row.snapshot_date for row in rows]
+    closes = await baseline_closes_for(db, snapshot_dates)
     return PortfolioHistoryOut(
-        dates=[row.snapshot_date for row in rows],
+        dates=snapshot_dates,
         market_value=[row.market_value for row in rows],
         cost_basis=[row.cost_basis for row in rows],
         sp500=[row.sp500_value for row in rows],
+        benchmark=contribution_benchmark(
+            [(row.snapshot_date, row.market_value, row.cost_basis) for row in rows], closes
+        ),
     )
 
 

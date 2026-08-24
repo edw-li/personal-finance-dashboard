@@ -340,18 +340,20 @@ export default function PortfolioPage() {
             <div className="panel-title-row">
               <h2 className="panel-title">
                 Performance
-                <InfoHint text="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance, so it compares price performance, not a contribution-matched alternative." />
+                <InfoHint text="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg." />
               </h2>
               {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
             </div>
             {performanceOption ? (
               <>
                 <EChart option={performanceOption} height={300} />
-                {/* The sheet's baseline invests only the STARTING balance in VOO; saying so here
-                    keeps the gap under the blue line from reading as outperformance. */}
+                {/* Two benchmark legs, one distinction: the baseline invests only the
+                    STARTING balance; the contribution-matched line adds every inferred
+                    flow. Said here so neither gap reads as outperformance. */}
                 <p className="hint">
                   S&amp;P 500 baseline tracks the starting balance invested in VOO — later
-                  contributions are not added to it.
+                  contributions are not added to it. VOO (your contributions) adds each
+                  inferred contribution as it lands.
                 </p>
               </>
             ) : (

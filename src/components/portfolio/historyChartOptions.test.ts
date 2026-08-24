@@ -15,11 +15,18 @@ function history(over: Partial<PortfolioHistory> = {}): PortfolioHistory {
     market_value: ['700000.00', '710000.50', '718422.07'],
     cost_basis: ['395000.00', '399542.36', '400243.74'],
     sp500: ['96000.00', '97000.00', '98636.70'],
+    benchmark: ['96000.00', '97250.00', '99001.13'],
     ...over,
   }
 }
 
-const EMPTY: PortfolioHistory = { dates: [], market_value: [], cost_basis: [], sp500: [] }
+const EMPTY: PortfolioHistory = {
+  dates: [],
+  market_value: [],
+  cost_basis: [],
+  sp500: [],
+  benchmark: [],
+}
 
 // --- option readers (allocationChartOptions.test.ts posture) ---------------------------
 interface SeriesLike {
@@ -50,23 +57,32 @@ describe('portfolioHistoryOption', () => {
           market_value: ['1.00'],
           cost_basis: ['1.00'],
           sp500: ['1.00'],
+          benchmark: ['1.00'],
         }),
         { date: '2026-08-14', value: 2 },
       ),
     ).toBeNull()
   })
 
-  it('draws three lines in fixed palette slots with a wash under value only', () => {
+  it('draws four lines in fixed palette slots with a wash under value only', () => {
     const option = portfolioHistoryOption(history(), null)
     expect(option).not.toBeNull()
     const series = seriesOf(option!)
-    expect(series.map((s) => s.name)).toEqual(['Portfolio value', 'Cost basis', 'S&P 500 baseline'])
-    expect(series.map((s) => s.color)).toEqual([PALETTE[0], PALETTE[1], PALETTE[2]])
+    expect(series.map((s) => s.name)).toEqual([
+      'Portfolio value',
+      'Cost basis',
+      'S&P 500 baseline',
+      'VOO (your contributions)',
+    ])
+    expect(series.map((s) => s.color)).toEqual([PALETTE[0], PALETTE[1], PALETTE[2], PALETTE[3]])
     expect(series[0].areaStyle?.opacity).toBeGreaterThan(0)
     expect(series[1].areaStyle).toBeUndefined()
     expect(series[2].areaStyle).toBeUndefined()
+    // No wash on the benchmark either — the wash rides the value line only (spec §4).
+    expect(series[3].areaStyle).toBeUndefined()
     // Number() at the boundary, once
     expect(series[0].data).toEqual([700000, 710000.5, 718422.07])
+    expect(series[3].data).toEqual([96000, 97250, 99001.13])
     expect(categoriesOf(option!)).toEqual(['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026'])
   })
 
@@ -79,12 +95,13 @@ describe('portfolioHistoryOption', () => {
       'Aug 14, 2026',
     ])
     const series = seriesOf(option!)
-    expect(series).toHaveLength(4)
+    expect(series).toHaveLength(5)
     // Lines end at the last IMPORTED point — the live category is never extrapolated.
     expect(series[0].data).toEqual([700000, 710000.5, 718422.07, null])
     expect(series[1].data).toEqual([395000, 399542.36, 400243.74, null])
     expect(series[2].data).toEqual([96000, 97000, 98636.7, null])
-    const live = series[3]
+    expect(series[3].data).toEqual([96000, 97250, 99001.13, null])
+    const live = series[4]
     expect(live.type).toBe('effectScatter')
     expect(live.name).toBe('Live')
     expect(live.color).toBe(PALETTE[0]) // same entity as the value line; the ripple says "live"
@@ -100,18 +117,44 @@ describe('portfolioHistoryOption', () => {
     const option = portfolioHistoryOption(history(), { date: '2026-08-10', value: 720000 })
     expect(categoriesOf(option!)).toEqual(['Jul 27, 2026', 'Aug 3, 2026', 'Aug 10, 2026'])
     const series = seriesOf(option!)
-    expect(series).toHaveLength(4)
+    expect(series).toHaveLength(5)
     expect(series[0].data).toEqual([700000, 710000.5, 718422.07]) // no null padding
-    expect(series[3].data).toEqual([['Aug 10, 2026', 720000]])
-    expect(series[3].markLine).toBeUndefined()
+    expect(series[3].data).toEqual([96000, 97250, 99001.13])
+    expect(series[4].data).toEqual([['Aug 10, 2026', 720000]])
+    expect(series[4].markLine).toBeUndefined()
   })
 
   it('self-retires the live point when the quote predates the series or is unusable', () => {
-    expect(seriesOf(portfolioHistoryOption(history(), { date: '2026-08-01', value: 1 })!)).toHaveLength(3)
+    expect(
+      seriesOf(portfolioHistoryOption(history(), { date: '2026-08-01', value: 1 })!),
+    ).toHaveLength(4)
     expect(
       seriesOf(portfolioHistoryOption(history(), { date: '2026-08-14', value: Number.NaN })!),
-    ).toHaveLength(3)
-    expect(seriesOf(portfolioHistoryOption(history(), null)!)).toHaveLength(3)
+    ).toHaveLength(4)
+    expect(seriesOf(portfolioHistoryOption(history(), null)!)).toHaveLength(4)
+  })
+
+  it('omits the benchmark series when the payload lacks the field or carries only nulls', () => {
+    // Stale-tab payload: cached from the pre-benchmark API the field is absent at
+    // runtime even though the type now requires it — hence the cast.
+    const legacy = {
+      dates: ['2026-07-27', '2026-08-03', '2026-08-10'],
+      market_value: ['700000.00', '710000.50', '718422.07'],
+      cost_basis: ['395000.00', '399542.36', '400243.74'],
+      sp500: ['96000.00', '97000.00', '98636.70'],
+    } as PortfolioHistory
+    expect(seriesOf(portfolioHistoryOption(legacy, null)!).map((s) => s.name)).toEqual([
+      'Portfolio value',
+      'Cost basis',
+      'S&P 500 baseline',
+    ])
+    // The server's no-VOO-bars degradation: all-null. An all-null line would draw
+    // nothing yet still ghost-occupy the legend, so the series is omitted outright.
+    expect(
+      seriesOf(portfolioHistoryOption(history({ benchmark: [null, null, null] }), null)!).map(
+        (s) => s.name,
+      ),
+    ).toEqual(['Portfolio value', 'Cost basis', 'S&P 500 baseline'])
   })
 })
 
@@ -176,5 +219,24 @@ describe('historyTooltipFormatter', () => {
         value: 718422.07,
       }),
     ).toContain('$718,422.07')
+  })
+
+  it('skips the benchmark null row on the padded live category', () => {
+    const html = historyTooltipFormatter([
+      {
+        seriesName: 'VOO (your contributions)',
+        marker: '<i/>',
+        axisValueLabel: 'Aug 14, 2026',
+        value: null,
+      },
+      {
+        seriesName: 'Live',
+        marker: '<i/>',
+        axisValueLabel: 'Aug 14, 2026',
+        value: ['Aug 14, 2026', 723456.78],
+      },
+    ])
+    expect(html).toContain('Live')
+    expect(html).not.toContain('VOO (your contributions)')
   })
 })

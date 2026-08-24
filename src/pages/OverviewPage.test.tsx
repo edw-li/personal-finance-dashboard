@@ -162,6 +162,7 @@ function historyOut(over: Partial<PortfolioHistory> = {}): PortfolioHistory {
     market_value: ['700000.00', '710000.50', '718422.07'],
     cost_basis: ['395000.00', '399542.36', '400243.74'],
     sp500: ['96000.00', '97000.00', '98636.70'],
+    benchmark: ['96000.00', '97250.00', '99001.13'],
     ...over,
   }
 }
@@ -699,7 +700,7 @@ describe('OverviewPage on an empty database', () => {
           unpriced_count: 0,
         },
       }),
-      history: historyOut({ dates: [], market_value: [], cost_basis: [], sp500: [] }),
+      history: historyOut({ dates: [], market_value: [], cost_basis: [], sp500: [], benchmark: [] }),
       matrix: matrixOut({ months: [], totals: [] }),
       taxes: { years: [] },
     })

@@ -353,7 +353,7 @@ export default function OverviewPage() {
             <section className="card span-12">
               <h2 className="eyebrow">
                 Portfolio performance
-                <InfoHint text="Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. The S&P 500 line invests only the starting balance — contributions are not added to it." />
+                <InfoHint text="Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. The S&P 500 line invests only the starting balance; VOO (your contributions) invests every inferred contribution instead." />
               </h2>
               <NavLink className="drill-hint" to="/portfolio">
                 Open portfolio →
