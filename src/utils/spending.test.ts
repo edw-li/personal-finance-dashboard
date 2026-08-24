@@ -8,10 +8,17 @@ const categories = [
   { id: 4, name: 'Misc', slug: 'misc', sort_order: 4, is_active: true },
 ]
 
-function matrix(values: Record<number, (string | null)[]>) {
+function matrix(
+  values: Record<number, (string | null)[]>,
+  budgets: Record<number, (string | null)[]> = {},
+) {
   return {
     categories,
-    series: Object.entries(values).map(([id, v]) => ({ category_id: Number(id), values: v })),
+    series: Object.entries(values).map(([id, v]) => ({
+      category_id: Number(id),
+      values: v,
+      budgets: budgets[Number(id)] ?? v.map(() => null),
+    })),
   }
 }
 
@@ -45,7 +52,7 @@ describe('buildMonthSlices', () => {
   })
 
   it('falls back to the id when a series category is missing from the list', () => {
-    const m = { categories: [], series: [{ category_id: 9, values: ['12.00'] }] }
+    const m = { categories: [], series: [{ category_id: 9, values: ['12.00'], budgets: [null] }] }
     expect(buildMonthSlices(m, [9], 0)).toEqual([{ name: '9', value: 12, slot: 0 }])
   })
 })
@@ -100,13 +107,18 @@ describe('typicalSpend', () => {
     months: ['2026-04-01', '2026-05-01', '2026-06-01', '2026-07-01'],
     categories: [],
     series: [
-      { category_id: 7, values: ['10.00', '30.00', null, '20.00'] },
-      { category_id: 8, values: [null, null, null, null] },
+      {
+        category_id: 7,
+        values: ['10.00', '30.00', null, '20.00'],
+        budgets: [null, null, null, null],
+      },
+      { category_id: 8, values: [null, null, null, null], budgets: [null, null, null, null] },
     ],
     totals: [],
     net_pay: [],
     savings_rate: [],
     four_pct_rule: [],
+    total_budget: [null, null, null, null],
   }
   it('takes the median of the up-to-3 latest non-null values strictly before the month', () => {
     // Before 2026-08: candidates are 20.00 (Jul), 30.00 (May), 10.00 (Apr) → median 20.

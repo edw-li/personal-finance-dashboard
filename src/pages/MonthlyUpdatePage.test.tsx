@@ -63,14 +63,15 @@ beforeEach(() => {
   vi.mocked(spendingApi.fetchMatrix).mockResolvedValue({
     months: ['2026-07-01'],
     categories: [],
-    series: [{ category_id: 7, values: ['300.00'] }],
+    series: [{ category_id: 7, values: ['300.00'], budgets: [null] }],
     totals: [],
     net_pay: [],
     savings_rate: [],
     four_pct_rule: [],
+    total_budget: [null],
   })
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', exists: false, net_pay: null, amounts: [],
+    month: '2026-08-01', exists: false, net_pay: null, amounts: [], budgets: [],
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
     month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
@@ -453,7 +454,7 @@ it('keeps the live spending footer in sync while entering amounts', async () => 
 
 it('clears a previously saved net pay when the box is blanked', async () => {
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [],
+    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [], budgets: [],
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
     month: '2026-08-01', created: 0, updated: 0, unchanged: 1,
@@ -478,7 +479,7 @@ it('clears a previously saved net pay when the box is blanked', async () => {
 
 it('keeps sending the clear on the retry after a failed save', async () => {
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [],
+    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [], budgets: [],
   })
   // The balances PUT resolves normally both times; only the spending half fails first.
   vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
@@ -563,11 +564,12 @@ it('leaves an exactly-typical month untoned instead of painting float residue', 
   vi.mocked(spendingApi.fetchMatrix).mockResolvedValue({
     months: ['2026-06-01', '2026-07-01'],
     categories: [],
-    series: [{ category_id: 7, values: ['0.10', '0.20'] }],
+    series: [{ category_id: 7, values: ['0.10', '0.20'], budgets: [null, null] }],
     totals: [],
     net_pay: [],
     savings_rate: [],
     four_pct_rule: [],
+    total_budget: [null, null],
   })
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))

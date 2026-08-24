@@ -96,11 +96,15 @@ export interface AmountEntry {
 export interface SpendingMatrix {
   months: string[]
   categories: CategoryOut[]
-  series: { category_id: number; values: (string | null)[] }[]
+  // budgets: the category's RESOLVED budget per month (greatest effective_month <= M,
+  // spec §2), aligned with months; null = unbudgeted that month.
+  series: { category_id: number; values: (string | null)[]; budgets: (string | null)[] }[]
   totals: string[]
   net_pay: (string | null)[]
   savings_rate: (string | null)[]
   four_pct_rule: (string | null)[]
+  /** Sum of the resolved category budgets per month; null when NO category has one. */
+  total_budget: (string | null)[]
 }
 
 export interface SpendingMonth {
@@ -108,6 +112,14 @@ export interface SpendingMonth {
   exists: boolean
   net_pay: string | null
   amounts: AmountEntry[]
+  /** Budgets RESOLVED for this month — only categories with one appear (wizard subtext). */
+  budgets: AmountEntry[]
+}
+
+export interface CategoryBudgetEntry {
+  effective_month: string
+  /** null = the dated "budget ends here" marker (spec §2), not a missing value. */
+  amount: string | null
 }
 
 export interface SpendingUpsertResult {

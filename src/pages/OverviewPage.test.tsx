@@ -177,6 +177,7 @@ function matrixOut(over: Partial<SpendingMatrix> = {}): SpendingMatrix {
     net_pay: [],
     savings_rate: [],
     four_pct_rule: [],
+    total_budget: [],
     ...over,
   }
 }
