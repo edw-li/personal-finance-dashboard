@@ -9,6 +9,10 @@ import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import {
+  spendingFlowPeriod,
+  spendingSankeyOption,
+} from '../components/spending/spendingSankeyOptions'
 import type { EChartsOption } from '../charts/echarts'
 import { timeZoom } from '../charts/timeZoom'
 import type { RangePreset } from '../charts/timeZoom'
@@ -68,6 +72,10 @@ export default function SpendingPage() {
   // whole: its visualMap is scaled to all time, and windowing rows of cells reads as
   // missing data rather than as a zoom.
   const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
+  // The flow card's window. Month follows the month being LOOKED AT (drill-aware, the
+  // movers' rule below); Year re-slices the SAME looked-at month's year from the rollup
+  // — both datasources are already on the page, so the toggle never refetches.
+  const [flowMode, setFlowMode] = useState<'month' | 'year'>('month')
   // Instance handle for the bars chart so heatmap hover can dispatch highlights into it.
   const barsChartRef = useRef<EChartsInstance | null>(null)
 
@@ -264,6 +272,15 @@ export default function SpendingPage() {
   const movers = useMemo(
     () => (matrix ? monthMovers(matrix, moversIndex, MOVERS_TOP) : []),
     [matrix, moversIndex],
+  )
+
+  const flowPeriod = useMemo(
+    () => spendingFlowPeriod(matrix, yearly, topIds, moversIndex, flowMode),
+    [matrix, yearly, topIds, moversIndex, flowMode],
+  )
+  const flowOption = useMemo(
+    () => (flowPeriod === null ? null : spendingSankeyOption(flowPeriod)),
+    [flowPeriod],
   )
 
   const handleSpendChartClick = (params: EChartEventParams) => {
@@ -619,6 +636,45 @@ export default function SpendingPage() {
               The {MOVERS_TOP} biggest category moves for the month above — drill into a
               month on the top chart to see its movers instead.
             </p>
+          </div>
+        )}
+
+        {flowPeriod && (
+          <div className="card span-12">
+            <div className="spending-chart-header">
+              <h2 className="eyebrow">
+                Where {flowPeriod.label} went
+                <InfoHint text="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a red Drawdown source covering the overspend." />
+              </h2>
+              <div className="segmented" role="group" aria-label="Flow window">
+                {(['month', 'year'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={flowMode === mode ? 'active' : ''}
+                    aria-pressed={flowMode === mode}
+                    onClick={() => setFlowMode(mode)}
+                  >
+                    {mode === 'month' ? 'Month' : 'Year'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {flowOption ? (
+              <>
+                <EChart option={flowOption} height={320} />
+                <p className="drill-hint">
+                  Hover a node to trace its flows; drill a month on the top chart and this
+                  card follows it.
+                </p>
+              </>
+            ) : (
+              <div className="empty-note">
+                {flowPeriod.netPay === null
+                  ? `Enter net pay for ${flowPeriod.label} to see the flow.`
+                  : `No flow to draw for ${flowPeriod.label}.`}
+              </div>
+            )}
           </div>
         )}
 
