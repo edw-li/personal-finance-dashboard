@@ -22,6 +22,7 @@ from app.models import (
     Account,
     AccountBalance,
     DividendPayment,
+    EsppOffering,
     LatestPrice,
     MonthlyCashflow,
     MonthlySpending,
@@ -931,26 +932,24 @@ async def test_importer_never_writes_rsu_grants(db):
     assert all("rsu_grants" not in sheet.entities for sheet in report.sheets.values())
 
 
-def account_row(row: Account) -> tuple:
-    """EVERY stored column, as grant_row above — so a user-owned account column added
-    later is covered by the pin below without anyone editing it."""
-    return tuple(getattr(row, column.key) for column in Account.__table__.columns)
+def offering_row(row: EsppOffering) -> tuple:
+    """EVERY stored column, as grant_row above — an offerings column added later is
+    covered by the pin below without anyone editing it."""
+    return tuple(getattr(row, column.key) for column in EsppOffering.__table__.columns)
 
 
-async def test_importer_never_writes_account_suggest_source(db):
-    """suggest_source is dashboard-only and user-owned (2026-08-22 spec §5.2, the
-    is_component posture). Unlike rsu_grants — a table the sheet has no column for — the
-    workbook DOES carry these accounts and the importer diffs them every run, so the pin
-    is the sharper one: re-importing a sheet that names the account must leave the
-    dashboard's mapping byte-identical."""
+async def test_importer_never_writes_espp_offerings(db):
+    """espp_offerings is dashboard-only (2026-08-23 spec §2.1, the rsu_grants posture):
+    the workbook has no offerings concept, so an import must neither create, update nor
+    delete a row."""
     from app.importer.service import run_import
 
-    assert (await run_import(build_workbook(), db, dry_run=False)).applied is True
-    checking = (await db.execute(select(Account).where(Account.slug == "checking"))).scalar_one()
-    checking.suggest_source = "portfolio:RH Taxable"
+    db.add(EsppOffering(offering_start=date(2023, 9, 1), subscription_price=Decimal("48.509")))
     await db.commit()
-    before = {row.id: account_row(row) for row in (await db.execute(select(Account))).scalars()}
-    assert len(before) == 3  # Checking / IRA / Credit Card — every one sheet-carried
+    before = {
+        row.id: offering_row(row) for row in (await db.execute(select(EsppOffering))).scalars()
+    }
+    assert len(before) == 1
 
     for _ in range(2):
         report = await run_import(build_workbook(), db, dry_run=False)
@@ -959,15 +958,10 @@ async def test_importer_never_writes_account_suggest_source(db):
     # populate_existing, or the identity map would hand back the pre-import objects and this
     # would pass even if the import had rewritten every column (the dividends pin's note).
     after = {
-        row.id: account_row(row)
+        row.id: offering_row(row)
         for row in (
-            await db.execute(select(Account).execution_options(populate_existing=True))
+            await db.execute(select(EsppOffering).execution_options(populate_existing=True))
         ).scalars()
     }
     assert after == before
-    # Named re-read straight from the DB: the full-tuple compare above can only see columns
-    # the model declares, so this is what fails loudly if the mapping itself is dropped.
-    stored = (
-        await db.execute(select(Account.suggest_source).where(Account.slug == "checking"))
-    ).scalar_one()
-    assert stored == "portfolio:RH Taxable"
+    assert all("espp_offerings" not in sheet.entities for sheet in report.sheets.values())

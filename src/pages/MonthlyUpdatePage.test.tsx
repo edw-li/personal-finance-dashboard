@@ -6,7 +6,6 @@ import MonthlyUpdatePage from './MonthlyUpdatePage'
 vi.mock('../api/netWorth', () => ({
   fetchAccounts: vi.fn(),
   fetchMonthBalances: vi.fn(),
-  fetchSuggestions: vi.fn(),
   fetchTimeseries: vi.fn(),
   putMonthBalances: vi.fn(),
 }))
@@ -25,16 +24,12 @@ import { addMonths, currentMonthIso } from '../utils/months'
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
   sort_order: 1, is_active: true, is_component: false, parent_account_id: null,
-  // Unmapped, like every account until Settings maps one — the chips are opt-in, and the
-  // suggestion fixtures below drive the wizard through the endpoint, not this column.
-  suggest_source: null,
 }
 // The default fixture is one account, which cannot show ORDER — the paste tests that care
 // about where a range lands opt into this second row.
 const savings = {
   id: 2, name: 'Savings', slug: 'savings', group: 'cash' as const,
   sort_order: 2, is_active: true, is_component: false, parent_account_id: null,
-  suggest_source: null,
 }
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 
@@ -62,10 +57,6 @@ beforeEach(() => {
     mom_pct: [null],
     notes: [null],
   })
-  // Nothing mapped is the DEFAULT posture (spec §5.2 opt-in): every test that is not
-  // about chips must see the wizard it always had, and the load's Promise.all must not
-  // reject on its newest member.
-  vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({ suggestions: [], warnings: [] })
   vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category])
   // One prior month of history for Food — the spending step's "Typical" column reads it
   // (a single sample IS its own median).
@@ -108,6 +99,9 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
   // Step 1: balance input pre-filled from the prior month (2026-07 snapshot).
   const balanceInput = await screen.findByLabelText('Checking')
   expect((balanceInput as HTMLInputElement).value).toBe('1500.00')
+  // The balance-suggestion chips were removed end to end (spec §5.2 amendment): the cell
+  // is the box and nothing else — no computed "suggested $X · Apply" offer under it.
+  expect(screen.queryByText(/suggested/)).toBeNull()
   fireEvent.change(balanceInput, { target: { value: '1600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
 
@@ -350,12 +344,10 @@ it('excludes components from the group subtotal and the live net worth', async (
   const brokerage = {
     id: 2, name: 'Brokerage', slug: 'brokerage', group: 'taxable' as const,
     sort_order: 2, is_active: true, is_component: false, parent_account_id: null,
-    suggest_source: null,
   }
   const brokerageCash = {
     id: 3, name: 'Brokerage cash', slug: 'brokerage-cash', group: 'taxable' as const,
     sort_order: 3, is_active: true, is_component: true, parent_account_id: 2,
-    suggest_source: null,
   }
   vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, brokerage, brokerageCash])
   renderWizard()
@@ -717,173 +709,4 @@ it('pastes into the spending step and drops the note on the way out', async () =
   fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
   await screen.findByLabelText('Checking')
   expect(screen.queryByText(/pasted 1 of 1 values/i)).toBeNull()
-})
-
-// --- balance suggestion chips (spec §5.2) ---
-// The anchor is CLOCK-derived — max(month after the latest covered month, current month) —
-// so these fixtures are built from currentMonthIso() the way 'offers starting the month
-// after the latest covered month' builds its own. Coverage through LAST month makes the
-// CURRENT month the anchor whenever the suite runs; the default fixture's hard-coded
-// 2026-08-01 is the anchor only while the calendar happens to agree, and pinning "chips
-// render here / never there" on that coincidence is exactly the flake this avoids.
-
-function seedAnchorFixture(): { anchor: string; backfill: string } {
-  const anchor = currentMonthIso()
-  const prior = addMonths(anchor, -1)
-  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
-    month,
-    exists: month === prior,
-    recorded_on: null,
-    notes: null,
-    balances: month === prior ? [{ account_id: 1, balance: '1500.00' }] : [],
-  }))
-  vi.mocked(netWorthApi.fetchTimeseries).mockResolvedValue({
-    months: [prior],
-    accounts: [account],
-    series: [{ account_id: 1, values: ['1500.00'] }],
-    group_totals: {
-      cash: ['1500.00'], pre_tax: ['0.00'], post_tax: ['0.00'], taxable: ['0.00'],
-      equity: ['0.00'], other: ['0.00'], liability: ['0.00'],
-    },
-    net_worth: ['1500.00'],
-    mom_pct: [null],
-    notes: [null],
-  })
-  // Half a year back: unambiguously a backfill under any clock, and covered by nothing.
-  return { anchor, backfill: addMonths(anchor, -6) }
-}
-
-function renderAt(month: string) {
-  return render(
-    <MemoryRouter initialEntries={[`/update?month=${month}`]}>
-      <MonthlyUpdatePage />
-    </MemoryRouter>,
-  )
-}
-
-it('offers the computed balance as an Apply chip on the anchor month', async () => {
-  const { anchor } = seedAnchorFixture()
-  vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({
-    suggestions: [{ account_id: 1, source: 'portfolio:RH Taxable', value: '2500.00' }],
-    warnings: [],
-  })
-  renderAt(anchor)
-
-  const box = (await screen.findByLabelText('Checking')) as HTMLInputElement
-  // The seed still wins: a suggestion is an OFFER, never an auto-fill (decision 5).
-  expect(box.value).toBe('1500.00')
-  const row = box.closest('tr') as HTMLElement
-  expect(within(row).getByText(/suggested \$2,500\.00/i)).toBeDefined()
-
-  fireEvent.click(
-    within(row).getByRole('button', { name: /apply suggested balance for checking/i }),
-  )
-  expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('2500.00')
-  // Hide-when-equal: once the box holds the suggested figure the chip has nothing left to
-  // say, and leaving it there would invite a second click that changes nothing.
-  expect(within(row).queryByRole('button', { name: /apply suggested balance/i })).toBeNull()
-})
-
-it('counts a whole-dollar entry as already holding the suggested value', async () => {
-  const { anchor } = seedAnchorFixture()
-  vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({
-    suggestions: [{ account_id: 1, source: 'portfolio:RH Taxable', value: '2500.00' }],
-    warnings: [],
-  })
-  renderAt(anchor)
-
-  const box = (await screen.findByLabelText('Checking')) as HTMLInputElement
-  const row = box.closest('tr') as HTMLElement
-  const chip = () => within(row).queryByRole('button', { name: /apply suggested balance/i })
-  expect(chip()).not.toBeNull()
-
-  // THE HOLE a raw canonical comparison leaves: '2500' canonicalizes VERBATIM (idempotence
-  // — parseAmount never rescales), so it is not the string '2500.00' even though the box
-  // echoes both as $2,500.00. The chip would sit there offering the number already on
-  // screen, which is precisely what decision 5 exists to prevent.
-  fireEvent.change(box, { target: { value: '2500' } })
-  expect(chip()).toBeNull()
-  // Every tolerant spelling of the same number is the same number.
-  fireEvent.change(box, { target: { value: '$2,500' } })
-  expect(chip()).toBeNull()
-  fireEvent.change(box, { target: { value: '=2500' } })
-  expect(chip()).toBeNull()
-  // Hide-when-EQUAL, not hide-forever: a different figure brings the offer back.
-  fireEvent.change(box, { target: { value: '2400' } })
-  expect(chip()).not.toBeNull()
-})
-
-it('never offers a suggestion the seeded balance already matches', async () => {
-  const { anchor } = seedAnchorFixture()
-  // The month is already entered AT the computed figure — the common shape of a second
-  // visit, and the one place a chip would appear before the user has touched anything.
-  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
-    month,
-    exists: month === anchor,
-    recorded_on: null,
-    notes: null,
-    balances: month === anchor ? [{ account_id: 1, balance: '2500.00' }] : [],
-  }))
-  vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({
-    suggestions: [{ account_id: 1, source: 'vesting:unvested', value: '2500.00' }],
-    warnings: [],
-  })
-  renderAt(anchor)
-
-  const box = (await screen.findByLabelText('Checking')) as HTMLInputElement
-  expect(box.value).toBe('2500.00')
-  // Suppressed at FIRST PAINT, not merely after an Apply click.
-  expect(screen.queryByRole('button', { name: /apply suggested balance/i })).toBeNull()
-})
-
-it('never offers a suggestion on a backfill month', async () => {
-  const { backfill } = seedAnchorFixture()
-  vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({
-    suggestions: [{ account_id: 1, source: 'portfolio:RH Taxable', value: '2500.00' }],
-    warnings: ["Roth IRA: no holdings under portfolio label 'Ghost Label'"],
-  })
-  renderAt(backfill)
-
-  await screen.findByLabelText('Checking')
-  // Suggestions are "now" values (decision 4): offering today's brokerage total as March's
-  // balance would write a wrong number into history with one click.
-  expect(screen.queryByText(/suggested \$/i)).toBeNull()
-  expect(screen.queryByRole('button', { name: /apply suggested balance/i })).toBeNull()
-  // Same reason the chips are gone: a diagnostic about mappings that cannot be applied
-  // here is noise on a month that was never their audience.
-  expect(screen.queryByText(/no holdings under/i)).toBeNull()
-})
-
-it('still enters the month when the suggestions fetch fails', async () => {
-  const { anchor } = seedAnchorFixture()
-  vi.mocked(netWorthApi.fetchSuggestions).mockRejectedValue(new Error('suggestions down'))
-  renderAt(anchor)
-
-  // The advisory degrades to nothing — an entry aid must never take the wizard down with
-  // it (the fetchMatrix precedent).
-  const box = await screen.findByLabelText('Checking')
-  expect(screen.queryByRole('button', { name: /apply suggested balance/i })).toBeNull()
-  expect(screen.queryByRole('alert')).toBeNull()
-  fireEvent.change(box, { target: { value: '1600' } })
-  expect(
-    (screen.getByRole('button', { name: /next: spending/i }) as HTMLButtonElement).disabled,
-  ).toBe(false)
-})
-
-it('names an unresolvable mapping above the table, verbatim', async () => {
-  const { anchor } = seedAnchorFixture()
-  vi.mocked(netWorthApi.fetchSuggestions).mockResolvedValue({
-    suggestions: [],
-    warnings: ["Roth IRA: no holdings under portfolio label 'Ghost Label'"],
-  })
-  renderAt(anchor)
-
-  await screen.findByLabelText('Checking')
-  // The server's sentence, not a paraphrase: it names the account AND the label that
-  // resolved to nothing, which is the whole repair instruction.
-  expect(
-    screen.getByText("Roth IRA: no holdings under portfolio label 'Ghost Label'"),
-  ).toBeDefined()
-  // A missing chip is not an error state — nothing failed, one mapping is stale.
-  expect(screen.queryByRole('alert')).toBeNull()
 })

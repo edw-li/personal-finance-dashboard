@@ -12,14 +12,20 @@ runs; only the endpoint reads `date.today()`.
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from app.models import EsppLot
 from app.services.espp_calc import (
     ANNUAL_LIMIT,
-    PeriodInputs,
+    OfferingInfo,
+    RowPlan,
+    StoredPeriod,
     ceil2,
     floor_int,
     half_up2,
+    last_weekday_of,
     lot_metrics,
+    plan_year_rows,
     run_modeler,
 )
 
@@ -39,17 +45,22 @@ def period(
     add: str = "0.00",
     start: date = date(2026, 1, 1),
     end: date = date(2026, 6, 30),
-) -> PeriodInputs:
+    sub: Decimal = SUB,
+) -> RowPlan:
     """Column-scale values, as the router hands them over: base/add Numeric(12,2),
-    contribution_pct Numeric(10,9)."""
-    return PeriodInputs(
-        id=id,
+    contribution_pct Numeric(10,9). `sub` defaults to the golden's single price, so the
+    chain tests below pin the same numbers they did before the price went per-row."""
+    return RowPlan(
+        period_id=id,
+        stored=True,
         label=label,
         period_start=start,
         period_end=end,
         semi_annual_base=D(base),
         additional_payments=D(add),
         contribution_pct=D(pct),
+        subscription_price=sub,
+        offering_start=None,
     )
 
 
@@ -113,10 +124,8 @@ def test_annual_limit_is_the_25k_ceiling_at_money_scale():
 
 
 def test_two_period_golden_chain_pins_every_intermediate():
-    result = run_modeler(
-        REAL_PERIODS, subscription_price=SUB, purchase_fmv=FMV, carry_forward=D("0.00")
-    )
-    assert result.subscription_price == SUB
+    result = run_modeler(REAL_PERIODS, purchase_fmv=FMV, carry_forward=D("0.00"))
+    assert all(row.period.subscription_price == SUB for row in result.periods)
     assert result.purchase_fmv == FMV
     assert result.carry_forward == D("0.00")
 
@@ -158,9 +167,7 @@ def test_two_period_golden_chain_pins_every_intermediate():
 
 
 def test_single_period_chain_and_the_carry_forward_seed():
-    zero_carry = run_modeler(
-        REAL_PERIODS[:1], subscription_price=SUB, purchase_fmv=FMV, carry_forward=D("0.00")
-    )
+    zero_carry = run_modeler(REAL_PERIODS[:1], purchase_fmv=FMV, carry_forward=D("0.00"))
     (only,) = zero_carry.periods
     assert only.available == D("11340.00")
     assert only.shares == 78
@@ -171,9 +178,7 @@ def test_single_period_chain_and_the_carry_forward_seed():
     assert zero_carry.totals.remaining_25k == D("11678.38")
 
     # The seed carry is spendable cash in the FIRST period and nowhere else.
-    seeded = run_modeler(
-        REAL_PERIODS[:1], subscription_price=SUB, purchase_fmv=FMV, carry_forward=D("100.00")
-    )
+    seeded = run_modeler(REAL_PERIODS[:1], purchase_fmv=FMV, carry_forward=D("100.00"))
     (funded,) = seeded.periods
     assert funded.available == D("11440.00")
     assert funded.shares == 78  # 79 shares would cost 11469.22 — still short
@@ -183,16 +188,11 @@ def test_single_period_chain_and_the_carry_forward_seed():
 
 def test_three_period_chain_decrements_unused_25k_cumulatively():
     periods = [
-        period(10, "P1", "10000.00", "0.100000000", end=date(2026, 3, 31)),
-        period(11, "P2", "10000.00", "0.100000000", end=date(2026, 7, 31)),
-        period(12, "P3", "10000.00", "0.100000000", end=date(2026, 11, 30)),
+        period(10, "P1", "10000.00", "0.100000000", end=date(2026, 3, 31), sub=D("100.00000")),
+        period(11, "P2", "10000.00", "0.100000000", end=date(2026, 7, 31), sub=D("100.00000")),
+        period(12, "P3", "10000.00", "0.100000000", end=date(2026, 11, 30), sub=D("100.00000")),
     ]
-    result = run_modeler(
-        periods,
-        subscription_price=D("100.00000"),
-        purchase_fmv=D("100.00000"),
-        carry_forward=D("0.00"),
-    )
+    result = run_modeler(periods, purchase_fmv=D("100.00000"), carry_forward=D("0.00"))
     p1, p2, p3 = result.periods
     assert [p.unused_25k for p in result.periods] == [
         D("25000.00"),
@@ -217,8 +217,7 @@ def test_three_period_chain_decrements_unused_25k_cumulatively():
 
 def test_over_limit_branch_swaps_carry_forward_for_a_refund():
     result = run_modeler(
-        [period(20, "rich", "400000.00", "0.100000000")],
-        subscription_price=D("100.00000"),
+        [period(20, "rich", "400000.00", "0.100000000", sub=D("100.00000"))],
         purchase_fmv=D("100.00000"),
         carry_forward=D("0.00"),
     )
@@ -238,8 +237,7 @@ def test_over_limit_triggers_on_equality_not_strict_excess():
     # shares_before_limit == max_shares_25k: the sheet's `>=` still refunds the change
     # instead of carrying it (a `>` here would report carry 50.00 / refund 0.00).
     result = run_modeler(
-        [period(21, "exact", "213000.00", "0.100000000")],
-        subscription_price=D("100.00000"),
+        [period(21, "exact", "213000.00", "0.100000000", sub=D("100.00000"))],
         purchase_fmv=D("100.00000"),
         carry_forward=D("0.00"),
     )
@@ -257,10 +255,9 @@ def test_an_over_limit_period_refunds_its_change_instead_of_funding_the_next_one
     # would be spent twice — once back to the employee, once in the next period.
     result = run_modeler(
         [
-            period(40, "over", "100000.00", "0.500000000", end=date(2026, 3, 31)),
-            period(41, "after", "10000.00", "0.100000000", end=date(2026, 9, 30)),
+            period(40, "over", "100000.00", "0.500000000", end=date(2026, 3, 31), sub=D("100")),
+            period(41, "after", "10000.00", "0.100000000", end=date(2026, 9, 30), sub=D("100")),
         ],
-        subscription_price=D("100.00000"),
         purchase_fmv=D("100.00000"),
         carry_forward=D("0.00"),
     )
@@ -291,12 +288,7 @@ def test_an_over_limit_period_refunds_its_change_instead_of_funding_the_next_one
 
 
 def test_purchase_price_takes_the_lower_of_subscription_and_fmv():
-    lower_fmv = run_modeler(
-        REAL_PERIODS[:1],
-        subscription_price=D("170.79000"),
-        purchase_fmv=D("100.00000"),
-        carry_forward=D("0.00"),
-    )
+    lower_fmv = run_modeler(REAL_PERIODS[:1], purchase_fmv=D("100.00000"), carry_forward=D("0.00"))
     assert lower_fmv.periods[0].purchase_price == D("85.00")  # CEIL2(0.85 x 100)
     # ... while the 25k valuation always runs on the SUBSCRIPTION price.
     assert lower_fmv.periods[0].max_shares_25k == 146
@@ -305,7 +297,6 @@ def test_purchase_price_takes_the_lower_of_subscription_and_fmv():
 def test_additional_payments_join_eligible_earnings():
     result = run_modeler(
         [period(30, "bonus", "81000.00", "0.140000000", add="9000.00")],
-        subscription_price=SUB,
         purchase_fmv=FMV,
         carry_forward=D("0.00"),
     )
@@ -315,12 +306,106 @@ def test_additional_payments_join_eligible_earnings():
 
 
 def test_empty_period_list_models_an_untouched_year():
-    result = run_modeler([], subscription_price=SUB, purchase_fmv=FMV, carry_forward=D("0.00"))
+    result = run_modeler([], purchase_fmv=FMV, carry_forward=D("0.00"))
     assert result.periods == []
     assert result.totals.total_25k_value == D("0.00")
     assert result.totals.out_of_pocket_cost == D("0.00")
     assert result.totals.fmv_of_shares == D("0.00")
     assert result.totals.remaining_25k == D("25000.00")
+
+
+def _plan(
+    label: str,
+    start: date,
+    end: date,
+    sub: str,
+    base: str = "60000",
+    additional: str = "0",
+    pct: str = "0.140000000",
+) -> RowPlan:
+    """A planned row carrying its OWN subscription price — what the planner hands the
+    modeler once offerings resolve per period."""
+    return RowPlan(
+        period_id=None,
+        stored=False,
+        label=label,
+        period_start=start,
+        period_end=end,
+        semi_annual_base=D(base),
+        additional_payments=D(additional),
+        contribution_pct=D(pct),
+        subscription_price=D(sub),
+        offering_start=None,
+    )
+
+
+def test_run_modeler_prices_each_period_at_its_own_subscription():
+    rows = [
+        _plan("H1", date(2025, 9, 1), date(2026, 2, 27), "48.509"),
+        _plan("H2", date(2026, 3, 1), date(2026, 8, 31), "120"),
+    ]
+    result = run_modeler(rows, purchase_fmv=D("180"), carry_forward=D("0"))
+    # 0.85 x min(sub, fmv), ROUNDUP to a cent — per row now.
+    assert result.periods[0].purchase_price == D("41.24")  # ceil2(0.85*48.509)
+    assert result.periods[1].purchase_price == D("102.00")  # ceil2(0.85*120)
+    # The 25k cap is valued at each period's OWN subscription price.
+    assert result.periods[0].max_shares_25k == 515  # floor(25000/48.509)
+    remaining = D("25000.00") - result.periods[0].value_25k
+    assert result.periods[1].max_shares_25k == int(remaining / D("120"))
+    # value_25k = shares x that period's subscription price (half_up2'd).
+    assert result.periods[0].value_25k == half_up2(D(result.periods[0].shares) * D("48.509"))
+
+
+def test_run_modeler_uniform_subscription_matches_the_old_single_knob_chain():
+    """Back-compat pin (spec §8): all-same-subscription rows reproduce the pre-offerings
+    chain byte for byte."""
+    rows = [
+        _plan(
+            "1H24",
+            date(2023, 9, 1),
+            date(2024, 2, 29),
+            "170.79000",
+            base="60000",
+            pct="0.140000000",
+        ),
+        _plan(
+            "2H24",
+            date(2024, 3, 1),
+            date(2024, 8, 30),
+            "170.79000",
+            base="60000",
+            pct="0.140000000",
+        ),
+    ]
+    result = run_modeler(rows, purchase_fmv=D("170.79000"), carry_forward=D("100.00"))
+    purchase_price = result.periods[0].purchase_price
+    assert purchase_price == D("145.18")  # ceil2(0.85 * 170.79)
+    first = result.periods[0]
+    assert first.contribution == D("8400.00")
+    assert first.available == D("8500.00")
+    assert first.shares == 58
+    assert first.cost == D("8420.44")
+    assert first.carry_forward_out == D("79.56")
+    assert result.totals.remaining_25k == D("25000.00") - result.totals.total_25k_value
+
+
+def test_run_modeler_refuses_an_unpriced_row():
+    row = RowPlan(
+        period_id=None,
+        stored=False,
+        label="H1",
+        period_start=date(2025, 9, 1),
+        period_end=date(2026, 2, 27),
+        semi_annual_base=D("1"),
+        additional_payments=D("0"),
+        contribution_pct=D("0.1"),
+        subscription_price=None,
+        offering_start=None,
+    )
+    # The router 422s an unpriced row long before here, so reaching the modeler with one
+    # is a programming error, not user data.
+    with pytest.raises(ValueError, match="unpriced row"):
+        run_modeler([row], purchase_fmv=D("1"), carry_forward=D("0"))
 
 
 # --- lot metrics ---
@@ -424,3 +509,126 @@ def test_lot_metrics_treats_a_sold_row_missing_its_price_as_unpriced():
     assert metrics["gain_amount"] is None
     assert metrics["gain_pct"] is None
     assert metrics["days_until_qualified"] is None
+
+
+# --- the purchase calendar and the year planner ---
+
+
+def _stored(
+    id_: int,
+    label: str,
+    start: date,
+    end: date,
+    base: str = "60000",
+    additional: str = "0",
+    pct: str = "0.140000000",
+) -> StoredPeriod:
+    """A stored espp_periods row for the PLANNER: both dates are positional because the
+    planner slots rows by period_end and resolves offerings by period_start."""
+    return StoredPeriod(
+        id=id_,
+        label=label,
+        period_start=start,
+        period_end=end,
+        semi_annual_base=D(base),
+        additional_payments=D(additional),
+        contribution_pct=D(pct),
+    )
+
+
+def test_last_weekday_of_weekday_and_weekend_ends():
+    assert last_weekday_of(2026, 2) == date(2026, 2, 27)  # Feb 28 2026 is a Saturday
+    assert last_weekday_of(2025, 8) == date(2025, 8, 29)  # Aug 31 2025 is a Sunday
+    assert last_weekday_of(2024, 2) == date(2024, 2, 29)  # leap Feb ending on a Thursday
+
+
+def test_plan_year_rows_stored_rows_win_verbatim():
+    stored = [
+        _stored(1, "1H24", date(2023, 9, 1), date(2024, 2, 29)),
+        _stored(2, "2H24", date(2024, 3, 1), date(2024, 8, 30)),
+    ]
+    offerings = [OfferingInfo(offering_start=date(2023, 9, 1), subscription_price=D("48.50900"))]
+    rows, warnings = plan_year_rows(2024, stored, offerings, D("180"), None)
+    assert warnings == []
+    assert [r.label for r in rows] == ["1H24", "2H24"]
+    assert all(r.stored and r.period_id is not None for r in rows)
+    # Boundary: period_start == offering_start resolves to that offering (<=, not <).
+    assert rows[0].subscription_price == D("48.50900")
+    assert rows[0].offering_start == date(2023, 9, 1)
+
+
+def test_plan_year_rows_derives_empty_slots_with_carried_values():
+    stored = [
+        _stored(1, "2H25", date(2025, 3, 1), date(2025, 8, 29), base="70000", pct="0.150000000")
+    ]
+    offerings = [
+        OfferingInfo(offering_start=date(2023, 9, 1), subscription_price=D("48.509")),
+        OfferingInfo(offering_start=date(2025, 9, 1), subscription_price=D("175.25")),
+    ]
+    rows, warnings = plan_year_rows(2026, stored, offerings, None, None)
+    assert warnings == []
+    assert [r.stored for r in rows] == [False, False]
+    assert rows[0].label == "Sep 2025–Feb 2026"
+    assert rows[0].period_start == date(2025, 9, 1)
+    assert rows[0].period_end == last_weekday_of(2026, 2)
+    assert rows[1].label == "Mar–Aug 2026"
+    assert rows[1].period_start == date(2026, 3, 1)
+    assert rows[1].period_end == last_weekday_of(2026, 8)
+    # Values carry forward from the latest stored period overall.
+    assert rows[0].semi_annual_base == D("70000")
+    assert rows[0].contribution_pct == D("0.150000000")
+    # Both slots start on/after 2025-09-01, so both wear the reset offering's price.
+    assert all(r.subscription_price == D("175.25") for r in rows)
+    assert all(r.offering_start == date(2025, 9, 1) for r in rows)
+
+
+def test_plan_year_rows_mixed_year_after_a_mid_cycle_reset():
+    offerings = [
+        OfferingInfo(offering_start=date(2023, 9, 1), subscription_price=D("48.509")),
+        OfferingInfo(offering_start=date(2026, 3, 1), subscription_price=D("120")),
+    ]
+    rows, _ = plan_year_rows(2026, [], offerings, None, None)
+    assert rows[0].subscription_price == D("48.509")  # Sep 2025 start: old offering
+    assert rows[1].subscription_price == D("120")  # Mar 2026 start: reset offering
+
+
+def test_plan_year_rows_gap_falls_back_to_quote_with_warning():
+    rows, warnings = plan_year_rows(2024, [], [], D("99.9900"), None)
+    assert all(r.subscription_price == D("99.9900") and r.offering_start is None for r in rows)
+    assert any("no offering covers" in w for w in warnings)
+    # And with no quote either, the rows are unpriced (the router's 422 case).
+    rows2, _ = plan_year_rows(2024, [], [], None, None)
+    assert all(r.subscription_price is None for r in rows2)
+
+
+def test_plan_year_rows_override_prices_every_row_silently():
+    offerings = [OfferingInfo(offering_start=date(2023, 9, 1), subscription_price=D("48.509"))]
+    stored = [_stored(1, "1H24", date(2023, 9, 1), date(2024, 2, 29))]
+    rows, warnings = plan_year_rows(2024, stored, offerings, None, D("55"))
+    # Stored row and derived slot alike: the override beats the covering offering and
+    # carries none of its provenance.
+    assert [r.stored for r in rows] == [True, False]
+    assert all(r.subscription_price == D("55") and r.offering_start is None for r in rows)
+    assert warnings == []
+    # ... and with no offering at all it silences the fallback warning both rows would
+    # otherwise raise.
+    gap_rows, gap_warnings = plan_year_rows(2024, stored, [], None, D("55"))
+    assert all(r.subscription_price == D("55") for r in gap_rows)
+    assert gap_warnings == []
+
+
+def test_plan_year_rows_zero_history_seeds_zero_with_warning():
+    rows, warnings = plan_year_rows(2026, [], [], D("1"), None)
+    assert all(r.semi_annual_base == D("0") and r.contribution_pct == D("0") for r in rows)
+    assert any("no stored purchase periods" in w for w in warnings)
+
+
+def test_plan_year_rows_anomalous_half_passes_through_verbatim():
+    stored = [
+        _stored(1, "A", date(2023, 9, 1), date(2024, 1, 15)),
+        _stored(2, "B", date(2023, 10, 1), date(2024, 2, 29)),  # two rows in H1
+    ]
+    rows, _ = plan_year_rows(2024, stored, [], D("1"), None)
+    # No derived filling for the year — stored data passes through in chain order.
+    assert [r.label for r in rows] == ["A", "B"]
+    assert all(r.stored for r in rows)

@@ -1,5 +1,12 @@
 from app.models.app_setting import AppSetting
-from app.models.comp import CompEvent, EsppLot, EsppPeriod, PaycheckProfile, RsuGrant
+from app.models.comp import (
+    CompEvent,
+    EsppLot,
+    EsppOffering,
+    EsppPeriod,
+    PaycheckProfile,
+    RsuGrant,
+)
 from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.models.portfolio import (
     DIVIDEND_SOURCES,
@@ -27,6 +34,7 @@ __all__ = [
     "DIVIDEND_SOURCES",
     "DividendPayment",
     "EsppLot",
+    "EsppOffering",
     "EsppPeriod",
     "HOLDING_TYPES",
     "LatestPrice",

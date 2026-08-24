@@ -5,6 +5,9 @@ import type {
   EsppLotsResponse,
   EsppLotUpdate,
   EsppModelerOut,
+  EsppOfferingCreate,
+  EsppOfferingOut,
+  EsppOfferingUpdate,
   EsppPeriodCreate,
   EsppPeriodOut,
   EsppPeriodUpdate,
@@ -32,12 +35,33 @@ export function deleteLot(id: number): Promise<void> {
   return api<void>(`/espp/lots/${id}`, { method: 'DELETE' })
 }
 
-// --- periods ---
+// --- offerings ---
 
-// Periods arrive ordered by (period_end, id) — the modeler chains them in this order.
-export function fetchPeriods(): Promise<EsppPeriodOut[]> {
-  return api<EsppPeriodOut[]>('/espp/periods')
+// Offerings arrive ascending by offering_start — the resolution order.
+export function fetchOfferings(): Promise<EsppOfferingOut[]> {
+  return api<EsppOfferingOut[]>('/espp/offerings')
 }
+
+// offering_start is the natural key: a duplicate is a 409.
+export function createOffering(body: EsppOfferingCreate): Promise<EsppOfferingOut> {
+  return api<EsppOfferingOut>('/espp/offerings', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function updateOffering(id: number, body: EsppOfferingUpdate): Promise<EsppOfferingOut> {
+  return api<EsppOfferingOut>(`/espp/offerings/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteOffering(id: number): Promise<void> {
+  return api<void>(`/espp/offerings/${id}`, { method: 'DELETE' })
+}
+
+// --- periods ---
+// There is no list endpoint on the client any more: the modeler payload IS the period
+// list (stored rows and derived slot-fillers together), and these three verbs are the
+// modeler table's save path.
 
 // label is the natural key: a duplicate is a 409.
 export function createPeriod(body: EsppPeriodCreate): Promise<EsppPeriodOut> {
@@ -54,10 +78,11 @@ export function deletePeriod(id: number): Promise<void> {
 
 // --- modeler ---
 
-// Nothing here is stored: the prices and the seed carry-forward are knobs. Leave them
-// out and the model runs off the espp ticker's latest quote (price_source
-// "latest_price"); "params" needs BOTH prices. `year` selects the calendar year by
-// period_end and defaults to the latest one that has periods.
+// The knobs are OVERRIDES, and blank is the smart default: leave subscription_price out
+// and every row is priced from the offering covering it (falling back to the ticker's
+// latest quote where none does), leave purchase_fmv out and the FMV is that latest quote.
+// `year` selects the calendar year by period_end and defaults to the current one — an
+// empty year is a full derived plan, never a 404.
 export interface ModelerParams {
   subscriptionPrice?: string
   purchaseFmv?: string
@@ -65,12 +90,12 @@ export interface ModelerParams {
   year?: number
 }
 
-// 404 when the (selected) year has no periods; 422 when neither prices-as-params nor a
-// live quote for the espp ticker exists (a clean seed's natural state).
+// 422 when neither an override nor a live quote for the espp ticker can price a row (a
+// clean seed with no offerings and no quote).
 export function fetchModeler(params: ModelerParams = {}): Promise<EsppModelerOut> {
   const query = new URLSearchParams()
   // A blanked controlled input arrives as '' — treat it as absent, or the server 422s
-  // on Decimal('') instead of falling back to the latest quote.
+  // on Decimal('') instead of resolving the blank knob's smart default.
   if (params.subscriptionPrice) query.set('subscription_price', params.subscriptionPrice)
   if (params.purchaseFmv) query.set('purchase_fmv', params.purchaseFmv)
   if (params.carryForward) query.set('carry_forward', params.carryForward)

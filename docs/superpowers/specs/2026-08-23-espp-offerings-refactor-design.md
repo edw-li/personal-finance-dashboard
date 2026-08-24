@@ -1,6 +1,6 @@
 # ESPP Offerings & Modeler Refactor (+ Balance Suggestions Removal) — Design Spec
 
-**Date:** 2026-08-23 · **Status:** approved design, pre-implementation
+**Date:** 2026-08-23 · **Status:** implemented 2026-08-23 (branch `espp-offerings-refactor`; backend 782 / frontend 707 green; alembic head `c9e2b7a4d113`)
 **Touches:** `/espp` page (all three cards), `espp` router/service/schemas, two migrations, `/settings` + monthly-update wizard (removal), `net-worth` router/schemas (removal).
 **Amends:** the master spec's `/espp` row (§6) — the "Offering periods" card it describes is replaced; `2026-08-21-data-entry-ergonomics-design.md` §5.2 — the balance-suggestions feature it introduced is removed (a dated amendment is part of this work).
 
@@ -153,7 +153,7 @@ Typing a purchase date prefills — only into untouched boxes — **subscription
 Removed:
 
 - **Frontend:** SettingsPage "Balance suggestions" card + its state/loads (incl. its `fetchAllocation('account')` usage); MonthlyUpdatePage suggestion fetch + Apply chips + hide-when-equal logic; `api/netWorth.ts` suggestions client + `suggest_source` in account types; related `types/api.ts` entries; the suggestion assertions in `SettingsPage.test.tsx` / `MonthlyUpdatePage.test.tsx` (replaced by chips-are-gone assertions where a regression is plausible).
-- **Backend:** `GET /net-worth/suggestions` (and its `comp._unvested_value` import — the helper itself stays, comp's own tiles use it); `suggest_source` handling in the accounts PATCH + echoes (`api/net_worth.py`, `schemas/net_worth.py`); the model column (`models/net_worth.py`); Migration B (§2.2); the suggestion tests in `test_net_worth_api.py` and the `suggest_source` importer-immunity pin in `test_importer_apply.py` (feature gone, pin moot).
+- **Backend:** `GET /net-worth/suggestions` (and `comp._unvested_value` itself — the endpoint was its only caller; comp's tiles compute inline via `_vest_value`, so the helper goes too — corrected 2026-08-23, this line originally claimed the tiles used it); `suggest_source` handling in the accounts PATCH + echoes (`api/net_worth.py`, `schemas/net_worth.py`); the model column (`models/net_worth.py`); Migration B (§2.2); the suggestion tests in `test_net_worth_api.py` and the `suggest_source` importer-immunity pin in `test_importer_apply.py` (feature gone, pin moot).
 - **Docs:** dated amendment to `2026-08-21-data-entry-ergonomics-design.md` §5.2 recording the removal and its rationale ("user judged the mapping + chips not useful; removed 2026-08-23 before ever deploying").
 
 ## 8. Testing
@@ -171,7 +171,7 @@ Removed:
 - Migration chain: `712243ee3ff3` → A (`espp_offerings`) → B (drop `suggest_source`). Both additive-or-narrowing with clean downgrades; a code rollback after deploy leaves old code that simply never queries offerings, and (post-B-downgrade) a re-added empty `suggest_source`. Prod note: the never-deployed `712243ee3ff3` and B run in the same boot — add-then-drop, harmless.
 - No importer changes ship in this work (the periods applier is untouched; offerings are importer-immune by test).
 - No new ECharts registrations; the chart chunk is untouched (this feature has no charts).
-- Wire evolution is additive plus one nullable-ization (`ModelerOut.subscription_price`) and the legacy `price_source` retained — an old tab renders sane text for one deploy cycle; a new tab against an old backend simply sees no new fields (nullable/optional reads).
+- Wire evolution is additive plus two nullable-izations (`ModelerOut.subscription_price`, and `ModelerPeriodOut.id` — null on derived rows, which an old tab can receive on a default-year GET) and the legacy `price_source` retained — an old tab renders sane text for one deploy cycle; a new tab against an old backend simply sees no new fields (nullable/optional reads).
 - Clock: the espp module keeps `date.today()` (its documented single clock); the year default inherits it. The known PT/UTC day-boundary split remains out of scope here.
 
 ## 10. Out of scope (recorded)

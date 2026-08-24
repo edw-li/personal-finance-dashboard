@@ -20,6 +20,7 @@ from app.models import AppSetting, EsppLot, EsppPeriod, LatestPrice, Security
 
 LOTS = "/api/v1/espp/lots"
 PERIODS = "/api/v1/espp/periods"
+OFFERINGS = "/api/v1/espp/offerings"
 MODELER = "/api/v1/espp/modeler"
 
 D = Decimal
@@ -430,9 +431,12 @@ async def test_periods_sharing_a_period_end_fall_back_to_the_id_tiebreak(auth_cl
     listed = (await auth_client.get(PERIODS)).json()
     assert [row["id"] for row in listed] == [zed["id"], ace["id"]]  # insertion, not label
 
+    # Two stored rows in ONE half is anomalous data: both pass through verbatim, in chain
+    # order, with no derived filling for the year (a GET never rejects what is stored).
     modeled = (
         await auth_client.get(
-            MODELER, params={"subscription_price": "170.79", "purchase_fmv": "171"}
+            MODELER,
+            params={"subscription_price": "170.79", "purchase_fmv": "171", "year": "2026"},
         )
     ).json()
     assert [row["id"] for row in modeled["periods"]] == [zed["id"], ace["id"]]
@@ -454,10 +458,16 @@ async def test_a_zero_contribution_pct_crosses_the_wire_in_plain_notation(auth_c
 
     body = (
         await auth_client.get(
-            MODELER, params={"subscription_price": "170.79", "purchase_fmv": "171"}
+            MODELER,
+            params={"subscription_price": "170.79", "purchase_fmv": "171", "year": "2026"},
         )
     ).json()
-    (row,) = body["periods"]
+    # H2 has no stored row, so the modeler derives one — seeded from this very period, so
+    # it contributes nothing either and the totals below are still all-zero.
+    row, derived = body["periods"]
+    assert derived["stored"] is False
+    assert derived["contribution_pct"] == "0.000000000"
+    assert derived["shares"] == "0"
     assert row["contribution_pct"] == "0.000000000"
     # ... and the chain still models the period; it just buys nothing.
     assert row["eligible_earnings"] == "81000.00"
@@ -548,6 +558,53 @@ async def test_patch_period_404_and_delete_404(auth_client):
     assert (await auth_client.delete(f"{PERIODS}/99999999999")).status_code == 422
 
 
+# --- offerings ---
+
+
+async def test_offerings_crud_roundtrip(auth_client):
+    created = await auth_client.post(
+        OFFERINGS,
+        json={"offering_start": "2023-09-01", "subscription_price": "48.509", "notes": "first"},
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["subscription_price"] == "48.50900"  # 5dp — the lot price family
+    assert body["notes"] == "first"
+
+    dup = await auth_client.post(
+        OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "1"}
+    )
+    assert dup.status_code == 409
+
+    listed = await auth_client.get(OFFERINGS)
+    assert [row["offering_start"] for row in listed.json()] == ["2023-09-01"]
+
+    patched = await auth_client.patch(
+        f"{OFFERINGS}/{body['id']}", json={"subscription_price": "50", "notes": None}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["subscription_price"] == "50.00000"
+    assert patched.json()["notes"] is None  # explicit null CLEARS the nullable column
+
+    gone = await auth_client.delete(f"{OFFERINGS}/{body['id']}")
+    assert gone.status_code == 204
+    assert (await auth_client.get(OFFERINGS)).json() == []
+
+
+async def test_offering_validation(auth_client):
+    bad_price = await auth_client.post(
+        OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "0"}
+    )
+    assert bad_price.status_code == 422
+    assert "subscription_price must be positive" in bad_price.json()["detail"]
+    bad_date = await auth_client.post(
+        OFFERINGS, json={"offering_start": "1850-01-01", "subscription_price": "1"}
+    )
+    assert bad_date.status_code == 422
+    missing = await auth_client.patch(f"{OFFERINGS}/999", json={"notes": "x"})
+    assert missing.status_code == 404
+
+
 # --- modeler ---
 
 
@@ -555,17 +612,30 @@ async def test_modeler_golden_chain_over_the_two_real_periods(auth_client, price
     await seed_real_periods(auth_client)
     resp = await auth_client.get(
         MODELER,
-        params={"subscription_price": "170.79", "purchase_fmv": "171", "carry_forward": "0"},
+        params={
+            "subscription_price": "170.79",
+            "purchase_fmv": "171",
+            "carry_forward": "0",
+            "year": "2026",
+        },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["year"] == 2026
     assert body["espp_ticker"] == "NVDA"
-    assert body["price_source"] == "params"  # explicit params beat the live quote
+    assert body["price_source"] == "params"  # legacy field: both prices overridden
+    assert body["subscription_source"] == "override"
+    assert body["fmv_source"] == "override"
     assert body["quoted_at"] is None  # ... so the stored quote is behind none of this
-    assert body["subscription_price"] == "170.79000"
+    assert body["subscription_price"] == "170.79000"  # the override echo
     assert body["purchase_fmv"] == "171.00000"
     assert body["carry_forward"] == "0.00"
+    assert body["warnings"] == []  # an override covers every row, so nothing to warn about
+    # Both halves are stored, so nothing is derived and every row wears the override.
+    assert [row["stored"] for row in body["periods"]] == [True, True]
+    assert all(isinstance(row["id"], int) for row in body["periods"])
+    assert [row["subscription_price"] for row in body["periods"]] == ["170.79000", "170.79000"]
+    assert [row["offering_start"] for row in body["periods"]] == [None, None]
 
     feb, aug = body["periods"]
     assert feb["label"] == "2026 H1"
@@ -611,13 +681,22 @@ async def test_modeler_golden_chain_over_the_two_real_periods(auth_client, price
 
 async def test_modeler_defaults_both_prices_to_the_live_quote(auth_client, priced_ticker):
     await seed_real_periods(auth_client)
-    body = (await auth_client.get(MODELER)).json()
-    assert body["price_source"] == "latest_price"
+    body = (await auth_client.get(MODELER, params={"year": "2026"})).json()
+    assert body["price_source"] == "latest_price"  # legacy field: nothing was overridden
+    assert body["subscription_source"] == "latest_price"  # no offerings at all
+    assert body["fmv_source"] == "latest_price"
     # The provenance line: which quote these prices actually came from.
     assert datetime.fromisoformat(body["quoted_at"]) == datetime(2026, 8, 14, 20, 30, tzinfo=UTC)
-    assert body["subscription_price"] == "174.18000"  # re-scaled into the espp price family
-    assert body["purchase_fmv"] == "174.18000"
+    assert body["subscription_price"] is None  # the override echo, and nothing was typed
+    assert body["purchase_fmv"] == "174.1800"  # the stored quote, at ITS column scale
     assert body["carry_forward"] == "0.00"
+    # Every row fell back to the quote, and every fallback says so by name.
+    assert [row["subscription_price"] for row in body["periods"]] == ["174.1800", "174.1800"]
+    assert [row["offering_start"] for row in body["periods"]] == [None, None]
+    assert body["warnings"] == [
+        "no offering covers 2026 H1; subscription defaulted to the latest quote",
+        "no offering covers 2026 H2; subscription defaulted to the latest quote",
+    ]
     assert body["periods"][0]["purchase_price"] == "148.06"  # CEIL2(0.85 x 174.18)
     assert body["periods"][0]["shares"] == "76"
     assert body["totals"]["total_25k_value"] == "24907.74"
@@ -625,32 +704,76 @@ async def test_modeler_defaults_both_prices_to_the_live_quote(auth_client, price
 
 async def test_modeler_half_defaulted_prices_report_the_live_source(auth_client, priced_ticker):
     await seed_real_periods(auth_client)
-    body = (await auth_client.get(MODELER, params={"subscription_price": "170.79"})).json()
+    body = (
+        await auth_client.get(MODELER, params={"subscription_price": "170.79", "year": "2026"})
+    ).json()
     assert body["subscription_price"] == "170.79000"
-    assert body["purchase_fmv"] == "174.18000"
-    assert body["price_source"] == "latest_price"  # not everything came from params
+    assert body["purchase_fmv"] == "174.1800"
+    assert body["subscription_source"] == "override"
+    assert body["fmv_source"] == "latest_price"
+    assert body["price_source"] == "latest_price"  # legacy field: not everything came from params
+    # The FMV fell back to the quote, so the quote IS behind these numbers.
+    assert datetime.fromisoformat(body["quoted_at"]) == datetime(2026, 8, 14, 20, 30, tzinfo=UTC)
 
 
-async def test_modeler_422_when_no_quote_and_no_params(auth_client, espp_ticker):
+async def test_modeler_422_when_the_fmv_cannot_be_resolved(auth_client, espp_ticker):
+    # The FMV resolves FIRST, so a bare GET with no quote complains about it alone.
     await seed_real_periods(auth_client)
-    resp = await auth_client.get(MODELER)
+    resp = await auth_client.get(MODELER, params={"year": "2026"})
     assert resp.status_code == 422
-    assert (
-        resp.json()["detail"] == "no live price for NVDA; pass subscription_price and purchase_fmv"
-    )
-    # One missing half is still missing.
-    half = await auth_client.get(MODELER, params={"subscription_price": "170.79"})
+    assert resp.json()["detail"] == "no live price for NVDA; pass purchase_fmv"
+    # A subscription override does not fill the OTHER half in.
+    half = await auth_client.get(MODELER, params={"subscription_price": "170.79", "year": "2026"})
     assert half.status_code == 422
+    assert half.json()["detail"] == "no live price for NVDA; pass purchase_fmv"
+
+
+async def test_modeler_422_when_no_offering_no_quote_and_no_subscription(auth_client, espp_ticker):
+    # FMV supplied, but nothing can price the rows: no offering covers them and the
+    # ticker has no quote — the sentence names the one param that would fix it.
+    await seed_real_periods(auth_client)
+    resp = await auth_client.get(MODELER, params={"purchase_fmv": "1", "year": "2026"})
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "no offering covers 2026 H1, 2026 H2" in detail
+    assert "no live price for NVDA" in detail
+    assert "pass subscription_price" in detail
+
+
+async def test_modeler_treats_a_non_positive_quote_as_no_quote(auth_client, db, priced_ticker):
+    """`run_modeler` DIVIDES by the subscription price (its documented boundary
+    precondition), so a 0 quote could only reach it as a 500. It degrades to "no quote"
+    instead and the 422s name the params that fix it — a GET still never rejects the
+    stored row itself, it just cannot model on it."""
+    latest = await db.get(LatestPrice, priced_ticker.id)
+    latest.price = D("0.0000")
+    await db.commit()
+    await seed_real_periods(auth_client)
+
+    resp = await auth_client.get(MODELER, params={"year": "2026"})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "no live price for NVDA; pass purchase_fmv"
+    # ... and with the FMV supplied, the unpriced ROWS are what is still missing.
+    rows_only = await auth_client.get(MODELER, params={"purchase_fmv": "171", "year": "2026"})
+    assert rows_only.status_code == 422, rows_only.text
+    assert "pass subscription_price" in rows_only.json()["detail"]
+    # Both params typed: nothing needs the quote, so the model runs.
+    priced = await auth_client.get(
+        MODELER, params={"subscription_price": "170.79", "purchase_fmv": "171", "year": "2026"}
+    )
+    assert priced.status_code == 200, priced.text
+    assert priced.json()["quoted_at"] is None
 
 
 async def test_modeler_runs_on_params_alone_without_any_ticker(auth_client):
     await seed_real_periods(auth_client)
     resp = await auth_client.get(
-        MODELER, params={"subscription_price": "170.79", "purchase_fmv": "171"}
+        MODELER, params={"subscription_price": "170.79", "purchase_fmv": "171", "year": "2026"}
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["espp_ticker"] is None
     assert resp.json()["price_source"] == "params"
+    assert resp.json()["quoted_at"] is None  # no value fell back to a quote
     assert resp.json()["totals"]["total_25k_value"] == "24935.34"
 
 
@@ -663,6 +786,7 @@ async def test_modeler_carry_forward_seeds_the_first_period(auth_client):
                 "subscription_price": "170.79",
                 "purchase_fmv": "171",
                 "carry_forward": "100",
+                "year": "2026",
             },
         )
     ).json()
@@ -713,7 +837,7 @@ async def test_modeler_prices_wear_the_quote_bound_not_the_lots_one(auth_client)
     assert "subscription_price: |value| must be below 10^9" in stored.json()["detail"]
 
 
-async def test_modeler_year_defaults_to_the_latest_year_with_periods(auth_client, db):
+async def test_modeler_year_defaults_to_the_current_year(auth_client, db):
     await seed_real_periods(auth_client)
     await create_period(
         auth_client,
@@ -725,28 +849,188 @@ async def test_modeler_year_defaults_to_the_latest_year_with_periods(auth_client
     )
     params = {"subscription_price": "170.79", "purchase_fmv": "171"}
 
-    latest = (await auth_client.get(MODELER, params=params)).json()
-    assert latest["year"] == 2026
-    assert [row["label"] for row in latest["periods"]] == ["2026 H1", "2026 H2"]
-
+    # The seed-sensitive year FIRST: derived rows seed from the latest stored period
+    # overall, so the future-year row created below must not exist yet here.
     older = (await auth_client.get(MODELER, params={**params, "year": 2025})).json()
     assert older["year"] == 2025
-    assert [row["label"] for row in older["periods"]] == ["2025 H2"]
-    assert older["periods"][0]["shares"] == "41"
-    assert older["totals"]["total_25k_value"] == "7002.39"
-    assert older["totals"]["remaining_25k"] == "17997.61"  # the limit is per YEAR
+    # 2025 stored only its H2 half, so H1 is derived (seeded from the latest stored period,
+    # 2026 H2's 94465 @ 11%) and chains AHEAD of the real row.
+    assert [row["label"] for row in older["periods"]] == ["Sep 2024–Feb 2025", "2025 H2"]
+    assert [row["stored"] for row in older["periods"]] == [False, True]
+    assert older["periods"][0]["semi_annual_base"] == "94465.00"
+    assert older["periods"][1]["shares"] == "41"
+    assert older["periods"][1]["value_25k"] == "7002.39"
+    assert older["totals"]["total_25k_value"] == "19128.48"
+    assert older["totals"]["remaining_25k"] == "5871.52"  # the limit is per YEAR
+
+    # A future-year-only period: the OLD default (max period_end.year) would pick it,
+    # so this is what makes the current-calendar-year assertion discriminating today.
+    future = date.today().year + 1
+    await create_period(
+        auth_client,
+        label="future H2",
+        period_start=f"{future}-03-01",
+        period_end=f"{future}-08-20",
+        semi_annual_base="1000",
+        contribution_pct="0.1",
+    )
+
+    default = (await auth_client.get(MODELER, params=params)).json()
+    assert default["year"] == date.today().year  # not "the latest year with periods"
+    if date.today().year == 2026:
+        assert [row["label"] for row in default["periods"]] == ["2026 H1", "2026 H2"]
+        assert [row["stored"] for row in default["periods"]] == [True, True]
+    else:
+        # The fixture's periods live in another year: both slots DERIVE rather than 404.
+        assert [row["stored"] for row in default["periods"]] == [False, False]
+        assert [row["id"] for row in default["periods"]] == [None, None]
 
 
-async def test_modeler_404s_when_the_year_has_no_periods(auth_client):
-    params = {"subscription_price": "170.79", "purchase_fmv": "171"}
-    empty = await auth_client.get(MODELER, params=params)
-    assert empty.status_code == 404
-    assert empty.json()["detail"] == "no espp periods"
-
+async def test_modeler_derives_rows_for_an_empty_year(auth_client, priced_ticker):
+    # The 404s retire (spec §3.4): a year with nothing stored still models, on the two
+    # derived half-year slots seeded from the latest stored period.
     await seed_real_periods(auth_client)
-    missing_year = await auth_client.get(MODELER, params={**params, "year": 2024})
-    assert missing_year.status_code == 404
-    assert "2024" in missing_year.json()["detail"]
+    body = (
+        await auth_client.get(
+            MODELER,
+            params={"subscription_price": "170.79", "purchase_fmv": "171", "year": "2027"},
+        )
+    ).json()
+    assert body["year"] == 2027
+    assert [row["label"] for row in body["periods"]] == ["Sep 2026–Feb 2027", "Mar–Aug 2027"]
+    assert [row["stored"] for row in body["periods"]] == [False, False]
+    assert [row["id"] for row in body["periods"]] == [None, None]
+    # Dates from §3.2: Sep 1 / Mar 1 to the last WEEKDAY of Feb / Aug.
+    assert [row["period_start"] for row in body["periods"]] == ["2026-09-01", "2027-03-01"]
+    assert [row["period_end"] for row in body["periods"]] == ["2027-02-26", "2027-08-31"]
+    # ... and the inputs carry forward from 2026 H2, the latest stored period.
+    for row in body["periods"]:
+        assert row["semi_annual_base"] == "94465.00"
+        assert row["additional_payments"] == "0.00"
+        assert row["contribution_pct"] == "0.110000000"
+    assert body["periods"][0]["shares"] == "71"
+
+
+async def test_modeler_resolves_subscription_from_the_covering_offering(auth_client, priced_ticker):
+    await create_period(auth_client, label="1H26", semi_annual_base="60000")
+    await auth_client.post(
+        OFFERINGS, json={"offering_start": "2025-09-01", "subscription_price": "48.509"}
+    )
+    resp = await auth_client.get(MODELER, params={"year": "2026"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["subscription_source"] == "offering"
+    assert body["subscription_price"] is None  # no override — blank means offerings
+    row = body["periods"][0]
+    assert row["subscription_price"] == "48.50900"
+    assert row["offering_start"] == "2025-09-01"
+    assert body["warnings"] == []
+
+
+async def test_modeler_available_years_composition(auth_client, priced_ticker):
+    # No stored periods at all: the chips still have to cover every year the offering
+    # buys in, plus the current one and the next.
+    current = date.today().year
+    await auth_client.post(
+        OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "48.509"}
+    )
+    resp = await auth_client.get(MODELER)
+    years = resp.json()["available_years"]
+    assert years == sorted(set(range(2024, current + 1)) | {current, current + 1})
+
+
+async def test_modeler_available_years_skips_an_uncovered_off_cycle_start_year(
+    auth_client, priced_ticker
+):
+    # An off-cycle (hire-month) offering starting after Mar 1 buys nothing until the
+    # NEXT year's February — its start year must not get a chip.
+    current = date.today().year
+    await auth_client.post(
+        OFFERINGS, json={"offering_start": "2024-06-01", "subscription_price": "100"}
+    )
+    years = (await auth_client.get(MODELER)).json()["available_years"]
+    assert 2024 not in years
+    assert years == sorted(set(range(2025, current + 1)) | {current, current + 1})
+
+
+async def test_modeler_reset_year_prices_each_period_from_its_own_offering(
+    auth_client, priced_ticker
+):
+    """A mid-cycle reset: 2024's H1 (started Sep 2023) wears the old offering, H2
+    (started Mar 2024) wears the reset — two prices in one chained year."""
+    await auth_client.post(
+        OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "48.509"}
+    )
+    await auth_client.post(
+        OFFERINGS, json={"offering_start": "2024-03-01", "subscription_price": "120"}
+    )
+    resp = await auth_client.get(MODELER, params={"year": "2024"})
+    body = resp.json()
+    assert body["subscription_source"] == "offering"  # both rows offering-priced
+    assert [row["subscription_price"] for row in body["periods"]] == ["48.50900", "120.00000"]
+    assert [row["offering_start"] for row in body["periods"]] == ["2023-09-01", "2024-03-01"]
+
+
+async def test_modeler_reports_mixed_when_only_one_slot_is_covered(auth_client, priced_ticker):
+    """Offering covers H2 only: H1 falls back to the quote with a warning — the source
+    field says "mixed" so the provenance line can't claim more than it knows."""
+    await auth_client.post(
+        OFFERINGS, json={"offering_start": "2024-03-01", "subscription_price": "120"}
+    )
+    resp = await auth_client.get(MODELER, params={"year": "2024"})
+    body = resp.json()
+    assert body["subscription_source"] == "mixed"
+    assert body["periods"][0]["offering_start"] is None
+    assert body["periods"][1]["offering_start"] == "2024-03-01"
+    assert sum("no offering covers" in w for w in body["warnings"]) == 1
+    assert body["quoted_at"] is not None  # a value fell back to the stored quote
+
+
+async def test_saving_a_derived_row_materializes_it_in_the_next_modeler_read(auth_client):
+    """The Save round trip the frontend performs (spec §8): POST a derived row's own body
+    verbatim, and the next read hands the same slot back stored, with an id."""
+    await create_period(
+        auth_client,
+        label="2025 H2",
+        period_start="2025-03-01",
+        period_end="2025-08-29",
+        semi_annual_base="94465",
+        contribution_pct="0.11",
+    )
+    params = {"subscription_price": "170.79", "purchase_fmv": "171", "year": "2026"}
+    derived = (await auth_client.get(MODELER, params=params)).json()["periods"][0]
+    assert (derived["stored"], derived["id"]) == (False, None)
+    assert derived["label"] == "Sep 2025–Feb 2026"  # the en dash IS the stored label
+    assert derived["period_start"] == "2025-09-01"
+    assert derived["period_end"] == "2026-02-27"  # the last weekday of Feb 2026
+
+    saved = await auth_client.post(
+        PERIODS,
+        json={
+            key: derived[key]
+            for key in (
+                "label",
+                "period_start",
+                "period_end",
+                "semi_annual_base",
+                "additional_payments",
+                "contribution_pct",
+            )
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    row = (await auth_client.get(MODELER, params=params)).json()["periods"][0]
+    assert row["stored"] is True
+    assert isinstance(row["id"], int)
+    assert row["id"] == saved.json()["id"]
+    assert row["label"] == "Sep 2025–Feb 2026"
+    assert row["period_start"] == "2025-09-01"
+    assert row["period_end"] == "2026-02-27"
+    assert row["semi_annual_base"] == "94465.00"
+    assert row["additional_payments"] == "0.00"
+    assert row["contribution_pct"] == "0.110000000"
+    assert row["shares"] == derived["shares"]  # same inputs, so materializing computes nothing new
 
 
 async def test_modeler_rejects_an_out_of_century_year(auth_client):
@@ -770,4 +1054,12 @@ async def test_espp_endpoints_require_auth(client):
     assert (await client.post(PERIODS, json=period_payload())).status_code == 401
     assert (await client.patch(f"{PERIODS}/1", json={"label": "x"})).status_code == 401
     assert (await client.delete(f"{PERIODS}/1")).status_code == 401
+    assert (await client.get(OFFERINGS)).status_code == 401
+    assert (
+        await client.post(
+            OFFERINGS, json={"offering_start": "2023-09-01", "subscription_price": "1"}
+        )
+    ).status_code == 401
+    assert (await client.patch(f"{OFFERINGS}/1", json={"notes": "x"})).status_code == 401
+    assert (await client.delete(f"{OFFERINGS}/1")).status_code == 401
     assert (await client.get(MODELER)).status_code == 401

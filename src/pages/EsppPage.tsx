@@ -3,16 +3,20 @@ import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import {
   createLot,
+  createOffering,
   createPeriod,
   deleteLot,
+  deleteOffering,
   deletePeriod,
   fetchLots,
   fetchModeler,
-  fetchPeriods,
+  fetchOfferings,
   updateLot,
+  updateOffering,
   updatePeriod,
 } from '../api/espp'
 import type { ModelerParams } from '../api/espp'
+import { fetchPriceHistory } from '../api/prices'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import type {
@@ -21,8 +25,11 @@ import type {
   EsppLotsResponse,
   EsppLotUpdate,
   EsppModelerOut,
+  EsppModelerPeriod,
+  EsppOfferingCreate,
+  EsppOfferingOut,
   EsppPeriodCreate,
-  EsppPeriodOut,
+  PricePoint,
 } from '../types/api'
 import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../utils/format'
@@ -69,12 +76,42 @@ function disposition(lot: EsppLotOut): string {
   return `Qualifying in ${days} ${days === 1 ? 'day' : 'days'}`
 }
 
+// ISO date-string year math for prefills (display/entry only — the server re-validates).
+// Feb 29 + n years can land on a non-leap year; clamp to the 28th.
+function addYearsIso(iso: string, years: number): string {
+  const [y, m, d] = iso.split('-')
+  const year = Number(y) + years
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+  const day = m === '02' && d === '29' && !leap ? '28' : d
+  return `${year}-${m}-${day}`
+}
+
+// The covering offering: greatest offering_start <= the date (ISO strings compare as
+// dates). Mirrors espp_calc._resolve_subscription so the prefill and the model agree.
+function coveringOffering(offerings: EsppOfferingOut[], isoDate: string): EsppOfferingOut | null {
+  let covering: EsppOfferingOut | null = null
+  for (const offering of offerings) {
+    if (offering.offering_start <= isoDate) covering = offering
+  }
+  return covering
+}
+
 /**
  * The lots table and the one form that doubles as add-row and row editor (TransactionsPanel
  * idiom). It owns its form state, and the page hands it a replaced `lots` payload rather
- * than remounting it — so a modeler or periods refetch cannot destroy a half-typed row.
+ * than remounting it — so a modeler or offerings refetch cannot destroy a half-typed row.
  */
-function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () => void }) {
+function LotsPanel({
+  data,
+  offerings,
+  onChanged,
+}: {
+  data: EsppLotsResponse
+  // The prefill source for a new lot's subscription price and qualifying date; empty
+  // until the offerings feed answers (a prefill nobody has data for simply does not run).
+  offerings: EsppOfferingOut[]
+  onChanged: () => void
+}) {
   const [form, setForm] = useState<LotFormState>(EMPTY_LOT)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -96,6 +133,33 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
       sold_date: lot.sold_date ?? '',
       sold_price: lot.sold_price ?? '',
       notes: lot.notes ?? '',
+    })
+  }
+
+  // Prefill-only, untouched-box guard (spec §6.4): typing a purchase date fills the
+  // subscription price from the covering offering and the qualifying date from the §423
+  // rule — max(offering start + 2y, purchase + 1y). Both editable; edits never clobbered.
+  const onPurchaseDateChange = (value: string) => {
+    setForm((f) => {
+      const next = { ...f, purchase_date: value }
+      if (editingId === null && value !== '') {
+        const covering = coveringOffering(offerings, value)
+        // No covering offering → NO prefill at all, neither box (spec §6.4). purchase + 1y
+        // on its own is only the §423 LOWER bound: without the offering's start + 2y to
+        // measure it against, seeding it would put an optimistically early qualifying date
+        // in a box the user has every reason to accept as computed for them.
+        if (covering !== null) {
+          if (f.subscription_price === '') {
+            next.subscription_price = covering.subscription_price
+          }
+          if (f.qualifying_date === '') {
+            const byPurchase = addYearsIso(value, 1)
+            const byOffering = addYearsIso(covering.offering_start, 2)
+            next.qualifying_date = byOffering > byPurchase ? byOffering : byPurchase
+          }
+        }
+      }
+      return next
     })
   }
 
@@ -269,7 +333,7 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
             className="field-input"
             type="date"
             value={form.purchase_date}
-            onChange={(e) => set('purchase_date')(e.target.value)}
+            onChange={(e) => onPurchaseDateChange(e.target.value)}
           />
         </label>
         <label>
@@ -445,6 +509,257 @@ function LotsPanel({ data, onChanged }: { data: EsppLotsResponse; onChanged: () 
   )
 }
 
+// ── Offerings ───────────────────────────────────────────────────────────────────────────
+
+interface OfferingFormState {
+  offering_start: string
+  subscription_price: string
+  notes: string
+}
+
+const EMPTY_OFFERING: OfferingFormState = { offering_start: '', subscription_price: '', notes: '' }
+
+/**
+ * The enrollment windows: one row per subscription-price reset. Coverage is display-only
+ * client math — "→ the next offering" or "through start + 24 mo" (approximate for an
+ * off-cycle hire-month enrollment, which ends at its 4th purchase; spec "Plan mechanics").
+ */
+function OfferingsPanel({
+  offerings,
+  bars,
+  onChanged,
+}: {
+  offerings: EsppOfferingOut[]
+  // Employer daily closes for the "use close" chip; empty when the ticker/bars are absent.
+  bars: PricePoint[]
+  onChanged: () => void
+}) {
+  const [form, setForm] = useState<OfferingFormState>(EMPTY_OFFERING)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const set = (field: keyof OfferingFormState) => (value: string) =>
+    setForm((f) => ({ ...f, [field]: value }))
+
+  // The last bar on/before the typed start date — the chip's suggestion. Never
+  // auto-applied (house suggestion posture).
+  const closeBar = (() => {
+    if (!form.offering_start) return null
+    let found: PricePoint | null = null
+    for (const bar of bars) {
+      if (bar.d <= form.offering_start) found = bar
+    }
+    return found
+  })()
+
+  const startEdit = (offering: EsppOfferingOut) => {
+    setEditingId(offering.id)
+    setForm({
+      offering_start: offering.offering_start,
+      subscription_price: offering.subscription_price,
+      notes: offering.notes ?? '',
+    })
+  }
+
+  const submit = () => {
+    // Canonical at the READ site (LotsPanel's rule). kind="plain": the column is 5dp, so
+    // no "=" and no 2dp echo may touch it.
+    const price = canonicalAmount(form.subscription_price.trim(), { expressions: false })
+    if (!form.offering_start || !price) {
+      setError('Offering start and subscription price are required')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    const body: EsppOfferingCreate = {
+      offering_start: form.offering_start,
+      subscription_price: price,
+      notes: form.notes.trim() || null,
+    }
+    const request = editingId !== null ? updateOffering(editingId, body) : createOffering(body)
+    request
+      .then(() => {
+        // Focus BEFORE the reset (the blur-commit invariant, LotsPanel's note).
+        document.getElementById('offering-start')?.focus()
+        setForm(EMPTY_OFFERING)
+        setEditingId(null)
+        onChanged()
+      })
+      .catch((err: unknown) => setError(message(err, 'Save failed')))
+      .finally(() => setBusy(false))
+  }
+
+  const remove = (offering: EsppOfferingOut) => {
+    if (!window.confirm(`Delete the offering starting ${formatDate(offering.offering_start)}?`))
+      return
+    setBusy(true)
+    setError(null)
+    deleteOffering(offering.id)
+      .then(() => {
+        if (offering.id === editingId) {
+          setEditingId(null)
+          setForm(EMPTY_OFFERING)
+        }
+        onChanged()
+      })
+      .catch((err: unknown) => setError(message(err, 'Delete failed')))
+      .finally(() => setBusy(false))
+  }
+
+  const coverage = (offering: EsppOfferingOut, index: number): string => {
+    const next = offerings[index + 1]
+    if (next) return `→ ${formatDate(next.offering_start)}`
+    return `through ${formatDate(addYearsIso(offering.offering_start, 2))}`
+  }
+
+  return (
+    <section className="card">
+      <h2 className="eyebrow">
+        Subscription offerings
+        <InfoHint text="Each enrollment window fixes your subscription price at its start-date close for up to two years (four purchases). The modeler prices each period from the offering covering it; a reset is just a new row." />
+      </h2>
+      <p className="drill-hint">
+        One row per enrollment: the offering start date and the closing price that became
+        your subscription price. Periods resolve to the latest offering starting on or
+        before them — adding a reset re-prices everything after it automatically.
+      </p>
+      {error && (
+        <div className="error-banner" role="alert">
+          {error}
+        </div>
+      )}
+      <form
+        className="espp-form espp-knobs"
+        onSubmit={(e) => {
+          e.preventDefault()
+          submit()
+        }}
+      >
+        <label>
+          Offering start
+          <input
+            // The form's first entry field, so the save-success path can hand the caret
+            // back to it by id (spec §5.1's focus-return).
+            id="offering-start"
+            className="field-input"
+            type="date"
+            value={form.offering_start}
+            onChange={(e) => set('offering_start')(e.target.value)}
+          />
+        </label>
+        <label>
+          Subscription price
+          {/* Numeric(14,5) like every other price on this page: kind="plain", so the stored
+              5dp text stands verbatim and no 2dp "=" evaluator can coarsen it. */}
+          <AmountInput
+            kind="plain"
+            value={form.subscription_price}
+            onValueChange={set('subscription_price')}
+          />
+        </label>
+        {/* "Offering notes", not the column's bare "Notes": the lots form one section up
+            the page has a Notes box of its own, and two fields sharing one accessible name
+            leave a screen reader's field list ambiguous. */}
+        <label className="span-2">
+          Offering notes
+          <input
+            className="field-input"
+            value={form.notes}
+            onChange={(e) => set('notes')(e.target.value)}
+          />
+        </label>
+        <div className="espp-form-actions">
+          <button type="submit" className="button button-primary" disabled={busy}>
+            {editingId !== null ? 'Save offering' : 'Add offering'}
+          </button>
+          {editingId !== null && (
+            <button
+              type="button"
+              className="button"
+              aria-label="Cancel the offering edit"
+              onClick={() => {
+                setEditingId(null)
+                setForm(EMPTY_OFFERING)
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </form>
+      {closeBar !== null && (
+        <p className="drill-hint" role="status">
+          {`close on ${formatDate(closeBar.d)}: ${closeBar.c} `}
+          <button
+            type="button"
+            className="button"
+            aria-label={`Use the ${formatDate(closeBar.d)} close as the subscription price`}
+            onClick={() => set('subscription_price')(closeBar.c)}
+          >
+            Use
+          </button>
+        </p>
+      )}
+      {offerings.length === 0 ? (
+        <p className="empty-note">
+          No offerings yet — add your enrollment date and its closing price to drive the
+          modeler below.
+        </p>
+      ) : (
+        <div className="espp-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Start</th>
+                <th className="num">Subscription price</th>
+                <th>Coverage</th>
+                <th>Notes</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {offerings.map((offering, index) => (
+                <tr
+                  key={offering.id}
+                  className={offering.id === editingId ? 'is-editing' : undefined}
+                >
+                  <td>{formatDate(offering.offering_start)}</td>
+                  {/* 5dp column — verbatim, never a 2dp currency echo. */}
+                  <td className="num">{offering.subscription_price}</td>
+                  <td>{coverage(offering, index)}</td>
+                  <td className="espp-notes-cell" title={offering.notes ?? undefined}>
+                    {offering.notes ?? ''}
+                  </td>
+                  <td className="row-actions">
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Edit offering from ${formatDate(offering.offering_start)}`}
+                      onClick={() => startEdit(offering)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Delete offering from ${formatDate(offering.offering_start)}`}
+                      disabled={busy}
+                      onClick={() => remove(offering)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
 // ── Modeler ─────────────────────────────────────────────────────────────────────────────
 
 interface Knobs {
@@ -453,82 +768,278 @@ interface Knobs {
   carry: string
 }
 
+// Sparse per-row edits keyed by row identity; only touched cells live here, so a refetch
+// updates every untouched cell while typed text survives.
+type RowEdits = Record<string, { base?: string; additional?: string; pct?: string }>
+
+// A stored row is its id; a derived one has no id yet, and its label is what the POST that
+// materializes it will carry — so the label is the only identity it can have.
+function rowKey(row: EsppModelerPeriod): string {
+  return row.id !== null ? `p${row.id}` : `d${row.label}`
+}
+
+// What the blank knobs resolved to — the provenance line under the form. Blank is the
+// smart default here, so the user needs telling which default answered.
+function sourceLine(data: EsppModelerOut): string {
+  const sub =
+    data.subscription_source === 'override'
+      ? 'custom subscription price'
+      : data.subscription_source === 'offering'
+        ? 'subscription from your offerings'
+        : data.subscription_source === 'mixed'
+          ? 'subscription mixed — offerings where they cover, latest quote elsewhere'
+          : `subscription from the latest ${data.espp_ticker ?? 'ESPP ticker'} quote`
+  const fmv =
+    data.fmv_source === 'override'
+      ? 'custom FMV'
+      : `FMV from the latest quote${data.quoted_at ? ` (as of ${formatDate(data.quoted_at)})` : ''}`
+  return `${sub} · ${fmv}`
+}
+
+/**
+ * The modeler as the periods EDITOR: every row the server modeled — stored ones and the
+ * derived slot-fillers that fill the year out — with its base, additional payments and
+ * contribution % editable in place. One primary saves the dirty rows (PATCH the stored,
+ * POST the derived, which materializes them) and re-runs the chain.
+ */
 function ModelerCard({
   data,
   knobs,
   onKnobChange,
-  onRecalculate,
+  onRun,
+  onYearSelect,
+  onRowsSaved,
   busy,
 }: {
   data: EsppModelerOut | null
   knobs: Knobs
   onKnobChange: (update: (current: Knobs) => Knobs) => void
-  onRecalculate: () => void
+  onRun: () => void
+  onYearSelect: (year: number) => void
+  onRowsSaved: () => void
   busy: boolean
 }) {
-  // An UPDATER, never `{ ...knobs, field: value }`: the seed below lands through the same
-  // setter, and React batches. A keystroke built from the props' `knobs` snapshot would
-  // resurrect the pre-seed siblings it spread — the panels' `set` helper, one field at a
-  // time, is the same shape for the same reason.
+  const [edits, setEdits] = useState<RowEdits>({})
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  // An UPDATER, never `{ ...knobs, field: value }`: React batches, and a keystroke built
+  // from a stale props snapshot would resurrect the siblings it spread.
   const setKnob = (field: keyof Knobs) => (value: string) =>
     onKnobChange((current) => ({ ...current, [field]: value }))
 
+  const editCell = (key: string, field: 'base' | 'additional' | 'pct') => (value: string) =>
+    setEdits((cur) => ({ ...cur, [key]: { ...cur[key], [field]: value } }))
+
+  // The DISPLAYED text per cell: the edit if one exists, else the payload value (pct at
+  // human scale — "14", never "0.140000000").
+  const cellValue = (row: EsppModelerPeriod, field: 'base' | 'additional' | 'pct'): string => {
+    const edit = edits[rowKey(row)]?.[field]
+    if (edit !== undefined) return edit
+    if (field === 'base') return row.semi_annual_base
+    if (field === 'additional') return row.additional_payments
+    return shiftPoint(row.contribution_pct, 2)
+  }
+
+  const rowIsDirty = (row: EsppModelerPeriod): boolean => {
+    const edit = edits[rowKey(row)]
+    if (!edit) return false
+    return (
+      (edit.base !== undefined && canonicalAmount(edit.base.trim()) !== row.semi_annual_base) ||
+      (edit.additional !== undefined &&
+        canonicalAmount(edit.additional.trim()) !== row.additional_payments) ||
+      (edit.pct !== undefined &&
+        canonicalAmount(edit.pct.trim(), { expressions: false }) !==
+          shiftPoint(row.contribution_pct, 2))
+    )
+  }
+
+  const dirtyRows = (data?.periods ?? []).filter(rowIsDirty)
+
+  const saveAndRecalculate = () => {
+    if (data === null || dirtyRows.length === 0) {
+      // Nothing to write — the primary is still the way to re-run the chain with the knobs.
+      onRun()
+      return
+    }
+    // Validate every dirty row before ANY write (the wizard's validate-then-save order).
+    for (const row of dirtyRows) {
+      const base = canonicalAmount(cellValue(row, 'base').trim())
+      const additional = canonicalAmount(cellValue(row, 'additional').trim() || '0')
+      const pct = canonicalAmount(cellValue(row, 'pct').trim(), { expressions: false })
+      if (
+        !base ||
+        !isAmount(base) ||
+        !isAmount(additional) ||
+        !pct ||
+        !isAmount(pct, { expressions: false })
+      ) {
+        setError(`${row.label}: base, additional and contribution % must be numbers`)
+        return
+      }
+      const pctNumber = Number(pct)
+      if (pctNumber < 0 || pctNumber > 100) {
+        // NOT the server's "contribution_pct must be between 0 and 1": that sentence is in
+        // the STORED fraction's vocabulary, and this cell holds 14 for 14%. Quoting it
+        // would call a perfectly good 14 out of range and wave a 0.5 through.
+        setError(`${row.label}: contribution % must be between 0 and 100`)
+        return
+      }
+    }
+    setSaving(true)
+    setError(null)
+    const requests = dirtyRows.map((row) => {
+      // The FULL row on both verbs: the router validates the MERGED period. A
+      // materialized derived row posts exactly what its cells display (spec §6.3).
+      const body: EsppPeriodCreate = {
+        label: row.label,
+        period_start: row.period_start,
+        period_end: row.period_end,
+        semi_annual_base: canonicalAmount(cellValue(row, 'base').trim()),
+        additional_payments: canonicalAmount(cellValue(row, 'additional').trim() || '0'),
+        contribution_pct: shiftPoint(
+          canonicalAmount(cellValue(row, 'pct').trim(), { expressions: false }),
+          -2,
+        ),
+      }
+      return row.id !== null ? updatePeriod(row.id, body) : createPeriod(body)
+    })
+    Promise.all(requests)
+      .then(() => {
+        setEdits({})
+        onRowsSaved()
+      })
+      .catch((err: unknown) => {
+        setError(message(err, 'Save failed'))
+        // RECONCILE, even though the save failed: Promise.all rejects on the FIRST failure
+        // while its siblings keep going, so a derived row's POST may have materialized a
+        // period the table still renders with `id: null` — and the next save would POST it
+        // again into a 409 loop. The refetch brings every row that did land back `stored`,
+        // with its real id.
+        // `edits` is deliberately NOT cleared here: the failed rows keep their typed text
+        // under `p{id}` so the retry writes what the user is still looking at, and the
+        // orphaned `d{label}` key a succeeded derived row leaves behind is dead weight only
+        // — that row now keys as `p{id}`, so `rowIsDirty` never reads it again.
+        onRowsSaved()
+      })
+      .finally(() => setSaving(false))
+  }
+
+  // Un-store a row: deleting the stored period hands the slot back to the derived planner,
+  // which is exactly what "reset to the derived values" means here.
+  const resetRow = (row: EsppModelerPeriod) => {
+    if (row.id === null) return
+    if (!window.confirm(`Reset ${row.label} to its derived values?`)) return
+    setSaving(true)
+    setError(null)
+    deletePeriod(row.id)
+      .then(() => {
+        setEdits((cur) => {
+          const next = { ...cur }
+          delete next[rowKey(row)]
+          return next
+        })
+        onRowsSaved()
+      })
+      .catch((err: unknown) => setError(message(err, 'Reset failed')))
+      .finally(() => setSaving(false))
+  }
+
+  const working = busy || saving
+
   return (
-    <section className="card">
+    <section className="card" data-entry-scope="">
       <h2 className="eyebrow">
         Purchase modeler{data === null ? '' : ` — ${data.year}`}
-        <InfoHint text="What the current period will buy — contributions, estimated shares at the 15% discount, and the $25k IRS limit. Nothing here is stored." />
+        <InfoHint text="What each period buys: your entered base and contribution % chained against the $25k IRS limit, priced at each period's offering subscription price and a 15% discount on the lower of it and the FMV." />
       </h2>
+      {data !== null && data.available_years.length > 1 && (
+        // The app's segmented control (panels.css .segmented / button.active).
+        <div className="segmented" role="group" aria-label="Modeled year">
+          {data.available_years.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={value === data.year ? 'active' : ''}
+              aria-pressed={value === data.year}
+              onClick={() => onYearSelect(value)}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      )}
       <p className="drill-hint">
-        Nothing here is stored: the two prices and the opening carry-forward are what-if
-        knobs over the periods below. Clear a price and the model falls back to the ESPP
-        ticker&apos;s latest quote — custom prices need BOTH of them.
+        Leave the knobs blank and the model uses your offerings for each period&apos;s
+        subscription price and the latest quote for the FMV — type a value to override the
+        whole year. Base, additional and contribution % are saved per period.
       </p>
       <form
         className="espp-form espp-knobs"
         onSubmit={(e) => {
           e.preventDefault()
-          onRecalculate()
+          saveAndRecalculate()
         }}
       >
-        {/* Nothing here is stored, but the knobs still carry the columns' scales: the
-            server echoes the two prices at the espp 5dp ("170.79000") and the carry-forward
-            at money's 2dp ("0.00"). So the prices are kind="plain" by the app-wide rule — a
-            "$170.79" echo would round the seed the next Recalculate sends straight back —
-            while the carry-forward is genuinely money and keeps the default, "="
-            arithmetic included (exactly the sort of thing a what-if knob invites). The
-            canonical belts are at runModeler's read site. */}
+        {/* The two prices are kind="plain" by the app-wide scale rule — they stand against
+            5dp columns, where a "$170.79" echo would round the override the chain is run
+            at — while the carry-forward is genuinely 2dp money and keeps the default, "="
+            arithmetic included. The placeholders name what BLANK resolves to; nothing here
+            is ever seeded from the payload (spec §6.2). */}
         <label>
           Subscription price
           <AmountInput
             kind="plain"
             value={knobs.subscription}
             onValueChange={setKnob('subscription')}
+            placeholder="from offerings"
           />
         </label>
         <label>
           Purchase FMV
-          <AmountInput kind="plain" value={knobs.fmv} onValueChange={setKnob('fmv')} />
+          <AmountInput
+            kind="plain"
+            value={knobs.fmv}
+            onValueChange={setKnob('fmv')}
+            placeholder="latest quote"
+          />
         </label>
         <label>
           Carry-forward
-          <AmountInput value={knobs.carry} onValueChange={setKnob('carry')} />
+          <AmountInput value={knobs.carry} onValueChange={setKnob('carry')} placeholder="0" />
         </label>
         <div className="espp-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
-            {busy ? 'Modeling…' : 'Recalculate'}
+          <button
+            type="submit"
+            className="button button-primary"
+            data-entry-primary=""
+            disabled={working}
+          >
+            {working ? 'Working…' : 'Save & recalculate'}
           </button>
         </div>
       </form>
+      {error && (
+        <div className="error-banner" role="alert">
+          {error}
+        </div>
+      )}
+      {dirtyRows.length > 0 && (
+        <p className="drill-hint" role="status">
+          {`${dirtyRows.length} ${
+            dirtyRows.length === 1 ? 'period has' : 'periods have'
+          } unsaved edits — the chain below is stale until you save & recalculate.`}
+        </p>
+      )}
       {data !== null && (
         <>
-          <p className="drill-hint">
-            {data.price_source === 'latest_price'
-              ? `using latest ${data.espp_ticker ?? 'ESPP ticker'} quote (as of ${formatDate(
-                  data.quoted_at,
-                )})`
-              : 'custom prices'}
-          </p>
+          <p className="drill-hint">{sourceLine(data)}</p>
+          {/* Advisory, not an error: the chain still ran (net-worth-projection precedent). */}
+          {data.warnings.map((warning) => (
+            <p key={warning} className="drill-hint espp-warning">
+              {warning}
+            </p>
+          ))}
           <div className="gauge">
             {/* A meter, not a progressbar: this is a filled quantity within a known range,
                 not the progress of a task. The value is the server's total; only the WIDTH
@@ -581,313 +1092,94 @@ function ModelerCard({
               <thead>
                 <tr>
                   <th>Period</th>
+                  <th className="num">Subscription</th>
+                  <th className="num">Base</th>
+                  <th className="num">Additional</th>
+                  <th className="num">Contrib %</th>
+                  <th className="num">Contribution</th>
+                  <th className="num">Available</th>
+                  <th className="num">Price</th>
                   <th className="num">Shares</th>
                   <th className="num">Cost</th>
                   <th className="num">Refund</th>
                   <th className="num">Carry out</th>
                   <th className="num">25k value</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {data.periods.map((period) => (
-                  <tr key={period.id}>
+                {data.periods.map((row) => (
+                  <tr key={rowKey(row)}>
                     <td>
-                      {period.label}
-                      {period.over_limit && <span className="badge">Over limit</span>}
+                      {row.label}
+                      {!row.stored && <span className="badge">derived</span>}
+                      {row.over_limit && <span className="badge">Over limit</span>}
+                      <span className="drill-hint espp-period-dates">
+                        {`${formatDate(row.period_start)} – ${formatDate(row.period_end)}`}
+                      </span>
                     </td>
-                    <td className="num">{formatShares(period.shares)}</td>
-                    <td className="num">{formatCurrency(period.cost)}</td>
-                    <td className="num">{formatCurrency(period.refund)}</td>
-                    <td className="num">{formatCurrency(period.carry_forward_out)}</td>
-                    <td className="num">{formatCurrency(period.value_25k)}</td>
+                    <td className="num">
+                      {/* 5dp column — verbatim. Provenance under it. */}
+                      {row.subscription_price}
+                      <span className="drill-hint espp-period-dates">
+                        {row.offering_start !== null
+                          ? `${formatDate(row.offering_start)} offering`
+                          : data.subscription_source === 'override'
+                            ? 'override'
+                            : 'latest quote'}
+                      </span>
+                    </td>
+                    <td className="num espp-cell">
+                      <AmountInput
+                        value={cellValue(row, 'base')}
+                        onValueChange={editCell(rowKey(row), 'base')}
+                        aria-label={`${row.label} semi-annual base`}
+                      />
+                    </td>
+                    <td className="num espp-cell">
+                      <AmountInput
+                        value={cellValue(row, 'additional')}
+                        onValueChange={editCell(rowKey(row), 'additional')}
+                        aria-label={`${row.label} additional payments`}
+                      />
+                    </td>
+                    <td className="num espp-cell">
+                      {/* Human scale in the box ("14" = 14%, echoed "14%"); the shift to the
+                          stored 9dp fraction happens at the wire, in saveAndRecalculate. */}
+                      <AmountInput
+                        kind="percent"
+                        value={cellValue(row, 'pct')}
+                        onValueChange={editCell(rowKey(row), 'pct')}
+                        aria-label={`${row.label} contribution percent`}
+                      />
+                    </td>
+                    <td className="num">{formatCurrency(row.contribution)}</td>
+                    <td className="num">{formatCurrency(row.available)}</td>
+                    <td className="num">{formatCurrency(row.purchase_price)}</td>
+                    <td className="num">{formatShares(row.shares)}</td>
+                    <td className="num">{formatCurrency(row.cost)}</td>
+                    <td className="num">{formatCurrency(row.refund)}</td>
+                    <td className="num">{formatCurrency(row.carry_forward_out)}</td>
+                    <td className="num">{formatCurrency(row.value_25k)}</td>
+                    <td className="row-actions">
+                      {row.stored && (
+                        <button
+                          type="button"
+                          className="button"
+                          aria-label={`Reset ${row.label} to derived values`}
+                          disabled={working}
+                          onClick={() => resetRow(row)}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         </>
-      )}
-    </section>
-  )
-}
-
-// ── Periods ─────────────────────────────────────────────────────────────────────────────
-
-interface PeriodFormState {
-  label: string
-  period_start: string
-  period_end: string
-  semi_annual_base: string
-  additional_payments: string
-  contribution_pct: string // percent form — "14", never "0.140000000"
-}
-
-const EMPTY_PERIOD: PeriodFormState = {
-  label: '', period_start: '', period_end: '', semi_annual_base: '',
-  additional_payments: '', contribution_pct: '',
-}
-
-function PeriodsPanel({
-  periods,
-  onChanged,
-}: {
-  periods: EsppPeriodOut[]
-  onChanged: () => void
-}) {
-  const [form, setForm] = useState<PeriodFormState>(EMPTY_PERIOD)
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const set = (field: keyof PeriodFormState) => (value: string) =>
-    setForm((f) => ({ ...f, [field]: value }))
-
-  const startEdit = (period: EsppPeriodOut) => {
-    setEditingId(period.id)
-    setForm({
-      label: period.label,
-      period_start: period.period_start,
-      period_end: period.period_end,
-      semi_annual_base: period.semi_annual_base,
-      additional_payments: period.additional_payments,
-      contribution_pct: shiftPoint(period.contribution_pct, 2),
-    })
-  }
-
-  const submit = () => {
-    const label = form.label.trim()
-    // Canonical at the READ site (LotsPanel's note): the presence checks, the gate below
-    // and the body all see the one text the column will store. `pct` renders as
-    // kind="percent", which refuses a leading "=" — the evaluator quantizes to 2dp and this
-    // column is a 9dp fraction, so an evaluated "=1/8" would store 0.0013 where an eighth
-    // of a percent (0.00125) was meant. The gate must refuse what the cell marks invalid.
-    const base = canonicalAmount(form.semi_annual_base.trim())
-    const pct = canonicalAmount(form.contribution_pct.trim(), { expressions: false })
-    if (!label || !form.period_start || !form.period_end || !base || !pct) {
-      setError('Label, both dates, the base and the contribution % are required')
-      return
-    }
-    if (form.period_end <= form.period_start) {
-      // The server's own sentence — already date-phrased, so it reads on screen. ISO
-      // strings from two <input type="date">, so the string compare IS the date compare.
-      setError('period_end must be after period_start')
-      return
-    }
-    if (!isAmount(pct, { expressions: false })) {
-      // Anything shiftPoint will not convert stops HERE, before the range check that
-      // Number() would happily pass it through: "1e-3" travels verbatim, parses on the
-      // server as a perfectly legal Decimal 0.001, and stores a tenth of a percent where
-      // the box said a thousandth of one. There is no 422 behind this gate — it is the
-      // only thing between that text and the column (src/utils/amount.ts).
-      setError('contribution % must be a number')
-      return
-    }
-    const pctNumber = Number(pct)
-    if (pctNumber < 0 || pctNumber > 100) {
-      // NOT the server's "contribution_pct must be between 0 and 1": that sentence is in
-      // the STORED fraction's vocabulary, and this box is labelled "Contribution %" and
-      // holds 14 for 14%. Quoting it verbatim would tell the user their 14 was too big
-      // and their 0.5 was fine — the opposite of what this form means.
-      setError('contribution % must be between 0 and 100')
-      return
-    }
-    setBusy(true)
-    setError(null)
-    // The FULL row on both verbs (Task 4 review M6's binding): the router validates the
-    // MERGED period, so a delta PATCH would 422 on a stored field this form never touched.
-    const body: EsppPeriodCreate = {
-      label,
-      period_start: form.period_start,
-      period_end: form.period_end,
-      semi_annual_base: base,
-      // Blank is a real zero here, not "leave it alone": the box was prefilled from the row.
-      // The '0' default stays OUTSIDE the belt, so blank is still a zero rather than an
-      // empty string canonicalized into one.
-      additional_payments: canonicalAmount(form.additional_payments.trim() || '0'),
-      // `pct` is already canonical, so the shift lands on the digits shiftPoint can move.
-      contribution_pct: shiftPoint(pct, -2),
-    }
-    const request = editingId !== null ? updatePeriod(editingId, body) : createPeriod(body)
-    request
-      .then(() => {
-        // The next entry starts here — the sheet's row-to-row rhythm (spec §5.1), BEFORE
-        // the reset for the blur-commit reason in LotsPanel's note: the transfer's blur has
-        // to write into state this reset is about to replace, not onto the emptied form.
-        // onChanged also re-runs the modeler, but nothing in that reload remounts this
-        // form, so the caret stays where it was just put.
-        document.getElementById('period-label')?.focus()
-        setForm(EMPTY_PERIOD)
-        setEditingId(null)
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
-      .finally(() => setBusy(false))
-  }
-
-  const remove = (period: EsppPeriodOut) => {
-    if (!window.confirm(`Delete the ${period.label} period?`)) return
-    setBusy(true)
-    // Cleared on entry like submit's (LotsPanel.remove's note).
-    setError(null)
-    deletePeriod(period.id)
-      .then(() => {
-        if (period.id === editingId) {
-          setEditingId(null)
-          setForm(EMPTY_PERIOD)
-        }
-        onChanged()
-      })
-      .catch((err: unknown) => setError(message(err, 'Delete failed')))
-      .finally(() => setBusy(false))
-  }
-
-  return (
-    <section className="card">
-      <h2 className="eyebrow">
-        Offering periods
-        <InfoHint text="The contribution windows behind the modeler: eligible base, extra payments, and your contribution percentage." />
-      </h2>
-      <p className="drill-hint">
-        The stored half of the model — the modeler chains these in period-end order, within
-        one calendar year. Contribution is entered as a percent (14 = 14%) and stored as a
-        fraction with 9 decimal places. Editing a period re-runs the model.
-      </p>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
-      <form
-        className="espp-form"
-        onSubmit={(e) => {
-          e.preventDefault()
-          submit()
-        }}
-      >
-        <label>
-          Label
-          <input
-            // The form's first entry field, so the save-success path can hand the caret
-            // back to it by id (spec §5.1's focus-return).
-            id="period-label"
-            className="field-input"
-            value={form.label}
-            onChange={(e) => set('label')(e.target.value)}
-          />
-        </label>
-        <label>
-          Period start
-          <input
-            className="field-input"
-            type="date"
-            value={form.period_start}
-            onChange={(e) => set('period_start')(e.target.value)}
-          />
-        </label>
-        <label>
-          Period end
-          <input
-            className="field-input"
-            type="date"
-            value={form.period_end}
-            onChange={(e) => set('period_end')(e.target.value)}
-          />
-        </label>
-        <label>
-          Semi-annual base
-          <AmountInput
-            value={form.semi_annual_base}
-            onValueChange={set('semi_annual_base')}
-          />
-        </label>
-        <label>
-          Additional payments
-          <AmountInput
-            value={form.additional_payments}
-            onValueChange={set('additional_payments')}
-          />
-        </label>
-        <label>
-          Contribution %
-          {/* State stays HUMAN-scale ("14" = 14%, echoed "14%"); the shift to the stored
-              fraction happens at the wire, in submit. */}
-          <AmountInput
-            kind="percent"
-            value={form.contribution_pct}
-            onValueChange={set('contribution_pct')}
-          />
-        </label>
-        <div className="espp-form-actions">
-          <button type="submit" className="button button-primary" disabled={busy}>
-            {editingId !== null ? 'Save period' : 'Add period'}
-          </button>
-          {editingId !== null && (
-            <button
-              type="button"
-              className="button"
-              aria-label="Cancel the period edit"
-              onClick={() => {
-                setEditingId(null)
-                setForm(EMPTY_PERIOD)
-              }}
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-      </form>
-      {periods.length === 0 ? (
-        <p className="empty-note">No offering periods yet.</p>
-      ) : (
-        <div className="espp-scroll">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Label</th>
-                <th>Start</th>
-                <th>End</th>
-                <th className="num">Base</th>
-                <th className="num">Additional</th>
-                <th className="num">Contribution</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {periods.map((period) => (
-                <tr
-                  key={period.id}
-                  className={period.id === editingId ? 'is-editing' : undefined}
-                >
-                  <td>{period.label}</td>
-                  <td>{formatDate(period.period_start)}</td>
-                  <td>{formatDate(period.period_end)}</td>
-                  <td className="num">{formatCurrency(period.semi_annual_base)}</td>
-                  <td className="num">{formatCurrency(period.additional_payments)}</td>
-                  <td className="num">{formatPct(period.contribution_pct, { signed: false })}</td>
-                  <td className="row-actions">
-                    <button
-                      type="button"
-                      className="button"
-                      aria-label={`Edit period ${period.label}`}
-                      onClick={() => startEdit(period)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="button"
-                      aria-label={`Delete period ${period.label}`}
-                      disabled={busy}
-                      onClick={() => remove(period)}
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       )}
     </section>
   )
@@ -900,31 +1192,30 @@ export default function EsppPage() {
   const [lotsError, setLotsError] = useState<string | null>(null)
   const [lotsBusy, setLotsBusy] = useState(true)
 
+  const [offerings, setOfferings] = useState<EsppOfferingOut[] | null>(null)
+  const [offeringsError, setOfferingsError] = useState<string | null>(null)
+  const [offeringsBusy, setOfferingsBusy] = useState(true)
+  // Employer closes for the "use close" chip — best-effort: a miss just hides the chip.
+  const [bars, setBars] = useState<PricePoint[]>([])
+
   const [modeler, setModeler] = useState<EsppModelerOut | null>(null)
   const [modelerError, setModelerError] = useState<string | null>(null)
-  // The 404 branch is not an error to recover from — it is "there is nothing to model yet",
-  // and its answer is the periods section below.
-  const [modelerMissing, setModelerMissing] = useState(false)
   const [modelerBusy, setModelerBusy] = useState(true)
-  // The knobs live HERE, not in the card: a failed recalculate drops the chain (a model
-  // shown under knobs that did not produce it is a lie), and the values the user typed to
-  // get out of that failure must survive it.
+  // Knobs are NEVER seeded from the echo (spec §6.2): blank means the smart default —
+  // subscription from offerings, FMV from the latest quote — and the provenance line
+  // says what blank resolved to. They live here so a failed recalculate keeps them.
   const [knobs, setKnobs] = useState<Knobs>({ subscription: '', fmv: '', carry: '' })
+  // null = the server's default (the current calendar year).
+  const [year, setYear] = useState<number | null>(null)
 
-  const [periods, setPeriods] = useState<EsppPeriodOut[] | null>(null)
-  const [periodsError, setPeriodsError] = useState<string | null>(null)
-  const [periodsBusy, setPeriodsBusy] = useState(true)
-
-  // Three INDEPENDENT loads: a modeler 404/422 must not blank the lots table, so each
-  // carries its own sequence guard, its own banner and its own busy flag.
+  // Three INDEPENDENT loads: a modeler 422 must not blank the lots table, so each carries
+  // its own sequence guard, its own banner and its own busy flag.
   const lotsSeq = useRef(0)
+  const offeringsSeq = useRef(0)
   const modelerSeq = useRef(0)
-  const periodsSeq = useRef(0)
-  // Seeded once, ever: every later echo would otherwise overwrite knobs mid-typing.
-  const knobsSeeded = useRef(false)
+  const barsFetched = useRef(false)
 
   // Promise callbacks only — no setState in an effect's synchronous body (react-hooks 7).
-  // The mount fetches are covered by the initial busy values; the handlers below flip them.
   const loadLots = () => {
     const seq = ++lotsSeq.current
     fetchLots()
@@ -932,18 +1223,39 @@ export default function EsppPage() {
         if (seq !== lotsSeq.current) return
         setLots(data)
         setLotsError(null)
+        // Lazy, once: the chip's bars need the employer ticker, which this payload names.
+        if (!barsFetched.current && data.espp_ticker !== null) {
+          barsFetched.current = true
+          fetchPriceHistory(data.espp_ticker, 3650)
+            .then((history) => setBars(history.points))
+            .catch(() => setBars([]))
+        }
       })
       .catch((err: unknown) => {
         if (seq !== lotsSeq.current) return
-        // The previous payload is KEPT: unlike TaxesPage's year switch, a failed reload
-        // here describes the same lots, and dropping them would also destroy a half-typed
-        // row in the panel's form. The banner below appends the stale cue whenever a
-        // table is still on screen — on a FIRST load there is none, so it says only the
-        // server's sentence.
+        // The previous payload is KEPT: a failed reload here describes the same lots, and
+        // dropping them would also destroy a half-typed row in the panel's form.
         setLotsError(message(err, 'Failed to load ESPP lots'))
       })
       .finally(() => {
         if (seq === lotsSeq.current) setLotsBusy(false)
+      })
+  }
+
+  const loadOfferings = () => {
+    const seq = ++offeringsSeq.current
+    fetchOfferings()
+      .then((data) => {
+        if (seq !== offeringsSeq.current) return
+        setOfferings(data)
+        setOfferingsError(null)
+      })
+      .catch((err: unknown) => {
+        if (seq !== offeringsSeq.current) return
+        setOfferingsError(message(err, 'Failed to load offerings'))
+      })
+      .finally(() => {
+        if (seq === offeringsSeq.current) setOfferingsBusy(false)
       })
   }
 
@@ -954,28 +1266,12 @@ export default function EsppPage() {
         if (seq !== modelerSeq.current) return
         setModeler(data)
         setModelerError(null)
-        setModelerMissing(false)
-        if (!knobsSeeded.current) {
-          knobsSeeded.current = true
-          // The echo IS the seed: the server answers with the prices it actually used.
-          // Guarded twice — once ever (a later echo must not overwrite typed knobs), and
-          // per field, because the knob inputs are on screen THROUGHOUT this first load:
-          // anything typed into one while it was in flight is the newer intent, while its
-          // untouched neighbours still want the seed.
-          setKnobs((current) => ({
-            subscription:
-              current.subscription === '' ? data.subscription_price : current.subscription,
-            fmv: current.fmv === '' ? data.purchase_fmv : current.fmv,
-            carry: current.carry === '' ? data.carry_forward : current.carry,
-          }))
-        }
       })
       .catch((err: unknown) => {
         if (seq !== modelerSeq.current) return
-        // Dropped, unlike the lots: the chain is a function of the knobs and the periods,
-        // and leaving the last one on screen would read as the answer for the current ones.
+        // Dropped, unlike the lots: a chain shown under knobs that did not produce it is
+        // a lie. The knobs and the year survive in page state.
         setModeler(null)
-        setModelerMissing(err instanceof ApiError && err.status === 404)
         setModelerError(message(err, 'Failed to run the model'))
       })
       .finally(() => {
@@ -983,27 +1279,10 @@ export default function EsppPage() {
       })
   }
 
-  const loadPeriods = () => {
-    const seq = ++periodsSeq.current
-    fetchPeriods()
-      .then((data) => {
-        if (seq !== periodsSeq.current) return
-        setPeriods(data)
-        setPeriodsError(null)
-      })
-      .catch((err: unknown) => {
-        if (seq !== periodsSeq.current) return
-        setPeriodsError(message(err, 'Failed to load offering periods'))
-      })
-      .finally(() => {
-        if (seq === periodsSeq.current) setPeriodsBusy(false)
-      })
-  }
-
   useEffect(() => {
     loadLots()
+    loadOfferings()
     loadModeler()
-    loadPeriods()
   }, [])
 
   // "We are fetching" flips live in the handlers that cause a fetch, never in the effect.
@@ -1013,40 +1292,34 @@ export default function EsppPage() {
     loadLots()
   }
 
-  // Blank knobs go over as '' and the client OMITS them (src/api/espp.ts: a blanked
-  // controlled input would otherwise 422 as Decimal('')), which is exactly the
-  // fall-back-to-the-latest-quote path the hint above describes.
-  const runModeler = () => {
+  // Blank knobs are OMITTED from the query (src/api/espp.ts) — blank means the server's
+  // smart default, which is the whole point of the offerings feature. The canonical belt
+  // is here, at the read site: a knob typed and saved without a blur must not put
+  // "$170.79" in the URL for Decimal() to choke on.
+  const runModeler = (yearOverride?: number | null) => {
+    const target = yearOverride !== undefined ? yearOverride : year
     setModelerBusy(true)
     setModelerError(null)
-    // Cleared TOGETHER with the error it is a flavour of: the 404 empty state renders
-    // `modelerError` as prose, so leaving `missing` up with the error gone would print a
-    // literal "null — add one below…" for the whole of the re-run that adding the first
-    // period just caused. Both are re-derived when this load answers.
-    setModelerMissing(false)
-    // The query-string belt, the same shape as every payload one: a knob typed and
-    // Recalculated without a blur must not put "$170.79" in the URL for Decimal() to
-    // choke on. canonicalAmount leaves blank blank, so the omit-me path above is intact.
-    // Each belt matches its box's kind: the two 5dp prices are expressionless (the 2dp
-    // evaluator would coarsen the price the whole chain is modelled at), the 2dp
-    // carry-forward keeps the money default.
     loadModeler({
       subscriptionPrice: canonicalAmount(knobs.subscription.trim(), { expressions: false }),
       purchaseFmv: canonicalAmount(knobs.fmv.trim(), { expressions: false }),
       carryForward: canonicalAmount(knobs.carry.trim()),
+      year: target ?? undefined,
     })
   }
 
-  const reloadPeriods = () => {
-    setPeriodsBusy(true)
-    setPeriodsError(null)
-    loadPeriods()
+  // The chip's year has to travel with THIS run: setYear only lands on the next render.
+  const selectYear = (value: number) => {
+    setYear(value)
+    runModeler(value)
   }
 
-  // A period save or delete moves the chain, so the model is re-run with the CURRENT
-  // knobs — refetching it bare would silently jump the prices back to the latest quote.
-  const onPeriodsChanged = () => {
-    reloadPeriods()
+  // An offering write re-prices the chain; a modeler-row save moves it. Both re-run with
+  // the CURRENT knobs and year.
+  const onOfferingsChanged = () => {
+    setOfferingsBusy(true)
+    setOfferingsError(null)
+    loadOfferings()
     runModeler()
   }
 
@@ -1071,63 +1344,56 @@ export default function EsppPage() {
         lotsBusy && <p className="empty-note">Loading lots…</p>
       ) : (
         <div className={`loading-dim${lotsBusy ? ' is-loading' : ''}`}>
-          {/* NOT keyed, and a sibling of the two cards below: a modeler or periods refetch
-              re-renders this panel with the same payload, so its half-typed row survives. */}
-          <LotsPanel data={lots} onChanged={reloadLots} />
+          {/* NOT keyed, and a sibling of the two cards below: a modeler or offerings
+              refetch re-renders this panel with the same payload, so a half-typed row
+              survives. */}
+          <LotsPanel data={lots} offerings={offerings ?? []} onChanged={reloadLots} />
         </div>
       )}
 
-      {modelerError !== null && !modelerMissing && (
+      {offeringsError && (
+        <div className="error-banner" role="alert">
+          {offerings === null
+            ? offeringsError
+            : `${offeringsError} — the table may be showing earlier data.`}{' '}
+          <button
+            className="button"
+            aria-label="Retry loading offerings"
+            onClick={onOfferingsChanged}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {offerings === null ? (
+        offeringsBusy && <p className="empty-note">Loading offerings…</p>
+      ) : (
+        <div className={`loading-dim${offeringsBusy ? ' is-loading' : ''}`}>
+          <OfferingsPanel offerings={offerings} bars={bars} onChanged={onOfferingsChanged} />
+        </div>
+      )}
+
+      {modelerError !== null && (
         <div className="error-banner" role="alert">
           {modelerError}{' '}
-          <button className="button" aria-label="Retry the model" onClick={runModeler}>
+          <button className="button" aria-label="Retry the model" onClick={() => runModeler()}>
             Retry
           </button>
         </div>
       )}
-      {modelerMissing ? (
-        <section className="card">
-          <h2 className="eyebrow">Purchase modeler</h2>
-          {/* The server's sentence, plus where to go next. No knobs: with no periods there
-              is nothing for them to model. */}
-          {/* "$25,000" is written out rather than formatCurrency(LIMIT_25K): the ceiling is
-              a client constant in a sentence, not a figure the server sent, and the
-              "$25,000.00" the formatter would give reads as a number to go check. */}
-          <p className="empty-note">
-            {`${modelerError} — add one below to run the $25,000 model.`}
-          </p>
-        </section>
-      ) : (
-        <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
-          <ModelerCard
-            data={modeler}
-            knobs={knobs}
-            // The setter itself: the card hands back an updater, so a keystroke that
-            // batches with the echo seed cannot spread a stale sibling over it.
-            onKnobChange={setKnobs}
-            onRecalculate={runModeler}
-            busy={modelerBusy}
-          />
-        </div>
-      )}
-
-      {periodsError && (
-        <div className="error-banner" role="alert">
-          {periods === null
-            ? periodsError
-            : `${periodsError} — the table may be showing earlier data.`}{' '}
-          <button className="button" aria-label="Retry loading periods" onClick={reloadPeriods}>
-            Retry
-          </button>
-        </div>
-      )}
-      {periods === null ? (
-        periodsBusy && <p className="empty-note">Loading periods…</p>
-      ) : (
-        <div className={`loading-dim${periodsBusy ? ' is-loading' : ''}`}>
-          <PeriodsPanel periods={periods} onChanged={onPeriodsChanged} />
-        </div>
-      )}
+      <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
+        <ModelerCard
+          data={modeler}
+          knobs={knobs}
+          // The setter itself: the card hands back an updater, so a keystroke cannot
+          // spread a stale sibling over its neighbour.
+          onKnobChange={setKnobs}
+          onRun={runModeler}
+          onYearSelect={selectYear}
+          onRowsSaved={() => runModeler()}
+          busy={modelerBusy}
+        />
+      </div>
     </div>
   )
 }

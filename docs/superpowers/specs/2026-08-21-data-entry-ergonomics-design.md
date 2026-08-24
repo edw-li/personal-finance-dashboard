@@ -219,6 +219,12 @@ dashboard already computes them.
   single-flight PATCH with the server echo adopted; a stored source today's options no
   longer contain renders as its own "(unresolved)" option rather than coercing to None.
 
+> **Amendment (2026-08-23): feature removed.** The balance-suggestions mapping card,
+> wizard Apply chips, `GET /net-worth/suggestions`, and `accounts.suggest_source` were
+> removed end to end before ever deploying — the user judged the mapping + chips not
+> useful. See `2026-08-23-espp-offerings-refactor-design.md` §7. The tax-input suggestion
+> chips (§ InputsForm) are a different feature and remain.
+
 ## 6. Cross-cutting invariants
 
 - **Wire format unchanged:** canonical plain-decimal strings only; formatted text never

@@ -105,27 +105,6 @@
   color: var(--negative);
 }
 
-/* The suggestion offer under a balance cell (spec §5.2) — the tax form's .tax-suggestion
-   in table dress. Block, so it can never widen the 160px .entry-cell-col; it inherits the
-   cell's right alignment, and the chip wraps under the figure on a narrow cell rather than
-   clipping it. Unlike the tax form's, the track is NOT reserved when empty: chips are the
-   rare case here (one or two mapped accounts among ~26 rows), so 26 permanent blank lines
-   would cost more than the one-row reflow they prevent. */
-.entry-suggestion {
-  display: block;
-  font-size: 0.72rem;
-  color: var(--muted);
-  margin-top: 2px;
-}
-
-/* A shade tighter than the shared .chip: this one sits inside a table cell under a
-   0.72rem line, where the full-size pill reads as a second control column. */
-.entry-suggestion .chip {
-  margin-left: 0.35rem;
-  padding: 0.1rem 0.45rem;
-  font-size: 0.68rem;
-}
-
 /* Live totals ride the viewport bottom while the column scrolls (the sheet's total row). */
 .entry-footer {
   position: sticky;

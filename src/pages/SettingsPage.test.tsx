@@ -1,16 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type {
-  AccountOut,
-  AllocationResponse,
-  AppSettingsOut,
-  ImportReport,
-  ImportSheetReport,
-} from '../types/api'
+import type { AppSettingsOut, ImportReport, ImportSheetReport } from '../types/api'
 import SettingsPage from './SettingsPage'
 
-// Five api modules, all stubbed. No EChart mock here: this page draws nothing, so the
+// Three api modules, all stubbed. No EChart mock here: this page draws nothing, so the
 // house's never-render-echarts-in-jsdom rule has nothing to catch.
 vi.mock('../api/settings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/settings')>()),
@@ -25,21 +19,8 @@ vi.mock('../api/importer', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/importer')>()),
   importXlsx: vi.fn(),
 }))
-// The mapping card's two: the accounts it lists (and PATCHes) and the portfolio allocation
-// whose per-account buckets ARE its option list.
-vi.mock('../api/netWorth', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../api/netWorth')>()),
-  fetchAccounts: vi.fn(),
-  updateAccount: vi.fn(),
-}))
-vi.mock('../api/portfolio', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../api/portfolio')>()),
-  fetchAllocation: vi.fn(),
-}))
 import { changePassword } from '../api/auth'
 import { importXlsx } from '../api/importer'
-import { fetchAccounts, updateAccount } from '../api/netWorth'
-import { fetchAllocation } from '../api/portfolio'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 
 // A promise this file settles by hand — the only way to look at the page while a request
@@ -155,55 +136,6 @@ const applyButton = () => screen.getByRole('button', { name: /^appl/i }) as HTML
 // jsdom has no file picker: the change event carries the File list itself.
 const pick = (file: File) => fireEvent.change(fileBox(), { target: { files: [file] } })
 
-// --- balance suggestions card ---
-
-// suggest_source is a REQUIRED field of AccountOut, so every literal states its mapping;
-// null is the posture every account starts in (the column is opt-in, spec §5.2).
-function account(id: number, name: string, over: Partial<AccountOut> = {}): AccountOut {
-  return {
-    id,
-    name,
-    slug: name.toLowerCase().replace(/\s+/g, '-'),
-    group: 'taxable',
-    sort_order: id,
-    is_active: true,
-    is_component: false,
-    parent_account_id: null,
-    suggest_source: null,
-    ...over,
-  }
-}
-
-const CHECKING = account(1, 'Checking', { group: 'cash' })
-const BROKERAGE = account(2, 'Brokerage', { suggest_source: 'portfolio:RH Taxable' })
-const RSU_HOLDING = account(3, 'RSU holding', { group: 'equity' })
-// Neither belongs in the card: a closed account has no balance to suggest, and a component
-// is entered under its parent (the wizard's own active/non-component filter).
-const CLOSED = account(4, 'Closed savings', { is_active: false })
-const COMPONENT = account(5, 'Brokerage cash', { is_component: true, parent_account_id: 2 })
-const ACCOUNTS = [CHECKING, BROKERAGE, RSU_HOLDING, CLOSED, COMPONENT]
-
-// GET /portfolio/allocation?by=account — `key` is the transactions' account LABEL, which is
-// exactly what a `portfolio:<label>` mapping names.
-const ALLOCATION: AllocationResponse = {
-  by: 'account',
-  total_market_value: '250000.00',
-  slices: [
-    { key: 'RH Taxable', market_value: '150000.00', weight_pct: '60.00', holdings: 4 },
-    { key: 'Fidelity 401k', market_value: '100000.00', weight_pct: '40.00', holdings: 2 },
-  ],
-}
-
-const SUGGEST_HINT =
-  'Suggestions appear in the Monthly update wizard on the newest month only — a backfilled ' +
-  'month never sees them.'
-
-const sourceBox = (name: string) =>
-  screen.getByLabelText(`Suggestion source for ${name}`) as HTMLSelectElement
-const optionTexts = (box: HTMLSelectElement) => Array.from(box.options).map((o) => o.text)
-const pickSource = (name: string, value: string) =>
-  fireEvent.change(sourceBox(name), { target: { value } })
-
 // Default "yes" keeps jsdom's unimplemented window.confirm out of every other test in the
 // file; only the decline test flips it (BracketsEditor.test.tsx's arrangement).
 const confirmSpy = vi.spyOn(window, 'confirm')
@@ -213,13 +145,6 @@ beforeEach(() => {
   vi.mocked(putAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(changePassword).mockResolvedValue(undefined)
   vi.mocked(importXlsx).mockResolvedValue(makeReport())
-  vi.mocked(fetchAccounts).mockResolvedValue(ACCOUNTS)
-  vi.mocked(fetchAllocation).mockResolvedValue(ALLOCATION)
-  // The server echoes the row it STORED — the same account, with the sparse PATCH applied.
-  vi.mocked(updateAccount).mockImplementation(async (id, body) => ({
-    ...(ACCOUNTS.find((a) => a.id === id) ?? account(id, `Account ${id}`)),
-    ...body,
-  }))
   confirmSpy.mockReturnValue(true)
 })
 
@@ -244,6 +169,9 @@ describe('SettingsPage — app settings', () => {
     // then says so), not a box the user forgot to fill in.
     expect(screen.getByText("Blank = ESPP page shows 'no ticker configured'.")).toBeTruthy()
     expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(1)
+    // The balance-suggestions mapping card was removed end to end (spec §5.2 amendment):
+    // this page no longer reads accounts or the allocation, and offers no mapping control.
+    expect(screen.queryByText(/Balance suggestions/)).toBeNull()
   })
 
   it('PUTs the full form with the rate shifted back, and notes the hot-applied schedule', async () => {
@@ -759,205 +687,5 @@ describe('SettingsPage — xlsx import', () => {
     })
     await waitFor(() => expect(dryButton().disabled).toBe(false))
     expect(fileBox().disabled).toBe(false)
-  })
-})
-
-describe('SettingsPage — balance suggestions', () => {
-  it('lists enterable accounts with the allocation buckets and the vesting source', async () => {
-    render(<SettingsPage />)
-    await screen.findByLabelText('Suggestion source for Checking')
-
-    expect(vi.mocked(fetchAllocation)).toHaveBeenCalledWith('account')
-    // Every option the card can offer: None, one per allocation BUCKET (the labels the
-    // portfolio actually holds under), and the one static kind.
-    expect(optionTexts(sourceBox('Checking'))).toEqual([
-      'None',
-      'Portfolio: RH Taxable',
-      'Portfolio: Fidelity 401k',
-      'Unvested RSUs',
-    ])
-    expect(Array.from(sourceBox('Checking').options).map((o) => o.value)).toEqual([
-      '',
-      'portfolio:RH Taxable',
-      'portfolio:Fidelity 401k',
-      'vesting:unvested',
-    ])
-    // The stored mapping is the current selection; an unmapped account sits on None.
-    expect(sourceBox('Brokerage').value).toBe('portfolio:RH Taxable')
-    expect(sourceBox('Checking').value).toBe('')
-    // A closed account has no balance to suggest, and a component is entered under its
-    // parent — the wizard's own filter, or the card would offer rows the chips never reach.
-    expect(screen.queryByLabelText('Suggestion source for Closed savings')).toBeNull()
-    expect(screen.queryByLabelText('Suggestion source for Brokerage cash')).toBeNull()
-    // Where the mapping shows up — the one thing the select cannot say for itself.
-    expect(screen.getByText(SUGGEST_HINT)).toBeTruthy()
-  })
-
-  it('PATCHes the picked source immediately and keeps the echoed row', async () => {
-    render(<SettingsPage />)
-    await screen.findByLabelText('Suggestion source for RSU holding')
-
-    pickSource('RSU holding', 'vesting:unvested')
-
-    await waitFor(() => expect(vi.mocked(updateAccount)).toHaveBeenCalledTimes(1))
-    // Exact body: the sparse PATCH carries the one column, so nothing else about the
-    // account can be rewritten by a mapping change.
-    expect(vi.mocked(updateAccount).mock.calls[0]).toEqual([
-      3,
-      { suggest_source: 'vesting:unvested' },
-    ])
-    await waitFor(() => expect(sourceBox('RSU holding').value).toBe('vesting:unvested'))
-    // The account's own row is untouched by its neighbours' state.
-    expect(sourceBox('Brokerage').value).toBe('portfolio:RH Taxable')
-    expect(screen.queryByRole('alert')).toBeNull()
-  })
-
-  it('lands on the source the SERVER echoes, not the one that was picked', async () => {
-    // The echo that disagrees with the pick — the only shape that can tell a re-seed from a
-    // box left holding its optimistic guess. Every other mock here answers with exactly what
-    // was sent, so deleting the .then re-seed would pass them all.
-    vi.mocked(updateAccount).mockResolvedValue({
-      ...CHECKING,
-      suggest_source: 'portfolio:RH Taxable',
-    })
-    render(<SettingsPage />)
-    await screen.findByLabelText('Suggestion source for Checking')
-
-    pickSource('Checking', 'portfolio:Fidelity 401k')
-
-    await waitFor(() => expect(vi.mocked(updateAccount)).toHaveBeenCalledTimes(1))
-    // The server owns what a mapping ends up as (it normalizes, and it may have stored
-    // something else entirely), exactly as the settings PUT re-seeds its boxes from the
-    // response. A box still showing the pick would be describing a mapping nobody has.
-    await waitFor(() => expect(sourceBox('Checking').value).toBe('portfolio:RH Taxable'))
-    expect(screen.queryByRole('alert')).toBeNull()
-  })
-
-  it('sends suggest_source: null EXPLICITLY when a mapping is set back to None', async () => {
-    render(<SettingsPage />)
-    await screen.findByLabelText('Suggestion source for Brokerage')
-
-    pickSource('Brokerage', '')
-
-    await waitFor(() => expect(vi.mocked(updateAccount)).toHaveBeenCalledTimes(1))
-    const [id, body] = vi.mocked(updateAccount).mock.calls[0]
-    expect(id).toBe(2)
-    // The key must SURVIVE JSON.stringify: an `undefined` value is dropped from the JSON
-    // and the server tells "clear it" from "I did not send it" by model_fields_set alone —
-    // so an omitted key would leave the old mapping in place while the box says None.
-    expect(Object.keys(body)).toContain('suggest_source')
-    expect(body.suggest_source).toBeNull()
-    expect(JSON.parse(JSON.stringify(body)).suggest_source).toBeNull()
-    await waitFor(() => expect(sourceBox('Brokerage').value).toBe(''))
-  })
-
-  it('restores the previous selection and banners a refused PATCH verbatim', async () => {
-    vi.mocked(updateAccount).mockRejectedValue(
-      new ApiError(
-        "suggest_source must be 'portfolio:<account-label>' or 'vesting:unvested'",
-        422,
-      ),
-    )
-    render(<SettingsPage />)
-    await screen.findByLabelText('Suggestion source for Brokerage')
-
-    pickSource('Brokerage', 'vesting:unvested')
-
-    expect(
-      await screen.findByText(
-        "suggest_source must be 'portfolio:<account-label>' or 'vesting:unvested'",
-      ),
-    ).toBeTruthy()
-    // The wizard is still suggesting from the OLD source, so the box must say so: a
-    // selection left showing a mapping the server refused is a lie about what runs.
-    await waitFor(() => expect(sourceBox('Brokerage').value).toBe('portfolio:RH Taxable'))
-    // No Retry beside THIS sentence: the rows loaded fine, and the way back from a refused
-    // PATCH is picking an option again — a button offering to re-run the load would be
-    // pointing at a request that never broke.
-    expect(screen.queryByRole('button', { name: 'Retry loading balance suggestions' })).toBeNull()
-  })
-
-  it('shuts every select while one PATCH is in flight', async () => {
-    const patch = deferred<AccountOut>()
-    vi.mocked(updateAccount).mockReturnValue(patch.promise)
-    render(<SettingsPage />)
-    await screen.findByLabelText('Suggestion source for Checking')
-
-    pickSource('Checking', 'portfolio:Fidelity 401k')
-
-    await waitFor(() => expect(sourceBox('Checking').disabled).toBe(true))
-    // The picked value is on screen while the request is out — a controlled select that
-    // waited for the response would snap back to the old option on the very next render,
-    // which is the failure case being SHOWN before anything has failed.
-    expect(sourceBox('Checking').value).toBe('portfolio:Fidelity 401k')
-    // Single-flight, and that is what buys this card its missing seq guard: with every
-    // select shut there is no way to start a second PATCH behind the first.
-    expect(sourceBox('Brokerage').disabled).toBe(true)
-    // Four cards, four flags — a mapping PATCH must not lock the forms above it.
-    expect(saveButton().disabled).toBe(false)
-    expect(pwButton().disabled).toBe(false)
-
-    await act(async () => {
-      patch.resolve({ ...CHECKING, suggest_source: 'portfolio:Fidelity 401k' })
-    })
-    await waitFor(() => expect(sourceBox('Checking').disabled).toBe(false))
-    expect(sourceBox('Checking').value).toBe('portfolio:Fidelity 401k')
-  })
-
-  it('keeps a stored source the allocation no longer offers, and never clears it', async () => {
-    // The label was renamed in the ledger (or its last holding was sold): the mapping is
-    // still in the database, and today's buckets do not contain it.
-    vi.mocked(fetchAccounts).mockResolvedValue([
-      CHECKING,
-      { ...BROKERAGE, suggest_source: 'portfolio:Ghost Label' },
-    ])
-    render(<SettingsPage />)
-    await screen.findByLabelText('Suggestion source for Brokerage')
-
-    // Shown, and marked for what it is. Without this option the controlled select would
-    // coerce to None on RENDER — and the next change event anywhere would look like the
-    // user clearing a mapping they never touched.
-    expect(sourceBox('Brokerage').value).toBe('portfolio:Ghost Label')
-    expect(optionTexts(sourceBox('Brokerage'))).toContain('Portfolio: Ghost Label (unresolved)')
-
-    // An unrelated interaction: the neighbour's mapping changes, this one must not move.
-    pickSource('Checking', 'vesting:unvested')
-
-    await waitFor(() => expect(vi.mocked(updateAccount)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(updateAccount).mock.calls[0][0]).toBe(1)
-    expect(sourceBox('Brokerage').value).toBe('portfolio:Ghost Label')
-  })
-
-  it('shows a stored source of a kind this build does not know, raw', async () => {
-    // A mapping written by a LATER build (or by hand): the card cannot name the kind, and a
-    // guess would be worse than the column. Same rule as the ghost label — it stays on
-    // screen, so it cannot be cleared by a change nobody made.
-    vi.mocked(fetchAccounts).mockResolvedValue([{ ...CHECKING, suggest_source: 'prices:VOO' }])
-    render(<SettingsPage />)
-    await screen.findByLabelText('Suggestion source for Checking')
-
-    expect(sourceBox('Checking').value).toBe('prices:VOO')
-    expect(optionTexts(sourceBox('Checking'))).toContain('prices:VOO (unresolved)')
-    expect(vi.mocked(updateAccount)).not.toHaveBeenCalled()
-  })
-
-  it('banners a failed mapping load, offers a Retry, and leaves the other cards up', async () => {
-    vi.mocked(fetchAllocation)
-      .mockRejectedValueOnce(new ApiError('portfolio unavailable', 503))
-      .mockResolvedValue(ALLOCATION)
-    render(<SettingsPage />)
-
-    expect(await screen.findByText('portfolio unavailable')).toBeTruthy()
-    // Four cards, four loads: the portfolio being down must not cost the user the settings
-    // form, the password form or the importer.
-    expect(screen.getByLabelText('ESPP ticker')).toBeTruthy()
-    expect(screen.getByLabelText('Workbook (.xlsx)')).toBeTruthy()
-    // No rows, so no half-built card offering to map an account list nobody has.
-    expect(screen.queryByLabelText('Suggestion source for Checking')).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading balance suggestions' }))
-    expect(await screen.findByLabelText('Suggestion source for Checking')).toBeTruthy()
-    expect(vi.mocked(fetchAllocation)).toHaveBeenCalledTimes(2)
-    expect(screen.queryByText('portfolio unavailable')).toBeNull()
   })
 })

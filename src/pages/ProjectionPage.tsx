@@ -75,7 +75,8 @@ export default function ProjectionPage() {
   const [data, setData] = useState<ProjectionOut | null>(null)
   const [error, setError] = useState<string | null>(null)
   // The 404 branch is not a failure to recover from — it is "there is nothing to project
-  // from yet", and its answer is the monthly-update wizard (EsppPage's modelerMissing).
+  // from yet", so it gets its own flag rather than the error banner: with no snapshots
+  // behind it the answer on screen is the monthly-update wizard, not a Retry.
   const [missing, setMissing] = useState(false)
   const [busy, setBusy] = useState(true)
   const [formError, setFormError] = useState<string | null>(null)
@@ -87,7 +88,9 @@ export default function ProjectionPage() {
   const [trendYears, setTrendYears] = useState<TrendSpan>(10)
   // Two recalculates in a row are two runs in flight; only the newest may land.
   const seqRef = useRef(0)
-  // Seeded once, ever: a later echo must not overwrite knobs mid-typing (EsppPage).
+  // Seeded once, ever: a later echo must not overwrite knobs mid-typing. (This page keeps
+  // echo-seeding because blank knobs here mean "derived defaults" the user should SEE to
+  // adjust; the ESPP modeler retired its seed in favour of blank-means-smart-default.)
   const knobsSeeded = useRef(false)
 
   // Promise callbacks only — no setState in an effect's synchronous body (react-hooks 7).

@@ -25,12 +25,6 @@ export interface AccountOut {
   is_active: boolean
   is_component: boolean
   parent_account_id: number | null
-  /**
-   * Where the wizard's balance suggestion for this account is computed from (spec §5.2):
-   * `portfolio:<account-label>` or `vesting:unvested`, null when unmapped. Dashboard-only
-   * and user-owned — the importer never writes it (the is_component posture).
-   */
-  suggest_source: string | null
 }
 
 export interface AccountCreate {
@@ -39,16 +33,6 @@ export interface AccountCreate {
   sort_order?: number
   is_component?: boolean
 }
-
-// suggest_source rides the same sparse PATCH: OMITTING it leaves the mapping alone, an
-// explicit null CLEARS it (the server tells the two apart by model_fields_set, and
-// JSON.stringify drops undefined but keeps null — so the difference survives the wire).
-export type AccountUpdate = Partial<
-  Pick<
-    AccountOut,
-    'name' | 'group' | 'sort_order' | 'is_active' | 'is_component' | 'suggest_source'
-  >
->
 
 export interface BalanceEntry {
   account_id: number
@@ -94,26 +78,6 @@ export interface MonthUpsertResult {
   created: number
   updated: number
   unchanged: number
-}
-
-/**
- * One computed "now" value for a mapped account (spec §5.2). `value` is a 2dp money
- * STRING like every other amount on the wire (pydantic serializes Decimal that way);
- * `source` echoes the account's suggest_source so the client needn't re-read the account.
- */
-export interface SuggestionOut {
-  account_id: number
-  source: string
-  value: string
-}
-
-export interface SuggestionsOut {
-  suggestions: SuggestionOut[]
-  /**
-   * One sentence per mapping that resolved to nothing, naming the account. Advisory: a
-   * broken mapping never fails the request and never silently disappears.
-   */
-  warnings: string[]
 }
 
 export interface CategoryOut {
@@ -705,6 +669,23 @@ export interface EsppLotsResponse {
   lots: EsppLotOut[]
 }
 
+export interface EsppOfferingOut {
+  id: number
+  offering_start: string
+  // Numeric(14,5) — render verbatim (kind="plain" column), never formatCurrency's 2dp.
+  subscription_price: string
+  notes: string | null
+}
+
+export interface EsppOfferingCreate {
+  offering_start: string
+  subscription_price: string
+  notes?: string | null
+}
+
+// offering_start / subscription_price are NOT NULL (value or omit); notes: null clears.
+export type EsppOfferingUpdate = Partial<EsppOfferingCreate>
+
 export interface EsppPeriodOut {
   id: number
   label: string
@@ -728,8 +709,20 @@ export interface EsppPeriodCreate {
 // out — an explicit null is a server-side no-op and has no place in the type.
 export type EsppPeriodUpdate = Partial<EsppPeriodCreate>
 
-// The stored inputs are echoed so the modeler card renders without a second call.
-export interface EsppModelerPeriod extends EsppPeriodOut {
+// One modeled row — a stored espp_periods row verbatim, or a derived slot-filler
+// (stored=false, id=null) that materializes only when saved via POST /espp/periods.
+export interface EsppModelerPeriod {
+  id: number | null
+  stored: boolean
+  label: string
+  period_start: string
+  period_end: string
+  semi_annual_base: string
+  additional_payments: string
+  contribution_pct: string // 9dp fraction
+  // The price this row was chained at + provenance (offering_start null = quote/override).
+  subscription_price: string
+  offering_start: string | null
   // --- computed chain (espp_calc.run_modeler)
   eligible_earnings: string
   contribution: string
@@ -756,16 +749,21 @@ export interface EsppModelerTotals {
 export interface EsppModelerOut {
   year: number
   espp_ticker: string | null
-  // A DIFFERENT union than HoldingOut's same-named field: "params" only when BOTH prices
-  // came from the query string; any fallback to the ticker's latest quote is
-  // "latest_price".
+  // LEGACY (stale-tab armor): "params" iff both prices overridden. New UI reads the two
+  // source fields below.
   price_source: 'params' | 'latest_price'
-  // Provenance, not data: null whenever price_source is "params", because then no stored
-  // quote is behind the numbers.
+  subscription_source: 'override' | 'offering' | 'latest_price' | 'mixed'
+  fmv_source: 'override' | 'latest_price'
+  // Provenance, not data: null whenever no stored quote is behind the numbers.
   quoted_at: string | null
-  subscription_price: string
+  // The override echo — null when offerings/quote drive per-period (blank knob = smart
+  // default; the box is never seeded from this).
+  subscription_price: string | null
   purchase_fmv: string
   carry_forward: string
+  // Server-owned year-chip list (stored ∪ offering-covered ∪ {now, now+1}), sorted.
+  available_years: number[]
+  warnings: string[]
   periods: EsppModelerPeriod[]
   totals: EsppModelerTotals
 }

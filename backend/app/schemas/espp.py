@@ -82,6 +82,29 @@ class LotsOut(BaseModel):
     lots: list[LotOut]
 
 
+class OfferingIn(BaseModel):
+    offering_start: date
+    subscription_price: Decimal
+    notes: str | None = None
+
+
+class OfferingUpdate(BaseModel):
+    # offering_start / subscription_price are NOT NULL: send a value or omit (an explicit
+    # null is a no-op). notes is the nullable one — its explicit null CLEARS.
+    offering_start: date | None = None
+    subscription_price: Decimal | None = None
+    notes: str | None = None
+
+
+class OfferingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    offering_start: date
+    subscription_price: Decimal
+    notes: str | None
+
+
 class PeriodIn(BaseModel):
     label: str = Field(min_length=1, max_length=60)
     period_start: date
@@ -113,14 +136,21 @@ class PeriodOut(BaseModel):
 
 
 class ModelerPeriodOut(BaseModel):
-    # Stored inputs, echoed so the card renders without a second call.
-    id: int
+    # Stored inputs, echoed so the card renders without a second call. id is None on a
+    # DERIVED row (stored=False): it fills an empty half-year slot and materializes only
+    # when the user saves it (POST /espp/periods).
+    id: int | None
+    stored: bool
     label: str
     period_start: date
     period_end: date
     semi_annual_base: Decimal
     additional_payments: Decimal
     contribution_pct: Pct9
+    # The price THIS row was chained at, plus its provenance: offering_start is None when
+    # the row fell back to the latest quote or an override priced it.
+    subscription_price: Decimal
+    offering_start: date | None
     # --- computed chain (espp_calc.run_modeler)
     eligible_earnings: Decimal
     contribution: Decimal
@@ -147,14 +177,22 @@ class ModelerTotalsOut(BaseModel):
 class ModelerOut(BaseModel):
     year: int
     espp_ticker: str | None
-    # "params" only when BOTH prices came from the query string; any fallback to the
-    # ticker's latest quote reports "latest_price".
+    # LEGACY, kept one deploy cycle as stale-tab armor (spec §5.2): "params" iff BOTH
+    # prices were overridden, else "latest_price". New UI reads the two sources below.
     price_source: Literal["params", "latest_price"]
-    # The quote the fallback prices came from — null whenever price_source is "params",
-    # because then no stored quote is behind the numbers (Task 8's provenance line).
+    subscription_source: Literal["override", "offering", "latest_price", "mixed"]
+    fmv_source: Literal["override", "latest_price"]
+    # Non-null whenever any value fell back to the stored quote.
     quoted_at: datetime | None
-    subscription_price: Decimal
+    # The OVERRIDE echo — null when offerings/quote drive per-period (the knob box's
+    # blank-means-smart-default posture).
+    subscription_price: Decimal | None
     purchase_fmv: Decimal
     carry_forward: Decimal
+    # Server-owned year-chip list: stored period years ∪ offering-covered purchase years
+    # ∪ {current, current + 1}, sorted (the frontend has no other source once
+    # fetchPeriods is gone).
+    available_years: list[int]
+    warnings: list[str]
     periods: list[ModelerPeriodOut]
     totals: ModelerTotalsOut

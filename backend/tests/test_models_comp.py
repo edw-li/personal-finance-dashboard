@@ -5,7 +5,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.models import AppSetting, CompEvent, EsppLot, EsppPeriod, PaycheckProfile, RsuGrant
+from app.models import (
+    AppSetting,
+    CompEvent,
+    EsppLot,
+    EsppOffering,
+    EsppPeriod,
+    PaycheckProfile,
+    RsuGrant,
+)
 
 
 async def test_espp_lot_roundtrip(db):
@@ -115,6 +123,36 @@ async def test_rsu_grant_label_unique(db):
     db.add(grant())
     await db.commit()
     db.add(grant(shares=400, first_vest_date=date(2026, 6, 17)))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
+async def test_espp_offering_roundtrip_and_unique_start(db):
+    db.add(
+        EsppOffering(
+            offering_start=date(2023, 9, 1),
+            subscription_price=Decimal("48.50900"),
+            notes="first enrollment",
+        )
+    )
+    await db.commit()
+    row = (await db.execute(select(EsppOffering))).scalar_one()
+    assert row.offering_start == date(2023, 9, 1)
+    # Numeric(14,5) — the lot price family, 5dp survives the round trip.
+    assert row.subscription_price == Decimal("48.50900")
+    assert row.notes == "first enrollment"
+
+    db.add(EsppOffering(offering_start=date(2023, 9, 1), subscription_price=Decimal("1")))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
+async def test_espp_offering_subscription_price_must_be_positive(db):
+    # The API rejects <= 0 before this fires; the CHECK is what stops a hand-edited row
+    # from reaching run_modeler's division by the subscription price.
+    db.add(EsppOffering(offering_start=date(2023, 9, 1), subscription_price=Decimal("0")))
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
