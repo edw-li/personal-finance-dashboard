@@ -13,7 +13,7 @@ export default defineConfig({
     // more echarts modules in trips it again. History: 678.97 kB at the 700 limit; the
     // dataZoom component took it to 694.77; ScatterChart (net-worth note markers) pushes
     // past 700, hence 720; SankeyChart (the /spending and /paycheck flow cards) lands at
-    // 723.95, hence 730.
+    // 723.95 (724.53 with the shared marks module), hence 730.
     chunkSizeWarningLimit: 730,
   },
   server: {
