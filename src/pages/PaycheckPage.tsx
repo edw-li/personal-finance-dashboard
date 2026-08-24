@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import {
   createProfile,
@@ -8,7 +8,9 @@ import {
   updateProfile,
 } from '../api/paycheck'
 import AmountInput from '../components/AmountInput'
+import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
+import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptions'
 import StatTile from '../components/StatTile'
 import type {
   PaycheckBreakdownOut,
@@ -106,6 +108,38 @@ function BreakdownPanel({ data }: { data: PaycheckBreakdownOut }) {
           </div>
         ))}
       </dl>
+    </section>
+  )
+}
+
+// ── Flow ────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The waterfall drawn as a flow, from the SAME payload the table renders: gray nodes
+ * restate money in transit (gross, taxable, post-tax), colored nodes are destinations,
+ * green is the kept money. A null option is the builder's negative guard (or an all-zero
+ * check) — the table is the always-correct surface, so this card steps aside with a
+ * sentence instead of drawing a lie.
+ */
+function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
+  const option = useMemo(() => paycheckSankeyOption(data), [data])
+  return (
+    <section className="card">
+      <h2 className="eyebrow">
+        Where each check goes
+        <InfoHint text="The table&apos;s own figures drawn as a flow — gross splits into pre-tax deductions and taxable, taxable into withholding and post-tax, post-tax into contributions and net pay. Amounts match the table exactly." />
+      </h2>
+      {option !== null ? (
+        <>
+          <EChart option={option} height={320} />
+          <p className="drill-hint">
+            Gray nodes restate money in transit; colored nodes are where it lands; green
+            is what you keep. Hover a node to trace its flows.
+          </p>
+        </>
+      ) : (
+        <p className="empty-note">This profile&apos;s deductions exceed pay — see the table.</p>
+      )}
     </section>
   )
 }
@@ -735,6 +769,9 @@ export default function PaycheckPage() {
       ) : (
         <div className={`loading-dim${breakdownBusy ? ' is-loading' : ''}`}>
           <BreakdownPanel data={breakdown} />
+          {/* Same payload, same busy dim: the flow can never show a different check than
+              the table above it. */}
+          <FlowPanel data={breakdown} />
         </div>
       )}
 
