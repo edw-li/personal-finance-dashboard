@@ -6,6 +6,7 @@ import {
   HeatmapChart,
   LineChart,
   PieChart,
+  SankeyChart,
   ScatterChart,
   TreemapChart,
 } from 'echarts/charts'
@@ -28,6 +29,7 @@ import type {
   HeatmapSeriesOption,
   LineSeriesOption,
   PieSeriesOption,
+  SankeySeriesOption,
   ScatterSeriesOption,
   TreemapSeriesOption,
 } from 'echarts/charts'
@@ -51,6 +53,9 @@ echarts.use([
   HeatmapChart,
   PieChart,
   TreemapChart,
+  // Flow cards on /spending and /paycheck (2026-08-24 sankey spec §2). Sankey lays out
+  // in its own 'view' coordinate system — no grid/axis component to register.
+  SankeyChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -74,6 +79,7 @@ export type EChartsOption = ComposeOption<
   | HeatmapSeriesOption
   | PieSeriesOption
   | TreemapSeriesOption
+  | SankeySeriesOption
   | DataZoomComponentOption
   | GridComponentOption
   | TooltipComponentOption
