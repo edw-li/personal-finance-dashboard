@@ -847,29 +847,10 @@ async def test_modeler_year_defaults_to_the_current_year(auth_client, db):
         semi_annual_base="60000",
         contribution_pct="0.1",
     )
-    # A future-year-only period: the OLD default (max period_end.year) would pick it,
-    # so this is what makes the current-calendar-year assertion discriminating today.
-    future = date.today().year + 1
-    await create_period(
-        auth_client,
-        label="future H2",
-        period_start=f"{future}-03-01",
-        period_end=f"{future}-08-20",
-        semi_annual_base="1000",
-        contribution_pct="0.1",
-    )
     params = {"subscription_price": "170.79", "purchase_fmv": "171"}
 
-    default = (await auth_client.get(MODELER, params=params)).json()
-    assert default["year"] == date.today().year  # not "the latest year with periods"
-    if date.today().year == 2026:
-        assert [row["label"] for row in default["periods"]] == ["2026 H1", "2026 H2"]
-        assert [row["stored"] for row in default["periods"]] == [True, True]
-    else:
-        # The fixture's periods live in another year: both slots DERIVE rather than 404.
-        assert [row["stored"] for row in default["periods"]] == [False, False]
-        assert [row["id"] for row in default["periods"]] == [None, None]
-
+    # The seed-sensitive year FIRST: derived rows seed from the latest stored period
+    # overall, so the future-year row created below must not exist yet here.
     older = (await auth_client.get(MODELER, params={**params, "year": 2025})).json()
     assert older["year"] == 2025
     # 2025 stored only its H2 half, so H1 is derived (seeded from the latest stored period,
@@ -881,6 +862,28 @@ async def test_modeler_year_defaults_to_the_current_year(auth_client, db):
     assert older["periods"][1]["value_25k"] == "7002.39"
     assert older["totals"]["total_25k_value"] == "19128.48"
     assert older["totals"]["remaining_25k"] == "5871.52"  # the limit is per YEAR
+
+    # A future-year-only period: the OLD default (max period_end.year) would pick it,
+    # so this is what makes the current-calendar-year assertion discriminating today.
+    future = date.today().year + 1
+    await create_period(
+        auth_client,
+        label="future H2",
+        period_start=f"{future}-03-01",
+        period_end=f"{future}-08-20",
+        semi_annual_base="1000",
+        contribution_pct="0.1",
+    )
+
+    default = (await auth_client.get(MODELER, params=params)).json()
+    assert default["year"] == date.today().year  # not "the latest year with periods"
+    if date.today().year == 2026:
+        assert [row["label"] for row in default["periods"]] == ["2026 H1", "2026 H2"]
+        assert [row["stored"] for row in default["periods"]] == [True, True]
+    else:
+        # The fixture's periods live in another year: both slots DERIVE rather than 404.
+        assert [row["stored"] for row in default["periods"]] == [False, False]
+        assert [row["id"] for row in default["periods"]] == [None, None]
 
 
 async def test_modeler_derives_rows_for_an_empty_year(auth_client, priced_ticker):
