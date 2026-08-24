@@ -1,0 +1,120 @@
+/* Budget meters (2026-08-24 spec §4.2): plain HTML/CSS in the StatTile family — thin
+   4px rounded tracks, figures in the app's text tokens, tone only where over. */
+
+.budget-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.budget-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) 1fr minmax(150px, auto) auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.budget-name {
+  font-size: 0.85rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.budget-meter {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-2);
+}
+
+.budget-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.budget-fill.is-over {
+  background: var(--negative);
+}
+
+/* The beyond-100% marker: a small negative-toned tick just past the track's end —
+   a POSITION channel for over-ness, redundant with the colour (CVD-safe). */
+.budget-overflow-tick {
+  position: absolute;
+  top: -3px;
+  right: -6px;
+  width: 3px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--negative);
+}
+
+.budget-figures {
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  text-align: right;
+  color: var(--muted);
+}
+
+.budget-figures.delta-negative {
+  color: var(--negative);
+}
+
+.budget-editor summary,
+.budget-unbudgeted summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.budget-unbudgeted summary {
+  font-size: 0.8rem;
+  margin-top: 0.75rem;
+}
+
+.budget-editor-form {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+  flex-wrap: wrap;
+}
+
+.budget-editor-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.budget-editor-form .field-input {
+  width: 150px;
+}
+
+.budget-history {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  font-size: 0.8rem;
+}
+
+.budget-history li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.2rem 0;
+}
+
+@media (max-width: 720px) {
+  .budget-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+}
