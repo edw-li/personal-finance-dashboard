@@ -1,6 +1,6 @@
 # ESPP Offerings & Modeler Refactor (+ Balance Suggestions Removal) — Design Spec
 
-**Date:** 2026-08-23 · **Status:** approved design, pre-implementation
+**Date:** 2026-08-23 · **Status:** implemented 2026-08-23 (branch `espp-offerings-refactor`; backend 782 / frontend 707 green; alembic head `c9e2b7a4d113`)
 **Touches:** `/espp` page (all three cards), `espp` router/service/schemas, two migrations, `/settings` + monthly-update wizard (removal), `net-worth` router/schemas (removal).
 **Amends:** the master spec's `/espp` row (§6) — the "Offering periods" card it describes is replaced; `2026-08-21-data-entry-ergonomics-design.md` §5.2 — the balance-suggestions feature it introduced is removed (a dated amendment is part of this work).
 
