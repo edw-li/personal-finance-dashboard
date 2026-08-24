@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import type { EChartsOption } from '../../charts/echarts'
+import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
 import type { SpendingMatrix, SpendingYearly } from '../../types/api'
-import { buildYearSlices, spendingFlowPeriod } from './spendingSankeyOptions'
+import {
+  buildYearSlices,
+  spendingFlowPeriod,
+  spendingSankeyOption,
+} from './spendingSankeyOptions'
 
 // Wire shape of GET /spending/matrix — Decimal strings, parallel arrays. The category
 // name carries markup on purpose: user text must survive to the escapeHtml boundary.
@@ -94,5 +100,160 @@ describe('spendingFlowPeriod', () => {
     const straddling = matrix({ months: ['2025-12', '2026-07'] })
     expect(spendingFlowPeriod(straddling, YEARLY, TOP, 0, 'year')).toBeNull()
     expect(spendingFlowPeriod(matrix(), null, TOP, 0, 'year')).toBeNull()
+  })
+})
+
+// --- option readers (historyChartOptions.test.ts posture) -------------------------------
+interface NodeLike {
+  name?: string
+  value?: number
+  itemStyle?: { color?: string }
+}
+interface LinkLike {
+  source?: string
+  target?: string
+  value?: number
+}
+interface SankeyLike {
+  type?: string
+  nodeWidth?: number
+  layoutIterations?: number
+  data?: NodeLike[]
+  links?: LinkLike[]
+}
+function sankeyOf(option: EChartsOption): SankeyLike {
+  return (option as unknown as { series: SankeyLike[] }).series[0]
+}
+function tooltipOf(option: EChartsOption): (params: unknown) => string {
+  return (option as unknown as { tooltip: { formatter: (params: unknown) => string } })
+    .tooltip.formatter
+}
+
+const july = () => spendingFlowPeriod(matrix(), YEARLY, TOP, 1, 'month')!
+
+describe('spendingSankeyOption — surplus periods', () => {
+  it('fans net pay into slotted category nodes and a green Saved tail', () => {
+    const option = spendingSankeyOption(july())
+    expect(option).not.toBeNull()
+    const series = sankeyOf(option!)
+    // The shared mark spec rides every option (charts/sankey.ts owns the numbers).
+    expect(series.type).toBe('sankey')
+    expect(series.nodeWidth).toBe(12)
+    expect(series.layoutIterations).toBe(0)
+    expect(series.data?.map((n) => n.name)).toEqual([
+      'Net pay',
+      'Rent',
+      'Groceries <b>& more</b>',
+      'Saved',
+    ])
+    expect(series.data?.map((n) => n.itemStyle?.color)).toEqual([
+      MUTED, // income restated, not a destination
+      PALETTE[0], // the stacked chart's slot for Rent — same entity, same hue
+      PALETTE[1],
+      POSITIVE, // Saved: the one deliberate status-color exception (spec §3)
+    ])
+    expect(series.links).toEqual([
+      { source: 'Net pay', target: 'Rent', value: 2000 },
+      { source: 'Net pay', target: 'Groceries <b>& more</b>', value: 580 },
+      { source: 'Net pay', target: 'Saved', value: 3420 },
+    ])
+  })
+
+  it('folds non-top categories into the gray Other node (year mode)', () => {
+    const option = spendingSankeyOption(spendingFlowPeriod(matrix(), YEARLY, TOP, 1, 'year')!)
+    const series = sankeyOf(option!)
+    const other = series.data?.find((n) => n.name === 'Other')
+    expect(other?.itemStyle?.color).toBe(OTHER_SERIES_COLOR)
+    expect(series.links).toContainEqual({ source: 'Net pay', target: 'Other', value: 150 })
+    // Saved = net pay − the DRAWN sum (4000+1180+150 = 5330), NOT net_pay − the
+    // refund-netted rollup total (5305): links cannot be negative, so the fold restates
+    // spending GROSS and balance (inflow = outflow) wins over restating the server total
+    // — the same documented divergence the drill-in pie carries (buildMonthSlices).
+    expect(series.links).toContainEqual({ source: 'Net pay', target: 'Saved', value: 6670 })
+  })
+
+  it('omits an exactly-zero Saved node (zero-width links are tooltip noise)', () => {
+    const period = spendingFlowPeriod(
+      matrix({ net_pay: ['6000.00', '2580.00'] }),
+      YEARLY,
+      TOP,
+      1,
+      'month',
+    )!
+    const series = sankeyOf(spendingSankeyOption(period)!)
+    expect(series.data?.map((n) => n.name)).toEqual([
+      'Net pay',
+      'Rent',
+      'Groceries <b>& more</b>',
+    ])
+    expect(series.links).toHaveLength(2)
+  })
+})
+
+describe('spendingSankeyOption — deficit and degenerate periods', () => {
+  it('adds a red Drawdown source and splits every category pro-rata', () => {
+    const period = spendingFlowPeriod(
+      matrix({ net_pay: ['6000.00', '1000.00'] }),
+      YEARLY,
+      TOP,
+      1,
+      'month',
+    )!
+    const series = sankeyOf(spendingSankeyOption(period)!)
+    // Saved is omitted in a deficit period (spec §3).
+    expect(series.data?.map((n) => n.name)).toEqual([
+      'Net pay',
+      'Drawdown',
+      'Rent',
+      'Groceries <b>& more</b>',
+    ])
+    expect(series.data?.[1]?.itemStyle?.color).toBe(NEGATIVE)
+    expect(series.data?.[1]?.value).toBe(1580)
+    // Pro-rata: net pay funds 1000/2580 of each category, the drawdown the rest — money
+    // is fungible, so no category is singled out as "the drawdown one". Inflows equal
+    // outflows again: 1000 + 1580 = 2580.
+    expect(series.links).toEqual([
+      { source: 'Net pay', target: 'Rent', value: 775.19 },
+      { source: 'Drawdown', target: 'Rent', value: 1224.81 },
+      { source: 'Net pay', target: 'Groceries <b>& more</b>', value: 224.81 },
+      { source: 'Drawdown', target: 'Groceries <b>& more</b>', value: 355.19 },
+    ])
+  })
+
+  it('funds a zero-net-pay deficit period entirely from Drawdown', () => {
+    const period = spendingFlowPeriod(
+      matrix({ net_pay: ['6000.00', '0.00'] }),
+      YEARLY,
+      TOP,
+      1,
+      'month',
+    )!
+    const series = sankeyOf(spendingSankeyOption(period)!)
+    // No zero-value Net pay node and no zero links from it.
+    expect(series.data?.map((n) => n.name)).toEqual([
+      'Drawdown',
+      'Rent',
+      'Groceries <b>& more</b>',
+    ])
+    expect(series.links).toEqual([
+      { source: 'Drawdown', target: 'Rent', value: 2000 },
+      { source: 'Drawdown', target: 'Groceries <b>& more</b>', value: 580 },
+    ])
+  })
+
+  it('is null when net pay is missing, negative, or there is nothing to draw', () => {
+    expect(spendingSankeyOption({ label: 'Jul 2026', netPay: null, slices: [] })).toBeNull()
+    expect(spendingSankeyOption({ label: 'Jul 2026', netPay: '-1.00', slices: [] })).toBeNull()
+    expect(spendingSankeyOption({ label: 'Jul 2026', netPay: '0.00', slices: [] })).toBeNull()
+  })
+
+  it("tooltips echo the builder's own figures with names escaped", () => {
+    const format = tooltipOf(spendingSankeyOption(july())!)
+    const node = format({ dataType: 'node', name: 'Groceries <b>& more</b>' })
+    expect(node).toContain('$580.00')
+    expect(node).toContain('&lt;b&gt;&amp; more&lt;/b&gt;')
+    expect(node).not.toContain('<b>')
+    const edge = format({ dataType: 'edge', data: { source: 'Net pay', target: 'Saved' } })
+    expect(edge).toContain('$3,420.00')
   })
 })

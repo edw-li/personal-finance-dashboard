@@ -5,6 +5,10 @@
 // Palette law: slices arrive PRE-SLOTTED through the page's own topIds order
 // (buildMonthSlices / buildYearSlices), so a category wears the exact hue its stacked-bar
 // segment wears — same entity, same color everywhere, gray "Other" fold included.
+import type { EChartsOption } from '../../charts/echarts'
+import { SANKEY_MARKS, makeSankeyTooltipFormatter } from '../../charts/sankey'
+import type { SankeyLink, SankeyNode } from '../../charts/sankey'
+import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
 import type { CategoryOut, SpendingMatrix, SpendingYearly, YearRollup } from '../../types/api'
 import { formatMonth } from '../../utils/format'
 import { buildMonthSlices } from '../../utils/spending'
@@ -76,5 +80,94 @@ export function spendingFlowPeriod(
     label: String(rollup.year),
     netPay: rollup.net_pay_total,
     slices: buildYearSlices(matrix.categories, rollup, topIds),
+  }
+}
+
+// Fixed node names. A user category with one of these exact names would merge with the
+// app node (sankey nodes key on name) — the same accepted collision as the pie's 'Other'.
+const NET_PAY = 'Net pay'
+const SAVED = 'Saved'
+const DRAWDOWN = 'Drawdown'
+
+// Cent arithmetic on display floats: Saved/Drawdown are DERIVED figures, and float dust
+// (6000 − 2580.0000000000005) must neither invent a node nor leak into a tooltip.
+const A_CENT = 0.005
+const cents = (value: number) => Math.round(value * 100) / 100
+
+/**
+ * "Where {period} went": Net pay fans out into the period's categories, and what is left
+ * lands on a green Saved node. A deficit period adds a red Drawdown source instead —
+ * links cannot be negative — with every category link split pro-rata between the two
+ * sources: money is fungible, and a greedy fill that named WHICH categories the drawdown
+ * funded would fabricate causality. Null = nothing drawable; the page picks the
+ * empty-note sentence (netPay missing vs a genuinely empty period).
+ *
+ * `spent` is the DRAWN links' sum (the positive fold), so inflow always equals outflow —
+ * a sankey that leaks reads as a bug. Refund cells are excluded by the fold, which
+ * restates spending GROSS: matrix.totals nets refunds in, so Saved here can sit a
+ * refund's width below net_pay − totals. The drill-in pie documents the same divergence
+ * (buildMonthSlices' comment).
+ */
+export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption | null {
+  const netPay = period.netPay === null ? null : Number(period.netPay)
+  // No net pay — or an unusable one (a negative period cannot source a flow) — is the
+  // page's empty-note, never a blank canvas (spec §2).
+  if (netPay === null || !Number.isFinite(netPay) || netPay < 0) return null
+  const spent = cents(period.slices.reduce((acc, slice) => acc + slice.value, 0))
+  const saved = cents(netPay - spent)
+  const shortfall = cents(spent - netPay)
+  const deficit = shortfall >= A_CENT
+
+  // Node order is render order (SANKEY_MARKS.layoutIterations 0): sources first, then
+  // categories biggest-first (the slices' own order), Saved at the bottom.
+  const nodes: SankeyNode[] = []
+  // MUTED-family neutral: the node restates income, it is not a destination (spec §3).
+  if (netPay >= A_CENT) {
+    nodes.push({ name: NET_PAY, value: netPay, itemStyle: { color: MUTED } })
+  }
+  if (deficit) {
+    nodes.push({ name: DRAWDOWN, value: shortfall, itemStyle: { color: NEGATIVE } })
+  }
+  for (const slice of period.slices) {
+    nodes.push({
+      name: slice.name,
+      value: slice.value,
+      // The stacked chart's exact assignment, reused: slot i = PALETTE[i]; the folded
+      // remainder wears the gray Other color.
+      itemStyle: { color: slice.slot === null ? OTHER_SERIES_COLOR : PALETTE[slice.slot] },
+    })
+  }
+
+  const links: SankeyLink[] = []
+  if (deficit) {
+    // Saved is omitted (spec §3). Sub-cent slivers are dropped on BOTH legs — a
+    // zero-width link is tooltip noise (the vesting-tooltip lesson).
+    for (const slice of period.slices) {
+      const fromNet = spent > 0 ? cents((slice.value * netPay) / spent) : 0
+      const fromDrawdown = cents(slice.value - fromNet)
+      if (fromNet >= A_CENT) {
+        links.push({ source: NET_PAY, target: slice.name, value: fromNet })
+      }
+      if (fromDrawdown >= A_CENT) {
+        links.push({ source: DRAWDOWN, target: slice.name, value: fromDrawdown })
+      }
+    }
+  } else {
+    for (const slice of period.slices) {
+      links.push({ source: NET_PAY, target: slice.name, value: slice.value })
+    }
+    // Saved wears POSITIVE green — the one deliberate exception to the reserved-status-
+    // color rule, one node per chart: "the kept money is green" is the cross-chart
+    // convention (§3/§4). An exactly-zero Saved is OMITTED, not drawn at zero width.
+    if (saved >= A_CENT) {
+      nodes.push({ name: SAVED, value: saved, itemStyle: { color: POSITIVE } })
+      links.push({ source: NET_PAY, target: SAVED, value: saved })
+    }
+  }
+  if (links.length === 0) return null
+
+  return {
+    tooltip: { trigger: 'item', formatter: makeSankeyTooltipFormatter(nodes, links) },
+    series: [{ ...SANKEY_MARKS, data: nodes, links }],
   }
 }
