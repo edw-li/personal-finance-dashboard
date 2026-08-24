@@ -603,9 +603,12 @@ async def modeler(
     years = {row.period_end.year for row in stored} | {today.year, today.year + 1}
     if offerings:
         first = offerings[0].offering_start
-        # An offering's first purchase: Sep–Dec starts buy next Feb; earlier starts buy
-        # within their own calendar year.
-        first_purchase_year = first.year + 1 if first.month >= 9 else first.year
+        # An offering's first purchase: a start on/before Mar 1 is covered by that
+        # year's Mar–Aug period (the Aug purchase); any later start waits for a slot
+        # whose purchase lands NEXT year (Sep 1 → next Feb; an off-cycle Apr–Aug
+        # hire-month start → also next Feb). Keying on Mar 1, not month >= 9, keeps
+        # an uncovered start year out of the chips.
+        first_purchase_year = first.year if first <= date(first.year, 3, 1) else first.year + 1
         years.update(range(first_purchase_year, today.year + 1))
 
     sub_sources = {"offering" if row.offering_start is not None else "latest_price" for row in rows}

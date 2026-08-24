@@ -847,6 +847,17 @@ async def test_modeler_year_defaults_to_the_current_year(auth_client, db):
         semi_annual_base="60000",
         contribution_pct="0.1",
     )
+    # A future-year-only period: the OLD default (max period_end.year) would pick it,
+    # so this is what makes the current-calendar-year assertion discriminating today.
+    future = date.today().year + 1
+    await create_period(
+        auth_client,
+        label="future H2",
+        period_start=f"{future}-03-01",
+        period_end=f"{future}-08-20",
+        semi_annual_base="1000",
+        contribution_pct="0.1",
+    )
     params = {"subscription_price": "170.79", "purchase_fmv": "171"}
 
     default = (await auth_client.get(MODELER, params=params)).json()
@@ -923,6 +934,20 @@ async def test_modeler_available_years_composition(auth_client, priced_ticker):
     resp = await auth_client.get(MODELER)
     years = resp.json()["available_years"]
     assert years == sorted(set(range(2024, current + 1)) | {current, current + 1})
+
+
+async def test_modeler_available_years_skips_an_uncovered_off_cycle_start_year(
+    auth_client, priced_ticker
+):
+    # An off-cycle (hire-month) offering starting after Mar 1 buys nothing until the
+    # NEXT year's February — its start year must not get a chip.
+    current = date.today().year
+    await auth_client.post(
+        OFFERINGS, json={"offering_start": "2024-06-01", "subscription_price": "100"}
+    )
+    years = (await auth_client.get(MODELER)).json()["available_years"]
+    assert 2024 not in years
+    assert years == sorted(set(range(2025, current + 1)) | {current, current + 1})
 
 
 async def test_modeler_reset_year_prices_each_period_from_its_own_offering(

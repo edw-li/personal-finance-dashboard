@@ -171,7 +171,7 @@ Removed:
 - Migration chain: `712243ee3ff3` → A (`espp_offerings`) → B (drop `suggest_source`). Both additive-or-narrowing with clean downgrades; a code rollback after deploy leaves old code that simply never queries offerings, and (post-B-downgrade) a re-added empty `suggest_source`. Prod note: the never-deployed `712243ee3ff3` and B run in the same boot — add-then-drop, harmless.
 - No importer changes ship in this work (the periods applier is untouched; offerings are importer-immune by test).
 - No new ECharts registrations; the chart chunk is untouched (this feature has no charts).
-- Wire evolution is additive plus one nullable-ization (`ModelerOut.subscription_price`) and the legacy `price_source` retained — an old tab renders sane text for one deploy cycle; a new tab against an old backend simply sees no new fields (nullable/optional reads).
+- Wire evolution is additive plus two nullable-izations (`ModelerOut.subscription_price`, and `ModelerPeriodOut.id` — null on derived rows, which an old tab can receive on a default-year GET) and the legacy `price_source` retained — an old tab renders sane text for one deploy cycle; a new tab against an old backend simply sees no new fields (nullable/optional reads).
 - Clock: the espp module keeps `date.today()` (its documented single clock); the year default inherits it. The known PT/UTC day-boundary split remains out of scope here.
 
 ## 10. Out of scope (recorded)
