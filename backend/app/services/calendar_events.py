@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from app.services import rsu_vesting
+from app.services.business_days import next_business_day, semi_monthly_paydays
 from app.services.espp_calc import OfferingInfo, StoredPeriod, plan_year_rows
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,21 @@ EVENT_TYPES = (
     "tax_deadline",
     "update_due",
 )
+
+_MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)  # our own literal — calendar.month_name is locale-dependent
 
 
 @dataclass(frozen=True)
@@ -130,6 +146,82 @@ def compose(
                     label="ESPP offering starts",
                     detail=f"subscription price {offering.subscription_price}",
                     href="/espp",
+                )
+            )
+
+    # ex_dividend — announced dates on ACTIVELY-HELD securities. The router folds the
+    # positions and passes only held tickers; §3's refresh keeps the column honest
+    # (future-only, cleared once past), so no date math is needed here beyond clipping.
+    for ticker, ex_date in announced_ex_divs:
+        if in_range(ex_date):
+            events.append(
+                CalendarEvent(
+                    event_date=ex_date,
+                    type="ex_dividend",
+                    label=f"Ex-dividend — {ticker}",
+                    detail=ticker,
+                    href="/portfolio",
+                )
+            )
+
+    # payday — ONLY the semi-monthly cadence (spec §5: pay_periods_per_year == 24; any
+    # other cadence omits paydays entirely — the page legend says so in words — because
+    # guessing biweekly anchors would be wrong money on the calendar).
+    if payday_semi_monthly:
+        year, month = start.year, start.month
+        while (year, month) <= (end.year, end.month):
+            for payday in semi_monthly_paydays(year, month):
+                if in_range(payday):
+                    events.append(
+                        CalendarEvent(
+                            event_date=payday,
+                            type="payday",
+                            label="Payday",
+                            detail=None,
+                            href="/paycheck",
+                        )
+                    )
+            year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+    # tax_deadline — static federal rules adjusted FORWARD (the IRS moves a weekend/
+    # holiday due date to the NEXT business day — the opposite of payroll). Jan 15 of
+    # year Y is year Y-1's Q4. Apr 15 is ONE event: filing and Q1 share the date, and
+    # two same-label events would collide their ICS UIDs.
+    for year in range(start.year, end.year + 1):
+        for nominal, which in (
+            (date(year, 1, 15), f"Q4 {year - 1} estimated payment"),
+            (date(year, 4, 15), "federal filing + Q1 estimated payment"),
+            (date(year, 6, 15), "Q2 estimated payment"),
+            (date(year, 9, 15), "Q3 estimated payment"),
+            (date(year, 10, 15), "extension filing deadline"),
+        ):
+            due = next_business_day(nominal)
+            if in_range(due):
+                events.append(
+                    CalendarEvent(
+                        event_date=due,
+                        type="tax_deadline",
+                        label=f"Tax deadline — {which}",
+                        detail=which,
+                        href="/taxes",
+                    )
+                )
+
+    # update_due — one reminder while the previous month's net-worth snapshot is
+    # missing, dated max(1st-of-current-month, today) (spec §5: pinned to the month's
+    # start but never in the past; today >= its own 1st always, so the max IS today —
+    # the expression keeps the spec's wording visible).
+    if missing_update_month is not None:
+        due = max(date(today.year, today.month, 1), today)
+        if in_range(due):
+            month_name = _MONTH_NAMES[missing_update_month.month - 1]
+            events.append(
+                CalendarEvent(
+                    event_date=due,
+                    type="update_due",
+                    label="Monthly update due",
+                    detail=f"Enter {month_name} {missing_update_month.year}",
+                    href="/update",
                 )
             )
 
