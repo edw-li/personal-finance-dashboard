@@ -227,6 +227,30 @@ def _savings_rate(net_pay: Decimal | None, total: Decimal) -> Decimal | None:
     return quantize_pct((net_pay - total) / net_pay)
 
 
+def _resolve_budgets(
+    rows: list[CategoryBudget], months: list[date]
+) -> dict[int, list[Decimal | None]]:
+    """Per category, the resolved budget for each month: the amount of the row with the
+    greatest effective_month <= month (spec §2). `months` must be ascending (the matrix's
+    order); one sorted walk per category, zero extra queries — the table is tiny."""
+    by_category: dict[int, list[CategoryBudget]] = {}
+    for row in rows:
+        by_category.setdefault(row.category_id, []).append(row)
+    resolved: dict[int, list[Decimal | None]] = {}
+    for category_id, history in by_category.items():
+        history.sort(key=lambda r: r.effective_month)
+        values: list[Decimal | None] = []
+        pointer = 0
+        current: Decimal | None = None
+        for month in months:
+            while pointer < len(history) and history[pointer].effective_month <= month:
+                current = history[pointer].amount
+                pointer += 1
+            values.append(current)
+        resolved[category_id] = values
+    return resolved
+
+
 @router.get("/matrix", response_model=MatrixOut)
 async def matrix(
     start: date | None = None,
@@ -275,6 +299,16 @@ async def matrix(
     for month in months:
         base = await investable_base(db, month)
         four_pct.append(None if base is None else quantize_money(base * swr / 12, "four_pct_rule"))
+    budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
+    budgets_by_category = _resolve_budgets(budget_rows, months)
+    # Shared read-only default for unbudgeted categories; pydantic validation copies it.
+    no_budgets: list[Decimal | None] = [None] * len(months)
+    total_budget: list[Decimal | None] = []
+    for i in range(len(months)):
+        month_budgets = [
+            values[i] for values in budgets_by_category.values() if values[i] is not None
+        ]
+        total_budget.append(sum(month_budgets, Decimal("0.00")) if month_budgets else None)
     return MatrixOut(
         months=months,
         categories=[CategoryOut.model_validate(c) for c in categories],
@@ -282,6 +316,7 @@ async def matrix(
             CategorySeries(
                 category_id=c.id,
                 values=[cells.get((c.id, i)) for i in range(len(months))],
+                budgets=budgets_by_category.get(c.id, no_budgets),
             )
             for c in categories
         ],
@@ -289,6 +324,7 @@ async def matrix(
         net_pay=net_pay,
         savings_rate=savings,
         four_pct_rule=four_pct,
+        total_budget=total_budget,
     )
 
 

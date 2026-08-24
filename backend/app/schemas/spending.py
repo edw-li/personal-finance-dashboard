@@ -59,6 +59,10 @@ class SpendingUpsertResult(BaseModel):
 class CategorySeries(BaseModel):
     category_id: int
     values: list[Decimal | None]
+    # The category's RESOLVED budget per month (greatest effective_month <= M, spec §2),
+    # aligned with MatrixOut.months; None = unbudgeted that month (no row on/before it,
+    # or a NULL end-marker).
+    budgets: list[Decimal | None]
 
 
 class MatrixOut(BaseModel):
@@ -69,6 +73,8 @@ class MatrixOut(BaseModel):
     net_pay: list[Decimal | None]
     savings_rate: list[Decimal | None]
     four_pct_rule: list[Decimal | None]
+    # Sum of the resolved category budgets per month; None when NO category has one.
+    total_budget: list[Decimal | None]
 
 
 class YearCategoryTotal(BaseModel):
