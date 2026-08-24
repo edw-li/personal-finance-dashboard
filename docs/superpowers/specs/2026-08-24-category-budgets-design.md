@@ -1,6 +1,6 @@
 # Category Budgets with Progress Meters — Design Spec
 
-**Date:** 2026-08-24 · **Status:** approved, not yet implemented
+**Date:** 2026-08-24 · **Status:** implemented 2026-08-24 (branch category-budgets)
 **Touches:** one additive migration (`category_budgets`), `models/spending.py`, `api/spending.py` (matrix enrichment + budget PUT + drive-by N+1 fix), `schemas/spending.py`, `/spending` page (Budget panel + chart reference lines), monthly-update wizard step 2, `src/types/api.ts`.
 
 ## 1. Context & goals
