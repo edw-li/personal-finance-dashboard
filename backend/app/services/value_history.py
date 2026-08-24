@@ -163,6 +163,35 @@ async def _closes_on_or_before(db: AsyncSession, day: date) -> dict[int, Decimal
     return dict(rows.all())
 
 
+async def baseline_closes_for(db: AsyncSession, dates: list[date]) -> dict[date, Decimal]:
+    """The benchmark close on-or-before each snapshot date, in ONE query (spec §2).
+
+    Fetches every BASELINE_TICKER bar up to the last date once, ascending, then walks
+    both sorted sequences with a two-pointer: ~190 weekly snapshots x ~1500 daily bars
+    is trivial in Python, and one flat fetch beats N `_baseline_close_on_or_before`
+    round-trips or a window-ranked join keyed on dates. Requires ascending `dates` (the
+    history endpoint's own snapshot order). Dates before the first bar are simply absent
+    from the result — contribution_benchmark's factor-1 input, never a zero."""
+    if not dates:
+        return {}
+    bars = (
+        await db.execute(
+            select(PriceHistory.price_date, PriceHistory.close)
+            .join(Security, Security.id == PriceHistory.security_id)
+            .where(Security.ticker == BASELINE_TICKER, PriceHistory.price_date <= dates[-1])
+            .order_by(PriceHistory.price_date)
+        )
+    ).all()
+    closes: dict[date, Decimal] = {}
+    newest = -1  # index of the newest bar dated on-or-before the walking date
+    for day in dates:
+        while newest + 1 < len(bars) and bars[newest + 1][0] <= day:
+            newest += 1
+        if newest >= 0:
+            closes[day] = bars[newest][1]
+    return closes
+
+
 def contribution_benchmark(
     rows: list[tuple[date, Decimal, Decimal]],
     closes: dict[date, Decimal],

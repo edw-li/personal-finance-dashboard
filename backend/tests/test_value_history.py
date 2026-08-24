@@ -1,11 +1,13 @@
 """services/value_history's read-side benchmark leg (2026-08-24 contribution-matched
-benchmark spec, §2 recurrence / §5 test list). contribution_benchmark is pure — every
-case here is literal-driven, no DB."""
+benchmark spec, §2 recurrence / §5 test list). contribution_benchmark is pure, so its
+cases are literal-driven, no DB; the baseline_closes_for cases at the bottom are async
+against the real test DB, because a loader's whole job is the query."""
 
 from datetime import date
 from decimal import Decimal
 
-from app.services.value_history import contribution_benchmark
+from app.models import PriceHistory, Security
+from app.services.value_history import baseline_closes_for, contribution_benchmark
 
 D = Decimal
 
@@ -192,3 +194,41 @@ def test_chaining_consumes_the_quantized_value():
     # A chain carried at full precision would answer 10100.06 — the amplified step is
     # what makes the difference observable.
     assert contribution_benchmark(rows, closes) == [D("1000.00"), D("1010.01"), D("10100.10")]
+
+
+async def test_baseline_closes_for_resolves_on_or_before_per_date(db):
+    voo = Security(ticker="VOO", name="Vanguard S&P 500 ETF", holding_type="etf")
+    decoy = Security(ticker="NVDA", name="NVIDIA", holding_type="stock")
+    db.add_all([voo, decoy])
+    await db.flush()
+    db.add_all(
+        [
+            PriceHistory(security_id=voo.id, price_date=date(2026, 8, 5), close=D("500.0000")),
+            PriceHistory(security_id=voo.id, price_date=date(2026, 8, 14), close=D("510.0000")),
+            # Another ticker's bar on an in-range date — the join must not read it.
+            PriceHistory(security_id=decoy.id, price_date=date(2026, 8, 10), close=D("999.0000")),
+        ]
+    )
+    await db.commit()
+    closes = await baseline_closes_for(
+        db,
+        [date(2026, 8, 3), date(2026, 8, 10), date(2026, 8, 17)],
+    )
+    # 8/3 precedes every bar: ABSENT (the factor-1 rule's input, never a zero). 8/10 and
+    # 8/17 each carry the newest bar on-or-before them.
+    assert closes == {date(2026, 8, 10): D("500.0000"), date(2026, 8, 17): D("510.0000")}
+
+
+async def test_baseline_closes_for_same_day_bar_and_empty_inputs(db):
+    voo = Security(ticker="VOO", name="Vanguard S&P 500 ETF", holding_type="etf")
+    db.add(voo)
+    await db.flush()
+    db.add(PriceHistory(security_id=voo.id, price_date=date(2026, 8, 10), close=D("500.0000")))
+    await db.commit()
+    # On-or-BEFORE: a bar dated the snapshot day itself resolves (Monday-close parity).
+    assert await baseline_closes_for(db, [date(2026, 8, 10)]) == {date(2026, 8, 10): D("500.0000")}
+    assert await baseline_closes_for(db, []) == {}
+
+
+async def test_baseline_closes_for_no_voo_rows_is_empty(db):
+    assert await baseline_closes_for(db, [date(2026, 8, 10)]) == {}
