@@ -9,6 +9,7 @@ from app.services.net_worth_calc import (
     get_swr_pct,
     group_totals_for,
     investable_base,
+    investable_bases,
     load_balance_matrix,
     net_worth_for,
 )
@@ -99,3 +100,27 @@ async def test_get_swr_pct_reads_envelope_with_fallback(db):
     setting.value = {"value": 2}  # a withdrawal rate above 1 is nonsense
     await db.commit()
     assert await get_swr_pct(db) == Decimal("0.04")
+
+
+async def test_investable_bases_matches_the_per_month_helper(db, nw_world):
+    months = [
+        date(2025, 12, 1),  # before the first snapshot -> None
+        date(2026, 1, 1),  # exactly ON a snapshot month (<=, not <)
+        date(2026, 2, 1),  # the later snapshot
+        date(2026, 3, 1),  # after the last -> latest prior carries forward
+    ]
+    batched = await investable_bases(db, months)
+    assert batched == [await investable_base(db, month) for month in months]
+    assert batched == [None, Decimal("1500.00"), Decimal("1650.00"), Decimal("1650.00")]
+    assert await investable_bases(db, []) == []
+
+
+async def test_investable_bases_without_snapshots_and_with_an_empty_one(db):
+    assert await investable_bases(db, [date(2026, 1, 1)]) == [None]
+    # A snapshot with NO investable balances sums to zero, exactly as the per-month
+    # helper's coalesce(0) does — the grouped query omits it, the .get default covers it.
+    db.add(NetWorthSnapshot(month=date(2026, 1, 1)))
+    await db.commit()
+    batched = await investable_bases(db, [date(2026, 1, 1)])
+    assert batched == [await investable_base(db, date(2026, 1, 1))]
+    assert batched == [Decimal("0")]

@@ -31,7 +31,7 @@ from app.services.money import (
     quantize_pct,
     require_first_of_month,
 )
-from app.services.net_worth_calc import get_swr_pct, investable_base
+from app.services.net_worth_calc import get_swr_pct, investable_bases
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
 
@@ -295,10 +295,11 @@ async def matrix(
     net_pay = [cashflow.get(month) for month in months]
     savings = [_savings_rate(net_pay[i], totals[i]) for i in range(len(months))]
     swr = await get_swr_pct(db)
-    four_pct: list[Decimal | None] = []
-    for month in months:
-        base = await investable_base(db, month)
-        four_pct.append(None if base is None else quantize_money(base * swr / 12, "four_pct_rule"))
+    # Batched (spec §3 drive-by): two queries for every month instead of two per month.
+    bases = await investable_bases(db, months)
+    four_pct = [
+        None if base is None else quantize_money(base * swr / 12, "four_pct_rule") for base in bases
+    ]
     budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
     budgets_by_category = _resolve_budgets(budget_rows, months)
     # Shared read-only default for unbudgeted categories; pydantic validation copies it.

@@ -1,7 +1,8 @@
 """Query-time net-worth math. Nothing here is ever stored (spec section 4).
 
 Personal-scale data (25 accounts x ~40 snapshots): full loads + in-memory sums are the
-entire strategy — no aggregate SQL beyond investable_base's single-snapshot sum.
+entire strategy — no aggregate SQL beyond the investable-base sums (single-snapshot
+and grouped).
 """
 
 from datetime import date
@@ -85,6 +86,56 @@ async def investable_base(db: AsyncSession, month: date) -> Decimal | None:
         )
     ).scalar_one()
     return Decimal(total)
+
+
+async def investable_bases(db: AsyncSession, months: list[date]) -> list[Decimal | None]:
+    """investable_base for many months in TWO queries — the spending matrix's per-month
+    loop was ~2 queries x months (2026-08-24 audit N+1; spec §3 sanctions the fix).
+
+    Resolution is identical by construction: snapshot months are UNIQUE, so "latest
+    snapshot on or before M" is one walk over the ascending list; a snapshot with no
+    matching balances is absent from the grouped sum and reads ZERO, matching the
+    single-month coalesce. Byte-identical output is pinned in tests against
+    investable_base itself and by the matrix endpoint's four_pct assertions.
+    """
+    if not months:
+        return []
+    snapshots = list(
+        (
+            await db.execute(
+                select(NetWorthSnapshot.id, NetWorthSnapshot.month).order_by(NetWorthSnapshot.month)
+            )
+        ).all()
+    )
+    if not snapshots:
+        return [None] * len(months)
+    totals = {
+        snapshot_id: Decimal(total)
+        for snapshot_id, total in (
+            await db.execute(
+                select(
+                    AccountBalance.snapshot_id,
+                    func.coalesce(func.sum(AccountBalance.balance), 0),
+                )
+                .join(Account, Account.id == AccountBalance.account_id)
+                .where(
+                    Account.is_component.is_(False),
+                    Account.group.in_(INVESTABLE_GROUPS),
+                )
+                .group_by(AccountBalance.snapshot_id)
+            )
+        ).all()
+    }
+    bases: list[Decimal | None] = []
+    for month in months:
+        latest: int | None = None
+        for snapshot_id, snapshot_month in snapshots:  # ascending; last <= month wins
+            if snapshot_month <= month:
+                latest = snapshot_id
+            else:
+                break
+        bases.append(None if latest is None else totals.get(latest, ZERO))
+    return bases
 
 
 async def get_swr_pct(db: AsyncSession) -> Decimal:
