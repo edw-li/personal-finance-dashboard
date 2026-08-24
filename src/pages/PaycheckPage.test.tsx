@@ -4,8 +4,7 @@ import { ApiError } from '../api/client'
 import type { PaycheckBreakdownOut, PaycheckProfileOut } from '../types/api'
 import PaycheckPage from './PaycheckPage'
 
-// Every request is stubbed; there is no chart on this page (the waterfall is a definition
-// list), so no EChart mock is needed.
+// Every request is stubbed.
 vi.mock('../api/paycheck', () => ({
   fetchProfiles: vi.fn(),
   createProfile: vi.fn(),
@@ -13,6 +12,20 @@ vi.mock('../api/paycheck', () => ({
   deleteProfile: vi.fn(),
   fetchBreakdown: vi.fn(),
 }))
+// echarts needs a real canvas and is NEVER rendered in jsdom (house law) — the flow
+// card's geometry is pinned in paycheckSankeyOptions.test.ts; this marker only says
+// whether the chart is up and which nodes it carries. The async factory keeps the JSX
+// runtime out of vi.mock's hoisted scope.
+vi.mock('../components/EChart', async () => {
+  const { createElement } = await import('react')
+  return {
+    default: ({ option }: { option: { series?: { data?: { name?: string }[] }[] } }) =>
+      createElement('div', {
+        'data-testid': 'echart',
+        'data-nodes': (option.series?.[0]?.data ?? []).map((n) => n.name ?? '').join(','),
+      }),
+  }
+})
 import {
   createProfile,
   deleteProfile,
@@ -710,5 +723,31 @@ describe('PaycheckPage — loading', () => {
     // looking at — the seq ref, not the network, decides which one is on screen.
     expect(screen.queryByText('$2,984.91')).toBeNull()
     expect(screen.getByText('$2,222.22')).toBeTruthy()
+  })
+})
+
+describe('PaycheckPage — the flow card', () => {
+  it('draws the flow beside the waterfall from the same payload, zero branches omitted', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    expect(screen.getByText('Where each check goes')).toBeTruthy()
+    const marker = screen.getByTestId('echart')
+    // The golden fixture's roth_401k is 0.00 — its node is omitted outright.
+    expect(marker.getAttribute('data-nodes')).toBe(
+      'Gross,Taxable,Post-tax,Traditional 401(k),Dental & vision,HSA,Withholding,After-tax 401(k),ESPP,Net pay',
+    )
+  })
+
+  it('shows the guard sentence instead of a chart when a figure is negative', async () => {
+    vi.mocked(fetchBreakdown).mockResolvedValue(
+      breakdownOf(profile2026, { net_pay: '-120.00' }),
+    )
+    render(<PaycheckPage />)
+    await screen.findByText('-$120.00')
+
+    // The table (which handles negatives fine) stays; the sankey steps aside (spec §4).
+    expect(screen.getByText(/deductions exceed pay — see the table/)).toBeTruthy()
+    expect(screen.queryByTestId('echart')).toBeNull()
   })
 })
