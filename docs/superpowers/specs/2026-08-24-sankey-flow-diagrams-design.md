@@ -1,6 +1,6 @@
 # Sankey Flow Diagrams (Spending + Paycheck) — Design Spec
 
-**Date:** 2026-08-24 · **Status:** approved, not yet implemented
+**Date:** 2026-08-24 · **Status:** implemented 2026-08-24 (branch sankey-flow-diagrams)
 **Touches:** `src/charts/echarts.ts` (register SankeyChart), `vite.config.ts` (chunk advisory limit), `/spending` page (new card + option builder), `/paycheck` page (new card + option builder). **Zero backend changes.**
 
 ## 1. Context & goals
