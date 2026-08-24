@@ -163,6 +163,51 @@ async def _closes_on_or_before(db: AsyncSession, day: date) -> dict[int, Decimal
     return dict(rows.all())
 
 
+def contribution_benchmark(
+    rows: list[tuple[date, Decimal, Decimal]],
+    closes: dict[date, Decimal],
+) -> list[Decimal | None]:
+    """The contribution-matched benchmark: what the book would be worth had every
+    inferred contribution bought BASELINE_TICKER instead (2026-08-24 spec §2).
+
+    Pure of the DB: `rows` are (snapshot_date, market_value, cost_basis) ascending;
+    `closes` maps snapshot dates to the benchmark close on-or-before them
+    (baseline_closes_for). Week-over-week cost-basis deltas proxy the flows — positions
+    are mostly undated by design, so no dated-transaction series exists to sum.
+
+        benchmark[0] = market_value[0]                      # parity seed, the sheet's own t0
+        flow[t]      = cost_basis[t] - cost_basis[t-1]
+        benchmark[t] = benchmark[t-1] * (close[t]/close[t-1]) + flow[t]
+
+    Each row quantizes to MONEY_Q HALF_UP and the NEXT step chains on the quantized
+    value — the S&P leg's own anchoring (every stored row anchors the next), which is
+    what makes a same-day recompute reproduce itself to the cent. All-None only when
+    there are no benchmark bars AT ALL: the read path degrades, never rejects.
+    """
+    if not rows:
+        return []
+    if not closes:
+        return [None] * len(rows)
+    series: list[Decimal | None] = []
+    prev_value: Decimal | None = None
+    prev_close: Decimal | None = None
+    prev_cost = ZERO
+    for snapshot_date, market_value, cost_basis in rows:
+        close = closes.get(snapshot_date)
+        if prev_value is None:
+            value = market_value.quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+        else:
+            flow = cost_basis - prev_cost
+            value = (prev_value * (close / prev_close) + flow).quantize(
+                MONEY_Q, rounding=ROUND_HALF_UP
+            )
+        series.append(value)
+        prev_value = value
+        prev_cost = cost_basis
+        prev_close = close
+    return series
+
+
 async def append_value_snapshot(db: AsyncSession, *, today: date | None = None) -> bool:
     """Upsert this Monday's (market_value, cost_basis, sp500) row from the live book.
 
