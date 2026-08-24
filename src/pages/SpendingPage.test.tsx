@@ -44,14 +44,15 @@ function matrixFixture(over: Partial<SpendingMatrix> = {}): SpendingMatrix {
       { id: 3, name: 'Fun', slug: 'fun', sort_order: 2, is_active: true },
     ],
     series: [
-      { category_id: 1, values: ['2000.00', '2000.00'] },
-      { category_id: 2, values: ['600.00', '580.00'] },
-      { category_id: 3, values: ['150.00', '0.00'] },
+      { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, null] },
+      { category_id: 2, values: ['600.00', '580.00'], budgets: [null, null] },
+      { category_id: 3, values: ['150.00', '0.00'], budgets: [null, null] },
     ],
     totals: ['2750.00', '2580.00'],
     net_pay: ['6000.00', '6000.00'],
     savings_rate: ['0.541666667', '0.57'],
     four_pct_rule: [null, null],
+    total_budget: [null, null],
     ...over,
   }
 }

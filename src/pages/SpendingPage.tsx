@@ -9,6 +9,8 @@ import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import BudgetPanel from '../components/spending/BudgetPanel'
+import { budgetStepSeries } from '../components/spending/budgetChartOptions'
 import {
   spendingFlowPeriod,
   spendingSankeyOption,
@@ -33,7 +35,7 @@ import {
   formatPct,
 } from '../utils/format'
 import { currentMonthIso } from '../utils/months'
-import { buildMonthSlices, monthMovers } from '../utils/spending'
+import { buildMonthSlices, hasVsBudget, monthMovers } from '../utils/spending'
 import '../components/panels.css'
 import './SpendingPage.css'
 
@@ -154,7 +156,11 @@ export default function SpendingPage() {
     return {
       dataZoom: timeZoom(matrix.months, range.preset),
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
-      legend: { top: 0 },
+      // 'Total budget' ships DESELECTED: it wears the same dashed-MUTED grammar as the
+      // 4% line (spec §4.3 — one reference-line language), so both on at once would be
+      // ambiguous; the legend chip is the summon. notMerge resets legend picks on option
+      // rebuild — the page's existing behavior for every series.
+      legend: { top: 0, selected: { 'Total budget': false } },
       tooltip: {
         trigger: 'axis',
         valueFormatter: (value) =>
@@ -216,6 +222,11 @@ export default function SpendingPage() {
           connectNulls: false,
           data: matrix.four_pct_rule.map((v) => (v === null ? null : Number(v))),
         },
+        // LAST in the array on purpose: the heatmap-hover highlight indexes the bar stack
+        // POSITIONALLY (seriesIndex), so nothing may be inserted ahead of it.
+        ...(matrix.total_budget.some((v) => v !== null)
+          ? [budgetStepSeries('Total budget', matrix.total_budget)]
+          : []),
       ],
     }
   }, [matrix, topIds, monthLabels, nameById, range])
@@ -266,17 +277,21 @@ export default function SpendingPage() {
     }
   }, [matrix, detailIndex, topIds])
 
-  // The movers follow the month being LOOKED AT: the drilled month when the pie is open,
-  // the latest month otherwise — one card answering "what changed here".
-  const moversIndex = matrix ? (activeDetail ? detailIndex : matrix.months.length - 1) : -1
+  // The page's FOCUSED month: the drilled month when the pie is open, the latest month
+  // otherwise. The movers, the flow card and the Budget card all read it, so drilling a
+  // month on the top chart moves the whole page's "what happened here" together.
+  const focusIndex = matrix ? (activeDetail ? detailIndex : matrix.months.length - 1) : -1
   const movers = useMemo(
-    () => (matrix ? monthMovers(matrix, moversIndex, MOVERS_TOP) : []),
-    [matrix, moversIndex],
+    () => (matrix ? monthMovers(matrix, focusIndex, MOVERS_TOP) : []),
+    [matrix, focusIndex],
   )
+  // The vs-budget column exists only when SOME mover has a budget that month — an
+  // all-dashes column would be noise on an unbudgeted page.
+  const showVsBudget = hasVsBudget(movers)
 
   const flowPeriod = useMemo(
-    () => spendingFlowPeriod(matrix, yearly, topIds, moversIndex, flowMode),
-    [matrix, yearly, topIds, moversIndex, flowMode],
+    () => spendingFlowPeriod(matrix, yearly, topIds, focusIndex, flowMode),
+    [matrix, yearly, topIds, focusIndex, flowMode],
   )
   const flowOption = useMemo(
     () => (flowPeriod === null ? null : spendingSankeyOption(flowPeriod)),
@@ -440,15 +455,25 @@ export default function SpendingPage() {
         type: 'value',
         axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
       },
-      series: trend.map(({ categoryId, slot }) => ({
-        name: nameById.get(categoryId) ?? String(categoryId),
-        type: 'line' as const,
-        symbol: 'none' as const,
-        lineStyle: { width: 2 },
-        color: PALETTE[slot],
-        connectNulls: false,
-        data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
-      })),
+      series: [
+        ...trend.map(({ categoryId, slot }) => ({
+          name: nameById.get(categoryId) ?? String(categoryId),
+          type: 'line' as const,
+          symbol: 'none' as const,
+          lineStyle: { width: 2 },
+          color: PALETTE[slot],
+          connectNulls: false,
+          data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
+        })),
+        // A picked category's budget as a dashed MUTED step (spec §4.3) — named
+        // "{category} budget" so the axis tooltip disambiguates when several show.
+        ...trend.flatMap(({ categoryId }) => {
+          const s = matrix.series.find((x) => x.category_id === categoryId)
+          if (!s || !s.budgets.some((v) => v !== null)) return []
+          const name = nameById.get(categoryId) ?? String(categoryId)
+          return [budgetStepSeries(`${name} budget`, s.budgets)]
+        }),
+      ],
     }
   }, [matrix, trend, monthLabels, nameById, range])
 
@@ -607,18 +632,19 @@ export default function SpendingPage() {
         {movers.length > 0 && (
           <div className="card span-12">
             <h2 className="eyebrow">
-              What changed — {monthLabels[moversIndex]}
+              What changed — {monthLabels[focusIndex]}
               <InfoHint text="The month's biggest category moves, vs the prior month and vs each category's 12-month average." />
             </h2>
             <table className="data-table">
               <thead>
                 <tr>
                   <th>Category</th>
-                  <th className="num">{monthLabels[moversIndex]}</th>
+                  <th className="num">{monthLabels[focusIndex]}</th>
                   <th className="num">
-                    vs {moversIndex > 0 ? monthLabels[moversIndex - 1] : 'prior month'}
+                    vs {focusIndex > 0 ? monthLabels[focusIndex - 1] : 'prior month'}
                   </th>
                   <th className="num">vs 12-mo avg</th>
+                  {showVsBudget && <th className="num">vs budget</th>}
                 </tr>
               </thead>
               <tbody>
@@ -628,6 +654,7 @@ export default function SpendingPage() {
                     <td className="num">{formatCurrency(m.value)}</td>
                     <td className="num">{moverCell(m.deltaPrior)}</td>
                     <td className="num">{moverCell(m.deltaAvg)}</td>
+                    {showVsBudget && <td className="num">{moverCell(m.deltaBudget)}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -676,6 +703,12 @@ export default function SpendingPage() {
               </div>
             )}
           </div>
+        )}
+
+        {/* onBudgetsChanged = the page's refetch: a saved budget re-draws the meters, the
+            chart reference lines and the movers column together, from one matrix. */}
+        {matrix && matrix.months.length > 0 && (
+          <BudgetPanel matrix={matrix} monthIndex={focusIndex} onBudgetsChanged={load} />
         )}
 
         <div className="card span-12">

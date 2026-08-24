@@ -169,6 +169,7 @@ async def test_get_spending_month(auth_client, db):
         "exists": False,
         "net_pay": None,
         "amounts": [],
+        "budgets": [],
     }
     assert (await auth_client.get("/api/v1/spending/months/2030-01-02")).status_code == 422
 
@@ -332,3 +333,134 @@ async def test_put_spending_month_net_pay_null_rides_along_with_amounts(auth_cli
     assert got["exists"] is True  # the month survives on its amounts alone
     assert got["net_pay"] is None
     assert {a["category_id"]: a["amount"] for a in got["amounts"]} == {food.id: "250.00"}
+
+
+async def test_budget_put_upserts_and_returns_full_history(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    first = await auth_client.put(url, json={"amount": "400.005", "effective_month": "2026-01-01"})
+    assert first.status_code == 200, first.text
+    assert first.json() == [{"effective_month": "2026-01-01", "amount": "400.01"}]  # HALF_UP
+
+    second = await auth_client.put(url, json={"amount": "450", "effective_month": "2026-03-01"})
+    assert second.json() == [
+        {"effective_month": "2026-01-01", "amount": "400.01"},
+        {"effective_month": "2026-03-01", "amount": "450.00"},
+    ]
+
+    # Same (category, month) again = upsert, not a duplicate — last write wins.
+    third = await auth_client.put(url, json={"amount": "500", "effective_month": "2026-03-01"})
+    assert third.json() == [
+        {"effective_month": "2026-01-01", "amount": "400.01"},
+        {"effective_month": "2026-03-01", "amount": "500.00"},
+    ]
+
+    # NULL amount is the dated end-of-budget marker and stores as a real history row.
+    ended = await auth_client.put(url, json={"amount": None, "effective_month": "2026-06-01"})
+    assert ended.json()[-1] == {"effective_month": "2026-06-01", "amount": None}
+
+
+async def test_budget_put_validation(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    assert (
+        await auth_client.put(url, json={"amount": "1", "effective_month": "2026-01-15"})
+    ).status_code == 422
+    assert (
+        await auth_client.put(url, json={"amount": "-1", "effective_month": "2026-01-01"})
+    ).status_code == 422
+    # Numeric(12,2) holds only 10 integer digits — same pre-write bound as monthly amounts.
+    assert (
+        await auth_client.put(url, json={"amount": "10000000000", "effective_month": "2026-01-01"})
+    ).status_code == 422
+    # amount is REQUIRED (nullable, not omittable): {} must 422, not silently mean null.
+    assert (await auth_client.put(url, json={"effective_month": "2026-01-01"})).status_code == 422
+    assert (
+        await auth_client.put(
+            "/api/v1/spending/categories/999/budget",
+            json={"amount": "1", "effective_month": "2026-01-01"},
+        )
+    ).status_code == 404
+
+
+async def test_budget_delete_removes_a_history_row(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    await auth_client.put(url, json={"amount": "400", "effective_month": "2026-01-01"})
+    await auth_client.put(url, json={"amount": "450", "effective_month": "2026-03-01"})
+
+    gone = await auth_client.delete(f"{url}/2026-03-01")
+    assert gone.status_code == 204
+    # The next PUT's echoed history shows only the surviving row.
+    after = await auth_client.put(url, json={"amount": "400", "effective_month": "2026-01-01"})
+    assert after.json() == [{"effective_month": "2026-01-01", "amount": "400.00"}]
+
+    assert (await auth_client.delete(f"{url}/2026-03-01")).status_code == 404
+    assert (await auth_client.delete(f"{url}/2026-03-15")).status_code == 422
+    assert (
+        await auth_client.delete("/api/v1/spending/categories/999/budget/2026-01-01")
+    ).status_code == 404
+
+
+async def test_matrix_budgets_resolution_rule_and_total(auth_client, db):
+    food, rent = await _seed_spending(db)  # months: 2025-12, 2026-01, 2026-02
+    put_food = f"/api/v1/spending/categories/{food.id}/budget"
+    put_rent = f"/api/v1/spending/categories/{rent.id}/budget"
+    # Food: starts in Jan at 450, steps to 350 in Feb. Rent: never budgeted.
+    await auth_client.put(put_food, json={"amount": "450.00", "effective_month": "2026-01-01"})
+    await auth_client.put(put_food, json={"amount": "350.00", "effective_month": "2026-02-01"})
+
+    body = (await auth_client.get("/api/v1/spending/matrix")).json()
+    by_id = {s["category_id"]: s["budgets"] for s in body["series"]}
+    # No row on/before Dec -> None; Jan row -> 450; Feb: the GREATEST effective <= M wins.
+    assert by_id[food.id] == [None, "450.00", "350.00"]
+    assert by_id[rent.id] == [None, None, None]
+    # total_budget: None when NO category has one; else the sum of those that do.
+    assert body["total_budget"] == [None, "450.00", "350.00"]
+
+    # Rent joins in Feb: the total adds across categories from that month on.
+    await auth_client.put(put_rent, json={"amount": "2000.00", "effective_month": "2026-02-01"})
+    body = (await auth_client.get("/api/v1/spending/matrix")).json()
+    assert body["total_budget"] == [None, "450.00", "2350.00"]
+
+
+async def test_matrix_budget_null_marker_and_redated_past_row(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    await auth_client.put(url, json={"amount": "450.00", "effective_month": "2026-01-01"})
+    # NULL from Feb on: Jan keeps its budget (history is frozen), Feb reads unbudgeted.
+    await auth_client.put(url, json={"amount": None, "effective_month": "2026-02-01"})
+    body = (await auth_client.get("/api/v1/spending/matrix")).json()
+    assert {s["category_id"]: s["budgets"] for s in body["series"]}[food.id] == [
+        None,
+        "450.00",
+        None,
+    ]
+    assert body["total_budget"] == [None, "450.00", None]
+
+    # Re-dating the past: a row placed at Dec 2025 rewrites what THAT era's budget was
+    # (spec §4.2's deliberate editor behavior, pinned here at the resolution layer).
+    await auth_client.put(url, json={"amount": "500.00", "effective_month": "2025-12-01"})
+    body = (await auth_client.get("/api/v1/spending/matrix")).json()
+    assert {s["category_id"]: s["budgets"] for s in body["series"]}[food.id] == [
+        "500.00",
+        "450.00",
+        None,
+    ]
+
+
+async def test_get_month_resolves_budgets_for_arbitrary_months(auth_client, db):
+    food, _rent = await _seed_spending(db)
+    url = f"/api/v1/spending/categories/{food.id}/budget"
+    await auth_client.put(url, json={"amount": "450.00", "effective_month": "2026-03-01"})
+    # 2026-04 is NOT an entered month (no matrix row) — the wizard's usual case: the
+    # budget effective in March must still resolve for it (spec §4.1).
+    body = (await auth_client.get("/api/v1/spending/months/2026-04-01")).json()
+    assert body["budgets"] == [{"category_id": food.id, "amount": "450.00"}]
+    # Before the first effective row: unbudgeted, and unbudgeted categories are OMITTED.
+    body = (await auth_client.get("/api/v1/spending/months/2026-02-01")).json()
+    assert body["budgets"] == []
+    # A NULL end-marker removes it from that month on.
+    await auth_client.put(url, json={"amount": None, "effective_month": "2026-05-01"})
+    body = (await auth_client.get("/api/v1/spending/months/2026-05-01")).json()
+    assert body["budgets"] == []

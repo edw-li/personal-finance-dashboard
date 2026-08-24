@@ -21,7 +21,7 @@ from app.models.portfolio import (
     PriceHistory,
     Security,
 )
-from app.models.spending import MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.models.spending import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
 from app.models.taxes import TaxBracket, TaxInput, TaxInputDefinition, TaxYear
 from app.models.user import User
 
@@ -30,6 +30,7 @@ __all__ = [
     "Account",
     "AccountBalance",
     "AppSetting",
+    "CategoryBudget",
     "CompEvent",
     "DIVIDEND_SOURCES",
     "DividendPayment",

@@ -63,14 +63,15 @@ beforeEach(() => {
   vi.mocked(spendingApi.fetchMatrix).mockResolvedValue({
     months: ['2026-07-01'],
     categories: [],
-    series: [{ category_id: 7, values: ['300.00'] }],
+    series: [{ category_id: 7, values: ['300.00'], budgets: [null] }],
     totals: [],
     net_pay: [],
     savings_rate: [],
     four_pct_rule: [],
+    total_budget: [null],
   })
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', exists: false, net_pay: null, amounts: [],
+    month: '2026-08-01', exists: false, net_pay: null, amounts: [], budgets: [],
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
     month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
@@ -453,7 +454,7 @@ it('keeps the live spending footer in sync while entering amounts', async () => 
 
 it('clears a previously saved net pay when the box is blanked', async () => {
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [],
+    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [], budgets: [],
   })
   vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
     month: '2026-08-01', created: 0, updated: 0, unchanged: 1,
@@ -478,7 +479,7 @@ it('clears a previously saved net pay when the box is blanked', async () => {
 
 it('keeps sending the clear on the retry after a failed save', async () => {
   vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
-    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [],
+    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [], budgets: [],
   })
   // The balances PUT resolves normally both times; only the spending half fails first.
   vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
@@ -563,11 +564,12 @@ it('leaves an exactly-typical month untoned instead of painting float residue', 
   vi.mocked(spendingApi.fetchMatrix).mockResolvedValue({
     months: ['2026-06-01', '2026-07-01'],
     categories: [],
-    series: [{ category_id: 7, values: ['0.10', '0.20'] }],
+    series: [{ category_id: 7, values: ['0.10', '0.20'], budgets: [null, null] }],
     totals: [],
     net_pay: [],
     savings_rate: [],
     four_pct_rule: [],
+    total_budget: [null, null],
   })
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
@@ -709,4 +711,41 @@ it('pastes into the spending step and drops the note on the way out', async () =
   fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
   await screen.findByLabelText('Checking')
   expect(screen.queryByText(/pasted 1 of 1 values/i)).toBeNull()
+})
+
+it('shows the budget subtext, tones it when over, and never blocks the save', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01',
+    exists: false,
+    net_pay: null,
+    amounts: [],
+    budgets: [{ category_id: 7, amount: '200.00' }],
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const food = await screen.findByLabelText('Food')
+  const row = food.closest('tr') as HTMLElement
+  // Within budget (seeded 0.00): muted subtext, no tone.
+  expect(within(row).getByText('of $200.00').className).toBe('entry-budget')
+  // Typing past the budget tones the subtext — and only the subtext.
+  fireEvent.change(food, { target: { value: '250.00' } })
+  expect(within(row).getByText('of $200.00').className).toBe('entry-budget delta-negative')
+  // Advice, not validation (spec §4.1): the step advances and the PUT carries the amount.
+  const next = screen.getByRole('button', { name: /next: review/i }) as HTMLButtonElement
+  expect(next.disabled).toBe(false)
+  fireEvent.click(next)
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() => {
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({ amounts: [{ category_id: 7, amount: '250.00' }] }),
+    )
+  })
+})
+
+it('leaves unbudgeted rows without the subtext', async () => {
+  renderWizard() // the default fetchSpendingMonth mock ships budgets: []
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const food = await screen.findByLabelText('Food')
+  expect(within(food.closest('tr') as HTMLElement).queryByText(/^of \$/)).toBeNull()
 })

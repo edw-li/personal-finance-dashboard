@@ -1,6 +1,7 @@
 import { api } from './client'
 import type {
   AmountEntry,
+  CategoryBudgetEntry,
   CategoryOut,
   SpendingMatrix,
   SpendingMonth,
@@ -33,5 +34,25 @@ export function putSpendingMonth(
   return api<SpendingUpsertResult>(`/spending/months/${month}`, {
     method: 'PUT',
     body: JSON.stringify(body),
+  })
+}
+
+// The response is the category's FULL budget history, ascending by month — the editor
+// renders it without a second fetch (spec §3).
+export function putCategoryBudget(
+  categoryId: number,
+  // amount null = "no budget from this month on" (a stored, dated end-marker).
+  body: { amount: string | null; effective_month: string },
+): Promise<CategoryBudgetEntry[]> {
+  return api<CategoryBudgetEntry[]>(`/spending/categories/${categoryId}/budget`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+// Removes one history ROW (a mis-dated entry) — distinct from the null-amount marker.
+export function deleteCategoryBudget(categoryId: number, effectiveMonth: string): Promise<void> {
+  return api<void>(`/spending/categories/${categoryId}/budget/${effectiveMonth}`, {
+    method: 'DELETE',
   })
 }

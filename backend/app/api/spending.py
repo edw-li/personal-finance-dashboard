@@ -8,9 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.models import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
 from app.schemas.spending import (
     AmountEntry,
+    BudgetHistoryEntry,
+    BudgetPut,
     CategoryCreate,
     CategoryOut,
     CategorySeries,
@@ -29,7 +31,7 @@ from app.services.money import (
     quantize_pct,
     require_first_of_month,
 )
-from app.services.net_worth_calc import get_swr_pct, investable_base
+from app.services.net_worth_calc import get_swr_pct, investable_bases
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
 
@@ -140,10 +142,113 @@ async def delete_category(category_id: int, db: AsyncSession = Depends(get_db)) 
     return Response(status_code=204)
 
 
+# --- category budgets ---
+
+
+async def _budget_history(db: AsyncSession, category_id: int) -> list[CategoryBudget]:
+    return list(
+        (
+            await db.execute(
+                select(CategoryBudget)
+                .where(CategoryBudget.category_id == category_id)
+                .order_by(CategoryBudget.effective_month)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _get_budget_row(
+    db: AsyncSession, category_id: int, effective_month: date
+) -> CategoryBudget | None:
+    return (
+        (
+            await db.execute(
+                select(CategoryBudget).where(
+                    CategoryBudget.category_id == category_id,
+                    CategoryBudget.effective_month == effective_month,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
+@router.put("/categories/{category_id}/budget", response_model=list[BudgetHistoryEntry])
+async def put_category_budget(
+    category_id: int, body: BudgetPut, db: AsyncSession = Depends(get_db)
+) -> list[CategoryBudget]:
+    """Upsert one (category, effective_month) budget row — last write wins (single-user
+    TOCTOU posture, spec §3). Returns the category's FULL history, ascending by month, so
+    the editor renders it without a second fetch."""
+    await _get_category(db, category_id)
+    require_first_of_month(body.effective_month)
+    amount: Decimal | None = None
+    if body.amount is not None:
+        amount = quantize_money(body.amount, "amount", max_abs=MONEY_MAX_ABS_12_2)
+        if amount < 0:
+            # Unlike monthly amounts (signed: refunds), a budget is a target — a
+            # negative target is nonsense, not data.
+            raise HTTPException(status_code=422, detail="amount must be non-negative")
+    existing = await _get_budget_row(db, category_id, body.effective_month)
+    if existing is None:
+        db.add(
+            CategoryBudget(
+                category_id=category_id, effective_month=body.effective_month, amount=amount
+            )
+        )
+    else:
+        existing.amount = amount
+    await db.commit()
+    return await _budget_history(db, category_id)
+
+
+@router.delete("/categories/{category_id}/budget/{effective_month}", status_code=204)
+async def delete_category_budget(
+    category_id: int, effective_month: date, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """Remove one HISTORY row (fixing a mis-dated entry) — distinct from the NULL-amount
+    "budget ended" marker, which is itself a stored row (spec §3)."""
+    await _get_category(db, category_id)
+    require_first_of_month(effective_month)
+    row = await _get_budget_row(db, category_id, effective_month)
+    if row is None:
+        raise HTTPException(status_code=404, detail="budget row not found")
+    await db.delete(row)
+    await db.commit()
+    return Response(status_code=204)
+
+
 def _savings_rate(net_pay: Decimal | None, total: Decimal) -> Decimal | None:
     if net_pay is None or net_pay == 0:
         return None
     return quantize_pct((net_pay - total) / net_pay)
+
+
+def _resolve_budgets(
+    rows: list[CategoryBudget], months: list[date]
+) -> dict[int, list[Decimal | None]]:
+    """Per category, the resolved budget for each month: the amount of the row with the
+    greatest effective_month <= month (spec §2). `months` must be ascending (the matrix's
+    order); one sorted walk per category, zero extra queries — the table is tiny."""
+    by_category: dict[int, list[CategoryBudget]] = {}
+    for row in rows:
+        by_category.setdefault(row.category_id, []).append(row)
+    resolved: dict[int, list[Decimal | None]] = {}
+    for category_id, history in by_category.items():
+        history.sort(key=lambda r: r.effective_month)
+        values: list[Decimal | None] = []
+        pointer = 0
+        current: Decimal | None = None
+        for month in months:
+            while pointer < len(history) and history[pointer].effective_month <= month:
+                current = history[pointer].amount
+                pointer += 1
+            values.append(current)
+        resolved[category_id] = values
+    return resolved
 
 
 @router.get("/matrix", response_model=MatrixOut)
@@ -190,10 +295,21 @@ async def matrix(
     net_pay = [cashflow.get(month) for month in months]
     savings = [_savings_rate(net_pay[i], totals[i]) for i in range(len(months))]
     swr = await get_swr_pct(db)
-    four_pct: list[Decimal | None] = []
-    for month in months:
-        base = await investable_base(db, month)
-        four_pct.append(None if base is None else quantize_money(base * swr / 12, "four_pct_rule"))
+    # Batched (spec §3 drive-by): two queries for every month instead of two per month.
+    bases = await investable_bases(db, months)
+    four_pct = [
+        None if base is None else quantize_money(base * swr / 12, "four_pct_rule") for base in bases
+    ]
+    budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
+    budgets_by_category = _resolve_budgets(budget_rows, months)
+    # Shared read-only default for unbudgeted categories; pydantic validation copies it.
+    no_budgets: list[Decimal | None] = [None] * len(months)
+    total_budget: list[Decimal | None] = []
+    for i in range(len(months)):
+        month_budgets = [
+            values[i] for values in budgets_by_category.values() if values[i] is not None
+        ]
+        total_budget.append(sum(month_budgets, Decimal("0.00")) if month_budgets else None)
     return MatrixOut(
         months=months,
         categories=[CategoryOut.model_validate(c) for c in categories],
@@ -201,6 +317,7 @@ async def matrix(
             CategorySeries(
                 category_id=c.id,
                 values=[cells.get((c.id, i)) for i in range(len(months))],
+                budgets=budgets_by_category.get(c.id, no_budgets),
             )
             for c in categories
         ],
@@ -208,6 +325,7 @@ async def matrix(
         net_pay=net_pay,
         savings_rate=savings,
         four_pct_rule=four_pct,
+        total_budget=total_budget,
     )
 
 
@@ -266,11 +384,19 @@ async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> Spending
         .all()
     )
     cashflow = await db.get(MonthlyCashflow, month)
+    budget_rows = list((await db.execute(select(CategoryBudget))).scalars().all())
+    resolved = _resolve_budgets(budget_rows, [month])
+    budgets = [
+        AmountEntry(category_id=category_id, amount=values[0])
+        for category_id, values in sorted(resolved.items())
+        if values[0] is not None
+    ]
     return SpendingMonthOut(
         month=month,
         exists=bool(rows) or cashflow is not None,
         net_pay=None if cashflow is None else cashflow.net_pay,
         amounts=[AmountEntry(category_id=r.category_id, amount=r.amount) for r in rows],
+        budgets=budgets,
     )
 
 

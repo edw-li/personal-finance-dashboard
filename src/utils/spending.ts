@@ -45,6 +45,8 @@ export interface CategoryMover {
   deltaPrior: number | null
   /** vs the mean of the category's non-null values across up to 12 months before. */
   deltaAvg: number | null
+  /** vs the month's resolved budget; null when the category has none that month. */
+  deltaBudget: number | null
 }
 
 /**
@@ -74,11 +76,13 @@ export function monthMovers(
       .filter((v): v is string => v !== null)
     const avg =
       window.length > 0 ? window.reduce((acc, v) => acc + Number(v), 0) / window.length : null
+    const budget = s.budgets[monthIndex] ?? null
     return {
       categoryId: s.category_id,
       value,
       deltaPrior: prior === null ? null : value - prior,
       deltaAvg: avg === null ? null : value - avg,
+      deltaBudget: budget === null ? null : value - Number(budget),
     }
   })
   const magnitude = (m: CategoryMover) =>
@@ -112,4 +116,39 @@ export function typicalSpend(
   values.sort((a, b) => a - b)
   const mid = Math.floor(values.length / 2)
   return values.length % 2 === 1 ? values[mid] : (values[mid - 1] + values[mid]) / 2
+}
+
+/** The movers table's "vs budget" column appears only when it has something to say. */
+export function hasVsBudget(movers: CategoryMover[]): boolean {
+  return movers.some((m) => m.deltaBudget !== null)
+}
+
+export interface BudgetProgress {
+  spent: number
+  budget: number
+  /** min(spent/budget, 1) as a 0–100 width; floored at 0 so a refund month reads empty. */
+  fillPct: number
+  over: boolean
+}
+
+/**
+ * One meter's math (spec §4.2): fill = min(spent/budget, 1), the beyond-100% overflow is
+ * a separate boolean the panel renders as a negative-toned tick. null budget = no meter.
+ * A zero budget cannot scale a bar, so it degenerates honestly: any positive spend shows
+ * a full bar and reads over; no spend reads empty. Number() is display-side math on
+ * server strings (format.ts's license) — nothing here goes back to the API.
+ */
+export function budgetProgress(spent: string | null, budget: string | null): BudgetProgress | null {
+  if (budget === null) return null
+  const budgetN = Number(budget)
+  const spentN = spent === null ? 0 : Number(spent)
+  if (!Number.isFinite(budgetN) || budgetN <= 0) {
+    return { spent: spentN, budget: budgetN, fillPct: spentN > 0 ? 100 : 0, over: spentN > budgetN }
+  }
+  return {
+    spent: spentN,
+    budget: budgetN,
+    fillPct: Math.max(0, Math.min(1, spentN / budgetN)) * 100,
+    over: spentN > budgetN,
+  }
 }

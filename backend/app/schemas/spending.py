@@ -43,6 +43,11 @@ class SpendingMonthOut(BaseModel):
     exists: bool
     net_pay: Decimal | None
     amounts: list[AmountEntry]
+    # Resolved budgets for THIS month (spec §2 rule) — the wizard's "of {budget}" subtext
+    # needs the ENTRY month, which is usually not on the matrix's entered-months axis
+    # (spec §4.1; the one addition beyond §3's endpoint list). Only categories with a
+    # non-null resolved budget appear.
+    budgets: list[AmountEntry]
 
 
 class SpendingUpsertResult(BaseModel):
@@ -59,6 +64,10 @@ class SpendingUpsertResult(BaseModel):
 class CategorySeries(BaseModel):
     category_id: int
     values: list[Decimal | None]
+    # The category's RESOLVED budget per month (greatest effective_month <= M, spec §2),
+    # aligned with MatrixOut.months; None = unbudgeted that month (no row on/before it,
+    # or a NULL end-marker).
+    budgets: list[Decimal | None]
 
 
 class MatrixOut(BaseModel):
@@ -69,6 +78,8 @@ class MatrixOut(BaseModel):
     net_pay: list[Decimal | None]
     savings_rate: list[Decimal | None]
     four_pct_rule: list[Decimal | None]
+    # Sum of the resolved category budgets per month; None when NO category has one.
+    total_budget: list[Decimal | None]
 
 
 class YearCategoryTotal(BaseModel):
@@ -86,3 +97,17 @@ class YearRollup(BaseModel):
 
 class YearlyOut(BaseModel):
     years: list[YearRollup]
+
+
+class BudgetPut(BaseModel):
+    # amount is REQUIRED but nullable: null is the dated "budget ends here" marker
+    # (spec §2), not an omitted field — there is no tri-state here.
+    amount: Decimal | None
+    effective_month: date
+
+
+class BudgetHistoryEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    effective_month: date
+    amount: Decimal | None

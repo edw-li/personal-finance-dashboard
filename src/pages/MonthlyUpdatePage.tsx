@@ -123,6 +123,9 @@ export default function MonthlyUpdatePage() {
   // value that existed on the server can be cleared, and only then is `null` sent.
   // Server-derived like `matrix` — deliberately NOT part of the draft snapshot.
   const [hadNetPay, setHadNetPay] = useState(false)
+  // Resolved budgets for the month being entered (GET /spending/months payload) —
+  // the "of {budget}" subtext's source; advice, never a gate (spec §4.1).
+  const [monthBudgets, setMonthBudgets] = useState<Record<number, string>>({})
   const [monthExisted, setMonthExisted] = useState(false)
   const [coveredMonths, setCoveredMonths] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
@@ -198,6 +201,9 @@ export default function MonthlyUpdatePage() {
         setCoveredMonths(new Set(timeseries.months))
         setMatrix(matrixData)
         setHadNetPay(spendMonth.net_pay !== null)
+        setMonthBudgets(
+          Object.fromEntries(spendMonth.budgets.map((b) => [b.category_id, b.amount])),
+        )
 
         // Pre-fill: the month's own values win; otherwise the prior month's (the sheet
         // ritual starts from last month's numbers); otherwise 0.00.
@@ -822,6 +828,9 @@ export default function MonthlyUpdatePage() {
                 // also fixes the text, since Intl prints "-$0.00" for a negative zero; the
                 // === 0 branch is what hands formatCurrency a positive one.
                 const deltaCents = delta === null ? null : Math.round(delta * 100)
+                const budget = monthBudgets[category.id]
+                const overBudget =
+                  budget !== undefined && (Number(canonicalAmount(value)) || 0) > Number(budget)
                 return (
                   <tr key={category.id}>
                     <td>
@@ -843,6 +852,14 @@ export default function MonthlyUpdatePage() {
                           setAmounts((cur) => ({ ...cur, [category.id]: next }))
                         }
                       />
+                      {budget !== undefined && (
+                        <span className={`entry-budget${overBudget ? ' delta-negative' : ''}`}>
+                          {/* Glyph + colour, never colour alone (StatTile's grammar):
+                              the amount went UP past the budget — the bad direction. */}
+                          {overBudget && <span aria-hidden="true">▲ </span>}
+                          {`of ${formatCurrency(budget)}`}
+                        </span>
+                      )}
                     </td>
                     {/* TONE INVERSION vs the balances Δ, deliberately: a POSITIVE delta
                         here is overspending against the typical month — the BAD direction

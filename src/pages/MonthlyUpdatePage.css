@@ -177,3 +177,18 @@
   background: var(--surface-2);
   font-size: 0.85rem;
 }
+
+/* The budget subtext under the amount cell (2026-08-24 spec §4.1): advice, never a gate —
+   muted within budget, negative-toned (with the ▲ glyph, never colour alone) when the
+   typed amount exceeds it. The Δ-vs-typical column keeps its own independent signal. */
+.entry-budget {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  text-align: right;
+  color: var(--muted);
+}
+
+.entry-budget.delta-negative {
+  color: var(--negative);
+}
