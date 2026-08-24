@@ -1,0 +1,84 @@
+// The sankey posture both flow charts wear (2026-08-24 spec §2), pinned once so the
+// /spending and /paycheck sankeys can never drift apart. Pure module: no React, no
+// fetching (the *ChartOptions law) — the option builders under src/components/ spread
+// SANKEY_MARKS into their series and hand their OWN nodes/links to the tooltip factory.
+import type { SankeySeriesOption } from 'echarts/charts'
+import { escapeHtml, formatCurrency } from '../utils/format'
+import { INK } from './theme'
+
+// The node/link vocabulary the builders emit. `value` on a node is the PAGE's own
+// displayed figure for that entity (the table line / matrix cell), never a link sum —
+// echarts sizes nodes from links regardless, but the tooltip must echo the page.
+export interface SankeyNode {
+  name: string
+  value: number
+  /** Explicit column (the paycheck chart pins all sinks right); omit to follow links. */
+  depth?: number
+  itemStyle: { color: string }
+}
+
+export interface SankeyLink {
+  source: string
+  target: string
+  value: number
+}
+
+export const SANKEY_MARKS: SankeySeriesOption = {
+  type: 'sankey',
+  orient: 'horizontal',
+  nodeWidth: 12,
+  nodeGap: 8,
+  draggable: false,
+  // 0 iterations = vertical node order IS data order (echarts' documented escape hatch
+  // from its crossing-minimizer). Both builders emit a meaningful order — biggest-first
+  // on /spending, the waterfall's own order on /paycheck — and a solver reshuffle would
+  // trade that meaning for a crossing or two.
+  layoutIterations: 0,
+  // No node borders (minimal-theme posture); 2px radius per spec §2.
+  itemStyle: { borderWidth: 0, borderRadius: 2 },
+  // Links wear the SOURCE node's color, flat at 0.3 opacity — no gradients (spec §2).
+  lineStyle: { color: 'source', opacity: 0.3 },
+  // Hovering a node lights its flows.
+  emphasis: { focus: 'adjacency' },
+  // Entity name only, in INK: text wears text tokens, never values-in-series-color.
+  // Amounts live in the tooltip.
+  label: { color: INK },
+}
+
+// The IDENTITY subset of echarts' item-tooltip params this module reads. Values are
+// deliberately NOT read from params: a sankey node's params value can be the
+// layout-derived link sum, which on /paycheck reconciliation-drifts a cent off the
+// table's display-rounded lines (spec §4: the two surfaces must never disagree). The
+// factory closes over the builder's own nodes/links instead, so the tooltip always
+// echoes the figures the page displays, regardless of what echarts passes in.
+interface SankeyTooltipParam {
+  dataType?: string
+  name?: string
+  data?: { source?: unknown; target?: unknown }
+}
+
+export function makeSankeyTooltipFormatter(
+  nodes: SankeyNode[],
+  links: SankeyLink[],
+): (params: unknown) => string {
+  const nodeValue = new Map(nodes.map((node) => [node.name, node.value]))
+  // NUL-joined key: no printable separator a node name could contain can forge it.
+  const linkValue = new Map(
+    links.map((link) => [`${link.source}\u0000${link.target}`, link.value]),
+  )
+  return (params: unknown): string => {
+    const p = (Array.isArray(params) ? params[0] : params) as SankeyTooltipParam | null
+    if (!p) return ''
+    if (p.dataType === 'edge') {
+      const source = typeof p.data?.source === 'string' ? p.data.source : ''
+      const target = typeof p.data?.target === 'string' ? p.data.target : ''
+      const value = linkValue.get(`${source}\u0000${target}`)
+      if (value === undefined) return ''
+      // Category names are user text — escapeHtml is mandatory in HTML tooltips.
+      return `<strong>${formatCurrency(value)}</strong><br/>${escapeHtml(source)} → ${escapeHtml(target)}`
+    }
+    const value = nodeValue.get(p.name ?? '')
+    if (value === undefined) return ''
+    return `<strong>${formatCurrency(value)}</strong><br/>${escapeHtml(p.name ?? '')}`
+  }
+}
