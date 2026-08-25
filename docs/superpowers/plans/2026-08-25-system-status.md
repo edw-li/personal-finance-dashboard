@@ -498,7 +498,7 @@ Purely additive — nothing consumes these yet, so no fixture repairs in this ta
 - Modify: `src/types/api.ts`
 - Create: `src/api/system.ts`
 
-- [ ] **Step 1: types/api.ts.** Insert directly AFTER the existing `RefreshStatus` interface (it extends it — keep them adjacent):
+- [x] **Step 1: types/api.ts.** Insert directly AFTER the existing `RefreshStatus` interface (it extends it — keep them adjacent):
 
 ```ts
 // GET /system/status — the Settings System card's and the Overview snapshot's feed: the
@@ -531,7 +531,7 @@ export interface SystemStatus {
 }
 ```
 
-- [ ] **Step 2: Client.** Create `src/api/system.ts`:
+- [x] **Step 2: Client.** Create `src/api/system.ts`:
 
 ```ts
 import { api } from './client'
@@ -544,9 +544,9 @@ export function fetchSystemStatus(): Promise<SystemStatus> {
 }
 ```
 
-- [ ] **Step 3: Verify** — `npx tsc -b` → clean.
+- [x] **Step 3: Verify** — `npx tsc -b` → clean.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(system): SystemStatus wire types + fetchSystemStatus client"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(system): SystemStatus wire types + fetchSystemStatus client"`
 
 ### Task 6: Shared clocks — `backupAge` + `formatBytes`
 

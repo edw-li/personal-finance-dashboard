@@ -360,6 +360,35 @@ export interface RefreshStatus {
   next_run_at: string | null
 }
 
+// GET /system/status — the Settings System card's and the Overview snapshot's feed: the
+// refresh-status shape (verbatim; one composition server-side) plus scheduler, database,
+// backup and environment facts. PortfolioPage keeps reading /prices/refresh-status.
+export interface SystemPricesStatus extends RefreshStatus {
+  scheduler_running: boolean
+}
+
+export interface SystemDatabaseStatus {
+  size_bytes: number
+  /** null when the alembic_version table is absent or empty (create_all-built schemas). */
+  alembic_head: string | null
+}
+
+export interface BackupStatus {
+  last_success_at: string
+  object_key: string
+  /** du -h's human string ("1.2M") exactly as backup_db.sh recorded it — not bytes. */
+  size: string
+}
+
+export interface SystemStatus {
+  prices: SystemPricesStatus
+  database: SystemDatabaseStatus
+  /** null until backup_db.sh records its first marker (or while the row is malformed). */
+  backup: BackupStatus | null
+  /** settings.environment verbatim — 'dev' | 'prod' in practice; never a reason to reject. */
+  environment: string
+}
+
 export interface PricePoint {
   d: string
   c: string
