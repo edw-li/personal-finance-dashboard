@@ -2,6 +2,7 @@ import { LogOut } from 'lucide-react'
 import { Suspense, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import CommandPalette from './CommandPalette'
 import './Layout.css'
 import { NAV_SECTIONS } from './navItems'
 import RouteBoundary from './RouteBoundary'
@@ -74,6 +75,7 @@ export default function Layout() {
           </Suspense>
         </RouteBoundary>
       </main>
+      <CommandPalette />
     </div>
   )
 }

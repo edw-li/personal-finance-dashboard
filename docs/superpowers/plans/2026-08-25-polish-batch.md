@@ -1879,7 +1879,7 @@ export function fuzzyScore(query: string, text: string): number | null {
 - Modify: `src/components/Layout.tsx` (mount)
 - Test: `src/components/CommandPalette.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/CommandPalette.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/CommandPalette.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -2000,9 +2000,9 @@ describe('CommandPalette', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/CommandPalette.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/CommandPalette.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/components/CommandPalette.tsx`:
+- [x] **Step 3: Implement** — create `src/components/CommandPalette.tsx`:
 
 ```tsx
 import { useEffect, useRef, useState } from 'react'
@@ -2240,7 +2240,7 @@ export default function CommandPalette() {
 }
 ```
 
-- [ ] **Step 4: CSS** — create `src/components/CommandPalette.css`:
+- [x] **Step 4: CSS** — create `src/components/CommandPalette.css`:
 
 ```css
 /* Command palette (2026-08-25 polish §9). Overlay z-index 20: above the app's bubble
@@ -2323,11 +2323,11 @@ export default function CommandPalette() {
 }
 ```
 
-- [ ] **Step 5: Mount in Layout.** In `src/components/Layout.tsx`, add `import CommandPalette from './CommandPalette'` (after the AuthContext import, before `'./Layout.css'`) and render `<CommandPalette />` as the LAST child of the `.layout` div (after `</main>`). Layout-mounted, not App-mounted: the palette needs `useNavigate`, and it must exist only behind login.
+- [x] **Step 5: Mount in Layout.** In `src/components/Layout.tsx`, add `import CommandPalette from './CommandPalette'` (after the AuthContext import, before `'./Layout.css'`) and render `<CommandPalette />` as the LAST child of the `.layout` div (after `</main>`). Layout-mounted, not App-mounted: the palette needs `useNavigate`, and it must exist only behind login.
 
-- [ ] **Step 6: Run** — `npx vitest run src/components/CommandPalette.test.tsx src/components/Layout.test.tsx` → ALL PASS (the palette renders null while closed, so Layout's pins are untouched).
+- [x] **Step 6: Run** — `npx vitest run src/components/CommandPalette.test.tsx src/components/Layout.test.tsx` → ALL PASS (the palette renders null while closed, so Layout's pins are untouched).
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(palette): Ctrl+K command palette with fuzzy nav, actions, recents"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(palette): Ctrl+K command palette with fuzzy nav, actions, recents"`
 
 ---
 
