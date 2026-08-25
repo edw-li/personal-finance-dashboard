@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { fetchCalendar } from '../api/calendar'
 import { ApiError } from '../api/client'
 import { fetchLots } from '../api/espp'
@@ -9,6 +9,7 @@ import { fetchRefreshStatus } from '../api/prices'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import EChart from '../components/EChart'
+import type { EChartEventParams } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
@@ -17,6 +18,7 @@ import { ytdStats } from '../components/overview/ytd'
 import {
   netWorthSparkOption,
   pickTaxSummary,
+  RECENT_SPEND_MONTHS,
   recentSpendOption,
   spendStats,
 } from '../components/overview/overviewChartOptions'
@@ -63,6 +65,7 @@ interface OverviewData {
 }
 
 export default function OverviewPage() {
+  const navigate = useNavigate()
   const [data, setData] = useState<OverviewData | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -153,6 +156,16 @@ export default function OverviewPage() {
     [data],
   )
   const bars = useMemo(() => (data ? recentSpendOption(data.matrix) : null), [data])
+
+  // 2026-08-25 spec §2d: each chart clicks through to the page that owns its numbers;
+  // the bars carry the clicked month into /spending's ?month= drill deep link, mapped
+  // back through the option's own trailing-12 slice.
+  const openSpendingMonth = (params: EChartEventParams) => {
+    if (!data || typeof params.dataIndex !== 'number') return
+    const months = data.matrix.months
+    const month = months[Math.max(0, months.length - RECENT_SPEND_MONTHS) + params.dataIndex]
+    if (month) navigate(`/spending?month=${month}`)
+  }
 
   const summary = data?.summary
   // Rendered verbatim, never re-derived: these are the server's own totals fields (the
@@ -375,7 +388,12 @@ export default function OverviewPage() {
                 Open net worth →
               </NavLink>
               {spark ? (
-                <EChart option={spark} height={220} ariaLabel="Line chart of net worth at every monthly snapshot" />
+                <EChart
+                  option={spark}
+                  height={220}
+                  ariaLabel="Line chart of net worth at every monthly snapshot"
+                  onClick={() => navigate('/net-worth')}
+                />
               ) : (
                 <p className="empty-note">No snapshots yet.</p>
               )}
@@ -389,7 +407,12 @@ export default function OverviewPage() {
                 Open portfolio →
               </NavLink>
               {perf ? (
-                <EChart option={perf} height={280} ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly" />
+                <EChart
+                  option={perf}
+                  height={280}
+                  ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
+                  onClick={() => navigate('/portfolio')}
+                />
               ) : (
                 <p className="empty-note">No performance history yet.</p>
               )}
@@ -403,7 +426,12 @@ export default function OverviewPage() {
                 Open spending →
               </NavLink>
               {bars ? (
-                <EChart option={bars} height={240} ariaLabel="Bar chart of total spending for each of the last 12 entered months" />
+                <EChart
+                  option={bars}
+                  height={240}
+                  ariaLabel="Bar chart of total spending for each of the last 12 entered months"
+                  onClick={openSpendingMonth}
+                />
               ) : (
                 <p className="empty-note">No spending months yet.</p>
               )}

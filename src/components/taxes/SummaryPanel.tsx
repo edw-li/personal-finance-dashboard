@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { fetchAllTaxSummaries } from '../../api/taxes'
@@ -7,7 +8,7 @@ import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type { TaxSummaryOut } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
-import { trendOption, waterfallOption, yearPieOption } from './taxChartOptions'
+import { taxTrendCsv, trendOption, waterfallOption, yearPieOption } from './taxChartOptions'
 // Only this component's own sheet, like its two siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.empty-note/.error-banner) is panels.css, which the PAGE
 // imports — and StatTile brings it along regardless.
@@ -34,10 +35,27 @@ export default function SummaryPanel({
   // the two say different things under the chart).
   const [years, setYears] = useState<TaxSummaryOut[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Year drill-in: the year whose jurisdiction pie replaces the trend chart. Stored as
-  // the YEAR (never an index) so a refetch that reshapes the feed cannot mis-target; a
-  // year that vanished falls back to the all-years view (SpendingPage's detailMonth).
-  const [detailYear, setDetailYear] = useState<number | null>(null)
+  // Year drill-in: the year whose jurisdiction pie replaces the trend chart — READ from
+  // the URL (?year=YYYY, 2026-08-25 spec §2d) so a drill is shareable. Stored as the
+  // YEAR (never an index); a year the feed does not carry — including any garbled param,
+  // which the integer fence below already nulls (TaxesPage's whatif-lot idiom) — falls
+  // back to the all-years view through the detailSummary find.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const yearParam = Number(searchParams.get('year'))
+  const detailYear = Number.isInteger(yearParam) && yearParam > 0 ? yearParam : null
+  const setDetailYear = (year: number | null) => {
+    // replace, not push (SpendingPage's drill rule) — and a COPY, so the page's own
+    // ?whatif= seeds ride along untouched.
+    setSearchParams(
+      (current) => {
+        const copy = new URLSearchParams(current)
+        if (year === null) copy.delete('year')
+        else copy.set('year', String(year))
+        return copy
+      },
+      { replace: true },
+    )
+  }
   // Two saves in a row are two feeds in flight; only the newest may land or complain.
   const seqRef = useRef(0)
 
@@ -189,10 +207,15 @@ export default function SummaryPanel({
               <p className="empty-note">No tax computed for {detailSummary.year}.</p>
             )}
           </>
-        ) : trend ? (
+        ) : trend && years ? (
           <>
             <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
-            <EChart option={trend} height={320} onClick={handleTrendClick} />
+            <EChart
+              option={trend}
+              height={320}
+              onClick={handleTrendClick}
+              exportConfig={{ name: 'tax-trend', csv: () => taxTrendCsv(years) }}
+            />
           </>
         ) : (
           !error && (

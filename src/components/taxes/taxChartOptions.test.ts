@@ -7,6 +7,7 @@ import {
   TAX_LABELS,
   TAX_SERIES_IDS,
   WATERFALL_CATEGORIES,
+  taxTrendCsv,
   trendOption,
   waterfallOption,
   yearPieOption,
@@ -371,7 +372,10 @@ describe('trendOption', () => {
         { name: '2024', seriesName: 'Federal', value: 40782.88, marker: '[m]' },
         { name: '2024', seriesName: 'Effective rate', value: 30.5661, marker: '[r]' },
       ]),
-    ).toBe('<strong>2024</strong><br/>[m]Federal: $40,782.88<br/>[r]Effective rate: 30.6%')
+    ).toBe(
+      '<strong>2024</strong><br/>[m]Federal: $40,782.88<br/>' +
+        '<strong>Total tax: $40,782.88</strong><br/>[r]Effective rate: 30.6%',
+    )
     // The percent AXIS is handed the same ×100 units and divides them back out too, at
     // whole percents; without the divisor this tick would read "3057%".
     const label = rateAxisLabelOf(option)
@@ -399,6 +403,21 @@ describe('trendOption', () => {
     expect(series.slice(0, 6).every((s) => s.universalTransition === true)).toBe(true)
     // The rate line stays out of the morph: it has no pie counterpart.
     expect(series[6].id).toBeUndefined()
+  })
+
+  it('totals the jurisdiction rows — dashes excluded, the rate line never an addend', () => {
+    const html = tooltipFormatterOf(trendOption([summaryFixture(2024)]))([
+      { name: '2024', seriesName: 'Federal', value: 40782.88, marker: '[m]' },
+      { name: '2024', seriesName: 'State', value: 15884.46, marker: '[s]' },
+      { name: '2024', seriesName: 'SDI', value: null, marker: '[d]' },
+      { name: '2024', seriesName: 'Effective rate', value: 30.5661, marker: '[r]' },
+    ])
+    expect(html).toContain('[d]SDI: —')
+    // 40782.88 + 15884.46; the null row contributes nothing, the rate is not money.
+    expect(html).toContain('<strong>Total tax: $56,667.34</strong>')
+    // Ordering: jurisdictions, the total, THEN the rate — a ratio after its parts.
+    expect(html.indexOf('Total tax')).toBeGreaterThan(html.indexOf('[s]State'))
+    expect(html.indexOf('[r]Effective rate')).toBeGreaterThan(html.indexOf('Total tax'))
   })
 })
 
@@ -445,5 +464,21 @@ describe('yearPieOption', () => {
     expect(formatter({ name: 'Federal', value: 40782.88, percent: 56.1 })).toBe(
       '<strong>$40,782.88</strong> · 56.1% of tax<br/>Federal',
     )
+  })
+})
+
+describe('taxTrendCsv', () => {
+  it('lays out year × jurisdiction + total, ascending, verbatim server strings', () => {
+    const y24 = summaryFixture(2024)
+    const y26 = summaryFixture(2026)
+    const csv = taxTrendCsv([y26, y24]) // deliberately unordered on the way in
+    expect(csv.headers).toEqual([
+      'Year', 'Federal', 'State', 'Medicare', 'Soc. Sec.', 'SDI', 'Cap. gains', 'Total tax',
+    ])
+    expect(csv.rows.map((r) => r[0])).toEqual([2024, 2026])
+    expect(csv.rows[0]).toEqual([
+      2024, y24.federal.tax, y24.state.tax, y24.medicare.tax, y24.social_security.tax,
+      y24.disability.tax, y24.capital_gains.tax, y24.totals.total_tax,
+    ])
   })
 })

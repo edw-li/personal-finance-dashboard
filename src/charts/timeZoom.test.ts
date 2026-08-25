@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rangeStartIndex, timeZoom } from './timeZoom'
+import { rangeStartIndex, rangeZoom, timeZoom } from './timeZoom'
 
 // 24 first-of-month strings, Jan 2024 … Dec 2025 — the app's month currency.
 const MONTHS = Array.from({ length: 24 }, (_, i) => {
@@ -56,5 +56,46 @@ describe('timeZoom', () => {
         moveOnMouseWheel: false,
       },
     ])
+  })
+})
+
+describe('rangeZoom', () => {
+  it('is exactly the preset zoom when no manual window is mirrored', () => {
+    expect(rangeZoom(MONTHS, { preset: '1y' })).toEqual(timeZoom(MONTHS, '1y'))
+  })
+
+  it('layers a mirrored {startValue, endValue} window over the preset', () => {
+    const [zoom] = rangeZoom(MONTHS, { preset: '1y', window: { startValue: 2, endValue: 5 } })
+    expect(zoom.startValue).toBe(2)
+    expect(zoom.endValue).toBe(5)
+    // The inside-zoom contract itself is untouched — chips still cover presets, the
+    // wheel stays ctrl-gated.
+    expect(zoom.type).toBe('inside')
+    expect(zoom.zoomOnMouseWheel).toBe('ctrl')
+    expect(zoom.moveOnMouseWheel).toBe(false)
+  })
+
+  it('a fresh preset-only state (the chips) snaps the window away', () => {
+    // RangeChips hand back {preset} with NO window — that IS the snap-back contract.
+    const [snapped] = rangeZoom(MONTHS, { preset: 'all' })
+    expect(snapped.startValue).toBe(0)
+    expect(snapped.endValue).toBeUndefined()
+  })
+
+  it('drops a window whose start fell off a SHORTER axis instead of pinning one bar', () => {
+    // The series was replaced wholesale (granularity flip, re-import) and shrank to six
+    // points; indices 18-20 describe an axis that no longer exists.
+    const short = MONTHS.slice(0, 6)
+    const dropped = rangeZoom(short, {
+      preset: 'all',
+      window: { startValue: 18, endValue: 20 },
+    })
+    expect(dropped).toEqual(timeZoom(short, 'all')) // straight back to the preset
+    expect(dropped[0].endValue).toBeUndefined()
+    // A window still ON the axis applies untouched, overhang and all — echarts clamps
+    // the tail itself, and clamping it here would fight a live append (the ping).
+    const [kept] = rangeZoom(short, { preset: 'all', window: { startValue: 5, endValue: 40 } })
+    expect(kept.startValue).toBe(5)
+    expect(kept.endValue).toBe(40)
   })
 })

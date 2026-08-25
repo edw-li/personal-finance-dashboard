@@ -16,6 +16,7 @@ import {
   SURFACE,
 } from '../../charts/theme'
 import type { TaxSummaryOut } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
 
 // The six jurisdictions in the order the engine reports them — one order shared by the
@@ -224,7 +225,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
       formatter: (params) => {
         const list = Array.isArray(params) ? params : [params]
         const head = `<strong>${list[0]?.name ?? ''}</strong>`
-        const lines = list.map((p) => {
+        const line = (p: (typeof list)[number]) => {
           const value = p.value as number | null
           const text =
             value === null || value === undefined
@@ -233,8 +234,24 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
                 ? formatPct(value / 100, { signed: false })
                 : formatCurrency(value)
           return `${p.marker ?? ''}${p.seriesName ?? ''}: ${text}`
-        })
-        return [head, ...lines].join('<br/>')
+        }
+        // The stacks, then the year's total (vestingChartOptions' Total row,
+        // jurisdiction-flavoured — 2026-08-25 spec §2b), then the rate line: the rate is
+        // a ratio, not a seventh addend, so it stays out of the sum and under it.
+        const taxRows = list.filter((p) => p.seriesName !== RATE_SERIES_NAME)
+        const rateRows = list.filter((p) => p.seriesName === RATE_SERIES_NAME)
+        const total = taxRows.reduce(
+          (sum, p) => sum + (typeof p.value === 'number' ? p.value : 0),
+          0,
+        )
+        return [
+          head,
+          ...taxRows.map(line),
+          ...(taxRows.length > 0
+            ? [`<strong>Total tax: ${formatCurrency(total)}</strong>`]
+            : []),
+          ...rateRows.map(line),
+        ].join('<br/>')
       },
     },
     xAxis: { type: 'category', data: ordered.map((y) => String(y.year)) },
@@ -331,5 +348,18 @@ export function yearPieOption(summary: TaxSummaryOut): EChartsOption | null {
         })),
       },
     ],
+  }
+}
+
+/** The trend chart as a table (2026-08-25 spec §2a): year rows × TAX_LABELS order plus
+ * the server's own total_tax, ascending like the chart's axis, verbatim strings. */
+export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
+  const ordered = [...years].sort((a, b) => a.year - b.year)
+  return {
+    headers: ['Year', ...TAX_LABELS, 'Total tax'],
+    rows: ordered.map((y) => [
+      y.year, y.federal.tax, y.state.tax, y.medicare.tax, y.social_security.tax,
+      y.disability.tax, y.capital_gains.tax, y.totals.total_tax,
+    ]),
   }
 }

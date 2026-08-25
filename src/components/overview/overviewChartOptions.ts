@@ -47,9 +47,13 @@ export function netWorthSparkOption(
   }
 }
 
+/** The bars' trailing-window length — named so OverviewPage's click handler can map a
+ * dataIndex back through the same slice (2026-08-25 spec §2d). */
+export const RECENT_SPEND_MONTHS = 12
+
 export function recentSpendOption(
   matrix: Pick<SpendingMatrix, 'months' | 'totals'>,
-  months = 12,
+  months = RECENT_SPEND_MONTHS,
 ): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const start = Math.max(0, matrix.months.length - months)

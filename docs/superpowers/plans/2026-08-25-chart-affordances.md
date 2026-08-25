@@ -53,7 +53,7 @@
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the worktree, the branch and a clean tree.** All work happens inside `.worktrees/chart-affordances`:
+- [x] **Step 1: Confirm the worktree, the branch and a clean tree.** All work happens inside `.worktrees/chart-affordances`:
 
 ```bash
 cd .worktrees/chart-affordances
@@ -63,12 +63,12 @@ git rev-parse --abbrev-ref HEAD   # expected: chart-affordances
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup. Every command below runs from the worktree root.
 
-- [ ] **Step 2: Install dependencies in the worktree** (worktrees do not share `node_modules`):
+- [x] **Step 2: Install dependencies in the worktree** (worktrees do not share `node_modules`):
 
 Run: `npm ci`
 Expected: clean install, exit 0.
 
-- [ ] **Step 3: Frontend smoke.**
+- [x] **Step 3: Frontend smoke.**
 
 Run: `npx vitest run src/utils/format.test.ts` → PASS.
 
@@ -82,7 +82,7 @@ Run: `npx vitest run src/utils/format.test.ts` → PASS.
 - Create: `src/utils/download.ts`
 - Test: `src/utils/download.test.ts`
 
-- [ ] **Step 1: Write the failing tests** — create `src/utils/download.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `src/utils/download.test.ts`:
 
 ```ts
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -150,9 +150,9 @@ describe('the download shims', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/utils/download.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/utils/download.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/utils/download.ts`:
+- [x] **Step 3: Implement** — create `src/utils/download.ts`:
 
 ```ts
 // Chart-export shims (2026-08-25 spec §2a). A module of their own so the export menu's
@@ -199,9 +199,9 @@ export function downloadText(text: string, filename: string, mime: string): void
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/utils/download.test.ts` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/utils/download.test.ts` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): download shims + RFC-4180 CSV serializer"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): download shims + RFC-4180 CSV serializer"`
 
 ### Task 2: `ChartExportMenu` + the three additive `EChart` props
 
@@ -209,7 +209,7 @@ export function downloadText(text: string, filename: string, mime: string): void
 - Create: `src/components/ChartExportMenu.tsx`, `src/components/EChart.test.tsx`
 - Modify: `src/components/EChart.tsx`, `src/components/panels.css`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/EChart.test.tsx`. The real echarts needs a canvas jsdom does not have (house law: never rendered in tests); mocking `../charts/echarts` keeps the WRAPPER's whole contract testable — init, the `.on` registry the tests fire by hand, `getDataURL`, `getOption`:
+- [x] **Step 1: Write the failing tests** — create `src/components/EChart.test.tsx`. The real echarts needs a canvas jsdom does not have (house law: never rendered in tests); mocking `../charts/echarts` keeps the WRAPPER's whole contract testable — init, the `.on` registry the tests fire by hand, `getDataURL`, `getOption`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -367,9 +367,9 @@ describe('EChart event mirrors', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/EChart.test.tsx` → FAIL (`exportConfig`/`onLegendChange`/`onDataZoom` are not props; `ChartExportMenu` missing).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/EChart.test.tsx` → FAIL (`exportConfig`/`onLegendChange`/`onDataZoom` are not props; `ChartExportMenu` missing).
 
-- [ ] **Step 3: Create the menu** — `src/components/ChartExportMenu.tsx`:
+- [x] **Step 3: Create the menu** — `src/components/ChartExportMenu.tsx`:
 
 ```tsx
 import { SURFACE } from '../charts/theme'
@@ -439,7 +439,7 @@ export default function ChartExportMenu({
 }
 ```
 
-- [ ] **Step 4: Extend `EChart.tsx` — additively only** (cross-plan note: the sibling `ariaLabel` branch edits this file too; every change below APPENDS).
+- [x] **Step 4: Extend `EChart.tsx` — additively only** (cross-plan note: the sibling `ariaLabel` branch edits this file too; every change below APPENDS).
   1. Add imports (after the `quiesceRipples` import):
 ```ts
 import ChartExportMenu from './ChartExportMenu'
@@ -501,7 +501,7 @@ import type { ExportConfig } from './ChartExportMenu'
   )
 ```
 
-- [ ] **Step 5: CSS** — append to `src/components/panels.css`:
+- [x] **Step 5: CSS** — append to `src/components/panels.css`:
 
 ```css
 /* ── Chart export menu (2026-08-25 spec §2a) ───────────────────────── */
@@ -522,9 +522,9 @@ import type { ExportConfig } from './ChartExportMenu'
 }
 ```
 
-- [ ] **Step 6: Run** — `npx vitest run src/components/EChart.test.tsx` → PASS. Then the neighbors that mock EChart shallowly: `npx vitest run src/pages/SpendingPage.test.tsx src/pages/OverviewPage.test.tsx src/pages/TaxesPage.test.tsx` → PASS (their mocks ignore the new props).
+- [x] **Step 6: Run** — `npx vitest run src/components/EChart.test.tsx` → PASS. Then the neighbors that mock EChart shallowly: `npx vitest run src/pages/SpendingPage.test.tsx src/pages/OverviewPage.test.tsx src/pages/TaxesPage.test.tsx` → PASS (their mocks ignore the new props).
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(charts): EChart exportConfig menu + legend/datazoom event mirrors"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(charts): EChart exportConfig menu + legend/datazoom event mirrors"`
 
 ### Task 3: `ChartZoomHint` + `rangeZoom` window state
 
@@ -532,7 +532,7 @@ import type { ExportConfig } from './ChartExportMenu'
 - Create: `src/components/ChartZoomHint.tsx`, `src/components/ChartZoomHint.test.tsx`
 - Modify: `src/charts/timeZoom.ts`, `src/charts/timeZoom.test.ts`, `src/components/panels.css`
 
-- [ ] **Step 1: Write the failing tests.** Create `src/components/ChartZoomHint.test.tsx`:
+- [x] **Step 1: Write the failing tests.** Create `src/components/ChartZoomHint.test.tsx`:
 
 ```tsx
 import { cleanup, render, screen } from '@testing-library/react'
@@ -576,9 +576,9 @@ describe('rangeZoom', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/ChartZoomHint.test.tsx src/charts/timeZoom.test.ts` → FAIL (missing module / missing export).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/ChartZoomHint.test.tsx src/charts/timeZoom.test.ts` → FAIL (missing module / missing export).
 
-- [ ] **Step 3: Implement.** Create `src/components/ChartZoomHint.tsx`:
+- [x] **Step 3: Implement.** Create `src/components/ChartZoomHint.tsx`:
 
 ```tsx
 import './panels.css'
@@ -646,9 +646,9 @@ Append to `src/components/panels.css`:
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/ChartZoomHint.test.tsx src/charts/timeZoom.test.ts` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/components/ChartZoomHint.test.tsx src/charts/timeZoom.test.ts` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): ChartZoomHint caption + rangeZoom manual-window state"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): ChartZoomHint caption + rangeZoom manual-window state"`
 
 ---
 
@@ -660,7 +660,7 @@ Append to `src/components/panels.css`:
 - Create: `src/components/spending/spendingChartOptions.ts`, `src/components/spending/spendingChartOptions.test.ts`
 - Modify: `src/pages/SpendingPage.tsx`, `src/pages/SpendingPage.test.tsx`
 
-- [ ] **Step 1: Write the failing formatter tests** — create `src/components/spending/spendingChartOptions.test.ts`:
+- [x] **Step 1: Write the failing formatter tests** — create `src/components/spending/spendingChartOptions.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -713,9 +713,9 @@ describe('spendingBarsTooltipFormatter', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/spending/spendingChartOptions.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/spending/spendingChartOptions.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement the formatter** — create `src/components/spending/spendingChartOptions.ts`:
+- [x] **Step 3: Implement the formatter** — create `src/components/spending/spendingChartOptions.ts`:
 
 ```ts
 // Pure tooltip + CSV helpers for the spending stacked-bars chart — no React, no
@@ -773,7 +773,7 @@ export function spendingBarsTooltipFormatter(
 
 Run: `npx vitest run src/components/spending/spendingChartOptions.test.ts` → PASS.
 
-- [ ] **Step 4: Wire the page.** In `src/pages/SpendingPage.tsx`:
+- [x] **Step 4: Wire the page.** In `src/pages/SpendingPage.tsx`:
   1. Add the import (beside the budgetChartOptions import):
 ```ts
 import { spendingBarsTooltipFormatter } from '../components/spending/spendingChartOptions'
@@ -799,7 +799,7 @@ import { spendingBarsTooltipFormatter } from '../components/spending/spendingCha
             : formatPct(value as number, { signed: false }),
 ```
 
-- [ ] **Step 5: Upgrade the SpendingPage test mock ONCE for the whole batch.** In `src/pages/SpendingPage.test.tsx`, replace the entire `vi.mock('../components/EChart', …)` block with the version below (later tasks — deep links, persistence, export — assert through these attributes and stand-in events):
+- [x] **Step 5: Upgrade the SpendingPage test mock ONCE for the whole batch.** In `src/pages/SpendingPage.test.tsx`, replace the entire `vi.mock('../components/EChart', …)` block with the version below (later tasks — deep links, persistence, export — assert through these attributes and stand-in events):
 
 ```tsx
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each
@@ -864,9 +864,9 @@ describe('SpendingPage — tooltip fixes', () => {
 })
 ```
 
-- [ ] **Step 6: Run** — `npx vitest run src/pages/SpendingPage.test.tsx src/components/spending/spendingChartOptions.test.ts` → ALL PASS (the four pre-existing flow tests ride the new mock unchanged).
+- [x] **Step 6: Run** — `npx vitest run src/pages/SpendingPage.test.tsx src/components/spending/spendingChartOptions.test.ts` → ALL PASS (the four pre-existing flow tests ride the new mock unchanged).
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(spending): bars tooltip shares + Total row; unsigned savings-rate tooltip"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(spending): bars tooltip shares + Total row; unsigned savings-rate tooltip"`
 
 ### Task 5: Net-worth stacked tooltip — assets subtotal
 
@@ -874,7 +874,7 @@ describe('SpendingPage — tooltip fixes', () => {
 - Create: `src/components/networth/netWorthChartOptions.ts`, `src/components/networth/netWorthChartOptions.test.ts`
 - Modify: `src/pages/NetWorthPage.tsx`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/networth/netWorthChartOptions.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `src/components/networth/netWorthChartOptions.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -930,9 +930,9 @@ describe('netWorthStackedTooltipFormatter', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/networth/netWorthChartOptions.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/networth/netWorthChartOptions.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/components/networth/netWorthChartOptions.ts` (the page's existing formatter moves here whole, growing the subtotal):
+- [x] **Step 3: Implement** — create `src/components/networth/netWorthChartOptions.ts` (the page's existing formatter moves here whole, growing the subtotal):
 
 ```ts
 // Pure tooltip/CSV helpers for the net-worth stacked chart — no React, no fetching, no
@@ -1001,7 +1001,7 @@ export function netWorthStackedTooltipFormatter(
 }
 ```
 
-- [ ] **Step 4: Wire the page.** In `src/pages/NetWorthPage.tsx`:
+- [x] **Step 4: Wire the page.** In `src/pages/NetWorthPage.tsx`:
   1. Add the import:
 ```ts
 import {
@@ -1021,16 +1021,16 @@ import {
 ```
   4. Remove `escapeHtml,` from the `../utils/format` import — the moved formatter was its only consumer here (ESLint flags it otherwise).
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/networth/netWorthChartOptions.test.ts` → PASS; `npx eslint src/pages/NetWorthPage.tsx` → clean.
+- [x] **Step 5: Run** — `npx vitest run src/components/networth/netWorthChartOptions.test.ts` → PASS; `npx eslint src/pages/NetWorthPage.tsx` → clean.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(net-worth): stacked tooltip assets subtotal (formatter extracted)"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(net-worth): stacked tooltip assets subtotal (formatter extracted)"`
 
 ### Task 6: Tax-trend total-tax row + bold history tooltip header
 
 **Files:**
 - Modify: `src/components/taxes/taxChartOptions.ts`, `src/components/taxes/taxChartOptions.test.ts`, `src/components/portfolio/historyChartOptions.ts`, `src/components/portfolio/historyChartOptions.test.ts`
 
-- [ ] **Step 1: Update the pinned trend-tooltip test and add the new cases.** In `src/components/taxes/taxChartOptions.test.ts`, the test `divides the rate back out in BOTH places that render it` pins the exact tooltip string — insert the Total row into its expectation:
+- [x] **Step 1: Update the pinned trend-tooltip test and add the new cases.** In `src/components/taxes/taxChartOptions.test.ts`, the test `divides the rate back out in BOTH places that render it` pins the exact tooltip string — insert the Total row into its expectation:
 
 ```ts
     ).toBe(
@@ -1058,9 +1058,9 @@ and append to the same `describe('trendOption', …)` block:
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/taxes/taxChartOptions.test.ts` → the updated pin and the new case FAIL (no Total row yet).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/taxes/taxChartOptions.test.ts` → the updated pin and the new case FAIL (no Total row yet).
 
-- [ ] **Step 3: Implement the Total-tax row.** In `src/components/taxes/taxChartOptions.ts`, replace `trendOption`'s `formatter` callback body with:
+- [x] **Step 3: Implement the Total-tax row.** In `src/components/taxes/taxChartOptions.ts`, replace `trendOption`'s `formatter` callback body with:
 
 ```ts
       formatter: (params) => {
@@ -1098,7 +1098,7 @@ and append to the same `describe('trendOption', …)` block:
 
 (The surrounding comment about two units in one tooltip stays.)
 
-- [ ] **Step 4: Bold the history tooltip header.** In `src/components/portfolio/historyChartOptions.ts`, `historyTooltipFormatter` currently returns `[header, ...rows.map(…)]` — change the first array element from `header,` to:
+- [x] **Step 4: Bold the history tooltip header.** In `src/components/portfolio/historyChartOptions.ts`, `historyTooltipFormatter` currently returns `[header, ...rows.map(…)]` — change the first array element from `header,` to:
 
 ```ts
     `<strong>${header}</strong>`,
@@ -1117,9 +1117,9 @@ and append to the same `describe('trendOption', …)` block:
 
 (The existing header assertions use `toContain('Aug 14, 2026')`, which the bold form still satisfies — no edits there.)
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/taxes/taxChartOptions.test.ts src/components/portfolio/historyChartOptions.test.ts` → ALL PASS. Then `npx vitest run src/pages/TaxesPage.test.tsx` → PASS (it never pins tooltip strings).
+- [x] **Step 5: Run** — `npx vitest run src/components/taxes/taxChartOptions.test.ts src/components/portfolio/historyChartOptions.test.ts` → ALL PASS. Then `npx vitest run src/pages/TaxesPage.test.tsx` → PASS (it never pins tooltip strings).
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(charts): tax-trend Total-tax tooltip row + bold history header"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(charts): tax-trend Total-tax tooltip row + bold history header"`
 
 ---
 
@@ -1130,7 +1130,7 @@ and append to the same `describe('trendOption', …)` block:
 **Files:**
 - Modify: `src/components/portfolio/historyChartOptions.ts`, `src/components/portfolio/historyChartOptions.test.ts`, `src/pages/PortfolioPage.tsx`
 
-- [ ] **Step 1: Write the failing tests** — append to `src/components/portfolio/historyChartOptions.test.ts`. Extend its imports:
+- [x] **Step 1: Write the failing tests** — append to `src/components/portfolio/historyChartOptions.test.ts`. Extend its imports:
 
 ```ts
 import type { DividendOut, PortfolioHistory, TransactionOut } from '../../types/api'
@@ -1316,9 +1316,9 @@ describe('historyTooltipFormatter — the Events branch', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/historyChartOptions.test.ts` → the new describes FAIL (missing exports); everything pre-existing PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/historyChartOptions.test.ts` → the new describes FAIL (missing exports); everything pre-existing PASSES.
 
-- [ ] **Step 3: Implement.** In `src/components/portfolio/historyChartOptions.ts`:
+- [x] **Step 3: Implement.** In `src/components/portfolio/historyChartOptions.ts`:
   1. Extend the imports:
 ```ts
 import { INK, MUTED, PALETTE } from '../../charts/theme'
@@ -1495,9 +1495,9 @@ export function portfolioHistoryOption(
 ```
   (No new echarts registration: `ScatterChart` is already in `src/charts/echarts.ts` for the net-worth notes — the lazy chunk cannot grow.)
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/portfolio/historyChartOptions.test.ts` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/components/portfolio/historyChartOptions.test.ts` → ALL PASS.
 
-- [ ] **Step 5: Wire /portfolio (and ONLY /portfolio).** In `src/pages/PortfolioPage.tsx`, extend the historyChartOptions import to
+- [x] **Step 5: Wire /portfolio (and ONLY /portfolio).** In `src/pages/PortfolioPage.tsx`, extend the historyChartOptions import to
 `import { buildEventMarkers, liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'`
 and replace the `performanceOption` memo with:
 
@@ -1515,9 +1515,9 @@ and replace the `performanceOption` memo with:
   }, [history, holdings, securities, transactions, dividends, range])
 ```
 
-- [ ] **Step 6: Run** — `npx vitest run` → ALL PASS; `npx eslint src/pages/PortfolioPage.tsx src/components/portfolio/historyChartOptions.ts` → clean.
+- [x] **Step 6: Run** — `npx vitest run` → ALL PASS; `npx eslint src/pages/PortfolioPage.tsx src/components/portfolio/historyChartOptions.ts` → clean.
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(portfolio): buy/sell/dividend event markers with bar-snap + clustering"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(portfolio): buy/sell/dividend event markers with bar-snap + clustering"`
 
 ---
 
@@ -1528,7 +1528,7 @@ and replace the `performanceOption` memo with:
 **Files:**
 - Modify: `src/pages/SpendingPage.tsx`, `src/pages/SpendingPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** In `src/pages/SpendingPage.test.tsx`: extend the react-router import to `import { MemoryRouter, useLocation } from 'react-router-dom'`, add the probe (TaxesPage.test's idiom) above `renderPage`, and give `renderPage` an entry parameter:
+- [x] **Step 1: Write the failing tests.** In `src/pages/SpendingPage.test.tsx`: extend the react-router import to `import { MemoryRouter, useLocation } from 'react-router-dom'`, add the probe (TaxesPage.test's idiom) above `renderPage`, and give `renderPage` an entry parameter:
 
 ```tsx
 // The URL as the router holds it — the deep-link tests pin both directions of the
@@ -1579,9 +1579,9 @@ describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx` → the three new tests FAIL (no URL sync); the pre-existing ones PASS.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx` → the three new tests FAIL (no URL sync); the pre-existing ones PASS.
 
-- [ ] **Step 3: Implement.** In `src/pages/SpendingPage.tsx`:
+- [x] **Step 3: Implement.** In `src/pages/SpendingPage.tsx`:
   1. Change the react-router import to `import { useNavigate, useSearchParams } from 'react-router-dom'`.
   2. Replace the `detailMonth` useState (and its comment) with the URL-derived pair, placed right after `const navigate = useNavigate()`:
 ```ts
@@ -1609,16 +1609,16 @@ describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
 ```
   3. Nothing else changes — `handleSpendChartClick`, the two `setDetailMonth(null)` buttons, and the `detailIndex` memo all keep their call shapes.
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx` → ALL PASS (including the pre-existing "follows the drilled month" test, now flowing through the URL).
+- [x] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx` → ALL PASS (including the pre-existing "follows the drilled month" test, now flowing through the URL).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(spending): ?month= deep link <-> drill-in pie"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(spending): ?month= deep link <-> drill-in pie"`
 
 ### Task 9: `/taxes?year=YYYY` ↔ the jurisdiction pie
 
 **Files:**
 - Modify: `src/components/taxes/SummaryPanel.tsx`, `src/pages/TaxesPage.tsx` (comment only), `src/pages/TaxesPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — append to `src/pages/TaxesPage.test.tsx` (its `renderPage(entry)`, `trendCategories()` and `summaryFor()` helpers already exist):
+- [x] **Step 1: Write the failing tests** — append to `src/pages/TaxesPage.test.tsx` (its `renderPage(entry)`, `trendCategories()` and `summaryFor()` helpers already exist):
 
 ```tsx
 describe('?year= deep link (2026-08-25 spec §2d)', () => {
@@ -1659,9 +1659,9 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/TaxesPage.test.tsx` → the three new tests FAIL; everything pre-existing PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/TaxesPage.test.tsx` → the three new tests FAIL; everything pre-existing PASSES.
 
-- [ ] **Step 3: Implement.** In `src/components/taxes/SummaryPanel.tsx`:
+- [x] **Step 3: Implement.** In `src/components/taxes/SummaryPanel.tsx`:
   1. Add `import { useSearchParams } from 'react-router-dom'` (first import line — the panel always renders under TaxesPage's router).
   2. Replace the `detailYear` useState (and its comment) with:
 ```ts
@@ -1697,16 +1697,16 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
   // reload re-seeding the same leg is the honest reading of the URL the user is sitting on.
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/TaxesPage.test.tsx` → ALL PASS (the pre-existing drill tests now flow through the URL; the whatif test's "location stays put" pin still holds — no drill happens there).
+- [x] **Step 4: Run** — `npx vitest run src/pages/TaxesPage.test.tsx` → ALL PASS (the pre-existing drill tests now flow through the URL; the whatif test's "location stays put" pin still holds — no drill happens there).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(taxes): ?year= deep link <-> jurisdiction pie"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(taxes): ?year= deep link <-> jurisdiction pie"`
 
 ### Task 10: Overview chart click-through
 
 **Files:**
 - Modify: `src/pages/OverviewPage.tsx`, `src/components/overview/overviewChartOptions.ts`, `src/pages/OverviewPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** In `src/pages/OverviewPage.test.tsx`:
+- [x] **Step 1: Write the failing tests.** In `src/pages/OverviewPage.test.tsx`:
   1. Extend the react-router import to `import { MemoryRouter, useLocation } from 'react-router-dom'`.
   2. Extend the EChart mock so a marker click forwards `dataIndex: 0` (replace the mock's `default:` component):
 ```tsx
@@ -1783,9 +1783,9 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/OverviewPage.test.tsx` → the new describe FAILS (no onClick handlers); everything else PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/OverviewPage.test.tsx` → the new describe FAILS (no onClick handlers); everything else PASSES.
 
-- [ ] **Step 3: Name the slice length.** In `src/components/overview/overviewChartOptions.ts`, add above `recentSpendOption`:
+- [x] **Step 3: Name the slice length.** In `src/components/overview/overviewChartOptions.ts`, add above `recentSpendOption`:
 
 ```ts
 /** The bars' trailing-window length — named so OverviewPage's click handler can map a
@@ -1795,7 +1795,7 @@ export const RECENT_SPEND_MONTHS = 12
 
 and change the signature's default to `months = RECENT_SPEND_MONTHS`.
 
-- [ ] **Step 4: Wire the page — minimal and localized** (siblings touch this file). In `src/pages/OverviewPage.tsx`:
+- [x] **Step 4: Wire the page — minimal and localized** (siblings touch this file). In `src/pages/OverviewPage.tsx`:
   1. Change the react-router import to `import { NavLink, useNavigate } from 'react-router-dom'`.
   2. Extend the overviewChartOptions import with `RECENT_SPEND_MONTHS,` and the EChart import with the type: `import EChart from '../components/EChart'` plus `import type { EChartEventParams } from '../components/EChart'`.
   3. First line of the component body: `const navigate = useNavigate()`.
@@ -1816,9 +1816,9 @@ and change the signature's default to `months = RECENT_SPEND_MONTHS`.
      - performance: `<EChart option={perf} height={280} onClick={() => navigate('/portfolio')} />`
      - bars: `<EChart option={bars} height={240} onClick={openSpendingMonth} />`
 
-- [ ] **Step 5: Run** — `npx vitest run src/pages/OverviewPage.test.tsx` → ALL PASS.
+- [x] **Step 5: Run** — `npx vitest run src/pages/OverviewPage.test.tsx` → ALL PASS.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(overview): chart click-through to owning pages with ?month= carry"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(overview): chart click-through to owning pages with ?month= carry"`
 
 ---
 
@@ -1829,7 +1829,7 @@ and change the signature's default to `months = RECENT_SPEND_MONTHS`.
 **Files:**
 - Modify: `src/pages/SpendingPage.tsx`, `src/pages/SpendingPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — append to `src/pages/SpendingPage.test.tsx` (the Task 4 mock already exposes the attributes and stand-in events):
+- [x] **Step 1: Write the failing tests** — append to `src/pages/SpendingPage.test.tsx` (the Task 4 mock already exposes the attributes and stand-in events):
 
 ```tsx
 describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', () => {
@@ -1880,9 +1880,9 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx` → the two new tests FAIL.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx` → the two new tests FAIL.
 
-- [ ] **Step 3: Implement.** In `src/pages/SpendingPage.tsx`:
+- [x] **Step 3: Implement.** In `src/pages/SpendingPage.tsx`:
   1. Swap the timeZoom imports:
 ```ts
 import { rangeZoom } from '../charts/timeZoom'
@@ -1928,9 +1928,9 @@ import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 ```
   savings: `{savingsOption && <EChart option={savingsOption} height={260} onDataZoom={onZoomWindow} />}` — trend: `<EChart option={trendOption} height={220} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />`.
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx` → ALL PASS; `npx eslint src/pages/SpendingPage.tsx` → clean.
+- [x] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx` → ALL PASS; `npx eslint src/pages/SpendingPage.tsx` → clean.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(spending): legend picks + manual zoom window survive rebuilds"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(spending): legend picks + manual zoom window survive rebuilds"`
 
 ### Task 12: NetWorthPage + PortfolioPage — the same wiring
 
@@ -1939,7 +1939,7 @@ Identical pattern to Task 11; those pages have no page-test files, so the behavi
 **Files:**
 - Modify: `src/pages/NetWorthPage.tsx`, `src/pages/PortfolioPage.tsx`
 
-- [ ] **Step 1: NetWorthPage.** In `src/pages/NetWorthPage.tsx`:
+- [x] **Step 1: NetWorthPage.** In `src/pages/NetWorthPage.tsx`:
   1. Swap imports: `import { rangeZoom } from '../charts/timeZoom'` + `import type { RangeState, ZoomWindow } from '../charts/timeZoom'` (drop `timeZoom`, `RangePreset`).
   2. Retype + mirrors (replace the `range` useState; keep its comment's first two sentences, append the window clause as in Task 11):
 ```ts
@@ -1957,7 +1957,7 @@ Identical pattern to Task 11; those pages have no page-test files, so the behavi
   4. `drillOption`: `dataZoom: rangeZoom(data.months, range),` and `legend: { top: 0, selected: legendSelected },`; deps `[data, drill, range, legendSelected]`.
   5. Mounts: `<EChart option={stackedOption} height={360} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />` and `<EChart option={drillOption} height={280} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />`.
 
-- [ ] **Step 2: PortfolioPage.** In `src/pages/PortfolioPage.tsx`:
+- [x] **Step 2: PortfolioPage.** In `src/pages/PortfolioPage.tsx`:
   1. Swap imports: `import { rangeZoom } from '../charts/timeZoom'` + `import type { RangeState, ZoomWindow } from '../charts/timeZoom'` (drop `timeZoom`, `RangePreset`).
   2. Retype + mirrors (replace the `range` useState; comment as in Task 11):
 ```ts
@@ -1984,9 +1984,9 @@ Identical pattern to Task 11; those pages have no page-test files, so the behavi
   deps: `[history, holdings, securities, transactions, dividends, range, legendSelected]`.
   4. Mount: `<EChart option={performanceOption} height={300} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />`.
 
-- [ ] **Step 3: Verify** — `npx vitest run` → ALL PASS; `npx eslint src/pages/NetWorthPage.tsx src/pages/PortfolioPage.tsx` → clean; `npx tsc -b` → clean.
+- [x] **Step 3: Verify** — `npx vitest run` → ALL PASS; `npx eslint src/pages/NetWorthPage.tsx src/pages/PortfolioPage.tsx` → clean; `npx tsc -b` → clean.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): legend/zoom persistence on net-worth + portfolio pages"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): legend/zoom persistence on net-worth + portfolio pages"`
 
 ---
 
@@ -1997,7 +1997,7 @@ Identical pattern to Task 11; those pages have no page-test files, so the behavi
 **Files:**
 - Modify: `src/components/spending/spendingChartOptions.ts` (+ test), `src/components/networth/netWorthChartOptions.ts` (+ test), `src/components/portfolio/historyChartOptions.ts` (+ test)
 
-- [ ] **Step 1: Write the failing tests.** Append to `src/components/spending/spendingChartOptions.test.ts` (extend the import to include `spendingCsv`):
+- [x] **Step 1: Write the failing tests.** Append to `src/components/spending/spendingChartOptions.test.ts` (extend the import to include `spendingCsv`):
 
 ```ts
 describe('spendingCsv', () => {
@@ -2072,9 +2072,9 @@ describe('portfolioHistoryCsv', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/spending/spendingChartOptions.test.ts src/components/networth/netWorthChartOptions.test.ts src/components/portfolio/historyChartOptions.test.ts` → the three new describes FAIL (missing exports).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/spending/spendingChartOptions.test.ts src/components/networth/netWorthChartOptions.test.ts src/components/portfolio/historyChartOptions.test.ts` → the three new describes FAIL (missing exports).
 
-- [ ] **Step 3: Implement.** Append to `src/components/spending/spendingChartOptions.ts` (add `import type { ExportTable } from '../../utils/download'` and `import type { SpendingMatrix } from '../../types/api'` up top):
+- [x] **Step 3: Implement.** Append to `src/components/spending/spendingChartOptions.ts` (add `import type { ExportTable } from '../../utils/download'` and `import type { SpendingMatrix } from '../../types/api'` up top):
 
 ```ts
 /**
@@ -2160,16 +2160,16 @@ export function portfolioHistoryCsv(history: PortfolioHistory): ExportTable {
 }
 ```
 
-- [ ] **Step 4: Run** — the three test files again → ALL PASS.
+- [x] **Step 4: Run** — the three test files again → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): CSV builders — spending, net-worth, portfolio performance"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): CSV builders — spending, net-worth, portfolio performance"`
 
 ### Task 14: CSV builders B — dividends (shared sums), tax trend, projection
 
 **Files:**
 - Modify: `src/components/portfolio/dividendChartOptions.ts` (+ test), `src/components/taxes/taxChartOptions.ts` (+ test), `src/components/projection/projectionChartOptions.ts` (+ test)
 
-- [ ] **Step 1: Write the failing tests.** Append to `src/components/portfolio/dividendChartOptions.test.ts` (extend the import to include `monthlyIncomeCsv, monthlyIncomeSums`; the file's `dividend(payDate, amount)` helper and `TODAY` constant already exist):
+- [x] **Step 1: Write the failing tests.** Append to `src/components/portfolio/dividendChartOptions.test.ts` (extend the import to include `monthlyIncomeCsv, monthlyIncomeSums`; the file's `dividend(payDate, amount)` helper and `TODAY` constant already exist):
 
 ```ts
 describe('monthlyIncomeSums / monthlyIncomeCsv', () => {
@@ -2254,9 +2254,9 @@ describe('projectionCsv', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/dividendChartOptions.test.ts src/components/taxes/taxChartOptions.test.ts src/components/projection/projectionChartOptions.test.ts` → the new describes FAIL; every pre-existing test PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/dividendChartOptions.test.ts src/components/taxes/taxChartOptions.test.ts src/components/projection/projectionChartOptions.test.ts` → the new describes FAIL; every pre-existing test PASSES.
 
-- [ ] **Step 3: Implement.** In `src/components/portfolio/dividendChartOptions.ts` (add `import type { ExportTable } from '../../utils/download'`): insert above `monthlyIncomeOption`:
+- [x] **Step 3: Implement.** In `src/components/portfolio/dividendChartOptions.ts` (add `import type { ExportTable } from '../../utils/download'`): insert above `monthlyIncomeOption`:
 
 ```ts
 /** Sums of `amount` by pay-date month over the trailing window, zero-filled and rounded
@@ -2359,9 +2359,9 @@ export function projectionCsv(
 }
 ```
 
-- [ ] **Step 4: Run** — the three test files again → ALL PASS (the pre-existing `monthlyIncomeOption` tests pin the refactor's parity).
+- [x] **Step 4: Run** — the three test files again → ALL PASS (the pre-existing `monthlyIncomeOption` tests pin the refactor's parity).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): CSV builders — dividends (shared sums), tax trend, projection"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): CSV builders — dividends (shared sums), tax trend, projection"`
 
 ### Task 15: Opt the six charts into the ⤓ menu
 
@@ -2370,7 +2370,7 @@ export function projectionCsv(
 
 The six names, fixed here and used verbatim: `spending`, `net-worth`, `portfolio-performance`, `dividends`, `tax-trend`, `projection`. Each `csv` closure needs its payload narrowed non-null, so four render branches gain an `&& <payload>` guard — the guard is always already true when the option is non-null.
 
-- [ ] **Step 1: Write the failing page pin** — append to the export describe-less end of `src/pages/SpendingPage.test.tsx` (inside the `tooltip fixes` describe or its own):
+- [x] **Step 1: Write the failing page pin** — append to the export describe-less end of `src/pages/SpendingPage.test.tsx` (inside the `tooltip fixes` describe or its own):
 
 ```tsx
 it('opts the bars chart into the export menu as "spending"', async () => {
@@ -2382,7 +2382,7 @@ it('opts the bars chart into the export menu as "spending"', async () => {
 
 Run: `npx vitest run src/pages/SpendingPage.test.tsx` → the new test FAILS (attr empty).
 
-- [ ] **Step 2: Wire all six.**
+- [x] **Step 2: Wire all six.**
   1. `src/pages/SpendingPage.tsx` — import `spendingCsv` (extend the spendingChartOptions import); change the bars branch condition `) : barsOption ? (` to `) : barsOption && matrix ? (` and add to the bars `<EChart …>`:
 ```tsx
                 exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
@@ -2433,16 +2433,16 @@ Run: `npx vitest run src/pages/SpendingPage.test.tsx` → the new test FAILS (at
 ```
   (only the six spec'd charts opt in — pies, heatmap, sankeys, sparks and the drill/trend siblings deliberately stay menu-less; others may opt in later.)
 
-- [ ] **Step 3: Run** — `npx vitest run` → ALL PASS (page tests mock EChart and ignore the new prop; the SpendingPage pin now passes); `npx tsc -b` → clean.
+- [x] **Step 3: Run** — `npx vitest run` → ALL PASS (page tests mock EChart and ignore the new prop; the SpendingPage pin now passes); `npx tsc -b` → clean.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): opt six charts into the export menu with real CSVs"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): opt six charts into the export menu with real CSVs"`
 
 ### Task 16: Zoom captions on every inside-zoom card
 
 **Files:**
 - Modify: `src/pages/SpendingPage.tsx` (+ test), `src/pages/NetWorthPage.tsx`, `src/pages/PortfolioPage.tsx`, `src/pages/ProjectionPage.tsx`, `src/components/portfolio/HoldingDetailPanel.tsx`
 
-- [ ] **Step 1: Write the failing page pin** — append to `src/pages/SpendingPage.test.tsx`:
+- [x] **Step 1: Write the failing page pin** — append to `src/pages/SpendingPage.test.tsx`:
 
 ```tsx
 it('captions every inside-zoom chart — bars, savings rate, trends — and nothing else', async () => {
@@ -2454,7 +2454,7 @@ it('captions every inside-zoom chart — bars, savings rate, trends — and noth
 
 Run: `npx vitest run src/pages/SpendingPage.test.tsx` → FAIL (0 found).
 
-- [ ] **Step 2: Place the caption under each of the nine inside-zoom mounts** — `import ChartZoomHint from '../components/ChartZoomHint'` (or `'../ChartZoomHint'` from `src/components/portfolio/`) in each file, then add `<ChartZoomHint />` directly AFTER the `<EChart …/>` element. Where a mount sits alone in a JSX expression (`{cond && <EChart …/>}` or a ternary branch), wrap the pair in a fragment: `{cond && (<><EChart …/><ChartZoomHint /></>)}`.
+- [x] **Step 2: Place the caption under each of the nine inside-zoom mounts** — `import ChartZoomHint from '../components/ChartZoomHint'` (or `'../ChartZoomHint'` from `src/components/portfolio/`) in each file, then add `<ChartZoomHint />` directly AFTER the `<EChart …/>` element. Where a mount sits alone in a JSX expression (`{cond && <EChart …/>}` or a ternary branch), wrap the pair in a fragment: `{cond && (<><EChart …/><ChartZoomHint /></>)}`.
   1. `SpendingPage.tsx`: the bars mount (non-drilled branch only — the pie has no zoom), the savings mount, the trend mount.
   2. `NetWorthPage.tsx`: the stacked mount, the drill mount.
   3. `PortfolioPage.tsx`: the performance mount (before the S&P-baseline `<p className="hint">`).
@@ -2463,9 +2463,9 @@ Run: `npx vitest run src/pages/SpendingPage.test.tsx` → FAIL (0 found).
 
   The heatmap, pies, sankeys, dividends bars and the Overview charts register no inside zoom — no caption (the caption would promise a gesture those charts refuse).
 
-- [ ] **Step 3: Run** — `npx vitest run` → ALL PASS (the caption text collides with no existing assertion — it is new wording; the SpendingPage count pin now passes: bars + savings + trends).
+- [x] **Step 3: Run** — `npx vitest run` → ALL PASS (the caption text collides with no existing assertion — it is new wording; the SpendingPage count pin now passes: bars + savings + trends).
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): zoom-gesture caption on every inside-zoom card"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): zoom-gesture caption on every inside-zoom card"`
 
 ---
 
@@ -2475,8 +2475,8 @@ Run: `npx vitest run src/pages/SpendingPage.test.tsx` → FAIL (0 found).
 
 **Files:** none
 
-- [ ] **Step 1: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; the pre-batch baseline was 791).
-- [ ] **Step 2: Types** — `npx tsc -b` → clean, no output.
-- [ ] **Step 3: Lint** — `npx eslint .` → clean.
-- [ ] **Step 4: Commit anything the verification steps touched** — `git add -A && git commit -m "chore(charts): verification pass"` (skip if `git status --porcelain` is already empty), then `git status --porcelain` → EMPTY.
-- [ ] **Step 5: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch (and reconciles the `EChart.tsx`/`OverviewPage.tsx` overlap with the polish-batch sibling). Leave a summary listing: the test count; the three additive `EChart` props (`exportConfig`, `onLegendChange`, `onDataZoom` — appended, container div untouched, per the cross-plan note); the six export names (`spending`, `net-worth`, `portfolio-performance`, `dividends`, `tax-trend`, `projection`); the deliberate behavior decisions worth a reviewer's eye (spending bars tooltip drops padded-null dash rows like every full formatter; events off the axis ends and splits are skipped; a mixed same-bar cluster wears the diamond; drill URL updates are replace-style); and that no new echarts modules were registered (chunk limit untouched).
+- [x] **Step 1: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; the pre-batch baseline was 791).
+- [x] **Step 2: Types** — `npx tsc -b` → clean, no output.
+- [x] **Step 3: Lint** — `npx eslint .` → clean.
+- [x] **Step 4: Commit anything the verification steps touched** — `git add -A && git commit -m "chore(charts): verification pass"` (skip if `git status --porcelain` is already empty), then `git status --porcelain` → EMPTY.
+- [x] **Step 5: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch (and reconciles the `EChart.tsx`/`OverviewPage.tsx` overlap with the polish-batch sibling). Leave a summary listing: the test count; the three additive `EChart` props (`exportConfig`, `onLegendChange`, `onDataZoom` — appended, container div untouched, per the cross-plan note); the six export names (`spending`, `net-worth`, `portfolio-performance`, `dividends`, `tax-trend`, `projection`); the deliberate behavior decisions worth a reviewer's eye (spending bars tooltip drops padded-null dash rows like every full formatter; events off the axis ends and splits are skipped; a mixed same-bar cluster wears the diamond; drill URL updates are replace-style); and that no new echarts modules were registered (chunk limit untouched).

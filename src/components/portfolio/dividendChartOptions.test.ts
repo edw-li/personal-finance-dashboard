@@ -5,7 +5,9 @@ import type { DividendOut } from '../../types/api'
 import {
   INCOME_WINDOW_MONTHS,
   incomeStats,
+  monthlyIncomeCsv,
   monthlyIncomeOption,
+  monthlyIncomeSums,
 } from './dividendChartOptions'
 
 // Fixed "today" — never new Date() in a test (the injectable-todayIso house law).
@@ -129,5 +131,31 @@ describe('incomeStats', () => {
       trailing12: 0,
       ytd: 0,
     })
+  })
+})
+
+describe('monthlyIncomeSums / monthlyIncomeCsv', () => {
+  it('mirrors the chart: the zero-filled trailing window, rounded to cents', () => {
+    const rows = monthlyIncomeSums(
+      [dividend('2026-08-03', '5.005'), dividend('2026-08-20', '5.005')],
+      TODAY,
+    )
+    expect(rows).not.toBeNull()
+    expect(rows).toHaveLength(24)
+    expect(rows![23]).toEqual({ month: '2026-08-01', amount: 10.01 })
+    expect(rows![0].amount).toBe(0) // quiet months read as quiet, not absent
+  })
+
+  it('is null with nothing in the window (the same guard the chart nulls on)', () => {
+    expect(monthlyIncomeSums([], TODAY)).toBeNull()
+    expect(monthlyIncomeSums([dividend('2023-01-15', '99.00')], TODAY)).toBeNull()
+  })
+
+  it('CSVs as month/amount rows with 2dp strings', () => {
+    const csv = monthlyIncomeCsv([dividend('2026-08-03', '5.00')], TODAY)
+    expect(csv.headers).toEqual(['Month', 'Dividends'])
+    expect(csv.rows).toHaveLength(24)
+    expect(csv.rows[23]).toEqual(['2026-08-01', '5.00'])
+    expect(csv.rows[0]).toEqual([csv.rows[0][0], '0.00'])
   })
 })

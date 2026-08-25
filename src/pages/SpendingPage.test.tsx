@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
@@ -7,8 +7,12 @@ import SpendingPage from './SpendingPage'
 vi.mock('../api/spending', () => ({ fetchMatrix: vi.fn(), fetchYearly: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each
 // chart draws is pinned in its option-builder tests; this marker says which charts are
-// up and, via data-links, what the FLOW card drew. Clicking a marker stands in for a
-// click on the chart's first month (dataIndex 0) — enough to walk the drill-in door.
+// up and, via data-* attributes, the option/prop slices these page tests pin: sankey
+// links (the flow card), legend.selected (persistence), the first dataZoom entry
+// (window persistence), a sampled valueFormatter (the unsigned savings rate) and the
+// export name. Clicking a marker stands in for a click on the chart's first month
+// (dataIndex 0); mouseEnter/mouseLeave stand in for the legendselectchanged/datazoom
+// chart events jsdom cannot raise.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
@@ -16,12 +20,21 @@ vi.mock('../components/EChart', async () => {
       option,
       onClick,
       ariaLabel,
+      onLegendChange,
+      onDataZoom,
+      exportConfig,
     }: {
       option: {
         series?: { links?: { source?: string; target?: string; value?: number }[] }[]
+        legend?: { selected?: Record<string, boolean> }
+        dataZoom?: { startValue?: number; endValue?: number }[]
+        tooltip?: { valueFormatter?: (value: unknown) => string }
       }
       onClick?: (params: { dataIndex?: number }) => void
       ariaLabel?: string
+      onLegendChange?: (selected: Record<string, boolean>) => void
+      onDataZoom?: (window: { startValue: number; endValue: number }) => void
+      exportConfig?: { name: string }
     }) =>
       createElement('div', {
         'data-testid': 'echart',
@@ -29,7 +42,17 @@ vi.mock('../components/EChart', async () => {
         'data-links': (option.series?.[0]?.links ?? [])
           .map((l) => `${l.source}>${l.target}=${l.value}`)
           .join('|'),
+        'data-legend-selected': JSON.stringify(option.legend?.selected ?? null),
+        'data-zoom': JSON.stringify(option.dataZoom?.[0] ?? null),
+        'data-pct-sample': option.tooltip?.valueFormatter?.(0.35) ?? '',
+        'data-export-name': exportConfig?.name ?? '',
         onClick: () => onClick?.({ dataIndex: 0 }),
+        onMouseEnter: () => onLegendChange?.({ 'Net pay': false, '4% rule': true }),
+        // A SECOND legendselectchanged shape, carrying a map disjoint from mouseEnter's:
+        // echarts hands each chart its OWN full name→shown map, so this is what a toggle
+        // on a sibling chart (different series entirely) looks like arriving at the page.
+        onDoubleClick: () => onLegendChange?.({ Rent: false }),
+        onMouseLeave: () => onDataZoom?.({ startValue: 1, endValue: 1 }),
       }),
   }
 })
@@ -80,10 +103,18 @@ const YEARLY: SpendingYearly = {
 const flowMarker = () =>
   screen.getAllByTestId('echart').find((el) => (el.getAttribute('data-links') ?? '') !== '')
 
-function renderPage() {
+// The URL as the router holds it — the deep-link tests pin both directions of the
+// drill↔URL sync.
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+}
+
+function renderPage(entry = '/spending') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
       <SpendingPage />
+      <LocationProbe />
     </MemoryRouter>,
   )
 }
@@ -161,5 +192,125 @@ describe('SpendingPage — chart aria', () => {
         '[aria-label="Sankey flow of where Jul 2026 went, from net pay into categories and savings"]',
       ),
     ).not.toBeNull()
+  })
+})
+
+describe('SpendingPage — tooltip fixes', () => {
+  it('prints the savings-rate tooltip unsigned — a rate is a level, not a movement', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const samples = screen
+      .getAllByTestId('echart')
+      .map((el) => el.getAttribute('data-pct-sample'))
+    expect(samples).toContain('35.0%') // the savings chart's valueFormatter, sampled at 0.35
+    expect(samples).not.toContain('+35.0%')
+  })
+
+  it('opts the bars chart into the export menu as "spending"', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(screen.getAllByTestId('echart')[0].getAttribute('data-export-name')).toBe('spending')
+  })
+
+  it('captions every inside-zoom chart — bars, savings rate, trends — and nothing else', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(3)
+  })
+})
+
+describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
+  it('opens the month drill-in straight from the URL', async () => {
+    renderPage('/spending?month=2026-06')
+    expect(await screen.findByText('Spending breakdown — Jun 2026')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'All months' })).toBeTruthy()
+  })
+
+  it('ignores a month the matrix does not carry — no drill, no crash', async () => {
+    renderPage('/spending?month=banana')
+    expect(await screen.findByText(/Monthly spend vs net pay/)).toBeTruthy()
+    expect(screen.queryByText(/Spending breakdown/)).toBeNull()
+  })
+
+  it('mirrors a bar-click drill into the URL and clears it on the way back', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    fireEvent.click(screen.getAllByTestId('echart')[0]) // the bars chart, dataIndex 0
+    expect(await screen.findByText('Spending breakdown — Jun 2026')).toBeTruthy()
+    // The fixture months carry no '-01' suffix; the contract is string equality with
+    // matrix.months entries, which in production are the wizard's YYYY-MM-01 grammar.
+    expect(screen.getByTestId('location').textContent).toBe('/spending?month=2026-06')
+    fireEvent.click(screen.getByRole('button', { name: 'All months' }))
+    await screen.findByText(/Monthly spend vs net pay/)
+    expect(screen.getByTestId('location').textContent).toBe('/spending')
+  })
+})
+
+describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', () => {
+  it('keeps legend toggles across an option rebuild — the budget-line reset bug dies', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const bars = screen.getAllByTestId('echart')[0]
+    // Before any toggle: only the shipped default rides legend.selected.
+    expect(bars.getAttribute('data-legend-selected')).toBe(
+      JSON.stringify({ 'Total budget': false }),
+    )
+    fireEvent.mouseEnter(bars) // stands in for legendselectchanged {'Net pay': false, '4% rule': true}
+    // Rebuild the options with a fresh identity — the active chip re-press class of event.
+    fireEvent.click(screen.getByRole('button', { name: '1Y' }))
+    expect(
+      JSON.parse(
+        screen.getAllByTestId('echart')[0].getAttribute('data-legend-selected') ?? '{}',
+      ),
+    ).toEqual({ 'Total budget': false, 'Net pay': false, '4% rule': true })
+  })
+
+  it('merges a sibling chart’s picks instead of clobbering — no series resurrects', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    // The two charts that mirror legend picks are exactly the ones carrying a
+    // legend.selected map: [0] the stacked bars, [1] the category trends.
+    const legendCharts = () =>
+      screen
+        .getAllByTestId('echart')
+        .filter((el) => (el.getAttribute('data-legend-selected') ?? 'null') !== 'null')
+    expect(legendCharts()).toHaveLength(2)
+    fireEvent.mouseEnter(legendCharts()[0]) // bars hide 'Net pay'
+    // Now a toggle on the TRENDS chart, whose map knows nothing of the bars' series.
+    // Replacing the page map here is what resurrected the bars' hidden lines.
+    fireEvent.doubleClick(legendCharts()[1]) // trends hide 'Rent'
+    expect(JSON.parse(legendCharts()[0].getAttribute('data-legend-selected') ?? '{}')).toEqual({
+      'Total budget': false,
+      'Net pay': false, // STAYS hidden — the whole point
+      '4% rule': true,
+      Rent: false, // and the sibling's pick rides along, inert where no series claims it
+    })
+  })
+
+  it('mirrors a manual window into every sibling time chart and snaps back on a chip', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    fireEvent.mouseLeave(screen.getAllByTestId('echart')[0]) // datazoom {startValue:1, endValue:1}
+    const zoomed = screen
+      .getAllByTestId('echart')
+      .filter((el) => (el.getAttribute('data-zoom') ?? 'null') !== 'null')
+    // bars + savings rate + category trends share the window; the heatmap (whole by
+    // design) and the flow sankey never zoom.
+    expect(zoomed).toHaveLength(3)
+    for (const el of zoomed) {
+      const zoom = JSON.parse(el.getAttribute('data-zoom') ?? '{}') as {
+        startValue?: number
+        endValue?: number
+      }
+      expect(zoom.startValue).toBe(1)
+      expect(zoom.endValue).toBe(1)
+    }
+    // Chips overwrite the shared state — fresh {preset}, no window (snap-back contract).
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    const snapped = JSON.parse(
+      screen.getAllByTestId('echart')[0].getAttribute('data-zoom') ?? '{}',
+    ) as { startValue?: number; endValue?: number }
+    expect(snapped.startValue).toBe(0)
+    expect(snapped.endValue).toBeUndefined()
   })
 })

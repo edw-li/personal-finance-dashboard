@@ -5,10 +5,12 @@ import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 import type { ProjectionParams } from '../api/projection'
 import EChart from '../components/EChart'
+import ChartZoomHint from '../components/ChartZoomHint'
 import InfoHint from '../components/InfoHint'
 import { fitPolyTrend } from '../components/projection/polyTrend'
 import {
   netWorthProjectionOption,
+  projectionCsv,
   projectionOption,
 } from '../components/projection/projectionChartOptions'
 import StatTile from '../components/StatTile'
@@ -402,6 +404,7 @@ export default function ProjectionPage() {
                     height={340}
                     ariaLabel={`Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`}
                   />
+                  <ChartZoomHint />
                   <p className="drill-hint">
                     {fit === null
                       ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
@@ -416,12 +419,16 @@ export default function ProjectionPage() {
                 Projected investable balance
                 <InfoHint text="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes." />
               </h2>
-              {chart ? (
-                <EChart
-                  option={chart}
-                  height={340}
-                  ariaLabel={`Projected investable balance over the next ${data.years} years`}
-                />
+              {chart && data ? (
+                <>
+                  <EChart
+                    option={chart}
+                    height={340}
+                    ariaLabel={`Projected investable balance over the next ${data.years} years`}
+                    exportConfig={{ name: 'projection', csv: () => projectionCsv(data) }}
+                  />
+                  <ChartZoomHint />
+                </>
               ) : (
                 <p className="empty-note">Nothing to chart at this horizon.</p>
               )}

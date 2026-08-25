@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
@@ -9,15 +9,20 @@ import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import ChartZoomHint from '../components/ChartZoomHint'
 import BudgetPanel from '../components/spending/BudgetPanel'
 import { budgetStepSeries } from '../components/spending/budgetChartOptions'
+import {
+  spendingBarsTooltipFormatter,
+  spendingCsv,
+} from '../components/spending/spendingChartOptions'
 import {
   spendingFlowPeriod,
   spendingSankeyOption,
 } from '../components/spending/spendingSankeyOptions'
 import type { EChartsOption } from '../charts/echarts'
-import { timeZoom } from '../charts/timeZoom'
-import type { RangePreset } from '../charts/timeZoom'
+import { rangeZoom } from '../charts/timeZoom'
+import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import {
   INK,
   MUTED,
@@ -64,16 +69,44 @@ export default function SpendingPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [trend, setTrend] = useState<{ categoryId: number; slot: number }[]>([])
-  // Month drill-in: the ISO month whose breakdown pie replaces the bars chart. Stored
-  // as the month string (never an index) so a refetch that reshapes the month list
-  // cannot mis-target; a month that vanished falls back to the all-months view.
-  const [detailMonth, setDetailMonth] = useState<string | null>(null)
+  // Month drill-in: the ISO month whose breakdown pie replaces the bars chart — READ
+  // from the URL (?month=YYYY-MM-01, the wizard's own param grammar) so a drill is
+  // shareable and Overview can link straight into it (2026-08-25 spec §2d). Month
+  // STRING, never an index: a refetch that reshapes the month list cannot mis-target,
+  // and a month that vanished (or a garbled param) falls back to the all-months view
+  // through the indexOf guard below.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const detailMonth = searchParams.get('month')
+  const setDetailMonth = (month: string | null) => {
+    // replace, not push: a drill is a view state — Back should leave the page, not
+    // unwind every pie the user peeked at.
+    setSearchParams(
+      (current) => {
+        const copy = new URLSearchParams(current)
+        if (month === null) copy.delete('month')
+        else copy.set('month', month)
+        return copy
+      },
+      { replace: true },
+    )
+  }
   // The page's time window, applied to the three time charts together (bars, savings
-  // rate, category trends — one month axis, one answer). Object identity so a re-click
-  // of the active chip re-asserts the window (NetWorthPage's `range`). The heatmap stays
-  // whole: its visualMap is scaled to all time, and windowing rows of cells reads as
-  // missing data rather than as a zoom.
-  const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
+  // rate, category trends — one month axis, one answer), PLUS any manual ctrl+wheel
+  // window mirrored back from a chart's datazoom event (2026-08-25 spec §2e) — so
+  // rebuilds and same-axis siblings keep the wander. Chips hand back a fresh {preset}
+  // with no window: their snap-back contract, unchanged. The heatmap stays whole.
+  const [range, setRange] = useState<RangeState>({ preset: 'all' })
+  // Legend picks, mirrored from legendselectchanged and fed back via legend.selected —
+  // a refetch/notMerge rebuild no longer resets toggles (the budget-line reset bug).
+  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
+  // MERGED, never replaced: echarts hands over the FIRING chart's whole name→shown map,
+  // and these charts carry different series, so replacing would let a toggle on the
+  // trends chart resurrect a series hidden on the bars. A stale key is inert in
+  // legend.selected (echarts ignores names no series claims), so merging is the safe way.
+  const onLegendChange = (selected: Record<string, boolean>) =>
+    setLegendSelected((current) => ({ ...current, ...selected }))
+  const onZoomWindow = (nextWindow: ZoomWindow) =>
+    setRange((current) => ({ preset: current.preset, window: nextWindow }))
   // The flow card's window. Month follows the month being LOOKED AT (drill-aware, the
   // movers' rule below); Year re-slices the SAME looked-at month's year from the rollup
   // — both datasources are already on the page, so the toggle never refetches.
@@ -154,17 +187,22 @@ export default function SpendingPage() {
       }, 0),
     )
     return {
-      dataZoom: timeZoom(matrix.months, range.preset),
+      dataZoom: rangeZoom(matrix.months, range),
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
       // 'Total budget' ships DESELECTED: it wears the same dashed-MUTED grammar as the
-      // 4% line (spec §4.3 — one reference-line language), so both on at once would be
-      // ambiguous; the legend chip is the summon. notMerge resets legend picks on option
-      // rebuild — the page's existing behavior for every series.
-      legend: { top: 0, selected: { 'Total budget': false } },
+      // 4% line (one reference-line language), so both on at once would be ambiguous;
+      // the legend chip is the summon. Mirrored picks spread OVER the default, so a
+      // deliberate summon now survives option rebuilds (2026-08-25 spec §2e).
+      legend: { top: 0, selected: { 'Total budget': false, ...legendSelected } },
       tooltip: {
         trigger: 'axis',
-        valueFormatter: (value) =>
-          value === null || value === undefined ? '—' : formatCurrency(value as number),
+        // Category rows carry (share of month) and a bold Total; the net-pay/4%/budget
+        // reference lines list after it, excluded from the sum (2026-08-25 spec §2b).
+        // Padded nulls now drop instead of printing '—' rows — the house formatter rule.
+        formatter: spendingBarsTooltipFormatter([
+          ...topIds.map((id) => nameById.get(id) ?? String(id)),
+          'Other',
+        ]),
       },
       xAxis: { type: 'category', data: monthLabels },
       yAxis: {
@@ -229,7 +267,7 @@ export default function SpendingPage() {
           : []),
       ],
     }
-  }, [matrix, topIds, monthLabels, nameById, range])
+  }, [matrix, topIds, monthLabels, nameById, range, legendSelected])
 
   const detailIndex = useMemo(
     () => (matrix && detailMonth ? matrix.months.indexOf(detailMonth) : -1),
@@ -400,13 +438,15 @@ export default function SpendingPage() {
   const savingsOption = useMemo<EChartsOption | null>(() => {
     if (!matrix || matrix.months.length === 0) return null
     return {
-      dataZoom: timeZoom(matrix.months, range.preset), // the page's one window (see `range`)
+      dataZoom: rangeZoom(matrix.months, range), // the page's one window (see `range`)
       grid: { left: 60, right: 24, top: 16, bottom: 28 },
       tooltip: {
         trigger: 'axis',
         // True value in the tooltip even when the line is clamped out of frame.
         valueFormatter: (value) =>
-          value === null || value === undefined ? '—' : formatPct(value as number),
+          value === null || value === undefined
+            ? '—'
+            : formatPct(value as number, { signed: false }),
       },
       xAxis: { type: 'category', data: monthLabels, boundaryGap: false },
       yAxis: {
@@ -442,9 +482,9 @@ export default function SpendingPage() {
     if (!matrix || matrix.months.length === 0 || trend.length === 0) return null
     const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
     return {
-      dataZoom: timeZoom(matrix.months, range.preset), // the page's one window (see `range`)
+      dataZoom: rangeZoom(matrix.months, range), // the page's one window (see `range`)
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
-      legend: { top: 0 },
+      legend: { top: 0, selected: legendSelected },
       tooltip: {
         trigger: 'axis',
         valueFormatter: (value) =>
@@ -475,7 +515,7 @@ export default function SpendingPage() {
         }),
       ],
     }
-  }, [matrix, trend, monthLabels, nameById, range])
+  }, [matrix, trend, monthLabels, nameById, range, legendSelected])
 
   const toggleTrend = (categoryId: number) => {
     setTrend((current) => {
@@ -611,7 +651,7 @@ export default function SpendingPage() {
                 <div className="empty-note">No spending recorded for {detailLabel}.</div>
               )}
             </>
-          ) : barsOption ? (
+          ) : barsOption && matrix ? (
             <>
               <p className="drill-hint">Click a month's bar to expand its breakdown.</p>
               <EChart
@@ -619,7 +659,11 @@ export default function SpendingPage() {
                 height={340}
                 onClick={handleSpendChartClick}
                 instanceRef={barsChartRef}
+                onLegendChange={onLegendChange}
+                onDataZoom={onZoomWindow}
+                exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
               />
+              <ChartZoomHint />
             </>
           ) : (
             !loading &&
@@ -736,7 +780,12 @@ export default function SpendingPage() {
             Savings rate (actual)
             <InfoHint text="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent." />
           </h2>
-          {savingsOption && <EChart option={savingsOption} height={260} />}
+          {savingsOption && (
+            <>
+              <EChart option={savingsOption} height={260} onDataZoom={onZoomWindow} />
+              <ChartZoomHint />
+            </>
+          )}
           <p className="drill-hint">
             (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
             planned rate, so values differ by design.
@@ -768,7 +817,15 @@ export default function SpendingPage() {
             })}
           </div>
           {trendOption ? (
-            <EChart option={trendOption} height={220} />
+            <>
+              <EChart
+                option={trendOption}
+                height={220}
+                onLegendChange={onLegendChange}
+                onDataZoom={onZoomWindow}
+              />
+              <ChartZoomHint />
+            </>
           ) : (
             <div className="empty-note">Pick up to {MAX_TREND} categories.</div>
           )}

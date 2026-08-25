@@ -7,6 +7,7 @@ import {
   NET_WORTH_PROJECTION_SERIES,
   netWorthProjectionOption,
   PROJECTION_SERIES,
+  projectionCsv,
   projectionOption,
   projectionTooltipFormatter,
 } from './projectionChartOptions'
@@ -314,5 +315,36 @@ describe('netWorthProjectionOption', () => {
     expect(option.series[0].data).toEqual([NaN, 101000, 102010])
     expect(option.series[1].data[0]).toBeNaN()
     expect(option.series[1].data[1]).toBe(123456)
+  })
+})
+
+describe('projectionCsv', () => {
+  const BASE = {
+    months: ['2026-09-01', '2026-10-01'],
+    projected: ['1000.00', '1100.00'],
+    coast: ['1000.00', '1005.00'],
+    bands: null,
+  }
+
+  it('is month/projected/coast without the fan', () => {
+    expect(projectionCsv(BASE)).toEqual({
+      headers: ['Month', 'Projected', 'Growth only'],
+      rows: [
+        ['2026-09-01', '1000.00', '1000.00'],
+        ['2026-10-01', '1100.00', '1005.00'],
+      ],
+    })
+  })
+
+  it('appends p10/p50/p90 when the fan is on', () => {
+    const csv = projectionCsv({
+      ...BASE,
+      bands: {
+        p10: ['900.00', '950.00'], p25: ['950.00', '990.00'], p50: ['1000.00', '1080.00'],
+        p75: ['1050.00', '1180.00'], p90: ['1200.00', '1300.00'],
+      },
+    })
+    expect(csv.headers).toEqual(['Month', 'Projected', 'Growth only', 'p10', 'p50', 'p90'])
+    expect(csv.rows[1]).toEqual(['2026-10-01', '1100.00', '1005.00', '950.00', '1080.00', '1300.00'])
   })
 })

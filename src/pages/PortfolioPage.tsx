@@ -12,11 +12,17 @@ import {
   updateSecurity,
 } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
+import ChartZoomHint from '../components/ChartZoomHint'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
-import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
+import {
+  buildEventMarkers,
+  liveFromHoldings,
+  portfolioHistoryCsv,
+  portfolioHistoryOption,
+} from '../components/portfolio/historyChartOptions'
 import HoldingDetailPanel from '../components/portfolio/HoldingDetailPanel'
 import HoldingsTable from '../components/portfolio/HoldingsTable'
 import RealizedPanel from '../components/portfolio/RealizedPanel'
@@ -24,8 +30,8 @@ import SecuritiesPanel from '../components/portfolio/SecuritiesPanel'
 import TransactionsPanel from '../components/portfolio/TransactionsPanel'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
-import { timeZoom } from '../charts/timeZoom'
-import type { RangePreset } from '../charts/timeZoom'
+import { rangeZoom } from '../charts/timeZoom'
+import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type {
   AllocationResponse,
   DividendOut,
@@ -100,8 +106,20 @@ export default function PortfolioPage() {
   const [deactivating, setDeactivating] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('transactions')
   // Performance-chart window; object identity so a re-click of the active chip snaps a
-  // ctrl+wheel wander back to the preset (NetWorthPage's `range`).
-  const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
+  // ctrl+wheel wander back to the preset (NetWorthPage's `range`) — and it now carries
+  // any manual window mirrored back from the chart's datazoom event (spec §2e).
+  const [range, setRange] = useState<RangeState>({ preset: 'all' })
+  // Mirrors of the chart's own events (2026-08-25 spec §2e): legend picks and a manual
+  // ctrl+wheel window become page state, fed back through the memoized option, so a
+  // reload or notMerge rebuild no longer resets them.
+  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
+  // MERGED, never replaced. One chart mirrors here today, so this is equivalent — it is
+  // written the sibling pages' way so a second mirroring chart cannot silently
+  // reintroduce their cross-chart clobber (a stale key is inert in legend.selected).
+  const onLegendChange = (selected: Record<string, boolean>) =>
+    setLegendSelected((current) => ({ ...current, ...selected }))
+  const onZoomWindow = (nextWindow: ZoomWindow) =>
+    setRange((current) => ({ preset: current.preset, window: nextWindow }))
   // Holdings drill-in: the TICKER whose detail panel is open (never an index — a reload
   // that resorts the table cannot mis-target, and a ticker that vanished simply finds no
   // holding and the panel folds away: SpendingPage's detailMonth posture).
@@ -215,11 +233,23 @@ export default function PortfolioPage() {
   // shared with OverviewPage (whose copy is a fixed snapshot, no chips).
   const performanceOption = useMemo(() => {
     if (!history || !holdings) return null
-    const base = portfolioHistoryOption(history, liveFromHoldings(holdings))
-    // startValue indexes history.dates; the appended live category sits at the END, so
-    // the indices are unshifted and the window always runs out to the ping.
-    return base === null ? null : { ...base, dataZoom: timeZoom(history.dates, range.preset) }
-  }, [history, holdings, range])
+    // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
+    // Overview keeps the two-arg call and never starts fetching them (spec Decision log).
+    const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
+    const events = buildEventMarkers(history, transactions, dividends, tickerById)
+    const base = portfolioHistoryOption(history, liveFromHoldings(holdings), events)
+    return base === null
+      ? null
+      : {
+          ...base,
+          // The builder's legend is a plain {top: 0}, shared verbatim with OverviewPage
+          // (which has no picks to persist) — the page layers its mirrors over it here.
+          legend: { top: 0, selected: legendSelected },
+          // startValue indexes history.dates; the appended live category sits at the
+          // END, so the indices are unshifted and the window runs out to the ping.
+          dataZoom: rangeZoom(history.dates, range),
+        }
+  }, [history, holdings, securities, transactions, dividends, range, legendSelected])
 
   // The open row's holding, resolved fresh from every reload so the panel always shows
   // the CURRENT figures; a sold-off ticker resolves to null and the panel folds away.
@@ -344,9 +374,19 @@ export default function PortfolioPage() {
               </h2>
               {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
             </div>
-            {performanceOption ? (
+            {performanceOption && history ? (
               <>
-                <EChart option={performanceOption} height={300} />
+                <EChart
+                  option={performanceOption}
+                  height={300}
+                  onLegendChange={onLegendChange}
+                  onDataZoom={onZoomWindow}
+                  exportConfig={{
+                    name: 'portfolio-performance',
+                    csv: () => portfolioHistoryCsv(history),
+                  }}
+                />
+                <ChartZoomHint />
                 {/* Two benchmark legs, one distinction: the baseline invests only the
                     STARTING balance; the contribution-matched line adds every inferred
                     flow. Said here so neither gap reads as outperformance. */}

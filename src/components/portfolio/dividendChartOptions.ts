@@ -3,19 +3,20 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { PALETTE, SURFACE } from '../../charts/theme'
 import type { DividendOut } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 
 export const INCOME_WINDOW_MONTHS = 24
 
-/** Sums of `amount` by pay-date month over the trailing window, zero-filled so quiet
- * months read as quiet rather than absent. Returns null with no rows in the window —
- * the caller simply omits the chart (the tiles still render whenever the log has rows
- * at all). `todayIso` injectable for tests. */
-export function monthlyIncomeOption(
+/** Sums of `amount` by pay-date month over the trailing window, zero-filled and rounded
+ * to cents; null with no rows in the window. ONE computation shared by the chart and its
+ * CSV export (2026-08-25 spec §2a) so the two can never disagree. `todayIso` injectable
+ * for tests. */
+export function monthlyIncomeSums(
   dividends: DividendOut[],
   todayIso: string,
-): EChartsOption | null {
+): { month: string; amount: number }[] | null {
   const end = `${todayIso.slice(0, 7)}-01`
   const start = addMonths(end, -(INCOME_WINDOW_MONTHS - 1))
   const sums = new Map<string, number>()
@@ -25,11 +26,33 @@ export function monthlyIncomeOption(
     sums.set(month, (sums.get(month) ?? 0) + Number(d.amount))
   }
   if (sums.size === 0) return null
-  const months: string[] = []
-  for (let m = start; m <= end; m = addMonths(m, 1)) months.push(m)
+  const rows: { month: string; amount: number }[] = []
+  for (let m = start; m <= end; m = addMonths(m, 1)) {
+    rows.push({ month: m, amount: Math.round((sums.get(m) ?? 0) * 100) / 100 })
+  }
+  return rows
+}
+
+/** Month/amount rows for the ⤓ menu — empty when the chart itself would be absent. */
+export function monthlyIncomeCsv(dividends: DividendOut[], todayIso: string): ExportTable {
+  const rows = monthlyIncomeSums(dividends, todayIso) ?? []
+  return { headers: ['Month', 'Dividends'], rows: rows.map((r) => [r.month, r.amount.toFixed(2)]) }
+}
+
+/** Sums of `amount` by pay-date month over the trailing window, zero-filled so quiet
+ * months read as quiet rather than absent — the computation shared with
+ * monthlyIncomeCsv. Returns null with no rows in the window — the caller simply omits
+ * the chart (the tiles still render whenever the log has rows at all). `todayIso`
+ * injectable for tests. */
+export function monthlyIncomeOption(
+  dividends: DividendOut[],
+  todayIso: string,
+): EChartsOption | null {
+  const rows = monthlyIncomeSums(dividends, todayIso)
+  if (rows === null) return null
   return {
     grid: { left: 70, right: 16, top: 16, bottom: 28 },
-    xAxis: { type: 'category', data: months.map(formatMonth) },
+    xAxis: { type: 'category', data: rows.map((r) => formatMonth(r.month)) },
     yAxis: {
       type: 'value',
       axisLabel: { formatter: (v: number) => formatCurrencyCompact(v) },
@@ -42,7 +65,7 @@ export function monthlyIncomeOption(
         barMaxWidth: 22,
         color: PALETTE[0],
         itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-        data: months.map((m) => Math.round((sums.get(m) ?? 0) * 100) / 100),
+        data: rows.map((r) => r.amount),
       },
     ],
   }

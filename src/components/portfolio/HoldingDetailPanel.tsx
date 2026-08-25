@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import { fetchPriceHistory } from '../../api/prices'
+import ChartZoomHint from '../ChartZoomHint'
 import EChart from '../EChart'
 import InfoHint from '../InfoHint'
 import type { DividendOut, HoldingOut, PricePoint, TransactionOut } from '../../types/api'
@@ -253,6 +254,7 @@ export default function HoldingDetailPanel({
       ) : chart ? (
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
           <EChart option={chart} height={260} />
+          <ChartZoomHint />
         </div>
       ) : (
         <p className="empty-note">

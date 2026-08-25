@@ -3,9 +3,16 @@
 // decisions of its own). Number() here is display-only — the server's Decimal strings
 // are parsed once and never handed back to the API (format.ts's rule).
 import type { EChartsOption } from '../../charts/echarts'
-import { PALETTE } from '../../charts/theme'
-import type { HoldingsTotals, PortfolioHistory } from '../../types/api'
-import { formatCurrency, formatCurrencyCompact, formatDate } from '../../utils/format'
+import { INK, MUTED, PALETTE } from '../../charts/theme'
+import type { DividendOut, HoldingsTotals, PortfolioHistory, TransactionOut } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
+import {
+  escapeHtml,
+  formatCurrency,
+  formatCurrencyCompact,
+  formatDate,
+  formatShares,
+} from '../../utils/format'
 
 export interface LivePoint {
   date: string // quote bar date, ISO YYYY-MM-DD
@@ -26,6 +33,101 @@ export function liveFromHoldings(holdings: {
     : null
 }
 
+// One name so the legend, the tooltip branch and the series stay in lockstep
+// (NetWorthPage's NOTES_SERIES idiom).
+export const EVENTS_SERIES = 'Events'
+
+export interface ChartEventPoint {
+  /** [category label, y] — the marker rides the portfolio-value line at its bar. */
+  value: [string, number]
+  symbol: 'triangle' | 'circle' | 'diamond'
+  symbolRotate: number
+  /** Display-ready lines, one per underlying event, TRUE dates included. Escaped at
+   * HTML time by the tooltip branch — tickers are server text. */
+  events: { text: string }[]
+}
+
+// Day-serial for snap distances. Date.UTC over split components — never `new Date(iso)`
+// (format.ts's UTC-shift rule); components are exact, no timezone in play.
+function dayNumber(iso: string): number {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
+  return Date.UTC(y, m - 1, d) / 86_400_000
+}
+
+/**
+ * The /portfolio ledgers as chart annotations (2026-08-25 spec §2c): every DATED buy,
+ * sell and dividend snapped to the NEAREST weekly bar (the axis is categorical — a
+ * true-date x would lie between bars), one marker per bar. Same-bar events cluster into
+ * one marker whose tooltip lists each with its true date; a single-kind cluster wears
+ * its kind's glyph (▲ buy, the same triangle rotated for sell, ● dividend) and a mixed
+ * one wears the diamond so no kind over-claims it. Skipped honestly: dateless imported
+ * transactions (nothing to snap to), splits (not one of the three glyphs — spec), and
+ * events off either axis end (no bar to stand on). /portfolio only by construction —
+ * OverviewPage never calls this (Decision log: it must not start fetching ledgers).
+ */
+export function buildEventMarkers(
+  history: Pick<PortfolioHistory, 'dates' | 'market_value'>,
+  transactions: TransactionOut[],
+  dividends: DividendOut[],
+  tickers: Map<number, string>,
+): ChartEventPoint[] {
+  if (history.dates.length === 0) return []
+  const days = history.dates.map(dayNumber)
+  const ticker = (id: number) => tickers.get(id) ?? `#${id}`
+  interface RawEvent {
+    kind: 'buy' | 'sell' | 'dividend'
+    date: string
+    text: string
+  }
+  const raw: RawEvent[] = []
+  for (const t of transactions) {
+    if (t.txn_date === null || (t.type !== 'buy' && t.type !== 'sell')) continue
+    raw.push({
+      kind: t.type,
+      date: t.txn_date,
+      text: `${t.type === 'buy' ? 'Buy' : 'Sell'} ${ticker(t.security_id)} — ${formatShares(
+        t.shares,
+      )} sh · ${formatDate(t.txn_date)}`,
+    })
+  }
+  for (const d of dividends) {
+    raw.push({
+      kind: 'dividend',
+      date: d.pay_date,
+      text: `Dividend ${ticker(d.security_id)} — ${formatCurrency(d.amount)} · ${formatDate(
+        d.pay_date,
+      )}`,
+    })
+  }
+  const byIndex = new Map<number, RawEvent[]>()
+  for (const event of raw) {
+    const day = dayNumber(event.date)
+    if (day < days[0] || day > days[days.length - 1]) continue
+    let index = 0
+    for (let i = 1; i < days.length; i += 1) {
+      // Strict <: an (unreachable-with-weekly-bars) tie keeps the earlier bar.
+      if (Math.abs(days[i] - day) < Math.abs(days[index] - day)) index = i
+    }
+    const bucket = byIndex.get(index)
+    if (bucket) bucket.push(event)
+    else byIndex.set(index, [event])
+  }
+  const SYMBOLS = { buy: 'triangle', sell: 'triangle', dividend: 'circle' } as const
+  return [...byIndex.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, events]) => {
+      events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+      const kinds = new Set(events.map((e) => e.kind))
+      const kind = kinds.size === 1 ? events[0].kind : null
+      return {
+        value: [formatDate(history.dates[index]), Number(history.market_value[index])],
+        symbol: kind === null ? 'diamond' : SYMBOLS[kind],
+        symbolRotate: kind === 'sell' ? 180 : 0,
+        events: events.map(({ text }) => ({ text })),
+      }
+    })
+}
+
 // Axis-tooltip params subset the formatter reads (the runtime shape for trigger:'axis'
 // is an array of these; echarts types the callback param as a much wider union).
 interface AxisTooltipParam {
@@ -33,6 +135,7 @@ interface AxisTooltipParam {
   marker?: string
   axisValueLabel?: string
   value?: unknown
+  data?: unknown
 }
 
 function rowValue(value: unknown): number | null {
@@ -44,29 +147,42 @@ function rowValue(value: unknown): number | null {
 
 // Exported for tests. Skipping null rows is the point: on the live category the three
 // lines are padding-null and would each print a dash row under the default formatter.
-// All strings interpolated here are app-generated (fixed series names, our own date
-// labels), so no escapeHtml is needed.
+// The Events row expands into its clustered event lines (count first when > 1) rather
+// than printing its y — that y is chart geometry, not a figure. Series names and date
+// labels are app-generated; EVENT TEXT carries tickers (server text), so it is escaped.
 export function historyTooltipFormatter(params: unknown): string {
   const list = (Array.isArray(params) ? params : [params]) as AxisTooltipParam[]
   const rows: { param: AxisTooltipParam; value: number }[] = []
+  const eventLines: string[] = []
   for (const param of list) {
+    if (param.seriesName === EVENTS_SERIES) {
+      const events =
+        (param.data as { events?: { text: string }[] } | undefined)?.events ?? []
+      if (events.length > 1) eventLines.push(`<strong>${events.length} events</strong>`)
+      for (const event of events) {
+        eventLines.push(`${param.marker ?? ''} ${escapeHtml(event.text)}`)
+      }
+      continue
+    }
     const value = rowValue(param.value)
     if (value !== null) rows.push({ param, value })
   }
-  if (rows.length === 0) return ''
-  const header = rows[0].param.axisValueLabel ?? ''
+  if (rows.length === 0 && eventLines.length === 0) return ''
+  const header = list.find((p) => p.axisValueLabel)?.axisValueLabel ?? ''
   return [
-    header,
+    `<strong>${header}</strong>`,
     ...rows.map(
       ({ param, value }) =>
         `${param.marker ?? ''} ${param.seriesName ?? ''}&nbsp;&nbsp;${formatCurrency(value)}`,
     ),
+    ...eventLines,
   ].join('<br/>')
 }
 
 export function portfolioHistoryOption(
   history: PortfolioHistory,
   live: LivePoint | null,
+  events: ChartEventPoint[] | null = null,
 ): EChartsOption | null {
   if (history.dates.length < 2) return null
   const lastDate = history.dates[history.dates.length - 1]
@@ -130,6 +246,23 @@ export function portfolioHistoryOption(
       ...(showBenchmark
         ? [lineSeries('VOO (your contributions)', benchmark, PALETTE[3], false)]
         : []),
+      ...(events !== null && events.length > 0
+        ? [
+            {
+              // Plain scatter in MUTED riding the value line — an annotation layer, not
+              // a data hue, and the ripple stays reserved for the live ping (the
+              // net-worth notes-diamond rule). Legend-toggleable, ON by default: no
+              // legend.selected entry ships for it.
+              type: 'scatter' as const,
+              name: EVENTS_SERIES,
+              color: MUTED,
+              symbolSize: 9,
+              itemStyle: { borderColor: INK, borderWidth: 1 },
+              z: 11,
+              data: events,
+            },
+          ]
+        : []),
       ...(livePt
         ? [
             {
@@ -166,5 +299,28 @@ export function portfolioHistoryOption(
           ]
         : []),
     ],
+  }
+}
+
+/** The performance chart as a table (2026-08-25 spec §2a): date rows × the four series,
+ * verbatim server strings; degraded/stale benchmark cells go empty. The live ping stays
+ * out — it is a quote, not a history row. */
+export function portfolioHistoryCsv(history: PortfolioHistory): ExportTable {
+  const benchmark = history.benchmark ?? []
+  return {
+    headers: [
+      'Date',
+      'Portfolio value',
+      'Cost basis',
+      'S&P 500 baseline',
+      'VOO (your contributions)',
+    ],
+    rows: history.dates.map((date, i) => [
+      date,
+      history.market_value[i],
+      history.cost_basis[i],
+      history.sp500[i],
+      benchmark[i] ?? '',
+    ]),
   }
 }
