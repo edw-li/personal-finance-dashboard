@@ -71,7 +71,8 @@ describe('buildIcs', () => {
 })
 
 describe('downloadIcs', () => {
-  it('hands a text/calendar blob to an anchor click and revokes the URL', () => {
+  it('hands a text/calendar blob to an anchor click and defers the URL revoke', () => {
+    vi.useFakeTimers()
     const created: Blob[] = []
     const revoke = vi.fn()
     vi.stubGlobal('URL', {
@@ -87,8 +88,12 @@ describe('downloadIcs', () => {
     expect(created).toHaveLength(1)
     expect(created[0].type).toBe('text/calendar;charset=utf-8')
     expect(click).toHaveBeenCalledTimes(1)
+    // download.ts's Safari armor: revoking on the click's own tick can abort the save.
+    expect(revoke).not.toHaveBeenCalled()
+    vi.runAllTimers()
     expect(revoke).toHaveBeenCalledWith('blob:calendar')
     click.mockRestore()
     vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 })

@@ -270,7 +270,7 @@ export default function OverviewPage() {
       <header className="page-header">
         <h1>Overview</h1>
         <div className="spacer" />
-        {/* Eleven idempotent GETs and no mutation anywhere on this page, so the button
+        {/* Nothing but idempotent GETs and no mutation anywhere on this page, so the button
             stays live while a load is in flight: an impatient second click is harmless,
             the body dims to show the work, and seqRef decides which answer lands. */}
         <button type="button" className="button" onClick={reload}>

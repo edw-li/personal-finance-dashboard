@@ -7,6 +7,7 @@
 // the event's own date at 00:00:00Z. Deliberate omission, accepted: no 75-octet line
 // folding (labels/details are short human lines).
 import type { CalendarEvent } from '../types/api'
+import { downloadText } from './download'
 
 // RFC 5545 §3.3.11 TEXT escaping: backslash FIRST, then semicolon, comma, newlines.
 export function escapeIcsText(value: string): string {
@@ -64,11 +65,7 @@ export function downloadIcs(
   events: CalendarEvent[],
   filename = 'financial-calendar.ics',
 ): void {
-  const blob = new Blob([buildIcs(events)], { type: 'text/calendar;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  URL.revokeObjectURL(url)
+  // One blob-download helper for the whole app (download.ts owns the Safari-safe
+  // deferred revoke); this file stays a pure text builder plus this thin shim.
+  downloadText(buildIcs(events), filename, 'text/calendar;charset=utf-8')
 }

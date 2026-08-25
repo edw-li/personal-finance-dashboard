@@ -30,6 +30,7 @@ import SecuritiesPanel from '../components/portfolio/SecuritiesPanel'
 import TransactionsPanel from '../components/portfolio/TransactionsPanel'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import { useArrivalParam } from '../components/useArrivalParam'
 import { rangeZoom } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type {
@@ -51,6 +52,10 @@ import '../components/portfolio/portfolio.css'
 import './PortfolioPage.css'
 
 type Tab = 'transactions' | 'dividends' | 'securities' | 'realized'
+
+// The ?tab= arrival vocabulary: the three non-default tabs (arriving at the default
+// needs no command). Module-level so the hook's deps stay identity-stable.
+const TAB_ARRIVALS: readonly Tab[] = ['dividends', 'securities', 'realized']
 
 // A whole-book failure would otherwise paste ~37 tickers into the header note.
 const MAX_FAILED_SHOWN = 5
@@ -104,14 +109,13 @@ export default function PortfolioPage() {
   // Ticker being deactivated from the failed-refresh row (the old manual-psql ritual for
   // a delisted symbol, one click now); single-flight like the panels' busy flags.
   const [deactivating, setDeactivating] = useState<string | null>(null)
+  const [tab, setTab] = useState<Tab>('transactions')
   // Arrival deep link (?tab=dividends — the palette's "Add dividend" lands on the
-  // dividends ledger, spec §4 item 9): read once at mount; the strip never writes back.
-  const [tab, setTab] = useState<Tab>(() => {
-    const wanted = new URLSearchParams(window.location.search).get('tab')
-    return wanted === 'dividends' || wanted === 'securities' || wanted === 'realized'
-      ? wanted
-      : 'transactions'
-  })
+  // dividends ledger, spec §4 item 9). A hook, not a useState initializer: the palette
+  // can fire the navigate while this page is ALREADY mounted, where an initializer
+  // never re-runs. The param is consumed (stripped) after applying; the tab strip
+  // itself never writes the URL.
+  useArrivalParam('tab', TAB_ARRIVALS, setTab)
   // Performance-chart window; object identity so a re-click of the active chip snaps a
   // ctrl+wheel wander back to the preset (NetWorthPage's `range`) — and it now carries
   // any manual window mirrored back from the chart's datazoom event (spec §2e).

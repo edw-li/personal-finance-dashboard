@@ -35,9 +35,8 @@ export default function EChart({
   option: EChartsOption
   height?: number
   // A one-sentence description of what the chart SHOWS (deliberate house wording —
-  // ECharts' generated aria is not used; spec §4 item 6). Optional and additive: a
-  // sibling plan adds its own optional prop on a parallel branch, so this signature
-  // only ever GROWS entries.
+  // ECharts' generated aria is not used; spec §4 item 6). Like every prop here it is
+  // optional and additive: the signature only ever GROWS entries.
   ariaLabel?: string
   onClick?: (params: EChartEventParams) => void
   onHover?: (params: EChartEventParams) => void
