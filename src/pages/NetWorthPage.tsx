@@ -13,8 +13,8 @@ import {
   netWorthStackedTooltipFormatter,
 } from '../components/networth/netWorthChartOptions'
 import type { EChartsOption } from '../charts/echarts'
-import { timeZoom } from '../charts/timeZoom'
-import type { RangePreset } from '../charts/timeZoom'
+import { rangeZoom } from '../charts/timeZoom'
+import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import {
   GROUP_COLORS,
   GROUP_LABELS,
@@ -68,8 +68,17 @@ export default function NetWorthPage() {
   // The page's time window, applied to BOTH time charts (they share one month axis, and
   // two range controls answering one question would drift). An OBJECT, not a bare preset:
   // re-clicking the active chip hands the memos a fresh identity, which is what snaps a
-  // ctrl+wheel wander back to the preset (RangeChips' contract).
-  const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
+  // ctrl+wheel wander back to the preset (RangeChips' contract) — and it now carries any
+  // manual window mirrored back from a chart's datazoom event (2026-08-25 spec §2e).
+  const [range, setRange] = useState<RangeState>({ preset: 'all' })
+  // Mirrors of the charts' own events (2026-08-25 spec §2e): legend picks and a manual
+  // ctrl+wheel window become page state, fed back through the memoized options, so a
+  // granularity refetch or notMerge rebuild no longer resets them — and both charts
+  // share one window, like they share the chips.
+  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
+  const onLegendChange = (selected: Record<string, boolean>) => setLegendSelected(selected)
+  const onZoomWindow = (nextWindow: ZoomWindow) =>
+    setRange((current) => ({ preset: current.preset, window: nextWindow }))
 
   // Promise callbacks rather than async/await, and no setState before the fetch starts:
   // every state update has to land in an async continuation, never in the synchronous
@@ -141,9 +150,9 @@ export default function NetWorthPage() {
       // Windowed, not sliced: dataZoom keeps the whole series loaded so a ctrl+wheel or a
       // chip flip never refetches, and the y-axis re-scales to the visible window (filter
       // mode) so a zoomed-in year is read at its own scale.
-      dataZoom: timeZoom(data.months, range.preset),
+      dataZoom: rangeZoom(data.months, range),
       grid: { left: 70, right: 84, top: 40, bottom: 28 },
-      legend: { top: 0 },
+      legend: { top: 0, selected: legendSelected },
       tooltip: {
         trigger: 'axis',
         // Asset rows + their subtotal, then liabilities/net worth/notes — the formatter
@@ -212,16 +221,16 @@ export default function NetWorthPage() {
           : []),
       ],
     }
-  }, [data, range])
+  }, [data, range, legendSelected])
 
   const drillOption = useMemo<EChartsOption | null>(() => {
     if (!data || drill.length === 0) return null
     const byId = new Map(data.series.map((s) => [s.account_id, s.values]))
     const nameById = new Map(data.accounts.map((a) => [a.id, a.name]))
     return {
-      dataZoom: timeZoom(data.months, range.preset), // the page's one window (see `range`)
+      dataZoom: rangeZoom(data.months, range), // the page's one window (see `range`)
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
-      legend: { top: 0 },
+      legend: { top: 0, selected: legendSelected },
       tooltip: {
         trigger: 'axis',
         valueFormatter: (value) =>
@@ -244,7 +253,7 @@ export default function NetWorthPage() {
         data: (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v))),
       })),
     }
-  }, [data, drill, range])
+  }, [data, drill, range, legendSelected])
 
   const toggleDrill = (accountId: number) => {
     setDrill((current) => {
@@ -360,7 +369,12 @@ export default function NetWorthPage() {
             </div>
           </div>
           {stackedOption ? (
-            <EChart option={stackedOption} height={360} />
+            <EChart
+              option={stackedOption}
+              height={360}
+              onLegendChange={onLegendChange}
+              onDataZoom={onZoomWindow}
+            />
           ) : (
             !loading &&
             !error && (
@@ -399,7 +413,12 @@ export default function NetWorthPage() {
             })}
           </div>
           {drillOption ? (
-            <EChart option={drillOption} height={280} />
+            <EChart
+              option={drillOption}
+              height={280}
+              onLegendChange={onLegendChange}
+              onDataZoom={onZoomWindow}
+            />
           ) : (
             !loading && <div className="empty-note">No accounts selected.</div>
           )}

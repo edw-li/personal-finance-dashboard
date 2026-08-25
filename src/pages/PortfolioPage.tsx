@@ -24,8 +24,8 @@ import SecuritiesPanel from '../components/portfolio/SecuritiesPanel'
 import TransactionsPanel from '../components/portfolio/TransactionsPanel'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
-import { timeZoom } from '../charts/timeZoom'
-import type { RangePreset } from '../charts/timeZoom'
+import { rangeZoom } from '../charts/timeZoom'
+import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type {
   AllocationResponse,
   DividendOut,
@@ -100,8 +100,16 @@ export default function PortfolioPage() {
   const [deactivating, setDeactivating] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('transactions')
   // Performance-chart window; object identity so a re-click of the active chip snaps a
-  // ctrl+wheel wander back to the preset (NetWorthPage's `range`).
-  const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
+  // ctrl+wheel wander back to the preset (NetWorthPage's `range`) — and it now carries
+  // any manual window mirrored back from the chart's datazoom event (spec §2e).
+  const [range, setRange] = useState<RangeState>({ preset: 'all' })
+  // Mirrors of the chart's own events (2026-08-25 spec §2e): legend picks and a manual
+  // ctrl+wheel window become page state, fed back through the memoized option, so a
+  // reload or notMerge rebuild no longer resets them.
+  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
+  const onLegendChange = (selected: Record<string, boolean>) => setLegendSelected(selected)
+  const onZoomWindow = (nextWindow: ZoomWindow) =>
+    setRange((current) => ({ preset: current.preset, window: nextWindow }))
   // Holdings drill-in: the TICKER whose detail panel is open (never an index — a reload
   // that resorts the table cannot mis-target, and a ticker that vanished simply finds no
   // holding and the panel folds away: SpendingPage's detailMonth posture).
@@ -220,10 +228,18 @@ export default function PortfolioPage() {
     const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
     const events = buildEventMarkers(history, transactions, dividends, tickerById)
     const base = portfolioHistoryOption(history, liveFromHoldings(holdings), events)
-    // startValue indexes history.dates; the appended live category sits at the END, so
-    // the indices are unshifted and the window always runs out to the ping.
-    return base === null ? null : { ...base, dataZoom: timeZoom(history.dates, range.preset) }
-  }, [history, holdings, securities, transactions, dividends, range])
+    return base === null
+      ? null
+      : {
+          ...base,
+          // The builder's legend is a plain {top: 0}, shared verbatim with OverviewPage
+          // (which has no picks to persist) — the page layers its mirrors over it here.
+          legend: { top: 0, selected: legendSelected },
+          // startValue indexes history.dates; the appended live category sits at the
+          // END, so the indices are unshifted and the window runs out to the ping.
+          dataZoom: rangeZoom(history.dates, range),
+        }
+  }, [history, holdings, securities, transactions, dividends, range, legendSelected])
 
   // The open row's holding, resolved fresh from every reload so the panel always shows
   // the CURRENT figures; a sold-off ticker resolves to null and the panel folds away.
@@ -350,7 +366,12 @@ export default function PortfolioPage() {
             </div>
             {performanceOption ? (
               <>
-                <EChart option={performanceOption} height={300} />
+                <EChart
+                  option={performanceOption}
+                  height={300}
+                  onLegendChange={onLegendChange}
+                  onDataZoom={onZoomWindow}
+                />
                 {/* Two benchmark legs, one distinction: the baseline invests only the
                     STARTING balance; the contribution-matched line adds every inferred
                     flow. Said here so neither gap reads as outperformance. */}

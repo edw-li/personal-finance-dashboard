@@ -1939,7 +1939,7 @@ Identical pattern to Task 11; those pages have no page-test files, so the behavi
 **Files:**
 - Modify: `src/pages/NetWorthPage.tsx`, `src/pages/PortfolioPage.tsx`
 
-- [ ] **Step 1: NetWorthPage.** In `src/pages/NetWorthPage.tsx`:
+- [x] **Step 1: NetWorthPage.** In `src/pages/NetWorthPage.tsx`:
   1. Swap imports: `import { rangeZoom } from '../charts/timeZoom'` + `import type { RangeState, ZoomWindow } from '../charts/timeZoom'` (drop `timeZoom`, `RangePreset`).
   2. Retype + mirrors (replace the `range` useState; keep its comment's first two sentences, append the window clause as in Task 11):
 ```ts
@@ -1957,7 +1957,7 @@ Identical pattern to Task 11; those pages have no page-test files, so the behavi
   4. `drillOption`: `dataZoom: rangeZoom(data.months, range),` and `legend: { top: 0, selected: legendSelected },`; deps `[data, drill, range, legendSelected]`.
   5. Mounts: `<EChart option={stackedOption} height={360} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />` and `<EChart option={drillOption} height={280} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />`.
 
-- [ ] **Step 2: PortfolioPage.** In `src/pages/PortfolioPage.tsx`:
+- [x] **Step 2: PortfolioPage.** In `src/pages/PortfolioPage.tsx`:
   1. Swap imports: `import { rangeZoom } from '../charts/timeZoom'` + `import type { RangeState, ZoomWindow } from '../charts/timeZoom'` (drop `timeZoom`, `RangePreset`).
   2. Retype + mirrors (replace the `range` useState; comment as in Task 11):
 ```ts
@@ -1984,9 +1984,9 @@ Identical pattern to Task 11; those pages have no page-test files, so the behavi
   deps: `[history, holdings, securities, transactions, dividends, range, legendSelected]`.
   4. Mount: `<EChart option={performanceOption} height={300} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />`.
 
-- [ ] **Step 3: Verify** — `npx vitest run` → ALL PASS; `npx eslint src/pages/NetWorthPage.tsx src/pages/PortfolioPage.tsx` → clean; `npx tsc -b` → clean.
+- [x] **Step 3: Verify** — `npx vitest run` → ALL PASS; `npx eslint src/pages/NetWorthPage.tsx src/pages/PortfolioPage.tsx` → clean; `npx tsc -b` → clean.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): legend/zoom persistence on net-worth + portfolio pages"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): legend/zoom persistence on net-worth + portfolio pages"`
 
 ---
 
