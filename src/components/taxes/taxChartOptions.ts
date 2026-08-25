@@ -16,6 +16,7 @@ import {
   SURFACE,
 } from '../../charts/theme'
 import type { TaxSummaryOut } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
 
 // The six jurisdictions in the order the engine reports them — one order shared by the
@@ -347,5 +348,18 @@ export function yearPieOption(summary: TaxSummaryOut): EChartsOption | null {
         })),
       },
     ],
+  }
+}
+
+/** The trend chart as a table (2026-08-25 spec §2a): year rows × TAX_LABELS order plus
+ * the server's own total_tax, ascending like the chart's axis, verbatim strings. */
+export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
+  const ordered = [...years].sort((a, b) => a.year - b.year)
+  return {
+    headers: ['Year', ...TAX_LABELS, 'Total tax'],
+    rows: ordered.map((y) => [
+      y.year, y.federal.tax, y.state.tax, y.medicare.tax, y.social_security.tax,
+      y.disability.tax, y.capital_gains.tax, y.totals.total_tax,
+    ]),
   }
 }

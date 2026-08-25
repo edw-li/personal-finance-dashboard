@@ -2169,7 +2169,7 @@ export function portfolioHistoryCsv(history: PortfolioHistory): ExportTable {
 **Files:**
 - Modify: `src/components/portfolio/dividendChartOptions.ts` (+ test), `src/components/taxes/taxChartOptions.ts` (+ test), `src/components/projection/projectionChartOptions.ts` (+ test)
 
-- [ ] **Step 1: Write the failing tests.** Append to `src/components/portfolio/dividendChartOptions.test.ts` (extend the import to include `monthlyIncomeCsv, monthlyIncomeSums`; the file's `dividend(payDate, amount)` helper and `TODAY` constant already exist):
+- [x] **Step 1: Write the failing tests.** Append to `src/components/portfolio/dividendChartOptions.test.ts` (extend the import to include `monthlyIncomeCsv, monthlyIncomeSums`; the file's `dividend(payDate, amount)` helper and `TODAY` constant already exist):
 
 ```ts
 describe('monthlyIncomeSums / monthlyIncomeCsv', () => {
@@ -2254,9 +2254,9 @@ describe('projectionCsv', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/dividendChartOptions.test.ts src/components/taxes/taxChartOptions.test.ts src/components/projection/projectionChartOptions.test.ts` → the new describes FAIL; every pre-existing test PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/dividendChartOptions.test.ts src/components/taxes/taxChartOptions.test.ts src/components/projection/projectionChartOptions.test.ts` → the new describes FAIL; every pre-existing test PASSES.
 
-- [ ] **Step 3: Implement.** In `src/components/portfolio/dividendChartOptions.ts` (add `import type { ExportTable } from '../../utils/download'`): insert above `monthlyIncomeOption`:
+- [x] **Step 3: Implement.** In `src/components/portfolio/dividendChartOptions.ts` (add `import type { ExportTable } from '../../utils/download'`): insert above `monthlyIncomeOption`:
 
 ```ts
 /** Sums of `amount` by pay-date month over the trailing window, zero-filled and rounded
@@ -2359,9 +2359,9 @@ export function projectionCsv(
 }
 ```
 
-- [ ] **Step 4: Run** — the three test files again → ALL PASS (the pre-existing `monthlyIncomeOption` tests pin the refactor's parity).
+- [x] **Step 4: Run** — the three test files again → ALL PASS (the pre-existing `monthlyIncomeOption` tests pin the refactor's parity).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): CSV builders — dividends (shared sums), tax trend, projection"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): CSV builders — dividends (shared sums), tax trend, projection"`
 
 ### Task 15: Opt the six charts into the ⤓ menu
 

@@ -7,6 +7,7 @@ import {
   TAX_LABELS,
   TAX_SERIES_IDS,
   WATERFALL_CATEGORIES,
+  taxTrendCsv,
   trendOption,
   waterfallOption,
   yearPieOption,
@@ -463,5 +464,21 @@ describe('yearPieOption', () => {
     expect(formatter({ name: 'Federal', value: 40782.88, percent: 56.1 })).toBe(
       '<strong>$40,782.88</strong> · 56.1% of tax<br/>Federal',
     )
+  })
+})
+
+describe('taxTrendCsv', () => {
+  it('lays out year × jurisdiction + total, ascending, verbatim server strings', () => {
+    const y24 = summaryFixture(2024)
+    const y26 = summaryFixture(2026)
+    const csv = taxTrendCsv([y26, y24]) // deliberately unordered on the way in
+    expect(csv.headers).toEqual([
+      'Year', 'Federal', 'State', 'Medicare', 'Soc. Sec.', 'SDI', 'Cap. gains', 'Total tax',
+    ])
+    expect(csv.rows.map((r) => r[0])).toEqual([2024, 2026])
+    expect(csv.rows[0]).toEqual([
+      2024, y24.federal.tax, y24.state.tax, y24.medicare.tax, y24.social_security.tax,
+      y24.disability.tax, y24.capital_gains.tax, y24.totals.total_tax,
+    ])
   })
 })

@@ -5,6 +5,7 @@ import type { EChartsOption } from '../../charts/echarts'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { timeZoom } from '../../charts/timeZoom'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 import { monthSerial } from './polyTrend'
@@ -286,5 +287,22 @@ export function netWorthProjectionOption(
             },
           ]),
     ],
+  }
+}
+
+/** The projection as a table (2026-08-25 spec §2a): month rows × projected/coast, plus
+ * p10/p50/p90 when the Monte Carlo fan is on — verbatim server strings. */
+export function projectionCsv(
+  data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'bands'>,
+): ExportTable {
+  const bands = data.bands ?? null
+  return {
+    headers: ['Month', 'Projected', 'Growth only', ...(bands ? ['p10', 'p50', 'p90'] : [])],
+    rows: data.months.map((month, i) => [
+      month,
+      data.projected[i],
+      data.coast[i],
+      ...(bands ? [bands.p10?.[i] ?? '', bands.p50?.[i] ?? '', bands.p90?.[i] ?? ''] : []),
+    ]),
   }
 }
