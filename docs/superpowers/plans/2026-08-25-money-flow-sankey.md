@@ -1104,7 +1104,7 @@ app.include_router(overview.router, prefix="/api/v1")
 - Modify: `src/types/api.ts`
 - Create: `src/api/overview.ts`
 
-- [ ] **Step 1: types/api.ts.** APPEND at the very end of the file (after the `--- app settings ---` block — appending is the merge-safest anchor; sibling plans have edited this file):
+- [x] **Step 1: types/api.ts.** APPEND at the very end of the file (after the `--- app settings ---` block — appending is the merge-safest anchor; sibling plans have edited this file):
 
 ```ts
 // --- overview: money flow ---
@@ -1164,7 +1164,7 @@ export interface MoneyFlowOut {
 }
 ```
 
-- [ ] **Step 2: Client** — create `src/api/overview.ts`:
+- [x] **Step 2: Client** — create `src/api/overview.ts`:
 
 ```ts
 import { api } from './client'
@@ -1179,9 +1179,9 @@ export function fetchMoneyFlow(year?: number): Promise<MoneyFlowOut> {
 }
 ```
 
-- [ ] **Step 3: Verify** — `npx tsc -b` → clean; `npx eslint src/types/api.ts src/api/overview.ts` → clean.
+- [x] **Step 3: Verify** — `npx tsc -b` → clean; `npx eslint src/types/api.ts src/api/overview.ts` → clean.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(overview): money-flow wire types + client"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(overview): money-flow wire types + client"`
 
 ### Task 4: The pure builder — 4 pinned columns on the shared sankey grammar
 

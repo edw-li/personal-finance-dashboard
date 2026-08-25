@@ -1157,3 +1157,59 @@ export interface AppSettingsOut {
 
 // PUT is full-form (the paycheck/espp whole-form law): all three settings every time.
 export type AppSettingsUpdate = AppSettingsOut
+
+// --- overview: money flow ---
+// GET /overview/money-flow?year= (2026-08-25 spec §5) — one server-composed, reconciled
+// year; all money 2dp Decimal strings. Conservation is structural: the five sources sum
+// to gross_income (other_income balances), and taxes.total + pre_tax_savings +
+// take_home_cash + retained_equity == gross_income (retained_equity is the residual) —
+// at 2dp the paycheck sankey's ±$0.01 reconciliation drift is tolerated.
+
+export interface MoneyFlowSources {
+  salary_and_bonus: string
+  rsu_vests: string
+  espp: string
+  investment_income: string
+  /** BALANCING node: engine gross minus the four named sources (1099 income, employer
+   * HSA, w2_other, stored-total drift). A negative here made renderable false. */
+  other_income: string
+}
+
+export interface MoneyFlowTaxes {
+  total: string
+  federal: string
+  state: string
+  medicare: string
+  social_security: string
+  disability: string
+  capital_gains: string
+}
+
+export interface MoneyFlowCategory {
+  name: string
+  amount: string
+}
+
+export interface MoneyFlowOut {
+  year: number
+  /** Years with any stored tax inputs — the card's chip row. */
+  available_years: number[]
+  /** false + reason: render the SERVER's sentence verbatim instead of a chart. */
+  renderable: boolean
+  reason: string | null
+  warnings: string[]
+  sources: MoneyFlowSources
+  gross_income: string
+  taxes: MoneyFlowTaxes
+  pre_tax_savings: string
+  take_home_cash: string
+  /** Residual: gross − taxes − pre-tax − take-home (≈ vest shares kept + ESPP + timing). */
+  retained_equity: string
+  /** Top-7 by year sum, biggest first, positive-only (the /spending fold). */
+  categories: MoneyFlowCategory[]
+  /** The folded positive remainder; null when nothing folded. */
+  other_spend: string | null
+  total_spend: string
+  /** SIGNED: take_home_cash − total_spend; negative draws a red Drawdown source. */
+  saved: string
+}
