@@ -41,8 +41,9 @@ function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
 export default function TaxesPage() {
   // The deep links' seeds — /taxes?whatif=TICKER from the holdings drill-in, ?whatif-lot={id}
   // from the ESPP lots table. A plain read per render (it is a hook, not a fetch), and the
-  // params are deliberately NOT cleared: this page owns no history writes, and a reload
-  // re-seeding the same leg is the honest reading of the URL the user is sitting on.
+  // params are deliberately NOT cleared: this page itself owns no history writes (the
+  // ?year drill param is SummaryPanel's, written replace-style beside these), and a
+  // reload re-seeding the same leg is the honest reading of the URL the user is sitting on.
   const [searchParams] = useSearchParams()
   const whatIfTicker = searchParams.get('whatif')
   // A garbled or hand-edited ?whatif-lot= is nobody's lot: null seeds nothing and the card

@@ -1012,3 +1012,40 @@ describe('TaxesPage', () => {
     expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('?year= deep link (2026-08-25 spec §2d)', () => {
+  it('opens the year pie straight from the URL', async () => {
+    const taxed2023 = summaryFor(2023)
+    taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
+    renderPage('/taxes?year=2023')
+    expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+  })
+
+  it('ignores a garbled or unknown year — the trend renders as usual', async () => {
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
+      years: [summaryFor(2023), summaryFor(2024)],
+    })
+    renderPage('/taxes?year=banana')
+    await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+    expect(screen.queryByText(/Tax breakdown —/)).toBeNull()
+    cleanup()
+    renderPage('/taxes?year=1999')
+    await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+    expect(screen.queryByText(/Tax breakdown —/)).toBeNull()
+  })
+
+  it('mirrors a trend-click drill into the URL, preserving sibling params, and clears it', async () => {
+    const taxed2023 = summaryFor(2023)
+    taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
+    renderPage('/taxes?whatif=VTI')
+    await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+    fireEvent.click(screen.getAllByTestId('echart')[1]) // the trend; the mock clicks 2023
+    await screen.findByText('Tax breakdown — 2023')
+    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI&year=2023')
+    fireEvent.click(screen.getAllByTestId('echart')[1]) // any click in detail mode returns
+    await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
+    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
+  })
+})

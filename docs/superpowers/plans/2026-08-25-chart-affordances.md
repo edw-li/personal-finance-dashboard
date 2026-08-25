@@ -1618,7 +1618,7 @@ describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
 **Files:**
 - Modify: `src/components/taxes/SummaryPanel.tsx`, `src/pages/TaxesPage.tsx` (comment only), `src/pages/TaxesPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — append to `src/pages/TaxesPage.test.tsx` (its `renderPage(entry)`, `trendCategories()` and `summaryFor()` helpers already exist):
+- [x] **Step 1: Write the failing tests** — append to `src/pages/TaxesPage.test.tsx` (its `renderPage(entry)`, `trendCategories()` and `summaryFor()` helpers already exist):
 
 ```tsx
 describe('?year= deep link (2026-08-25 spec §2d)', () => {
@@ -1659,9 +1659,9 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/TaxesPage.test.tsx` → the three new tests FAIL; everything pre-existing PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/TaxesPage.test.tsx` → the three new tests FAIL; everything pre-existing PASSES.
 
-- [ ] **Step 3: Implement.** In `src/components/taxes/SummaryPanel.tsx`:
+- [x] **Step 3: Implement.** In `src/components/taxes/SummaryPanel.tsx`:
   1. Add `import { useSearchParams } from 'react-router-dom'` (first import line — the panel always renders under TaxesPage's router).
   2. Replace the `detailYear` useState (and its comment) with:
 ```ts
@@ -1697,9 +1697,9 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
   // reload re-seeding the same leg is the honest reading of the URL the user is sitting on.
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/TaxesPage.test.tsx` → ALL PASS (the pre-existing drill tests now flow through the URL; the whatif test's "location stays put" pin still holds — no drill happens there).
+- [x] **Step 4: Run** — `npx vitest run src/pages/TaxesPage.test.tsx` → ALL PASS (the pre-existing drill tests now flow through the URL; the whatif test's "location stays put" pin still holds — no drill happens there).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(taxes): ?year= deep link <-> jurisdiction pie"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(taxes): ?year= deep link <-> jurisdiction pie"`
 
 ### Task 10: Overview chart click-through
 
