@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
+  CalendarEvent,
   DividendOut,
   EsppLotOut,
   EsppLotsResponse,
@@ -52,6 +53,12 @@ vi.mock('../api/prices', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/prices')>()),
   fetchRefreshStatus: vi.fn(),
 }))
+// The seventh module is deliberately NOT one of those eleven: the Up-next strip fetches
+// the calendar on its own, so a hiccup there dents the strip and nothing else.
+vi.mock('../api/calendar', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/calendar')>()),
+  fetchCalendar: vi.fn(),
+}))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
 // charts DRAW is pinned elsewhere — the spark and the bars in
 // src/components/overview/overviewChartOptions.test.ts, the performance lines in
@@ -68,6 +75,7 @@ vi.mock('../components/EChart', async () => {
       }),
   }
 })
+import { fetchCalendar } from '../api/calendar'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
@@ -220,6 +228,16 @@ function lotsOut(lots: EsppLotOut[] = []): EsppLotsResponse {
   return { espp_ticker: null, current_price: null, quoted_at: null, lots }
 }
 
+function upNextEvents(count = 6): CalendarEvent[] {
+  return Array.from({ length: count }, (_, i) => ({
+    date: daysAgo(-(i + 1)),
+    type: 'payday' as const,
+    label: `Upcoming event ${i + 1}`,
+    detail: null,
+    href: '/paycheck',
+  }))
+}
+
 interface Payload {
   summary: NetWorthSummary
   ts: NetWorthTimeseries
@@ -265,6 +283,7 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchYearly).mockResolvedValue(payload.yearly)
   vi.mocked(fetchDividends).mockResolvedValue(payload.dividends)
   vi.mocked(fetchRefreshStatus).mockResolvedValue(payload.refresh)
+  vi.mocked(fetchCalendar).mockResolvedValue({ events: upNextEvents() })
   return payload
 }
 
@@ -281,6 +300,7 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchYearly).mockImplementation(boom)
   vi.mocked(fetchDividends).mockImplementation(boom)
   vi.mocked(fetchRefreshStatus).mockImplementation(boom)
+  vi.mocked(fetchCalendar).mockImplementation(boom)
 }
 
 function renderPage() {
@@ -793,4 +813,25 @@ describe('OverviewPage failures', () => {
     // The overtaken snapshot is dropped whole — seqRef, not per-field merging.
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$2,000,000.00')
   })
+})
+
+it('renders the next five calendar events as links, and only five', async () => {
+  serve()
+  renderPage()
+  await screen.findByText('Upcoming event 1')
+  screen.getByText('Upcoming event 5')
+  expect(screen.queryByText('Upcoming event 6')).toBeNull()
+  const link = screen.getByText(/Upcoming event 1/).closest('a')
+  expect(link?.getAttribute('href')).toBe('/paycheck')
+  // A SEPARATE fetch — exactly one calendar call, never a twelfth Promise.all member.
+  expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(1)
+})
+
+it('a calendar failure dents only the strip, never the snapshot', async () => {
+  serve()
+  vi.mocked(fetchCalendar).mockRejectedValue(new ApiError('calendar down', 500))
+  renderPage()
+  await screen.findByText(/Couldn't load upcoming events/)
+  screen.getByText(/Net worth —/) // the snapshot half rendered normally
+  expect(screen.queryByRole('alert')).toBeNull() // and no page-level banner fired
 })
