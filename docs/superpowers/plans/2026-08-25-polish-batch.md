@@ -1699,7 +1699,7 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
 - Modify: `src/components/comp/RsuGrantsPanel.tsx`
 - Test: `src/pages/CompPage.test.tsx`
 
-- [ ] **Step 1: Rewrite the failing pin.** In `src/pages/CompPage.test.tsx`:
+- [x] **Step 1: Rewrite the failing pin.** In `src/pages/CompPage.test.tsx`:
   1. Add `import ToastProvider from '../components/ToastProvider'` (after the CompPage import).
   2. KEEP the `confirmSpy` scaffolding — CompPage's comp-EVENT delete still confirms and its tests still need the default-true spy. Replace ONLY the test `'deletes a grant only after the confirm names it'` (body and name) with:
 
@@ -1740,9 +1740,9 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
 
   (The other grant test that presses Delete — `'keeps the schedule up when a RELOAD of it fails, and says so'` — needs NO change: it asserted nothing about confirm, and the instant delete fires the same refetch it waits on.)
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/CompPage.test.tsx` → the rewritten test FAILS (confirm still gates the delete); the rest PASS.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/CompPage.test.tsx` → the rewritten test FAILS (confirm still gates the delete); the rest PASS.
 
-- [ ] **Step 3: Implement.** In `src/components/comp/RsuGrantsPanel.tsx`:
+- [x] **Step 3: Implement.** In `src/components/comp/RsuGrantsPanel.tsx`:
   1. Add `import { useToast } from '../ToastProvider'` (after the InfoHint import).
   2. Add `const toast = useToast()` beside the `busy` state.
   3. Replace `remove` in full:
@@ -1791,11 +1791,11 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/CompPage.test.tsx` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/pages/CompPage.test.tsx` → ALL PASS.
 
-- [ ] **Step 5: Confirm-site audit** — `grep -rn "window.confirm" src --include=*.tsx | grep -v test` → expected hits ONLY in: `src/pages/CompPage.tsx` (comp event), `src/pages/EsppPage.tsx` (×3), `src/pages/PaycheckPage.tsx`, `src/pages/SettingsPage.tsx`, `src/pages/TaxesPage.tsx` (×2), `src/components/portfolio/SecuritiesPanel.tsx`, `src/components/taxes/BracketsEditor.tsx`. TransactionsPanel, DividendsPanel and RsuGrantsPanel must be ABSENT from the list.
+- [x] **Step 5: Confirm-site audit** — `grep -rn "window.confirm" src --include=*.tsx | grep -v test` → expected hits ONLY in: `src/pages/CompPage.tsx` (comp event), `src/pages/EsppPage.tsx` (×3), `src/pages/PaycheckPage.tsx`, `src/pages/SettingsPage.tsx`, `src/pages/TaxesPage.tsx` (×2), `src/components/portfolio/SecuritiesPanel.tsx`, `src/components/taxes/BracketsEditor.tsx`. TransactionsPanel, DividendsPanel and RsuGrantsPanel must be ABSENT from the list.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(toast): instant RSU-grant delete with undo re-create"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(toast): instant RSU-grant delete with undo re-create"`
 
 ---
 

@@ -9,6 +9,7 @@ import type {
   VestOut,
 } from '../types/api'
 import CompPage from './CompPage'
+import ToastProvider from '../components/ToastProvider'
 
 vi.mock('../api/comp', () => ({
   fetchEvents: vi.fn(),
@@ -1142,19 +1143,37 @@ describe('CompPage — RSU grant writes', () => {
     expect(edit().disabled).toBe(false)
   })
 
-  it('deletes a grant only after the confirm names it', async () => {
-    render(<CompPage />)
+  it('deletes a grant instantly, and Undo re-creates it through the POST', async () => {
+    render(
+      <ToastProvider>
+        <CompPage />
+      </ToastProvider>,
+    )
     await screen.findByText('RSU grants')
 
-    confirmSpy.mockReturnValue(false)
     fireEvent.click(screen.getByRole('button', { name: 'Delete the FY26 refresh grant' }))
-    expect(confirmSpy).toHaveBeenCalledWith('Delete the FY26 refresh grant?')
-    expect(vi.mocked(deleteRsuGrant)).not.toHaveBeenCalled()
-
-    confirmSpy.mockReturnValue(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Delete the FY26 refresh grant' }))
+    // No confirm interrupt any more (2026-08-25 polish §8) — the delete just runs.
+    expect(confirmSpy).not.toHaveBeenCalled()
     await waitFor(() => expect(vi.mocked(deleteRsuGrant)).toHaveBeenCalledWith(12))
     await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('Deleted the FY26 refresh grant')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    // The captured row's STORED fields, verbatim — computed columns never travel back.
+    await waitFor(() =>
+      expect(vi.mocked(createRsuGrant)).toHaveBeenCalledWith({
+        kind: 'refresh',
+        label: 'FY26 refresh',
+        focal_year: 2026,
+        shares: 480,
+        grant_price: '129.5651',
+        first_vest_date: '2026-09-16',
+        cliff_pct: '0.0625',
+        vest_quantum: 1,
+        notes: 'seeded from focal history',
+      }),
+    )
+    await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(3))
   })
 })
 
