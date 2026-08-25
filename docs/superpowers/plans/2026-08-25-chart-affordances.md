@@ -1130,7 +1130,7 @@ and append to the same `describe('trendOption', …)` block:
 **Files:**
 - Modify: `src/components/portfolio/historyChartOptions.ts`, `src/components/portfolio/historyChartOptions.test.ts`, `src/pages/PortfolioPage.tsx`
 
-- [ ] **Step 1: Write the failing tests** — append to `src/components/portfolio/historyChartOptions.test.ts`. Extend its imports:
+- [x] **Step 1: Write the failing tests** — append to `src/components/portfolio/historyChartOptions.test.ts`. Extend its imports:
 
 ```ts
 import type { DividendOut, PortfolioHistory, TransactionOut } from '../../types/api'
@@ -1316,9 +1316,9 @@ describe('historyTooltipFormatter — the Events branch', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/historyChartOptions.test.ts` → the new describes FAIL (missing exports); everything pre-existing PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/historyChartOptions.test.ts` → the new describes FAIL (missing exports); everything pre-existing PASSES.
 
-- [ ] **Step 3: Implement.** In `src/components/portfolio/historyChartOptions.ts`:
+- [x] **Step 3: Implement.** In `src/components/portfolio/historyChartOptions.ts`:
   1. Extend the imports:
 ```ts
 import { INK, MUTED, PALETTE } from '../../charts/theme'
@@ -1495,9 +1495,9 @@ export function portfolioHistoryOption(
 ```
   (No new echarts registration: `ScatterChart` is already in `src/charts/echarts.ts` for the net-worth notes — the lazy chunk cannot grow.)
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/portfolio/historyChartOptions.test.ts` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/components/portfolio/historyChartOptions.test.ts` → ALL PASS.
 
-- [ ] **Step 5: Wire /portfolio (and ONLY /portfolio).** In `src/pages/PortfolioPage.tsx`, extend the historyChartOptions import to
+- [x] **Step 5: Wire /portfolio (and ONLY /portfolio).** In `src/pages/PortfolioPage.tsx`, extend the historyChartOptions import to
 `import { buildEventMarkers, liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'`
 and replace the `performanceOption` memo with:
 
@@ -1515,9 +1515,9 @@ and replace the `performanceOption` memo with:
   }, [history, holdings, securities, transactions, dividends, range])
 ```
 
-- [ ] **Step 6: Run** — `npx vitest run` → ALL PASS; `npx eslint src/pages/PortfolioPage.tsx src/components/portfolio/historyChartOptions.ts` → clean.
+- [x] **Step 6: Run** — `npx vitest run` → ALL PASS; `npx eslint src/pages/PortfolioPage.tsx src/components/portfolio/historyChartOptions.ts` → clean.
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(portfolio): buy/sell/dividend event markers with bar-snap + clustering"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(portfolio): buy/sell/dividend event markers with bar-snap + clustering"`
 
 ---
 

@@ -16,7 +16,7 @@ import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
-import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
+import { buildEventMarkers, liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
 import HoldingDetailPanel from '../components/portfolio/HoldingDetailPanel'
 import HoldingsTable from '../components/portfolio/HoldingsTable'
 import RealizedPanel from '../components/portfolio/RealizedPanel'
@@ -215,11 +215,15 @@ export default function PortfolioPage() {
   // shared with OverviewPage (whose copy is a fixed snapshot, no chips).
   const performanceOption = useMemo(() => {
     if (!history || !holdings) return null
-    const base = portfolioHistoryOption(history, liveFromHoldings(holdings))
+    // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
+    // Overview keeps the two-arg call and never starts fetching them (spec Decision log).
+    const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
+    const events = buildEventMarkers(history, transactions, dividends, tickerById)
+    const base = portfolioHistoryOption(history, liveFromHoldings(holdings), events)
     // startValue indexes history.dates; the appended live category sits at the END, so
     // the indices are unshifted and the window always runs out to the ping.
     return base === null ? null : { ...base, dataZoom: timeZoom(history.dates, range.preset) }
-  }, [history, holdings, range])
+  }, [history, holdings, securities, transactions, dividends, range])
 
   // The open row's holding, resolved fresh from every reload so the panel always shows
   // the CURRENT figures; a sold-off ticker resolves to null and the panel folds away.
