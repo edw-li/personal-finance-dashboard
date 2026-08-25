@@ -789,7 +789,7 @@ describe('LoginPage', () => {
 - Modify: `src/components/EChart.tsx`
 - Test: `src/components/EChart.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing test** — create `src/components/EChart.test.tsx`:
+- [x] **Step 1: Write the failing test** — create `src/components/EChart.test.tsx`:
 
 ```tsx
 import { cleanup, render } from '@testing-library/react'
@@ -845,9 +845,9 @@ describe('EChart aria facade', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/EChart.test.tsx` → FAIL (TS: no `ariaLabel` prop; no role rendered).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/EChart.test.tsx` → FAIL (TS: no `ariaLabel` prop; no role rendered).
 
-- [ ] **Step 3: Implement — purely additively** (cross-plan note: a sibling branch adds `exportConfig` to this same signature; touch NOTHING but the prop and the two attributes). In `src/components/EChart.tsx`, the destructure + type gain one entry after `height = 320,` / `height?: number`:
+- [x] **Step 3: Implement — purely additively** (cross-plan note: a sibling branch adds `exportConfig` to this same signature; touch NOTHING but the prop and the two attributes). In `src/components/EChart.tsx`, the destructure + type gain one entry after `height = 320,` / `height?: number`:
 
 ```tsx
   ariaLabel,
@@ -876,9 +876,9 @@ and the return statement becomes:
   )
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/EChart.test.tsx` → PASS. Then `npx vitest run src/components` → PASS (every panel test that mocks EChart is untouched by an optional prop).
+- [x] **Step 4: Run** — `npx vitest run src/components/EChart.test.tsx` → PASS. Then `npx vitest run src/components` → PASS (every panel test that mocks EChart is untouched by an optional prop).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): EChart optional ariaLabel -> role=img facade"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): EChart optional ariaLabel -> role=img facade"`
 
 ### Task 7: Apply the ten labels
 
