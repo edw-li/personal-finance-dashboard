@@ -44,7 +44,9 @@ describe('isStaleQuote', () => {
 describe('backupAge', () => {
   // The Overview strip evaluates at the injected today's MIDNIGHT UTC (attention.ts)
   // and the Settings card at the real clock — both call THIS function, so the amber
-  // tone and the "hasn't run recently" nag flip at the same hour by construction.
+  // tone and the "hasn't run recently" nag flip on the same THRESHOLDS (the strip's
+  // evaluation instant can trail the card's live clock by up to a day; the card only
+  // ever leads, never the nag — the prices-stale house pattern).
   const now = new Date('2026-08-18T00:00:00Z')
 
   it('reads fresh through the 48th hour exactly', () => {

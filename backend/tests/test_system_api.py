@@ -69,7 +69,16 @@ async def test_system_status_reads_the_alembic_head_when_the_table_exists(auth_c
     try:
         body = (await auth_client.get(STATUS)).json()
         assert body["database"]["alembic_head"] == "e7c5a9f4b2d8"
+        # A present-but-empty table must read as None too (the schemas docstring's claim).
+        await db.execute(text("DELETE FROM alembic_version"))
+        await db.commit()
+        body = (await auth_client.get(STATUS)).json()
+        assert body["database"]["alembic_head"] is None
     finally:
+        # A failing GET above would leave the SHARED session in an aborted transaction;
+        # without this rollback the DROP itself raises and the stray table outlives
+        # drop_all/TRUNCATE forever (neither walks non-metadata tables).
+        await db.rollback()
         await db.execute(text("DROP TABLE alembic_version"))
         await db.commit()
 
