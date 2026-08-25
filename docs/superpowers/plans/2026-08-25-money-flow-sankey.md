@@ -1189,7 +1189,7 @@ export function fetchMoneyFlow(year?: number): Promise<MoneyFlowOut> {
 - Create: `src/components/overview/moneyFlowOptions.ts`
 - Test: `src/components/overview/moneyFlowOptions.test.ts`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/overview/moneyFlowOptions.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `src/components/overview/moneyFlowOptions.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -1387,9 +1387,9 @@ describe('moneyFlowOption — the four pinned columns', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/moneyFlowOptions.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/moneyFlowOptions.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/components/overview/moneyFlowOptions.ts`:
+- [x] **Step 3: Implement** — create `src/components/overview/moneyFlowOptions.ts`:
 
 ```ts
 // Pure option builder for the Overview annual money-flow card (2026-08-25 spec §5) — no
@@ -1577,9 +1577,9 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/overview/moneyFlowOptions.test.ts` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/components/overview/moneyFlowOptions.test.ts` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(overview): money-flow sankey option builder"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(overview): money-flow sankey option builder"`
 
 ### Task 5: `MoneyFlowCard` — chips, chart, warnings, refusal note, inline retry
 
