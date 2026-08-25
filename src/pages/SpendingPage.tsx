@@ -689,7 +689,11 @@ export default function SpendingPage() {
             </div>
             {flowOption ? (
               <>
-                <EChart option={flowOption} height={320} />
+                <EChart
+                  option={flowOption}
+                  height={320}
+                  ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
+                />
                 <p className="drill-hint">
                   Hover a node to trace its flows; drill a month on the top chart and this
                   card follows it.
@@ -720,6 +724,7 @@ export default function SpendingPage() {
             <EChart
               option={heatmapOption}
               height={Math.max(332, (matrix?.categories.length ?? 0) * 24 + 142)}
+              ariaLabel="Heatmap of spend per category per month — darker is more"
               onHover={handleHeatmapHover}
               onHoverEnd={handleHeatmapHoverEnd}
             />

@@ -886,7 +886,7 @@ and the return statement becomes:
 - Modify: `src/pages/OverviewPage.tsx`, `src/pages/ProjectionPage.tsx`, `src/pages/SpendingPage.tsx`, `src/pages/PaycheckPage.tsx`, `src/components/portfolio/AllocationPanel.tsx`
 - Test: `src/pages/SpendingPage.test.tsx`, `src/pages/PaycheckPage.test.tsx` (page-level pins; EChart.test.tsx already pins the mechanism)
 
-- [ ] **Step 1: Write the failing page pins.** In `src/pages/SpendingPage.test.tsx`, extend the EChart mock to pass the label through — the mock's destructure and props type each gain `ariaLabel` and the created div gains the attribute:
+- [x] **Step 1: Write the failing page pins.** In `src/pages/SpendingPage.test.tsx`, extend the EChart mock to pass the label through — the mock's destructure and props type each gain `ariaLabel` and the created div gains the attribute:
 
 ```tsx
     default: ({
@@ -943,9 +943,9 @@ describe('SpendingPage — chart aria', () => {
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx src/pages/PaycheckPage.test.tsx` → the two new tests FAIL (no labels yet); everything else PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx src/pages/PaycheckPage.test.tsx` → the two new tests FAIL (no labels yet); everything else PASSES.
 
-- [ ] **Step 3: Apply all ten labels.** Each is one attribute added to an existing `<EChart …/>` mount — nothing else on the mount changes. Dynamic where cheap (a value already narrowed in the branch), static otherwise.
+- [x] **Step 3: Apply all ten labels.** Each is one attribute added to an existing `<EChart …/>` mount — nothing else on the mount changes. Dynamic where cheap (a value already narrowed in the branch), static otherwise.
 
   1. `src/pages/OverviewPage.tsx` — the three mounts become:
 
@@ -1002,9 +1002,9 @@ describe('SpendingPage — chart aria', () => {
 
   (The bar/pie/savings/trend charts on Spending and the rest of the app may opt in later — spec §4 item 6 names this exact minimum set.)
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx src/pages/PaycheckPage.test.tsx src/pages/OverviewPage.test.tsx src/pages/ProjectionPage.test.tsx` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx src/pages/PaycheckPage.test.tsx src/pages/OverviewPage.test.tsx src/pages/ProjectionPage.test.tsx` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): aria labels on overview, projection, spending, paycheck, allocation charts"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): aria labels on overview, projection, spending, paycheck, allocation charts"`
 
 ---
 
