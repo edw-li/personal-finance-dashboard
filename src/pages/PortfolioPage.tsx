@@ -16,7 +16,12 @@ import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
-import { buildEventMarkers, liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
+import {
+  buildEventMarkers,
+  liveFromHoldings,
+  portfolioHistoryCsv,
+  portfolioHistoryOption,
+} from '../components/portfolio/historyChartOptions'
 import HoldingDetailPanel from '../components/portfolio/HoldingDetailPanel'
 import HoldingsTable from '../components/portfolio/HoldingsTable'
 import RealizedPanel from '../components/portfolio/RealizedPanel'
@@ -364,13 +369,17 @@ export default function PortfolioPage() {
               </h2>
               {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
             </div>
-            {performanceOption ? (
+            {performanceOption && history ? (
               <>
                 <EChart
                   option={performanceOption}
                   height={300}
                   onLegendChange={onLegendChange}
                   onDataZoom={onZoomWindow}
+                  exportConfig={{
+                    name: 'portfolio-performance',
+                    csv: () => portfolioHistoryCsv(history),
+                  }}
                 />
                 {/* Two benchmark legs, one distinction: the baseline invests only the
                     STARTING balance; the contribution-matched line adds every inferred

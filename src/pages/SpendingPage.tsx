@@ -11,7 +11,10 @@ import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
 import BudgetPanel from '../components/spending/BudgetPanel'
 import { budgetStepSeries } from '../components/spending/budgetChartOptions'
-import { spendingBarsTooltipFormatter } from '../components/spending/spendingChartOptions'
+import {
+  spendingBarsTooltipFormatter,
+  spendingCsv,
+} from '../components/spending/spendingChartOptions'
 import {
   spendingFlowPeriod,
   spendingSankeyOption,
@@ -642,7 +645,7 @@ export default function SpendingPage() {
                 <div className="empty-note">No spending recorded for {detailLabel}.</div>
               )}
             </>
-          ) : barsOption ? (
+          ) : barsOption && matrix ? (
             <>
               <p className="drill-hint">Click a month's bar to expand its breakdown.</p>
               <EChart
@@ -652,6 +655,7 @@ export default function SpendingPage() {
                 instanceRef={barsChartRef}
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
               />
             </>
           ) : (

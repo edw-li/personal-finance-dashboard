@@ -9,7 +9,7 @@ import type { DividendOut, SecurityOut } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { todayIso } from '../../utils/months'
-import { incomeStats, monthlyIncomeOption } from './dividendChartOptions'
+import { incomeStats, monthlyIncomeCsv, monthlyIncomeOption } from './dividendChartOptions'
 import './portfolio.css'
 
 interface FormState {
@@ -186,7 +186,13 @@ export default function DividendsPanel({
               hint="Each holding's trailing-12-month dividend rate × shares held, summed."
             />
           </div>
-          {chart && <EChart option={chart} height={220} />}
+          {chart && (
+            <EChart
+              option={chart}
+              height={220}
+              exportConfig={{ name: 'dividends', csv: () => monthlyIncomeCsv(dividends, todayIso()) }}
+            />
+          )}
         </>
       )}
       {error && <div className="error-banner" role="alert">{error}</div>}

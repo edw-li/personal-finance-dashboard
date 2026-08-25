@@ -9,6 +9,7 @@ import InfoHint from '../components/InfoHint'
 import { fitPolyTrend } from '../components/projection/polyTrend'
 import {
   netWorthProjectionOption,
+  projectionCsv,
   projectionOption,
 } from '../components/projection/projectionChartOptions'
 import StatTile from '../components/StatTile'
@@ -412,8 +413,12 @@ export default function ProjectionPage() {
                 Projected investable balance
                 <InfoHint text="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes." />
               </h2>
-              {chart ? (
-                <EChart option={chart} height={340} />
+              {chart && data ? (
+                <EChart
+                  option={chart}
+                  height={340}
+                  exportConfig={{ name: 'projection', csv: () => projectionCsv(data) }}
+                />
               ) : (
                 <p className="empty-note">Nothing to chart at this horizon.</p>
               )}

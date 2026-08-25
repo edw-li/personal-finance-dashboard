@@ -181,6 +181,12 @@ describe('SpendingPage — tooltip fixes', () => {
     expect(samples).toContain('35.0%') // the savings chart's valueFormatter, sampled at 0.35
     expect(samples).not.toContain('+35.0%')
   })
+
+  it('opts the bars chart into the export menu as "spending"', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(screen.getAllByTestId('echart')[0].getAttribute('data-export-name')).toBe('spending')
+  })
 })
 
 describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {

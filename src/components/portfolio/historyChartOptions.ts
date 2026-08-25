@@ -5,6 +5,7 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { INK, MUTED, PALETTE } from '../../charts/theme'
 import type { DividendOut, HoldingsTotals, PortfolioHistory, TransactionOut } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import {
   escapeHtml,
   formatCurrency,

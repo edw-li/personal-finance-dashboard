@@ -10,6 +10,7 @@ import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
 import {
   NOTES_SERIES,
+  netWorthCsv,
   netWorthStackedTooltipFormatter,
 } from '../components/networth/netWorthChartOptions'
 import type { EChartsOption } from '../charts/echarts'
@@ -368,12 +369,13 @@ export default function NetWorthPage() {
               </div>
             </div>
           </div>
-          {stackedOption ? (
+          {stackedOption && data ? (
             <EChart
               option={stackedOption}
               height={360}
               onLegendChange={onLegendChange}
               onDataZoom={onZoomWindow}
+              exportConfig={{ name: 'net-worth', csv: () => netWorthCsv(data) }}
             />
           ) : (
             !loading &&

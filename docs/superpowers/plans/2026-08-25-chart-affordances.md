@@ -2370,7 +2370,7 @@ export function projectionCsv(
 
 The six names, fixed here and used verbatim: `spending`, `net-worth`, `portfolio-performance`, `dividends`, `tax-trend`, `projection`. Each `csv` closure needs its payload narrowed non-null, so four render branches gain an `&& <payload>` guard — the guard is always already true when the option is non-null.
 
-- [ ] **Step 1: Write the failing page pin** — append to the export describe-less end of `src/pages/SpendingPage.test.tsx` (inside the `tooltip fixes` describe or its own):
+- [x] **Step 1: Write the failing page pin** — append to the export describe-less end of `src/pages/SpendingPage.test.tsx` (inside the `tooltip fixes` describe or its own):
 
 ```tsx
 it('opts the bars chart into the export menu as "spending"', async () => {
@@ -2382,7 +2382,7 @@ it('opts the bars chart into the export menu as "spending"', async () => {
 
 Run: `npx vitest run src/pages/SpendingPage.test.tsx` → the new test FAILS (attr empty).
 
-- [ ] **Step 2: Wire all six.**
+- [x] **Step 2: Wire all six.**
   1. `src/pages/SpendingPage.tsx` — import `spendingCsv` (extend the spendingChartOptions import); change the bars branch condition `) : barsOption ? (` to `) : barsOption && matrix ? (` and add to the bars `<EChart …>`:
 ```tsx
                 exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
@@ -2433,9 +2433,9 @@ Run: `npx vitest run src/pages/SpendingPage.test.tsx` → the new test FAILS (at
 ```
   (only the six spec'd charts opt in — pies, heatmap, sankeys, sparks and the drill/trend siblings deliberately stay menu-less; others may opt in later.)
 
-- [ ] **Step 3: Run** — `npx vitest run` → ALL PASS (page tests mock EChart and ignore the new prop; the SpendingPage pin now passes); `npx tsc -b` → clean.
+- [x] **Step 3: Run** — `npx vitest run` → ALL PASS (page tests mock EChart and ignore the new prop; the SpendingPage pin now passes); `npx tsc -b` → clean.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): opt six charts into the export menu with real CSVs"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): opt six charts into the export menu with real CSVs"`
 
 ### Task 16: Zoom captions on every inside-zoom card
 

@@ -8,7 +8,7 @@ import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type { TaxSummaryOut } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
-import { trendOption, waterfallOption, yearPieOption } from './taxChartOptions'
+import { taxTrendCsv, trendOption, waterfallOption, yearPieOption } from './taxChartOptions'
 // Only this component's own sheet, like its two siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.empty-note/.error-banner) is panels.css, which the PAGE
 // imports — and StatTile brings it along regardless.
@@ -207,10 +207,15 @@ export default function SummaryPanel({
               <p className="empty-note">No tax computed for {detailSummary.year}.</p>
             )}
           </>
-        ) : trend ? (
+        ) : trend && years ? (
           <>
             <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
-            <EChart option={trend} height={320} onClick={handleTrendClick} />
+            <EChart
+              option={trend}
+              height={320}
+              onClick={handleTrendClick}
+              exportConfig={{ name: 'tax-trend', csv: () => taxTrendCsv(years) }}
+            />
           </>
         ) : (
           !error && (
