@@ -30,6 +30,7 @@ def _compose(start, end, **over):
         offerings=[],
         unsold_lots=[],
         announced_ex_divs=[],
+        custom_rows=[],
         payday_semi_monthly=False,
         missing_update_month=None,
     )
@@ -220,3 +221,25 @@ def test_update_due_absent_when_entered_or_out_of_range():
     # Missing, but the requested window excludes today: no reminder either.
     later = _compose(date(2026, 9, 1), date(2026, 10, 31), missing_update_month=date(2026, 7, 1))
     assert _of_type(later, "update_due") == []
+
+
+def test_custom_rows_render_and_clip():
+    events = _of_type(
+        _compose(
+            date(2026, 9, 1),
+            date(2026, 9, 30),
+            custom_rows=[
+                (7, date(2026, 9, 12), "Car insurance renewal", "policy 8841"),
+                (8, date(2026, 10, 2), "Out of range", None),
+            ],
+        ),
+        "custom",
+    )
+    assert [(e.event_date, e.label, e.detail, e.href, e.event_id) for e in events] == [
+        (date(2026, 9, 12), "Car insurance renewal", "policy 8841", None, 7)
+    ]
+
+
+def test_computed_events_carry_no_event_id():
+    events = _compose(date(2026, 1, 1), date(2026, 12, 31), payday_semi_monthly=True)
+    assert events and all(e.event_id is None for e in events)

@@ -23,7 +23,7 @@ from app.services.espp_calc import OfferingInfo, StoredPeriod, plan_year_rows
 logger = logging.getLogger(__name__)
 
 # Wire vocabulary, pinned once: schemas/calendar.py's Literal and the frontend's
-# CalendarEventType both spell exactly these eight.
+# CalendarEventType both spell exactly these nine.
 EVENT_TYPES = (
     "rsu_vest",
     "espp_purchase",
@@ -33,6 +33,7 @@ EVENT_TYPES = (
     "offering_start",
     "tax_deadline",
     "update_due",
+    "custom",
 )
 
 _MONTH_NAMES = (
@@ -61,7 +62,8 @@ class CalendarEvent:
     type: str  # one of EVENT_TYPES
     label: str
     detail: str | None
-    href: str
+    href: str | None  # None for custom events — no page owns them (spec §9.3)
+    event_id: int | None = None  # custom rows only: the frontend's edit/delete handle
 
 
 def compose(
@@ -74,6 +76,7 @@ def compose(
     offerings: list[OfferingInfo],
     unsold_lots: list[tuple[date, date]],  # (purchase_date, qualifying_date)
     announced_ex_divs: list[tuple[str, date]],  # (ticker, next_ex_div_date), HELD only
+    custom_rows: list[tuple[int, date, str, str | None]],  # (id, event_date, label, detail)
     payday_semi_monthly: bool,
     missing_update_month: date | None,  # prev month's 1st when it lacks a snapshot
 ) -> list[CalendarEvent]:
@@ -222,6 +225,22 @@ def compose(
                     label="Monthly update due",
                     detail=f"Enter {month_name} {missing_update_month.year}",
                     href="/update",
+                )
+            )
+
+    # custom — user-entered informational rows (spec §9.3). No page owns them: href is
+    # None and the id rides along so the frontend can edit/delete. The router loads only
+    # rows in range; the clip keeps compose total over its inputs regardless.
+    for event_id, event_date, label, detail in custom_rows:
+        if in_range(event_date):
+            events.append(
+                CalendarEvent(
+                    event_date=event_date,
+                    type="custom",
+                    label=label,
+                    detail=detail,
+                    href=None,
+                    event_id=event_id,
                 )
             )
 
