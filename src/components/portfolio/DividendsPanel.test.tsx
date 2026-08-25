@@ -221,12 +221,12 @@ describe('DividendsPanel editing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit this dividend' }))
     // A FAILED delete leaves the row standing, so the edit session must survive it.
     vi.mocked(deleteDividend).mockRejectedValueOnce(new Error('network'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
     await waitFor(() => expect(screen.getByText('Delete failed')).toBeTruthy())
     expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy()
     expect(onChanged).not.toHaveBeenCalled()
     // The successful one takes the row away — a stale editingId would PATCH a 404 next save.
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: /add dividend/i })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
@@ -244,7 +244,7 @@ describe('DividendsPanel editing', () => {
         />
       </ToastProvider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     expect(screen.getByText('Deleted the NVDA dividend paid Dec 15, 2025')).toBeTruthy()
 
@@ -261,6 +261,28 @@ describe('DividendsPanel editing', () => {
       }),
     )
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
+  })
+
+  it('offers NO Undo on an auto row — an undo would double-count the next refresh', async () => {
+    const onChanged = vi.fn()
+    render(
+      <ToastProvider>
+        <DividendsPanel
+          securities={securities}
+          dividends={[AUTO]}
+          annualIncome="432.10"
+          onChanged={onChanged}
+        />
+      </ToastProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    // The receipt still lands — only the offer is withheld: an undone auto row re-enters
+    // as 'manual' and the next refresh re-adds its auto twin on top (double-counted
+    // income). The ingest self-heals, so the row comes back on its own next run.
+    expect(screen.getByText('Deleted the NVDA dividend paid Jun 19, 2026')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+    expect(createDividend).not.toHaveBeenCalled()
   })
 })
 
@@ -320,14 +342,16 @@ describe('DividendsPanel entry session', () => {
     // mid-flight Edit would have its seed wiped by the reset that lands afterwards — the
     // row buttons are simply shut for the duration (TransactionsPanel's rule).
     fireEvent.click(screen.getByRole('button', { name: 'Edit this dividend' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this dividend' }))
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
     // Still the typed row, not the ledger row's 2025-12-15 seed.
     expect((screen.getByLabelText(/pay date/i) as HTMLInputElement).value).toBe('2026-08-03')
     expect(
       (screen.getByRole('button', { name: 'Edit this dividend' }) as HTMLButtonElement).disabled,
     ).toBe(true)
-    expect((screen.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      (screen.getByRole('button', { name: 'Delete this dividend' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
   })
 
   it('drops the kept cue when the security changes', async () => {

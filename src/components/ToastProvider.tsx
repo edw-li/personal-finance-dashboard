@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { ReactNode } from 'react'
 import './toast.css'
 
@@ -43,8 +51,13 @@ export function useToast(): ToastApi {
 export default function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastEntry[]>([])
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
-  const paused = useRef(false)
+  // TWO latches, ORed into "paused", never one shared flag: the pointer and the keyboard
+  // hold the clock for different reasons, so a pointer leaving a region the keyboard is
+  // still inside must not start the countdown under the user's hands.
+  const hoverPaused = useRef(false)
+  const focusPaused = useRef(false)
   const nextId = useRef(1)
+  const regionRef = useRef<HTMLDivElement>(null)
 
   const dismiss = useCallback((id: number) => {
     const timer = timers.current.get(id)
@@ -71,8 +84,9 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
       const id = nextId.current
       nextId.current += 1
       setToasts((current) => [...current, { id, variant, message, action: options?.action }])
-      // Born under the pointer = not armed yet; resume() below re-arms every survivor.
-      if (!paused.current) arm(id)
+      // Born under the pointer or under keyboard focus = not armed yet; the release paths
+      // below re-arm every survivor once the last latch lets go.
+      if (!hoverPaused.current && !focusPaused.current) arm(id)
     },
     [arm],
   )
@@ -88,18 +102,31 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
     [push],
   )
 
-  // Pause on hover/focus; resume re-arms a FULL window rather than a remainder —
-  // "I was reading this" earns a fresh clock, and no per-toast stopwatch bookkeeping.
-  const pause = () => {
-    paused.current = true
+  const holdTimers = () => {
     for (const timer of timers.current.values()) clearTimeout(timer)
     timers.current.clear()
   }
 
-  const resume = () => {
-    paused.current = false
+  // Releasing re-arms a FULL window rather than a remainder — "I was reading this" earns
+  // a fresh clock, and no per-toast stopwatch bookkeeping. A no-op while the OTHER latch
+  // still holds.
+  const releaseTimers = () => {
+    if (hoverPaused.current || focusPaused.current) return
     for (const toast of toasts) arm(toast.id)
   }
+
+  // Activating Undo or Dismiss unmounts the very button that holds the focus latch, and
+  // browsers fire NO focusout for a removed node — so onBlur never runs and the latch
+  // would wedge true, leaving every LATER toast born unarmed and immortal. Re-checking
+  // containment here (an effect, after the removal) is the only reliable release: in the
+  // click handler the button is still mounted and still focused.
+  useEffect(() => {
+    if (!focusPaused.current) return
+    const region = regionRef.current
+    if (region !== null && region.contains(document.activeElement)) return
+    focusPaused.current = false
+    if (!hoverPaused.current) for (const toast of toasts) arm(toast.id)
+  }, [toasts, arm])
 
   return (
     <ToastContext.Provider value={api}>
@@ -107,12 +134,25 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
       {/* Always mounted: a live region must exist BEFORE content lands, or screen
           readers miss the first announcement. */}
       <div
+        ref={regionRef}
         className="toast-region"
         aria-live="polite"
-        onMouseEnter={pause}
-        onMouseLeave={resume}
-        onFocus={pause}
-        onBlur={resume}
+        onMouseEnter={() => {
+          hoverPaused.current = true
+          holdTimers()
+        }}
+        onMouseLeave={() => {
+          hoverPaused.current = false
+          releaseTimers()
+        }}
+        onFocus={() => {
+          focusPaused.current = true
+          holdTimers()
+        }}
+        onBlur={() => {
+          focusPaused.current = false
+          releaseTimers()
+        }}
       >
         {toasts.map((toast) => {
           const action = toast.action

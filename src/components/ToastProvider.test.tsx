@@ -106,6 +106,39 @@ describe('ToastProvider', () => {
     expect(screen.queryByText('Deleted the NVDA buy')).toBeNull()
   })
 
+  // The focus latch's release path. Browsers fire no focusout for a node that is REMOVED
+  // while focused, so activating Undo (or Dismiss) by keyboard used to wedge the pause on
+  // forever: every later toast was born unarmed and never auto-dismissed.
+  it('re-arms after a keyboard Undo removes the focused button', () => {
+    const onUndo = vi.fn()
+    renderHost(onUndo)
+    fireEvent.click(screen.getByText('fire success'))
+    const undo = screen.getByRole('button', { name: 'Undo' })
+    undo.focus()
+    expect(region().contains(document.activeElement)).toBe(true)
+    fireEvent.click(undo)
+    expect(onUndo).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByText('fire error'))
+    act(() => {
+      vi.advanceTimersByTime(6000)
+    })
+    expect(screen.queryByText('Save failed')).toBeNull()
+  })
+
+  it('keeps the clock held when the pointer leaves but focus is still inside', () => {
+    renderHost(vi.fn())
+    fireEvent.click(screen.getByText('fire success'))
+    fireEvent.mouseOver(region())
+    screen.getByRole('button', { name: 'Undo' }).focus()
+    // Pointer gone, keyboard still parked on Undo: the countdown must NOT restart.
+    fireEvent.mouseOut(region())
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(screen.getByText('Deleted the NVDA buy')).toBeTruthy()
+  })
+
   it('carries the error variant and a manual dismiss', () => {
     renderHost()
     fireEvent.click(screen.getByText('fire error'))

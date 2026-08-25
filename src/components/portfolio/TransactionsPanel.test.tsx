@@ -87,7 +87,7 @@ describe('TransactionsPanel', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
     expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this buy' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     // Back to create mode: a stale editingId would PATCH the deleted id on the next save.
     expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
@@ -185,7 +185,7 @@ describe('TransactionsPanel', () => {
         />
       </ToastProvider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this buy' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     expect(screen.getByText('Deleted the NVDA buy')).toBeTruthy()
 
@@ -384,7 +384,7 @@ describe('TransactionsPanel entry session', () => {
     // mid-flight Duplicate the same) — the row buttons are simply shut for the duration.
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('button', { name: 'Duplicate this buy' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this buy' }))
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
     // Still the typed row, not the ledger row's 'Schwab' seed.
     expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('Robinhood')
@@ -392,7 +392,9 @@ describe('TransactionsPanel entry session', () => {
     expect(
       (screen.getByRole('button', { name: 'Duplicate this buy' }) as HTMLButtonElement).disabled,
     ).toBe(true)
-    expect((screen.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      (screen.getByRole('button', { name: 'Delete this buy' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
   })
 
   it('a successful edit still resets the whole form — carry-forward is create-only', async () => {

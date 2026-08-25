@@ -139,8 +139,17 @@ export default function DividendsPanel({
 
   const remove = (dividend: DividendOut) => {
     const ticker = tickers.get(dividend.security_id) ?? '?'
+    // An UNDONE auto row would come back as 'manual', and the next refresh would re-add
+    // its auto twin on top — the same payment counted twice. The ingest already self-heals
+    // ("a delete comes back next run", types/api.ts DividendOut), so an auto row's toast
+    // is a receipt, not an offer. Manual rows are the user's alone and keep Undo.
+    const undoable = dividend.source !== 'auto'
     // Instant + Undo (2026-08-25 polish §8) — the confirm interrupt is gone; Undo
     // re-POSTs the captured payment (new id, and always source 'manual', by design).
+    // busy for the duration (RsuGrantsPanel's posture): without the confirm dialog to
+    // absorb it, a double-click would fire a second DELETE on the same id and drop a 404
+    // into the error banner beside the success toast.
+    setBusy(true)
     deleteDividend(dividend.id)
       .then(() => {
         // The edited row is gone — a stale editingId would PATCH a 404 on the next save
@@ -153,26 +162,32 @@ export default function DividendsPanel({
         // The ledger just changed under the cue — whatever entry session it narrated is over.
         setKept(false)
         onChanged()
-        toast.success(`Deleted the ${ticker} dividend paid ${formatDate(dividend.pay_date)}`, {
-          action: {
-            label: 'Undo',
-            onAction: () => {
-              createDividend({
-                security_id: dividend.security_id,
-                account: dividend.account,
-                pay_date: dividend.pay_date,
-                amount: dividend.amount,
-                notes: dividend.notes,
-              })
-                .then(() => onChanged())
-                .catch(() => toast.error(`Could not restore the ${ticker} dividend`))
-            },
-          },
-        })
+        toast.success(
+          `Deleted the ${ticker} dividend paid ${formatDate(dividend.pay_date)}`,
+          undoable
+            ? {
+                action: {
+                  label: 'Undo',
+                  onAction: () => {
+                    createDividend({
+                      security_id: dividend.security_id,
+                      account: dividend.account,
+                      pay_date: dividend.pay_date,
+                      amount: dividend.amount,
+                      notes: dividend.notes,
+                    })
+                      .then(() => onChanged())
+                      .catch(() => toast.error(`Could not restore the ${ticker} dividend`))
+                  },
+                },
+              }
+            : undefined,
+        )
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Delete failed')
       })
+      .finally(() => setBusy(false))
   }
 
   return (
@@ -316,9 +331,11 @@ export default function DividendsPanel({
                     or worse, a PATCH aimed at whatever editingId the closure still holds.
                     Shutting the row for the duration of a save is the cheap fix. */}
                 <td className="row-actions">
-                  {/* aria-label: a row button named just "Edit" tells a screen-reader user
-                      nothing about what it edits. Delete keeps its bare name — its
-                      confirm() sentence names the row before anything happens. */}
+                  {/* aria-label: a row button named just "Edit"/"Delete" tells a
+                      screen-reader user nothing about what it acts on. Delete needs it
+                      MORE since the delete went instant (2026-08-25 polish §8): the
+                      confirm() sentence that used to name the row before anything
+                      happened is gone, so the button is the last chance to say it. */}
                   <button
                     type="button"
                     disabled={busy}
@@ -327,7 +344,14 @@ export default function DividendsPanel({
                   >
                     Edit
                   </button>
-                  <button type="button" disabled={busy} onClick={() => remove(d)}>Delete</button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label="Delete this dividend"
+                    onClick={() => remove(d)}
+                  >
+                    Delete
+                  </button>
                 </td>
               </tr>
             ))}
