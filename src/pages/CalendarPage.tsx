@@ -51,6 +51,7 @@ export default function CalendarPage() {
   useEffect(() => {
     load(month)
     // mount-only: month changes call load directly (EsppPage's selectYear pattern)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const showMonth = (next: string) => {
