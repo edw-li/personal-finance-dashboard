@@ -20,6 +20,7 @@ from app.api import (
     prices,
     projection,
     spending,
+    system,
     taxes,
 )
 from app.config import settings
@@ -84,6 +85,7 @@ app.include_router(comp.router, prefix="/api/v1")
 app.include_router(calendar.router, prefix="/api/v1")
 app.include_router(projection.router, prefix="/api/v1")
 app.include_router(app_settings.router, prefix="/api/v1")
+app.include_router(system.router, prefix="/api/v1")
 
 
 @app.get("/api/v1/health")

@@ -50,11 +50,10 @@ async def refresh(db: AsyncSession = Depends(get_db)) -> RefreshOut:
     )
 
 
-@router.get("/refresh-status", response_model=RefreshStatusOut)
-async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut:
-    """What happened last and what happens next — the header line's and the attention
-    strip's feed. The stored payload is convention-shaped JSON; anything malformed reads
-    as 'no run recorded' rather than a 500 (get_swr_pct's fallback posture)."""
+async def compose_refresh_status(db: AsyncSession) -> RefreshStatusOut:
+    """One composition, two doors (2026-08-25 spec §3): /prices/refresh-status keeps
+    serving this, and /system/status embeds it as `prices` — extracted rather than
+    duplicated so the actionability filtering below can never drift between the two."""
     raw = await read_last_refresh(db)
     last: LastRefreshOut | None = None
     if raw is not None:
@@ -90,6 +89,14 @@ async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut
             }
         )
     return RefreshStatusOut(last=last, next_run_at=get_next_run_time())
+
+
+@router.get("/refresh-status", response_model=RefreshStatusOut)
+async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut:
+    """What happened last and what happens next — the header line's and the attention
+    strip's feed. The stored payload is convention-shaped JSON; anything malformed reads
+    as 'no run recorded' rather than a 500 (get_swr_pct's fallback posture)."""
+    return await compose_refresh_status(db)
 
 
 async def _security_by_ticker(db: AsyncSession, ticker: str) -> Security:

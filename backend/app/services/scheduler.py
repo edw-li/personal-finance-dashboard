@@ -4,8 +4,8 @@ America/Los_Angeles (the spec's '13:10 PT weekdays'). The job owns its DB sessio
 Started from the FastAPI lifespan when settings.scheduler_enabled — pytest's
 ASGITransport never runs the lifespan (plan probe 7), so tests never start it. The
 module keeps a handle on the running scheduler so the settings router can hot-apply a
-saved cron and the status endpoint can name the next run; both degrade to no-op/None
-when nothing is running."""
+saved cron and the status endpoints can name the next run and report whether it is
+running; all degrade to no-op/None/False when nothing is running."""
 
 import logging
 from datetime import date, datetime, timedelta
@@ -28,7 +28,7 @@ JOB_ID = "price_refresh"
 CATCHUP_JOB_ID = "price_refresh_catchup"
 CATCHUP_DELAY_SECONDS = 10
 
-# The running scheduler, if any — set by start_scheduler, read by the two accessors.
+# The running scheduler, if any — set by start_scheduler, read by the accessors below.
 _scheduler: AsyncIOScheduler | None = None
 
 
@@ -66,6 +66,14 @@ def get_next_run_time() -> datetime | None:
         return None
     job = _scheduler.get_job(JOB_ID)
     return job.next_run_time if job is not None else None
+
+
+def is_scheduler_running() -> bool:
+    """Whether the in-process scheduler is up — the system-status endpoint's flag
+    (2026-08-25 spec §3). False when no handle exists (tests, SCHEDULER_ENABLED=0)
+    AND when a held handle has been shut down: APScheduler's own .running is the
+    judge, not the handle's presence."""
+    return _scheduler is not None and bool(_scheduler.running)
 
 
 def reschedule_price_refresh(cron: str) -> bool:

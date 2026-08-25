@@ -48,7 +48,7 @@ NOT touched, on purpose: `src/api/prices.ts` (`fetchRefreshStatus` stays), `src/
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the branch and a clean tree.**
+- [x] **Step 1: Confirm the branch and a clean tree.**
 
 ```bash
 git status --porcelain   # expected: EMPTY output
@@ -57,12 +57,12 @@ git rev-parse --abbrev-ref HEAD   # expected: system-status
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup.
 
-- [ ] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
+- [x] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
 
 Run: `cd backend && .venv/Scripts/python -m pytest tests/test_health.py -q`
 Expected: PASS. If it errors on connection, bring the container up (`cd backend && docker compose up -d db`) and retry once; if it still fails, read `backend/app/config.py` for the dev DATABASE_URL default before proceeding — do not guess.
 
-- [ ] **Step 3: Frontend smoke.**
+- [x] **Step 3: Frontend smoke.**
 
 Run: `npx vitest run src/utils/months.test.ts` → PASS.
 
@@ -76,7 +76,7 @@ Run: `npx vitest run src/utils/months.test.ts` → PASS.
 - Modify: `backend/app/services/scheduler.py`
 - Test: `backend/tests/test_scheduler.py`
 
-- [ ] **Step 1: Write the failing test.** In `backend/tests/test_scheduler.py`, extend the `from app.services.scheduler import (...)` block with `is_scheduler_running,` (alphabetical: after `get_next_run_time`). Append:
+- [x] **Step 1: Write the failing test.** In `backend/tests/test_scheduler.py`, extend the `from app.services.scheduler import (...)` block with `is_scheduler_running,` (alphabetical: after `get_next_run_time`). Append:
 
 ```python
 def test_is_scheduler_running_tracks_the_module_handle(monkeypatch):
@@ -96,9 +96,9 @@ def test_is_scheduler_running_tracks_the_module_handle(monkeypatch):
     assert is_scheduler_running() is False
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_scheduler.py -q` → FAIL (`ImportError: cannot import name 'is_scheduler_running'`).
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_scheduler.py -q` → FAIL (`ImportError: cannot import name 'is_scheduler_running'`).
 
-- [ ] **Step 3: Implement.** In `backend/app/services/scheduler.py`, insert directly below `get_next_run_time` (re-read the file first — do not place by line number):
+- [x] **Step 3: Implement.** In `backend/app/services/scheduler.py`, insert directly below `get_next_run_time` (re-read the file first — do not place by line number):
 
 ```python
 def is_scheduler_running() -> bool:
@@ -111,9 +111,9 @@ def is_scheduler_running() -> bool:
 
 Also update the module docstring's last sentence from "…so the settings router can hot-apply a saved cron and the status endpoint can name the next run; both degrade to no-op/None when nothing is running." to "…so the settings router can hot-apply a saved cron and the status endpoints can name the next run and report whether it is running; all degrade to no-op/None/False when nothing is running."
 
-- [ ] **Step 4: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_scheduler.py -q` → PASS.
+- [x] **Step 4: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_scheduler.py -q` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(system): is_scheduler_running accessor"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(system): is_scheduler_running accessor"`
 
 ### Task 2: Extract `compose_refresh_status()` — the old endpoint must not move
 
@@ -122,7 +122,7 @@ Pure extraction, zero behavior change: the existing `test_prices_api.py` suite I
 **Files:**
 - Modify: `backend/app/api/prices.py`
 
-- [ ] **Step 1: Extract.** In `backend/app/api/prices.py`, replace the whole `refresh_status` endpoint (currently the `@router.get("/refresh-status", ...)` decorator through its final `return RefreshStatusOut(...)`) with the pair below. The composition body moves VERBATIM — including the actionability comment — only the function boundary is new:
+- [x] **Step 1: Extract.** In `backend/app/api/prices.py`, replace the whole `refresh_status` endpoint (currently the `@router.get("/refresh-status", ...)` decorator through its final `return RefreshStatusOut(...)`) with the pair below. The composition body moves VERBATIM — including the actionability comment — only the function boundary is new:
 
 ```python
 async def compose_refresh_status(db: AsyncSession) -> RefreshStatusOut:
@@ -174,9 +174,9 @@ async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut
     return await compose_refresh_status(db)
 ```
 
-- [ ] **Step 2: Prove nothing moved** — `cd backend && .venv/Scripts/python -m pytest tests/test_prices_api.py -q` → ALL PASS (the empty-status, pre-feature-payload and deactivated-ticker-filter pins in particular).
+- [x] **Step 2: Prove nothing moved** — `cd backend && .venv/Scripts/python -m pytest tests/test_prices_api.py -q` → ALL PASS (the empty-status, pre-feature-payload and deactivated-ticker-filter pins in particular).
 
-- [ ] **Step 3: Commit** — `git add -A && git commit -m "refactor(prices): extract compose_refresh_status — endpoint behavior unchanged"`
+- [x] **Step 3: Commit** — `git add -A && git commit -m "refactor(prices): extract compose_refresh_status — endpoint behavior unchanged"`
 
 ### Task 3: System schemas + router + mount
 
@@ -184,7 +184,7 @@ async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut
 - Create: `backend/app/schemas/system.py`, `backend/app/api/system.py`, `backend/tests/test_system_api.py`
 - Modify: `backend/app/main.py`
 
-- [ ] **Step 1: Write the failing tests** — create `backend/tests/test_system_api.py`:
+- [x] **Step 1: Write the failing tests** — create `backend/tests/test_system_api.py`:
 
 ```python
 from datetime import UTC, datetime
@@ -317,9 +317,9 @@ async def test_system_scheduler_flag_reads_the_live_handle(auth_client, monkeypa
     assert (await auth_client.get(STATUS)).json()["prices"]["scheduler_running"] is True
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_system_api.py -q` → FAIL (404s on every authed call; the router does not exist).
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_system_api.py -q` → FAIL (404s on every authed call; the router does not exist).
 
-- [ ] **Step 3: Schemas.** Create `backend/app/schemas/system.py`:
+- [x] **Step 3: Schemas.** Create `backend/app/schemas/system.py`:
 
 ```python
 """System-status wire shapes (2026-08-25 spec §3). One rule shapes the nullables: the
@@ -365,7 +365,7 @@ class SystemStatusOut(BaseModel):
     environment: str
 ```
 
-- [ ] **Step 4: Router.** Create `backend/app/api/system.py`:
+- [x] **Step 4: Router.** Create `backend/app/api/system.py`:
 
 ```python
 """System-status vertical (2026-08-25 spec §3): one JWT-protected GET feeding the
@@ -436,17 +436,17 @@ async def system_status(db: AsyncSession = Depends(get_db)) -> SystemStatusOut:
     )
 ```
 
-- [ ] **Step 5: Mount.** In `backend/app/main.py`: add `system,` to the `from app.api import (...)` tuple (alphabetical: between `spending` and `taxes`), and add the include after the `app_settings.router` line:
+- [x] **Step 5: Mount.** In `backend/app/main.py`: add `system,` to the `from app.api import (...)` tuple (alphabetical: between `spending` and `taxes`), and add the include after the `app_settings.router` line:
 
 ```python
 app.include_router(system.router, prefix="/api/v1")
 ```
 
-- [ ] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_system_api.py tests/test_prices_api.py -q` → ALL PASS (the old endpoint's suite rides along as the no-drift pin).
+- [x] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_system_api.py tests/test_prices_api.py -q` → ALL PASS (the old endpoint's suite rides along as the no-drift pin).
 
-- [ ] **Step 7: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or commit them).
+- [x] **Step 7: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or commit them).
 
-- [ ] **Step 8: Commit** — `git add -A && git commit -m "feat(system): GET /system/status — prices+scheduler+database+backup+environment"`
+- [x] **Step 8: Commit** — `git add -A && git commit -m "feat(system): GET /system/status — prices+scheduler+database+backup+environment"`
 
 ### Task 4: `backup_db.sh` — record the marker (review-only; no shell harness exists)
 
@@ -455,7 +455,7 @@ This repo has NO shell test harness, so this change is verified by eyeball plus 
 **Files:**
 - Modify: `backend/scripts/backup_db.sh`
 
-- [ ] **Step 1: Insert the marker upsert.** In `backend/scripts/backup_db.sh`, directly after the `PYEOF` line and before the `# Clean up local dump` comment, insert:
+- [x] **Step 1: Insert the marker upsert.** In `backend/scripts/backup_db.sh`, directly after the `PYEOF` line and before the `# Clean up local dump` comment, insert:
 
 ```bash
 # Record the successful upload for the dashboard's System card (2026-08-25 spec §3):
@@ -480,11 +480,11 @@ PGPASSWORD="${POSTGRES_PASSWORD}" psql \
 
 (`POSTGRES_PASSWORD` is safe under `set -u` here: the `pg_dump` line above already expanded it unguarded, so the script cannot reach this point without it. `ON CONFLICT (key)` targets `app_settings`' primary key.)
 
-- [ ] **Step 2: Review pass.** Re-read the whole script top to bottom and confirm: (a) the block sits between the upload heredoc and the cleanup, (b) nothing else moved, (c) the `|| echo` is attached to the `psql` compound command so `set -e` cannot trip on a marker failure.
+- [x] **Step 2: Review pass.** Re-read the whole script top to bottom and confirm: (a) the block sits between the upload heredoc and the cleanup, (b) nothing else moved, (c) the `|| echo` is attached to the `psql` compound command so `set -e` cannot trip on a marker failure.
 
-- [ ] **Step 3: Syntax check** — `bash -n backend/scripts/backup_db.sh` → exit code 0, no output. That is the whole automated verification available; there is no shell test to write.
+- [x] **Step 3: Syntax check** — `bash -n backend/scripts/backup_db.sh` → exit code 0, no output. That is the whole automated verification available; there is no shell test to write.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(backup): record backup_status marker in app_settings after upload"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(backup): record backup_status marker in app_settings after upload"`
 
 ---
 
@@ -498,7 +498,7 @@ Purely additive — nothing consumes these yet, so no fixture repairs in this ta
 - Modify: `src/types/api.ts`
 - Create: `src/api/system.ts`
 
-- [ ] **Step 1: types/api.ts.** Insert directly AFTER the existing `RefreshStatus` interface (it extends it — keep them adjacent):
+- [x] **Step 1: types/api.ts.** Insert directly AFTER the existing `RefreshStatus` interface (it extends it — keep them adjacent):
 
 ```ts
 // GET /system/status — the Settings System card's and the Overview snapshot's feed: the
@@ -531,7 +531,7 @@ export interface SystemStatus {
 }
 ```
 
-- [ ] **Step 2: Client.** Create `src/api/system.ts`:
+- [x] **Step 2: Client.** Create `src/api/system.ts`:
 
 ```ts
 import { api } from './client'
@@ -544,9 +544,9 @@ export function fetchSystemStatus(): Promise<SystemStatus> {
 }
 ```
 
-- [ ] **Step 3: Verify** — `npx tsc -b` → clean.
+- [x] **Step 3: Verify** — `npx tsc -b` → clean.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(system): SystemStatus wire types + fetchSystemStatus client"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(system): SystemStatus wire types + fetchSystemStatus client"`
 
 ### Task 6: Shared clocks — `backupAge` + `formatBytes`
 
@@ -554,7 +554,7 @@ export function fetchSystemStatus(): Promise<SystemStatus> {
 - Modify: `src/utils/staleness.ts`, `src/utils/format.ts`
 - Test: `src/utils/staleness.test.ts`, `src/utils/format.test.ts`
 
-- [ ] **Step 1: Write the failing tests.** Append to `src/utils/staleness.test.ts` (extend its import line to `import { STALE_AFTER_DAYS, backupAge, isStaleQuote } from './staleness'`):
+- [x] **Step 1: Write the failing tests.** Append to `src/utils/staleness.test.ts` (extend its import line to `import { STALE_AFTER_DAYS, backupAge, isStaleQuote } from './staleness'`):
 
 ```ts
 describe('backupAge', () => {
@@ -603,9 +603,9 @@ describe('formatBytes', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/utils/staleness.test.ts src/utils/format.test.ts` → FAIL (no exported `backupAge` / `formatBytes`).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/utils/staleness.test.ts src/utils/format.test.ts` → FAIL (no exported `backupAge` / `formatBytes`).
 
-- [ ] **Step 3: Implement.** Append to `src/utils/staleness.ts`:
+- [x] **Step 3: Implement.** Append to `src/utils/staleness.ts`:
 
 ```ts
 // Nightly-backup staleness — ONE copy for the Settings System card (amber tone, red
@@ -646,9 +646,9 @@ export function formatBytes(bytes: number): string {
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/utils/staleness.test.ts src/utils/format.test.ts` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/utils/staleness.test.ts src/utils/format.test.ts` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(system): backupAge staleness clock + formatBytes"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(system): backupAge staleness clock + formatBytes"`
 
 ### Task 7: The Settings System card
 
@@ -656,7 +656,7 @@ export function formatBytes(bytes: number): string {
 - Create: `src/components/settings/SystemCard.tsx`, `src/components/settings/SystemCard.test.tsx`
 - Modify: `src/components/settings/settings.css`, `src/pages/SettingsPage.tsx`, `src/pages/SettingsPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/settings/SystemCard.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/settings/SystemCard.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -796,9 +796,9 @@ it('shows the load failure verbatim and retries into the rows', async () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/settings/SystemCard.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/settings/SystemCard.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement the card** — create `src/components/settings/SystemCard.tsx`:
+- [x] **Step 3: Implement the card** — create `src/components/settings/SystemCard.tsx`:
 
 ```tsx
 import { useEffect, useRef, useState } from 'react'
@@ -941,7 +941,7 @@ export default function SystemCard() {
 
 (A failed RELOAD keeps the previous facts hidden behind the banner rather than beside it — `!error &&` — because unlike Overview's charts these rows claim to be "now", and a stale "Running" next to a failure banner is a lie about the present.)
 
-- [ ] **Step 4: CSS.** Append to `src/components/settings/settings.css`:
+- [x] **Step 4: CSS.** Append to `src/components/settings/settings.css`:
 
 ```css
 /* --- system card --- */
@@ -1000,9 +1000,9 @@ export default function SystemCard() {
 }
 ```
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/settings/SystemCard.test.tsx` → PASS.
+- [x] **Step 5: Run** — `npx vitest run src/components/settings/SystemCard.test.tsx` → PASS.
 
-- [ ] **Step 6: Mount on SettingsPage.** In `src/pages/SettingsPage.tsx` (re-read it first): add `import SystemCard from '../components/settings/SystemCard'` directly after the `ImportReportView` import, and insert `<SystemCard />` inside the `card-grid` div, after the Password `</section>` and before the grid's closing `</div>`:
+- [x] **Step 6: Mount on SettingsPage.** In `src/pages/SettingsPage.tsx` (re-read it first): add `import SystemCard from '../components/settings/SystemCard'` directly after the `ImportReportView` import, and insert `<SystemCard />` inside the `card-grid` div, after the Password `</section>` and before the grid's closing `</div>`:
 
 ```tsx
           {/* Read-only status, its own fetch/error (SystemCard) — it shares the forms'
@@ -1011,7 +1011,7 @@ export default function SystemCard() {
           <SystemCard />
 ```
 
-- [ ] **Step 7: Arm the page test.** In `src/pages/SettingsPage.test.tsx` (re-read it first):
+- [x] **Step 7: Arm the page test.** In `src/pages/SettingsPage.test.tsx` (re-read it first):
   1. Update the mock-block header comment "Three api modules, all stubbed." → "Four api modules, all stubbed." and add below the importer mock:
 ```tsx
 vi.mock('../api/system', async (importOriginal) => ({
@@ -1046,9 +1046,9 @@ describe('SettingsPage — system card', () => {
 })
 ```
 
-- [ ] **Step 8: Run** — `npx vitest run src/pages/SettingsPage.test.tsx` → ALL PASS (every pre-existing test must survive the new card; if any trips on ambiguous text queries, the new card's copy above deliberately shares no strings with the forms).
+- [x] **Step 8: Run** — `npx vitest run src/pages/SettingsPage.test.tsx` → ALL PASS (every pre-existing test must survive the new card; if any trips on ambiguous text queries, the new card's copy above deliberately shares no strings with the forms).
 
-- [ ] **Step 9: Commit** — `git add -A && git commit -m "feat(system): Settings System card — refresh/scheduler/backup/database rows"`
+- [x] **Step 9: Commit** — `git add -A && git commit -m "feat(system): Settings System card — refresh/scheduler/backup/database rows"`
 
 ### Task 8: Attention backup item + Overview switches to `/system/status`
 
@@ -1057,7 +1057,7 @@ describe('SettingsPage — system card', () => {
 **Files:**
 - Modify: `src/components/overview/attention.ts`, `src/components/overview/attention.test.ts`, `src/pages/OverviewPage.tsx`, `src/pages/OverviewPage.test.tsx`
 
-- [ ] **Step 1: Write the failing attention tests.** In `src/components/overview/attention.test.ts`:
+- [x] **Step 1: Write the failing attention tests.** In `src/components/overview/attention.test.ts`:
   1. Extend the type import with `BackupStatus,` and `SystemStatus,` (alphabetical; keep `LastRefresh` — `lastRefreshOut` still builds it).
   2. Add fixtures after `lastRefreshOut`:
 ```ts
@@ -1137,9 +1137,9 @@ describe('attentionItems — the nightly backup (prod only)', () => {
 ```
   and insert `'backup-stale',` into the expected keys array between `'refresh-failed'` and `'espp-qualifying'`.
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/attention.test.ts` → FAIL (TS: `system` is not a known property; `lastRefresh` missing).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/attention.test.ts` → FAIL (TS: `system` is not a known property; `lastRefresh` missing).
 
-- [ ] **Step 3: Implement attention.ts.** In `src/components/overview/attention.ts`:
+- [x] **Step 3: Implement attention.ts.** In `src/components/overview/attention.ts`:
   1. Type imports become:
 ```ts
 import type {
@@ -1180,16 +1180,16 @@ import type {
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/overview/attention.test.ts` → PASS. (`npx tsc -b` still fails on OverviewPage — that is Steps 5–6's job, in this same task.)
+- [x] **Step 4: Run** — `npx vitest run src/components/overview/attention.test.ts` → PASS. (`npx tsc -b` still fails on OverviewPage — that is Steps 5–6's job, in this same task.)
 
-- [ ] **Step 5: OverviewPage.tsx swap.** Re-read the file, then apply five semantic edits:
+- [x] **Step 5: OverviewPage.tsx swap.** Re-read the file, then apply five semantic edits:
   1. Replace `import { fetchRefreshStatus } from '../api/prices'` with `import { fetchSystemStatus } from '../api/system'` (keep the api-import block's alphabetical order: `../api/spending`, `../api/system`, `../api/taxes`).
   2. In the type import block, replace `RefreshStatus,` with `SystemStatus,` (alphabetical: after `SpendingYearly`).
   3. In `OverviewData`, replace `refresh: RefreshStatus` with `system: SystemStatus`, and amend the block comment's "the last refresh run" clause to "the system status — last refresh run, backup marker, environment".
   4. In `load()`: `fetchRefreshStatus(),` → `fetchSystemStatus(),`; rename `refresh` → `system` in BOTH the destructuring array and the `setData({...})` object.
   5. In the `attention` const, replace `lastRefresh: data.refresh.last,` with `system: data.system,`.
 
-- [ ] **Step 6: OverviewPage.test.tsx repairs.** Re-read the file, then:
+- [x] **Step 6: OverviewPage.test.tsx repairs.** Re-read the file, then:
   1. Delete the `vi.mock('../api/prices', ...)` block and the `import { fetchRefreshStatus } from '../api/prices'` line; add in their places:
 ```tsx
 vi.mock('../api/system', async (importOriginal) => ({
@@ -1229,9 +1229,9 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
     expect(strip.querySelectorAll('a')).toHaveLength(4)
 ```
 
-- [ ] **Step 7: Run** — `npx vitest run src/components/overview/attention.test.ts src/pages/OverviewPage.test.tsx` → ALL PASS; `npx tsc -b` → clean (proves no other file still names `data.refresh` or the old input field).
+- [x] **Step 7: Run** — `npx vitest run src/components/overview/attention.test.ts src/pages/OverviewPage.test.tsx` → ALL PASS; `npx tsc -b` → clean (proves no other file still names `data.refresh` or the old input field).
 
-- [ ] **Step 8: Commit** — `git add -A && git commit -m "feat(system): overview reads /system/status; backup attention item, prod-only"`
+- [x] **Step 8: Commit** — `git add -A && git commit -m "feat(system): overview reads /system/status; backup attention item, prod-only"`
 
 ---
 
@@ -1241,9 +1241,9 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
 
 **Files:** none
 
-- [ ] **Step 1: Full backend suite** — `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS (record the count; ~853 before this plan, +8 here).
-- [ ] **Step 2: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → if anything reformats, re-run the touched test files and commit the reflow.
-- [ ] **Step 3: Bash syntax re-check** — `bash -n backend/scripts/backup_db.sh` → exit 0 (belt-and-braces after any late edits; still the only shell verification that exists).
-- [ ] **Step 4: Full frontend** — `npx vitest run` → ALL PASS (record the count; ~791 before this plan); `npx tsc -b` → clean; `npx eslint .` → clean.
-- [ ] **Step 5: Commit anything outstanding** — `git add -A && git commit -m "chore(system): verification pass"` (skip if `git status --porcelain` is already EMPTY — it should be).
-- [ ] **Step 6: STOP.** Do not merge, do not push, do not delete anything, and do NOT edit the five-feature spec's status line (four of its features are still open). Leave a summary listing: both test counts; that `/prices/refresh-status` is byte-identical (Task 3's equality pin) and PortfolioPage still reads it; that the backup marker write is best-effort and review-only-verified (`bash -n`); that the attention nag is prod-suppressed by `environment !== 'prod'`; and that `alembic_head` is legitimately `null` on test/dev databases built by `create_all`.
+- [x] **Step 1: Full backend suite** — `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS (record the count; ~853 before this plan, +8 here).
+- [x] **Step 2: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → if anything reformats, re-run the touched test files and commit the reflow.
+- [x] **Step 3: Bash syntax re-check** — `bash -n backend/scripts/backup_db.sh` → exit 0 (belt-and-braces after any late edits; still the only shell verification that exists).
+- [x] **Step 4: Full frontend** — `npx vitest run` → ALL PASS (record the count; ~791 before this plan); `npx tsc -b` → clean; `npx eslint .` → clean.
+- [x] **Step 5: Commit anything outstanding** — `git add -A && git commit -m "chore(system): verification pass"` (skip if `git status --porcelain` is already EMPTY — it should be).
+- [x] **Step 6: STOP.** Do not merge, do not push, do not delete anything, and do NOT edit the five-feature spec's status line (four of its features are still open). Leave a summary listing: both test counts; that `/prices/refresh-status` is byte-identical (Task 3's equality pin) and PortfolioPage still reads it; that the backup marker write is best-effort and review-only-verified (`bash -n`); that the attention nag is prod-suppressed by `environment !== 'prod'`; and that `alembic_head` is legitimately `null` on test/dev databases built by `create_all`.

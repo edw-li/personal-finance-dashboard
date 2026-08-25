@@ -5,6 +5,7 @@ import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
 import ImportReportView from '../components/settings/ImportReportView'
+import SystemCard from '../components/settings/SystemCard'
 import type { AppSettingsOut, ImportReport } from '../types/api'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
@@ -464,6 +465,11 @@ export default function SettingsPage() {
               </p>
             </form>
           </section>
+
+          {/* Read-only status, its own fetch/error (SystemCard) — it shares the forms'
+              loadedOnce gate like the import card: a settings GET that failed means the
+              API is unreachable, and this card could only echo that. */}
+          <SystemCard />
         </div>
       )}
     </div>

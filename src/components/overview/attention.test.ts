@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type {
+  BackupStatus,
   EsppLotOut,
   EsppLotsResponse,
   HoldingOut,
   HoldingsResponse,
   LastRefresh,
+  SystemStatus,
   TaxYearOut,
 } from '../../types/api'
 import { attentionItems } from './attention'
@@ -73,6 +75,30 @@ function lastRefreshOut(failed: Record<string, string> = {}): LastRefresh {
   }
 }
 
+function pricesOut(last: LastRefresh | null = lastRefreshOut()): SystemStatus['prices'] {
+  return { last, next_run_at: null, scheduler_running: false }
+}
+
+function backupOut(lastSuccessAt: string): BackupStatus {
+  return {
+    last_success_at: lastSuccessAt,
+    object_key: 'backups/finance_2026-08-16.sql.gz',
+    size: '1.2M',
+  }
+}
+
+// environment 'dev' in the baseline: the backup nag is PROD-only (spec §3), so dev is
+// the quiet default — exactly what the real dev box is.
+function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
+  return {
+    prices: pricesOut(),
+    database: { size_bytes: 123_456_789, alembic_head: 'e7c5a9f4b2d8' },
+    backup: null,
+    environment: 'dev',
+    ...over,
+  }
+}
+
 // The all-clear baseline: current month entered, quotes fresh, everything priced, no
 // qualifying window open, the year's inputs filled, the last refresh clean.
 function inputs(over: Partial<AttentionInputs> = {}): AttentionInputs {
@@ -81,7 +107,7 @@ function inputs(over: Partial<AttentionInputs> = {}): AttentionInputs {
     holdings: holdingsOut(),
     lots: lotsOut([]),
     taxYears: [taxYear(2026)],
-    lastRefresh: lastRefreshOut(),
+    system: systemOut(),
     ...over,
   }
 }
@@ -194,13 +220,13 @@ describe('attentionItems — ESPP qualifying window', () => {
 
 describe('attentionItems — the last refresh run', () => {
   it('stays quiet with no recorded run and with a clean one', () => {
-    expect(keys(inputs({ lastRefresh: null }))).toEqual([])
-    expect(keys(inputs({ lastRefresh: lastRefreshOut() }))).toEqual([])
+    expect(keys(inputs({ system: systemOut({ prices: pricesOut(null) }) }))).toEqual([])
+    expect(keys(inputs({ system: systemOut() }))).toEqual([])
   })
 
   it('names the failed tickers, capped at three', () => {
     const [one] = attentionItems(
-      inputs({ lastRefresh: lastRefreshOut({ ZI: 'delisted' }) }),
+      inputs({ system: systemOut({ prices: pricesOut(lastRefreshOut({ ZI: 'delisted' })) }) }),
       TODAY,
     )
     expect(one.key).toBe('refresh-failed')
@@ -209,7 +235,9 @@ describe('attentionItems — the last refresh run', () => {
 
     const [many] = attentionItems(
       inputs({
-        lastRefresh: lastRefreshOut({ A: 'x', B: 'x', C: 'x', D: 'x', E: 'x' }),
+        system: systemOut({
+          prices: pricesOut(lastRefreshOut({ A: 'x', B: 'x', C: 'x', D: 'x', E: 'x' })),
+        }),
       }),
       TODAY,
     )
@@ -230,6 +258,33 @@ describe('attentionItems — taxes', () => {
   })
 })
 
+describe('attentionItems — the nightly backup (prod only)', () => {
+  // TODAY's midnight UTC is the strip's clock (the prices-stale pattern): 2026-08-18
+  // 00:00Z, so exactly-48h-ago is 2026-08-16T00:00:00Z.
+  const prod = (backup: BackupStatus | null) =>
+    inputs({ system: systemOut({ environment: 'prod', backup }) })
+
+  it('nags when prod has no marker at all', () => {
+    const [item] = attentionItems(prod(null), TODAY)
+    expect(item.key).toBe('backup-stale')
+    expect(item.text).toBe("Nightly backup hasn't run recently")
+    expect(item.to).toBe('/settings')
+  })
+
+  it('nags past 48 hours and stays quiet through the 48th exactly', () => {
+    expect(keys(prod(backupOut('2026-08-15T23:00:00Z')))).toEqual(['backup-stale'])
+    expect(keys(prod(backupOut('2026-08-16T00:00:00Z')))).toEqual([])
+    expect(keys(prod(backupOut('2026-08-17T09:00:00Z')))).toEqual([])
+  })
+
+  it('is suppressed off prod — dev boxes never back up and must not nag', () => {
+    expect(keys(inputs({ system: systemOut({ backup: null }) }))).toEqual([])
+    expect(
+      keys(inputs({ system: systemOut({ backup: backupOut('2026-08-01T00:00:00Z') }) })),
+    ).toEqual([])
+  })
+})
+
 describe('attentionItems — ordering', () => {
   it('lists the ritual first, then prices, then the module reminders', () => {
     const noisy = inputs({
@@ -241,7 +296,10 @@ describe('attentionItems — ordering', () => {
       }),
       lots: lotsOut([lot(9)]),
       taxYears: [],
-      lastRefresh: lastRefreshOut({ ZI: 'delisted' }),
+      system: systemOut({
+        prices: pricesOut(lastRefreshOut({ ZI: 'delisted' })),
+        environment: 'prod', // backup stays null -> the nag joins the parade
+      }),
     })
     expect(keys(noisy)).toEqual([
       'update-due',
@@ -249,6 +307,7 @@ describe('attentionItems — ordering', () => {
       'unpriced',
       'holding-warnings',
       'refresh-failed',
+      'backup-stale',
       'espp-qualifying',
       'tax-year-missing',
     ])

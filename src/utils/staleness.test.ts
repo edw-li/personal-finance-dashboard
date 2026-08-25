@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { STALE_AFTER_DAYS, isStaleQuote } from './staleness'
+import { STALE_AFTER_DAYS, backupAge, isStaleQuote } from './staleness'
 
 // `today` is injected so these read as calendar facts rather than as whatever day the
 // suite happens to run on. Every instant is written in UTC (`Z`) because the function
@@ -38,5 +38,33 @@ describe('isStaleQuote', () => {
     expect(isStaleQuote('2026-08-14', new Date('2026-08-18T23:30:00Z'))).toBe(false)
     // And the day after that it is genuinely old.
     expect(isStaleQuote('2026-08-14', new Date('2026-08-19T00:05:00Z'))).toBe(true)
+  })
+})
+
+describe('backupAge', () => {
+  // The Overview strip evaluates at the injected today's MIDNIGHT UTC (attention.ts)
+  // and the Settings card at the real clock — both call THIS function, so the amber
+  // tone and the "hasn't run recently" nag flip on the same THRESHOLDS (the strip's
+  // evaluation instant can trail the card's live clock by up to a day; the card only
+  // ever leads, never the nag — the prices-stale house pattern).
+  const now = new Date('2026-08-18T00:00:00Z')
+
+  it('reads fresh through the 48th hour exactly', () => {
+    expect(backupAge('2026-08-17T00:00:00Z', now)).toBe('fresh')
+    // Exactly 48h: "older than 48h" is strict, so the boundary itself is still fresh.
+    expect(backupAge('2026-08-16T00:00:00Z', now)).toBe('fresh')
+  })
+
+  it('turns stale past 48 hours and holds through the seventh day', () => {
+    expect(backupAge('2026-08-15T23:59:00Z', now)).toBe('stale')
+    expect(backupAge('2026-08-11T00:00:00Z', now)).toBe('stale') // exactly 7 days
+  })
+
+  it('reads overdue past seven days — the red-wording register', () => {
+    expect(backupAge('2026-08-10T23:59:59Z', now)).toBe('overdue')
+  })
+
+  it('treats an unparseable stamp as overdue — the nag errs toward nagging', () => {
+    expect(backupAge('not a timestamp', now)).toBe('overdue')
   })
 })

@@ -9,6 +9,7 @@ from app.services.scheduler import (
     SCHEDULER_TIMEZONE,
     build_trigger,
     get_next_run_time,
+    is_scheduler_running,
     missed_todays_run,
     product_today,
     read_cron_setting,
@@ -104,3 +105,20 @@ async def test_read_cron_setting_envelope_and_fallbacks(db):
     setting.value = {"value": "   "}  # whitespace-only cron
     await db.commit()
     assert await read_cron_setting(db) == DEFAULT_PRICE_REFRESH_CRON
+
+
+def test_is_scheduler_running_tracks_the_module_handle(monkeypatch):
+    # No handle at all — pytest never starts a scheduler (conftest pins the setting off).
+    assert is_scheduler_running() is False
+
+    class _Handle:
+        def __init__(self, running: bool):
+            self.running = running
+
+    # The flag reads APScheduler's own .running, not the handle's mere presence: a
+    # shut-down scheduler the module still holds must answer False, or the status card
+    # would call a dead process "Running" for the rest of its life.
+    monkeypatch.setattr("app.services.scheduler._scheduler", _Handle(True))
+    assert is_scheduler_running() is True
+    monkeypatch.setattr("app.services.scheduler._scheduler", _Handle(False))
+    assert is_scheduler_running() is False

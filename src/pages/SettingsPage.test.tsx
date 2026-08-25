@@ -1,10 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { AppSettingsOut, ImportReport, ImportSheetReport } from '../types/api'
+import type { AppSettingsOut, ImportReport, ImportSheetReport, SystemStatus } from '../types/api'
 import SettingsPage from './SettingsPage'
 
-// Three api modules, all stubbed. No EChart mock here: this page draws nothing, so the
+// Four api modules, all stubbed. No EChart mock here: this page draws nothing, so the
 // house's never-render-echarts-in-jsdom rule has nothing to catch.
 vi.mock('../api/settings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/settings')>()),
@@ -19,9 +19,14 @@ vi.mock('../api/importer', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/importer')>()),
   importXlsx: vi.fn(),
 }))
+vi.mock('../api/system', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/system')>()),
+  fetchSystemStatus: vi.fn(),
+}))
 import { changePassword } from '../api/auth'
 import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
+import { fetchSystemStatus } from '../api/system'
 
 // A promise this file settles by hand — the only way to look at the page while a request
 // is still in flight (TaxesPage.test.tsx's helper).
@@ -41,6 +46,15 @@ const SETTINGS: AppSettingsOut = {
   swr_pct: '0.045000',
   espp_ticker: 'NVDA',
   price_refresh_cron: '10 13 * * mon-fri',
+}
+
+// Quiet system payload — the card's rendering details are pinned in SystemCard.test.tsx;
+// this file only needs the fetch answered so the card settles.
+const SYSTEM: SystemStatus = {
+  prices: { last: null, next_run_at: null, scheduler_running: false },
+  database: { size_bytes: 1024, alembic_head: null },
+  backup: null,
+  environment: 'dev',
 }
 
 // Static copy, pinned verbatim: it is the only place the day-NAMES trap is stated — and
@@ -145,6 +159,7 @@ beforeEach(() => {
   vi.mocked(putAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(changePassword).mockResolvedValue(undefined)
   vi.mocked(importXlsx).mockResolvedValue(makeReport())
+  vi.mocked(fetchSystemStatus).mockResolvedValue(SYSTEM)
   confirmSpy.mockReturnValue(true)
 })
 
@@ -687,5 +702,13 @@ describe('SettingsPage — xlsx import', () => {
     })
     await waitFor(() => expect(dryButton().disabled).toBe(false))
     expect(fileBox().disabled).toBe(false)
+  })
+})
+
+describe('SettingsPage — system card', () => {
+  it('mounts the System card alongside the forms', async () => {
+    render(<SettingsPage />)
+    await screen.findByText('No refresh recorded yet')
+    expect(screen.getByText('No backup recorded')).toBeDefined()
   })
 })

@@ -83,6 +83,25 @@ except Exception:
     print(f"No expired backup to delete: {expired_key}")
 PYEOF
 
+# Record the successful upload for the dashboard's System card (2026-08-25 spec §3):
+# upsert app_settings['backup_status'] as a FLAT JSON object — the {"value": ...}
+# envelope is a Python readers' convention, and the reader (app/api/system.py) expects
+# exactly this shape. Every interpolated value is machine-generated (date -u, du -h,
+# the OBJECT_KEY template above), so the single-quoted SQL literal cannot be broken by
+# user text. Best-effort BY DESIGN: the backup itself already succeeded, so a marker
+# failure only warns — the `|| echo` keeps `set -e` from turning bookkeeping into a
+# failed backup.
+BACKUP_MARKER="{\"last_success_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"object_key\": \"${OBJECT_KEY}\", \"size\": \"${DUMP_SIZE}\"}"
+PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+  -h "$DB_HOST" \
+  -p "$DB_PORT" \
+  -U "$DB_USER" \
+  -d "$DB_NAME" \
+  -v ON_ERROR_STOP=1 \
+  -q \
+  -c "INSERT INTO app_settings (key, value) VALUES ('backup_status', '${BACKUP_MARKER}'::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" \
+  || echo "[$(date)] WARN: could not record backup_status in app_settings — the backup itself succeeded"
+
 # Clean up local dump
 rm -f "$DUMP_FILE"
 echo "[$(date)] Backup complete."

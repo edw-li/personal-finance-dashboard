@@ -30,3 +30,58 @@
   color: var(--negative);
   font-size: 0.85rem;
 }
+
+/* --- system card --- */
+
+/* Label/value rows for the System card's operational facts — sentences to scan down,
+   not tiles to compare, so a single-column dl, not the kpi grid. */
+.system-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.system-fact {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.system-fact dt {
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.system-fact dd {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+/* The shared amber token (--warn, PALETTE[3]) every other stale cue already wears —
+   portfolio.css's stale quote, OverviewPage.css's strip. The backup row past 48h. */
+.system-fact dd.system-stale {
+  color: var(--warn);
+}
+
+/* Past seven days the wording changes too ("more than a week old") — the colour is
+   never the only channel. */
+.system-fact dd.system-overdue {
+  color: var(--negative);
+}
+
+.system-fact dd.system-mono {
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 720px) {
+  .system-fact {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+}
