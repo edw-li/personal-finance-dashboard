@@ -3,6 +3,7 @@ import {
   escapeHtml,
   formatCurrency,
   formatCurrencyCompact,
+  formatBytes,
   formatDate,
   formatDateTime,
   formatMonth,
@@ -98,5 +99,20 @@ describe('formatDate', () => {
   it('tolerates full ISO datetimes and unpadded days', () => {
     expect(formatDate('2026-08-14T00:00:00Z')).toBe('Aug 14, 2026')
     expect(formatDate('2026-03-01')).toBe('Mar 1, 2026')
+  })
+})
+
+describe('formatBytes', () => {
+  it('walks the units at base 1024 with one decimal past bytes', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(512)).toBe('512 B')
+    expect(formatBytes(2048)).toBe('2.0 KB')
+    expect(formatBytes(123_456_789)).toBe('117.7 MB')
+    expect(formatBytes(5 * 1024 ** 3)).toBe('5.0 GB')
+  })
+
+  it('answers a dash for the unrenderable', () => {
+    expect(formatBytes(-1)).toBe('—')
+    expect(formatBytes(Number.NaN)).toBe('—')
   })
 })

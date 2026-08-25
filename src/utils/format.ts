@@ -69,6 +69,21 @@ export function formatDateTime(iso: string | null | undefined): string {
   return `${MONTH_NAMES[at.getMonth()]} ${at.getDate()}, ${at.getFullYear()}, ${hours}:${minutes} ${meridiem}`
 }
 
+export function formatBytes(bytes: number): string {
+  // pg_database_size is exact bytes; the card wants a human size. Base 1024 with one
+  // decimal past B — the register `du -h` speaks, which the backup row quotes verbatim.
+  if (!Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  let value = bytes
+  let unit = 'B'
+  for (const next of ['KB', 'MB', 'GB', 'TB']) {
+    if (value < 1024) break
+    value /= 1024
+    unit = next
+  }
+  return `${value.toFixed(1)} ${unit}`
+}
+
 export function escapeHtml(raw: string): string {
   // ECharts tooltip formatters build HTML strings; account/category names are user text.
   return raw

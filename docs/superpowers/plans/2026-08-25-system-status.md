@@ -554,7 +554,7 @@ export function fetchSystemStatus(): Promise<SystemStatus> {
 - Modify: `src/utils/staleness.ts`, `src/utils/format.ts`
 - Test: `src/utils/staleness.test.ts`, `src/utils/format.test.ts`
 
-- [ ] **Step 1: Write the failing tests.** Append to `src/utils/staleness.test.ts` (extend its import line to `import { STALE_AFTER_DAYS, backupAge, isStaleQuote } from './staleness'`):
+- [x] **Step 1: Write the failing tests.** Append to `src/utils/staleness.test.ts` (extend its import line to `import { STALE_AFTER_DAYS, backupAge, isStaleQuote } from './staleness'`):
 
 ```ts
 describe('backupAge', () => {
@@ -603,9 +603,9 @@ describe('formatBytes', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/utils/staleness.test.ts src/utils/format.test.ts` → FAIL (no exported `backupAge` / `formatBytes`).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/utils/staleness.test.ts src/utils/format.test.ts` → FAIL (no exported `backupAge` / `formatBytes`).
 
-- [ ] **Step 3: Implement.** Append to `src/utils/staleness.ts`:
+- [x] **Step 3: Implement.** Append to `src/utils/staleness.ts`:
 
 ```ts
 // Nightly-backup staleness — ONE copy for the Settings System card (amber tone, red
@@ -646,9 +646,9 @@ export function formatBytes(bytes: number): string {
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/utils/staleness.test.ts src/utils/format.test.ts` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/utils/staleness.test.ts src/utils/format.test.ts` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(system): backupAge staleness clock + formatBytes"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(system): backupAge staleness clock + formatBytes"`
 
 ### Task 7: The Settings System card
 
