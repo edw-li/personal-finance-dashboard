@@ -22,6 +22,7 @@ from app.models import (
     Account,
     AccountBalance,
     CategoryBudget,
+    CustomEvent,
     DividendPayment,
     EsppOffering,
     LatestPrice,
@@ -1014,3 +1015,39 @@ async def test_importer_never_writes_category_budgets(db):
     }
     assert after == before
     assert all("category_budgets" not in sheet.entities for sheet in report.sheets.values())
+
+
+def custom_event_row(row: CustomEvent) -> tuple:
+    """EVERY stored column, as grant_row above — a column added later is covered by the
+    pin below without anyone editing it."""
+    return tuple(getattr(row, column.key) for column in CustomEvent.__table__.columns)
+
+
+async def test_importer_never_writes_custom_events(db):
+    """custom_events is dashboard-only (2026-08-24 financial-calendar spec §9.3, the
+    rsu_grants posture): no sheet maps to user-entered calendar events, so a re-import
+    must neither create, update nor delete a row."""
+    from app.importer.service import run_import
+
+    db.add(CustomEvent(event_date=date(2026, 9, 12), label="pre-import", detail="kept"))
+    await db.commit()
+    before = {
+        row.id: custom_event_row(row) for row in (await db.execute(select(CustomEvent))).scalars()
+    }
+    assert len(before) == 1
+
+    for _ in range(2):
+        report = await run_import(build_workbook(), db, dry_run=False)
+        assert report.applied is True  # a blocked import would pin nothing
+
+    # populate_existing, or the identity map would hand back the pre-import objects and
+    # this would pass even if the import had rewritten every column (the dividends pin's
+    # note).
+    after = {
+        row.id: custom_event_row(row)
+        for row in (
+            await db.execute(select(CustomEvent).execution_options(populate_existing=True))
+        ).scalars()
+    }
+    assert after == before
+    assert all("custom_events" not in sheet.entities for sheet in report.sheets.values())
