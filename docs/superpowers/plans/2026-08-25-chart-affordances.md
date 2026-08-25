@@ -2475,8 +2475,8 @@ Run: `npx vitest run src/pages/SpendingPage.test.tsx` → FAIL (0 found).
 
 **Files:** none
 
-- [ ] **Step 1: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; the pre-batch baseline was 791).
-- [ ] **Step 2: Types** — `npx tsc -b` → clean, no output.
-- [ ] **Step 3: Lint** — `npx eslint .` → clean.
-- [ ] **Step 4: Commit anything the verification steps touched** — `git add -A && git commit -m "chore(charts): verification pass"` (skip if `git status --porcelain` is already empty), then `git status --porcelain` → EMPTY.
-- [ ] **Step 5: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch (and reconciles the `EChart.tsx`/`OverviewPage.tsx` overlap with the polish-batch sibling). Leave a summary listing: the test count; the three additive `EChart` props (`exportConfig`, `onLegendChange`, `onDataZoom` — appended, container div untouched, per the cross-plan note); the six export names (`spending`, `net-worth`, `portfolio-performance`, `dividends`, `tax-trend`, `projection`); the deliberate behavior decisions worth a reviewer's eye (spending bars tooltip drops padded-null dash rows like every full formatter; events off the axis ends and splits are skipped; a mixed same-bar cluster wears the diamond; drill URL updates are replace-style); and that no new echarts modules were registered (chunk limit untouched).
+- [x] **Step 1: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; the pre-batch baseline was 791).
+- [x] **Step 2: Types** — `npx tsc -b` → clean, no output.
+- [x] **Step 3: Lint** — `npx eslint .` → clean.
+- [x] **Step 4: Commit anything the verification steps touched** — `git add -A && git commit -m "chore(charts): verification pass"` (skip if `git status --porcelain` is already empty), then `git status --porcelain` → EMPTY.
+- [x] **Step 5: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch (and reconciles the `EChart.tsx`/`OverviewPage.tsx` overlap with the polish-batch sibling). Leave a summary listing: the test count; the three additive `EChart` props (`exportConfig`, `onLegendChange`, `onDataZoom` — appended, container div untouched, per the cross-plan note); the six export names (`spending`, `net-worth`, `portfolio-performance`, `dividends`, `tax-trend`, `projection`); the deliberate behavior decisions worth a reviewer's eye (spending bars tooltip drops padded-null dash rows like every full formatter; events off the axis ends and splits are skipped; a mixed same-bar cluster wears the diamond; drill URL updates are replace-style); and that no new echarts modules were registered (chunk limit untouched).
