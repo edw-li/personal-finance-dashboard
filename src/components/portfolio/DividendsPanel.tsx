@@ -5,6 +5,7 @@ import AmountInput from '../AmountInput'
 import EChart from '../EChart'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
+import { useToast } from '../ToastProvider'
 import type { DividendOut, SecurityOut } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
@@ -68,6 +69,7 @@ export default function DividendsPanel({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
+  const toast = useToast()
   // Only the CHART option is memoized (EChart keys its notMerge setOption on [option], so
   // a fresh object per keystroke in the form below would redraw it); the tiles are plain
   // numbers and memoizing them would buy nothing.
@@ -136,7 +138,9 @@ export default function DividendsPanel({
   }
 
   const remove = (dividend: DividendOut) => {
-    if (!window.confirm('Delete this dividend?')) return
+    const ticker = tickers.get(dividend.security_id) ?? '?'
+    // Instant + Undo (2026-08-25 polish §8) — the confirm interrupt is gone; Undo
+    // re-POSTs the captured payment (new id, and always source 'manual', by design).
     deleteDividend(dividend.id)
       .then(() => {
         // The edited row is gone — a stale editingId would PATCH a 404 on the next save
@@ -149,6 +153,22 @@ export default function DividendsPanel({
         // The ledger just changed under the cue — whatever entry session it narrated is over.
         setKept(false)
         onChanged()
+        toast.success(`Deleted the ${ticker} dividend paid ${formatDate(dividend.pay_date)}`, {
+          action: {
+            label: 'Undo',
+            onAction: () => {
+              createDividend({
+                security_id: dividend.security_id,
+                account: dividend.account,
+                pay_date: dividend.pay_date,
+                amount: dividend.amount,
+                notes: dividend.notes,
+              })
+                .then(() => onChanged())
+                .catch(() => toast.error(`Could not restore the ${ticker} dividend`))
+            },
+          },
+        })
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Delete failed')

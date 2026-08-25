@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DividendOut, SecurityOut } from '../../types/api'
 import DividendsPanel from './DividendsPanel'
+import ToastProvider from '../ToastProvider'
 
 vi.mock('../../api/portfolio', () => ({
   createDividend: vi.fn().mockResolvedValue({}),
@@ -215,7 +216,6 @@ describe('DividendsPanel editing', () => {
   })
 
   it('deleting the row being edited resets the form — on success only', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const onChanged = vi.fn()
     renderPanel([dividend()], '432.10', onChanged)
     fireEvent.click(screen.getByRole('button', { name: 'Edit this dividend' }))
@@ -230,6 +230,37 @@ describe('DividendsPanel editing', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: /add dividend/i })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
+  })
+
+  it('deletes instantly and Undo re-creates the payment through the POST', async () => {
+    const onChanged = vi.fn()
+    render(
+      <ToastProvider>
+        <DividendsPanel
+          securities={securities}
+          dividends={[dividend()]}
+          annualIncome="432.10"
+          onChanged={onChanged}
+        />
+      </ToastProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('Deleted the NVDA dividend paid Dec 15, 2025')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    // DividendCreate's shape exactly — no id, no provenance fields (an undone auto row
+    // comes back as manual, which is honest: the refresh re-writes auto rows anyway).
+    await waitFor(() =>
+      expect(vi.mocked(createDividend)).toHaveBeenCalledWith({
+        security_id: 1,
+        account: 'RH Taxable',
+        pay_date: '2025-12-15',
+        amount: '100.00',
+        notes: null,
+      }),
+    )
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
   })
 })
 

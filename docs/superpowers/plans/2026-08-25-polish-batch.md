@@ -1488,7 +1488,7 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
 - Modify: `src/components/portfolio/DividendsPanel.tsx`
 - Test: `src/components/portfolio/DividendsPanel.test.tsx`
 
-- [ ] **Step 1: Write the failing test.** In `src/components/portfolio/DividendsPanel.test.tsx`:
+- [x] **Step 1: Write the failing test.** In `src/components/portfolio/DividendsPanel.test.tsx`:
   1. Add `import ToastProvider from '../ToastProvider'` (after the DividendsPanel import).
   2. In `'deleting the row being edited resets the form — on success only'`, DELETE the line `vi.spyOn(window, 'confirm').mockReturnValue(true)` (the failed-then-successful delete choreography underneath is exactly what the instant flow does — it survives unchanged).
   3. Append inside the main describe:
@@ -1526,9 +1526,9 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/DividendsPanel.test.tsx` → the new test FAILS, and so does the de-spied edit-delete test (jsdom's stub confirm returns falsy, so the still-gated delete never runs) — both pass only after Step 3.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/DividendsPanel.test.tsx` → the new test FAILS, and so does the de-spied edit-delete test (jsdom's stub confirm returns falsy, so the still-gated delete never runs) — both pass only after Step 3.
 
-- [ ] **Step 3: Implement.** In `src/components/portfolio/DividendsPanel.tsx`:
+- [x] **Step 3: Implement.** In `src/components/portfolio/DividendsPanel.tsx`:
   1. Add `import { useToast } from '../ToastProvider'` (after the StatTile import).
   2. Add `const toast = useToast()` beside the `tickers` const.
   3. Replace `remove` in full:
@@ -1573,9 +1573,9 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/portfolio/DividendsPanel.test.tsx` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/components/portfolio/DividendsPanel.test.tsx` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): instant dividend delete with undo re-create"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): instant dividend delete with undo re-create"`
 
 ### Task 11: Calendar custom-event delete toast + Undo
 
