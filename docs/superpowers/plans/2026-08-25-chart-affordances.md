@@ -1030,7 +1030,7 @@ import {
 **Files:**
 - Modify: `src/components/taxes/taxChartOptions.ts`, `src/components/taxes/taxChartOptions.test.ts`, `src/components/portfolio/historyChartOptions.ts`, `src/components/portfolio/historyChartOptions.test.ts`
 
-- [ ] **Step 1: Update the pinned trend-tooltip test and add the new cases.** In `src/components/taxes/taxChartOptions.test.ts`, the test `divides the rate back out in BOTH places that render it` pins the exact tooltip string — insert the Total row into its expectation:
+- [x] **Step 1: Update the pinned trend-tooltip test and add the new cases.** In `src/components/taxes/taxChartOptions.test.ts`, the test `divides the rate back out in BOTH places that render it` pins the exact tooltip string — insert the Total row into its expectation:
 
 ```ts
     ).toBe(
@@ -1058,9 +1058,9 @@ and append to the same `describe('trendOption', …)` block:
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/taxes/taxChartOptions.test.ts` → the updated pin and the new case FAIL (no Total row yet).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/taxes/taxChartOptions.test.ts` → the updated pin and the new case FAIL (no Total row yet).
 
-- [ ] **Step 3: Implement the Total-tax row.** In `src/components/taxes/taxChartOptions.ts`, replace `trendOption`'s `formatter` callback body with:
+- [x] **Step 3: Implement the Total-tax row.** In `src/components/taxes/taxChartOptions.ts`, replace `trendOption`'s `formatter` callback body with:
 
 ```ts
       formatter: (params) => {
@@ -1098,7 +1098,7 @@ and append to the same `describe('trendOption', …)` block:
 
 (The surrounding comment about two units in one tooltip stays.)
 
-- [ ] **Step 4: Bold the history tooltip header.** In `src/components/portfolio/historyChartOptions.ts`, `historyTooltipFormatter` currently returns `[header, ...rows.map(…)]` — change the first array element from `header,` to:
+- [x] **Step 4: Bold the history tooltip header.** In `src/components/portfolio/historyChartOptions.ts`, `historyTooltipFormatter` currently returns `[header, ...rows.map(…)]` — change the first array element from `header,` to:
 
 ```ts
     `<strong>${header}</strong>`,
@@ -1117,9 +1117,9 @@ and append to the same `describe('trendOption', …)` block:
 
 (The existing header assertions use `toContain('Aug 14, 2026')`, which the bold form still satisfies — no edits there.)
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/taxes/taxChartOptions.test.ts src/components/portfolio/historyChartOptions.test.ts` → ALL PASS. Then `npx vitest run src/pages/TaxesPage.test.tsx` → PASS (it never pins tooltip strings).
+- [x] **Step 5: Run** — `npx vitest run src/components/taxes/taxChartOptions.test.ts src/components/portfolio/historyChartOptions.test.ts` → ALL PASS. Then `npx vitest run src/pages/TaxesPage.test.tsx` → PASS (it never pins tooltip strings).
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(charts): tax-trend Total-tax tooltip row + bold history header"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(charts): tax-trend Total-tax tooltip row + bold history header"`
 
 ---
 

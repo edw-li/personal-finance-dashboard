@@ -224,7 +224,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
       formatter: (params) => {
         const list = Array.isArray(params) ? params : [params]
         const head = `<strong>${list[0]?.name ?? ''}</strong>`
-        const lines = list.map((p) => {
+        const line = (p: (typeof list)[number]) => {
           const value = p.value as number | null
           const text =
             value === null || value === undefined
@@ -233,8 +233,24 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
                 ? formatPct(value / 100, { signed: false })
                 : formatCurrency(value)
           return `${p.marker ?? ''}${p.seriesName ?? ''}: ${text}`
-        })
-        return [head, ...lines].join('<br/>')
+        }
+        // The stacks, then the year's total (vestingChartOptions' Total row,
+        // jurisdiction-flavoured — 2026-08-25 spec §2b), then the rate line: the rate is
+        // a ratio, not a seventh addend, so it stays out of the sum and under it.
+        const taxRows = list.filter((p) => p.seriesName !== RATE_SERIES_NAME)
+        const rateRows = list.filter((p) => p.seriesName === RATE_SERIES_NAME)
+        const total = taxRows.reduce(
+          (sum, p) => sum + (typeof p.value === 'number' ? p.value : 0),
+          0,
+        )
+        return [
+          head,
+          ...taxRows.map(line),
+          ...(taxRows.length > 0
+            ? [`<strong>Total tax: ${formatCurrency(total)}</strong>`]
+            : []),
+          ...rateRows.map(line),
+        ].join('<br/>')
       },
     },
     xAxis: { type: 'category', data: ordered.map((y) => String(y.year)) },

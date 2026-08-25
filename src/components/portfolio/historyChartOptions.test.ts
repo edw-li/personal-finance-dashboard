@@ -239,4 +239,11 @@ describe('historyTooltipFormatter', () => {
     expect(html).toContain('Live')
     expect(html).not.toContain('VOO (your contributions)')
   })
+
+  it('bolds the date header like every other formatter', () => {
+    const html = historyTooltipFormatter([
+      { seriesName: 'Portfolio value', marker: '<i/>', axisValueLabel: 'Aug 10, 2026', value: 1 },
+    ])
+    expect(html).toContain('<strong>Aug 10, 2026</strong>')
+  })
 })

@@ -56,7 +56,7 @@ export function historyTooltipFormatter(params: unknown): string {
   if (rows.length === 0) return ''
   const header = rows[0].param.axisValueLabel ?? ''
   return [
-    header,
+    `<strong>${header}</strong>`,
     ...rows.map(
       ({ param, value }) =>
         `${param.marker ?? ''} ${param.seriesName ?? ''}&nbsp;&nbsp;${formatCurrency(value)}`,
