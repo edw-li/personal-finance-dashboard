@@ -1017,7 +1017,7 @@ describe('SpendingPage — chart aria', () => {
 - Modify: `src/App.tsx`
 - Test: `src/components/ToastProvider.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/ToastProvider.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/ToastProvider.test.tsx`:
 
 ```tsx
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -1144,9 +1144,9 @@ describe('ToastProvider', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/ToastProvider.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/ToastProvider.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/components/ToastProvider.tsx`:
+- [x] **Step 3: Implement** — create `src/components/ToastProvider.tsx`:
 
 ```tsx
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
@@ -1291,7 +1291,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 4: CSS** — create `src/components/toast.css`:
+- [x] **Step 4: CSS** — create `src/components/toast.css`:
 
 ```css
 /* Toasts (2026-08-25 polish §8): one polite live region, bottom-right. z-index above the
@@ -1368,11 +1368,11 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 5: Mount in App above Layout.** In `src/App.tsx`, add `import ToastProvider from './components/ToastProvider'` (after the Layout import), then wrap the existing `<BrowserRouter>…</BrowserRouter>` element — every line of it byte-identical — in `<ToastProvider>` / `</ToastProvider>`, directly inside `<AuthProvider>`, and re-indent the wrapped block one level. Nothing inside the router changes. (Outside the router on purpose: toasts never navigate — the undo actions call API creates and the hosts' own refetchers.)
+- [x] **Step 5: Mount in App above Layout.** In `src/App.tsx`, add `import ToastProvider from './components/ToastProvider'` (after the Layout import), then wrap the existing `<BrowserRouter>…</BrowserRouter>` element — every line of it byte-identical — in `<ToastProvider>` / `</ToastProvider>`, directly inside `<AuthProvider>`, and re-indent the wrapped block one level. Nothing inside the router changes. (Outside the router on purpose: toasts never navigate — the undo actions call API creates and the hosts' own refetchers.)
 
-- [ ] **Step 6: Run** — `npx vitest run src/components/ToastProvider.test.tsx` → PASS.
+- [x] **Step 6: Run** — `npx vitest run src/components/ToastProvider.test.tsx` → PASS.
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(toast): ToastProvider with polite region, pause-on-hover, actions; mounted in App"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(toast): ToastProvider with polite region, pause-on-hover, actions; mounted in App"`
 
 ### Task 9: Instant transaction delete + Undo
 
