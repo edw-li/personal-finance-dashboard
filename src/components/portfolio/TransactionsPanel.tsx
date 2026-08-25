@@ -7,6 +7,7 @@ import {
 } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import { useToast } from '../ToastProvider'
 import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
@@ -113,6 +114,7 @@ export default function TransactionsPanel({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
+  const toast = useToast()
 
   // 'type' is excluded: it is a union field with its own dedicated handler below.
   const set = (field: Exclude<keyof FormState, 'type'>) => (value: string) =>
@@ -199,7 +201,10 @@ export default function TransactionsPanel({
   }
 
   const remove = (txn: TransactionOut) => {
-    if (!window.confirm(`Delete this ${txn.type} of ${tickers.get(txn.security_id) ?? '?'}?`)) return
+    const ticker = tickers.get(txn.security_id) ?? '?'
+    // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone and the
+    // recovery affordance replaces it — Undo re-POSTs the captured row (new id, by
+    // design). Only this low-risk flow converts; cascade deletes elsewhere keep confirm.
     deleteTransaction(txn.id)
       .then(() => {
         // The edited row is gone — a stale editingId would PATCH a 404 on the next save
@@ -211,6 +216,28 @@ export default function TransactionsPanel({
         // The ledger just changed under the cue — whatever entry session it narrated is over.
         setKept(false)
         onChanged()
+        toast.success(`Deleted the ${ticker} ${txn.type}`, {
+          action: {
+            label: 'Undo',
+            onAction: () => {
+              // TransactionOut carries every TransactionCreate field verbatim, split
+              // dummies included (toPayload's convention) — POST accepts them as-is.
+              createTransaction({
+                security_id: txn.security_id,
+                account: txn.account,
+                type: txn.type,
+                txn_date: txn.txn_date,
+                shares: txn.shares,
+                price: txn.price,
+                fees: txn.fees,
+                split_factor: txn.split_factor,
+                notes: txn.notes,
+              })
+                .then(() => onChanged())
+                .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`))
+            },
+          },
+        })
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Delete failed')

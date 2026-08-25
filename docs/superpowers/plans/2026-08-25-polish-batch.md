@@ -1382,7 +1382,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 
 Scope guard for this whole phase: ONLY the four named flows convert. `window.confirm` STAYS at every other site — PaycheckPage profile delete, SecuritiesPanel, CompPage comp-EVENT delete, EsppPage lot/offering/reset, TaxesPage discard + tax-year delete, SettingsPage import clobber, BracketsEditor. Existing inline "Saved."/kept status notes stay everywhere.
 
-- [ ] **Step 1: Write the failing test.** In `src/components/portfolio/TransactionsPanel.test.tsx`:
+- [x] **Step 1: Write the failing test.** In `src/components/portfolio/TransactionsPanel.test.tsx`:
   1. Add `import ToastProvider from '../ToastProvider'` (after the TransactionsPanel import).
   2. In the test `'deleting the row being edited resets the form'`, DELETE the line `vi.spyOn(window, 'confirm').mockReturnValue(true)` — the flow no longer confirms, and a dead spy would claim otherwise.
   3. Append inside the main describe:
@@ -1425,9 +1425,9 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/TransactionsPanel.test.tsx` → the new test FAILS (no toast; delete may even stall on jsdom's unimplemented confirm); the de-spied edit test PASSES only after Step 3.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/TransactionsPanel.test.tsx` → the new test FAILS (no toast; delete may even stall on jsdom's unimplemented confirm); the de-spied edit test PASSES only after Step 3.
 
-- [ ] **Step 3: Implement.** In `src/components/portfolio/TransactionsPanel.tsx`:
+- [x] **Step 3: Implement.** In `src/components/portfolio/TransactionsPanel.tsx`:
   1. Add `import { useToast } from '../ToastProvider'` (after the InfoHint import).
   2. In the component body, add `const toast = useToast()` beside the `tickers` const.
   3. Replace `remove` in full:
@@ -1478,9 +1478,9 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/portfolio/TransactionsPanel.test.tsx` → ALL PASS (the pre-existing delete/busy tests ride the no-op fallback untouched).
+- [x] **Step 4: Run** — `npx vitest run src/components/portfolio/TransactionsPanel.test.tsx` → ALL PASS (the pre-existing delete/busy tests ride the no-op fallback untouched).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): instant transaction delete with undo re-create"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): instant transaction delete with undo re-create"`
 
 ### Task 10: Instant dividend delete + Undo
 
