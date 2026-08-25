@@ -184,7 +184,7 @@ async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut
 - Create: `backend/app/schemas/system.py`, `backend/app/api/system.py`, `backend/tests/test_system_api.py`
 - Modify: `backend/app/main.py`
 
-- [ ] **Step 1: Write the failing tests** — create `backend/tests/test_system_api.py`:
+- [x] **Step 1: Write the failing tests** — create `backend/tests/test_system_api.py`:
 
 ```python
 from datetime import UTC, datetime
@@ -317,9 +317,9 @@ async def test_system_scheduler_flag_reads_the_live_handle(auth_client, monkeypa
     assert (await auth_client.get(STATUS)).json()["prices"]["scheduler_running"] is True
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_system_api.py -q` → FAIL (404s on every authed call; the router does not exist).
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_system_api.py -q` → FAIL (404s on every authed call; the router does not exist).
 
-- [ ] **Step 3: Schemas.** Create `backend/app/schemas/system.py`:
+- [x] **Step 3: Schemas.** Create `backend/app/schemas/system.py`:
 
 ```python
 """System-status wire shapes (2026-08-25 spec §3). One rule shapes the nullables: the
@@ -365,7 +365,7 @@ class SystemStatusOut(BaseModel):
     environment: str
 ```
 
-- [ ] **Step 4: Router.** Create `backend/app/api/system.py`:
+- [x] **Step 4: Router.** Create `backend/app/api/system.py`:
 
 ```python
 """System-status vertical (2026-08-25 spec §3): one JWT-protected GET feeding the
@@ -436,17 +436,17 @@ async def system_status(db: AsyncSession = Depends(get_db)) -> SystemStatusOut:
     )
 ```
 
-- [ ] **Step 5: Mount.** In `backend/app/main.py`: add `system,` to the `from app.api import (...)` tuple (alphabetical: between `spending` and `taxes`), and add the include after the `app_settings.router` line:
+- [x] **Step 5: Mount.** In `backend/app/main.py`: add `system,` to the `from app.api import (...)` tuple (alphabetical: between `spending` and `taxes`), and add the include after the `app_settings.router` line:
 
 ```python
 app.include_router(system.router, prefix="/api/v1")
 ```
 
-- [ ] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_system_api.py tests/test_prices_api.py -q` → ALL PASS (the old endpoint's suite rides along as the no-drift pin).
+- [x] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_system_api.py tests/test_prices_api.py -q` → ALL PASS (the old endpoint's suite rides along as the no-drift pin).
 
-- [ ] **Step 7: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or commit them).
+- [x] **Step 7: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or commit them).
 
-- [ ] **Step 8: Commit** — `git add -A && git commit -m "feat(system): GET /system/status — prices+scheduler+database+backup+environment"`
+- [x] **Step 8: Commit** — `git add -A && git commit -m "feat(system): GET /system/status — prices+scheduler+database+backup+environment"`
 
 ### Task 4: `backup_db.sh` — record the marker (review-only; no shell harness exists)
 
