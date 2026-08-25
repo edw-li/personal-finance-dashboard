@@ -455,7 +455,7 @@ This repo has NO shell test harness, so this change is verified by eyeball plus 
 **Files:**
 - Modify: `backend/scripts/backup_db.sh`
 
-- [ ] **Step 1: Insert the marker upsert.** In `backend/scripts/backup_db.sh`, directly after the `PYEOF` line and before the `# Clean up local dump` comment, insert:
+- [x] **Step 1: Insert the marker upsert.** In `backend/scripts/backup_db.sh`, directly after the `PYEOF` line and before the `# Clean up local dump` comment, insert:
 
 ```bash
 # Record the successful upload for the dashboard's System card (2026-08-25 spec §3):
@@ -480,11 +480,11 @@ PGPASSWORD="${POSTGRES_PASSWORD}" psql \
 
 (`POSTGRES_PASSWORD` is safe under `set -u` here: the `pg_dump` line above already expanded it unguarded, so the script cannot reach this point without it. `ON CONFLICT (key)` targets `app_settings`' primary key.)
 
-- [ ] **Step 2: Review pass.** Re-read the whole script top to bottom and confirm: (a) the block sits between the upload heredoc and the cleanup, (b) nothing else moved, (c) the `|| echo` is attached to the `psql` compound command so `set -e` cannot trip on a marker failure.
+- [x] **Step 2: Review pass.** Re-read the whole script top to bottom and confirm: (a) the block sits between the upload heredoc and the cleanup, (b) nothing else moved, (c) the `|| echo` is attached to the `psql` compound command so `set -e` cannot trip on a marker failure.
 
-- [ ] **Step 3: Syntax check** — `bash -n backend/scripts/backup_db.sh` → exit code 0, no output. That is the whole automated verification available; there is no shell test to write.
+- [x] **Step 3: Syntax check** — `bash -n backend/scripts/backup_db.sh` → exit code 0, no output. That is the whole automated verification available; there is no shell test to write.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(backup): record backup_status marker in app_settings after upload"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(backup): record backup_status marker in app_settings after upload"`
 
 ---
 
