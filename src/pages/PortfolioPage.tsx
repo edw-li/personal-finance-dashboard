@@ -104,7 +104,14 @@ export default function PortfolioPage() {
   // Ticker being deactivated from the failed-refresh row (the old manual-psql ritual for
   // a delisted symbol, one click now); single-flight like the panels' busy flags.
   const [deactivating, setDeactivating] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('transactions')
+  // Arrival deep link (?tab=dividends — the palette's "Add dividend" lands on the
+  // dividends ledger, spec §4 item 9): read once at mount; the strip never writes back.
+  const [tab, setTab] = useState<Tab>(() => {
+    const wanted = new URLSearchParams(window.location.search).get('tab')
+    return wanted === 'dividends' || wanted === 'securities' || wanted === 'realized'
+      ? wanted
+      : 'transactions'
+  })
   // Performance-chart window; object identity so a re-click of the active chip snaps a
   // ctrl+wheel wander back to the preset (NetWorthPage's `range`) — and it now carries
   // any manual window mirrored back from the chart's datazoom event (spec §2e).

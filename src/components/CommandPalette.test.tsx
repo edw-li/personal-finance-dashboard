@@ -9,8 +9,13 @@ import { refreshPrices } from '../api/prices'
 import CommandPalette from './CommandPalette'
 
 function LocationProbe() {
-  const { pathname } = useLocation()
-  return <div data-testid="pathname">{pathname}</div>
+  const { pathname, search } = useLocation()
+  return (
+    <>
+      <div data-testid="pathname">{pathname}</div>
+      <div data-testid="search">{search}</div>
+    </>
+  )
 }
 
 function renderPalette() {
@@ -121,6 +126,15 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(combo(), { key: 'Enter' })
     expect(refreshPrices).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('pathname').textContent).toBe('/portfolio')
+  })
+
+  it('"Add dividend" lands on the dividends tab via the arrival-only ?tab= link', () => {
+    renderPalette()
+    openPalette()
+    fireEvent.change(combo(), { target: { value: 'add div' } })
+    fireEvent.keyDown(combo(), { key: 'Enter' })
+    expect(screen.getByTestId('pathname').textContent).toBe('/portfolio')
+    expect(screen.getByTestId('search').textContent).toBe('?tab=dividends')
   })
 
   it('floats recently-used entries to the top of the unfiltered list, via localStorage', () => {

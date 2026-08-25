@@ -94,7 +94,8 @@ export default function CommandPalette() {
       id: 'action:add-dividend',
       label: 'Add dividend',
       kind: 'Action' as const,
-      run: () => navigate('/portfolio'),
+      // ?tab= is an arrival-only deep link PortfolioPage reads once at mount.
+      run: () => navigate('/portfolio?tab=dividends'),
     },
     {
       id: 'action:add-custom-event',
