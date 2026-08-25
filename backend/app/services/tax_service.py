@@ -5,11 +5,16 @@ is the schema layer's job (money 2dp, effective rates 6dp via `money.quantize_pc
 the engine never quantizes an intermediate the sheet did not quantize.
 
 The canonical model is the clean shape the workbook's own "Total Income" row uses in every
-year, which is also 2024's whole column. The other three year-columns carry hand-edit
-drift (a stray literal, capital gains folded into AGI, a stale hardcoded deduction);
-`backend/tests/test_tax_service.py` pins the canonical outputs AND reproduces each drifted
-sheet value to the cent, so no divergence is accidental. Precedent: Plan 3's savings-rate
-line and Plan 4's Unrealized column shipped the principled formula the same way.
+year (2024's whole column follows it), plus one deliberate correction the sheet made in NO
+year: state AGI carries `cg_amount`, because California taxes capital gains and all
+dividends as ordinary income and the sheet's state chain silently dropped them (2026-08-25
+spec §1 — for a CG year the app's state tax is >= the sheet's, on purpose, in every year
+unconditionally). The other three year-columns also carry hand-edit drift (a stray
+literal, capital gains folded into AGI, a stale hardcoded deduction);
+`backend/tests/test_tax_service.py` pins the canonical outputs AND reproduces each
+drifted/divergent sheet value to the cent, so no difference is accidental. Precedent:
+Plan 3's savings-rate line and Plan 4's Unrealized column shipped the principled formula
+over the sheet's the same way.
 
 Stored input values are authoritative for the breakdown; `derive_suggestions` is advisory
 only (the UI offers a chip, nothing is ever auto-applied server-side).
@@ -271,13 +276,31 @@ def compute_breakdown(
     fed_ti = fed_agi - fed_deduction
     fed_tax = walk(tables["federal"], fed_ti)
 
+    # Capital gains (rows 118-120): a long-term LOSS nets against gains only while the net
+    # stays positive; otherwise the sheet drops it (its deduction line never reaches AGI).
+    # Netted here, above the state section, because state AGI consumes cg_amount too; the
+    # federal CG stack itself is applied after FICA, where the sheet computes it.
+    ltcg = values["ltcg_total"]
+    netted = ltcg + values["qualified_dividends"] + values["other_capital_gains"]
+    if ltcg > 0:
+        cg_amount = netted
+    elif ltcg < 0 and netted > 0:
+        cg_amount = netted
+    else:
+        cg_amount = values["qualified_dividends"] + values["other_capital_gains"]
+
     # State (rows 100-103): CA exempts the treasury slice of unqualified dividends and
-    # does NOT recognise the HSA deduction, so both are added back.
+    # does NOT recognise the HSA deduction, so both are added back — and, deliberately
+    # unlike the sheet (whose state chain dropped them in EVERY year), state AGI carries
+    # cg_amount: California taxes capital gains and all dividends as ordinary income
+    # (2026-08-25 spec §1). One definition of taxable gains, two consumers — this term and
+    # the federal stack below.
     state_agi = (
         fed_agi
         - values["unq_div_us_treasuries_etf"] * values["unq_div_state_exempt_pct"]
         + values["hsa_contributions"]
         + values["hsa_contributions_employer"]
+        + cg_amount
     )
     state_ti = state_agi - values["state_standard_deduction"]
     state_tax = walk(tables["state"], state_ti) - values["state_exemption_credits"]
@@ -310,16 +333,8 @@ def compute_breakdown(
     sdi_wages = w2_income - values["other_pretax_deductions"]
     sdi_tax = walk(tables["disability"], sdi_wages)
 
-    # Capital gains (rows 118-120): a long-term LOSS nets against gains only while the net
-    # stays positive; otherwise the sheet drops it (its deduction line never reaches AGI).
-    ltcg = values["ltcg_total"]
-    netted = ltcg + values["qualified_dividends"] + values["other_capital_gains"]
-    if ltcg > 0:
-        cg_amount = netted
-    elif ltcg < 0 and netted > 0:
-        cg_amount = netted
-    else:
-        cg_amount = values["qualified_dividends"] + values["other_capital_gains"]
+    # The federal CG stack (row 120): cg_amount was netted above the state section, which
+    # shares it; the gains stack on top of federal taxable income.
     cg_tax = stack(tables["capital_gains"], fed_ti, cg_amount)
 
     # Totals (rows 121-125). Gross income sums the *_standard / *_brokerage COMPONENTS,

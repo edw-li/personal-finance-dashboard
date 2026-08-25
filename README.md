@@ -540,14 +540,22 @@ on the first successful refresh.
 | Check | Where | Expected |
 |---|---|---|
 | Net worth identity | /net-worth totals vs the sheet's NET WORTH row | equal with the five component flags set (7.3), less the After-Tax component by design |
-| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent**; 2023 / 2025 / 2026 differ by four known drifts (below) |
+| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent except the state chain** (the deliberate CA capital-gains divergence, below); 2023 / 2025 / 2026 differ by the known sheet drifts (below), plus the CA divergence where the year carries gains |
 | Holdings | cost basis, per row | within ~$0.10 of the sheet (6dp shares × 4dp prices folding) |
 | Scheduler | /settings → price refresh cron | day **names** (`10 13 * * mon-fri`), never numbers |
 
-**The four known tax drifts** — D1 −31.20; D2 +405.50 and +117.85; D3 +4,918.92/93 at cents.
-Each is a place the sheet's own columns disagree with one another; the app is the
-self-consistent model. **Do not "fix" these** — a reconciliation that makes them vanish has
-introduced a bug, not removed one.
+**The five documented tax divergences** — the four sheet drifts, plus one deliberate model
+fix. D1 −31.20; D2 +405.50 and +117.85; D3 +4,918.92/93 at cents — each a place the
+sheet's own columns disagree with one another; the app is the self-consistent model. The
+fifth is different in kind — **CA capital-gains taxation (2026-08-25)**: California taxes
+capital gains and all dividends as ordinary income, and the sheet's state chain never
+added them in ANY year, so here the app is right and the sheet was wrong. For a year
+carrying LTCG / qualified dividends / other CG the app's state tax is **≥ the sheet's**:
++12.00 for 2023 and +16.66 for 2024 at the stored inputs; 2025's state figures now MATCH
+the sheet, because D2's CG-in-AGI drift had pushed the gains into its state chain by
+accident (its +117.85 state half now reads sheet-vs-its-own-formula, not sheet-vs-app);
+2026 carries no gains and is unchanged. **Do not "fix" any of these** — a reconciliation
+that makes them vanish has introduced a bug, not removed one.
 
 **On the cron**: a legacy numeric day-of-week (`10 13 * * 1-5`) is misread by the scheduler
 (APScheduler counts `0` as Monday, so the whole range slips a day) *and* makes the settings
@@ -606,8 +614,8 @@ day's scheduled price refresh is skipped — the **Refresh prices** button recov
 Run both systems for **at least one full monthly cycle** before trusting the app alone: do
 the month-end ritual in the **/update** wizard *and* in the sheet, then compare the net-worth
 summary, spending totals, holdings market value, and — if a tax year changed — the /taxes
-summary. Judge every difference against 7.5: the After-Tax offset and the four tax drifts are
-expected, anything else is not. One clean cycle and the sheet stops being updated — keep it
+summary. Judge every difference against 7.5: the After-Tax offset and the five documented tax
+divergences are expected, anything else is not. One clean cycle and the sheet stops being updated — keep it
 as a frozen archive, which the importer remains able to re-consume if 7.2 is ever needed
 again.
 
