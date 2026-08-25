@@ -602,7 +602,7 @@ export default function Layout() {
 - Modify: `src/App.tsx`
 - Test: `src/pages/NotFoundPage.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing test** — create `src/pages/NotFoundPage.test.tsx`:
+- [x] **Step 1: Write the failing test** — create `src/pages/NotFoundPage.test.tsx`:
 
 ```tsx
 import { cleanup, render, screen } from '@testing-library/react'
@@ -628,9 +628,9 @@ describe('NotFoundPage', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/NotFoundPage.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/NotFoundPage.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/pages/NotFoundPage.tsx`:
+- [x] **Step 3: Implement** — create `src/pages/NotFoundPage.tsx`:
 
 ```tsx
 import { Link, useLocation } from 'react-router-dom'
@@ -653,16 +653,16 @@ export default function NotFoundPage() {
 }
 ```
 
-- [ ] **Step 4: Swap the catch-all.** In `src/App.tsx`:
+- [x] **Step 4: Swap the catch-all.** In `src/App.tsx`:
   1. Replace `import PlaceholderPage from './pages/PlaceholderPage'` with `import NotFoundPage from './pages/NotFoundPage'`.
   2. In the comment above the lazy block, change `Login and the 404 placeholder stay eager` → `Login and the 404 stay eager`.
   3. Replace `<Route path="*" element={<PlaceholderPage title="Not Found" />} />` with `<Route path="*" element={<NotFoundPage />} />`.
 
-- [ ] **Step 5: Prove the placeholder is orphaned, not deleted** — `grep -rln "PlaceholderPage" src` → expected EXACTLY `src/pages/PlaceholderPage.tsx` (its own definition; zero importers). The file STAYS on disk — no deletions overnight.
+- [x] **Step 5: Prove the placeholder is orphaned, not deleted** — `grep -rln "PlaceholderPage" src` → expected EXACTLY `src/pages/PlaceholderPage.tsx` (its own definition; zero importers). The file STAYS on disk — no deletions overnight.
 
-- [ ] **Step 6: Run** — `npx vitest run src/pages/NotFoundPage.test.tsx` → PASS.
+- [x] **Step 6: Run** — `npx vitest run src/pages/NotFoundPage.test.tsx` → PASS.
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(polish): real 404 page, placeholder orphaned"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(polish): real 404 page, placeholder orphaned"`
 
 ### Task 5: Login fixes — primary button, alert role, autofocus
 

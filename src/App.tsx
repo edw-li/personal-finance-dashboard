@@ -4,10 +4,10 @@ import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
-import PlaceholderPage from './pages/PlaceholderPage'
+import NotFoundPage from './pages/NotFoundPage'
 
 // Route-level splitting (Plans 3-5 deferred it here): echarts + each page leave the entry
-// chunk; Login and the 404 placeholder stay eager (first paint must not wait on a chunk).
+// chunk; Login and the 404 stay eager (first paint must not wait on a chunk).
 const OverviewPage = lazy(() => import('./pages/OverviewPage'))
 const MonthlyUpdatePage = lazy(() => import('./pages/MonthlyUpdatePage'))
 const NetWorthPage = lazy(() => import('./pages/NetWorthPage'))
@@ -41,7 +41,7 @@ export default function App() {
               <Route path="/calendar" element={<CalendarPage />} />
               <Route path="/projection" element={<ProjectionPage />} />
               <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<PlaceholderPage title="Not Found" />} />
+              <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Route>
         </Routes>
