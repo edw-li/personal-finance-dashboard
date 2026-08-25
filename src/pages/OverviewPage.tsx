@@ -5,8 +5,8 @@ import { ApiError } from '../api/client'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
-import { fetchRefreshStatus } from '../api/prices'
 import { fetchMatrix, fetchYearly } from '../api/spending'
+import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import EChart from '../components/EChart'
 import type { EChartEventParams } from '../components/EChart'
@@ -32,9 +32,9 @@ import type {
   NetWorthSummary,
   NetWorthTimeseries,
   PortfolioHistory,
-  RefreshStatus,
   SpendingMatrix,
   SpendingYearly,
+  SystemStatus,
   TaxSummariesOut,
   TaxYearOut,
 } from '../types/api'
@@ -54,14 +54,15 @@ interface OverviewData {
   history: PortfolioHistory
   matrix: SpendingMatrix
   taxes: TaxSummariesOut
-  // The attention strip's feeds (ESPP countdowns, tax-year input counts, the last
-  // refresh run) and the YTD card's (yearly rollup, dividend log) ride the same
-  // all-or-nothing snapshot: per-slot degradation stays the documented v2 shape.
+  // The attention strip's feeds (ESPP countdowns, tax-year input counts, the system
+  // status — last refresh run, backup marker, environment) and the YTD card's (yearly
+  // rollup, dividend log) ride the same all-or-nothing snapshot: per-slot degradation
+  // stays the documented v2 shape.
   lots: EsppLotsResponse
   taxYears: TaxYearOut[]
   yearly: SpendingYearly
   dividends: DividendOut[]
-  refresh: RefreshStatus
+  system: SystemStatus
 }
 
 export default function OverviewPage() {
@@ -112,13 +113,13 @@ export default function OverviewPage() {
       fetchTaxYears(),
       fetchYearly(),
       fetchDividends(),
-      fetchRefreshStatus(),
+      fetchSystemStatus(),
     ])
       .then(
-        ([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, refresh]) => {
+        ([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system]) => {
           if (seq !== seqRef.current) return
           setData({
-            summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, refresh,
+            summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system,
           })
           setError(null)
         },
@@ -184,7 +185,7 @@ export default function OverviewPage() {
           holdings: data.holdings,
           lots: data.lots,
           taxYears: data.taxYears,
-          lastRefresh: data.refresh.last,
+          system: data.system,
         },
         todayIso(),
       )

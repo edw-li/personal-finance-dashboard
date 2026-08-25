@@ -1057,7 +1057,7 @@ describe('SettingsPage — system card', () => {
 **Files:**
 - Modify: `src/components/overview/attention.ts`, `src/components/overview/attention.test.ts`, `src/pages/OverviewPage.tsx`, `src/pages/OverviewPage.test.tsx`
 
-- [ ] **Step 1: Write the failing attention tests.** In `src/components/overview/attention.test.ts`:
+- [x] **Step 1: Write the failing attention tests.** In `src/components/overview/attention.test.ts`:
   1. Extend the type import with `BackupStatus,` and `SystemStatus,` (alphabetical; keep `LastRefresh` — `lastRefreshOut` still builds it).
   2. Add fixtures after `lastRefreshOut`:
 ```ts
@@ -1137,9 +1137,9 @@ describe('attentionItems — the nightly backup (prod only)', () => {
 ```
   and insert `'backup-stale',` into the expected keys array between `'refresh-failed'` and `'espp-qualifying'`.
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/attention.test.ts` → FAIL (TS: `system` is not a known property; `lastRefresh` missing).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/attention.test.ts` → FAIL (TS: `system` is not a known property; `lastRefresh` missing).
 
-- [ ] **Step 3: Implement attention.ts.** In `src/components/overview/attention.ts`:
+- [x] **Step 3: Implement attention.ts.** In `src/components/overview/attention.ts`:
   1. Type imports become:
 ```ts
 import type {
@@ -1180,16 +1180,16 @@ import type {
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/overview/attention.test.ts` → PASS. (`npx tsc -b` still fails on OverviewPage — that is Steps 5–6's job, in this same task.)
+- [x] **Step 4: Run** — `npx vitest run src/components/overview/attention.test.ts` → PASS. (`npx tsc -b` still fails on OverviewPage — that is Steps 5–6's job, in this same task.)
 
-- [ ] **Step 5: OverviewPage.tsx swap.** Re-read the file, then apply five semantic edits:
+- [x] **Step 5: OverviewPage.tsx swap.** Re-read the file, then apply five semantic edits:
   1. Replace `import { fetchRefreshStatus } from '../api/prices'` with `import { fetchSystemStatus } from '../api/system'` (keep the api-import block's alphabetical order: `../api/spending`, `../api/system`, `../api/taxes`).
   2. In the type import block, replace `RefreshStatus,` with `SystemStatus,` (alphabetical: after `SpendingYearly`).
   3. In `OverviewData`, replace `refresh: RefreshStatus` with `system: SystemStatus`, and amend the block comment's "the last refresh run" clause to "the system status — last refresh run, backup marker, environment".
   4. In `load()`: `fetchRefreshStatus(),` → `fetchSystemStatus(),`; rename `refresh` → `system` in BOTH the destructuring array and the `setData({...})` object.
   5. In the `attention` const, replace `lastRefresh: data.refresh.last,` with `system: data.system,`.
 
-- [ ] **Step 6: OverviewPage.test.tsx repairs.** Re-read the file, then:
+- [x] **Step 6: OverviewPage.test.tsx repairs.** Re-read the file, then:
   1. Delete the `vi.mock('../api/prices', ...)` block and the `import { fetchRefreshStatus } from '../api/prices'` line; add in their places:
 ```tsx
 vi.mock('../api/system', async (importOriginal) => ({
@@ -1229,9 +1229,9 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
     expect(strip.querySelectorAll('a')).toHaveLength(4)
 ```
 
-- [ ] **Step 7: Run** — `npx vitest run src/components/overview/attention.test.ts src/pages/OverviewPage.test.tsx` → ALL PASS; `npx tsc -b` → clean (proves no other file still names `data.refresh` or the old input field).
+- [x] **Step 7: Run** — `npx vitest run src/components/overview/attention.test.ts src/pages/OverviewPage.test.tsx` → ALL PASS; `npx tsc -b` → clean (proves no other file still names `data.refresh` or the old input field).
 
-- [ ] **Step 8: Commit** — `git add -A && git commit -m "feat(system): overview reads /system/status; backup attention item, prod-only"`
+- [x] **Step 8: Commit** — `git add -A && git commit -m "feat(system): overview reads /system/status; backup attention item, prod-only"`
 
 ---
 

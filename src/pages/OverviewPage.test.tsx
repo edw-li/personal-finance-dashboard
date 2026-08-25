@@ -11,9 +11,9 @@ import type {
   NetWorthSummary,
   NetWorthTimeseries,
   PortfolioHistory,
-  RefreshStatus,
   SpendingMatrix,
   SpendingYearly,
+  SystemStatus,
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
@@ -49,9 +49,9 @@ vi.mock('../api/espp', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/espp')>()),
   fetchLots: vi.fn(),
 }))
-vi.mock('../api/prices', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../api/prices')>()),
-  fetchRefreshStatus: vi.fn(),
+vi.mock('../api/system', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/system')>()),
+  fetchSystemStatus: vi.fn(),
 }))
 // The seventh module is deliberately NOT one of those eleven: the Up-next strip fetches
 // the calendar on its own, so a hiccup there dents the strip and nothing else.
@@ -89,8 +89,8 @@ import { fetchCalendar } from '../api/calendar'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
-import { fetchRefreshStatus } from '../api/prices'
 import { fetchMatrix, fetchYearly } from '../api/spending'
+import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 
 // --- fixtures ---------------------------------------------------------------------------
@@ -239,6 +239,19 @@ function lotsOut(lots: EsppLotOut[] = []): EsppLotsResponse {
   return { espp_ticker: null, current_price: null, quoted_at: null, lots }
 }
 
+// Strip-quiet system default: environment 'dev' suppresses the backup nag (its logic is
+// pinned in attention.test.ts, where today is injectable) and no refresh is recorded —
+// the same quiet the old { last: null, next_run_at: null } fixture bought.
+function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
+  return {
+    prices: { last: null, next_run_at: null, scheduler_running: false },
+    database: { size_bytes: 123_456_789, alembic_head: 'e7c5a9f4b2d8' },
+    backup: null,
+    environment: 'dev',
+    ...over,
+  }
+}
+
 function upNextEvents(count = 6): CalendarEvent[] {
   return Array.from({ length: count }, (_, i) => ({
     date: daysAgo(-(i + 1)),
@@ -261,7 +274,7 @@ interface Payload {
   taxYears: TaxYearOut[]
   yearly: SpendingYearly
   dividends: DividendOut[]
-  refresh: RefreshStatus
+  system: SystemStatus
 }
 
 // Arms all eleven clients at once — the page never renders a partial snapshot, so neither
@@ -281,7 +294,7 @@ function serve(over: Partial<Payload> = {}): Payload {
     taxYears: [{ year: CURRENT_YEAR, notes: null, input_count: 21, bracket_count: 42 }],
     yearly: { years: [] },
     dividends: [],
-    refresh: { last: null, next_run_at: null },
+    system: systemOut(),
     ...over,
   }
   vi.mocked(fetchSummary).mockResolvedValue(payload.summary)
@@ -294,7 +307,7 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchTaxYears).mockResolvedValue(payload.taxYears)
   vi.mocked(fetchYearly).mockResolvedValue(payload.yearly)
   vi.mocked(fetchDividends).mockResolvedValue(payload.dividends)
-  vi.mocked(fetchRefreshStatus).mockResolvedValue(payload.refresh)
+  vi.mocked(fetchSystemStatus).mockResolvedValue(payload.system)
   vi.mocked(fetchCalendar).mockResolvedValue({ events: upNextEvents() })
   return payload
 }
@@ -311,7 +324,7 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchTaxYears).mockImplementation(boom)
   vi.mocked(fetchYearly).mockImplementation(boom)
   vi.mocked(fetchDividends).mockImplementation(boom)
-  vi.mocked(fetchRefreshStatus).mockImplementation(boom)
+  vi.mocked(fetchSystemStatus).mockImplementation(boom)
   vi.mocked(fetchCalendar).mockImplementation(boom)
 }
 
@@ -559,7 +572,7 @@ describe('OverviewPage snapshot fan-out', () => {
     for (const client of [
       fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
       fetchAllTaxSummaries, fetchLots, fetchTaxYears, fetchYearly, fetchDividends,
-      fetchRefreshStatus,
+      fetchSystemStatus,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
     }
@@ -696,6 +709,7 @@ describe('OverviewPage attention strip', () => {
       ts: timeseriesOut({ months: [addMonths(current, -4), addMonths(current, -3)] }),
       lots: lotsOut([lotOut(5)]),
       taxYears: [{ year: CURRENT_YEAR, notes: null, input_count: 0, bracket_count: 42 }],
+      system: systemOut({ environment: 'prod' }),
     })
     renderPage()
 
@@ -712,8 +726,13 @@ describe('OverviewPage attention strip', () => {
         .getByRole('link', { name: new RegExp(`${CURRENT_YEAR}'s tax inputs are empty`) })
         .getAttribute('href'),
     ).toBe('/taxes')
-    // Exactly the three conditions above — nothing else invented itself an item.
-    expect(strip.querySelectorAll('a')).toHaveLength(3)
+    expect(
+      screen
+        .getByRole('link', { name: /Nightly backup hasn't run recently/ })
+        .getAttribute('href'),
+    ).toBe('/settings')
+    // Exactly the four conditions above — nothing else invented itself an item.
+    expect(strip.querySelectorAll('a')).toHaveLength(4)
   })
 })
 
@@ -786,7 +805,7 @@ describe('OverviewPage failures', () => {
     for (const client of [
       fetchSummary, fetchTimeseries, fetchHoldings, fetchHistory, fetchMatrix,
       fetchAllTaxSummaries, fetchLots, fetchTaxYears, fetchYearly, fetchDividends,
-      fetchRefreshStatus,
+      fetchSystemStatus,
     ]) {
       expect(client).toHaveBeenCalledTimes(2)
     }

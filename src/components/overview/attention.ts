@@ -4,12 +4,12 @@
 import type {
   EsppLotsResponse,
   HoldingsResponse,
-  LastRefresh,
+  SystemStatus,
   TaxYearOut,
 } from '../../types/api'
 import { formatDate, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
-import { isStaleQuote } from '../../utils/staleness'
+import { backupAge, isStaleQuote } from '../../utils/staleness'
 
 export interface AttentionItem {
   key: string
@@ -23,8 +23,8 @@ export interface AttentionInputs {
   holdings: HoldingsResponse
   lots: EsppLotsResponse
   taxYears: TaxYearOut[]
-  /** The persisted outcome of the most recent refresh run; null before the first one. */
-  lastRefresh: LastRefresh | null
+  /** GET /system/status — the last refresh outcome, backup marker and environment. */
+  system: SystemStatus
 }
 
 // The ritual runs in the month's first days (recorded_on evidence), so the nudge waits a
@@ -102,7 +102,8 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
   // The last refresh run's failures — persisted whichever way it ran (the scheduled
   // job's outcome used to be log-only). The Portfolio header carries the per-ticker
   // detail and the one-click deactivate.
-  const failedTickers = data.lastRefresh === null ? [] : Object.keys(data.lastRefresh.failed)
+  const failedTickers =
+    data.system.prices.last === null ? [] : Object.keys(data.system.prices.last.failed)
   if (failedTickers.length > 0) {
     const shown = failedTickers.slice(0, 3).join(', ')
     const more = failedTickers.length - Math.min(3, failedTickers.length)
@@ -113,6 +114,23 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
         `the last price refresh (${shown}${more > 0 ? `, +${more} more` : ''})`,
       to: '/portfolio',
     })
+  }
+
+  // Nightly backup — PROD only (spec §3): dev boxes never back up and must not nag.
+  // "Missing or older than 48h" shares backupAge with the Settings card's amber tone,
+  // evaluated at today's midnight UTC exactly as prices-stale above.
+  if (data.system.environment === 'prod') {
+    const { backup } = data.system
+    if (
+      backup === null ||
+      backupAge(backup.last_success_at, new Date(`${todayIso}T00:00:00Z`)) !== 'fresh'
+    ) {
+      items.push({
+        key: 'backup-stale',
+        text: "Nightly backup hasn't run recently",
+        to: '/settings',
+      })
+    }
   }
 
   // ESPP — days_until_qualified is the SERVER's countdown (null on sold rows), so there
