@@ -113,7 +113,11 @@ export default function PortfolioPage() {
   // ctrl+wheel window become page state, fed back through the memoized option, so a
   // reload or notMerge rebuild no longer resets them.
   const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
-  const onLegendChange = (selected: Record<string, boolean>) => setLegendSelected(selected)
+  // MERGED, never replaced. One chart mirrors here today, so this is equivalent — it is
+  // written the sibling pages' way so a second mirroring chart cannot silently
+  // reintroduce their cross-chart clobber (a stale key is inert in legend.selected).
+  const onLegendChange = (selected: Record<string, boolean>) =>
+    setLegendSelected((current) => ({ ...current, ...selected }))
   const onZoomWindow = (nextWindow: ZoomWindow) =>
     setRange((current) => ({ preset: current.preset, window: nextWindow }))
   // Holdings drill-in: the TICKER whose detail panel is open (never an index — a reload

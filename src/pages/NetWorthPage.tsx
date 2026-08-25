@@ -78,7 +78,12 @@ export default function NetWorthPage() {
   // granularity refetch or notMerge rebuild no longer resets them — and both charts
   // share one window, like they share the chips.
   const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
-  const onLegendChange = (selected: Record<string, boolean>) => setLegendSelected(selected)
+  // MERGED, never replaced: echarts hands over the FIRING chart's whole name→shown map,
+  // and the stacked chart's groups are not the drill chart's accounts — replacing would
+  // let a toggle on one resurrect a series hidden on the other. A stale key is inert in
+  // legend.selected (echarts ignores names no series claims), so merging is the safe way.
+  const onLegendChange = (selected: Record<string, boolean>) =>
+    setLegendSelected((current) => ({ ...current, ...selected }))
   const onZoomWindow = (nextWindow: ZoomWindow) =>
     setRange((current) => ({ preset: current.preset, window: nextWindow }))
 

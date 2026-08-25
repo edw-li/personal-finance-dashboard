@@ -64,11 +64,21 @@ describe('the download shims', () => {
   })
 
   it('downloadText wraps the text in a typed Blob, downloads it and revokes the URL', async () => {
-    downloadText('Month,Total\r\n', 'spending.csv', 'text/csv;charset=utf-8')
-    const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob
-    expect(blob.type).toBe('text/csv;charset=utf-8')
-    expect(await readBlob(blob)).toBe('Month,Total\r\n')
-    expect(clicks).toEqual([{ download: 'spending.csv', href: 'blob:mock-1' }])
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-1')
+    vi.useFakeTimers()
+    try {
+      downloadText('Month,Total\r\n', 'spending.csv', 'text/csv;charset=utf-8')
+      const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob
+      expect(blob.type).toBe('text/csv;charset=utf-8')
+      expect(clicks).toEqual([{ download: 'spending.csv', href: 'blob:mock-1' }])
+      // NOT yet: revoking in the click's own tick aborts the download on Safari.
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+      vi.runAllTimers()
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-1')
+      // Read the Blob only after restoring real timers — FileReader is async.
+      vi.useRealTimers()
+      expect(await readBlob(blob)).toBe('Month,Total\r\n')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -74,9 +74,15 @@ export interface RangeState {
  * timeZoom with any mirrored manual window layered over the preset, so option rebuilds
  * (refetches, notMerge) and same-axis sibling charts keep the window the user dragged
  * out instead of snapping back to the preset on every re-render.
+ *
+ * A window whose start falls off the END of a SHORTER axis is dropped rather than
+ * applied: the series was replaced wholesale (a granularity flip, a re-import) and the
+ * stale indices would pin the chart to a degenerate one-bar window nobody asked for.
+ * Falling back to the preset is the honest reading — the axis the window described is
+ * gone. Windows that merely overhang the end still apply: echarts clamps those itself.
  */
 export function rangeZoom(dates: string[], range: RangeState): InsideZoomOption[] {
   const [zoom] = timeZoom(dates, range.preset)
-  if (range.window === undefined) return [zoom]
+  if (range.window === undefined || range.window.startValue >= dates.length) return [zoom]
   return [{ ...zoom, startValue: range.window.startValue, endValue: range.window.endValue }]
 }

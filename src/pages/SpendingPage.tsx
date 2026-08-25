@@ -99,7 +99,12 @@ export default function SpendingPage() {
   // Legend picks, mirrored from legendselectchanged and fed back via legend.selected —
   // a refetch/notMerge rebuild no longer resets toggles (the budget-line reset bug).
   const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
-  const onLegendChange = (selected: Record<string, boolean>) => setLegendSelected(selected)
+  // MERGED, never replaced: echarts hands over the FIRING chart's whole name→shown map,
+  // and these charts carry different series, so replacing would let a toggle on the
+  // trends chart resurrect a series hidden on the bars. A stale key is inert in
+  // legend.selected (echarts ignores names no series claims), so merging is the safe way.
+  const onLegendChange = (selected: Record<string, boolean>) =>
+    setLegendSelected((current) => ({ ...current, ...selected }))
   const onZoomWindow = (nextWindow: ZoomWindow) =>
     setRange((current) => ({ preset: current.preset, window: nextWindow }))
   // The flow card's window. Month follows the month being LOOKED AT (drill-aware, the

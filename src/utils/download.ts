@@ -31,12 +31,16 @@ export function downloadDataUrl(url: string, filename: string): void {
   anchor.remove()
 }
 
-/** Text → typed Blob → object URL → anchor; revoked after so exports don't leak blobs. */
+/** Text → typed Blob → object URL → anchor; revoked after so exports don't leak blobs.
+ * The revoke is DEFERRED to a macrotask: Safari has historically aborted a download when
+ * the URL is revoked synchronously in the same tick as the click, and the anchor is
+ * already gone by then either way. A task later still frees the blob well before the
+ * page can accumulate them. */
 export function downloadText(text: string, filename: string, mime: string): void {
   const url = URL.createObjectURL(new Blob([text], { type: mime }))
   try {
     downloadDataUrl(url, filename)
   } finally {
-    URL.revokeObjectURL(url)
+    setTimeout(() => URL.revokeObjectURL(url), 0)
   }
 }

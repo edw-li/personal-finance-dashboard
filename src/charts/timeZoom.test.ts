@@ -81,4 +81,21 @@ describe('rangeZoom', () => {
     expect(snapped.startValue).toBe(0)
     expect(snapped.endValue).toBeUndefined()
   })
+
+  it('drops a window whose start fell off a SHORTER axis instead of pinning one bar', () => {
+    // The series was replaced wholesale (granularity flip, re-import) and shrank to six
+    // points; indices 18-20 describe an axis that no longer exists.
+    const short = MONTHS.slice(0, 6)
+    const dropped = rangeZoom(short, {
+      preset: 'all',
+      window: { startValue: 18, endValue: 20 },
+    })
+    expect(dropped).toEqual(timeZoom(short, 'all')) // straight back to the preset
+    expect(dropped[0].endValue).toBeUndefined()
+    // A window still ON the axis applies untouched, overhang and all — echarts clamps
+    // the tail itself, and clamping it here would fight a live append (the ping).
+    const [kept] = rangeZoom(short, { preset: 'all', window: { startValue: 5, endValue: 40 } })
+    expect(kept.startValue).toBe(5)
+    expect(kept.endValue).toBe(40)
+  })
 })

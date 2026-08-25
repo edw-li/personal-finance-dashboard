@@ -45,6 +45,10 @@ vi.mock('../components/EChart', async () => {
         'data-export-name': exportConfig?.name ?? '',
         onClick: () => onClick?.({ dataIndex: 0 }),
         onMouseEnter: () => onLegendChange?.({ 'Net pay': false, '4% rule': true }),
+        // A SECOND legendselectchanged shape, carrying a map disjoint from mouseEnter's:
+        // echarts hands each chart its OWN full name→shown map, so this is what a toggle
+        // on a sibling chart (different series entirely) looks like arriving at the page.
+        onDoubleClick: () => onLegendChange?.({ Rent: false }),
         onMouseLeave: () => onDataZoom?.({ startValue: 1, endValue: 1 }),
       }),
   }
@@ -239,6 +243,28 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
         screen.getAllByTestId('echart')[0].getAttribute('data-legend-selected') ?? '{}',
       ),
     ).toEqual({ 'Total budget': false, 'Net pay': false, '4% rule': true })
+  })
+
+  it('merges a sibling chart’s picks instead of clobbering — no series resurrects', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    // The two charts that mirror legend picks are exactly the ones carrying a
+    // legend.selected map: [0] the stacked bars, [1] the category trends.
+    const legendCharts = () =>
+      screen
+        .getAllByTestId('echart')
+        .filter((el) => (el.getAttribute('data-legend-selected') ?? 'null') !== 'null')
+    expect(legendCharts()).toHaveLength(2)
+    fireEvent.mouseEnter(legendCharts()[0]) // bars hide 'Net pay'
+    // Now a toggle on the TRENDS chart, whose map knows nothing of the bars' series.
+    // Replacing the page map here is what resurrected the bars' hidden lines.
+    fireEvent.doubleClick(legendCharts()[1]) // trends hide 'Rent'
+    expect(JSON.parse(legendCharts()[0].getAttribute('data-legend-selected') ?? '{}')).toEqual({
+      'Total budget': false,
+      'Net pay': false, // STAYS hidden — the whole point
+      '4% rule': true,
+      Rent: false, // and the sibling's pick rides along, inert where no series claims it
+    })
   })
 
   it('mirrors a manual window into every sibling time chart and snaps back on a chip', async () => {
