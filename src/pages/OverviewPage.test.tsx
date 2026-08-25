@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
@@ -68,10 +68,20 @@ vi.mock('../api/calendar', async (importOriginal) => ({
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ option }: { option: { xAxis?: { data?: unknown[] } } }) =>
+    default: ({
+      option,
+      onClick,
+    }: {
+      option: { xAxis?: { data?: unknown[] } }
+      onClick?: (params: { dataIndex?: number }) => void
+    }) =>
       createElement('div', {
         'data-testid': 'echart',
         'data-categories': (option.xAxis?.data ?? []).join(','),
+        // A click stands in for a click on the chart's FIRST point (dataIndex 0) —
+        // enough to walk the click-through door without a canvas (SpendingPage.test's
+        // idiom). Charts given no handler stay inert, like the real thing.
+        onClick: () => onClick?.({ dataIndex: 0 }),
       }),
   }
 })
@@ -305,10 +315,16 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchCalendar).mockImplementation(boom)
 }
 
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+}
+
 function renderPage() {
   return render(
     <MemoryRouter>
       <OverviewPage />
+      <LocationProbe />
     </MemoryRouter>,
   )
 }
@@ -858,4 +874,42 @@ it('a calendar failure dents only the strip, never the snapshot', async () => {
   await screen.findByText(/Couldn't load upcoming events/)
   screen.getByText(/Net worth —/) // the snapshot half rendered normally
   expect(screen.queryByRole('alert')).toBeNull() // and no page-level banner fired
+})
+
+describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
+  it('spending bars carry the clicked month into the /spending drill deep link', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    fireEvent.click(screen.getAllByTestId('echart')[2]) // bars: first of the 12-month slice
+    expect(screen.getByTestId('location').textContent).toBe('/spending?month=2025-08-01')
+  })
+
+  it('maps the bar index through the trailing-12 slice offset', async () => {
+    // 13 months on the wire, 12 drawn: dataIndex 0 is the SECOND month, not the first.
+    serve({
+      matrix: matrixOut({
+        months: monthsFrom('2025-07-01', 13),
+        totals: [...Array<string>(12).fill('5000.00'), '6000.00'],
+      }),
+    })
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    fireEvent.click(screen.getAllByTestId('echart')[2])
+    expect(screen.getByTestId('location').textContent).toBe('/spending?month=2025-08-01')
+  })
+
+  it('performance goes to /portfolio, the spark to /net-worth', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    fireEvent.click(screen.getAllByTestId('echart')[1])
+    expect(screen.getByTestId('location').textContent).toBe('/portfolio')
+    cleanup()
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    fireEvent.click(screen.getAllByTestId('echart')[0])
+    expect(screen.getByTestId('location').textContent).toBe('/net-worth')
+  })
 })

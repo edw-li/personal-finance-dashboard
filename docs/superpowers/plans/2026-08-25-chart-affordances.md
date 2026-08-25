@@ -1706,7 +1706,7 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
 **Files:**
 - Modify: `src/pages/OverviewPage.tsx`, `src/components/overview/overviewChartOptions.ts`, `src/pages/OverviewPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** In `src/pages/OverviewPage.test.tsx`:
+- [x] **Step 1: Write the failing tests.** In `src/pages/OverviewPage.test.tsx`:
   1. Extend the react-router import to `import { MemoryRouter, useLocation } from 'react-router-dom'`.
   2. Extend the EChart mock so a marker click forwards `dataIndex: 0` (replace the mock's `default:` component):
 ```tsx
@@ -1783,9 +1783,9 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/OverviewPage.test.tsx` → the new describe FAILS (no onClick handlers); everything else PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/OverviewPage.test.tsx` → the new describe FAILS (no onClick handlers); everything else PASSES.
 
-- [ ] **Step 3: Name the slice length.** In `src/components/overview/overviewChartOptions.ts`, add above `recentSpendOption`:
+- [x] **Step 3: Name the slice length.** In `src/components/overview/overviewChartOptions.ts`, add above `recentSpendOption`:
 
 ```ts
 /** The bars' trailing-window length — named so OverviewPage's click handler can map a
@@ -1795,7 +1795,7 @@ export const RECENT_SPEND_MONTHS = 12
 
 and change the signature's default to `months = RECENT_SPEND_MONTHS`.
 
-- [ ] **Step 4: Wire the page — minimal and localized** (siblings touch this file). In `src/pages/OverviewPage.tsx`:
+- [x] **Step 4: Wire the page — minimal and localized** (siblings touch this file). In `src/pages/OverviewPage.tsx`:
   1. Change the react-router import to `import { NavLink, useNavigate } from 'react-router-dom'`.
   2. Extend the overviewChartOptions import with `RECENT_SPEND_MONTHS,` and the EChart import with the type: `import EChart from '../components/EChart'` plus `import type { EChartEventParams } from '../components/EChart'`.
   3. First line of the component body: `const navigate = useNavigate()`.
@@ -1816,9 +1816,9 @@ and change the signature's default to `months = RECENT_SPEND_MONTHS`.
      - performance: `<EChart option={perf} height={280} onClick={() => navigate('/portfolio')} />`
      - bars: `<EChart option={bars} height={240} onClick={openSpendingMonth} />`
 
-- [ ] **Step 5: Run** — `npx vitest run src/pages/OverviewPage.test.tsx` → ALL PASS.
+- [x] **Step 5: Run** — `npx vitest run src/pages/OverviewPage.test.tsx` → ALL PASS.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(overview): chart click-through to owning pages with ?month= carry"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(overview): chart click-through to owning pages with ?month= carry"`
 
 ---
 
