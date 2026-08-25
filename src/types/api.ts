@@ -1021,6 +1021,7 @@ export type CalendarEventType =
   | 'offering_start'
   | 'tax_deadline'
   | 'update_due'
+  | 'custom'
 
 // One forward-looking event (2026-08-24 spec §5). No money fields in v1 — labels and
 // details carry share counts and prices as text. Sorted by (date, type, label) on the
@@ -1031,11 +1032,26 @@ export interface CalendarEvent {
   type: CalendarEventType
   label: string
   detail: string | null
-  href: string
+  href: string | null // null for custom events — they have no page (spec §9.3)
+  id: number | null // set only for custom events, the edit/delete handle
 }
 
 export interface CalendarResponse {
   events: CalendarEvent[]
+}
+
+// POST/PATCH body — full replace (the form always submits all three fields).
+export interface CustomEventBody {
+  date: string
+  label: string
+  detail: string | null
+}
+
+export interface CustomEventOut {
+  id: number
+  date: string
+  label: string
+  detail: string | null
 }
 
 // --- projection ---

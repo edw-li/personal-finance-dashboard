@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { NavLink } from 'react-router-dom'
 import { ApiError } from '../api/client'
-import { fetchCalendar } from '../api/calendar'
+import {
+  createCustomEvent,
+  deleteCustomEvent,
+  fetchCalendar,
+  updateCustomEvent,
+} from '../api/calendar'
 import {
   EVENT_COLORS,
   EVENT_TYPE_LABELS,
   EVENT_TYPE_ORDER,
+  eventKey,
   groupByDate,
 } from '../components/calendar/calendarView'
+import EventDetails from '../components/calendar/EventDetails'
 import type { CalendarEvent } from '../types/api'
 import { formatDate, formatMonth } from '../utils/format'
 import { downloadIcs } from '../utils/ics'
@@ -23,12 +29,27 @@ function windowFor(monthIso: string): { start: string; end: string } {
   return { start: addMonths(monthIso, -1), end: addDays(addMonths(monthIso, 2), -1) }
 }
 
+// Which surface the open event's details render on — the grid anchors a popover, the
+// list (also the mobile rendering) expands inline (spec §9.2).
+type OpenState = { key: string; surface: 'grid' | 'list' } | null
+type FormState = { mode: 'add' } | { mode: 'edit'; id: number } | null
+
 export default function CalendarPage() {
   const [month, setMonth] = useState<string>(currentMonthIso())
   const [events, setEvents] = useState<CalendarEvent[] | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const seqRef = useRef(0)
+  const [open, setOpen] = useState<OpenState>(null)
+  const [form, setForm] = useState<FormState>(null)
+  const [fDate, setFDate] = useState('')
+  const [fLabel, setFLabel] = useState('')
+  const [fDetail, setFDetail] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const anchorRef = useRef<HTMLElement | null>(null)
+  const popoverRef = useRef<HTMLDivElement | null>(null)
 
   const load = (monthIso: string) => {
     const seq = ++seqRef.current
@@ -56,6 +77,7 @@ export default function CalendarPage() {
 
   const showMonth = (next: string) => {
     setMonth(next)
+    setOpen(null)
     setBusy(true)
     load(next)
   }
@@ -63,6 +85,97 @@ export default function CalendarPage() {
   const reload = () => {
     setBusy(true)
     load(month)
+  }
+
+  const toggleEvent = (event: CalendarEvent, surface: 'grid' | 'list', anchor: HTMLElement) => {
+    const key = eventKey(event)
+    if (open !== null && open.key === key && open.surface === surface) {
+      setOpen(null)
+      return
+    }
+    anchorRef.current = anchor
+    setOpen({ key, surface })
+  }
+
+  // Popover lifecycle: focus it on open (it is a dialog), Escape closes and hands focus
+  // back to the chip, an outside mousedown closes the GRID popover (the list expansion
+  // is an accordion — it closes by toggle or Escape, the vest-table grammar).
+  useEffect(() => {
+    if (open === null) return
+    if (open.surface === 'grid') popoverRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setOpen(null)
+      anchorRef.current?.focus()
+    }
+    document.addEventListener('keydown', onKey)
+    if (open.surface !== 'grid') {
+      return () => document.removeEventListener('keydown', onKey)
+    }
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (popoverRef.current?.contains(target)) return
+      // The chip's own mousedown must not close-then-reopen via its click toggle.
+      if (anchorRef.current?.contains(target)) return
+      setOpen(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+    }
+  }, [open])
+
+  const openAddForm = () => {
+    setForm({ mode: 'add' })
+    setFDate(todayIso())
+    setFLabel('')
+    setFDetail('')
+    setFormError(null)
+  }
+
+  const startEdit = (event: CalendarEvent) => {
+    if (event.id === null) return
+    setForm({ mode: 'edit', id: event.id })
+    setFDate(event.date)
+    setFLabel(event.label)
+    setFDetail(event.detail ?? '')
+    setFormError(null)
+    setOpen(null)
+  }
+
+  const saveForm = () => {
+    if (form === null) return
+    setSaving(true)
+    const detail = fDetail.trim()
+    const body = { date: fDate, label: fLabel.trim(), detail: detail === '' ? null : detail }
+    const call =
+      form.mode === 'add' ? createCustomEvent(body) : updateCustomEvent(form.id, body)
+    call
+      .then(() => {
+        setForm(null)
+        setBusy(true)
+        load(month)
+      })
+      .catch((err: unknown) => {
+        setFormError(err instanceof ApiError ? err.message : 'Could not save the event.')
+      })
+      .finally(() => setSaving(false))
+  }
+
+  const removeEvent = (event: CalendarEvent) => {
+    if (event.id === null) return
+    setDeleting(true)
+    deleteCustomEvent(event.id)
+      .then(() => {
+        setOpen(null)
+        setBusy(true)
+        load(month)
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : 'Could not delete the event.')
+      })
+      .finally(() => setDeleting(false))
   }
 
   const today = todayIso()
@@ -73,11 +186,18 @@ export default function CalendarPage() {
   const monthEvents = (events ?? []).filter((e) => e.date.slice(0, 7) === month.slice(0, 7))
   const listGroups = [...groupByDate(monthEvents).entries()]
 
+  const details = (event: CalendarEvent) => (
+    <EventDetails event={event} onEdit={startEdit} onDelete={removeEvent} deleting={deleting} />
+  )
+
   return (
     <div className="page calendar-page">
       <header className="page-header">
         <h1>Calendar</h1>
         <div className="spacer" />
+        <button type="button" className="button" onClick={openAddForm}>
+          Add event
+        </button>
         <button
           type="button"
           className="button"
@@ -98,8 +218,58 @@ export default function CalendarPage() {
       {events === null ? (
         busy && <p className="empty-note">Loading…</p>
       ) : (
-        <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          <section className="card">
+        <div className={`card-grid loading-dim${busy ? ' is-loading' : ''}`}>
+          {form !== null && (
+            <section className="card span-12">
+              <h2 className="eyebrow">{form.mode === 'add' ? 'Add event' : 'Edit event'}</h2>
+              {formError && (
+                <div className="error-banner" role="alert">
+                  {formError}
+                </div>
+              )}
+              <div className="cal-form">
+                <label className="cal-form-field">
+                  Date
+                  <input
+                    type="date"
+                    className="field-input cal-form-input"
+                    value={fDate}
+                    onChange={(e) => setFDate(e.target.value)}
+                  />
+                </label>
+                <label className="cal-form-field">
+                  Title
+                  <input
+                    className="field-input cal-form-input"
+                    value={fLabel}
+                    maxLength={120}
+                    onChange={(e) => setFLabel(e.target.value)}
+                  />
+                </label>
+                <label className="cal-form-field cal-form-note">
+                  Note (optional)
+                  <input
+                    className="field-input cal-form-input"
+                    value={fDetail}
+                    maxLength={300}
+                    onChange={(e) => setFDetail(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={saving || fLabel.trim() === '' || fDate === ''}
+                  onClick={saveForm}
+                >
+                  {form.mode === 'add' ? 'Save event' : 'Save changes'}
+                </button>
+                <button type="button" className="button" onClick={() => setForm(null)}>
+                  Cancel
+                </button>
+              </div>
+            </section>
+          )}
+          <section className="card span-12">
             <div className="cal-controls">
               <button
                 type="button"
@@ -130,7 +300,7 @@ export default function CalendarPage() {
                   {dow}
                 </div>
               ))}
-              {weeks.flat().map((day) => {
+              {weeks.flat().map((day, dayIndex) => {
                 const outside = day.slice(0, 7) !== month.slice(0, 7)
                 return (
                   <div
@@ -140,17 +310,37 @@ export default function CalendarPage() {
                     }`}
                   >
                     <div className="cal-day-number">{Number(day.slice(8, 10))}</div>
-                    {(byDate.get(day) ?? []).map((event) => (
-                      <NavLink
-                        key={`${event.type}-${event.date}-${event.label}`}
-                        className="cal-chip"
-                        to={event.href}
-                        title={event.detail ?? event.label}
-                        style={{ borderLeftColor: EVENT_COLORS[event.type] }}
-                      >
-                        {event.label}
-                      </NavLink>
-                    ))}
+                    {(byDate.get(day) ?? []).map((event) => {
+                      const key = eventKey(event)
+                      const isOpen = open?.surface === 'grid' && open.key === key
+                      return (
+                        <div key={key} className="cal-chip-slot">
+                          <button
+                            type="button"
+                            className="cal-chip"
+                            aria-expanded={isOpen}
+                            aria-haspopup="dialog"
+                            style={{ borderLeftColor: EVENT_COLORS[event.type] }}
+                            onClick={(e) => toggleEvent(event, 'grid', e.currentTarget)}
+                          >
+                            {event.label}
+                          </button>
+                          {isOpen && (
+                            <div
+                              ref={popoverRef}
+                              role="dialog"
+                              aria-label={event.label}
+                              tabIndex={-1}
+                              className={`cal-popover${
+                                dayIndex % 7 >= 5 ? ' cal-popover-right' : ''
+                              }`}
+                            >
+                              {details(event)}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )
               })}
@@ -178,11 +368,11 @@ export default function CalendarPage() {
             {events.length === 0 && (
               <p className="empty-note">
                 No events in this window — vests, purchases and paydays appear once grants,
-                periods and a paycheck profile are entered.
+                periods and a paycheck profile are entered. Add your own with Add event.
               </p>
             )}
           </section>
-          <section className="card">
+          <section className="card span-12">
             <h2 className="eyebrow">{formatMonth(month)} — list</h2>
             {listGroups.length === 0 ? (
               <p className="empty-note">Nothing this month.</p>
@@ -192,16 +382,26 @@ export default function CalendarPage() {
                   <li key={day}>
                     <span className="cal-list-date">{formatDate(day)}</span>
                     <ul>
-                      {dayEvents.map((event) => (
-                        <li key={`${event.type}-${event.label}`}>
-                          <NavLink to={event.href} className="cal-list-link">
-                            {event.label}
-                          </NavLink>
-                          {event.detail !== null && event.detail !== event.label && (
-                            <span className="cal-list-detail"> — {event.detail}</span>
-                          )}
-                        </li>
-                      ))}
+                      {dayEvents.map((event) => {
+                        const key = eventKey(event)
+                        const isOpen = open?.surface === 'list' && open.key === key
+                        return (
+                          <li key={key}>
+                            <button
+                              type="button"
+                              className="row-toggle cal-list-item"
+                              aria-expanded={isOpen}
+                              onClick={(e) => toggleEvent(event, 'list', e.currentTarget)}
+                            >
+                              {event.label}
+                              {event.detail !== null && event.detail !== event.label && (
+                                <span className="cal-list-detail"> — {event.detail}</span>
+                              )}
+                            </button>
+                            {isOpen && <div className="cal-list-expansion">{details(event)}</div>}
+                          </li>
+                        )
+                      })}
                     </ul>
                   </li>
                 ))}

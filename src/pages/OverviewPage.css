@@ -125,6 +125,15 @@
   text-decoration: underline;
 }
 
+/* Custom events carry no page link — same row grammar, no link affordance. */
+.up-next-plain {
+  cursor: default;
+}
+
+.up-next-plain:hover {
+  text-decoration: none;
+}
+
 .up-next-date {
   color: var(--muted);
   font-variant-numeric: tabular-nums;

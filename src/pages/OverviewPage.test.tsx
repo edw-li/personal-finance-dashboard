@@ -236,6 +236,7 @@ function upNextEvents(count = 6): CalendarEvent[] {
     label: `Upcoming event ${i + 1}`,
     detail: null,
     href: '/paycheck',
+    id: null,
   }))
 }
 
@@ -826,6 +827,28 @@ it('renders the next five calendar events as links, and only five', async () => 
   expect(link?.getAttribute('href')).toBe('/paycheck')
   // A SEPARATE fetch — exactly one calendar call, never a twelfth Promise.all member.
   expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(1)
+})
+
+it('renders a custom event as a plain row — no page to open (spec §9.2)', async () => {
+  serve()
+  vi.mocked(fetchCalendar).mockResolvedValue({
+    events: [
+      {
+        date: daysAgo(-1),
+        type: 'custom',
+        label: 'Car insurance',
+        detail: null,
+        href: null,
+        id: 41,
+      },
+      ...upNextEvents(2),
+    ],
+  })
+  renderPage()
+  await screen.findByText(/Car insurance/)
+  expect(screen.getByText(/Car insurance/).closest('a')).toBeNull()
+  // Computed neighbors keep their links.
+  expect(screen.getByText(/Upcoming event 1/).closest('a')?.getAttribute('href')).toBe('/paycheck')
 })
 
 it('a calendar failure dents only the strip, never the snapshot', async () => {

@@ -15,6 +15,7 @@ export function escapeIcsText(value: string): string {
     .replaceAll(';', '\\;')
     .replaceAll(',', '\\,')
     .replaceAll('\r\n', '\\n')
+    .replaceAll('\r', '\\n') // lone CR — pasted user text can carry one (spec §9.4)
     .replaceAll('\n', '\\n')
 }
 
@@ -27,8 +28,10 @@ function slugify(value: string): string {
 
 // UID stability contract (pinned by test): the same event yields the same UID on every
 // export. Labels carry identity (the server's rule), so same-day same-type events from
-// different sources never collide.
+// different sources never collide. Custom events key on the id instead (spec §9.3): a
+// rename must UPDATE the event in a subscribed calendar, not duplicate it.
 export function eventUid(event: CalendarEvent): string {
+  if (event.id !== null) return `custom-${event.id}@finance-dashboard`
   return `${event.type}-${event.date}-${slugify(event.label)}@finance-dashboard`
 }
 
@@ -40,8 +43,8 @@ export function buildIcs(events: CalendarEvent[]): string {
     'METHOD:PUBLISH',
   ]
   for (const event of events) {
-    // DESCRIPTION = detail + href (spec §6); href is always present, so a detail-less
-    // event still describes where it lives in the app.
+    // DESCRIPTION = detail + href (spec §6). Custom events have no href (§9.3), so the
+    // filter leaves a detail-only — possibly empty — description; empty TEXT is valid.
     const description = [event.detail, event.href].filter(Boolean).join(' — ')
     lines.push(
       'BEGIN:VEVENT',

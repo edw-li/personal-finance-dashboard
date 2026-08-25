@@ -11,6 +11,7 @@ import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { attentionItems } from '../components/overview/attention'
+import { eventKey } from '../components/calendar/calendarView'
 import { UP_NEXT_WINDOW_DAYS, upNextItems } from '../components/overview/upNext'
 import { ytdStats } from '../components/overview/ytd'
 import {
@@ -422,11 +423,19 @@ export default function OverviewPage() {
             ) : (
               <ul className="up-next-list">
                 {upNextItems(upNext, todayIso()).map((event) => (
-                  <li key={`${event.type}-${event.date}-${event.label}`}>
-                    <NavLink to={event.href} className="up-next-link">
-                      <span className="up-next-date">{formatDate(event.date)}</span>{' '}
-                      {event.label}
-                    </NavLink>
+                  <li key={eventKey(event)}>
+                    {event.href !== null ? (
+                      <NavLink to={event.href} className="up-next-link">
+                        <span className="up-next-date">{formatDate(event.date)}</span>{' '}
+                        {event.label}
+                      </NavLink>
+                    ) : (
+                      // Custom events are informational — no page to open (spec §9.2).
+                      <span className="up-next-link up-next-plain">
+                        <span className="up-next-date">{formatDate(event.date)}</span>{' '}
+                        {event.label}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
