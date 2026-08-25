@@ -50,6 +50,7 @@ export default function CalendarPage() {
   const [deleting, setDeleting] = useState(false)
   const anchorRef = useRef<HTMLElement | null>(null)
   const popoverRef = useRef<HTMLDivElement | null>(null)
+  const addEventBtnRef = useRef<HTMLButtonElement | null>(null)
 
   const load = (monthIso: string) => {
     const seq = ++seqRef.current
@@ -169,6 +170,9 @@ export default function CalendarPage() {
     deleteCustomEvent(event.id)
       .then(() => {
         setOpen(null)
+        // The focused Delete button unmounts with the popover — hand focus to a stable
+        // landmark instead of letting it drop to <body> (the Escape path's manners).
+        addEventBtnRef.current?.focus()
         setBusy(true)
         load(month)
       })
@@ -195,7 +199,7 @@ export default function CalendarPage() {
       <header className="page-header">
         <h1>Calendar</h1>
         <div className="spacer" />
-        <button type="button" className="button" onClick={openAddForm}>
+        <button type="button" className="button" ref={addEventBtnRef} onClick={openAddForm}>
           Add event
         </button>
         <button

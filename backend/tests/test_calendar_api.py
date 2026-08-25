@@ -258,6 +258,14 @@ async def test_custom_event_crud_roundtrip(auth_client):
         "detail": "moved a day",
     }
 
+    # Full-replace also CLEARS: an emptied detail box stores as null (spec §9.3).
+    cleared = await auth_client.patch(
+        f"{CALENDAR}/events/{event_id}",
+        json={"date": "2026-09-13", "label": "Renewal", "detail": ""},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["detail"] is None
+
     deleted = await auth_client.delete(f"{CALENDAR}/events/{event_id}")
     assert deleted.status_code == 204
     after = await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")

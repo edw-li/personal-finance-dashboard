@@ -243,3 +243,20 @@ def test_custom_rows_render_and_clip():
 def test_computed_events_carry_no_event_id():
     events = _compose(date(2026, 1, 1), date(2026, 12, 31), payday_semi_monthly=True)
     assert events and all(e.event_id is None for e in events)
+
+
+def test_custom_rows_sort_with_computed_events():
+    # Same-day merge position pinned directly: (date, type, label) slots "custom"
+    # alphabetically before "payday" and "tax_deadline" (Sep 15 is also Q3's due date —
+    # the always-on source this file's header warns shares windows).
+    events = _compose(
+        date(2026, 9, 15),
+        date(2026, 9, 15),
+        payday_semi_monthly=True,
+        custom_rows=[(3, date(2026, 9, 15), "Zoo membership", None)],
+    )
+    assert [(e.type, e.label) for e in events] == [
+        ("custom", "Zoo membership"),
+        ("payday", "Payday"),
+        ("tax_deadline", "Tax deadline — Q3 estimated payment"),
+    ]

@@ -248,9 +248,11 @@ describe('CalendarPage', () => {
     expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined()
   })
 
-  it('list rows expand the same details inline', async () => {
+  it('list rows expand the same details inline, closing any grid popover', async () => {
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(chipFor('Payday')) // grid popover open first
+    expect(popover()).not.toBeNull()
     const list = document.querySelector('.cal-list') as HTMLElement
     const row = Array.from(list.querySelectorAll('button.cal-list-item')).find((r) =>
       r.textContent?.startsWith('Car insurance'),
@@ -260,7 +262,7 @@ describe('CalendarPage', () => {
     expect(expansion).not.toBeNull()
     expect(expansion?.textContent).toContain('Custom')
     expect(expansion?.textContent).toContain('policy 8841')
-    expect(popover()).toBeNull() // the grid surface stays closed
+    expect(popover()).toBeNull() // one open surface at a time — the grid one closed
   })
 
   it('Add event posts the trimmed form and refetches the window', async () => {
@@ -325,5 +327,7 @@ describe('CalendarPage', () => {
     expect(deleteCustomEvent).toHaveBeenCalledWith(41)
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
     expect(popover()).toBeNull()
+    // Focus hands off to a stable landmark, not <body> (the unmounted Delete button).
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add event' }))
   })
 })
