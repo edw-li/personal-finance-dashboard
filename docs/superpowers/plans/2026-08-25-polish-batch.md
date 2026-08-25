@@ -50,7 +50,7 @@
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the worktree, the branch and a clean tree** (run from `.worktrees/polish-batch`):
+- [x] **Step 1: Confirm the worktree, the branch and a clean tree** (run from `.worktrees/polish-batch`):
 
 ```bash
 git status --porcelain   # expected: EMPTY output
@@ -59,9 +59,9 @@ git rev-parse --abbrev-ref HEAD   # expected: polish-batch
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup.
 
-- [ ] **Step 2: Install** — `npm ci` → expected: completes without error (the worktree has its own `node_modules`).
+- [x] **Step 2: Install** — `npm ci` → expected: completes without error (the worktree has its own `node_modules`).
 
-- [ ] **Step 3: Frontend smoke** — `npx vitest run src/utils/months.test.ts` → PASS.
+- [x] **Step 3: Frontend smoke** — `npx vitest run src/utils/months.test.ts` → PASS.
 
 ---
 
@@ -74,7 +74,7 @@ If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it
 
 No unit test carries CSS custom properties — the pin is the grep in Step 3 plus the suite staying green.
 
-- [ ] **Step 1: index.css.** Replace the `:root` block (currently lines 1–12) with:
+- [x] **Step 1: index.css.** Replace the `:root` block (currently lines 1–12) with:
 
 ```css
 :root {
@@ -99,7 +99,7 @@ No unit test carries CSS custom properties — the pin is the grep in Step 3 plu
 }
 ```
 
-- [ ] **Step 2: The six literal swaps** (each is exact-string; the comment amendments keep the "comments explain constraints" rule honest — the old comments justified a literal that no longer exists):
+- [x] **Step 2: The six literal swaps** (each is exact-string; the comment amendments keep the "comments explain constraints" rule honest — the old comments justified a literal that no longer exists):
   1. `src/pages/OverviewPage.css` line 37: `border-left: 3px solid #c98500;` → `border-left: 3px solid var(--warn);`. In the comment above it (lines 22–24), change the clause `the same PALETTE[3] literal the freshness cue below uses, for the same frozen-charts reason` → `the --warn token (PALETTE[3] amber) the freshness cue below shares`.
   2. `src/pages/OverviewPage.css` lines 96–100: replace the comment + rule pair with:
 
@@ -116,11 +116,11 @@ No unit test carries CSS custom properties — the pin is the grep in Step 3 plu
   5. `src/pages/PortfolioPage.css` line 23: `border-left: 3px solid #c98500;` → `border-left: 3px solid var(--warn);` (the comment above already says "the staleness literal, PALETTE[3]" — change `the staleness literal, PALETTE[3]` → `--warn, PALETTE[3] amber`).
   6. `src/components/portfolio/portfolio.css` lines 34 and 43: both `#c98500` → `var(--warn)`; in the header comment (line 6–7), change `Colors come from the index.css :root variables wherever one exists; the remaining literal (#c98500) is theme.ts PALETTE[3], which has none.` → `Colors come from the index.css :root variables — including --warn (PALETTE[3] amber), which index.css defines since the 2026-08-25 polish.`
 
-- [ ] **Step 3: Verify the sweep** — `grep -rn "c98500" src` → expected EXACTLY three hits: `src/index.css` (the token definition), `src/charts/theme.ts` (PALETTE[3], the frozen canvas copy), `src/components/calendar/calendarView.test.ts` (a fixture pinning the PALETTE-derived `ex_dividend` color — TS, not CSS, stays). Any other hit means a missed swap.
+- [x] **Step 3: Verify the sweep** — `grep -rn "c98500" src` → expected EXACTLY three hits: `src/index.css` (the token definition), `src/charts/theme.ts` (PALETTE[3], the frozen canvas copy), `src/components/calendar/calendarView.test.ts` (a fixture pinning the PALETTE-derived `ex_dividend` color — TS, not CSS, stays). Any other hit means a missed swap.
 
-- [ ] **Step 4: Suite sanity** — `npx vitest run src/components/calendar/calendarView.test.ts` → PASS (the pinned literal was never touched).
+- [x] **Step 4: Suite sanity** — `npx vitest run src/components/calendar/calendarView.test.ts` → PASS (the pinned literal was never touched).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(polish): color-scheme dark + --warn token for the amber literals"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(polish): color-scheme dark + --warn token for the amber literals"`
 
 ### Task 2: Favicon + nav registry + `usePageTitle`
 
@@ -131,7 +131,7 @@ No unit test carries CSS custom properties — the pin is the grep in Step 3 plu
 
 The hook ships here with its own test; Layout APPLIES it in Task 3 (an exported-but-unimported module compiles and lints clean in the interim).
 
-- [ ] **Step 1: Write the failing hook test** — create `src/components/usePageTitle.test.tsx`:
+- [x] **Step 1: Write the failing hook test** — create `src/components/usePageTitle.test.tsx`:
 
 ```tsx
 import { cleanup, render } from '@testing-library/react'
@@ -177,9 +177,9 @@ describe('usePageTitle', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/usePageTitle.test.tsx` → FAIL (cannot resolve `./usePageTitle`).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/usePageTitle.test.tsx` → FAIL (cannot resolve `./usePageTitle`).
 
-- [ ] **Step 3: The nav registry** — create `src/components/navItems.ts`:
+- [x] **Step 3: The nav registry** — create `src/components/navItems.ts`:
 
 ```ts
 import {
@@ -255,7 +255,7 @@ export const NAV_SECTIONS: NavSection[] = [
 export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((section) => section.items)
 ```
 
-- [ ] **Step 4: The hook** — create `src/components/usePageTitle.ts`:
+- [x] **Step 4: The hook** — create `src/components/usePageTitle.ts`:
 
 ```ts
 import { useEffect } from 'react'
@@ -280,9 +280,9 @@ export function usePageTitle(): void {
 }
 ```
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/usePageTitle.test.tsx` → PASS.
+- [x] **Step 5: Run** — `npx vitest run src/components/usePageTitle.test.tsx` → PASS.
 
-- [ ] **Step 6: The favicon** — create `public/favicon.svg` (the `public/` directory does not exist yet — creating the file creates it; Vite serves `public/` at the site root):
+- [x] **Step 6: The favicon** — create `public/favicon.svg` (the `public/` directory does not exist yet — creating the file creates it; Vite serves `public/` at the site root):
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
@@ -296,7 +296,7 @@ export function usePageTitle(): void {
 </svg>
 ```
 
-- [ ] **Step 7: Link it** — in `index.html`, insert between the robots meta and the title:
+- [x] **Step 7: Link it** — in `index.html`, insert between the robots meta and the title:
 
 ```html
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -304,7 +304,7 @@ export function usePageTitle(): void {
 
 (The static `<title>Finance Dashboard</title>` stays — it is the pre-hydration and 404-fallback title, the same string the hook falls back to.)
 
-- [ ] **Step 8: Commit** — `git add -A && git commit -m "feat(polish): favicon, nav registry, usePageTitle hook"`
+- [x] **Step 8: Commit** — `git add -A && git commit -m "feat(polish): favicon, nav registry, usePageTitle hook"`
 
 ### Task 3: Sidebar v2 + skip link + navigation focus/scroll reset
 
@@ -312,7 +312,7 @@ export function usePageTitle(): void {
 - Modify: `src/components/Layout.tsx`, `src/components/Layout.css`
 - Test: `src/components/Layout.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/Layout.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/Layout.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -424,9 +424,9 @@ describe('Layout — skip link and navigation reset', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/Layout.test.tsx` → FAIL (no "Primary" nav, no skip link, "Net Worth" casing, no title).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/Layout.test.tsx` → FAIL (no "Primary" nav, no skip link, "Net Worth" casing, no title).
 
-- [ ] **Step 3: Rewrite `src/components/Layout.tsx`** — full replacement (the RouteBoundary comment block is the existing one, kept verbatim):
+- [x] **Step 3: Rewrite `src/components/Layout.tsx`** — full replacement (the RouteBoundary comment block is the existing one, kept verbatim):
 
 ```tsx
 import { LogOut } from 'lucide-react'
@@ -512,7 +512,7 @@ export default function Layout() {
 
 (The old in-file `NAV_ITEMS` const is gone — the registry moved to `navItems.ts` in Task 2. Icon imports shrink to `LogOut` alone.)
 
-- [ ] **Step 4: Layout.css.** Three edits:
+- [x] **Step 4: Layout.css.** Three edits:
   1. Replace the `.sidebar nav` rule with the section trio:
 
 ```css
@@ -591,9 +591,9 @@ export default function Layout() {
 }
 ```
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/Layout.test.tsx` → PASS.
+- [x] **Step 5: Run** — `npx vitest run src/components/Layout.test.tsx` → PASS.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(polish): sidebar v2, skip link, navigation focus/scroll reset"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(polish): sidebar v2, skip link, navigation focus/scroll reset"`
 
 ### Task 4: Real 404
 
@@ -602,7 +602,7 @@ export default function Layout() {
 - Modify: `src/App.tsx`
 - Test: `src/pages/NotFoundPage.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing test** — create `src/pages/NotFoundPage.test.tsx`:
+- [x] **Step 1: Write the failing test** — create `src/pages/NotFoundPage.test.tsx`:
 
 ```tsx
 import { cleanup, render, screen } from '@testing-library/react'
@@ -628,9 +628,9 @@ describe('NotFoundPage', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/NotFoundPage.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/NotFoundPage.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/pages/NotFoundPage.tsx`:
+- [x] **Step 3: Implement** — create `src/pages/NotFoundPage.tsx`:
 
 ```tsx
 import { Link, useLocation } from 'react-router-dom'
@@ -653,16 +653,16 @@ export default function NotFoundPage() {
 }
 ```
 
-- [ ] **Step 4: Swap the catch-all.** In `src/App.tsx`:
+- [x] **Step 4: Swap the catch-all.** In `src/App.tsx`:
   1. Replace `import PlaceholderPage from './pages/PlaceholderPage'` with `import NotFoundPage from './pages/NotFoundPage'`.
   2. In the comment above the lazy block, change `Login and the 404 placeholder stay eager` → `Login and the 404 stay eager`.
   3. Replace `<Route path="*" element={<PlaceholderPage title="Not Found" />} />` with `<Route path="*" element={<NotFoundPage />} />`.
 
-- [ ] **Step 5: Prove the placeholder is orphaned, not deleted** — `grep -rln "PlaceholderPage" src` → expected EXACTLY `src/pages/PlaceholderPage.tsx` (its own definition; zero importers). The file STAYS on disk — no deletions overnight.
+- [x] **Step 5: Prove the placeholder is orphaned, not deleted** — `grep -rln "PlaceholderPage" src` → expected EXACTLY `src/pages/PlaceholderPage.tsx` (its own definition; zero importers). The file STAYS on disk — no deletions overnight.
 
-- [ ] **Step 6: Run** — `npx vitest run src/pages/NotFoundPage.test.tsx` → PASS.
+- [x] **Step 6: Run** — `npx vitest run src/pages/NotFoundPage.test.tsx` → PASS.
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(polish): real 404 page, placeholder orphaned"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(polish): real 404 page, placeholder orphaned"`
 
 ### Task 5: Login fixes — primary button, alert role, autofocus
 
@@ -670,7 +670,7 @@ export default function NotFoundPage() {
 - Modify: `src/pages/LoginPage.tsx`, `src/pages/LoginPage.css`, `src/components/Layout.tsx` (one comment clause)
 - Test: `src/pages/LoginPage.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/pages/LoginPage.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/pages/LoginPage.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -733,9 +733,9 @@ describe('LoginPage', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/LoginPage.test.tsx` → FAIL (no autofocus, no alert role, bare button class).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/LoginPage.test.tsx` → FAIL (no autofocus, no alert role, bare button class).
 
-- [ ] **Step 3: LoginPage.tsx.** Three edits:
+- [x] **Step 3: LoginPage.tsx.** Three edits:
   1. Add `import '../components/panels.css'` on the line ABOVE `import './LoginPage.css'` (the login screen needs `.button-primary`; panels.css thereby joins the eager entry chunk — see Step 5).
   2. The email input gains `autoFocus` (first attribute line, above `type="email"`).
   3. The error div and the button become:
@@ -751,7 +751,7 @@ describe('LoginPage', () => {
         </button>
 ```
 
-- [ ] **Step 4: LoginPage.css.** Replace the two button blocks (`.login-card button` and `.login-card button:disabled`) with:
+- [x] **Step 4: LoginPage.css.** Replace the two button blocks (`.login-card button` and `.login-card button:disabled`) with:
 
 ```css
 /* Layout-only: the primary treatment (dark-on-accent — AA-safe, unlike the old local
@@ -771,13 +771,13 @@ describe('LoginPage', () => {
 }
 ```
 
-- [ ] **Step 5: Keep the two stale comments honest.** Login (eager) importing panels.css moves that sheet into the entry chunk, which dates two claims:
+- [x] **Step 5: Keep the two stale comments honest.** Login (eager) importing panels.css moves that sheet into the entry chunk, which dates two claims:
   1. `src/components/Layout.tsx` — in the RouteBoundary comment, change the clause `panels.css now ships with the first PAGE chunk, so it is absent from the very paint this fallback owns.` → `panels.css travels with its importers, not this file, so this fallback cannot rely on it.`
   2. `src/components/Layout.css` — in the `.route-fallback` comment, change `not panels.css, which now arrives lazily with the first page chunk (Task 9 review)` → `not panels.css, which travels with its importers (Task 9 review; Login pulls it eagerly since the 2026-08-25 polish)`.
 
-- [ ] **Step 6: Run** — `npx vitest run src/pages/LoginPage.test.tsx src/components/Layout.test.tsx` → PASS.
+- [x] **Step 6: Run** — `npx vitest run src/pages/LoginPage.test.tsx src/components/Layout.test.tsx` → PASS.
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "fix(login): primary-button contrast, error alert role, email autofocus"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "fix(login): primary-button contrast, error alert role, email autofocus"`
 
 ---
 
@@ -789,7 +789,7 @@ describe('LoginPage', () => {
 - Modify: `src/components/EChart.tsx`
 - Test: `src/components/EChart.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing test** — create `src/components/EChart.test.tsx`:
+- [x] **Step 1: Write the failing test** — create `src/components/EChart.test.tsx`:
 
 ```tsx
 import { cleanup, render } from '@testing-library/react'
@@ -845,9 +845,9 @@ describe('EChart aria facade', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/EChart.test.tsx` → FAIL (TS: no `ariaLabel` prop; no role rendered).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/EChart.test.tsx` → FAIL (TS: no `ariaLabel` prop; no role rendered).
 
-- [ ] **Step 3: Implement — purely additively** (cross-plan note: a sibling branch adds `exportConfig` to this same signature; touch NOTHING but the prop and the two attributes). In `src/components/EChart.tsx`, the destructure + type gain one entry after `height = 320,` / `height?: number`:
+- [x] **Step 3: Implement — purely additively** (cross-plan note: a sibling branch adds `exportConfig` to this same signature; touch NOTHING but the prop and the two attributes). In `src/components/EChart.tsx`, the destructure + type gain one entry after `height = 320,` / `height?: number`:
 
 ```tsx
   ariaLabel,
@@ -876,9 +876,9 @@ and the return statement becomes:
   )
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/EChart.test.tsx` → PASS. Then `npx vitest run src/components` → PASS (every panel test that mocks EChart is untouched by an optional prop).
+- [x] **Step 4: Run** — `npx vitest run src/components/EChart.test.tsx` → PASS. Then `npx vitest run src/components` → PASS (every panel test that mocks EChart is untouched by an optional prop).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): EChart optional ariaLabel -> role=img facade"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): EChart optional ariaLabel -> role=img facade"`
 
 ### Task 7: Apply the ten labels
 
@@ -886,7 +886,7 @@ and the return statement becomes:
 - Modify: `src/pages/OverviewPage.tsx`, `src/pages/ProjectionPage.tsx`, `src/pages/SpendingPage.tsx`, `src/pages/PaycheckPage.tsx`, `src/components/portfolio/AllocationPanel.tsx`
 - Test: `src/pages/SpendingPage.test.tsx`, `src/pages/PaycheckPage.test.tsx` (page-level pins; EChart.test.tsx already pins the mechanism)
 
-- [ ] **Step 1: Write the failing page pins.** In `src/pages/SpendingPage.test.tsx`, extend the EChart mock to pass the label through — the mock's destructure and props type each gain `ariaLabel` and the created div gains the attribute:
+- [x] **Step 1: Write the failing page pins.** In `src/pages/SpendingPage.test.tsx`, extend the EChart mock to pass the label through — the mock's destructure and props type each gain `ariaLabel` and the created div gains the attribute:
 
 ```tsx
     default: ({
@@ -943,9 +943,9 @@ describe('SpendingPage — chart aria', () => {
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx src/pages/PaycheckPage.test.tsx` → the two new tests FAIL (no labels yet); everything else PASSES.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx src/pages/PaycheckPage.test.tsx` → the two new tests FAIL (no labels yet); everything else PASSES.
 
-- [ ] **Step 3: Apply all ten labels.** Each is one attribute added to an existing `<EChart …/>` mount — nothing else on the mount changes. Dynamic where cheap (a value already narrowed in the branch), static otherwise.
+- [x] **Step 3: Apply all ten labels.** Each is one attribute added to an existing `<EChart …/>` mount — nothing else on the mount changes. Dynamic where cheap (a value already narrowed in the branch), static otherwise.
 
   1. `src/pages/OverviewPage.tsx` — the three mounts become:
 
@@ -1002,9 +1002,9 @@ describe('SpendingPage — chart aria', () => {
 
   (The bar/pie/savings/trend charts on Spending and the rest of the app may opt in later — spec §4 item 6 names this exact minimum set.)
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx src/pages/PaycheckPage.test.tsx src/pages/OverviewPage.test.tsx src/pages/ProjectionPage.test.tsx` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx src/pages/PaycheckPage.test.tsx src/pages/OverviewPage.test.tsx src/pages/ProjectionPage.test.tsx` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): aria labels on overview, projection, spending, paycheck, allocation charts"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): aria labels on overview, projection, spending, paycheck, allocation charts"`
 
 ---
 
@@ -1017,7 +1017,7 @@ describe('SpendingPage — chart aria', () => {
 - Modify: `src/App.tsx`
 - Test: `src/components/ToastProvider.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/ToastProvider.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/ToastProvider.test.tsx`:
 
 ```tsx
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -1144,9 +1144,9 @@ describe('ToastProvider', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/ToastProvider.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/ToastProvider.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/components/ToastProvider.tsx`:
+- [x] **Step 3: Implement** — create `src/components/ToastProvider.tsx`:
 
 ```tsx
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
@@ -1291,7 +1291,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 4: CSS** — create `src/components/toast.css`:
+- [x] **Step 4: CSS** — create `src/components/toast.css`:
 
 ```css
 /* Toasts (2026-08-25 polish §8): one polite live region, bottom-right. z-index above the
@@ -1368,11 +1368,11 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 5: Mount in App above Layout.** In `src/App.tsx`, add `import ToastProvider from './components/ToastProvider'` (after the Layout import), then wrap the existing `<BrowserRouter>…</BrowserRouter>` element — every line of it byte-identical — in `<ToastProvider>` / `</ToastProvider>`, directly inside `<AuthProvider>`, and re-indent the wrapped block one level. Nothing inside the router changes. (Outside the router on purpose: toasts never navigate — the undo actions call API creates and the hosts' own refetchers.)
+- [x] **Step 5: Mount in App above Layout.** In `src/App.tsx`, add `import ToastProvider from './components/ToastProvider'` (after the Layout import), then wrap the existing `<BrowserRouter>…</BrowserRouter>` element — every line of it byte-identical — in `<ToastProvider>` / `</ToastProvider>`, directly inside `<AuthProvider>`, and re-indent the wrapped block one level. Nothing inside the router changes. (Outside the router on purpose: toasts never navigate — the undo actions call API creates and the hosts' own refetchers.)
 
-- [ ] **Step 6: Run** — `npx vitest run src/components/ToastProvider.test.tsx` → PASS.
+- [x] **Step 6: Run** — `npx vitest run src/components/ToastProvider.test.tsx` → PASS.
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(toast): ToastProvider with polite region, pause-on-hover, actions; mounted in App"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(toast): ToastProvider with polite region, pause-on-hover, actions; mounted in App"`
 
 ### Task 9: Instant transaction delete + Undo
 
@@ -1382,7 +1382,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 
 Scope guard for this whole phase: ONLY the four named flows convert. `window.confirm` STAYS at every other site — PaycheckPage profile delete, SecuritiesPanel, CompPage comp-EVENT delete, EsppPage lot/offering/reset, TaxesPage discard + tax-year delete, SettingsPage import clobber, BracketsEditor. Existing inline "Saved."/kept status notes stay everywhere.
 
-- [ ] **Step 1: Write the failing test.** In `src/components/portfolio/TransactionsPanel.test.tsx`:
+- [x] **Step 1: Write the failing test.** In `src/components/portfolio/TransactionsPanel.test.tsx`:
   1. Add `import ToastProvider from '../ToastProvider'` (after the TransactionsPanel import).
   2. In the test `'deleting the row being edited resets the form'`, DELETE the line `vi.spyOn(window, 'confirm').mockReturnValue(true)` — the flow no longer confirms, and a dead spy would claim otherwise.
   3. Append inside the main describe:
@@ -1425,9 +1425,9 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/TransactionsPanel.test.tsx` → the new test FAILS (no toast; delete may even stall on jsdom's unimplemented confirm); the de-spied edit test PASSES only after Step 3.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/TransactionsPanel.test.tsx` → the new test FAILS (no toast; delete may even stall on jsdom's unimplemented confirm); the de-spied edit test PASSES only after Step 3.
 
-- [ ] **Step 3: Implement.** In `src/components/portfolio/TransactionsPanel.tsx`:
+- [x] **Step 3: Implement.** In `src/components/portfolio/TransactionsPanel.tsx`:
   1. Add `import { useToast } from '../ToastProvider'` (after the InfoHint import).
   2. In the component body, add `const toast = useToast()` beside the `tickers` const.
   3. Replace `remove` in full:
@@ -1478,9 +1478,9 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/portfolio/TransactionsPanel.test.tsx` → ALL PASS (the pre-existing delete/busy tests ride the no-op fallback untouched).
+- [x] **Step 4: Run** — `npx vitest run src/components/portfolio/TransactionsPanel.test.tsx` → ALL PASS (the pre-existing delete/busy tests ride the no-op fallback untouched).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): instant transaction delete with undo re-create"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): instant transaction delete with undo re-create"`
 
 ### Task 10: Instant dividend delete + Undo
 
@@ -1488,7 +1488,7 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
 - Modify: `src/components/portfolio/DividendsPanel.tsx`
 - Test: `src/components/portfolio/DividendsPanel.test.tsx`
 
-- [ ] **Step 1: Write the failing test.** In `src/components/portfolio/DividendsPanel.test.tsx`:
+- [x] **Step 1: Write the failing test.** In `src/components/portfolio/DividendsPanel.test.tsx`:
   1. Add `import ToastProvider from '../ToastProvider'` (after the DividendsPanel import).
   2. In `'deleting the row being edited resets the form — on success only'`, DELETE the line `vi.spyOn(window, 'confirm').mockReturnValue(true)` (the failed-then-successful delete choreography underneath is exactly what the instant flow does — it survives unchanged).
   3. Append inside the main describe:
@@ -1526,9 +1526,9 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/DividendsPanel.test.tsx` → the new test FAILS, and so does the de-spied edit-delete test (jsdom's stub confirm returns falsy, so the still-gated delete never runs) — both pass only after Step 3.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/portfolio/DividendsPanel.test.tsx` → the new test FAILS, and so does the de-spied edit-delete test (jsdom's stub confirm returns falsy, so the still-gated delete never runs) — both pass only after Step 3.
 
-- [ ] **Step 3: Implement.** In `src/components/portfolio/DividendsPanel.tsx`:
+- [x] **Step 3: Implement.** In `src/components/portfolio/DividendsPanel.tsx`:
   1. Add `import { useToast } from '../ToastProvider'` (after the StatTile import).
   2. Add `const toast = useToast()` beside the `tickers` const.
   3. Replace `remove` in full:
@@ -1573,9 +1573,9 @@ Scope guard for this whole phase: ONLY the four named flows convert. `window.con
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/portfolio/DividendsPanel.test.tsx` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/components/portfolio/DividendsPanel.test.tsx` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): instant dividend delete with undo re-create"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): instant dividend delete with undo re-create"`
 
 ### Task 11: Calendar custom-event delete toast + Undo
 
@@ -1585,7 +1585,7 @@ The calendar delete is ALREADY confirm-free — this task adds only the toast + 
 - Modify: `src/pages/CalendarPage.tsx`
 - Test: `src/pages/CalendarPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** In `src/pages/CalendarPage.test.tsx`:
+- [x] **Step 1: Write the failing tests.** In `src/pages/CalendarPage.test.tsx`:
   1. Add `import ToastProvider from '../components/ToastProvider'` (after the CalendarPage import).
   2. Wrap the page in `renderPage`:
 
@@ -1635,9 +1635,9 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/CalendarPage.test.tsx` → the two touched tests FAIL (no toast); the rest PASS.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/CalendarPage.test.tsx` → the two touched tests FAIL (no toast); the rest PASS.
 
-- [ ] **Step 3: Implement.** In `src/pages/CalendarPage.tsx`:
+- [x] **Step 3: Implement.** In `src/pages/CalendarPage.tsx`:
   1. Add `import { useToast } from '../components/ToastProvider'` (after the EventDetails import).
   2. In the component body, add beside `addEventBtnRef`:
 
@@ -1689,9 +1689,9 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/CalendarPage.test.tsx` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/pages/CalendarPage.test.tsx` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): calendar custom-event delete toast + undo"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): calendar custom-event delete toast + undo"`
 
 ### Task 12: Instant RSU-grant delete + Undo
 
@@ -1699,7 +1699,7 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
 - Modify: `src/components/comp/RsuGrantsPanel.tsx`
 - Test: `src/pages/CompPage.test.tsx`
 
-- [ ] **Step 1: Rewrite the failing pin.** In `src/pages/CompPage.test.tsx`:
+- [x] **Step 1: Rewrite the failing pin.** In `src/pages/CompPage.test.tsx`:
   1. Add `import ToastProvider from '../components/ToastProvider'` (after the CompPage import).
   2. KEEP the `confirmSpy` scaffolding — CompPage's comp-EVENT delete still confirms and its tests still need the default-true spy. Replace ONLY the test `'deletes a grant only after the confirm names it'` (body and name) with:
 
@@ -1740,9 +1740,9 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
 
   (The other grant test that presses Delete — `'keeps the schedule up when a RELOAD of it fails, and says so'` — needs NO change: it asserted nothing about confirm, and the instant delete fires the same refetch it waits on.)
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/CompPage.test.tsx` → the rewritten test FAILS (confirm still gates the delete); the rest PASS.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/CompPage.test.tsx` → the rewritten test FAILS (confirm still gates the delete); the rest PASS.
 
-- [ ] **Step 3: Implement.** In `src/components/comp/RsuGrantsPanel.tsx`:
+- [x] **Step 3: Implement.** In `src/components/comp/RsuGrantsPanel.tsx`:
   1. Add `import { useToast } from '../ToastProvider'` (after the InfoHint import).
   2. Add `const toast = useToast()` beside the `busy` state.
   3. Replace `remove` in full:
@@ -1791,11 +1791,11 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/CompPage.test.tsx` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/pages/CompPage.test.tsx` → ALL PASS.
 
-- [ ] **Step 5: Confirm-site audit** — `grep -rn "window.confirm" src --include=*.tsx | grep -v test` → expected hits ONLY in: `src/pages/CompPage.tsx` (comp event), `src/pages/EsppPage.tsx` (×3), `src/pages/PaycheckPage.tsx`, `src/pages/SettingsPage.tsx`, `src/pages/TaxesPage.tsx` (×2), `src/components/portfolio/SecuritiesPanel.tsx`, `src/components/taxes/BracketsEditor.tsx`. TransactionsPanel, DividendsPanel and RsuGrantsPanel must be ABSENT from the list.
+- [x] **Step 5: Confirm-site audit** — `grep -rn "window.confirm" src --include=*.tsx | grep -v test` → expected hits ONLY in: `src/pages/CompPage.tsx` (comp event), `src/pages/EsppPage.tsx` (×3), `src/pages/PaycheckPage.tsx`, `src/pages/SettingsPage.tsx`, `src/pages/TaxesPage.tsx` (×2), `src/components/portfolio/SecuritiesPanel.tsx`, `src/components/taxes/BracketsEditor.tsx`. TransactionsPanel, DividendsPanel and RsuGrantsPanel must be ABSENT from the list.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(toast): instant RSU-grant delete with undo re-create"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(toast): instant RSU-grant delete with undo re-create"`
 
 ---
 
@@ -1807,7 +1807,7 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
 - Create: `src/utils/fuzzy.ts`
 - Test: `src/utils/fuzzy.test.ts` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/utils/fuzzy.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `src/utils/fuzzy.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -1835,9 +1835,9 @@ describe('fuzzyScore', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/utils/fuzzy.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/utils/fuzzy.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/utils/fuzzy.ts`:
+- [x] **Step 3: Implement** — create `src/utils/fuzzy.ts`:
 
 ```ts
 /**
@@ -1868,9 +1868,9 @@ export function fuzzyScore(query: string, text: string): number | null {
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/utils/fuzzy.test.ts` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/utils/fuzzy.test.ts` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(palette): fuzzy subsequence scorer"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(palette): fuzzy subsequence scorer"`
 
 ### Task 14: `CommandPalette` — overlay, actions, recents, mount
 
@@ -1879,7 +1879,7 @@ export function fuzzyScore(query: string, text: string): number | null {
 - Modify: `src/components/Layout.tsx` (mount)
 - Test: `src/components/CommandPalette.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/CommandPalette.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/CommandPalette.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -2000,9 +2000,9 @@ describe('CommandPalette', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/CommandPalette.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/CommandPalette.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/components/CommandPalette.tsx`:
+- [x] **Step 3: Implement** — create `src/components/CommandPalette.tsx`:
 
 ```tsx
 import { useEffect, useRef, useState } from 'react'
@@ -2240,7 +2240,7 @@ export default function CommandPalette() {
 }
 ```
 
-- [ ] **Step 4: CSS** — create `src/components/CommandPalette.css`:
+- [x] **Step 4: CSS** — create `src/components/CommandPalette.css`:
 
 ```css
 /* Command palette (2026-08-25 polish §9). Overlay z-index 20: above the app's bubble
@@ -2323,11 +2323,11 @@ export default function CommandPalette() {
 }
 ```
 
-- [ ] **Step 5: Mount in Layout.** In `src/components/Layout.tsx`, add `import CommandPalette from './CommandPalette'` (after the AuthContext import, before `'./Layout.css'`) and render `<CommandPalette />` as the LAST child of the `.layout` div (after `</main>`). Layout-mounted, not App-mounted: the palette needs `useNavigate`, and it must exist only behind login.
+- [x] **Step 5: Mount in Layout.** In `src/components/Layout.tsx`, add `import CommandPalette from './CommandPalette'` (after the AuthContext import, before `'./Layout.css'`) and render `<CommandPalette />` as the LAST child of the `.layout` div (after `</main>`). Layout-mounted, not App-mounted: the palette needs `useNavigate`, and it must exist only behind login.
 
-- [ ] **Step 6: Run** — `npx vitest run src/components/CommandPalette.test.tsx src/components/Layout.test.tsx` → ALL PASS (the palette renders null while closed, so Layout's pins are untouched).
+- [x] **Step 6: Run** — `npx vitest run src/components/CommandPalette.test.tsx src/components/Layout.test.tsx` → ALL PASS (the palette renders null while closed, so Layout's pins are untouched).
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(palette): Ctrl+K command palette with fuzzy nav, actions, recents"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(palette): Ctrl+K command palette with fuzzy nav, actions, recents"`
 
 ---
 
@@ -2337,9 +2337,9 @@ export default function CommandPalette() {
 
 **Files:** none (verification only; commit only if a step below changes files)
 
-- [ ] **Step 1: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; the batch adds 8 new test files and ~35 new tests over the 791 baseline).
-- [ ] **Step 2: Types** — `npx tsc -b` → exits clean, no output.
-- [ ] **Step 3: Lint** — `npx eslint .` → exits 0. (react-refresh/only-export-components is configured as WARN and already fires on context modules; ToastProvider may add one warning — warnings do not fail the command and no new ERROR may appear.)
-- [ ] **Step 4: Spec-coverage sweep** — re-read spec §4's nine numbered items against the commits; each maps to Tasks 1–14. Then two greps: `grep -rn "c98500" src` → 3 hits (Task 1's expected set); `grep -rln "PlaceholderPage" src` → the file alone.
-- [ ] **Step 5: Clean tree** — `git status --porcelain` → EMPTY. If any step above touched files (a lint fix), commit them: `git add -A && git commit -m "chore(polish): verification pass fixes"`.
-- [ ] **Step 6: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch. Leave a summary listing: the test count, the ten labelled charts, the four converted delete flows (and that every other `window.confirm` site survives — Task 12 Step 5's list), the `useToast` no-op-outside-provider posture, and the EChart cross-plan note (only `ariaLabel` was added, additively, for the parallel `exportConfig` branch).
+- [x] **Step 1: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; the batch adds 8 new test files and ~35 new tests over the 791 baseline).
+- [x] **Step 2: Types** — `npx tsc -b` → exits clean, no output.
+- [x] **Step 3: Lint** — `npx eslint .` → exits 0. (react-refresh/only-export-components is configured as WARN and already fires on context modules; ToastProvider may add one warning — warnings do not fail the command and no new ERROR may appear.)
+- [x] **Step 4: Spec-coverage sweep** — re-read spec §4's nine numbered items against the commits; each maps to Tasks 1–14. Then two greps: `grep -rn "c98500" src` → 3 hits (Task 1's expected set); `grep -rln "PlaceholderPage" src` → the file alone.
+- [x] **Step 5: Clean tree** — `git status --porcelain` → EMPTY. If any step above touched files (a lint fix), commit them: `git add -A && git commit -m "chore(polish): verification pass fixes"`.
+- [x] **Step 6: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch. Leave a summary listing: the test count, the ten labelled charts, the four converted delete flows (and that every other `window.confirm` site survives — Task 12 Step 5's list), the `useToast` no-op-outside-provider posture, and the EChart cross-plan note (only `ariaLabel` was added, additively, for the parallel `exportConfig` branch).

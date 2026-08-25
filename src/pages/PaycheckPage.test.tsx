@@ -19,9 +19,16 @@ vi.mock('../api/paycheck', () => ({
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ option }: { option: { series?: { data?: { name?: string }[] }[] } }) =>
+    default: ({
+      option,
+      ariaLabel,
+    }: {
+      option: { series?: { data?: { name?: string }[] }[] }
+      ariaLabel?: string
+    }) =>
       createElement('div', {
         'data-testid': 'echart',
+        'aria-label': ariaLabel,
         'data-nodes': (option.series?.[0]?.data ?? []).map((n) => n.name ?? '').join(','),
       }),
   }
@@ -749,5 +756,13 @@ describe('PaycheckPage — the flow card', () => {
     // The table (which handles negatives fine) stays; the sankey steps aside (spec §4).
     expect(screen.getByText(/deductions exceed pay — see the table/)).toBeTruthy()
     expect(screen.queryByTestId('echart')).toBeNull()
+  })
+
+  it('names the sankey for assistive tech', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('Where each check goes')
+    expect(
+      document.querySelector('[aria-label="Sankey flow of one paycheck from gross to net"]'),
+    ).not.toBeNull()
   })
 })

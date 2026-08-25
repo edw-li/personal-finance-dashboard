@@ -1,0 +1,190 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import type { ReactNode } from 'react'
+import './toast.css'
+
+export interface ToastAction {
+  label: string
+  onAction: () => void
+}
+
+export interface ToastOptions {
+  action?: ToastAction
+}
+
+export interface ToastApi {
+  success: (message: string, options?: ToastOptions) => void
+  info: (message: string, options?: ToastOptions) => void
+  error: (message: string, options?: ToastOptions) => void
+}
+
+type ToastVariant = 'success' | 'info' | 'error'
+
+interface ToastEntry {
+  id: number
+  variant: ToastVariant
+  message: string
+  action?: ToastAction
+}
+
+// Long enough to read and reach Undo, short enough never to queue up (hover pauses it).
+const AUTO_DISMISS_MS = 6000
+
+// The deliberate INVERSE of useAuth's throw: toasts are an ambient layer, and a host
+// rendered without it — every pre-existing direct-render test of the four delete hosts —
+// must keep working. The notification is dropped; the operation never is.
+const NOOP: ToastApi = { success: () => {}, info: () => {}, error: () => {} }
+
+const ToastContext = createContext<ToastApi | null>(null)
+
+export function useToast(): ToastApi {
+  return useContext(ToastContext) ?? NOOP
+}
+
+export default function ToastProvider({ children }: { children: ReactNode }) {
+  const [toasts, setToasts] = useState<ToastEntry[]>([])
+  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
+  // TWO latches, ORed into "paused", never one shared flag: the pointer and the keyboard
+  // hold the clock for different reasons, so a pointer leaving a region the keyboard is
+  // still inside must not start the countdown under the user's hands.
+  const hoverPaused = useRef(false)
+  const focusPaused = useRef(false)
+  const nextId = useRef(1)
+  const regionRef = useRef<HTMLDivElement>(null)
+
+  const dismiss = useCallback((id: number) => {
+    const timer = timers.current.get(id)
+    if (timer !== undefined) clearTimeout(timer)
+    timers.current.delete(id)
+    setToasts((current) => current.filter((toast) => toast.id !== id))
+  }, [])
+
+  const arm = useCallback(
+    (id: number) => {
+      timers.current.set(
+        id,
+        setTimeout(() => dismiss(id), AUTO_DISMISS_MS),
+      )
+    },
+    [dismiss],
+  )
+
+  // The ref reads live HERE, in a useCallback, not in the useMemo below: react-hooks/refs
+  // treats a useMemo body as render phase (its value IS used while rendering) and rejects
+  // ref access inside it, while a callback's body is deferred by definition.
+  const push = useCallback(
+    (variant: ToastVariant, message: string, options?: ToastOptions) => {
+      const id = nextId.current
+      nextId.current += 1
+      setToasts((current) => [...current, { id, variant, message, action: options?.action }])
+      // Born under the pointer or under keyboard focus = not armed yet; the release paths
+      // below re-arm every survivor once the last latch lets go.
+      if (!hoverPaused.current && !focusPaused.current) arm(id)
+    },
+    [arm],
+  )
+
+  // A STABLE api object: it travels through context, and every consumer is a whole page —
+  // a fresh identity per render would re-render them all whenever a toast comes or goes.
+  const api = useMemo<ToastApi>(
+    () => ({
+      success: (message, options) => push('success', message, options),
+      info: (message, options) => push('info', message, options),
+      error: (message, options) => push('error', message, options),
+    }),
+    [push],
+  )
+
+  const holdTimers = () => {
+    for (const timer of timers.current.values()) clearTimeout(timer)
+    timers.current.clear()
+  }
+
+  // Releasing re-arms a FULL window rather than a remainder — "I was reading this" earns
+  // a fresh clock, and no per-toast stopwatch bookkeeping. A no-op while the OTHER latch
+  // still holds.
+  const releaseTimers = () => {
+    if (hoverPaused.current || focusPaused.current) return
+    for (const toast of toasts) arm(toast.id)
+  }
+
+  // Activating Undo or Dismiss unmounts the very button that holds the focus latch, and
+  // browsers fire NO focusout for a removed node — so onBlur never runs and the latch
+  // would wedge true, leaving every LATER toast born unarmed and immortal. Re-checking
+  // containment here (an effect, after the removal) is the only reliable release: in the
+  // click handler the button is still mounted and still focused.
+  useEffect(() => {
+    if (!focusPaused.current) return
+    const region = regionRef.current
+    if (region !== null && region.contains(document.activeElement)) return
+    focusPaused.current = false
+    if (!hoverPaused.current) for (const toast of toasts) arm(toast.id)
+  }, [toasts, arm])
+
+  return (
+    <ToastContext.Provider value={api}>
+      {children}
+      {/* Always mounted: a live region must exist BEFORE content lands, or screen
+          readers miss the first announcement. */}
+      <div
+        ref={regionRef}
+        className="toast-region"
+        aria-live="polite"
+        onMouseEnter={() => {
+          hoverPaused.current = true
+          holdTimers()
+        }}
+        onMouseLeave={() => {
+          hoverPaused.current = false
+          releaseTimers()
+        }}
+        onFocus={() => {
+          focusPaused.current = true
+          holdTimers()
+        }}
+        onBlur={() => {
+          focusPaused.current = false
+          releaseTimers()
+        }}
+      >
+        {toasts.map((toast) => {
+          const action = toast.action
+          return (
+            <div key={toast.id} className={`toast toast-${toast.variant}`}>
+              <span className="toast-message">{toast.message}</span>
+              {action !== undefined && (
+                <button
+                  type="button"
+                  className="toast-action"
+                  onClick={() => {
+                    // Consume FIRST: an action that itself toasts (an undo that fails)
+                    // must not race a dismiss aimed at the wrong entry.
+                    dismiss(toast.id)
+                    action.onAction()
+                  }}
+                >
+                  {action.label}
+                </button>
+              )}
+              <button
+                type="button"
+                className="toast-close"
+                aria-label="Dismiss notification"
+                onClick={() => dismiss(toast.id)}
+              >
+                ×
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </ToastContext.Provider>
+  )
+}

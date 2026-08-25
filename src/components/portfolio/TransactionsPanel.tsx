@@ -7,6 +7,7 @@ import {
 } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import { useToast } from '../ToastProvider'
 import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
@@ -113,6 +114,7 @@ export default function TransactionsPanel({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const tickers = new Map(securities.map((s) => [s.id, s.ticker]))
+  const toast = useToast()
 
   // 'type' is excluded: it is a union field with its own dedicated handler below.
   const set = (field: Exclude<keyof FormState, 'type'>) => (value: string) =>
@@ -199,7 +201,14 @@ export default function TransactionsPanel({
   }
 
   const remove = (txn: TransactionOut) => {
-    if (!window.confirm(`Delete this ${txn.type} of ${tickers.get(txn.security_id) ?? '?'}?`)) return
+    const ticker = tickers.get(txn.security_id) ?? '?'
+    // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone and the
+    // recovery affordance replaces it — Undo re-POSTs the captured row (new id, by
+    // design). Only this low-risk flow converts; cascade deletes elsewhere keep confirm.
+    // busy for the duration (RsuGrantsPanel's posture): without the confirm dialog to
+    // absorb it, a double-click would fire a second DELETE on the same id and drop a 404
+    // into the error banner beside the success toast.
+    setBusy(true)
     deleteTransaction(txn.id)
       .then(() => {
         // The edited row is gone — a stale editingId would PATCH a 404 on the next save
@@ -211,10 +220,33 @@ export default function TransactionsPanel({
         // The ledger just changed under the cue — whatever entry session it narrated is over.
         setKept(false)
         onChanged()
+        toast.success(`Deleted the ${ticker} ${txn.type}`, {
+          action: {
+            label: 'Undo',
+            onAction: () => {
+              // TransactionOut carries every TransactionCreate field verbatim, split
+              // dummies included (toPayload's convention) — POST accepts them as-is.
+              createTransaction({
+                security_id: txn.security_id,
+                account: txn.account,
+                type: txn.type,
+                txn_date: txn.txn_date,
+                shares: txn.shares,
+                price: txn.price,
+                fees: txn.fees,
+                split_factor: txn.split_factor,
+                notes: txn.notes,
+              })
+                .then(() => onChanged())
+                .catch(() => toast.error(`Could not restore the ${ticker} ${txn.type}`))
+            },
+          },
+        })
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Delete failed')
       })
+      .finally(() => setBusy(false))
   }
 
   return (
@@ -394,9 +426,12 @@ export default function TransactionsPanel({
                     Shutting the row for the duration of a save is the cheap fix. */}
                 <td className="row-actions">
                   <button type="button" disabled={busy} onClick={() => startEdit(t)}>Edit</button>
-                  {/* aria-label: "Duplicate" alone never says what is being duplicated, and
-                      the type is the row's shortest distinguishing word. Edit/Delete keep
-                      their bare names — Delete's confirm() sentence names the row first. */}
+                  {/* aria-label: "Duplicate"/"Delete" alone never say WHAT they act on, and
+                      the type is the row's shortest distinguishing word. Delete needs the
+                      naming MORE since the delete went instant (2026-08-25 polish §8): the
+                      confirm() sentence that used to name the row before anything happened
+                      is gone, so the button is the last chance to say it. Edit keeps its
+                      bare name — it opens a form showing the row, and changes nothing. */}
                   <button
                     type="button"
                     disabled={busy}
@@ -405,7 +440,14 @@ export default function TransactionsPanel({
                   >
                     Duplicate
                   </button>
-                  <button type="button" disabled={busy} onClick={() => remove(t)}>Delete</button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Delete this ${t.type}`}
+                    onClick={() => remove(t)}
+                  >
+                    Delete
+                  </button>
                 </td>
               </tr>
             ))}

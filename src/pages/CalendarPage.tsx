@@ -14,6 +14,7 @@ import {
   groupByDate,
 } from '../components/calendar/calendarView'
 import EventDetails from '../components/calendar/EventDetails'
+import { useToast } from '../components/ToastProvider'
 import type { CalendarEvent } from '../types/api'
 import { formatDate, formatMonth } from '../utils/format'
 import { downloadIcs } from '../utils/ics'
@@ -51,6 +52,14 @@ export default function CalendarPage() {
   const anchorRef = useRef<HTMLElement | null>(null)
   const popoverRef = useRef<HTMLDivElement | null>(null)
   const addEventBtnRef = useRef<HTMLButtonElement | null>(null)
+  const toast = useToast()
+  // The undo closure can outlive a month change (the user pages ‹/› and THEN presses
+  // Undo): the refetch must follow the month on screen, not the one captured at delete.
+  // Unkeyed effect, not a render-time assignment — react-hooks/refs (EChart's idiom).
+  const monthRef = useRef(month)
+  useEffect(() => {
+    monthRef.current = month
+  })
 
   const load = (monthIso: string) => {
     const seq = ++seqRef.current
@@ -175,6 +184,21 @@ export default function CalendarPage() {
         addEventBtnRef.current?.focus()
         setBusy(true)
         load(month)
+        // Already confirm-free before this batch; the toast adds the recovery affordance
+        // (2026-08-25 polish §8). Undo re-POSTs the row — a new id is acceptable.
+        toast.success(`Deleted ${event.label}`, {
+          action: {
+            label: 'Undo',
+            onAction: () => {
+              createCustomEvent({ date: event.date, label: event.label, detail: event.detail })
+                .then(() => {
+                  setBusy(true)
+                  load(monthRef.current)
+                })
+                .catch(() => toast.error(`Could not restore ${event.label}`))
+            },
+          },
+        })
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Could not delete the event.')

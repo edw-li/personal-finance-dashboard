@@ -375,7 +375,7 @@ export default function OverviewPage() {
                 Open net worth →
               </NavLink>
               {spark ? (
-                <EChart option={spark} height={220} />
+                <EChart option={spark} height={220} ariaLabel="Line chart of net worth at every monthly snapshot" />
               ) : (
                 <p className="empty-note">No snapshots yet.</p>
               )}
@@ -389,7 +389,7 @@ export default function OverviewPage() {
                 Open portfolio →
               </NavLink>
               {perf ? (
-                <EChart option={perf} height={280} />
+                <EChart option={perf} height={280} ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly" />
               ) : (
                 <p className="empty-note">No performance history yet.</p>
               )}
@@ -403,7 +403,7 @@ export default function OverviewPage() {
                 Open spending →
               </NavLink>
               {bars ? (
-                <EChart option={bars} height={240} />
+                <EChart option={bars} height={240} ariaLabel="Bar chart of total spending for each of the last 12 entered months" />
               ) : (
                 <p className="empty-note">No spending months yet.</p>
               )}

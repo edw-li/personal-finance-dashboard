@@ -397,7 +397,11 @@ export default function ProjectionPage() {
                 <p className="empty-note">Not enough monthly snapshots to chart yet.</p>
               ) : (
                 <>
-                  <EChart option={nwChart} height={340} />
+                  <EChart
+                    option={nwChart}
+                    height={340}
+                    ariaLabel={`Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`}
+                  />
                   <p className="drill-hint">
                     {fit === null
                       ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
@@ -413,7 +417,11 @@ export default function ProjectionPage() {
                 <InfoHint text="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes." />
               </h2>
               {chart ? (
-                <EChart option={chart} height={340} />
+                <EChart
+                  option={chart}
+                  height={340}
+                  ariaLabel={`Projected investable balance over the next ${data.years} years`}
+                />
               ) : (
                 <p className="empty-note">Nothing to chart at this horizon.</p>
               )}

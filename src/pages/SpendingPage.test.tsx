@@ -15,14 +15,17 @@ vi.mock('../components/EChart', async () => {
     default: ({
       option,
       onClick,
+      ariaLabel,
     }: {
       option: {
         series?: { links?: { source?: string; target?: string; value?: number }[] }[]
       }
       onClick?: (params: { dataIndex?: number }) => void
+      ariaLabel?: string
     }) =>
       createElement('div', {
         'data-testid': 'echart',
+        'aria-label': ariaLabel,
         'data-links': (option.series?.[0]?.links ?? [])
           .map((l) => `${l.source}>${l.target}=${l.value}`)
           .join('|'),
@@ -141,5 +144,22 @@ describe('SpendingPage — the flow card', () => {
       await screen.findByText('Enter net pay for Jul 2026 to see the flow.'),
     ).toBeTruthy()
     expect(flowMarker()).toBeUndefined()
+  })
+})
+
+describe('SpendingPage — chart aria', () => {
+  it('names the heatmap and the sankey for assistive tech', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(
+      document.querySelector(
+        '[aria-label="Heatmap of spend per category per month — darker is more"]',
+      ),
+    ).not.toBeNull()
+    expect(
+      document.querySelector(
+        '[aria-label="Sankey flow of where Jul 2026 went, from net pay into categories and savings"]',
+      ),
+    ).not.toBeNull()
   })
 })

@@ -39,7 +39,11 @@ export default function AllocationPanel({
           <InfoHint text="Holdings grouped by industry; cell size and shading both follow market value." />
         </h2>
         {treemap ? (
-          <EChart option={treemap} height={300} />
+          <EChart
+            option={treemap}
+            height={300}
+            ariaLabel="Treemap of holdings by industry, sized and shaded by market value"
+          />
         ) : (
           <p className="empty-note">No priced holdings yet.</p>
         )}
@@ -68,7 +72,11 @@ export default function AllocationPanel({
           </div>
         </div>
         {donut ? (
-          <EChart option={donut} height={300} />
+          <EChart
+            option={donut}
+            height={300}
+            ariaLabel={`Donut chart of portfolio share by ${donutDim === 'type' ? 'holding type' : 'account'}`}
+          />
         ) : (
           <p className="empty-note">No priced holdings yet.</p>
         )}

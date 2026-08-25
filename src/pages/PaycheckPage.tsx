@@ -131,7 +131,7 @@ function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
       </h2>
       {option !== null ? (
         <>
-          <EChart option={option} height={320} />
+          <EChart option={option} height={320} ariaLabel="Sankey flow of one paycheck from gross to net" />
           <p className="drill-hint">
             Gray nodes restate money in transit; colored nodes are where it lands; green
             is what you keep. Hover a node to trace its flows.

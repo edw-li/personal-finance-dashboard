@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecurityOut, TransactionOut } from '../../types/api'
 import TransactionsPanel from './TransactionsPanel'
+import ToastProvider from '../ToastProvider'
 
 vi.mock('../../api/portfolio', () => ({
   createTransaction: vi.fn().mockResolvedValue({}),
@@ -80,14 +81,13 @@ describe('TransactionsPanel', () => {
   })
 
   it('deleting the row being edited resets the form', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const onChanged = vi.fn()
     render(
       <TransactionsPanel securities={securities} transactions={[importTxn]} onChanged={onChanged} />,
     )
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
     expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this buy' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     // Back to create mode: a stale editingId would PATCH the deleted id on the next save.
     expect(screen.getByRole('button', { name: /add transaction/i })).toBeTruthy()
@@ -172,6 +172,42 @@ describe('TransactionsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /add transaction/i }))
     expect(screen.getByText(/split factor is required/i)).toBeTruthy()
     expect(createTransaction).not.toHaveBeenCalled()
+  })
+
+  it('deletes instantly and Undo re-creates the captured row through the POST', async () => {
+    const onChanged = vi.fn()
+    render(
+      <ToastProvider>
+        <TransactionsPanel
+          securities={securities}
+          transactions={[importTxn]}
+          onChanged={onChanged}
+        />
+      </ToastProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this buy' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('Deleted the NVDA buy')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    // The captured row, re-POSTed field for field — a NEW id is acceptable by design
+    // (spec §4 item 8); the split-row '0' dummies would round-trip verbatim the same way.
+    await waitFor(() =>
+      expect(vi.mocked(createTransaction)).toHaveBeenCalledWith({
+        security_id: 1,
+        account: 'Schwab',
+        type: 'buy',
+        txn_date: null,
+        shares: '10.000000',
+        price: '100.0000',
+        fees: null,
+        split_factor: null,
+        notes: null,
+      }),
+    )
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
+    // The undo toast is consumed by its own action.
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
   })
 })
 
@@ -348,7 +384,7 @@ describe('TransactionsPanel entry session', () => {
     // mid-flight Duplicate the same) — the row buttons are simply shut for the duration.
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
     fireEvent.click(screen.getByRole('button', { name: 'Duplicate this buy' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete this buy' }))
     expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
     // Still the typed row, not the ledger row's 'Schwab' seed.
     expect((screen.getByLabelText(/account/i) as HTMLInputElement).value).toBe('Robinhood')
@@ -356,7 +392,9 @@ describe('TransactionsPanel entry session', () => {
     expect(
       (screen.getByRole('button', { name: 'Duplicate this buy' }) as HTMLButtonElement).disabled,
     ).toBe(true)
-    expect((screen.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(
+      (screen.getByRole('button', { name: 'Delete this buy' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
   })
 
   it('a successful edit still resets the whole form — carry-forward is create-only', async () => {

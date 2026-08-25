@@ -21,6 +21,7 @@ const REDUCED_MOTION =
 export default function EChart({
   option,
   height = 320,
+  ariaLabel,
   onClick,
   onHover,
   onHoverEnd,
@@ -28,6 +29,11 @@ export default function EChart({
 }: {
   option: EChartsOption
   height?: number
+  // A one-sentence description of what the chart SHOWS (deliberate house wording —
+  // ECharts' generated aria is not used; spec §4 item 6). Optional and additive: a
+  // sibling plan adds its own optional prop on a parallel branch, so this signature
+  // only ever GROWS entries.
+  ariaLabel?: string
   onClick?: (params: EChartEventParams) => void
   onHover?: (params: EChartEventParams) => void
   onHoverEnd?: () => void
@@ -86,5 +92,14 @@ export default function EChart({
     )
   }, [option])
 
-  return <div ref={containerRef} style={{ height, width: '100%' }} />
+  return (
+    <div
+      ref={containerRef}
+      // role only WITH a label: a bare role="img" would be an unnamed image to a screen
+      // reader — worse than the default (skippable) div.
+      role={ariaLabel === undefined ? undefined : 'img'}
+      aria-label={ariaLabel}
+      style={{ height, width: '100%' }}
+    />
+  )
 }

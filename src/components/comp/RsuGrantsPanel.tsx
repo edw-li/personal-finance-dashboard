@@ -3,6 +3,7 @@ import { ApiError } from '../../api/client'
 import { createRsuGrant, deleteRsuGrant, updateRsuGrant } from '../../api/comp'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import { useToast } from '../ToastProvider'
 import type { RsuGrantCreate, RsuGrantOut, SeedCandidateOut } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
@@ -84,6 +85,7 @@ export default function RsuGrantsPanel({
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
   const [busy, setBusy] = useState(false)
+  const toast = useToast()
 
   const set = (field: keyof GrantFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
@@ -246,11 +248,12 @@ export default function RsuGrantsPanel({
   }
 
   const remove = (grant: RsuGrantOut) => {
-    if (!window.confirm(`Delete the ${grant.label} grant?`)) return
     setBusy(true)
     // Cleared on entry like submit's: a delete that succeeds must not leave the previous
     // save's 409 sitting over the panel as if it still described the table.
     setError(null)
+    // Instant + Undo (2026-08-25 polish §8): the confirm interrupt is gone. Grants are
+    // parameters (the schedule recomputes from them), so a re-POST restores everything.
     deleteRsuGrant(grant.id)
       .then(() => {
         // The edited row is gone — a stale editingId would PATCH a 404 on the next save
@@ -260,6 +263,27 @@ export default function RsuGrantsPanel({
           setForm(EMPTY_GRANT)
         }
         onChanged()
+        toast.success(`Deleted the ${grant.label} grant`, {
+          action: {
+            label: 'Undo',
+            onAction: () => {
+              // The STORED columns only — vest_count and friends are computed on read.
+              createRsuGrant({
+                kind: grant.kind,
+                label: grant.label,
+                focal_year: grant.focal_year,
+                shares: grant.shares,
+                grant_price: grant.grant_price,
+                first_vest_date: grant.first_vest_date,
+                cliff_pct: grant.cliff_pct,
+                vest_quantum: grant.vest_quantum,
+                notes: grant.notes,
+              })
+                .then(() => onChanged())
+                .catch(() => toast.error(`Could not restore the ${grant.label} grant`))
+            },
+          },
+        })
       })
       .catch((err: unknown) => setError(message(err, 'Delete failed')))
       .finally(() => setBusy(false))

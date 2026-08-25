@@ -1,0 +1,78 @@
+/* Command palette (2026-08-25 polish §9). Overlay z-index 20: above the app's bubble
+   layer (2), below the toast region (30) — an Undo must survive an open palette. */
+
+.palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 14vh;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.palette {
+  width: min(560px, calc(100vw - 2rem));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+/* The overlay IS the focus ring — a second ring inside it would double-outline. */
+.palette-input:focus {
+  outline: none;
+}
+
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.palette-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* The sidebar's active grammar, reused: inset accent bar + surface. */
+.palette-option[aria-selected='true'] {
+  background: var(--surface-2);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.palette-kind {
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.palette-empty {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
