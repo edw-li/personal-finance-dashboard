@@ -300,3 +300,26 @@ export function portfolioHistoryOption(
     ],
   }
 }
+
+/** The performance chart as a table (2026-08-25 spec §2a): date rows × the four series,
+ * verbatim server strings; degraded/stale benchmark cells go empty. The live ping stays
+ * out — it is a quote, not a history row. */
+export function portfolioHistoryCsv(history: PortfolioHistory): ExportTable {
+  const benchmark = history.benchmark ?? []
+  return {
+    headers: [
+      'Date',
+      'Portfolio value',
+      'Cost basis',
+      'S&P 500 baseline',
+      'VOO (your contributions)',
+    ],
+    rows: history.dates.map((date, i) => [
+      date,
+      history.market_value[i],
+      history.cost_basis[i],
+      history.sp500[i],
+      benchmark[i] ?? '',
+    ]),
+  }
+}

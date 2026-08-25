@@ -1,6 +1,9 @@
 // Pure tooltip/CSV helpers for the net-worth stacked chart — no React, no fetching, no
 // theme decisions of their own (historyChartOptions.ts posture). The option itself stays
 // in NetWorthPage (it reads page state); only the parts worth unit-testing live here.
+import { GROUP_LABELS, GROUP_ORDER } from '../../charts/theme'
+import type { NetWorthTimeseries } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import { escapeHtml, formatCurrency } from '../../utils/format'
 
 /** The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
@@ -60,5 +63,20 @@ export function netWorthStackedTooltipFormatter(
         : []),
       ...otherLines,
     ].join('<br/>')
+  }
+}
+
+/** The stacked chart as a table (2026-08-25 spec §2a): month rows × the seven fixed
+ * groups + net worth, verbatim server strings in the palette's own group order. */
+export function netWorthCsv(
+  ts: Pick<NetWorthTimeseries, 'months' | 'group_totals' | 'net_worth'>,
+): ExportTable {
+  return {
+    headers: ['Month', ...GROUP_ORDER.map((g) => GROUP_LABELS[g]), 'Net worth'],
+    rows: ts.months.map((month, i) => [
+      month,
+      ...GROUP_ORDER.map((g) => ts.group_totals[g][i] ?? ''),
+      ts.net_worth[i],
+    ]),
   }
 }

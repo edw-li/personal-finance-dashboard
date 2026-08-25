@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { spendingBarsTooltipFormatter } from './spendingChartOptions'
+import { spendingBarsTooltipFormatter, spendingCsv } from './spendingChartOptions'
 
 const format = spendingBarsTooltipFormatter(['Rent', '<b>Fun</b>', 'Other'])
 
@@ -44,5 +44,27 @@ describe('spendingBarsTooltipFormatter', () => {
   it('returns an empty string when nothing under the pointer is finite', () => {
     expect(format([{ seriesName: 'Net pay', value: null }])).toBe('')
     expect(format([])).toBe('')
+  })
+})
+
+describe('spendingCsv', () => {
+  it('lays out month rows × top categories + Other + Total + Net pay, verbatim strings', () => {
+    const matrix = {
+      months: ['2026-06-01', '2026-07-01'],
+      series: [
+        { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, null] },
+        { category_id: 2, values: ['150.00', null], budgets: [null, null] }, // folded
+      ],
+      totals: ['2150.00', '2000.00'],
+      net_pay: ['6000.00', null],
+    }
+    expect(spendingCsv(matrix, [1], new Map([[1, 'Rent']]))).toEqual({
+      headers: ['Month', 'Rent', 'Other', 'Total', 'Net pay'],
+      rows: [
+        ['2026-06-01', '2000.00', '150.00', '2150.00', '6000.00'],
+        // null cells go EMPTY, never '0.00' — absent is not zero; Other re-sums the fold.
+        ['2026-07-01', '2000.00', '0.00', '2000.00', ''],
+      ],
+    })
   })
 })

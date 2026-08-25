@@ -7,6 +7,7 @@ import {
   EVENTS_SERIES,
   historyTooltipFormatter,
   liveFromHoldings,
+  portfolioHistoryCsv,
   portfolioHistoryOption,
 } from './historyChartOptions'
 
@@ -415,5 +416,23 @@ describe('historyTooltipFormatter — the Events branch', () => {
     expect(html).toContain('<strong>Aug 10, 2026</strong>')
     expect(html).toContain('Buy NVDA — 10 sh · Aug 10, 2026')
     expect(html).not.toContain('events</strong>')
+  })
+})
+
+describe('portfolioHistoryCsv', () => {
+  it('lays out date rows × the four series, verbatim strings', () => {
+    expect(portfolioHistoryCsv(history())).toEqual({
+      headers: ['Date', 'Portfolio value', 'Cost basis', 'S&P 500 baseline', 'VOO (your contributions)'],
+      rows: [
+        ['2026-07-27', '700000.00', '395000.00', '96000.00', '96000.00'],
+        ['2026-08-03', '710000.50', '399542.36', '97000.00', '97250.00'],
+        ['2026-08-10', '718422.07', '400243.74', '98636.70', '99001.13'],
+      ],
+    })
+  })
+
+  it('empties the VOO cells on a degraded or stale-payload benchmark', () => {
+    const rows = portfolioHistoryCsv(history({ benchmark: [null, null, null] })).rows
+    expect(rows.map((r) => r[4])).toEqual(['', '', ''])
   })
 })

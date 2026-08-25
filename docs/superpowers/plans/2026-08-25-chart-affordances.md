@@ -1997,7 +1997,7 @@ Identical pattern to Task 11; those pages have no page-test files, so the behavi
 **Files:**
 - Modify: `src/components/spending/spendingChartOptions.ts` (+ test), `src/components/networth/netWorthChartOptions.ts` (+ test), `src/components/portfolio/historyChartOptions.ts` (+ test)
 
-- [ ] **Step 1: Write the failing tests.** Append to `src/components/spending/spendingChartOptions.test.ts` (extend the import to include `spendingCsv`):
+- [x] **Step 1: Write the failing tests.** Append to `src/components/spending/spendingChartOptions.test.ts` (extend the import to include `spendingCsv`):
 
 ```ts
 describe('spendingCsv', () => {
@@ -2072,9 +2072,9 @@ describe('portfolioHistoryCsv', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/spending/spendingChartOptions.test.ts src/components/networth/netWorthChartOptions.test.ts src/components/portfolio/historyChartOptions.test.ts` → the three new describes FAIL (missing exports).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/spending/spendingChartOptions.test.ts src/components/networth/netWorthChartOptions.test.ts src/components/portfolio/historyChartOptions.test.ts` → the three new describes FAIL (missing exports).
 
-- [ ] **Step 3: Implement.** Append to `src/components/spending/spendingChartOptions.ts` (add `import type { ExportTable } from '../../utils/download'` and `import type { SpendingMatrix } from '../../types/api'` up top):
+- [x] **Step 3: Implement.** Append to `src/components/spending/spendingChartOptions.ts` (add `import type { ExportTable } from '../../utils/download'` and `import type { SpendingMatrix } from '../../types/api'` up top):
 
 ```ts
 /**
@@ -2160,9 +2160,9 @@ export function portfolioHistoryCsv(history: PortfolioHistory): ExportTable {
 }
 ```
 
-- [ ] **Step 4: Run** — the three test files again → ALL PASS.
+- [x] **Step 4: Run** — the three test files again → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): CSV builders — spending, net-worth, portfolio performance"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): CSV builders — spending, net-worth, portfolio performance"`
 
 ### Task 14: CSV builders B — dividends (shared sums), tax trend, projection
 

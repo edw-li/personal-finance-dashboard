@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NOTES_SERIES, netWorthStackedTooltipFormatter } from './netWorthChartOptions'
+import { NOTES_SERIES, netWorthCsv, netWorthStackedTooltipFormatter } from './netWorthChartOptions'
 
 const ASSETS = ['Cash', 'Pre-tax', 'Post-tax', 'Taxable', 'Equity', 'Other']
 const format = netWorthStackedTooltipFormatter(ASSETS)
@@ -47,5 +47,28 @@ describe('netWorthStackedTooltipFormatter', () => {
     ])
     expect(html).not.toContain('Assets:')
     expect(format([])).toBe('')
+  })
+})
+
+describe('netWorthCsv', () => {
+  it('lays out month rows × the seven group columns + net worth, verbatim strings', () => {
+    const csv = netWorthCsv({
+      months: ['2026-07-01', '2026-08-01'],
+      group_totals: {
+        cash: ['100.00', '110.00'], pre_tax: ['200.00', '210.00'],
+        post_tax: ['300.00', '310.00'], taxable: ['400.00', '410.00'],
+        equity: ['500.00', '510.00'], other: ['0.00', '0.00'],
+        liability: ['-50.00', '-40.00'],
+      },
+      net_worth: ['1450.00', '1500.00'],
+    })
+    expect(csv.headers).toEqual([
+      'Month', 'Cash', 'Pre-tax', 'Post-tax', 'Taxable', 'Equity', 'Other',
+      'Liabilities', 'Net worth',
+    ])
+    expect(csv.rows).toEqual([
+      ['2026-07-01', '100.00', '200.00', '300.00', '400.00', '500.00', '0.00', '-50.00', '1450.00'],
+      ['2026-08-01', '110.00', '210.00', '310.00', '410.00', '510.00', '0.00', '-40.00', '1500.00'],
+    ])
   })
 })

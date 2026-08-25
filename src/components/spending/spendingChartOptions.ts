@@ -2,6 +2,8 @@
 // fetching, no theme decisions of their own (budgetChartOptions.ts's posture). The
 // option itself stays in SpendingPage (it reads page state); only the parts worth
 // unit-testing live here. Number() is display-only (format.ts's rule).
+import type { SpendingMatrix } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import { escapeHtml, formatCurrency } from '../../utils/format'
 
 // Axis-tooltip params subset the formatter reads (historyChartOptions' posture).
@@ -47,5 +49,41 @@ export function spendingBarsTooltipFormatter(
       ...(catRows.length > 0 ? [`<strong>Total: ${formatCurrency(total)}</strong>`] : []),
       ...refRows.map((row) => line(row, false)),
     ].join('<br/>')
+  }
+}
+
+/**
+ * The stacked chart as a table (2026-08-25 spec §2a): month rows × the SAME top-N fold
+ * the bars draw, plus Other, the server's Total and Net pay — the export echoes the
+ * displayed chart, verbatim server strings. Null cells go empty, never '0.00': absent
+ * is not zero.
+ */
+export function spendingCsv(
+  matrix: Pick<SpendingMatrix, 'months' | 'series' | 'totals' | 'net_pay'>,
+  topIds: number[],
+  nameById: Map<number, string>,
+): ExportTable {
+  const topSet = new Set(topIds)
+  const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+  return {
+    headers: [
+      'Month',
+      ...topIds.map((id) => nameById.get(id) ?? String(id)),
+      'Other',
+      'Total',
+      'Net pay',
+    ],
+    rows: matrix.months.map((month, i) => [
+      month,
+      ...topIds.map((id) => valuesById.get(id)?.[i] ?? ''),
+      matrix.series
+        .reduce(
+          (acc, s) => (topSet.has(s.category_id) ? acc : acc + Number(s.values[i] ?? 0)),
+          0,
+        )
+        .toFixed(2),
+      matrix.totals[i],
+      matrix.net_pay[i] ?? '',
+    ]),
   }
 }
