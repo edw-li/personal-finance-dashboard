@@ -48,7 +48,7 @@ NOT touched, on purpose: `src/api/prices.ts` (`fetchRefreshStatus` stays), `src/
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the branch and a clean tree.**
+- [x] **Step 1: Confirm the branch and a clean tree.**
 
 ```bash
 git status --porcelain   # expected: EMPTY output
@@ -57,12 +57,12 @@ git rev-parse --abbrev-ref HEAD   # expected: system-status
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup.
 
-- [ ] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
+- [x] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
 
 Run: `cd backend && .venv/Scripts/python -m pytest tests/test_health.py -q`
 Expected: PASS. If it errors on connection, bring the container up (`cd backend && docker compose up -d db`) and retry once; if it still fails, read `backend/app/config.py` for the dev DATABASE_URL default before proceeding — do not guess.
 
-- [ ] **Step 3: Frontend smoke.**
+- [x] **Step 3: Frontend smoke.**
 
 Run: `npx vitest run src/utils/months.test.ts` → PASS.
 
@@ -76,7 +76,7 @@ Run: `npx vitest run src/utils/months.test.ts` → PASS.
 - Modify: `backend/app/services/scheduler.py`
 - Test: `backend/tests/test_scheduler.py`
 
-- [ ] **Step 1: Write the failing test.** In `backend/tests/test_scheduler.py`, extend the `from app.services.scheduler import (...)` block with `is_scheduler_running,` (alphabetical: after `get_next_run_time`). Append:
+- [x] **Step 1: Write the failing test.** In `backend/tests/test_scheduler.py`, extend the `from app.services.scheduler import (...)` block with `is_scheduler_running,` (alphabetical: after `get_next_run_time`). Append:
 
 ```python
 def test_is_scheduler_running_tracks_the_module_handle(monkeypatch):
@@ -96,9 +96,9 @@ def test_is_scheduler_running_tracks_the_module_handle(monkeypatch):
     assert is_scheduler_running() is False
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_scheduler.py -q` → FAIL (`ImportError: cannot import name 'is_scheduler_running'`).
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_scheduler.py -q` → FAIL (`ImportError: cannot import name 'is_scheduler_running'`).
 
-- [ ] **Step 3: Implement.** In `backend/app/services/scheduler.py`, insert directly below `get_next_run_time` (re-read the file first — do not place by line number):
+- [x] **Step 3: Implement.** In `backend/app/services/scheduler.py`, insert directly below `get_next_run_time` (re-read the file first — do not place by line number):
 
 ```python
 def is_scheduler_running() -> bool:
@@ -111,9 +111,9 @@ def is_scheduler_running() -> bool:
 
 Also update the module docstring's last sentence from "…so the settings router can hot-apply a saved cron and the status endpoint can name the next run; both degrade to no-op/None when nothing is running." to "…so the settings router can hot-apply a saved cron and the status endpoints can name the next run and report whether it is running; all degrade to no-op/None/False when nothing is running."
 
-- [ ] **Step 4: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_scheduler.py -q` → PASS.
+- [x] **Step 4: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_scheduler.py -q` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(system): is_scheduler_running accessor"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(system): is_scheduler_running accessor"`
 
 ### Task 2: Extract `compose_refresh_status()` — the old endpoint must not move
 
