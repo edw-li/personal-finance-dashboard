@@ -40,7 +40,7 @@
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the branch and a clean tree.**
+- [x] **Step 1: Confirm the branch and a clean tree.**
 
 ```bash
 git status --porcelain   # expected: EMPTY output
@@ -49,16 +49,16 @@ git rev-parse --abbrev-ref HEAD   # expected: money-flow-sankey
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup. The sibling waves (CA-tax fix, system status, polish, chart affordances) are expected to be merged already — `git log --oneline -5` should show their merge commits; if it does not, report before proceeding.
 
-- [ ] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
+- [x] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
 
 Run: `cd backend && .venv/Scripts/python -m pytest tests/test_health.py -q`
 Expected: PASS. If it errors on connection, bring the container up (`cd backend && docker compose up -d db`) and retry once; if it still fails, read `backend/app/config.py` for the dev DATABASE_URL default before proceeding — do not guess.
 
-- [ ] **Step 3: Frontend smoke.**
+- [x] **Step 3: Frontend smoke.**
 
 Run: `npx vitest run src/utils/months.test.ts` → PASS.
 
-- [ ] **Step 4: Confirm the engine's post-fix shape** (this plan's fixtures depend on it).
+- [x] **Step 4: Confirm the engine's post-fix shape** (this plan's fixtures depend on it).
 
 Run: `cd backend && .venv/Scripts/python -c "import inspect; from app.services import tax_service; src = inspect.getsource(tax_service.compute_breakdown); print('cg in state_agi:', 'cg_amount' in src.split('state_agi')[1][:400])"`
 Expected: `cg in state_agi: True`. If False, the CA capital-gains fix has not merged — STOP and report (Task 1's CG-carrying test asserts THROUGH the engine either way, but the protocol said this plan runs last).
