@@ -656,7 +656,7 @@ export function formatBytes(bytes: number): string {
 - Create: `src/components/settings/SystemCard.tsx`, `src/components/settings/SystemCard.test.tsx`
 - Modify: `src/components/settings/settings.css`, `src/pages/SettingsPage.tsx`, `src/pages/SettingsPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/settings/SystemCard.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/settings/SystemCard.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -796,9 +796,9 @@ it('shows the load failure verbatim and retries into the rows', async () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/settings/SystemCard.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/settings/SystemCard.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement the card** — create `src/components/settings/SystemCard.tsx`:
+- [x] **Step 3: Implement the card** — create `src/components/settings/SystemCard.tsx`:
 
 ```tsx
 import { useEffect, useRef, useState } from 'react'
@@ -941,7 +941,7 @@ export default function SystemCard() {
 
 (A failed RELOAD keeps the previous facts hidden behind the banner rather than beside it — `!error &&` — because unlike Overview's charts these rows claim to be "now", and a stale "Running" next to a failure banner is a lie about the present.)
 
-- [ ] **Step 4: CSS.** Append to `src/components/settings/settings.css`:
+- [x] **Step 4: CSS.** Append to `src/components/settings/settings.css`:
 
 ```css
 /* --- system card --- */
@@ -1000,9 +1000,9 @@ export default function SystemCard() {
 }
 ```
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/settings/SystemCard.test.tsx` → PASS.
+- [x] **Step 5: Run** — `npx vitest run src/components/settings/SystemCard.test.tsx` → PASS.
 
-- [ ] **Step 6: Mount on SettingsPage.** In `src/pages/SettingsPage.tsx` (re-read it first): add `import SystemCard from '../components/settings/SystemCard'` directly after the `ImportReportView` import, and insert `<SystemCard />` inside the `card-grid` div, after the Password `</section>` and before the grid's closing `</div>`:
+- [x] **Step 6: Mount on SettingsPage.** In `src/pages/SettingsPage.tsx` (re-read it first): add `import SystemCard from '../components/settings/SystemCard'` directly after the `ImportReportView` import, and insert `<SystemCard />` inside the `card-grid` div, after the Password `</section>` and before the grid's closing `</div>`:
 
 ```tsx
           {/* Read-only status, its own fetch/error (SystemCard) — it shares the forms'
@@ -1011,7 +1011,7 @@ export default function SystemCard() {
           <SystemCard />
 ```
 
-- [ ] **Step 7: Arm the page test.** In `src/pages/SettingsPage.test.tsx` (re-read it first):
+- [x] **Step 7: Arm the page test.** In `src/pages/SettingsPage.test.tsx` (re-read it first):
   1. Update the mock-block header comment "Three api modules, all stubbed." → "Four api modules, all stubbed." and add below the importer mock:
 ```tsx
 vi.mock('../api/system', async (importOriginal) => ({
@@ -1046,9 +1046,9 @@ describe('SettingsPage — system card', () => {
 })
 ```
 
-- [ ] **Step 8: Run** — `npx vitest run src/pages/SettingsPage.test.tsx` → ALL PASS (every pre-existing test must survive the new card; if any trips on ambiguous text queries, the new card's copy above deliberately shares no strings with the forms).
+- [x] **Step 8: Run** — `npx vitest run src/pages/SettingsPage.test.tsx` → ALL PASS (every pre-existing test must survive the new card; if any trips on ambiguous text queries, the new card's copy above deliberately shares no strings with the forms).
 
-- [ ] **Step 9: Commit** — `git add -A && git commit -m "feat(system): Settings System card — refresh/scheduler/backup/database rows"`
+- [x] **Step 9: Commit** — `git add -A && git commit -m "feat(system): Settings System card — refresh/scheduler/backup/database rows"`
 
 ### Task 8: Attention backup item + Overview switches to `/system/status`
 
