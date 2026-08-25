@@ -1807,7 +1807,7 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
 - Create: `src/utils/fuzzy.ts`
 - Test: `src/utils/fuzzy.test.ts` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/utils/fuzzy.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `src/utils/fuzzy.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -1835,9 +1835,9 @@ describe('fuzzyScore', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/utils/fuzzy.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/utils/fuzzy.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/utils/fuzzy.ts`:
+- [x] **Step 3: Implement** — create `src/utils/fuzzy.ts`:
 
 ```ts
 /**
@@ -1868,9 +1868,9 @@ export function fuzzyScore(query: string, text: string): number | null {
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/utils/fuzzy.test.ts` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/utils/fuzzy.test.ts` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(palette): fuzzy subsequence scorer"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(palette): fuzzy subsequence scorer"`
 
 ### Task 14: `CommandPalette` — overlay, actions, recents, mount
 
