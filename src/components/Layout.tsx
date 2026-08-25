@@ -59,8 +59,8 @@ export default function Layout() {
       <main id="main" tabIndex={-1} className="content" ref={mainRef}>
         {/* Route chunks resolve here — the sidebar must not unmount while one loads, and a
             chunk that never arrives must not blank the app (RouteBoundary). The fallback's
-            class is .route-fallback, not panels.css's .empty-note: panels.css now ships with
-            the first PAGE chunk, so it is absent from the very paint this fallback owns.
+            class is .route-fallback, not panels.css's .empty-note: panels.css travels with
+            its importers, not this file, so this fallback cannot rely on it.
 
             key={pathname} remounts the boundary on navigation, which is what makes the retry
             real: React.lazy memoizes the rejected import, so re-rendering the FAILED route

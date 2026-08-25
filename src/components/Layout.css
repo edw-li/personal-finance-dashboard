@@ -98,7 +98,8 @@
 }
 
 /* Suspense fallback for lazy route chunks — must live in ENTRY css (this file), not
-   panels.css, which now arrives lazily with the first page chunk (Task 9 review). */
+   panels.css, which travels with its importers (Task 9 review; Login pulls it eagerly
+   since the 2026-08-25 polish). */
 .route-fallback {
   color: var(--muted);
   font-size: 0.85rem;

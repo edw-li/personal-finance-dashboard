@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+import '../components/panels.css'
 import './LoginPage.css'
 
 export default function LoginPage() {
@@ -36,6 +37,7 @@ export default function LoginPage() {
         <label>
           Email
           <input
+            autoFocus
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -53,8 +55,12 @@ export default function LoginPage() {
             required
           />
         </label>
-        {error && <div className="login-error">{error}</div>}
-        <button type="submit" disabled={submitting}>
+        {error && (
+          <div className="login-error" role="alert">
+            {error}
+          </div>
+        )}
+        <button type="submit" className="button button-primary" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
       </form>

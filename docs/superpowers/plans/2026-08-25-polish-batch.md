@@ -670,7 +670,7 @@ export default function NotFoundPage() {
 - Modify: `src/pages/LoginPage.tsx`, `src/pages/LoginPage.css`, `src/components/Layout.tsx` (one comment clause)
 - Test: `src/pages/LoginPage.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/pages/LoginPage.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/pages/LoginPage.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -733,9 +733,9 @@ describe('LoginPage', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/LoginPage.test.tsx` → FAIL (no autofocus, no alert role, bare button class).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/LoginPage.test.tsx` → FAIL (no autofocus, no alert role, bare button class).
 
-- [ ] **Step 3: LoginPage.tsx.** Three edits:
+- [x] **Step 3: LoginPage.tsx.** Three edits:
   1. Add `import '../components/panels.css'` on the line ABOVE `import './LoginPage.css'` (the login screen needs `.button-primary`; panels.css thereby joins the eager entry chunk — see Step 5).
   2. The email input gains `autoFocus` (first attribute line, above `type="email"`).
   3. The error div and the button become:
@@ -751,7 +751,7 @@ describe('LoginPage', () => {
         </button>
 ```
 
-- [ ] **Step 4: LoginPage.css.** Replace the two button blocks (`.login-card button` and `.login-card button:disabled`) with:
+- [x] **Step 4: LoginPage.css.** Replace the two button blocks (`.login-card button` and `.login-card button:disabled`) with:
 
 ```css
 /* Layout-only: the primary treatment (dark-on-accent — AA-safe, unlike the old local
@@ -771,13 +771,13 @@ describe('LoginPage', () => {
 }
 ```
 
-- [ ] **Step 5: Keep the two stale comments honest.** Login (eager) importing panels.css moves that sheet into the entry chunk, which dates two claims:
+- [x] **Step 5: Keep the two stale comments honest.** Login (eager) importing panels.css moves that sheet into the entry chunk, which dates two claims:
   1. `src/components/Layout.tsx` — in the RouteBoundary comment, change the clause `panels.css now ships with the first PAGE chunk, so it is absent from the very paint this fallback owns.` → `panels.css travels with its importers, not this file, so this fallback cannot rely on it.`
   2. `src/components/Layout.css` — in the `.route-fallback` comment, change `not panels.css, which now arrives lazily with the first page chunk (Task 9 review)` → `not panels.css, which travels with its importers (Task 9 review; Login pulls it eagerly since the 2026-08-25 polish)`.
 
-- [ ] **Step 6: Run** — `npx vitest run src/pages/LoginPage.test.tsx src/components/Layout.test.tsx` → PASS.
+- [x] **Step 6: Run** — `npx vitest run src/pages/LoginPage.test.tsx src/components/Layout.test.tsx` → PASS.
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "fix(login): primary-button contrast, error alert role, email autofocus"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "fix(login): primary-button contrast, error alert role, email autofocus"`
 
 ---
 
