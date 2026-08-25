@@ -2337,9 +2337,9 @@ export default function CommandPalette() {
 
 **Files:** none (verification only; commit only if a step below changes files)
 
-- [ ] **Step 1: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; the batch adds 8 new test files and ~35 new tests over the 791 baseline).
-- [ ] **Step 2: Types** — `npx tsc -b` → exits clean, no output.
-- [ ] **Step 3: Lint** — `npx eslint .` → exits 0. (react-refresh/only-export-components is configured as WARN and already fires on context modules; ToastProvider may add one warning — warnings do not fail the command and no new ERROR may appear.)
-- [ ] **Step 4: Spec-coverage sweep** — re-read spec §4's nine numbered items against the commits; each maps to Tasks 1–14. Then two greps: `grep -rn "c98500" src` → 3 hits (Task 1's expected set); `grep -rln "PlaceholderPage" src` → the file alone.
-- [ ] **Step 5: Clean tree** — `git status --porcelain` → EMPTY. If any step above touched files (a lint fix), commit them: `git add -A && git commit -m "chore(polish): verification pass fixes"`.
-- [ ] **Step 6: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch. Leave a summary listing: the test count, the ten labelled charts, the four converted delete flows (and that every other `window.confirm` site survives — Task 12 Step 5's list), the `useToast` no-op-outside-provider posture, and the EChart cross-plan note (only `ariaLabel` was added, additively, for the parallel `exportConfig` branch).
+- [x] **Step 1: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; the batch adds 8 new test files and ~35 new tests over the 791 baseline).
+- [x] **Step 2: Types** — `npx tsc -b` → exits clean, no output.
+- [x] **Step 3: Lint** — `npx eslint .` → exits 0. (react-refresh/only-export-components is configured as WARN and already fires on context modules; ToastProvider may add one warning — warnings do not fail the command and no new ERROR may appear.)
+- [x] **Step 4: Spec-coverage sweep** — re-read spec §4's nine numbered items against the commits; each maps to Tasks 1–14. Then two greps: `grep -rn "c98500" src` → 3 hits (Task 1's expected set); `grep -rln "PlaceholderPage" src` → the file alone.
+- [x] **Step 5: Clean tree** — `git status --porcelain` → EMPTY. If any step above touched files (a lint fix), commit them: `git add -A && git commit -m "chore(polish): verification pass fixes"`.
+- [x] **Step 6: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch. Leave a summary listing: the test count, the ten labelled charts, the four converted delete flows (and that every other `window.confirm` site survives — Task 12 Step 5's list), the `useToast` no-op-outside-provider posture, and the EChart cross-plan note (only `ariaLabel` was added, additively, for the parallel `exportConfig` branch).

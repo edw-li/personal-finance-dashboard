@@ -63,20 +63,30 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
     [dismiss],
   )
 
+  // The ref reads live HERE, in a useCallback, not in the useMemo below: react-hooks/refs
+  // treats a useMemo body as render phase (its value IS used while rendering) and rejects
+  // ref access inside it, while a callback's body is deferred by definition.
+  const push = useCallback(
+    (variant: ToastVariant, message: string, options?: ToastOptions) => {
+      const id = nextId.current
+      nextId.current += 1
+      setToasts((current) => [...current, { id, variant, message, action: options?.action }])
+      // Born under the pointer = not armed yet; resume() below re-arms every survivor.
+      if (!paused.current) arm(id)
+    },
+    [arm],
+  )
+
   // A STABLE api object: it travels through context, and every consumer is a whole page —
   // a fresh identity per render would re-render them all whenever a toast comes or goes.
-  const api = useMemo<ToastApi>(() => {
-    const push =
-      (variant: ToastVariant) =>
-      (message: string, options?: ToastOptions) => {
-        const id = nextId.current
-        nextId.current += 1
-        setToasts((current) => [...current, { id, variant, message, action: options?.action }])
-        // Born under the pointer = not armed yet; resume() below re-arms every survivor.
-        if (!paused.current) arm(id)
-      }
-    return { success: push('success'), info: push('info'), error: push('error') }
-  }, [arm])
+  const api = useMemo<ToastApi>(
+    () => ({
+      success: (message, options) => push('success', message, options),
+      info: (message, options) => push('info', message, options),
+      error: (message, options) => push('error', message, options),
+    }),
+    [push],
+  )
 
   // Pause on hover/focus; resume re-arms a FULL window rather than a remainder —
   // "I was reading this" earns a fresh clock, and no per-toast stopwatch bookkeeping.
