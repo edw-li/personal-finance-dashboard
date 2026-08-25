@@ -15,6 +15,7 @@ from app.api import (
     espp,
     import_,
     net_worth,
+    overview,
     paycheck,
     portfolio,
     prices,
@@ -86,6 +87,7 @@ app.include_router(calendar.router, prefix="/api/v1")
 app.include_router(projection.router, prefix="/api/v1")
 app.include_router(app_settings.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
+app.include_router(overview.router, prefix="/api/v1")
 
 
 @app.get("/api/v1/health")

@@ -654,7 +654,7 @@ def compose_money_flow(
 - Modify: `backend/app/main.py`
 - Test: `backend/tests/test_overview_api.py`
 
-- [ ] **Step 1: Write the failing API tests** — create `backend/tests/test_overview_api.py`. Tax data goes through the REAL taxes PUTs (test_taxes_api's posture — the FK to `tax_input_definitions` demands the seed first); spending is seeded directly like `_seed_spending`. Engine figures are cross-checked against the taxes SUMMARY endpoint — the same stored rows through the same loaders must land on the same cents, with zero hand math.
+- [x] **Step 1: Write the failing API tests** — create `backend/tests/test_overview_api.py`. Tax data goes through the REAL taxes PUTs (test_taxes_api's posture — the FK to `tax_input_definitions` demands the seed first); spending is seeded directly like `_seed_spending`. Engine figures are cross-checked against the taxes SUMMARY endpoint — the same stored rows through the same loaders must land on the same cents, with zero hand math.
 
 ```python
 """Overview money-flow endpoint (2026-08-25 spec §5): loading, windows, quantization.
@@ -876,9 +876,9 @@ async def test_money_flow_available_years_lists_every_inputs_year(auth_client, d
     assert body["available_years"] == [2024, 2026]
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_overview_api.py -q` → FAIL (404s — the route does not exist; the auth test may pass by accident of the 401-before-404 ordering, that is fine).
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_overview_api.py -q` → FAIL (404s — the route does not exist; the auth test may pass by accident of the 401-before-404 ordering, that is fine).
 
-- [ ] **Step 3: Schemas** — create `backend/app/schemas/overview.py`:
+- [x] **Step 3: Schemas** — create `backend/app/schemas/overview.py`:
 
 ```python
 from decimal import Decimal
@@ -940,7 +940,7 @@ class MoneyFlowOut(BaseModel):
     saved: Decimal
 ```
 
-- [ ] **Step 4: Router** — create `backend/app/api/overview.py`:
+- [x] **Step 4: Router** — create `backend/app/api/overview.py`:
 
 ```python
 """Overview API: cross-domain, server-composed payloads for the dashboard's cards.
@@ -1080,17 +1080,17 @@ async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db))
     return _money_flow_out(flow)
 ```
 
-- [ ] **Step 5: Mount.** In `backend/app/main.py`: add `overview,` to the `from app.api import (...)` block (alphabetical: after `net_worth`, before `paycheck`), and append after the last `include_router` line (`app_settings`):
+- [x] **Step 5: Mount.** In `backend/app/main.py`: add `overview,` to the `from app.api import (...)` block (alphabetical: after `net_worth`, before `paycheck`), and append after the last `include_router` line (`app_settings`):
 
 ```python
 app.include_router(overview.router, prefix="/api/v1")
 ```
 
-- [ ] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_overview_api.py tests/test_money_flow.py -q` → ALL PASS. Then the full backend suite once here (cheap insurance that the borrow of `_money`/`_stored_inputs`/`_engine_tables` changed nothing): `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS.
+- [x] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_overview_api.py tests/test_money_flow.py -q` → ALL PASS. Then the full backend suite once here (cheap insurance that the borrow of `_money`/`_stored_inputs`/`_engine_tables` changed nothing): `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS.
 
-- [ ] **Step 7: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or re-run the touched tests and commit the reflow).
+- [x] **Step 7: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or re-run the touched tests and commit the reflow).
 
-- [ ] **Step 8: Commit** — `git add -A && git commit -m "feat(overview): money-flow endpoint + schemas + mount"`
+- [x] **Step 8: Commit** — `git add -A && git commit -m "feat(overview): money-flow endpoint + schemas + mount"`
 
 ---
 
