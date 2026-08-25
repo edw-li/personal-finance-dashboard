@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
@@ -65,10 +65,27 @@ export default function SpendingPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [trend, setTrend] = useState<{ categoryId: number; slot: number }[]>([])
-  // Month drill-in: the ISO month whose breakdown pie replaces the bars chart. Stored
-  // as the month string (never an index) so a refetch that reshapes the month list
-  // cannot mis-target; a month that vanished falls back to the all-months view.
-  const [detailMonth, setDetailMonth] = useState<string | null>(null)
+  // Month drill-in: the ISO month whose breakdown pie replaces the bars chart — READ
+  // from the URL (?month=YYYY-MM-01, the wizard's own param grammar) so a drill is
+  // shareable and Overview can link straight into it (2026-08-25 spec §2d). Month
+  // STRING, never an index: a refetch that reshapes the month list cannot mis-target,
+  // and a month that vanished (or a garbled param) falls back to the all-months view
+  // through the indexOf guard below.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const detailMonth = searchParams.get('month')
+  const setDetailMonth = (month: string | null) => {
+    // replace, not push: a drill is a view state — Back should leave the page, not
+    // unwind every pie the user peeked at.
+    setSearchParams(
+      (current) => {
+        const copy = new URLSearchParams(current)
+        if (month === null) copy.delete('month')
+        else copy.set('month', month)
+        return copy
+      },
+      { replace: true },
+    )
+  }
   // The page's time window, applied to the three time charts together (bars, savings
   // rate, category trends — one month axis, one answer). Object identity so a re-click
   // of the active chip re-asserts the window (NetWorthPage's `range`). The heatmap stays

@@ -1528,7 +1528,7 @@ and replace the `performanceOption` memo with:
 **Files:**
 - Modify: `src/pages/SpendingPage.tsx`, `src/pages/SpendingPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** In `src/pages/SpendingPage.test.tsx`: extend the react-router import to `import { MemoryRouter, useLocation } from 'react-router-dom'`, add the probe (TaxesPage.test's idiom) above `renderPage`, and give `renderPage` an entry parameter:
+- [x] **Step 1: Write the failing tests.** In `src/pages/SpendingPage.test.tsx`: extend the react-router import to `import { MemoryRouter, useLocation } from 'react-router-dom'`, add the probe (TaxesPage.test's idiom) above `renderPage`, and give `renderPage` an entry parameter:
 
 ```tsx
 // The URL as the router holds it — the deep-link tests pin both directions of the
@@ -1579,9 +1579,9 @@ describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx` → the three new tests FAIL (no URL sync); the pre-existing ones PASS.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx` → the three new tests FAIL (no URL sync); the pre-existing ones PASS.
 
-- [ ] **Step 3: Implement.** In `src/pages/SpendingPage.tsx`:
+- [x] **Step 3: Implement.** In `src/pages/SpendingPage.tsx`:
   1. Change the react-router import to `import { useNavigate, useSearchParams } from 'react-router-dom'`.
   2. Replace the `detailMonth` useState (and its comment) with the URL-derived pair, placed right after `const navigate = useNavigate()`:
 ```ts
@@ -1609,9 +1609,9 @@ describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
 ```
   3. Nothing else changes — `handleSpendChartClick`, the two `setDetailMonth(null)` buttons, and the `detailIndex` memo all keep their call shapes.
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx` → ALL PASS (including the pre-existing "follows the drilled month" test, now flowing through the URL).
+- [x] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx` → ALL PASS (including the pre-existing "follows the drilled month" test, now flowing through the URL).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(spending): ?month= deep link <-> drill-in pie"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(spending): ?month= deep link <-> drill-in pie"`
 
 ### Task 9: `/taxes?year=YYYY` ↔ the jurisdiction pie
 

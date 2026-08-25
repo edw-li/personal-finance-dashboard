@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
@@ -96,10 +96,18 @@ const YEARLY: SpendingYearly = {
 const flowMarker = () =>
   screen.getAllByTestId('echart').find((el) => (el.getAttribute('data-links') ?? '') !== '')
 
-function renderPage() {
+// The URL as the router holds it — the deep-link tests pin both directions of the
+// drill↔URL sync.
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+}
+
+function renderPage(entry = '/spending') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
       <SpendingPage />
+      <LocationProbe />
     </MemoryRouter>,
   )
 }
@@ -172,5 +180,32 @@ describe('SpendingPage — tooltip fixes', () => {
       .map((el) => el.getAttribute('data-pct-sample'))
     expect(samples).toContain('35.0%') // the savings chart's valueFormatter, sampled at 0.35
     expect(samples).not.toContain('+35.0%')
+  })
+})
+
+describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
+  it('opens the month drill-in straight from the URL', async () => {
+    renderPage('/spending?month=2026-06')
+    expect(await screen.findByText('Spending breakdown — Jun 2026')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'All months' })).toBeTruthy()
+  })
+
+  it('ignores a month the matrix does not carry — no drill, no crash', async () => {
+    renderPage('/spending?month=banana')
+    expect(await screen.findByText(/Monthly spend vs net pay/)).toBeTruthy()
+    expect(screen.queryByText(/Spending breakdown/)).toBeNull()
+  })
+
+  it('mirrors a bar-click drill into the URL and clears it on the way back', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    fireEvent.click(screen.getAllByTestId('echart')[0]) // the bars chart, dataIndex 0
+    expect(await screen.findByText('Spending breakdown — Jun 2026')).toBeTruthy()
+    // The fixture months carry no '-01' suffix; the contract is string equality with
+    // matrix.months entries, which in production are the wizard's YYYY-MM-01 grammar.
+    expect(screen.getByTestId('location').textContent).toBe('/spending?month=2026-06')
+    fireEvent.click(screen.getByRole('button', { name: 'All months' }))
+    await screen.findByText(/Monthly spend vs net pay/)
+    expect(screen.getByTestId('location').textContent).toBe('/spending')
   })
 })
