@@ -21,7 +21,7 @@
 
 /* The "needs attention" strip: one row per actionable condition, each a link to the page
    that fixes it. Amber accent = advisory, not error (the .tax-warnings register) — the
-   the --warn token (PALETTE[3] amber) the freshness cue below shares. */
+   --warn token (PALETTE[3] amber) the freshness cue below shares. */
 .attention-strip {
   display: flex;
   flex-direction: column;

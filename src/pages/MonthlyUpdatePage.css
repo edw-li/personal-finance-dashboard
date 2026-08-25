@@ -161,8 +161,8 @@
 }
 
 /* The draft-restored banner: advisory amber (the .tax-warnings register), never an error
-   — nothing failed, work was preserved. The literal is PALETTE[3], the app's one
-   annotation/advisory color (portfolio.css's staleness note explains why it's a literal). */
+   — nothing failed, work was preserved. It is the app's one annotation/advisory color
+   (--warn, PALETTE[3] amber). */
 .draft-note {
   display: flex;
   align-items: center;
