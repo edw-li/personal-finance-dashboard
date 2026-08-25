@@ -11,6 +11,7 @@ import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
 import BudgetPanel from '../components/spending/BudgetPanel'
 import { budgetStepSeries } from '../components/spending/budgetChartOptions'
+import { spendingBarsTooltipFormatter } from '../components/spending/spendingChartOptions'
 import {
   spendingFlowPeriod,
   spendingSankeyOption,
@@ -163,8 +164,13 @@ export default function SpendingPage() {
       legend: { top: 0, selected: { 'Total budget': false } },
       tooltip: {
         trigger: 'axis',
-        valueFormatter: (value) =>
-          value === null || value === undefined ? '—' : formatCurrency(value as number),
+        // Category rows carry (share of month) and a bold Total; the net-pay/4%/budget
+        // reference lines list after it, excluded from the sum (2026-08-25 spec §2b).
+        // Padded nulls now drop instead of printing '—' rows — the house formatter rule.
+        formatter: spendingBarsTooltipFormatter([
+          ...topIds.map((id) => nameById.get(id) ?? String(id)),
+          'Other',
+        ]),
       },
       xAxis: { type: 'category', data: monthLabels },
       yAxis: {
@@ -406,7 +412,9 @@ export default function SpendingPage() {
         trigger: 'axis',
         // True value in the tooltip even when the line is clamped out of frame.
         valueFormatter: (value) =>
-          value === null || value === undefined ? '—' : formatPct(value as number),
+          value === null || value === undefined
+            ? '—'
+            : formatPct(value as number, { signed: false }),
       },
       xAxis: { type: 'category', data: monthLabels, boundaryGap: false },
       yAxis: {

@@ -7,26 +7,45 @@ import SpendingPage from './SpendingPage'
 vi.mock('../api/spending', () => ({ fetchMatrix: vi.fn(), fetchYearly: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each
 // chart draws is pinned in its option-builder tests; this marker says which charts are
-// up and, via data-links, what the FLOW card drew. Clicking a marker stands in for a
-// click on the chart's first month (dataIndex 0) — enough to walk the drill-in door.
+// up and, via data-* attributes, the option/prop slices these page tests pin: sankey
+// links (the flow card), legend.selected (persistence), the first dataZoom entry
+// (window persistence), a sampled valueFormatter (the unsigned savings rate) and the
+// export name. Clicking a marker stands in for a click on the chart's first month
+// (dataIndex 0); mouseEnter/mouseLeave stand in for the legendselectchanged/datazoom
+// chart events jsdom cannot raise.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
     default: ({
       option,
       onClick,
+      onLegendChange,
+      onDataZoom,
+      exportConfig,
     }: {
       option: {
         series?: { links?: { source?: string; target?: string; value?: number }[] }[]
+        legend?: { selected?: Record<string, boolean> }
+        dataZoom?: { startValue?: number; endValue?: number }[]
+        tooltip?: { valueFormatter?: (value: unknown) => string }
       }
       onClick?: (params: { dataIndex?: number }) => void
+      onLegendChange?: (selected: Record<string, boolean>) => void
+      onDataZoom?: (window: { startValue: number; endValue: number }) => void
+      exportConfig?: { name: string }
     }) =>
       createElement('div', {
         'data-testid': 'echart',
         'data-links': (option.series?.[0]?.links ?? [])
           .map((l) => `${l.source}>${l.target}=${l.value}`)
           .join('|'),
+        'data-legend-selected': JSON.stringify(option.legend?.selected ?? null),
+        'data-zoom': JSON.stringify(option.dataZoom?.[0] ?? null),
+        'data-pct-sample': option.tooltip?.valueFormatter?.(0.35) ?? '',
+        'data-export-name': exportConfig?.name ?? '',
         onClick: () => onClick?.({ dataIndex: 0 }),
+        onMouseEnter: () => onLegendChange?.({ 'Net pay': false, '4% rule': true }),
+        onMouseLeave: () => onDataZoom?.({ startValue: 1, endValue: 1 }),
       }),
   }
 })
@@ -141,5 +160,17 @@ describe('SpendingPage — the flow card', () => {
       await screen.findByText('Enter net pay for Jul 2026 to see the flow.'),
     ).toBeTruthy()
     expect(flowMarker()).toBeUndefined()
+  })
+})
+
+describe('SpendingPage — tooltip fixes', () => {
+  it('prints the savings-rate tooltip unsigned — a rate is a level, not a movement', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const samples = screen
+      .getAllByTestId('echart')
+      .map((el) => el.getAttribute('data-pct-sample'))
+    expect(samples).toContain('35.0%') // the savings chart's valueFormatter, sampled at 0.35
+    expect(samples).not.toContain('+35.0%')
   })
 })

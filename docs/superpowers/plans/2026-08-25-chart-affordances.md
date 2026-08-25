@@ -660,7 +660,7 @@ Append to `src/components/panels.css`:
 - Create: `src/components/spending/spendingChartOptions.ts`, `src/components/spending/spendingChartOptions.test.ts`
 - Modify: `src/pages/SpendingPage.tsx`, `src/pages/SpendingPage.test.tsx`
 
-- [ ] **Step 1: Write the failing formatter tests** — create `src/components/spending/spendingChartOptions.test.ts`:
+- [x] **Step 1: Write the failing formatter tests** — create `src/components/spending/spendingChartOptions.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -713,9 +713,9 @@ describe('spendingBarsTooltipFormatter', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/spending/spendingChartOptions.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/spending/spendingChartOptions.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement the formatter** — create `src/components/spending/spendingChartOptions.ts`:
+- [x] **Step 3: Implement the formatter** — create `src/components/spending/spendingChartOptions.ts`:
 
 ```ts
 // Pure tooltip + CSV helpers for the spending stacked-bars chart — no React, no
@@ -773,7 +773,7 @@ export function spendingBarsTooltipFormatter(
 
 Run: `npx vitest run src/components/spending/spendingChartOptions.test.ts` → PASS.
 
-- [ ] **Step 4: Wire the page.** In `src/pages/SpendingPage.tsx`:
+- [x] **Step 4: Wire the page.** In `src/pages/SpendingPage.tsx`:
   1. Add the import (beside the budgetChartOptions import):
 ```ts
 import { spendingBarsTooltipFormatter } from '../components/spending/spendingChartOptions'
@@ -799,7 +799,7 @@ import { spendingBarsTooltipFormatter } from '../components/spending/spendingCha
             : formatPct(value as number, { signed: false }),
 ```
 
-- [ ] **Step 5: Upgrade the SpendingPage test mock ONCE for the whole batch.** In `src/pages/SpendingPage.test.tsx`, replace the entire `vi.mock('../components/EChart', …)` block with the version below (later tasks — deep links, persistence, export — assert through these attributes and stand-in events):
+- [x] **Step 5: Upgrade the SpendingPage test mock ONCE for the whole batch.** In `src/pages/SpendingPage.test.tsx`, replace the entire `vi.mock('../components/EChart', …)` block with the version below (later tasks — deep links, persistence, export — assert through these attributes and stand-in events):
 
 ```tsx
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each
@@ -864,9 +864,9 @@ describe('SpendingPage — tooltip fixes', () => {
 })
 ```
 
-- [ ] **Step 6: Run** — `npx vitest run src/pages/SpendingPage.test.tsx src/components/spending/spendingChartOptions.test.ts` → ALL PASS (the four pre-existing flow tests ride the new mock unchanged).
+- [x] **Step 6: Run** — `npx vitest run src/pages/SpendingPage.test.tsx src/components/spending/spendingChartOptions.test.ts` → ALL PASS (the four pre-existing flow tests ride the new mock unchanged).
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(spending): bars tooltip shares + Total row; unsigned savings-rate tooltip"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(spending): bars tooltip shares + Total row; unsigned savings-rate tooltip"`
 
 ### Task 5: Net-worth stacked tooltip — assets subtotal
 
