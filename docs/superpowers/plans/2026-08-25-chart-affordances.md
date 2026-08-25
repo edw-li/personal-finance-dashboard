@@ -53,7 +53,7 @@
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the worktree, the branch and a clean tree.** All work happens inside `.worktrees/chart-affordances`:
+- [x] **Step 1: Confirm the worktree, the branch and a clean tree.** All work happens inside `.worktrees/chart-affordances`:
 
 ```bash
 cd .worktrees/chart-affordances
@@ -63,12 +63,12 @@ git rev-parse --abbrev-ref HEAD   # expected: chart-affordances
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup. Every command below runs from the worktree root.
 
-- [ ] **Step 2: Install dependencies in the worktree** (worktrees do not share `node_modules`):
+- [x] **Step 2: Install dependencies in the worktree** (worktrees do not share `node_modules`):
 
 Run: `npm ci`
 Expected: clean install, exit 0.
 
-- [ ] **Step 3: Frontend smoke.**
+- [x] **Step 3: Frontend smoke.**
 
 Run: `npx vitest run src/utils/format.test.ts` → PASS.
 
@@ -82,7 +82,7 @@ Run: `npx vitest run src/utils/format.test.ts` → PASS.
 - Create: `src/utils/download.ts`
 - Test: `src/utils/download.test.ts`
 
-- [ ] **Step 1: Write the failing tests** — create `src/utils/download.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `src/utils/download.test.ts`:
 
 ```ts
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -150,9 +150,9 @@ describe('the download shims', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/utils/download.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/utils/download.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/utils/download.ts`:
+- [x] **Step 3: Implement** — create `src/utils/download.ts`:
 
 ```ts
 // Chart-export shims (2026-08-25 spec §2a). A module of their own so the export menu's
@@ -199,9 +199,9 @@ export function downloadText(text: string, filename: string, mime: string): void
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/utils/download.test.ts` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/utils/download.test.ts` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): download shims + RFC-4180 CSV serializer"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): download shims + RFC-4180 CSV serializer"`
 
 ### Task 2: `ChartExportMenu` + the three additive `EChart` props
 
