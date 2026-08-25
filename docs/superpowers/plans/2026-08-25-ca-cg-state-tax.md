@@ -600,7 +600,7 @@ Expected: ALL PASS with **zero edits to any of these files** — `test_tax_whati
 
 ⚠ The README uses the true minus sign (U+2212) in "D1 −31.20" and friends, not an ASCII hyphen — copy each old string out of the file (or grep it) rather than retyping, or the Edit will not match.
 
-- [ ] **Step 1: The "Verify before trusting" Taxes row.** In §7.5's table, replace:
+- [x] **Step 1: The "Verify before trusting" Taxes row.** In §7.5's table, replace:
 
 ```
 | Taxes | /taxes, year by year | 2024 matches the sheet **to the cent**; 2023 / 2025 / 2026 differ by four known drifts (below) |
@@ -612,7 +612,7 @@ with:
 | Taxes | /taxes, year by year | 2024 matches the sheet **to the cent except the state chain** (the deliberate CA capital-gains divergence, below); 2023 / 2025 / 2026 additionally differ by the known sheet drifts (below) |
 ```
 
-- [ ] **Step 2: The divergence paragraph.** Replace:
+- [x] **Step 2: The divergence paragraph.** Replace:
 
 ```
 **The four known tax drifts** — D1 −31.20; D2 +405.50 and +117.85; D3 +4,918.92/93 at cents.
@@ -638,7 +638,7 @@ accident (its +117.85 state half now reads sheet-vs-its-own-formula, not sheet-v
 that makes them vanish has introduced a bug, not removed one.
 ```
 
-- [ ] **Step 3: Keep §7.7 coherent.** Replace (spans two lines in the file):
+- [x] **Step 3: Keep §7.7 coherent.** Replace (spans two lines in the file):
 
 ```
 Judge every difference against 7.5: the After-Tax offset and the four tax drifts are
@@ -652,7 +652,7 @@ Judge every difference against 7.5: the After-Tax offset and the five documented
 divergences are expected, anything else is not.
 ```
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "docs(readme): fifth documented tax divergence - CA capital-gains taxation"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "docs(readme): fifth documented tax divergence - CA capital-gains taxation"`
 
 ---
 
