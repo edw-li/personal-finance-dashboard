@@ -73,7 +73,7 @@ Expected: `cg in state_agi: True`. If False, the CA capital-gains fix has not me
 - Create: `backend/app/services/money_flow.py`
 - Test: `backend/tests/test_money_flow.py`
 
-- [ ] **Step 1: Write the failing tests** — create `backend/tests/test_money_flow.py`. No DB, no fixtures: the service is handed dicts. The fixture inputs are **CG-free** so their plain sums are hand-checkable; every engine-derived figure (gross, all seven tax lines) is asserted THROUGH `compute_breakdown` itself, and one CG-carrying test proves the identities survive the engine's state-AGI capital-gains fold without a single hand-derived golden.
+- [x] **Step 1: Write the failing tests** — create `backend/tests/test_money_flow.py`. No DB, no fixtures: the service is handed dicts. The fixture inputs are **CG-free** so their plain sums are hand-checkable; every engine-derived figure (gross, all seven tax lines) is asserted THROUGH `compute_breakdown` itself, and one CG-carrying test proves the identities survive the engine's state-AGI capital-gains fold without a single hand-derived golden.
 
 ```python
 """Pure-service tests for the Overview money-flow composition (2026-08-25 spec §5).
@@ -278,9 +278,9 @@ def test_saved_goes_negative_as_a_drawdown_figure_not_a_refusal():
     assert flow.renderable is True
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → FAIL (`ModuleNotFoundError: No module named 'app.services.money_flow'`).
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → FAIL (`ModuleNotFoundError: No module named 'app.services.money_flow'`).
 
-- [ ] **Step 3: Append the refusal + warning tests** to the same file:
+- [x] **Step 3: Append the refusal + warning tests** to the same file:
 
 ```python
 def test_negative_other_income_refuses_with_reason_and_still_carries_figures():
@@ -375,9 +375,9 @@ def test_engine_bracket_warnings_pass_through_and_missing_keys_do_not():
     assert not any(w.startswith("missing inputs defaulted to 0") for w in flow.warnings)
 ```
 
-- [ ] **Step 4: Run to verify failure again** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → same ModuleNotFoundError (all tests collected, none passing).
+- [x] **Step 4: Run to verify failure again** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → same ModuleNotFoundError (all tests collected, none passing).
 
-- [ ] **Step 5: Implement the service** — create `backend/app/services/money_flow.py`:
+- [x] **Step 5: Implement the service** — create `backend/app/services/money_flow.py`:
 
 ```python
 """Annual money-flow composition for the Overview sankey (2026-08-25 spec §5).
@@ -643,9 +643,9 @@ def compose_money_flow(
     )
 ```
 
-- [ ] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → ALL PASS (13 tests).
+- [x] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → ALL PASS (13 tests).
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(overview): pure money-flow compose service"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(overview): pure money-flow compose service"`
 
 ### Task 2: Schemas + `/overview/money-flow` router + mount
 
