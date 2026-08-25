@@ -398,8 +398,8 @@
   position: absolute;
   bottom: calc(100% + 6px);
   left: -8px;
-  /* The codebase's one z-index: the bubble must float over chart canvases and table
-     rows; nothing else in the app stacks. */
+  /* The app's bubble layer (shared with the calendar event popover): floats over chart
+     canvases and table rows. */
   z-index: 2;
   display: none;
   width: max-content;

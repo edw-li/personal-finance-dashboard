@@ -216,3 +216,91 @@ async def test_calendar_update_due_absent_when_previous_month_entered(auth_clien
     await db.commit()
     resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")
     assert [e for e in resp.json()["events"] if e["type"] == "update_due"] == []
+
+
+async def test_custom_event_crud_roundtrip(auth_client):
+    created = await auth_client.post(
+        f"{CALENDAR}/events",
+        json={"date": "2026-09-12", "label": "  Car insurance renewal ", "detail": ""},
+    )
+    assert created.status_code == 201
+    body = created.json()
+    event_id = body["id"]
+    # Whitespace trims; an empty detail stores as null.
+    assert body == {
+        "id": event_id,
+        "date": "2026-09-12",
+        "label": "Car insurance renewal",
+        "detail": None,
+    }
+
+    listed = await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")
+    assert [e for e in listed.json()["events"] if e["type"] == "custom"] == [
+        {
+            "date": "2026-09-12",
+            "type": "custom",
+            "label": "Car insurance renewal",
+            "detail": None,
+            "href": None,
+            "id": event_id,
+        }
+    ]
+
+    updated = await auth_client.patch(
+        f"{CALENDAR}/events/{event_id}",
+        json={"date": "2026-09-13", "label": "Renewal", "detail": "moved a day"},
+    )
+    assert updated.status_code == 200
+    assert updated.json() == {
+        "id": event_id,
+        "date": "2026-09-13",
+        "label": "Renewal",
+        "detail": "moved a day",
+    }
+
+    # Full-replace also CLEARS: an emptied detail box stores as null (spec §9.3).
+    cleared = await auth_client.patch(
+        f"{CALENDAR}/events/{event_id}",
+        json={"date": "2026-09-13", "label": "Renewal", "detail": ""},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["detail"] is None
+
+    deleted = await auth_client.delete(f"{CALENDAR}/events/{event_id}")
+    assert deleted.status_code == 204
+    after = await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")
+    assert [e for e in after.json()["events"] if e["type"] == "custom"] == []
+
+
+async def test_custom_event_validation(auth_client):
+    blank = await auth_client.post(
+        f"{CALENDAR}/events", json={"date": "2026-09-12", "label": "   "}
+    )
+    assert blank.status_code == 422
+    over = await auth_client.post(
+        f"{CALENDAR}/events", json={"date": "2026-09-12", "label": "x" * 121}
+    )
+    assert over.status_code == 422
+    long_detail = await auth_client.post(
+        f"{CALENDAR}/events", json={"date": "2026-09-12", "label": "ok", "detail": "y" * 301}
+    )
+    assert long_detail.status_code == 422
+    missing = await auth_client.patch(
+        f"{CALENDAR}/events/999", json={"date": "2026-09-12", "label": "ok"}
+    )
+    assert missing.status_code == 404
+    gone = await auth_client.delete(f"{CALENDAR}/events/999")
+    assert gone.status_code == 404
+
+
+async def test_custom_events_load_only_the_requested_range(auth_client):
+    for day, label in (("2026-08-31", "before"), ("2026-09-15", "inside"), ("2026-10-01", "after")):
+        resp = await auth_client.post(f"{CALENDAR}/events", json={"date": day, "label": label})
+        assert resp.status_code == 201
+    listed = await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")
+    assert [e["label"] for e in listed.json()["events"] if e["type"] == "custom"] == ["inside"]
+
+
+async def test_custom_event_requires_auth(client):
+    resp = await client.post(f"{CALENDAR}/events", json={"date": "2026-09-12", "label": "nope"})
+    assert resp.status_code == 401

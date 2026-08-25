@@ -53,24 +53,134 @@
 }
 
 /* Chips: color is the LEFT BORDER (the attention-item accent grammar) and the label
-   text always rides along — type identity never rides color alone. */
+   text always rides along — type identity never rides color alone. A chip is a BUTTON
+   opening the details popover (spec §9.2), so the button chrome is reset here. */
 .cal-chip {
   display: block;
-  margin-top: 3px;
+  width: 100%;
   padding: 1px 5px;
+  border: none;
   border-left: 3px solid var(--border);
   border-radius: 4px;
   background: var(--surface-2);
   color: var(--text);
+  font-family: inherit;
   font-size: 0.68rem;
-  text-decoration: none;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .cal-chip:hover {
   filter: brightness(1.15);
+}
+
+.cal-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Each chip sits in its own positioning slot so the popover anchors under IT, not
+   under the whole day cell. */
+.cal-chip-slot {
+  position: relative;
+  margin-top: 3px;
+}
+
+/* The details popover — the app's bubble layer (z-index 2, InfoHint's). Days in the
+   right two columns anchor right so the bubble stays inside the card; a last-row
+   bubble may overhang downward — accepted, it floats and dismisses on outside click. */
+.cal-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 2;
+  width: 260px;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  outline: none;
+}
+
+.cal-popover-right {
+  left: auto;
+  right: 0;
+}
+
+.cal-event-type {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cal-event-label {
+  margin-top: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.cal-event-detail {
+  margin-top: 0.15rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.cal-event-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
+.cal-event-actions .button {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+
+.cal-event-open {
+  color: var(--accent);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.cal-event-open:hover {
+  text-decoration: underline;
+}
+
+/* The add/edit form — labeled columns, house field-input (text-aligned left here:
+   the mono right-aligned default is for numbers). */
+.cal-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.cal-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.cal-form-field .cal-form-input {
+  width: 170px;
+  text-align: left;
+  font-family: inherit;
+}
+
+.cal-form-note .cal-form-input {
+  width: 260px;
 }
 
 .cal-legend {
@@ -121,18 +231,26 @@
   color: var(--muted);
 }
 
-.cal-list-link {
-  color: var(--text);
-  text-decoration: none;
+/* List rows are buttons expanding the same details inline (the vest-table accordion
+   grammar — no floating popovers at screen edges on mobile). */
+.cal-list-item {
+  font-size: 0.85rem;
+  padding: 1px 0;
 }
 
-.cal-list-link:hover {
+.cal-list-item:hover {
   text-decoration: underline;
 }
 
 .cal-list-detail {
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+.cal-list-expansion {
+  margin: 0.35rem 0;
+  padding: 0.1rem 0 0.1rem 0.75rem;
+  border-left: 2px solid var(--surface-2);
 }
 
 @media (max-width: 720px) {

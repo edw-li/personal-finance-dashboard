@@ -3,18 +3,26 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type { CalendarEvent, CalendarResponse } from '../types/api'
-import { addDays, addMonths, currentMonthIso } from '../utils/months'
+import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import CalendarPage from './CalendarPage'
 
 vi.mock('../api/calendar', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/calendar')>()),
   fetchCalendar: vi.fn(),
+  createCustomEvent: vi.fn(),
+  updateCustomEvent: vi.fn(),
+  deleteCustomEvent: vi.fn(),
 }))
 vi.mock('../utils/ics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/ics')>()),
   downloadIcs: vi.fn(),
 }))
-import { fetchCalendar } from '../api/calendar'
+import {
+  createCustomEvent,
+  deleteCustomEvent,
+  fetchCalendar,
+  updateCustomEvent,
+} from '../api/calendar'
 import { downloadIcs } from '../utils/ics'
 
 // Wall-clock-proof fixtures (OverviewPage.test's NW_MONTHS discipline): the page boots
@@ -30,14 +38,24 @@ function fixtureEvents(): CalendarEvent[] {
       label: 'RSU vest — 2025 offer',
       detail: '25 sh — 2025 offer',
       href: '/comp',
+      id: null,
     },
-    { date: DAY_15, type: 'payday', label: 'Payday', detail: null, href: '/paycheck' },
+    { date: DAY_15, type: 'payday', label: 'Payday', detail: null, href: '/paycheck', id: null },
     {
       date: addDays(DAY_15, 3),
       type: 'ex_dividend',
       label: 'Ex-dividend — NVDA',
       detail: 'NVDA',
       href: '/portfolio',
+      id: null,
+    },
+    {
+      date: DAY_15,
+      type: 'custom',
+      label: 'Car insurance',
+      detail: 'policy 8841',
+      href: null,
+      id: 41,
     },
   ]
 }
@@ -77,18 +95,27 @@ describe('CalendarPage', () => {
     expect(fetchCalendar).toHaveBeenCalledWith(start, end)
   })
 
-  it('places chips on their day — a multi-event day carries them all, linked', async () => {
+  it('places chips on their day — buttons now, a multi-event day carries them all', async () => {
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
-    const chips = Array.from(grid().querySelectorAll('a.cal-chip'))
+    const chips = Array.from(grid().querySelectorAll('button.cal-chip'))
     const texts = chips.map((chip) => chip.textContent)
     expect(texts).toContain('RSU vest — 2025 offer')
     expect(texts).toContain('Payday') // same day, second chip
     expect(texts).toContain('Ex-dividend — NVDA')
+    expect(texts).toContain('Car insurance')
     const vestChip = chips.find((chip) => chip.textContent === 'RSU vest — 2025 offer')
-    expect(vestChip?.getAttribute('href')).toBe('/comp')
+    // No more direct navigation: chips open the details popover (spec §9.2).
+    expect(vestChip?.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(vestChip?.getAttribute('aria-expanded')).toBe('false')
     // Colored per the fixed type map — but never color alone: the text IS on the chip.
     expect(vestChip?.getAttribute('style')).toContain('border-left-color')
+  })
+
+  it('spaces the sections with the house card-grid wrapper', async () => {
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    expect(document.querySelector('.card-grid.loading-dim')).not.toBeNull()
   })
 
   it('renders the accessible date-grouped list for the shown month', async () => {
@@ -101,7 +128,7 @@ describe('CalendarPage', () => {
     expect(list?.textContent).toContain('Payday')
   })
 
-  it('names all eight event types in the legend, with the cadence/honesty note', async () => {
+  it('names all nine event types in the legend, with the cadence/honesty note', async () => {
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
     for (const name of [
@@ -113,6 +140,7 @@ describe('CalendarPage', () => {
       'ESPP offering start',
       'Tax deadline',
       'Monthly update due',
+      'Custom',
     ]) {
       expect(screen.getAllByText(name).length).toBeGreaterThan(0)
     }
@@ -164,5 +192,142 @@ describe('CalendarPage', () => {
     await screen.findAllByText('RSU vest — 2025 offer')
     fireEvent.click(screen.getByRole('button', { name: 'Add to calendar (.ics)' }))
     expect(downloadIcs).toHaveBeenCalledWith(fixtureEvents())
+  })
+
+  function chipFor(text: string): HTMLElement {
+    const chip = Array.from(grid().querySelectorAll('button.cal-chip')).find(
+      (c) => c.textContent === text,
+    )
+    expect(chip).toBeDefined()
+    return chip as HTMLElement
+  }
+
+  function popover(): HTMLElement | null {
+    return document.querySelector('.cal-popover')
+  }
+
+  it('opens a details popover on chip click; Escape closes and refocuses the chip', async () => {
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    const chip = chipFor('RSU vest — 2025 offer')
+    fireEvent.click(chip)
+    const dialog = popover()
+    expect(dialog).not.toBeNull()
+    expect(dialog?.getAttribute('role')).toBe('dialog')
+    expect(dialog?.textContent).toContain('25 sh — 2025 offer')
+    const link = dialog?.querySelector('a')
+    expect(link?.textContent).toBe('Open Comp →')
+    expect(link?.getAttribute('href')).toBe('/comp')
+    expect(chip.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(popover()).toBeNull()
+    expect(document.activeElement).toBe(chip)
+  })
+
+  it('keeps one popover at a time and closes on an outside mousedown', async () => {
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(chipFor('RSU vest — 2025 offer'))
+    fireEvent.mouseDown(chipFor('Payday'))
+    fireEvent.click(chipFor('Payday'))
+    const dialogs = document.querySelectorAll('.cal-popover')
+    expect(dialogs).toHaveLength(1)
+    expect(dialogs[0].textContent).toContain('Open Paycheck →')
+    fireEvent.mouseDown(document.body)
+    expect(popover()).toBeNull()
+  })
+
+  it('custom popover offers Edit/Delete instead of an Open link', async () => {
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(chipFor('Car insurance'))
+    const dialog = popover()
+    expect(dialog?.textContent).toContain('policy 8841')
+    expect(dialog?.querySelector('a')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined()
+  })
+
+  it('list rows expand the same details inline, closing any grid popover', async () => {
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(chipFor('Payday')) // grid popover open first
+    expect(popover()).not.toBeNull()
+    const list = document.querySelector('.cal-list') as HTMLElement
+    const row = Array.from(list.querySelectorAll('button.cal-list-item')).find((r) =>
+      r.textContent?.startsWith('Car insurance'),
+    ) as HTMLElement
+    fireEvent.click(row)
+    const expansion = list.querySelector('.cal-list-expansion')
+    expect(expansion).not.toBeNull()
+    expect(expansion?.textContent).toContain('Custom')
+    expect(expansion?.textContent).toContain('policy 8841')
+    expect(popover()).toBeNull() // one open surface at a time — the grid one closed
+  })
+
+  it('Add event posts the trimmed form and refetches the window', async () => {
+    const todayIsoStr = todayIso()
+    vi.mocked(createCustomEvent).mockResolvedValue({
+      id: 99,
+      date: todayIsoStr,
+      label: 'Car wash',
+      detail: null,
+    })
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+    const dateBox = screen.getByLabelText('Date') as HTMLInputElement
+    expect(dateBox.value).toBe(todayIsoStr) // defaults to today
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: '  Car wash ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save event' }))
+    expect(createCustomEvent).toHaveBeenCalledWith({
+      date: todayIsoStr,
+      label: 'Car wash',
+      detail: null,
+    })
+    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
+    // The form closes on success.
+    expect(screen.queryByRole('button', { name: 'Save event' })).toBeNull()
+  })
+
+  it('Edit prefills the form from the popover and PATCHes the row', async () => {
+    vi.mocked(updateCustomEvent).mockResolvedValue({
+      id: 41,
+      date: DAY_15,
+      label: 'Renewal',
+      detail: 'policy 8841',
+    })
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(chipFor('Car insurance'))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(popover()).toBeNull() // the popover hands off to the form
+    const title = screen.getByLabelText('Title') as HTMLInputElement
+    expect(title.value).toBe('Car insurance')
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(DAY_15)
+    expect((screen.getByLabelText('Note (optional)') as HTMLInputElement).value).toBe(
+      'policy 8841',
+    )
+    fireEvent.change(title, { target: { value: 'Renewal' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(updateCustomEvent).toHaveBeenCalledWith(41, {
+      date: DAY_15,
+      label: 'Renewal',
+      detail: 'policy 8841',
+    })
+    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
+  })
+
+  it('Delete removes the row from the popover and refetches', async () => {
+    vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(chipFor('Car insurance'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(deleteCustomEvent).toHaveBeenCalledWith(41)
+    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
+    expect(popover()).toBeNull()
+    // Focus hands off to a stable landmark, not <body> (the unmounted Delete button).
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add event' }))
   })
 })

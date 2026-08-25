@@ -1,4 +1,5 @@
 from app.models.app_setting import AppSetting
+from app.models.calendar import CustomEvent
 from app.models.comp import (
     CompEvent,
     EsppLot,
@@ -32,6 +33,7 @@ __all__ = [
     "AppSetting",
     "CategoryBudget",
     "CompEvent",
+    "CustomEvent",
     "DIVIDEND_SOURCES",
     "DividendPayment",
     "EsppLot",

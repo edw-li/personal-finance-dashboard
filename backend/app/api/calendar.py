@@ -6,13 +6,14 @@ positions for "actively held") runs only when an announced ex-dividend exists at
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import (
+    CustomEvent,
     EsppLot,
     EsppOffering,
     EsppPeriod,
@@ -22,7 +23,7 @@ from app.models import (
     RsuGrant,
     Security,
 )
-from app.schemas.calendar import CalendarEventOut, CalendarOut
+from app.schemas.calendar import CalendarEventOut, CalendarOut, CustomEventIn, CustomEventOut
 from app.services.calendar_events import compose
 from app.services.espp_calc import OfferingInfo, StoredPeriod
 from app.services.portfolio_calc import SHARE_Q, fold_transactions
@@ -144,6 +145,16 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
         .scalars()
         .first()
     )
+    custom_rows = [
+        (row.id, row.event_date, row.label, row.detail)
+        for row in (
+            await db.execute(
+                select(CustomEvent)
+                .where(CustomEvent.event_date >= start, CustomEvent.event_date <= end)
+                .order_by(CustomEvent.event_date, CustomEvent.id)
+            )
+        ).scalars()
+    ]
 
     events = compose(
         start,
@@ -154,6 +165,7 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
         offerings=offerings,
         unsold_lots=unsold_lots,
         announced_ex_divs=announced,
+        custom_rows=custom_rows,
         payday_semi_monthly=semi_monthly,
         missing_update_month=None if snapshot is not None else prev_month,
     )
@@ -165,7 +177,55 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
                 label=event.label,
                 detail=event.detail,
                 href=event.href,
+                id=event.event_id,
             )
             for event in events
         ]
     )
+
+
+# --- custom events: the one stored, user-owned source (spec §9.3). Plain single-user
+# CRUD — comp.py's rsu-grants grammar (201 create, full-replace PATCH, 204 delete).
+
+
+def _custom_out(row: CustomEvent) -> CustomEventOut:
+    return CustomEventOut(id=row.id, date=row.event_date, label=row.label, detail=row.detail)
+
+
+async def _get_custom_event(db: AsyncSession, event_id: int) -> CustomEvent:
+    row = (
+        await db.execute(select(CustomEvent).where(CustomEvent.id == event_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="custom event not found")
+    return row
+
+
+@router.post("/events", response_model=CustomEventOut, status_code=201)
+async def create_custom_event(
+    body: CustomEventIn, db: AsyncSession = Depends(get_db)
+) -> CustomEventOut:
+    row = CustomEvent(event_date=body.date, label=body.label, detail=body.detail)
+    db.add(row)
+    await db.commit()
+    return _custom_out(row)
+
+
+@router.patch("/events/{event_id}", response_model=CustomEventOut)
+async def update_custom_event(
+    event_id: int, body: CustomEventIn, db: AsyncSession = Depends(get_db)
+) -> CustomEventOut:
+    """Full replace — the form always submits all three fields (spec §9.3)."""
+    row = await _get_custom_event(db, event_id)
+    row.event_date = body.date
+    row.label = body.label
+    row.detail = body.detail
+    await db.commit()
+    return _custom_out(row)
+
+
+@router.delete("/events/{event_id}", status_code=204)
+async def delete_custom_event(event_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+    await db.delete(await _get_custom_event(db, event_id))
+    await db.commit()
+    return Response(status_code=204)

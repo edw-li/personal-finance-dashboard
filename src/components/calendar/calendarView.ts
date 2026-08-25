@@ -1,5 +1,5 @@
 // Pure calendar-page vocabulary — no React, no fetching (the attention.ts posture).
-import { PALETTE } from '../../charts/theme'
+import { MUTED, PALETTE } from '../../charts/theme'
 import type { CalendarEvent, CalendarEventType } from '../../types/api'
 
 // FIXED type -> PALETTE-slot map (charts/theme's slot discipline: fixed order IS the
@@ -14,6 +14,9 @@ export const EVENT_COLORS: Record<CalendarEventType, string> = {
   payday: PALETTE[5],
   offering_start: PALETTE[6],
   tax_deadline: PALETTE[7],
+  // User-entered rows: the palette caps chart slots at 8 (fixed order IS the CVD
+  // mechanism), so custom wears the theme's MUTED gray — "entered, not derived".
+  custom: MUTED,
 }
 
 export const EVENT_TYPE_LABELS: Record<CalendarEventType, string> = {
@@ -25,6 +28,7 @@ export const EVENT_TYPE_LABELS: Record<CalendarEventType, string> = {
   offering_start: 'ESPP offering start',
   tax_deadline: 'Tax deadline',
   update_due: 'Monthly update due',
+  custom: 'Custom',
 }
 
 // Legend order — one place, so the legend and any future filter row agree.
@@ -37,7 +41,29 @@ export const EVENT_TYPE_ORDER: CalendarEventType[] = [
   'offering_start',
   'tax_deadline',
   'update_due',
+  'custom',
 ]
+
+// Popover footer vocabulary (spec §9.2): the page a computed event opens. A fixed map,
+// not string munging — hrefs are wire values.
+export const HREF_LABELS: Record<string, string> = {
+  '/comp': 'Comp',
+  '/espp': 'ESPP',
+  '/portfolio': 'Portfolio',
+  '/paycheck': 'Paycheck',
+  '/taxes': 'Taxes',
+  '/update': 'Monthly update',
+}
+
+export function hrefLabel(href: string): string {
+  return HREF_LABELS[href] ?? 'page'
+}
+
+// React-key identity (spec §9.4): custom labels may repeat, so the id keys them;
+// computed events key on the ICS-UID triple.
+export function eventKey(event: CalendarEvent): string {
+  return event.id !== null ? `custom-${event.id}` : `${event.type}-${event.date}-${event.label}`
+}
 
 // Events keyed by their ISO date, server order preserved within a day (a Map keeps
 // insertion order, so iterating it renders days chronologically for a sorted payload).

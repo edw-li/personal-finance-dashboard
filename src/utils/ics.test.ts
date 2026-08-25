@@ -9,6 +9,7 @@ function event(over: Partial<CalendarEvent> = {}): CalendarEvent {
     label: 'RSU vest — 2025 offer',
     detail: '25 sh — 2025 offer',
     href: '/comp',
+    id: null,
     ...over,
   }
 }
@@ -18,12 +19,22 @@ describe('eventUid', () => {
     expect(eventUid(event())).toBe('rsu_vest-2026-09-16-rsu-vest-2025-offer@finance-dashboard')
     expect(eventUid(event())).toBe(eventUid(event()))
   })
+
+  it('keys custom events by id so a rename UPDATES instead of duplicating', () => {
+    const custom = event({ type: 'custom', label: 'Car insurance', href: null, id: 41 })
+    expect(eventUid(custom)).toBe('custom-41@finance-dashboard')
+    expect(eventUid({ ...custom, label: 'Renamed' })).toBe(eventUid(custom))
+  })
 })
 
 describe('escapeIcsText', () => {
   it('escapes RFC 5545 TEXT characters, backslash first', () => {
     expect(escapeIcsText('a,b;c\nd\\e')).toBe('a\\,b\\;c\\nd\\\\e')
     expect(escapeIcsText('crlf\r\nline')).toBe('crlf\\nline')
+  })
+
+  it('escapes a lone carriage return', () => {
+    expect(escapeIcsText('a\rb')).toBe('a\\nb')
   })
 })
 
