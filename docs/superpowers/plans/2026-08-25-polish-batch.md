@@ -1585,7 +1585,7 @@ The calendar delete is ALREADY confirm-free — this task adds only the toast + 
 - Modify: `src/pages/CalendarPage.tsx`
 - Test: `src/pages/CalendarPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** In `src/pages/CalendarPage.test.tsx`:
+- [x] **Step 1: Write the failing tests.** In `src/pages/CalendarPage.test.tsx`:
   1. Add `import ToastProvider from '../components/ToastProvider'` (after the CalendarPage import).
   2. Wrap the page in `renderPage`:
 
@@ -1635,9 +1635,9 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
   })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/CalendarPage.test.tsx` → the two touched tests FAIL (no toast); the rest PASS.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/CalendarPage.test.tsx` → the two touched tests FAIL (no toast); the rest PASS.
 
-- [ ] **Step 3: Implement.** In `src/pages/CalendarPage.tsx`:
+- [x] **Step 3: Implement.** In `src/pages/CalendarPage.tsx`:
   1. Add `import { useToast } from '../components/ToastProvider'` (after the EventDetails import).
   2. In the component body, add beside `addEventBtnRef`:
 
@@ -1689,9 +1689,9 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
   }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/CalendarPage.test.tsx` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/pages/CalendarPage.test.tsx` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): calendar custom-event delete toast + undo"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(toast): calendar custom-event delete toast + undo"`
 
 ### Task 12: Instant RSU-grant delete + Undo
 

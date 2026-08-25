@@ -5,6 +5,7 @@ import { ApiError } from '../api/client'
 import type { CalendarEvent, CalendarResponse } from '../types/api'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import CalendarPage from './CalendarPage'
+import ToastProvider from '../components/ToastProvider'
 
 vi.mock('../api/calendar', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/calendar')>()),
@@ -68,7 +69,9 @@ function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
   vi.mocked(fetchCalendar).mockResolvedValue({ events: payload } satisfies CalendarResponse)
   return render(
     <MemoryRouter>
-      <CalendarPage />
+      <ToastProvider>
+        <CalendarPage />
+      </ToastProvider>
     </MemoryRouter>,
   )
 }
@@ -329,5 +332,29 @@ describe('CalendarPage', () => {
     expect(popover()).toBeNull()
     // Focus hands off to a stable landmark, not <body> (the unmounted Delete button).
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add event' }))
+    expect(screen.getByText('Deleted Car insurance')).toBeTruthy()
+  })
+
+  it('Undo re-creates the deleted custom event and refetches', async () => {
+    vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
+    vi.mocked(createCustomEvent).mockResolvedValue({
+      id: 77,
+      date: DAY_15,
+      label: 'Car insurance',
+      detail: 'policy 8841',
+    })
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(chipFor('Car insurance'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(createCustomEvent).toHaveBeenCalledWith({
+      date: DAY_15,
+      label: 'Car insurance',
+      detail: 'policy 8841',
+    })
+    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(3))
   })
 })
