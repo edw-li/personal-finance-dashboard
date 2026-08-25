@@ -421,3 +421,20 @@
 .info-hint:focus-visible::after {
   display: block;
 }
+
+/* ── Chart export menu (2026-08-25 spec §2a) ───────────────────────── */
+/* RangeChips' segmented grammar with a ⤓ glyph, tucked against the card's right edge
+   just above the canvas — deliberately NOT echarts' toolbox (spec Decision log). */
+
+.chart-export {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.chart-export-glyph {
+  color: var(--muted);
+  font-size: 0.8rem;
+}

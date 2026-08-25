@@ -209,7 +209,7 @@ export function downloadText(text: string, filename: string, mime: string): void
 - Create: `src/components/ChartExportMenu.tsx`, `src/components/EChart.test.tsx`
 - Modify: `src/components/EChart.tsx`, `src/components/panels.css`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/EChart.test.tsx`. The real echarts needs a canvas jsdom does not have (house law: never rendered in tests); mocking `../charts/echarts` keeps the WRAPPER's whole contract testable — init, the `.on` registry the tests fire by hand, `getDataURL`, `getOption`:
+- [x] **Step 1: Write the failing tests** — create `src/components/EChart.test.tsx`. The real echarts needs a canvas jsdom does not have (house law: never rendered in tests); mocking `../charts/echarts` keeps the WRAPPER's whole contract testable — init, the `.on` registry the tests fire by hand, `getDataURL`, `getOption`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -367,9 +367,9 @@ describe('EChart event mirrors', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/EChart.test.tsx` → FAIL (`exportConfig`/`onLegendChange`/`onDataZoom` are not props; `ChartExportMenu` missing).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/EChart.test.tsx` → FAIL (`exportConfig`/`onLegendChange`/`onDataZoom` are not props; `ChartExportMenu` missing).
 
-- [ ] **Step 3: Create the menu** — `src/components/ChartExportMenu.tsx`:
+- [x] **Step 3: Create the menu** — `src/components/ChartExportMenu.tsx`:
 
 ```tsx
 import { SURFACE } from '../charts/theme'
@@ -439,7 +439,7 @@ export default function ChartExportMenu({
 }
 ```
 
-- [ ] **Step 4: Extend `EChart.tsx` — additively only** (cross-plan note: the sibling `ariaLabel` branch edits this file too; every change below APPENDS).
+- [x] **Step 4: Extend `EChart.tsx` — additively only** (cross-plan note: the sibling `ariaLabel` branch edits this file too; every change below APPENDS).
   1. Add imports (after the `quiesceRipples` import):
 ```ts
 import ChartExportMenu from './ChartExportMenu'
@@ -501,7 +501,7 @@ import type { ExportConfig } from './ChartExportMenu'
   )
 ```
 
-- [ ] **Step 5: CSS** — append to `src/components/panels.css`:
+- [x] **Step 5: CSS** — append to `src/components/panels.css`:
 
 ```css
 /* ── Chart export menu (2026-08-25 spec §2a) ───────────────────────── */
@@ -522,9 +522,9 @@ import type { ExportConfig } from './ChartExportMenu'
 }
 ```
 
-- [ ] **Step 6: Run** — `npx vitest run src/components/EChart.test.tsx` → PASS. Then the neighbors that mock EChart shallowly: `npx vitest run src/pages/SpendingPage.test.tsx src/pages/OverviewPage.test.tsx src/pages/TaxesPage.test.tsx` → PASS (their mocks ignore the new props).
+- [x] **Step 6: Run** — `npx vitest run src/components/EChart.test.tsx` → PASS. Then the neighbors that mock EChart shallowly: `npx vitest run src/pages/SpendingPage.test.tsx src/pages/OverviewPage.test.tsx src/pages/TaxesPage.test.tsx` → PASS (their mocks ignore the new props).
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(charts): EChart exportConfig menu + legend/datazoom event mirrors"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(charts): EChart exportConfig menu + legend/datazoom event mirrors"`
 
 ### Task 3: `ChartZoomHint` + `rangeZoom` window state
 

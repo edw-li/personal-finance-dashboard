@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react'
 import { echarts } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
 import { quiesceRipples } from '../charts/motion'
+import ChartExportMenu from './ChartExportMenu'
+import type { ExportConfig } from './ChartExportMenu'
 
 export type EChartsInstance = ReturnType<typeof echarts.init>
 
@@ -25,6 +27,9 @@ export default function EChart({
   onHover,
   onHoverEnd,
   instanceRef,
+  onLegendChange,
+  onDataZoom,
+  exportConfig,
 }: {
   option: EChartsOption
   height?: number
@@ -35,12 +40,22 @@ export default function EChart({
   // handlers). Must be a STABLE ref (useRef) — a fresh object every render would
   // re-init the chart via the effect dep below.
   instanceRef?: { current: EChartsInstance | null }
+  /** Mirrors legend toggles into page state (2026-08-25 spec §2e) with echarts' full
+   *  name→shown map, COPIED — fed back via legend.selected so notMerge rebuilds keep
+   *  the picks. */
+  onLegendChange?: (selected: Record<string, boolean>) => void
+  /** Mirrors a ctrl+wheel/drag-pan window into page state, as category-axis indices. */
+  onDataZoom?: (window: { startValue: number; endValue: number }) => void
+  /** Mounts the house ⤓ export menu above the canvas (2026-08-25 spec §2a). */
+  exportConfig?: ExportConfig
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<EChartsInstance | null>(null)
   const onClickRef = useRef(onClick)
   const onHoverRef = useRef(onHover)
   const onHoverEndRef = useRef(onHoverEnd)
+  const onLegendChangeRef = useRef(onLegendChange)
+  const onDataZoomRef = useRef(onDataZoom)
 
   // Latest-handler refs, refreshed after each render so the chart's listeners never
   // have to be rebound. Assigning during render trips react-hooks/refs ("Cannot update
@@ -50,6 +65,8 @@ export default function EChart({
     onClickRef.current = onClick
     onHoverRef.current = onHover
     onHoverEndRef.current = onHoverEnd
+    onLegendChangeRef.current = onLegendChange
+    onDataZoomRef.current = onDataZoom
   })
 
   useEffect(() => {
@@ -62,6 +79,22 @@ export default function EChart({
     // cross-chart highlight would stick after the cursor leaves the canvas.
     chart.on('mouseout', () => onHoverEndRef.current?.())
     chart.on('globalout', () => onHoverEndRef.current?.())
+    chart.on('legendselectchanged', (params) => {
+      // Copied, not aliased: echarts mutates its own map on the next toggle.
+      onLegendChangeRef.current?.({
+        ...(params as { selected: Record<string, boolean> }).selected,
+      })
+    })
+    chart.on('datazoom', () => {
+      // The event's own payload is percent-based (and batch-shaped from inside zooms);
+      // the RESOLVED category-axis indices live on the option — read them back instead.
+      const zoom = (
+        chart.getOption() as { dataZoom?: { startValue?: unknown; endValue?: unknown }[] }
+      ).dataZoom?.[0]
+      if (zoom && typeof zoom.startValue === 'number' && typeof zoom.endValue === 'number') {
+        onDataZoomRef.current?.({ startValue: zoom.startValue, endValue: zoom.endValue })
+      }
+    })
     chartRef.current = chart
     if (instanceRef) instanceRef.current = chart
     const observer = new ResizeObserver(() => chart.resize())
@@ -86,5 +119,12 @@ export default function EChart({
     )
   }, [option])
 
-  return <div ref={containerRef} style={{ height, width: '100%' }} />
+  return (
+    <>
+      {exportConfig && (
+        <ChartExportMenu config={exportConfig} getChart={() => chartRef.current} />
+      )}
+      <div ref={containerRef} style={{ height, width: '100%' }} />
+    </>
+  )
 }
