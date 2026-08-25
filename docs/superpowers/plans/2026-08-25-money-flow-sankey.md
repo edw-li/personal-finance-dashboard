@@ -1589,7 +1589,7 @@ The card is PRESENTATIONAL: the page owns the isolated fetch (Task 6, the Up-nex
 - Create: `src/components/overview/MoneyFlowCard.tsx`, `src/components/overview/moneyFlow.css`
 - Test: `src/components/overview/MoneyFlowCard.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/overview/MoneyFlowCard.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/overview/MoneyFlowCard.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -1721,9 +1721,9 @@ it('renders only the header while the first fetch is in flight', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/MoneyFlowCard.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/MoneyFlowCard.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement the card** — create `src/components/overview/MoneyFlowCard.tsx`:
+- [x] **Step 3: Implement the card** — create `src/components/overview/MoneyFlowCard.tsx`:
 
 ```tsx
 import { useMemo } from 'react'
@@ -1809,7 +1809,7 @@ export default function MoneyFlowCard({
 }
 ```
 
-- [ ] **Step 4: CSS** — create `src/components/overview/moneyFlow.css`:
+- [x] **Step 4: CSS** — create `src/components/overview/moneyFlow.css`:
 
 ```css
 /* Money-flow card chrome (2026-08-25 spec §5). The chips reuse panels.css's .segmented
@@ -1820,9 +1820,9 @@ export default function MoneyFlowCard({
 }
 ```
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/overview/MoneyFlowCard.test.tsx` → ALL PASS.
+- [x] **Step 5: Run** — `npx vitest run src/components/overview/MoneyFlowCard.test.tsx` → ALL PASS.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(overview): MoneyFlowCard with year chips, warnings and inline retry"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(overview): MoneyFlowCard with year chips, warnings and inline retry"`
 
 ### Task 6: OverviewPage integration — the second isolated fetch + test repairs
 
