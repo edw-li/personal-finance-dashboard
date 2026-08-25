@@ -187,6 +187,12 @@ describe('SpendingPage — tooltip fixes', () => {
     await screen.findByText('Where Jul 2026 went')
     expect(screen.getAllByTestId('echart')[0].getAttribute('data-export-name')).toBe('spending')
   })
+
+  it('captions every inside-zoom chart — bars, savings rate, trends — and nothing else', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(3)
+  })
 })
 
 describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {

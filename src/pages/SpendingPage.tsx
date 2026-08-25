@@ -9,6 +9,7 @@ import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import ChartZoomHint from '../components/ChartZoomHint'
 import BudgetPanel from '../components/spending/BudgetPanel'
 import { budgetStepSeries } from '../components/spending/budgetChartOptions'
 import {
@@ -657,6 +658,7 @@ export default function SpendingPage() {
                 onDataZoom={onZoomWindow}
                 exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
               />
+              <ChartZoomHint />
             </>
           ) : (
             !loading &&
@@ -768,7 +770,12 @@ export default function SpendingPage() {
             Savings rate (actual)
             <InfoHint text="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent." />
           </h2>
-          {savingsOption && <EChart option={savingsOption} height={260} onDataZoom={onZoomWindow} />}
+          {savingsOption && (
+            <>
+              <EChart option={savingsOption} height={260} onDataZoom={onZoomWindow} />
+              <ChartZoomHint />
+            </>
+          )}
           <p className="drill-hint">
             (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
             planned rate, so values differ by design.
@@ -800,7 +807,15 @@ export default function SpendingPage() {
             })}
           </div>
           {trendOption ? (
-            <EChart option={trendOption} height={220} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />
+            <>
+              <EChart
+                option={trendOption}
+                height={220}
+                onLegendChange={onLegendChange}
+                onDataZoom={onZoomWindow}
+              />
+              <ChartZoomHint />
+            </>
           ) : (
             <div className="empty-note">Pick up to {MAX_TREND} categories.</div>
           )}

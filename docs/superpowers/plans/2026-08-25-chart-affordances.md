@@ -2442,7 +2442,7 @@ Run: `npx vitest run src/pages/SpendingPage.test.tsx` → the new test FAILS (at
 **Files:**
 - Modify: `src/pages/SpendingPage.tsx` (+ test), `src/pages/NetWorthPage.tsx`, `src/pages/PortfolioPage.tsx`, `src/pages/ProjectionPage.tsx`, `src/components/portfolio/HoldingDetailPanel.tsx`
 
-- [ ] **Step 1: Write the failing page pin** — append to `src/pages/SpendingPage.test.tsx`:
+- [x] **Step 1: Write the failing page pin** — append to `src/pages/SpendingPage.test.tsx`:
 
 ```tsx
 it('captions every inside-zoom chart — bars, savings rate, trends — and nothing else', async () => {
@@ -2454,7 +2454,7 @@ it('captions every inside-zoom chart — bars, savings rate, trends — and noth
 
 Run: `npx vitest run src/pages/SpendingPage.test.tsx` → FAIL (0 found).
 
-- [ ] **Step 2: Place the caption under each of the nine inside-zoom mounts** — `import ChartZoomHint from '../components/ChartZoomHint'` (or `'../ChartZoomHint'` from `src/components/portfolio/`) in each file, then add `<ChartZoomHint />` directly AFTER the `<EChart …/>` element. Where a mount sits alone in a JSX expression (`{cond && <EChart …/>}` or a ternary branch), wrap the pair in a fragment: `{cond && (<><EChart …/><ChartZoomHint /></>)}`.
+- [x] **Step 2: Place the caption under each of the nine inside-zoom mounts** — `import ChartZoomHint from '../components/ChartZoomHint'` (or `'../ChartZoomHint'` from `src/components/portfolio/`) in each file, then add `<ChartZoomHint />` directly AFTER the `<EChart …/>` element. Where a mount sits alone in a JSX expression (`{cond && <EChart …/>}` or a ternary branch), wrap the pair in a fragment: `{cond && (<><EChart …/><ChartZoomHint /></>)}`.
   1. `SpendingPage.tsx`: the bars mount (non-drilled branch only — the pie has no zoom), the savings mount, the trend mount.
   2. `NetWorthPage.tsx`: the stacked mount, the drill mount.
   3. `PortfolioPage.tsx`: the performance mount (before the S&P-baseline `<p className="hint">`).
@@ -2463,9 +2463,9 @@ Run: `npx vitest run src/pages/SpendingPage.test.tsx` → FAIL (0 found).
 
   The heatmap, pies, sankeys, dividends bars and the Overview charts register no inside zoom — no caption (the caption would promise a gesture those charts refuse).
 
-- [ ] **Step 3: Run** — `npx vitest run` → ALL PASS (the caption text collides with no existing assertion — it is new wording; the SpendingPage count pin now passes: bars + savings + trends).
+- [x] **Step 3: Run** — `npx vitest run` → ALL PASS (the caption text collides with no existing assertion — it is new wording; the SpendingPage count pin now passes: bars + savings + trends).
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): zoom-gesture caption on every inside-zoom card"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(charts): zoom-gesture caption on every inside-zoom card"`
 
 ---
 

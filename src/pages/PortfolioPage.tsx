@@ -12,6 +12,7 @@ import {
   updateSecurity,
 } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
+import ChartZoomHint from '../components/ChartZoomHint'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
@@ -381,6 +382,7 @@ export default function PortfolioPage() {
                     csv: () => portfolioHistoryCsv(history),
                   }}
                 />
+                <ChartZoomHint />
                 {/* Two benchmark legs, one distinction: the baseline invests only the
                     STARTING balance; the contribution-matched line adds every inferred
                     flow. Said here so neither gap reads as outperformance. */}

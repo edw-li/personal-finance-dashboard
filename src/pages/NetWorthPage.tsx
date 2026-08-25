@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { ApiError } from '../api/client'
+import ChartZoomHint from '../components/ChartZoomHint'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
@@ -370,13 +371,16 @@ export default function NetWorthPage() {
             </div>
           </div>
           {stackedOption && data ? (
-            <EChart
-              option={stackedOption}
-              height={360}
-              onLegendChange={onLegendChange}
-              onDataZoom={onZoomWindow}
-              exportConfig={{ name: 'net-worth', csv: () => netWorthCsv(data) }}
-            />
+            <>
+              <EChart
+                option={stackedOption}
+                height={360}
+                onLegendChange={onLegendChange}
+                onDataZoom={onZoomWindow}
+                exportConfig={{ name: 'net-worth', csv: () => netWorthCsv(data) }}
+              />
+              <ChartZoomHint />
+            </>
           ) : (
             !loading &&
             !error && (
@@ -415,12 +419,15 @@ export default function NetWorthPage() {
             })}
           </div>
           {drillOption ? (
-            <EChart
-              option={drillOption}
-              height={280}
-              onLegendChange={onLegendChange}
-              onDataZoom={onZoomWindow}
-            />
+            <>
+              <EChart
+                option={drillOption}
+                height={280}
+                onLegendChange={onLegendChange}
+                onDataZoom={onZoomWindow}
+              />
+              <ChartZoomHint />
+            </>
           ) : (
             !loading && <div className="empty-note">No accounts selected.</div>
           )}

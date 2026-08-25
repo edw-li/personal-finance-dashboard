@@ -5,6 +5,7 @@ import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 import type { ProjectionParams } from '../api/projection'
 import EChart from '../components/EChart'
+import ChartZoomHint from '../components/ChartZoomHint'
 import InfoHint from '../components/InfoHint'
 import { fitPolyTrend } from '../components/projection/polyTrend'
 import {
@@ -399,6 +400,7 @@ export default function ProjectionPage() {
               ) : (
                 <>
                   <EChart option={nwChart} height={340} />
+                  <ChartZoomHint />
                   <p className="drill-hint">
                     {fit === null
                       ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
@@ -414,11 +416,14 @@ export default function ProjectionPage() {
                 <InfoHint text="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes." />
               </h2>
               {chart && data ? (
-                <EChart
-                  option={chart}
-                  height={340}
-                  exportConfig={{ name: 'projection', csv: () => projectionCsv(data) }}
-                />
+                <>
+                  <EChart
+                    option={chart}
+                    height={340}
+                    exportConfig={{ name: 'projection', csv: () => projectionCsv(data) }}
+                  />
+                  <ChartZoomHint />
+                </>
               ) : (
                 <p className="empty-note">Nothing to chart at this horizon.</p>
               )}
