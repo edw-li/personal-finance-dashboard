@@ -662,12 +662,12 @@ divergences are expected, anything else is not.
 
 **Files:** none
 
-- [ ] **Step 1: The ENTIRE backend suite** — `cd backend && .venv/Scripts/python -m pytest -q`
+- [x] **Step 1: The ENTIRE backend suite** — **855 passed = N(853) + 2.** — `cd backend && .venv/Scripts/python -m pytest -q`
 Expected: **ALL PASS**, and the passed count is exactly **Task 0's N + 2** (the two new regression tests; every other change edited assertions in place). Any other count means a test was accidentally added, deleted, or skipped — investigate before proceeding.
 
-- [ ] **Step 2: Ruff, final** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or commit the reflow with `git commit -m "style: ruff reflow"` and re-run Step 1).
+- [x] **Step 2: Ruff, final** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or commit the reflow with `git commit -m "style: ruff reflow"` and re-run Step 1).
 
-- [ ] **Step 3: Blast-radius audit** — `git diff --name-only main` must print EXACTLY these four paths and nothing else:
+- [x] **Step 3: Blast-radius audit** — `git diff --name-only main` must print EXACTLY these four paths and nothing else:
 
 ```
 README.md
@@ -678,4 +678,4 @@ backend/tests/test_taxes_api.py
 
 (Plus this plan file only if the orchestrator committed it on this branch.) No migration, no `src/`, no deletions. Then `git status --porcelain` → EMPTY.
 
-- [ ] **Step 4: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch. Leave a summary listing: the new state-chain pins per year (2023 +12.00, 2024 +16.66, 2025 +117.85 at cents, 2026 unchanged — or the oracle's values if they disagreed with the plan's hand derivation, flagged as such), the retirement of D2's +117.85 state half (sheet's 2025 state now agrees with the app), both suite counts (Task 0's N and the final N + 2), the zero-migration fact, and the reminder that the capital-loss cap / NIIT-as-jurisdiction / qualified-dividend treasury slices remain deliberately unmodeled.
+- [x] **Step 4: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch. Leave a summary listing: the new state-chain pins per year (2023 +12.00, 2024 +16.66, 2025 +117.85 at cents, 2026 unchanged — or the oracle's values if they disagreed with the plan's hand derivation, flagged as such), the retirement of D2's +117.85 state half (sheet's 2025 state now agrees with the app), both suite counts (Task 0's N and the final N + 2), the zero-migration fact, and the reminder that the capital-loss cap / NIIT-as-jurisdiction / qualified-dividend treasury slices remain deliberately unmodeled.
