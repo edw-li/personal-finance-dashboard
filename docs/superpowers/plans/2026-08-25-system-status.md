@@ -1241,9 +1241,9 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
 
 **Files:** none
 
-- [ ] **Step 1: Full backend suite** — `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS (record the count; ~853 before this plan, +8 here).
-- [ ] **Step 2: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → if anything reformats, re-run the touched test files and commit the reflow.
-- [ ] **Step 3: Bash syntax re-check** — `bash -n backend/scripts/backup_db.sh` → exit 0 (belt-and-braces after any late edits; still the only shell verification that exists).
-- [ ] **Step 4: Full frontend** — `npx vitest run` → ALL PASS (record the count; ~791 before this plan); `npx tsc -b` → clean; `npx eslint .` → clean.
-- [ ] **Step 5: Commit anything outstanding** — `git add -A && git commit -m "chore(system): verification pass"` (skip if `git status --porcelain` is already EMPTY — it should be).
-- [ ] **Step 6: STOP.** Do not merge, do not push, do not delete anything, and do NOT edit the five-feature spec's status line (four of its features are still open). Leave a summary listing: both test counts; that `/prices/refresh-status` is byte-identical (Task 3's equality pin) and PortfolioPage still reads it; that the backup marker write is best-effort and review-only-verified (`bash -n`); that the attention nag is prod-suppressed by `environment !== 'prod'`; and that `alembic_head` is legitimately `null` on test/dev databases built by `create_all`.
+- [x] **Step 1: Full backend suite** — `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS (record the count; ~853 before this plan, +8 here).
+- [x] **Step 2: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → if anything reformats, re-run the touched test files and commit the reflow.
+- [x] **Step 3: Bash syntax re-check** — `bash -n backend/scripts/backup_db.sh` → exit 0 (belt-and-braces after any late edits; still the only shell verification that exists).
+- [x] **Step 4: Full frontend** — `npx vitest run` → ALL PASS (record the count; ~791 before this plan); `npx tsc -b` → clean; `npx eslint .` → clean.
+- [x] **Step 5: Commit anything outstanding** — `git add -A && git commit -m "chore(system): verification pass"` (skip if `git status --porcelain` is already EMPTY — it should be).
+- [x] **Step 6: STOP.** Do not merge, do not push, do not delete anything, and do NOT edit the five-feature spec's status line (four of its features are still open). Leave a summary listing: both test counts; that `/prices/refresh-status` is byte-identical (Task 3's equality pin) and PortfolioPage still reads it; that the backup marker write is best-effort and review-only-verified (`bash -n`); that the attention nag is prod-suppressed by `environment !== 'prod'`; and that `alembic_head` is legitimately `null` on test/dev databases built by `create_all`.
