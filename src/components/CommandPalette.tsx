@@ -134,7 +134,14 @@ export default function CommandPalette() {
   // render, so it always sees the current open/close functions without a stale closure.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      // Alt and Shift must be CLEAR: Ctrl+Shift+K is Firefox's console, and Ctrl+Alt+K is
+      // what AltGr+K reports on Windows layouts (it types a glyph). Neither is ours.
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === 'k'
+      ) {
         event.preventDefault() // the browser's own ^K (search bar) must not fire
         if (open) closePalette()
         else openPalette()
@@ -179,7 +186,17 @@ export default function CommandPalette() {
         if (event.target === event.currentTarget) closePalette()
       }}
     >
-      <div className="palette">
+      <div
+        className="palette"
+        // The palette's own chrome (input padding, the list's gutters) must not take the
+        // focus off the input: a blur there strands the user — Tab would walk the page
+        // BEHIND the overlay, and Escape is bound to the input, so it would stop closing.
+        // The input itself is exempt, or clicking to place the caret would do nothing;
+        // options preventDefault in their own handlers before running.
+        onMouseDown={(event) => {
+          if (event.target !== inputRef.current) event.preventDefault()
+        }}
+      >
         <input
           ref={inputRef}
           className="palette-input"

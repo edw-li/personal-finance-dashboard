@@ -47,6 +47,27 @@ describe('CommandPalette', () => {
     expect(document.activeElement).toBe(outside)
   })
 
+  it('leaves Ctrl+Shift+K and Ctrl+Alt+K (AltGr) to the browser and the layout', () => {
+    renderPalette()
+    // fireEvent returns true when nothing called preventDefault — the key rides on.
+    expect(fireEvent.keyDown(window, { key: 'k', ctrlKey: true, shiftKey: true })).toBe(true)
+    expect(document.querySelector('.palette-overlay')).toBeNull()
+    expect(fireEvent.keyDown(window, { key: 'k', ctrlKey: true, altKey: true })).toBe(true)
+    expect(document.querySelector('.palette-overlay')).toBeNull()
+  })
+
+  it('keeps focus on the input when its own chrome is pressed', () => {
+    renderPalette()
+    openPalette()
+    const palette = document.querySelector('.palette') as HTMLElement
+    // preventDefault-ed, so the press never blurs the input: Escape keeps closing and Tab
+    // cannot walk out into the page behind the overlay.
+    expect(fireEvent.mouseDown(palette)).toBe(false)
+    expect(document.activeElement).toBe(combo())
+    fireEvent.keyDown(combo(), { key: 'Escape' })
+    expect(document.querySelector('.palette-overlay')).toBeNull()
+  })
+
   it('Cmd+K toggles: a second press closes', () => {
     renderPalette()
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
