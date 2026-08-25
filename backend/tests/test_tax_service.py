@@ -5,8 +5,9 @@ Fixtures are the pinned workbook values (== the dev DB's imported `tax_inputs` /
 
 * **canonical goldens** — the clean model the engine ships, one test per year;
 * **sheet equality for 2024** — 2024 is the drift-free column, so its canonical values ARE
-  the sheet's cached values (the cached cells are 10-significant-figure float renderings,
-  so the five derived-from-a-product quantities match within 1e-4 rather than bit-exactly);
+  the sheet's cached values everywhere but the state chain, which sits exactly one CA
+  capital-gains divergence above them (2026-08-25 spec §1; pinned as sheet value + delta,
+  the cached cells being 10-significant-figure float renderings compared within 1e-4);
 * **drift pins** — the sheet's per-year hand-edit drift (D1-D3) reproduced to the cent by
   feeding the engine's own walkers the drifted intermediate, proving every delta is
   understood rather than papered over.
@@ -166,17 +167,17 @@ _CANONICAL_TABLE: dict[str, tuple[str, str, str, str]] = {
     "fed_deduction": ("13850.00", "14600.00", "27213.28", "29824.00"),
     "fed_ti": ("103876.64", "197176.20", "232162.77", "250304.21"),
     "fed_tax": ("18330.39", "40782.88", "51355.09", "57160.35"),
-    "state_agi": ("119746.28", "215122.02", "262132.89", "284428.21"),
-    "state_ti": ("114383.28", "209582.02", "256426.89", "278722.21"),
-    "state_tax": ("7146.50", "15884.46", "20139.34", "22206.80"),
+    "state_agi": ("119875.28", "215301.15", "263400.08", "284428.21"),
+    "state_ti": ("114512.28", "209761.15", "257694.08", "278722.21"),
+    "state_tax": ("7158.49", "15901.12", "20257.19", "22206.80"),
     "medicare_tax": ("1490.92", "3634.95", "4582.05", "5299.21"),
     "ss_tax": ("6374.99", "10453.20", "10918.20", "10918.20"),
     "sdi_tax": ("944.90", "1950.00", "2700.00", "3000.00"),
     "cg_amount": ("129.00", "179.13", "1267.19", "0.00"),
     "cg_tax": ("19.35", "33.68", "238.23", "0.00"),
     "gross_income": ("126321.23", "237973.17", "287209.06", "306694.03"),
-    "total_tax": ("34307.05", "72739.17", "89932.91", "98584.56"),
-    "take_home": ("92014.18", "165234.00", "197276.15", "208109.47"),
+    "total_tax": ("34319.05", "72755.83", "90050.76", "98584.56"),
+    "take_home": ("92002.18", "165217.34", "197158.30", "208109.47"),
 }
 
 CANONICAL: dict[int, dict[str, Decimal]] = {
@@ -326,11 +327,13 @@ def test_golden_2024():
 
 
 def test_golden_2024_equals_sheet_cached_values():
-    """2024 is the drift-free column, so canonical == sheet, not merely close.
+    """2024 is the drift-free column, so canonical == sheet — EXCEPT the state chain.
 
-    The five quantities carrying a product (the state chain, which subtracts
-    treasuries × exempt-pct, and the totals built on it) are compared against the cached
-    cell's 10-significant-figure float rendering; everything else is bit-exact.
+    The five state-chain quantities diverge by exactly the CA capital-gains fix
+    (2026-08-25 spec §1: state AGI carries cg_amount; the sheet's never did), so they are
+    pinned as the sheet's cached value PLUS the fix's delta — the divergence itself stays
+    exact. Everything else is the cached cell: bit-exact where no product is involved,
+    within 1e-4 where one is (cached cells are 10-significant-figure float renderings).
     """
     breakdown = breakdown_for(2024)
     produced = actuals(breakdown)
@@ -352,15 +355,23 @@ def test_golden_2024_equals_sheet_cached_values():
     assert breakdown.social_security.taxable_wages == Decimal("168600")
     assert breakdown.disability.taxable_wages == Decimal("235424.46")
 
-    rendered = {
-        "state_agi": "215122.0164",
-        "state_ti": "209582.0164",
-        "state_tax": "15884.45652",
-        "total_tax": "72739.16677",
-        "take_home": "165234.0032",
+    # The state chain vs the sheet: AGI/TI sit exactly cg_amount above the cached cells,
+    # and the three money outcomes exactly one 9.3%-bracket walk above/below — the
+    # documented direction (the app's state tax >= the sheet's for a CG year).
+    cg = Decimal("179.13")
+    state_delta = walk(YEAR_BRACKETS[2024]["state"], produced["state_ti"]) - walk(
+        YEAR_BRACKETS[2024]["state"], produced["state_ti"] - cg
+    )
+    assert state_delta == cg * Decimal("0.093")  # no bracket boundary crossed
+    sheet = {
+        "state_agi": (Decimal("215122.0164"), cg),
+        "state_ti": (Decimal("209582.0164"), cg),
+        "state_tax": (Decimal("15884.45652"), state_delta),
+        "total_tax": (Decimal("72739.16677"), state_delta),
+        "take_home": (Decimal("165234.0032"), -state_delta),
     }
-    for quantity, cached in rendered.items():
-        assert abs(produced[quantity] - Decimal(cached)) < Decimal("0.0001"), quantity
+    for quantity, (cached, delta) in sheet.items():
+        assert abs(produced[quantity] - (cached + delta)) < Decimal("0.0001"), quantity
 
 
 def test_golden_2025():
@@ -473,6 +484,47 @@ def test_capital_gains_stack_clamps_a_negative_taxable_income():
     assert breakdown.capital_gains.tax == Decimal("5306.25")
 
 
+def test_state_agi_carries_cg_amount_every_year():
+    """CA taxes capital gains and ALL dividends as ordinary income (2026-08-25 spec §1):
+    state AGI = fed AGI - treasury slice + HSA addbacks + cg_amount, in EVERY year,
+    unconditionally — the same netted quantity the federal CG stack taxes, never a second
+    definition. 2026 rides along as the zero-gains control: its state chain must not move."""
+    for year in YEARS:
+        breakdown = breakdown_for(year)
+        values = YEAR_INPUTS[year]
+        assert breakdown.state.agi == (
+            breakdown.federal.agi
+            - values["unq_div_us_treasuries_etf"] * values["unq_div_state_exempt_pct"]
+            + values["hsa_contributions"]
+            + values["hsa_contributions_employer"]
+            + breakdown.capital_gains.gains_amount
+        ), year
+
+
+def test_state_tax_walks_the_capital_gains_increment():
+    """Two input sets identical except ltcg_total: state tax must differ by EXACTLY the
+    state-bracket walk over the cg_amount increment (the fix's contract, spec §1), while
+    the federal income chain stays put — CG never enters fed AGI."""
+    increment = Decimal("10000")
+    base = dict(YEAR_INPUTS[2025])
+    bumped = base | {"ltcg_total": base["ltcg_total"] + increment}
+    before = compute_breakdown(2025, base, YEAR_BRACKETS[2025])
+    after = compute_breakdown(2025, bumped, YEAR_BRACKETS[2025])
+
+    # The netting rules are unchanged: a bigger long-term gain lands 1:1 on cg_amount...
+    assert after.capital_gains.gains_amount - before.capital_gains.gains_amount == increment
+    # ...and 1:1 on the state chain ALONE.
+    assert after.federal.agi == before.federal.agi
+    assert after.federal.tax == before.federal.tax
+    assert after.state.agi - before.state.agi == increment
+    assert after.state.taxable_income - before.state.taxable_income == increment
+    expected = walk(YEAR_BRACKETS[2025]["state"], before.state.taxable_income + increment) - walk(
+        YEAR_BRACKETS[2025]["state"], before.state.taxable_income
+    )
+    assert expected > 0
+    assert after.state.tax - before.state.tax == expected
+
+
 # --------------------------------------------------------------------------------------
 # Sheet drift pins (D1-D3)
 # --------------------------------------------------------------------------------------
@@ -491,7 +543,10 @@ def test_sheet_drift_2023_qdiv_minus_one():
 
 def test_sheet_drift_2025_cg_in_agi():
     """2025 r96 adds LTCG + qualified dividends + other CG into fed AGI, contradicting its
-    own r122 and double-taxing gains that the CG stack already charges."""
+    own r122 and double-taxing gains that the CG stack already charges. The FEDERAL chain
+    is still the drift; the state chain it feeds stopped being one — the canonical model
+    now adds cg_amount to state AGI on purpose (2026-08-25 spec §1), so the sheet's 2025
+    state figures agree with the app by accident: right answer, wrong door."""
     breakdown = breakdown_for(2025)
     doubled = Decimal("1267.19")
 
@@ -503,14 +558,23 @@ def test_sheet_drift_2025_cg_in_agi():
     assert drifted_tax == Decimal("51760.58656")  # sheet r98c5
     assert cents(drifted_tax - breakdown.federal.tax) == Decimal("405.50")  # 1267.19 × .32
 
-    # The inflated AGI flows into the state chain too.
-    drifted_state_ti = breakdown.state.taxable_income + doubled
-    drifted_state_tax = (
-        walk(YEAR_BRACKETS[2025]["state"], drifted_state_ti)
-        - YEAR_INPUTS[2025]["state_exemption_credits"]
+    # The sheet's state chain, rebuilt from ITS drifted fed AGI, lands exactly on the
+    # canonical one — both add the same 1267.19 (the sheet through fed AGI, the app
+    # through the deliberate cg_amount term), so the old +117.85 state drift is retired.
+    values = YEAR_INPUTS[2025]
+    sheet_state_ti = (
+        drifted_agi
+        - values["unq_div_us_treasuries_etf"] * values["unq_div_state_exempt_pct"]
+        + values["hsa_contributions"]
+        + values["hsa_contributions_employer"]
+        - values["state_standard_deduction"]
     )
-    assert abs(drifted_state_tax - Decimal("20257.18732")) < Decimal("0.001")
-    assert cents(drifted_state_tax - breakdown.state.tax) == Decimal("117.85")
+    assert sheet_state_ti == breakdown.state.taxable_income
+    sheet_state_tax = (
+        walk(YEAR_BRACKETS[2025]["state"], sheet_state_ti) - values["state_exemption_credits"]
+    )
+    assert sheet_state_tax == breakdown.state.tax
+    assert abs(sheet_state_tax - Decimal("20257.18732")) < Decimal("0.001")  # sheet's cache
 
 
 def test_sheet_drift_2026_stale_deduction():
@@ -686,7 +750,7 @@ def test_missing_jurisdiction_zero_and_warning():
 def test_negative_state_tax_warning():
     inputs = dict(YEAR_INPUTS[2024]) | {"state_exemption_credits": Decimal("1000000")}
     breakdown = compute_breakdown(2024, inputs, YEAR_BRACKETS[2024])
-    assert cents(breakdown.state.tax) == Decimal("15884.46") + Decimal("149") - Decimal("1000000")
+    assert cents(breakdown.state.tax) == Decimal("15901.12") + Decimal("149") - Decimal("1000000")
     assert NEGATIVE_STATE_TAX_WARNING in breakdown.warnings
     assert breakdown.state.tax < 0
 

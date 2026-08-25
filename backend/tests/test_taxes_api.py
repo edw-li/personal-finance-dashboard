@@ -4,7 +4,9 @@ The 2024 fixtures are imported from `test_tax_service` on purpose — they are t
 Workbook reference pins, and one copy of them keeps a golden from drifting against the
 engine's. Here they are pushed through the REAL endpoints (PUT inputs + PUT brackets), so
 the summary golden also proves the DB round-trip: Numeric(14,4) inputs and Numeric(7,4)/
-Numeric(12,2) brackets come back at column scale and still land on the sheet's cents.
+Numeric(12,2) brackets come back at column scale and still land on the canonical cents
+(the sheet's, except the documented CA capital-gains divergence on the state chain — see
+test_tax_service.py).
 """
 
 from datetime import UTC, date, datetime
@@ -492,7 +494,11 @@ async def test_clone_brackets_from_a_partial_source(auth_client, definitions):
 # --- summaries ---
 
 
-async def test_summary_2024_matches_the_sheet(auth_client, definitions):
+async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client, definitions):
+    """The 2024 wire golden. Sheet-exact everywhere but the state chain, which carries the
+    deliberate CA capital-gains divergence (2026-08-25 spec §1) — the engine-level
+    sheet-vs-canonical deltas are pinned in test_tax_service.py; this test pins the
+    quantized strings the client actually renders."""
     await put_inputs(auth_client, 2024, inputs_payload(2024))
     await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
 
@@ -506,10 +512,10 @@ async def test_summary_2024_matches_the_sheet(auth_client, definitions):
         "effective_rate": "0.192575",
     }
     assert body["state"] == {
-        "agi": "215122.02",
-        "taxable_income": "209582.02",
-        "tax": "15884.46",
-        "effective_rate": "0.073839",
+        "agi": "215301.15",
+        "taxable_income": "209761.15",
+        "tax": "15901.12",
+        "effective_rate": "0.073855",
     }
     assert body["medicare"] == {
         "w2_income": "235724.46",
@@ -534,9 +540,9 @@ async def test_summary_2024_matches_the_sheet(auth_client, definitions):
     assert body["totals"] == {
         "gross_income": "237973.17",
         "total_income": "211776.20",
-        "total_tax": "72739.17",
-        "take_home": "165234.00",
-        "effective_rate": "0.305661",
+        "total_tax": "72755.83",
+        "take_home": "165217.34",
+        "effective_rate": "0.305731",
     }
 
 
@@ -584,7 +590,7 @@ async def test_all_years_summary_skips_input_less_years(auth_client, definitions
 
     body = (await auth_client.get(ALL_SUMMARY)).json()
     assert [year["year"] for year in body["years"]] == [2024, 2025]  # 2023 has no inputs
-    assert body["years"][0]["totals"]["total_tax"] == "72739.17"
+    assert body["years"][0]["totals"]["total_tax"] == "72755.83"
 
     sparse = body["years"][1]
     assert sparse["totals"]["total_tax"] == "0.00"
@@ -770,6 +776,12 @@ async def test_what_if_long_sale_moves_ltcg_and_delta(auth_client, db, definitio
     assert Decimal(body["delta"]["take_home"]) == Decimal(
         body["scenario"]["totals"]["take_home"]
     ) - Decimal(body["baseline"]["totals"]["take_home"])
+    # The 2026-08-25 CA-CG fix's user-visible symptom: a long-term sale must move STATE
+    # tax too — the panel can never again answer "Δ state ≈ $0" for a long sale.
+    assert Decimal(body["delta"]["state_tax"]) == Decimal(
+        body["scenario"]["state"]["tax"]
+    ) - Decimal(body["baseline"]["state"]["tax"])
+    assert Decimal(body["delta"]["state_tax"]) > 0
     # Nothing about the sale reached the stored year.
     assert (await auth_client.get(f"{YEARS}/2024/summary")).json() == body["baseline"]
 

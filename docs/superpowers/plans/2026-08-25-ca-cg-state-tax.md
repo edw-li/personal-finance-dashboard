@@ -37,7 +37,7 @@
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the branch and a clean tree.**
+- [x] **Step 1: Confirm the branch and a clean tree.**
 
 ```bash
 git status --porcelain   # expected: EMPTY output
@@ -46,12 +46,12 @@ git rev-parse --abbrev-ref HEAD   # expected: ca-cg-state-tax
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup.
 
-- [ ] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
+- [x] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
 
 Run: `cd backend && .venv/Scripts/python -m pytest tests/test_health.py -q`
 Expected: PASS. If it errors on connection, bring the container up (`cd backend && docker compose up -d db`) and retry once; if it still fails, read `backend/app/config.py` for the dev DATABASE_URL default before proceeding — do not guess.
 
-- [ ] **Step 3: Baseline the whole backend suite** (this is the count Task 6 is judged against).
+- [x] **Step 3: Baseline the whole backend suite** (this is the count Task 6 is judged against). **N = 853 passed.**
 
 Run: `cd backend && .venv/Scripts/python -m pytest -q`
 Expected: ALL PASS. **Record the passed count** — call it N. (Task 6 must end at exactly N + 2: the two new regression tests; every other change edits existing tests in place.)
@@ -67,7 +67,7 @@ The spec's own test mandate: "a dedicated regression test asserting state tax in
 **Files:**
 - Test: `backend/tests/test_tax_service.py`, `backend/tests/test_taxes_api.py`
 
-- [ ] **Step 1: Write the two failing engine tests.** In `backend/tests/test_tax_service.py`, insert at the END of the "Canonical goldens" section — immediately BEFORE the `# Sheet drift pins (D1-D3)` banner comment (after `test_capital_gains_stack_clamps_a_negative_taxable_income`). Everything referenced (`YEARS`, `YEAR_INPUTS`, `YEAR_BRACKETS`, `breakdown_for`, `compute_breakdown`, `walk`, `Decimal`) is already imported/defined at module level; no import edits needed.
+- [x] **Step 1: Write the two failing engine tests.** In `backend/tests/test_tax_service.py`, insert at the END of the "Canonical goldens" section — immediately BEFORE the `# Sheet drift pins (D1-D3)` banner comment (after `test_capital_gains_stack_clamps_a_negative_taxable_income`). Everything referenced (`YEARS`, `YEAR_INPUTS`, `YEAR_BRACKETS`, `breakdown_for`, `compute_breakdown`, `walk`, `Decimal`) is already imported/defined at module level; no import edits needed.
 
 ```python
 def test_state_agi_carries_cg_amount_every_year():
@@ -111,10 +111,10 @@ def test_state_tax_walks_the_capital_gains_increment():
     assert after.state.tax - before.state.tax == expected
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py -q`
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py -q`
 Expected: **2 failed, 50 passed**. `test_state_agi_carries_cg_amount_every_year` fails on year 2023 (state AGI is 129 short of the identity); `test_state_tax_walks_the_capital_gains_increment` fails at `after.state.agi - before.state.agi == increment` (`0 != 10000` — the gains never reach the state today). Any OTHER failure means the checkout is not the expected baseline: STOP and report.
 
-- [ ] **Step 3: Write the failing what-if assertion.** In `backend/tests/test_taxes_api.py`, inside `test_what_if_long_sale_moves_ltcg_and_delta`, insert directly AFTER the `delta["take_home"]` assertion block and BEFORE the `# Nothing about the sale reached the stored year.` comment:
+- [x] **Step 3: Write the failing what-if assertion.** In `backend/tests/test_taxes_api.py`, inside `test_what_if_long_sale_moves_ltcg_and_delta`, insert directly AFTER the `delta["take_home"]` assertion block and BEFORE the `# Nothing about the sale reached the stored year.` comment:
 
 ```python
     # The 2026-08-25 CA-CG fix's user-visible symptom: a long-term sale must move STATE
@@ -127,17 +127,17 @@ Expected: **2 failed, 50 passed**. `test_state_agi_carries_cg_amount_every_year`
 
 (The equality clause follows the test's own "the delta is the two RENDERED figures subtracted" pattern — `api/taxes.py` builds deltas from the `_summary_out` results, so quantized-minus-quantized is the exact contract.)
 
-- [ ] **Step 4: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_taxes_api.py::test_what_if_long_sale_moves_ltcg_and_delta -q`
+- [x] **Step 4: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_taxes_api.py::test_what_if_long_sale_moves_ltcg_and_delta -q`
 Expected: FAIL on the new `> 0` line — the delta is `"0.00"` today (the equality clause passes: 0 == 0). Everything else in the test unchanged and reaching the new lines.
 
-- [ ] **Step 5: Do NOT commit.** The tree is deliberately red; Tasks 2–4 turn it green and Task 4 carries the one atomic commit.
+- [x] **Step 5: Do NOT commit.** The tree is deliberately red; Tasks 2–4 turn it green and Task 4 carries the one atomic commit.
 
 ### Task 2: The engine change + engine documentation
 
 **Files:**
 - Modify: `backend/app/services/tax_service.py`
 
-- [ ] **Step 1: Hoist the netting, feed the state.** Two edits in `compute_breakdown`.
+- [x] **Step 1: Hoist the netting, feed the state.** Two edits in `compute_breakdown`.
 
 **Edit A** — CUT the capital-gains netting block from its current home (between the SDI lines and `cg_tax = stack(...)`; currently ~lines 313–322):
 
@@ -199,7 +199,7 @@ and leave the `cg_tax` line behind with a replacement comment (the block comment
     state_tax = walk(tables["state"], state_ti) - values["state_exemption_credits"]
 ```
 
-- [ ] **Step 2: Record the divergence in the module docstring**, with the same precedent framing the docstring already uses. Replace the paragraph
+- [x] **Step 2: Record the divergence in the module docstring**, with the same precedent framing the docstring already uses. Replace the paragraph
 
 ```
 The canonical model is the clean shape the workbook's own "Total Income" row uses in every
@@ -226,10 +226,10 @@ Plan 3's savings-rate line and Plan 4's Unrealized column shipped the principled
 over the sheet's the same way.
 ```
 
-- [ ] **Step 3: Run the regression tests** — `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py::test_state_agi_carries_cg_amount_every_year tests/test_tax_service.py::test_state_tax_walks_the_capital_gains_increment tests/test_taxes_api.py::test_what_if_long_sale_moves_ltcg_and_delta -q`
+- [x] **Step 3: Run the regression tests** — `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py::test_state_agi_carries_cg_amount_every_year tests/test_tax_service.py::test_state_tax_walks_the_capital_gains_increment tests/test_taxes_api.py::test_what_if_long_sale_moves_ltcg_and_delta -q`
 Expected: **3 passed**.
 
-- [ ] **Step 4: Enumerate the golden fallout — it must be EXACTLY this list.** Run `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py tests/test_taxes_api.py -q`.
+- [x] **Step 4: Enumerate the golden fallout — it must be EXACTLY this list.** Run `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py tests/test_taxes_api.py -q`.
 
 Expected failures in `test_tax_service.py` (**6 failed, 46 passed**):
 1. `test_golden_2023` — `assert_canonical` trips on `state_agi` (2023 carries `cg_amount = 129`);
@@ -245,14 +245,14 @@ Expected failures in `test_taxes_api.py` (**exactly 2**):
 
 Everything else in both files must PASS — in particular `test_golden_2026` (the zero-gains control), `test_effective_rates_are_full_precision_ratios` (identities move with both sides), `test_capital_gains_amount_branches` (netting untouched), `test_summary_2026_has_no_gains_so_no_capital_gains_rate`, `test_summary_never_serializes_a_signed_zero`, `test_summary_guards_absurd_but_legal_inputs` (no CG keys stored → `cg_amount = 0`), and `test_what_if_empty_scenario_echoes_baseline` (relative). **A failure outside this list means the edit changed more than the state term — STOP and use superpowers:systematic-debugging before touching any pin.**
 
-- [ ] **Step 5: Do NOT commit** (still red by design).
+- [x] **Step 5: Do NOT commit** (still red by design).
 
 ### Task 3: Independently verify every shifted pin, then reconcile `test_tax_service.py`
 
 **Files:**
 - Modify: `backend/tests/test_tax_service.py`
 
-- [ ] **Step 1: Run the oracle.** It rebuilds every shifted quantity from fixture literals plus `walk`/`stack` alone (each primitive has its own untouched unit pins; `compute_breakdown` is never imported), prints the required delta check `walk(state, old_ti + cg) − walk(state, old_ti)`, and recomputes the new totals from scratch so no new pin leans on an old rounded one:
+- [x] **Step 1: Run the oracle.** It rebuilds every shifted quantity from fixture literals plus `walk`/`stack` alone (each primitive has its own untouched unit pins; `compute_breakdown` is never imported), prints the required delta check `walk(state, old_ti + cg) − walk(state, old_ti)`, and recomputes the new totals from scratch so no new pin leans on an old rounded one:
 
 ```bash
 cd backend && .venv/Scripts/python - <<'EOF'
@@ -349,7 +349,7 @@ Expected output — the author's hand derivation; **the run is authoritative** (
 
 Sanity anchors before proceeding: each `state_delta` must equal `cg_amount × 0.093` (all six old/new taxable incomes sit inside the 9.3% bracket — 2023: 68,350–349,137; 2024: 70,607–360,659; 2025: 72,724–371,479 — so no boundary is crossed); the 2026 row must be byte-identical to the CURRENT canonical column; and 2025's new `state_tax 20257.19` should ring a bell — it is the very figure the old drift pin compared against `20257.18732` (the sheet's cached cell), which is exactly WHY Task 3 Step 4 rewrites that pin. If any printed value disagrees with the block above, the snippet wins: use its values in every edit below and record the discrepancy in the final report.
 
-- [ ] **Step 2: Update `_CANONICAL_TABLE`** — five rows, columns are (2023, 2024, 2025, 2026); ONLY the first three columns move, and only on the state-chain rows. Replace:
+- [x] **Step 2: Update `_CANONICAL_TABLE`** — five rows, columns are (2023, 2024, 2025, 2026); ONLY the first three columns move, and only on the state-chain rows. Replace:
 
 ```python
     "state_agi": ("119746.28", "215122.02", "262132.89", "284428.21"),
@@ -381,7 +381,7 @@ with:
 
 (All other `_CANONICAL_TABLE` rows — fed chain, FICA, `cg_amount`, `cg_tax`, `gross_income` — are untouched by construction; if Step 7's run says otherwise, STOP.)
 
-- [ ] **Step 3: Rework `test_golden_2024_equals_sheet_cached_values`** — 2024's state chain is no longer sheet-equal; pin it as *sheet value + the fix's delta* so the divergence stays exact rather than becoming a blind new number. Replace the whole function with:
+- [x] **Step 3: Rework `test_golden_2024_equals_sheet_cached_values`** — 2024's state chain is no longer sheet-equal; pin it as *sheet value + the fix's delta* so the divergence stays exact rather than becoming a blind new number. Replace the whole function with:
 
 ```python
 def test_golden_2024_equals_sheet_cached_values():
@@ -432,7 +432,7 @@ def test_golden_2024_equals_sheet_cached_values():
         assert abs(produced[quantity] - (cached + delta)) < Decimal("0.0001"), quantity
 ```
 
-- [ ] **Step 4: Rework `test_sheet_drift_2025_cg_in_agi`** — the federal half is still the drift; the state half flipped from "drift" to "accidental agreement" (the sheet reached state AGI *through* its inflated fed AGI, which is numerically the same +1267.19 the fix adds on purpose). Replace the whole function with:
+- [x] **Step 4: Rework `test_sheet_drift_2025_cg_in_agi`** — the federal half is still the drift; the state half flipped from "drift" to "accidental agreement" (the sheet reached state AGI *through* its inflated fed AGI, which is numerically the same +1267.19 the fix adds on purpose). Replace the whole function with:
 
 ```python
 def test_sheet_drift_2025_cg_in_agi():
@@ -471,7 +471,7 @@ def test_sheet_drift_2025_cg_in_agi():
     assert abs(sheet_state_tax - Decimal("20257.18732")) < Decimal("0.001")  # sheet's cache
 ```
 
-- [ ] **Step 5: Update `test_negative_state_tax_warning`** — the literal is the 2024 canonical state tax, which moved. Change the one assertion line from
+- [x] **Step 5: Update `test_negative_state_tax_warning`** — the literal is the 2024 canonical state tax, which moved. Change the one assertion line from
 
 ```python
     assert cents(breakdown.state.tax) == Decimal("15884.46") + Decimal("149") - Decimal("1000000")
@@ -485,7 +485,7 @@ to
 
 (15901.12 from Step 1's 2024 line; the `+ 149` still restores the pre-credit walk, and the huge credit still drives the result negative, so the warning assertions stand.)
 
-- [ ] **Step 6: Amend the module docstring** — the "sheet equality" bullet overpromises now. Replace:
+- [x] **Step 6: Amend the module docstring** — the "sheet equality" bullet overpromises now. Replace:
 
 ```
 * **sheet equality for 2024** — 2024 is the drift-free column, so its canonical values ARE
@@ -502,14 +502,14 @@ with:
   the cached cells being 10-significant-figure float renderings compared within 1e-4);
 ```
 
-- [ ] **Step 7: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py -q` → **ALL PASS (52 tests)**. Do NOT commit yet (`test_taxes_api.py` is still red).
+- [x] **Step 7: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py -q` → **ALL PASS (52 tests)**. Do NOT commit yet (`test_taxes_api.py` is still red).
 
 ### Task 4: Reconcile `test_taxes_api.py`, prove the neighbors, commit
 
 **Files:**
 - Modify: `backend/tests/test_taxes_api.py`
 
-- [ ] **Step 1: Update `test_summary_2024_matches_the_sheet`.** Three edits, using Task 3 Step 1's 2024 line (`state_tax 15901.12`, `state_rate 0.073855`, `total_tax 72755.83`, `take_home 165217.34`, `total_rate 0.305731`):
+- [x] **Step 1: Update `test_summary_2024_matches_the_sheet`.** Three edits, using Task 3 Step 1's 2024 line (`state_tax 15901.12`, `state_rate 0.073855`, `total_tax 72755.83`, `take_home 165217.34`, `total_rate 0.305731`):
 
 1. Rename the function and give the divergence a voice — change the def line from `async def test_summary_2024_matches_the_sheet(auth_client, definitions):` to:
 
@@ -546,7 +546,7 @@ async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client
 
 (Both new 6dp rates — `"0.073855"` and `"0.305731"` — come from the oracle's 2024 `state_rate` / `total_rate` line; confirm against your Task 3 Step 1 output before pasting. `gross_income`, `total_income`, and every federal/medicare/SS/SDI/capital-gains string in this test are untouched — if the Step 4 run flags one, the engine edit leaked.)
 
-- [ ] **Step 2: Update `test_all_years_summary_skips_input_less_years`** — change
+- [x] **Step 2: Update `test_all_years_summary_skips_input_less_years`** — change
 
 ```python
     assert body["years"][0]["totals"]["total_tax"] == "72739.17"
@@ -558,7 +558,7 @@ to
     assert body["years"][0]["totals"]["total_tax"] == "72755.83"
 ```
 
-- [ ] **Step 3: Amend the module docstring** — its last sentence promises sheet cents. Replace:
+- [x] **Step 3: Amend the module docstring** — its last sentence promises sheet cents. Replace:
 
 ```
 the summary golden also proves the DB round-trip: Numeric(14,4) inputs and Numeric(7,4)/
@@ -574,9 +574,9 @@ Numeric(12,2) brackets come back at column scale and still land on the canonical
 test_tax_service.py).
 ```
 
-- [ ] **Step 4: Run the two edited suites** — `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py tests/test_taxes_api.py -q` → **ALL PASS**.
+- [x] **Step 4: Run the two edited suites** — `cd backend && .venv/Scripts/python -m pytest tests/test_tax_service.py tests/test_taxes_api.py -q` → **ALL PASS**.
 
-- [ ] **Step 5: Prove the neighbors inherit without edits** (the spec's "everything downstream" claim, demonstrated rather than asserted):
+- [x] **Step 5: Prove the neighbors inherit without edits** (the spec's "everything downstream" claim, demonstrated rather than asserted):
 
 ```bash
 cd backend && .venv/Scripts/python -m pytest tests/test_tax_whatif.py tests/test_withholding_api.py tests/test_withholding_calc.py tests/test_models_taxes.py -q
@@ -584,9 +584,9 @@ cd backend && .venv/Scripts/python -m pytest tests/test_tax_whatif.py tests/test
 
 Expected: ALL PASS with **zero edits to any of these files** — `test_tax_whatif.py` is pure scenario math (no breakdowns), and the withholding seeds carry no CG keys, so their `"115753.20"` liability pin sits on `cg_amount = 0`. If any of these fail, the engine edit leaked beyond the state term: STOP and debug, do not edit these files.
 
-- [ ] **Step 6: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → if anything reformats, re-run Step 4's command and keep the reflow in this commit.
+- [x] **Step 6: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → if anything reformats, re-run Step 4's command and keep the reflow in this commit.
 
-- [ ] **Step 7: THE atomic commit** — `git add -A && git commit -m "fix(taxes): CA taxes capital gains as ordinary income - state AGI carries cg_amount (all years)"`
+- [x] **Step 7: THE atomic commit** — `git add -A && git commit -m "fix(taxes): CA taxes capital gains as ordinary income - state AGI carries cg_amount (all years)"`
 (One commit for engine + both test files: at no intermediate file boundary is the suite green, so splitting would commit red trees.)
 
 ---
