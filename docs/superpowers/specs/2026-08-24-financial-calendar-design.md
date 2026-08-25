@@ -1,6 +1,6 @@
 # Financial Calendar (+ Announced Ex-Dividend Capture) — Design Spec
 
-**Date:** 2026-08-24 · **Status:** implemented 2026-08-24 (branch financial-calendar)
+**Date:** 2026-08-24 · **Status:** implemented 2026-08-24 (branch financial-calendar); revised same day (§9: section spacing, click→popover flow, custom events — branch calendar-revisions)
 **Touches:** one additive migration (`securities.next_ex_div_date`), `services/price_provider.py` (forward-calendar fetch), `services/price_service.py` (refresh integration), new pure services (`services/business_days.py`, `services/calendar_events.py`), new router (`api/calendar.py`), new `/calendar` page + nav item, Overview "Up next" strip, ICS export (client-side).
 
 ## 1. Context & goals
@@ -70,4 +70,39 @@ New router `api/calendar.py`: `GET /calendar?start=YYYY-MM-DD&end=YYYY-MM-DD` (a
 
 ## 8. Out of scope (v2 candidates)
 
-- User-entered custom events (needs a table; deliberately deferred), estimated/projected ex-dividends (**rejected** — confirmed-only), dividend *pay*-date events, per-employer holiday calendars, vest-value pricing on chips, push/email reminders (pairs with a future weekly-digest job), recurring-bill detection (needs transactions).
+- User-entered custom events (was deferred here; **shipped by the §9 revision** — single-date only, recurrence stays v2), estimated/projected ex-dividends (**rejected** — confirmed-only), dividend *pay*-date events, per-employer holiday calendars, vest-value pricing on chips, push/email reminders (pairs with a future weekly-digest job), recurring-bill detection (needs transactions).
+
+## 9. Revision batch (2026-08-24, user-requested after first use)
+
+Three changes, design-approved same day. Q&A confirmed: custom events are **single-date only** (no recurrence in v1) and adding lives in a **header button + inline form** (no click-a-day affordance).
+
+### 9.1 Section spacing
+
+The page stacked two bare `.card` sections inside `loading-dim` with no spacing supplier — the only page without the `card-grid` wrapper. The wrapper becomes `card-grid loading-dim` and each section carries `span-12` (Overview's full-width-row grammar). No new spacing CSS.
+
+### 9.2 Click → details, not navigation
+
+Chips and list rows stop being links. A click opens the event's details, with navigation demoted to an explicit affordance inside them:
+
+- **Grid:** an anchored popover under the day cell — `role="dialog"`, focused on open; Escape closes and returns focus to the chip; outside click closes; one open at a time; days in the right two columns anchor right so the bubble stays inside the card. A last-week-row bubble may overhang the card edge — accepted; it floats at the app's bubble layer (`z-index: 2`, shared with InfoHint, whose "the codebase's one z-index" comment gets a truth update).
+- **List (also the mobile rendering):** the same details content expands **inline** under the row (the vest-table accordion pattern) — no floating positioning at screen edges. Opening either surface closes the other.
+- **Content** (one shared component): colored type dot + type name + formatted date; the label; the detail when present and distinct; footer = **"Open {page} →"** link, page named by a fixed href→name map (`/comp`→Comp, `/espp`→ESPP, `/portfolio`→Portfolio, `/paycheck`→Paycheck, `/taxes`→Taxes, `/update`→Monthly update). Custom events show **Edit / Delete** instead (they have no page).
+- The Overview **Up-next strip keeps direct links** (a compact jump list was never the complaint); it learns to render a custom event as a plain non-link row.
+
+### 9.3 Custom events (informational, single-date)
+
+- **Table `custom_events`** — one additive migration chained on `d2f8a6b3c1e7`: `id`, `event_date` (Date, indexed), `label` (String(120), required), `detail` (String(300), nullable). Dashboard-only, importer-immune (the `rsu_grants` posture, pinned by test).
+- **API** (same router): `POST /calendar/events` (201, returns `{id, date, label, detail}`; whitespace-only label 422; lengths schema-enforced) · `PATCH /calendar/events/{id}` (full replace — the form always submits all fields; 404 unknown) · `DELETE /calendar/events/{id}` (204; 404 unknown). `GET /calendar` loads rows in `[start, end]` and `compose()` emits them as a ninth type `custom` with `href = null`.
+- **Wire change (the one ripple):** `href` becomes `str | null`, and every event gains `id: int | null` (set only for custom). ICS `DESCRIPTION` already tolerates a missing href.
+- **ICS:** custom UID = `custom-{id}@finance-dashboard` — id-keyed so a rename **updates** the event in a subscribed calendar instead of duplicating it. Computed events keep label-keyed UIDs (their labels carry identity; they have no id).
+- **Frontend:** an **Add event** header button (beside the ICS export) toggles an inline form card — date (defaults today), title, optional note, Save/Cancel, busy-gated, house error banner. The popover's Edit prefills the same form in edit mode (PATCH); Delete acts in place, no confirm dialog (house delete grammar). Legend and chips color `custom` with the theme's `MUTED` gray — the palette file caps chart slots at 8 and forbids new hues; gray reads as "user-entered, not derived", and color is never the only channel. The grid empty-note gains "— or add your own with Add event."
+
+### 9.4 Bundled drive-by fixes (both from the ship-night minors ledger, both in files this batch touches)
+
+- `escapeIcsText` escapes a lone `\r` (user-authored text now reaches ICS via custom events).
+- Grid/list React keys include the date and, for custom events, the id — same-label events on different days collided list keys, and custom labels may legitimately repeat.
+
+### 9.5 Testing
+
+- **pytest:** CRUD matrix (whitespace label 422, over-length 422, unknown-id 404 on PATCH/DELETE, PATCH replaces detail-to-null), GET range filtering + `id`/`href: null` wiring, compose ordering with custom rows, importer-immunity pin, migration round-trip via the existing alembic gate.
+- **vitest:** popover open/Escape/outside-click/one-at-a-time (incl. cross-surface), "Open {page} →" labeling, custom popover shows Edit/Delete and no Open link, list-accordion parity, add/edit/delete wiring with window refetch, ICS custom UID stable across a rename, `EVENT_COLORS.custom` pinned to MUTED, Up-next custom row renders without a link.
