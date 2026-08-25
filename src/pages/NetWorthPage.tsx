@@ -8,6 +8,10 @@ import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import {
+  NOTES_SERIES,
+  netWorthStackedTooltipFormatter,
+} from '../components/networth/netWorthChartOptions'
 import type { EChartsOption } from '../charts/echarts'
 import { timeZoom } from '../charts/timeZoom'
 import type { RangePreset } from '../charts/timeZoom'
@@ -22,7 +26,6 @@ import {
 import type { AccountGroup, NetWorthSummary, NetWorthTimeseries } from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import {
-  escapeHtml,
   formatCurrency,
   formatCurrencyCompact,
   formatMonth,
@@ -36,10 +39,6 @@ import './NetWorthPage.css'
 const ASSET_GROUPS = GROUP_ORDER.filter((g): g is AccountGroup => g !== 'liability')
 // One slot per validated palette hue (theme.ts: never cycle past 8).
 const MAX_DRILL = PALETTE.length
-
-// The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
-// the legend, the tooltip branch and the series stay in lockstep.
-const NOTES_SERIES = 'Notes'
 
 // The three group tiles are one map over one shape, so they share one hint — three copies
 // of the same sentence would be three chances to edit only two of them.
@@ -147,31 +146,9 @@ export default function NetWorthPage() {
       legend: { top: 0 },
       tooltip: {
         trigger: 'axis',
-        // A full formatter, not valueFormatter: the Notes series carries TEXT — and note
-        // text is USER TEXT, so escapeHtml is mandatory (SpendingPage's rule). Money rows
-        // keep the currency treatment; a padded null still reads as a dash.
-        formatter: (params: unknown) => {
-          const list = (Array.isArray(params) ? params : [params]) as {
-            seriesName?: string
-            marker?: string
-            axisValueLabel?: string
-            value?: unknown
-            data?: unknown
-          }[]
-          if (list.length === 0) return ''
-          const head = `<strong>${list[0].axisValueLabel ?? ''}</strong>`
-          const lines = list.map((p) => {
-            if (p.seriesName === NOTES_SERIES) {
-              const note = (p.data as { note?: string } | undefined)?.note ?? ''
-              return `${p.marker ?? ''}${escapeHtml(note)}`
-            }
-            const raw = Array.isArray(p.value) ? p.value[1] : p.value
-            const text =
-              typeof raw === 'number' && Number.isFinite(raw) ? formatCurrency(raw) : '—'
-            return `${p.marker ?? ''}${p.seriesName ?? ''}: ${text}`
-          })
-          return [head, ...lines].join('<br/>')
-        },
+        // Asset rows + their subtotal, then liabilities/net worth/notes — the formatter
+        // (and its escapeHtml duty on note text) lives in netWorthChartOptions.ts.
+        formatter: netWorthStackedTooltipFormatter(ASSET_GROUPS.map((g) => GROUP_LABELS[g])),
       },
       xAxis: { type: 'category', data: labels, boundaryGap: false },
       yAxis: {

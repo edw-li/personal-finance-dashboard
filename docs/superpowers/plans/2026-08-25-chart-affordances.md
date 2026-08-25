@@ -874,7 +874,7 @@ describe('SpendingPage — tooltip fixes', () => {
 - Create: `src/components/networth/netWorthChartOptions.ts`, `src/components/networth/netWorthChartOptions.test.ts`
 - Modify: `src/pages/NetWorthPage.tsx`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/networth/netWorthChartOptions.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `src/components/networth/netWorthChartOptions.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -930,9 +930,9 @@ describe('netWorthStackedTooltipFormatter', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/networth/netWorthChartOptions.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/networth/netWorthChartOptions.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/components/networth/netWorthChartOptions.ts` (the page's existing formatter moves here whole, growing the subtotal):
+- [x] **Step 3: Implement** — create `src/components/networth/netWorthChartOptions.ts` (the page's existing formatter moves here whole, growing the subtotal):
 
 ```ts
 // Pure tooltip/CSV helpers for the net-worth stacked chart — no React, no fetching, no
@@ -1001,7 +1001,7 @@ export function netWorthStackedTooltipFormatter(
 }
 ```
 
-- [ ] **Step 4: Wire the page.** In `src/pages/NetWorthPage.tsx`:
+- [x] **Step 4: Wire the page.** In `src/pages/NetWorthPage.tsx`:
   1. Add the import:
 ```ts
 import {
@@ -1021,9 +1021,9 @@ import {
 ```
   4. Remove `escapeHtml,` from the `../utils/format` import — the moved formatter was its only consumer here (ESLint flags it otherwise).
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/networth/netWorthChartOptions.test.ts` → PASS; `npx eslint src/pages/NetWorthPage.tsx` → clean.
+- [x] **Step 5: Run** — `npx vitest run src/components/networth/netWorthChartOptions.test.ts` → PASS; `npx eslint src/pages/NetWorthPage.tsx` → clean.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(net-worth): stacked tooltip assets subtotal (formatter extracted)"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(net-worth): stacked tooltip assets subtotal (formatter extracted)"`
 
 ### Task 6: Tax-trend total-tax row + bold history tooltip header
 
