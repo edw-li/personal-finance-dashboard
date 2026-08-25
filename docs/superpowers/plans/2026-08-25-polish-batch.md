@@ -50,7 +50,7 @@
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the worktree, the branch and a clean tree** (run from `.worktrees/polish-batch`):
+- [x] **Step 1: Confirm the worktree, the branch and a clean tree** (run from `.worktrees/polish-batch`):
 
 ```bash
 git status --porcelain   # expected: EMPTY output
@@ -59,9 +59,9 @@ git rev-parse --abbrev-ref HEAD   # expected: polish-batch
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup.
 
-- [ ] **Step 2: Install** — `npm ci` → expected: completes without error (the worktree has its own `node_modules`).
+- [x] **Step 2: Install** — `npm ci` → expected: completes without error (the worktree has its own `node_modules`).
 
-- [ ] **Step 3: Frontend smoke** — `npx vitest run src/utils/months.test.ts` → PASS.
+- [x] **Step 3: Frontend smoke** — `npx vitest run src/utils/months.test.ts` → PASS.
 
 ---
 
@@ -74,7 +74,7 @@ If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it
 
 No unit test carries CSS custom properties — the pin is the grep in Step 3 plus the suite staying green.
 
-- [ ] **Step 1: index.css.** Replace the `:root` block (currently lines 1–12) with:
+- [x] **Step 1: index.css.** Replace the `:root` block (currently lines 1–12) with:
 
 ```css
 :root {
@@ -99,7 +99,7 @@ No unit test carries CSS custom properties — the pin is the grep in Step 3 plu
 }
 ```
 
-- [ ] **Step 2: The six literal swaps** (each is exact-string; the comment amendments keep the "comments explain constraints" rule honest — the old comments justified a literal that no longer exists):
+- [x] **Step 2: The six literal swaps** (each is exact-string; the comment amendments keep the "comments explain constraints" rule honest — the old comments justified a literal that no longer exists):
   1. `src/pages/OverviewPage.css` line 37: `border-left: 3px solid #c98500;` → `border-left: 3px solid var(--warn);`. In the comment above it (lines 22–24), change the clause `the same PALETTE[3] literal the freshness cue below uses, for the same frozen-charts reason` → `the --warn token (PALETTE[3] amber) the freshness cue below shares`.
   2. `src/pages/OverviewPage.css` lines 96–100: replace the comment + rule pair with:
 
@@ -116,11 +116,11 @@ No unit test carries CSS custom properties — the pin is the grep in Step 3 plu
   5. `src/pages/PortfolioPage.css` line 23: `border-left: 3px solid #c98500;` → `border-left: 3px solid var(--warn);` (the comment above already says "the staleness literal, PALETTE[3]" — change `the staleness literal, PALETTE[3]` → `--warn, PALETTE[3] amber`).
   6. `src/components/portfolio/portfolio.css` lines 34 and 43: both `#c98500` → `var(--warn)`; in the header comment (line 6–7), change `Colors come from the index.css :root variables wherever one exists; the remaining literal (#c98500) is theme.ts PALETTE[3], which has none.` → `Colors come from the index.css :root variables — including --warn (PALETTE[3] amber), which index.css defines since the 2026-08-25 polish.`
 
-- [ ] **Step 3: Verify the sweep** — `grep -rn "c98500" src` → expected EXACTLY three hits: `src/index.css` (the token definition), `src/charts/theme.ts` (PALETTE[3], the frozen canvas copy), `src/components/calendar/calendarView.test.ts` (a fixture pinning the PALETTE-derived `ex_dividend` color — TS, not CSS, stays). Any other hit means a missed swap.
+- [x] **Step 3: Verify the sweep** — `grep -rn "c98500" src` → expected EXACTLY three hits: `src/index.css` (the token definition), `src/charts/theme.ts` (PALETTE[3], the frozen canvas copy), `src/components/calendar/calendarView.test.ts` (a fixture pinning the PALETTE-derived `ex_dividend` color — TS, not CSS, stays). Any other hit means a missed swap.
 
-- [ ] **Step 4: Suite sanity** — `npx vitest run src/components/calendar/calendarView.test.ts` → PASS (the pinned literal was never touched).
+- [x] **Step 4: Suite sanity** — `npx vitest run src/components/calendar/calendarView.test.ts` → PASS (the pinned literal was never touched).
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(polish): color-scheme dark + --warn token for the amber literals"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(polish): color-scheme dark + --warn token for the amber literals"`
 
 ### Task 2: Favicon + nav registry + `usePageTitle`
 

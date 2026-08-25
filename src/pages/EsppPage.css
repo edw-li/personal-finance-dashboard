@@ -116,7 +116,7 @@
 
 /* Advisory register (net-worth-projection precedent): amber, not the error banner. */
 .espp-warning {
-  color: #c98500;
+  color: var(--warn);
 }
 
 /* Year chips reuse the app's segmented control look; panels.css owns .segmented. */

@@ -21,7 +21,7 @@
 
 /* The "needs attention" strip: one row per actionable condition, each a link to the page
    that fixes it. Amber accent = advisory, not error (the .tax-warnings register) — the
-   same PALETTE[3] literal the freshness cue below uses, for the same frozen-charts reason. */
+   the --warn token (PALETTE[3] amber) the freshness cue below shares. */
 .attention-strip {
   display: flex;
   flex-direction: column;
@@ -34,7 +34,7 @@
   padding: 0.5rem 0.75rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-left: 3px solid #c98500;
+  border-left: 3px solid var(--warn);
   border-radius: 8px;
   color: var(--text);
   font-size: 0.85rem;
@@ -93,11 +93,10 @@
   margin-top: 1rem;
 }
 
-/* PALETTE[3] amber, written as a literal exactly as portfolio.css does: src/charts is
-   frozen, CSS cannot import a TS token, and this is already the app's staleness colour
-   (HoldingsTable's .sub.stale). */
+/* --warn (PALETTE[3] amber): index.css owns the token now; only the canvas copy in
+   charts/theme.ts stays a literal (CSS variables do not reach ECharts). */
 .overview-freshness .stale {
-  color: #c98500;
+  color: var(--warn);
 }
 
 /* Up-next strip: the forward-looking sibling of the freshness footer below it. */

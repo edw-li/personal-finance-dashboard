@@ -14,13 +14,13 @@
 .hint.refresh-note-bad { color: var(--negative); }
 
 /* The last-run failures, each with its one-click deactivate. Amber = the app's advisory
-   register (the staleness literal, PALETTE[3]); the chip's button carries panels.css's
+   register (--warn, PALETTE[3] amber); the chip's button carries panels.css's
    .button tokens at chip scale. */
 .refresh-failures { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
 .refresh-failure {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 3px 6px 3px 10px;
-  border: 1px solid var(--border); border-left: 3px solid #c98500; border-radius: 8px;
+  border: 1px solid var(--border); border-left: 3px solid var(--warn); border-radius: 8px;
   background: var(--surface); color: var(--text); font-size: 12px;
 }
 .refresh-failure button {

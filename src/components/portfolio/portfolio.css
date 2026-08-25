@@ -3,8 +3,9 @@
    depends on PortfolioPage.css happening to be in the bundle (the same reasoning that
    keeps shared utilities in panels.css). panels.css owns the app-wide vocabulary
    (.badge, .error-banner, .empty-note, .button, .loading-dim, .data-table …) and nothing
-   it defines is redefined here. Colors come from the index.css :root variables wherever
-   one exists; the remaining literal (#c98500) is theme.ts PALETTE[3], which has none. */
+   it defines is redefined here. Colors come from the index.css :root variables —
+   including --warn (PALETTE[3] amber), which index.css defines since the 2026-08-25
+   polish. */
 
 /* .panel / .panel-title are used by all four panels (and by the page's holdings section)
    but are defined NOWHERE in panels.css — built here from the same tokens as .card. */
@@ -31,7 +32,7 @@
    past the panel on its own — clamped; the full name rides in the span's title. Works
    because .ticker-cell is a column flex, which blockifies the span so max-width binds. */
 .ticker-cell .sub { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
-.port-table .sub.stale { color: #c98500; } /* must outrank .port-table .sub (Task 13 review) */
+.port-table .sub.stale { color: var(--warn); } /* must outrank .port-table .sub (Task 13 review) */
 /* A stale quote's "as of" date stacks under the price instead of widening the column. */
 .port-table .sub.stale { display: block; }
 /* Long free text must not stretch the row past the viewport (.port-table td already
@@ -40,7 +41,7 @@
 .chart-col { width: 120px; } /* the 110px sparkline + cell padding: no reflow per row */
 .sparkline { display: block; } /* inline SVG baseline gap otherwise inflates row height */
 .sparkline-empty { color: var(--muted); } /* the "no bars yet" dash reads as absence */
-.warn-icon { color: #c98500; display: inline-flex; }
+.warn-icon { color: var(--warn); display: inline-flex; }
 .pos { color: var(--positive); }
 .neg { color: var(--negative); }
 .hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }

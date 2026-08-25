@@ -1,4 +1,7 @@
 :root {
+  /* Native widgets (date pickers, scrollbars, form autofill) follow the app's darkness
+     instead of flashing white chrome into it. */
+  color-scheme: dark;
   --bg: #0f1115;
   --surface: #171a21;
   --surface-2: #1e222c;
@@ -8,6 +11,11 @@
   --accent: #4f8cff;
   --positive: #3fb968;
   --negative: #e05252;
+  /* PALETTE[3] amber — the app's advisory/staleness register, promoted from six
+     duplicated per-sheet literals (2026-08-25 polish §1). The CANVAS copies stay
+     literal (charts/theme.ts PALETTE[3] and everything derived from it): a CSS custom
+     property cannot reach an ECharts canvas. */
+  --warn: #c98500;
   font-family: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
