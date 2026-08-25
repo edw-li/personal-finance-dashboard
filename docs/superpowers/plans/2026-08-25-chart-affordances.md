@@ -1829,7 +1829,7 @@ and change the signature's default to `months = RECENT_SPEND_MONTHS`.
 **Files:**
 - Modify: `src/pages/SpendingPage.tsx`, `src/pages/SpendingPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — append to `src/pages/SpendingPage.test.tsx` (the Task 4 mock already exposes the attributes and stand-in events):
+- [x] **Step 1: Write the failing tests** — append to `src/pages/SpendingPage.test.tsx` (the Task 4 mock already exposes the attributes and stand-in events):
 
 ```tsx
 describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', () => {
@@ -1880,9 +1880,9 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx` → the two new tests FAIL.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/SpendingPage.test.tsx` → the two new tests FAIL.
 
-- [ ] **Step 3: Implement.** In `src/pages/SpendingPage.tsx`:
+- [x] **Step 3: Implement.** In `src/pages/SpendingPage.tsx`:
   1. Swap the timeZoom imports:
 ```ts
 import { rangeZoom } from '../charts/timeZoom'
@@ -1928,9 +1928,9 @@ import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 ```
   savings: `{savingsOption && <EChart option={savingsOption} height={260} onDataZoom={onZoomWindow} />}` — trend: `<EChart option={trendOption} height={220} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />`.
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx` → ALL PASS; `npx eslint src/pages/SpendingPage.tsx` → clean.
+- [x] **Step 4: Run** — `npx vitest run src/pages/SpendingPage.test.tsx` → ALL PASS; `npx eslint src/pages/SpendingPage.tsx` → clean.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(spending): legend picks + manual zoom window survive rebuilds"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(spending): legend picks + manual zoom window survive rebuilds"`
 
 ### Task 12: NetWorthPage + PortfolioPage — the same wiring
 

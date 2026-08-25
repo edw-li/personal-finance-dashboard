@@ -209,3 +209,50 @@ describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
     expect(screen.getByTestId('location').textContent).toBe('/spending')
   })
 })
+
+describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', () => {
+  it('keeps legend toggles across an option rebuild — the budget-line reset bug dies', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const bars = screen.getAllByTestId('echart')[0]
+    // Before any toggle: only the shipped default rides legend.selected.
+    expect(bars.getAttribute('data-legend-selected')).toBe(
+      JSON.stringify({ 'Total budget': false }),
+    )
+    fireEvent.mouseEnter(bars) // stands in for legendselectchanged {'Net pay': false, '4% rule': true}
+    // Rebuild the options with a fresh identity — the active chip re-press class of event.
+    fireEvent.click(screen.getByRole('button', { name: '1Y' }))
+    expect(
+      JSON.parse(
+        screen.getAllByTestId('echart')[0].getAttribute('data-legend-selected') ?? '{}',
+      ),
+    ).toEqual({ 'Total budget': false, 'Net pay': false, '4% rule': true })
+  })
+
+  it('mirrors a manual window into every sibling time chart and snaps back on a chip', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    fireEvent.mouseLeave(screen.getAllByTestId('echart')[0]) // datazoom {startValue:1, endValue:1}
+    const zoomed = screen
+      .getAllByTestId('echart')
+      .filter((el) => (el.getAttribute('data-zoom') ?? 'null') !== 'null')
+    // bars + savings rate + category trends share the window; the heatmap (whole by
+    // design) and the flow sankey never zoom.
+    expect(zoomed).toHaveLength(3)
+    for (const el of zoomed) {
+      const zoom = JSON.parse(el.getAttribute('data-zoom') ?? '{}') as {
+        startValue?: number
+        endValue?: number
+      }
+      expect(zoom.startValue).toBe(1)
+      expect(zoom.endValue).toBe(1)
+    }
+    // Chips overwrite the shared state — fresh {preset}, no window (snap-back contract).
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    const snapped = JSON.parse(
+      screen.getAllByTestId('echart')[0].getAttribute('data-zoom') ?? '{}',
+    ) as { startValue?: number; endValue?: number }
+    expect(snapped.startValue).toBe(0)
+    expect(snapped.endValue).toBeUndefined()
+  })
+})

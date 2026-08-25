@@ -17,8 +17,8 @@ import {
   spendingSankeyOption,
 } from '../components/spending/spendingSankeyOptions'
 import type { EChartsOption } from '../charts/echarts'
-import { timeZoom } from '../charts/timeZoom'
-import type { RangePreset } from '../charts/timeZoom'
+import { rangeZoom } from '../charts/timeZoom'
+import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import {
   INK,
   MUTED,
@@ -87,11 +87,17 @@ export default function SpendingPage() {
     )
   }
   // The page's time window, applied to the three time charts together (bars, savings
-  // rate, category trends — one month axis, one answer). Object identity so a re-click
-  // of the active chip re-asserts the window (NetWorthPage's `range`). The heatmap stays
-  // whole: its visualMap is scaled to all time, and windowing rows of cells reads as
-  // missing data rather than as a zoom.
-  const [range, setRange] = useState<{ preset: RangePreset }>({ preset: 'all' })
+  // rate, category trends — one month axis, one answer), PLUS any manual ctrl+wheel
+  // window mirrored back from a chart's datazoom event (2026-08-25 spec §2e) — so
+  // rebuilds and same-axis siblings keep the wander. Chips hand back a fresh {preset}
+  // with no window: their snap-back contract, unchanged. The heatmap stays whole.
+  const [range, setRange] = useState<RangeState>({ preset: 'all' })
+  // Legend picks, mirrored from legendselectchanged and fed back via legend.selected —
+  // a refetch/notMerge rebuild no longer resets toggles (the budget-line reset bug).
+  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
+  const onLegendChange = (selected: Record<string, boolean>) => setLegendSelected(selected)
+  const onZoomWindow = (nextWindow: ZoomWindow) =>
+    setRange((current) => ({ preset: current.preset, window: nextWindow }))
   // The flow card's window. Month follows the month being LOOKED AT (drill-aware, the
   // movers' rule below); Year re-slices the SAME looked-at month's year from the rollup
   // — both datasources are already on the page, so the toggle never refetches.
@@ -172,13 +178,13 @@ export default function SpendingPage() {
       }, 0),
     )
     return {
-      dataZoom: timeZoom(matrix.months, range.preset),
+      dataZoom: rangeZoom(matrix.months, range),
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
       // 'Total budget' ships DESELECTED: it wears the same dashed-MUTED grammar as the
-      // 4% line (spec §4.3 — one reference-line language), so both on at once would be
-      // ambiguous; the legend chip is the summon. notMerge resets legend picks on option
-      // rebuild — the page's existing behavior for every series.
-      legend: { top: 0, selected: { 'Total budget': false } },
+      // 4% line (one reference-line language), so both on at once would be ambiguous;
+      // the legend chip is the summon. Mirrored picks spread OVER the default, so a
+      // deliberate summon now survives option rebuilds (2026-08-25 spec §2e).
+      legend: { top: 0, selected: { 'Total budget': false, ...legendSelected } },
       tooltip: {
         trigger: 'axis',
         // Category rows carry (share of month) and a bold Total; the net-pay/4%/budget
@@ -252,7 +258,7 @@ export default function SpendingPage() {
           : []),
       ],
     }
-  }, [matrix, topIds, monthLabels, nameById, range])
+  }, [matrix, topIds, monthLabels, nameById, range, legendSelected])
 
   const detailIndex = useMemo(
     () => (matrix && detailMonth ? matrix.months.indexOf(detailMonth) : -1),
@@ -423,7 +429,7 @@ export default function SpendingPage() {
   const savingsOption = useMemo<EChartsOption | null>(() => {
     if (!matrix || matrix.months.length === 0) return null
     return {
-      dataZoom: timeZoom(matrix.months, range.preset), // the page's one window (see `range`)
+      dataZoom: rangeZoom(matrix.months, range), // the page's one window (see `range`)
       grid: { left: 60, right: 24, top: 16, bottom: 28 },
       tooltip: {
         trigger: 'axis',
@@ -467,9 +473,9 @@ export default function SpendingPage() {
     if (!matrix || matrix.months.length === 0 || trend.length === 0) return null
     const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
     return {
-      dataZoom: timeZoom(matrix.months, range.preset), // the page's one window (see `range`)
+      dataZoom: rangeZoom(matrix.months, range), // the page's one window (see `range`)
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
-      legend: { top: 0 },
+      legend: { top: 0, selected: legendSelected },
       tooltip: {
         trigger: 'axis',
         valueFormatter: (value) =>
@@ -500,7 +506,7 @@ export default function SpendingPage() {
         }),
       ],
     }
-  }, [matrix, trend, monthLabels, nameById, range])
+  }, [matrix, trend, monthLabels, nameById, range, legendSelected])
 
   const toggleTrend = (categoryId: number) => {
     setTrend((current) => {
@@ -644,6 +650,8 @@ export default function SpendingPage() {
                 height={340}
                 onClick={handleSpendChartClick}
                 instanceRef={barsChartRef}
+                onLegendChange={onLegendChange}
+                onDataZoom={onZoomWindow}
               />
             </>
           ) : (
@@ -756,7 +764,7 @@ export default function SpendingPage() {
             Savings rate (actual)
             <InfoHint text="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent." />
           </h2>
-          {savingsOption && <EChart option={savingsOption} height={260} />}
+          {savingsOption && <EChart option={savingsOption} height={260} onDataZoom={onZoomWindow} />}
           <p className="drill-hint">
             (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
             planned rate, so values differ by design.
@@ -788,7 +796,7 @@ export default function SpendingPage() {
             })}
           </div>
           {trendOption ? (
-            <EChart option={trendOption} height={220} />
+            <EChart option={trendOption} height={220} onLegendChange={onLegendChange} onDataZoom={onZoomWindow} />
           ) : (
             <div className="empty-note">Pick up to {MAX_TREND} categories.</div>
           )}
