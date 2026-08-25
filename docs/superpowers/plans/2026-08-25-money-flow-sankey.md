@@ -40,7 +40,7 @@
 
 **Files:** none (environment only)
 
-- [ ] **Step 1: Confirm the branch and a clean tree.**
+- [x] **Step 1: Confirm the branch and a clean tree.**
 
 ```bash
 git status --porcelain   # expected: EMPTY output
@@ -49,16 +49,16 @@ git rev-parse --abbrev-ref HEAD   # expected: money-flow-sankey
 
 If the branch is wrong or the tree is dirty, STOP and report — do not "fix" it by switching or stashing; the orchestrator owns branch setup. The sibling waves (CA-tax fix, system status, polish, chart affordances) are expected to be merged already — `git log --oneline -5` should show their merge commits; if it does not, report before proceeding.
 
-- [ ] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
+- [x] **Step 2: Backend smoke test** (proves the venv + the 5433 dev Postgres answer).
 
 Run: `cd backend && .venv/Scripts/python -m pytest tests/test_health.py -q`
 Expected: PASS. If it errors on connection, bring the container up (`cd backend && docker compose up -d db`) and retry once; if it still fails, read `backend/app/config.py` for the dev DATABASE_URL default before proceeding — do not guess.
 
-- [ ] **Step 3: Frontend smoke.**
+- [x] **Step 3: Frontend smoke.**
 
 Run: `npx vitest run src/utils/months.test.ts` → PASS.
 
-- [ ] **Step 4: Confirm the engine's post-fix shape** (this plan's fixtures depend on it).
+- [x] **Step 4: Confirm the engine's post-fix shape** (this plan's fixtures depend on it).
 
 Run: `cd backend && .venv/Scripts/python -c "import inspect; from app.services import tax_service; src = inspect.getsource(tax_service.compute_breakdown); print('cg in state_agi:', 'cg_amount' in src.split('state_agi')[1][:400])"`
 Expected: `cg in state_agi: True`. If False, the CA capital-gains fix has not merged — STOP and report (Task 1's CG-carrying test asserts THROUGH the engine either way, but the protocol said this plan runs last).
@@ -73,7 +73,7 @@ Expected: `cg in state_agi: True`. If False, the CA capital-gains fix has not me
 - Create: `backend/app/services/money_flow.py`
 - Test: `backend/tests/test_money_flow.py`
 
-- [ ] **Step 1: Write the failing tests** — create `backend/tests/test_money_flow.py`. No DB, no fixtures: the service is handed dicts. The fixture inputs are **CG-free** so their plain sums are hand-checkable; every engine-derived figure (gross, all seven tax lines) is asserted THROUGH `compute_breakdown` itself, and one CG-carrying test proves the identities survive the engine's state-AGI capital-gains fold without a single hand-derived golden.
+- [x] **Step 1: Write the failing tests** — create `backend/tests/test_money_flow.py`. No DB, no fixtures: the service is handed dicts. The fixture inputs are **CG-free** so their plain sums are hand-checkable; every engine-derived figure (gross, all seven tax lines) is asserted THROUGH `compute_breakdown` itself, and one CG-carrying test proves the identities survive the engine's state-AGI capital-gains fold without a single hand-derived golden.
 
 ```python
 """Pure-service tests for the Overview money-flow composition (2026-08-25 spec §5).
@@ -278,9 +278,9 @@ def test_saved_goes_negative_as_a_drawdown_figure_not_a_refusal():
     assert flow.renderable is True
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → FAIL (`ModuleNotFoundError: No module named 'app.services.money_flow'`).
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → FAIL (`ModuleNotFoundError: No module named 'app.services.money_flow'`).
 
-- [ ] **Step 3: Append the refusal + warning tests** to the same file:
+- [x] **Step 3: Append the refusal + warning tests** to the same file:
 
 ```python
 def test_negative_other_income_refuses_with_reason_and_still_carries_figures():
@@ -375,9 +375,9 @@ def test_engine_bracket_warnings_pass_through_and_missing_keys_do_not():
     assert not any(w.startswith("missing inputs defaulted to 0") for w in flow.warnings)
 ```
 
-- [ ] **Step 4: Run to verify failure again** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → same ModuleNotFoundError (all tests collected, none passing).
+- [x] **Step 4: Run to verify failure again** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → same ModuleNotFoundError (all tests collected, none passing).
 
-- [ ] **Step 5: Implement the service** — create `backend/app/services/money_flow.py`:
+- [x] **Step 5: Implement the service** — create `backend/app/services/money_flow.py`:
 
 ```python
 """Annual money-flow composition for the Overview sankey (2026-08-25 spec §5).
@@ -643,9 +643,9 @@ def compose_money_flow(
     )
 ```
 
-- [ ] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → ALL PASS (13 tests).
+- [x] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_money_flow.py -q` → ALL PASS (13 tests).
 
-- [ ] **Step 7: Commit** — `git add -A && git commit -m "feat(overview): pure money-flow compose service"`
+- [x] **Step 7: Commit** — `git add -A && git commit -m "feat(overview): pure money-flow compose service"`
 
 ### Task 2: Schemas + `/overview/money-flow` router + mount
 
@@ -654,7 +654,7 @@ def compose_money_flow(
 - Modify: `backend/app/main.py`
 - Test: `backend/tests/test_overview_api.py`
 
-- [ ] **Step 1: Write the failing API tests** — create `backend/tests/test_overview_api.py`. Tax data goes through the REAL taxes PUTs (test_taxes_api's posture — the FK to `tax_input_definitions` demands the seed first); spending is seeded directly like `_seed_spending`. Engine figures are cross-checked against the taxes SUMMARY endpoint — the same stored rows through the same loaders must land on the same cents, with zero hand math.
+- [x] **Step 1: Write the failing API tests** — create `backend/tests/test_overview_api.py`. Tax data goes through the REAL taxes PUTs (test_taxes_api's posture — the FK to `tax_input_definitions` demands the seed first); spending is seeded directly like `_seed_spending`. Engine figures are cross-checked against the taxes SUMMARY endpoint — the same stored rows through the same loaders must land on the same cents, with zero hand math.
 
 ```python
 """Overview money-flow endpoint (2026-08-25 spec §5): loading, windows, quantization.
@@ -876,9 +876,9 @@ async def test_money_flow_available_years_lists_every_inputs_year(auth_client, d
     assert body["available_years"] == [2024, 2026]
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_overview_api.py -q` → FAIL (404s — the route does not exist; the auth test may pass by accident of the 401-before-404 ordering, that is fine).
+- [x] **Step 2: Run to verify failure** — `cd backend && .venv/Scripts/python -m pytest tests/test_overview_api.py -q` → FAIL (404s — the route does not exist; the auth test may pass by accident of the 401-before-404 ordering, that is fine).
 
-- [ ] **Step 3: Schemas** — create `backend/app/schemas/overview.py`:
+- [x] **Step 3: Schemas** — create `backend/app/schemas/overview.py`:
 
 ```python
 from decimal import Decimal
@@ -940,7 +940,7 @@ class MoneyFlowOut(BaseModel):
     saved: Decimal
 ```
 
-- [ ] **Step 4: Router** — create `backend/app/api/overview.py`:
+- [x] **Step 4: Router** — create `backend/app/api/overview.py`:
 
 ```python
 """Overview API: cross-domain, server-composed payloads for the dashboard's cards.
@@ -1080,17 +1080,17 @@ async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db))
     return _money_flow_out(flow)
 ```
 
-- [ ] **Step 5: Mount.** In `backend/app/main.py`: add `overview,` to the `from app.api import (...)` block (alphabetical: after `net_worth`, before `paycheck`), and append after the last `include_router` line (`app_settings`):
+- [x] **Step 5: Mount.** In `backend/app/main.py`: add `overview,` to the `from app.api import (...)` block (alphabetical: after `net_worth`, before `paycheck`), and append after the last `include_router` line (`app_settings`):
 
 ```python
 app.include_router(overview.router, prefix="/api/v1")
 ```
 
-- [ ] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_overview_api.py tests/test_money_flow.py -q` → ALL PASS. Then the full backend suite once here (cheap insurance that the borrow of `_money`/`_stored_inputs`/`_engine_tables` changed nothing): `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS.
+- [x] **Step 6: Run** — `cd backend && .venv/Scripts/python -m pytest tests/test_overview_api.py tests/test_money_flow.py -q` → ALL PASS. Then the full backend suite once here (cheap insurance that the borrow of `_money`/`_stored_inputs`/`_engine_tables` changed nothing): `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS.
 
-- [ ] **Step 7: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or re-run the touched tests and commit the reflow).
+- [x] **Step 7: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → no reformats (or re-run the touched tests and commit the reflow).
 
-- [ ] **Step 8: Commit** — `git add -A && git commit -m "feat(overview): money-flow endpoint + schemas + mount"`
+- [x] **Step 8: Commit** — `git add -A && git commit -m "feat(overview): money-flow endpoint + schemas + mount"`
 
 ---
 
@@ -1104,7 +1104,7 @@ app.include_router(overview.router, prefix="/api/v1")
 - Modify: `src/types/api.ts`
 - Create: `src/api/overview.ts`
 
-- [ ] **Step 1: types/api.ts.** APPEND at the very end of the file (after the `--- app settings ---` block — appending is the merge-safest anchor; sibling plans have edited this file):
+- [x] **Step 1: types/api.ts.** APPEND at the very end of the file (after the `--- app settings ---` block — appending is the merge-safest anchor; sibling plans have edited this file):
 
 ```ts
 // --- overview: money flow ---
@@ -1164,7 +1164,7 @@ export interface MoneyFlowOut {
 }
 ```
 
-- [ ] **Step 2: Client** — create `src/api/overview.ts`:
+- [x] **Step 2: Client** — create `src/api/overview.ts`:
 
 ```ts
 import { api } from './client'
@@ -1179,9 +1179,9 @@ export function fetchMoneyFlow(year?: number): Promise<MoneyFlowOut> {
 }
 ```
 
-- [ ] **Step 3: Verify** — `npx tsc -b` → clean; `npx eslint src/types/api.ts src/api/overview.ts` → clean.
+- [x] **Step 3: Verify** — `npx tsc -b` → clean; `npx eslint src/types/api.ts src/api/overview.ts` → clean.
 
-- [ ] **Step 4: Commit** — `git add -A && git commit -m "feat(overview): money-flow wire types + client"`
+- [x] **Step 4: Commit** — `git add -A && git commit -m "feat(overview): money-flow wire types + client"`
 
 ### Task 4: The pure builder — 4 pinned columns on the shared sankey grammar
 
@@ -1189,7 +1189,7 @@ export function fetchMoneyFlow(year?: number): Promise<MoneyFlowOut> {
 - Create: `src/components/overview/moneyFlowOptions.ts`
 - Test: `src/components/overview/moneyFlowOptions.test.ts`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/overview/moneyFlowOptions.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `src/components/overview/moneyFlowOptions.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -1387,9 +1387,9 @@ describe('moneyFlowOption — the four pinned columns', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/moneyFlowOptions.test.ts` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/moneyFlowOptions.test.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — create `src/components/overview/moneyFlowOptions.ts`:
+- [x] **Step 3: Implement** — create `src/components/overview/moneyFlowOptions.ts`:
 
 ```ts
 // Pure option builder for the Overview annual money-flow card (2026-08-25 spec §5) — no
@@ -1577,9 +1577,9 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/overview/moneyFlowOptions.test.ts` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/components/overview/moneyFlowOptions.test.ts` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(overview): money-flow sankey option builder"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(overview): money-flow sankey option builder"`
 
 ### Task 5: `MoneyFlowCard` — chips, chart, warnings, refusal note, inline retry
 
@@ -1589,7 +1589,7 @@ The card is PRESENTATIONAL: the page owns the isolated fetch (Task 6, the Up-nex
 - Create: `src/components/overview/MoneyFlowCard.tsx`, `src/components/overview/moneyFlow.css`
 - Test: `src/components/overview/MoneyFlowCard.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/overview/MoneyFlowCard.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/overview/MoneyFlowCard.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -1721,9 +1721,9 @@ it('renders only the header while the first fetch is in flight', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/MoneyFlowCard.test.tsx` → FAIL (module not found).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/overview/MoneyFlowCard.test.tsx` → FAIL (module not found).
 
-- [ ] **Step 3: Implement the card** — create `src/components/overview/MoneyFlowCard.tsx`:
+- [x] **Step 3: Implement the card** — create `src/components/overview/MoneyFlowCard.tsx`:
 
 ```tsx
 import { useMemo } from 'react'
@@ -1809,7 +1809,7 @@ export default function MoneyFlowCard({
 }
 ```
 
-- [ ] **Step 4: CSS** — create `src/components/overview/moneyFlow.css`:
+- [x] **Step 4: CSS** — create `src/components/overview/moneyFlow.css`:
 
 ```css
 /* Money-flow card chrome (2026-08-25 spec §5). The chips reuse panels.css's .segmented
@@ -1820,9 +1820,9 @@ export default function MoneyFlowCard({
 }
 ```
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/overview/MoneyFlowCard.test.tsx` → ALL PASS.
+- [x] **Step 5: Run** — `npx vitest run src/components/overview/MoneyFlowCard.test.tsx` → ALL PASS.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(overview): MoneyFlowCard with year chips, warnings and inline retry"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(overview): MoneyFlowCard with year chips, warnings and inline retry"`
 
 ### Task 6: OverviewPage integration — the second isolated fetch + test repairs
 
@@ -1831,7 +1831,7 @@ export default function MoneyFlowCard({
 **Files:**
 - Modify: `src/pages/OverviewPage.tsx`, `src/pages/OverviewPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** In `src/pages/OverviewPage.test.tsx`:
+- [x] **Step 1: Write the failing tests.** In `src/pages/OverviewPage.test.tsx`:
   1. Add the mock block after the `../api/calendar` mock (same shape — the money flow is the page's SECOND isolated fetch):
 ```tsx
 // The money-flow card is the page's second isolated fetch (spec §5): its failure must
@@ -1930,9 +1930,9 @@ it('Refresh refetches the money flow alongside the snapshot', async () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/OverviewPage.test.tsx` → the three new tests FAIL (no card rendered) and the repaired chart-count tests FAIL (still 3 charts); nothing else may break.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/OverviewPage.test.tsx` → the three new tests FAIL (no card rendered) and the repaired chart-count tests FAIL (still 3 charts); nothing else may break.
 
-- [ ] **Step 3: Implement the page wiring.** In `src/pages/OverviewPage.tsx` (after re-reading it):
+- [x] **Step 3: Implement the page wiring.** In `src/pages/OverviewPage.tsx` (after re-reading it):
   1. Imports: add `import { fetchMoneyFlow } from '../api/overview'` (alphabetical among the `../api/*` imports, after `netWorth`, before `portfolio`); add `import MoneyFlowCard from '../components/overview/MoneyFlowCard'` beside the other overview-component imports; add `MoneyFlowOut,` to the `import type {...} from '../types/api'` list (alphabetical: after `HoldingsResponse`, before `NetWorthSummary`).
   2. State + loader, directly below the Up-next block (`loadUpNext`) — it is the same pattern, second verse:
 ```tsx
@@ -1973,9 +1973,9 @@ it('Refresh refetches the money flow alongside the snapshot', async () => {
             />
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/OverviewPage.test.tsx` → ALL PASS (repaired counts included). Then the neighbours that share fixtures/mocks with nothing here, as a sanity sweep: `npx vitest run src/components/overview` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/pages/OverviewPage.test.tsx` → ALL PASS (repaired counts included). Then the neighbours that share fixtures/mocks with nothing here, as a sanity sweep: `npx vitest run src/components/overview` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(overview): mount the money-flow card behind an isolated fetch"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(overview): mount the money-flow card behind an isolated fetch"`
 
 ---
 
@@ -1985,10 +1985,10 @@ it('Refresh refetches the money flow alongside the snapshot', async () => {
 
 **Files:** none (verification only; fix-forward anything red, in the task where it belongs)
 
-- [ ] **Step 1: Full backend suite** — `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS (record the count; the pre-plan baseline was 853 — expect that plus this plan's ~19 new tests, adjusted for whatever the sibling waves added).
-- [ ] **Step 2: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → if anything reformats, re-run the touched test files and commit the reflow.
-- [ ] **Step 3: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; baseline 791 plus this plan's ~15).
-- [ ] **Step 4: Types** — `npx tsc -b` → clean, no output.
-- [ ] **Step 5: Lint** — `npx eslint .` → clean.
-- [ ] **Step 6: Commit anything the verification steps touched** — `git add -A && git commit -m "chore(overview): money-flow verification sweep"` (skip if the tree is already clean), then `git status --porcelain` → EMPTY.
-- [ ] **Step 7: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch. Leave a summary listing: both test counts; the new route (`GET /api/v1/overview/money-flow?year=`); the two structural conventions reviewers should sanity-check on real data (Other income balances the sources column, Retained equity & other is the mid-column residual — both refuse with a sentence when negative); the deliberate palette repetition (sources wear slots 0–4 on the left, categories reuse slots 0–6 on the right — same-entity-same-hue with /spending won over hue uniqueness, MUTED intermediates keep the columns apart); and the accepted node-name collision (a user category literally named "Taxes"/"Saved"/etc. would merge with the app node — the spending sankey's documented 'Other' posture).
+- [x] **Step 1: Full backend suite** — `cd backend && .venv/Scripts/python -m pytest -q` → ALL PASS (record the count; the pre-plan baseline was 853 — expect that plus this plan's ~19 new tests, adjusted for whatever the sibling waves added).
+- [x] **Step 2: Ruff** — `cd backend && .venv/Scripts/python -m ruff check app tests` → clean; `cd backend && .venv/Scripts/python -m ruff format app tests` → if anything reformats, re-run the touched test files and commit the reflow.
+- [x] **Step 3: Full frontend suite** — `npx vitest run` → ALL PASS (record the count; baseline 791 plus this plan's ~15).
+- [x] **Step 4: Types** — `npx tsc -b` → clean, no output.
+- [x] **Step 5: Lint** — `npx eslint .` → clean.
+- [x] **Step 6: Commit anything the verification steps touched** — `git add -A && git commit -m "chore(overview): money-flow verification sweep"` (skip if the tree is already clean), then `git status --porcelain` → EMPTY.
+- [x] **Step 7: STOP.** Do not merge, do not push, do not delete anything — the orchestrator reviews and merges this branch. Leave a summary listing: both test counts; the new route (`GET /api/v1/overview/money-flow?year=`); the two structural conventions reviewers should sanity-check on real data (Other income balances the sources column, Retained equity & other is the mid-column residual — both refuse with a sentence when negative); the deliberate palette repetition (sources wear slots 0–4 on the left, categories reuse slots 0–6 on the right — same-entity-same-hue with /spending won over hue uniqueness, MUTED intermediates keep the columns apart); and the accepted node-name collision (a user category literally named "Taxes"/"Saved"/etc. would merge with the app node — the spending sankey's documented 'Other' posture).
