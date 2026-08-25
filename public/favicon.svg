@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The app's own tokens, hard-coded (an SVG file cannot read CSS custom properties
+       from the page): --surface #171a21 tile, --border #262b36 edge, --accent #4f8cff
+       line, --positive #3fb968 endpoint. Dark tile, so it reads on light AND dark
+       browser chrome. -->
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#171a21" stroke="#262b36" stroke-width="1"/>
+  <path d="M7 21.5 L13 15 L17.5 18.5 L25 9.5" fill="none" stroke="#4f8cff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="25" cy="9.5" r="2.2" fill="#3fb968"/>
+</svg>

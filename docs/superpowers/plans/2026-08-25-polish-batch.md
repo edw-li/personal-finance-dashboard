@@ -131,7 +131,7 @@ No unit test carries CSS custom properties — the pin is the grep in Step 3 plu
 
 The hook ships here with its own test; Layout APPLIES it in Task 3 (an exported-but-unimported module compiles and lints clean in the interim).
 
-- [ ] **Step 1: Write the failing hook test** — create `src/components/usePageTitle.test.tsx`:
+- [x] **Step 1: Write the failing hook test** — create `src/components/usePageTitle.test.tsx`:
 
 ```tsx
 import { cleanup, render } from '@testing-library/react'
@@ -177,9 +177,9 @@ describe('usePageTitle', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/usePageTitle.test.tsx` → FAIL (cannot resolve `./usePageTitle`).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/usePageTitle.test.tsx` → FAIL (cannot resolve `./usePageTitle`).
 
-- [ ] **Step 3: The nav registry** — create `src/components/navItems.ts`:
+- [x] **Step 3: The nav registry** — create `src/components/navItems.ts`:
 
 ```ts
 import {
@@ -255,7 +255,7 @@ export const NAV_SECTIONS: NavSection[] = [
 export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((section) => section.items)
 ```
 
-- [ ] **Step 4: The hook** — create `src/components/usePageTitle.ts`:
+- [x] **Step 4: The hook** — create `src/components/usePageTitle.ts`:
 
 ```ts
 import { useEffect } from 'react'
@@ -280,9 +280,9 @@ export function usePageTitle(): void {
 }
 ```
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/usePageTitle.test.tsx` → PASS.
+- [x] **Step 5: Run** — `npx vitest run src/components/usePageTitle.test.tsx` → PASS.
 
-- [ ] **Step 6: The favicon** — create `public/favicon.svg` (the `public/` directory does not exist yet — creating the file creates it; Vite serves `public/` at the site root):
+- [x] **Step 6: The favicon** — create `public/favicon.svg` (the `public/` directory does not exist yet — creating the file creates it; Vite serves `public/` at the site root):
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
@@ -296,7 +296,7 @@ export function usePageTitle(): void {
 </svg>
 ```
 
-- [ ] **Step 7: Link it** — in `index.html`, insert between the robots meta and the title:
+- [x] **Step 7: Link it** — in `index.html`, insert between the robots meta and the title:
 
 ```html
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -304,7 +304,7 @@ export function usePageTitle(): void {
 
 (The static `<title>Finance Dashboard</title>` stays — it is the pre-hydration and 404-fallback title, the same string the hook falls back to.)
 
-- [ ] **Step 8: Commit** — `git add -A && git commit -m "feat(polish): favicon, nav registry, usePageTitle hook"`
+- [x] **Step 8: Commit** — `git add -A && git commit -m "feat(polish): favicon, nav registry, usePageTitle hook"`
 
 ### Task 3: Sidebar v2 + skip link + navigation focus/scroll reset
 
