@@ -8,6 +8,7 @@ import type {
   EsppLotOut,
   EsppLotsResponse,
   HoldingsResponse,
+  MoneyFlowOut,
   NetWorthSummary,
   NetWorthTimeseries,
   PortfolioHistory,
@@ -59,6 +60,12 @@ vi.mock('../api/calendar', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/calendar')>()),
   fetchCalendar: vi.fn(),
 }))
+// The money-flow card is the page's second isolated fetch (spec §5): its failure must
+// dent one card, never the snapshot — and vice versa.
+vi.mock('../api/overview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/overview')>()),
+  fetchMoneyFlow: vi.fn(),
+}))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
 // charts DRAW is pinned elsewhere — the spark and the bars in
 // src/components/overview/overviewChartOptions.test.ts, the performance lines in
@@ -88,6 +95,7 @@ vi.mock('../components/EChart', async () => {
 import { fetchCalendar } from '../api/calendar'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
+import { fetchMoneyFlow } from '../api/overview'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
@@ -200,6 +208,36 @@ function matrixOut(over: Partial<SpendingMatrix> = {}): SpendingMatrix {
   }
 }
 
+function moneyFlowOut(over: Partial<MoneyFlowOut> = {}): MoneyFlowOut {
+  return {
+    year: CURRENT_YEAR,
+    available_years: [CURRENT_YEAR - 1, CURRENT_YEAR],
+    renderable: true,
+    reason: null,
+    warnings: [],
+    sources: {
+      salary_and_bonus: '220000.00', rsu_vests: '80000.00', espp: '4000.00',
+      investment_income: '2500.00', other_income: '1000.00',
+    },
+    gross_income: '307500.00',
+    taxes: {
+      total: '67016.05', federal: '26520.00', state: '14225.00', medicare: '4345.65',
+      social_security: '18581.40', disability: '3344.00', capital_gains: '0.00',
+    },
+    pre_tax_savings: '27300.00',
+    take_home_cash: '120000.00',
+    retained_equity: '93183.95',
+    categories: [
+      { name: 'Rent', amount: '24000.00' },
+      { name: 'Food', amount: '6000.00' },
+    ],
+    other_spend: null,
+    total_spend: '30000.00',
+    saved: '90000.00',
+    ...over,
+  }
+}
+
 function taxSummaryOut(year: number, effectiveRate: string | null = '0.246914'): TaxSummaryOut {
   const income = { agi: '0.00', taxable_income: '0.00', tax: '0.00', effective_rate: null }
   const wage = { w2_income: '0.00', taxable_wages: '0.00', tax: '0.00', effective_rate: null }
@@ -275,6 +313,7 @@ interface Payload {
   yearly: SpendingYearly
   dividends: DividendOut[]
   system: SystemStatus
+  flow: MoneyFlowOut
 }
 
 // Arms all eleven clients at once — the page never renders a partial snapshot, so neither
@@ -295,6 +334,7 @@ function serve(over: Partial<Payload> = {}): Payload {
     yearly: { years: [] },
     dividends: [],
     system: systemOut(),
+    flow: moneyFlowOut(),
     ...over,
   }
   vi.mocked(fetchSummary).mockResolvedValue(payload.summary)
@@ -309,6 +349,7 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchDividends).mockResolvedValue(payload.dividends)
   vi.mocked(fetchSystemStatus).mockResolvedValue(payload.system)
   vi.mocked(fetchCalendar).mockResolvedValue({ events: upNextEvents() })
+  vi.mocked(fetchMoneyFlow).mockResolvedValue(payload.flow)
   return payload
 }
 
@@ -326,6 +367,7 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchDividends).mockImplementation(boom)
   vi.mocked(fetchSystemStatus).mockImplementation(boom)
   vi.mocked(fetchCalendar).mockImplementation(boom)
+  vi.mocked(fetchMoneyFlow).mockImplementation(boom)
 }
 
 function LocationProbe() {
@@ -591,7 +633,7 @@ describe('OverviewPage charts', () => {
 
     await screen.findByText('Net worth — Aug 2026')
     const charts = screen.getAllByTestId('echart')
-    expect(charts).toHaveLength(3)
+    expect(charts).toHaveLength(4)
     // Spark first (net-worth months), performance second (weekly dates + the live
     // category derived from the quote bar date), bars last.
     expect(categoriesOf(charts[0])).toBe(NW_MONTHS.map(formatMonth).join(','))
@@ -601,6 +643,7 @@ describe('OverviewPage charts', () => {
     expect(categoriesOf(charts[2])).toBe(
       'Aug 2025,Sep 2025,Oct 2025,Nov 2025,Dec 2025,Jan 2026,Feb 2026,Mar 2026,Apr 2026,May 2026,Jun 2026,Jul 2026',
     )
+    expect(categoriesOf(charts[3])).toBe('') // the money-flow sankey has no category axis
     // Each card drills into the page that owns the numbers.
     expect(screen.getByRole('link', { name: /Open net worth/ }).getAttribute('href')).toBe('/net-worth')
     expect(screen.getByRole('link', { name: /Open portfolio/ }).getAttribute('href')).toBe('/portfolio')
@@ -760,6 +803,13 @@ describe('OverviewPage on an empty database', () => {
       history: historyOut({ dates: [], market_value: [], cost_basis: [], sp500: [], benchmark: [] }),
       matrix: matrixOut({ months: [], totals: [] }),
       taxes: { years: [] },
+      flow: moneyFlowOut({
+        renderable: false,
+        reason:
+          'No tax inputs are stored for 2031 — enter the year on the Taxes page to draw its money flow.',
+        available_years: [],
+        warnings: ['no tax inputs stored for 2031'],
+      }),
     })
     renderPage()
 
@@ -775,6 +825,8 @@ describe('OverviewPage on an empty database', () => {
     expect(screen.getByText('No snapshots yet.')).toBeTruthy()
     expect(screen.getByText('No performance history yet.')).toBeTruthy()
     expect(screen.getByText('No spending months yet.')).toBeTruthy()
+    // The money-flow card refuses with the SERVER's sentence — no fourth chart.
+    expect(screen.getByText(/No tax inputs are stored for 2031/)).toBeTruthy()
 
     // Capitalized (unlike PortfolioPage's lowercase note): three peer clauses in one row,
     // and the other two start with a capital.
@@ -825,7 +877,11 @@ describe('OverviewPage failures', () => {
     // The previous snapshot survives the failure — a dashboard that blanks itself on a
     // dropped connection is worse than one that admits the numbers are a minute old.
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    // Three, not four: failAll fails the money-flow fetch too, and that card's whole
+    // point is to dent ITSELF — it swaps its sankey for the inline retry while the
+    // snapshot's own three charts stay up with the previous payload.
     expect(screen.getAllByTestId('echart')).toHaveLength(3)
+    expect(screen.getByText(/Couldn't load the money flow/)).toBeTruthy()
   })
 
   it('lets the newest snapshot win when two loads overlap', async () => {
@@ -931,4 +987,37 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
     fireEvent.click(screen.getAllByTestId('echart')[0])
     expect(screen.getByTestId('location').textContent).toBe('/net-worth')
   })
+})
+
+it('a money-flow failure dents only its card, and its Retry refetches the flow alone', async () => {
+  serve()
+  vi.mocked(fetchMoneyFlow).mockRejectedValue(new ApiError('flow down', 500))
+  renderPage()
+  await screen.findByText(/Couldn't load the money flow/)
+  screen.getByText(/Net worth —/) // the snapshot half rendered normally
+  expect(screen.queryByRole('alert')).toBeNull() // no page-level banner fired
+
+  vi.mocked(fetchMoneyFlow).mockResolvedValue(moneyFlowOut())
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading the money flow' }))
+  await screen.findByText(`Money flow — ${CURRENT_YEAR}`)
+  expect(fetchSummary).toHaveBeenCalledTimes(1) // the snapshot was never refetched
+})
+
+it('money-flow year chips refetch the picked year and nothing else', async () => {
+  serve()
+  renderPage()
+  await screen.findByText(`Money flow — ${CURRENT_YEAR}`)
+  fireEvent.click(screen.getByRole('button', { name: String(CURRENT_YEAR - 1) }))
+  await waitFor(() => expect(fetchMoneyFlow).toHaveBeenLastCalledWith(CURRENT_YEAR - 1))
+  expect(fetchSummary).toHaveBeenCalledTimes(1)
+})
+
+it('Refresh refetches the money flow alongside the snapshot', async () => {
+  serve()
+  renderPage()
+  await screen.findByText(`Money flow — ${CURRENT_YEAR}`)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  await waitFor(() => expect(fetchMoneyFlow).toHaveBeenCalledTimes(2))
+  // No year pinned by a chip yet, so the reload keeps the server-default call shape.
+  expect(vi.mocked(fetchMoneyFlow).mock.calls[1]).toEqual([undefined])
 })

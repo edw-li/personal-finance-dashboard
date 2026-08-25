@@ -4,6 +4,7 @@ import { fetchCalendar } from '../api/calendar'
 import { ApiError } from '../api/client'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
+import { fetchMoneyFlow } from '../api/overview'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
@@ -13,6 +14,7 @@ import type { EChartEventParams } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
+import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import { UP_NEXT_WINDOW_DAYS, upNextItems } from '../components/overview/upNext'
 import { ytdStats } from '../components/overview/ytd'
 import {
@@ -29,6 +31,7 @@ import type {
   DividendOut,
   EsppLotsResponse,
   HoldingsResponse,
+  MoneyFlowOut,
   NetWorthSummary,
   NetWorthTimeseries,
   PortfolioHistory,
@@ -96,6 +99,29 @@ export default function OverviewPage() {
       })
   }
 
+  // The money-flow card is the SECOND isolated fetch (spec §5, the Up-next pattern):
+  // its own state, its own seq, its own inline error — a tax-engine hiccup dents one
+  // card and never the snapshot, and vice versa.
+  const [flow, setFlow] = useState<MoneyFlowOut | null>(null)
+  const [flowFailed, setFlowFailed] = useState(false)
+  // null = let the server pick the year (the current product year); a chip click pins it.
+  const [flowYear, setFlowYear] = useState<number | null>(null)
+  const flowSeq = useRef(0)
+
+  const loadFlow = (year: number | null) => {
+    const seq = ++flowSeq.current
+    fetchMoneyFlow(year ?? undefined)
+      .then((data) => {
+        if (seq !== flowSeq.current) return
+        setFlow(data)
+        setFlowFailed(false)
+      })
+      .catch(() => {
+        if (seq !== flowSeq.current) return
+        setFlowFailed(true)
+      })
+  }
+
   // Plain function + inline chain (preserve-manual-memoization wall — Plan 3/5 notes).
   // Promise.all is deliberate: the page renders one coherent snapshot, and a partial
   // refresh would let the tiles disagree with the charts. On failure the previous payload
@@ -136,6 +162,7 @@ export default function OverviewPage() {
   useEffect(() => {
     load()
     loadUpNext()
+    loadFlow(null)
     // mount-only: load is a plain function over stable setters (house idiom)
   }, [])
 
@@ -145,6 +172,7 @@ export default function OverviewPage() {
     setBusy(true)
     load()
     loadUpNext()
+    loadFlow(flowYear)
   }
 
   // The only memoized values on the page — EChart keys its setOption effect on [option],
@@ -437,6 +465,15 @@ export default function OverviewPage() {
                 <p className="empty-note">No spending months yet.</p>
               )}
             </section>
+            <MoneyFlowCard
+              flow={flow}
+              failed={flowFailed}
+              onRetry={() => loadFlow(flowYear)}
+              onYearChange={(year) => {
+                setFlowYear(year)
+                loadFlow(year)
+              }}
+            />
           </div>
           <div className="up-next">
             <h2 className="eyebrow">

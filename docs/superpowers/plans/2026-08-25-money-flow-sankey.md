@@ -1831,7 +1831,7 @@ export default function MoneyFlowCard({
 **Files:**
 - Modify: `src/pages/OverviewPage.tsx`, `src/pages/OverviewPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** In `src/pages/OverviewPage.test.tsx`:
+- [x] **Step 1: Write the failing tests.** In `src/pages/OverviewPage.test.tsx`:
   1. Add the mock block after the `../api/calendar` mock (same shape — the money flow is the page's SECOND isolated fetch):
 ```tsx
 // The money-flow card is the page's second isolated fetch (spec §5): its failure must
@@ -1930,9 +1930,9 @@ it('Refresh refetches the money flow alongside the snapshot', async () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/pages/OverviewPage.test.tsx` → the three new tests FAIL (no card rendered) and the repaired chart-count tests FAIL (still 3 charts); nothing else may break.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/pages/OverviewPage.test.tsx` → the three new tests FAIL (no card rendered) and the repaired chart-count tests FAIL (still 3 charts); nothing else may break.
 
-- [ ] **Step 3: Implement the page wiring.** In `src/pages/OverviewPage.tsx` (after re-reading it):
+- [x] **Step 3: Implement the page wiring.** In `src/pages/OverviewPage.tsx` (after re-reading it):
   1. Imports: add `import { fetchMoneyFlow } from '../api/overview'` (alphabetical among the `../api/*` imports, after `netWorth`, before `portfolio`); add `import MoneyFlowCard from '../components/overview/MoneyFlowCard'` beside the other overview-component imports; add `MoneyFlowOut,` to the `import type {...} from '../types/api'` list (alphabetical: after `HoldingsResponse`, before `NetWorthSummary`).
   2. State + loader, directly below the Up-next block (`loadUpNext`) — it is the same pattern, second verse:
 ```tsx
@@ -1973,9 +1973,9 @@ it('Refresh refetches the money flow alongside the snapshot', async () => {
             />
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/pages/OverviewPage.test.tsx` → ALL PASS (repaired counts included). Then the neighbours that share fixtures/mocks with nothing here, as a sanity sweep: `npx vitest run src/components/overview` → ALL PASS.
+- [x] **Step 4: Run** — `npx vitest run src/pages/OverviewPage.test.tsx` → ALL PASS (repaired counts included). Then the neighbours that share fixtures/mocks with nothing here, as a sanity sweep: `npx vitest run src/components/overview` → ALL PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(overview): mount the money-flow card behind an isolated fetch"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(overview): mount the money-flow card behind an isolated fetch"`
 
 ---
 
