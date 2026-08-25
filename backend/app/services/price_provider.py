@@ -7,7 +7,7 @@ the pandas import. Verified against yfinance 1.6.0 (plan probes 1-3)."""
 import logging
 import math
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
@@ -35,6 +35,41 @@ def yahoo_symbol(ticker: str) -> str:
     return ticker.replace(".", "-")
 
 
+# yfinance's forward-calendar key (Ticker.calendar, quote-summary "calendarEvents").
+EX_DIVIDEND_KEY = "Ex-Dividend Date"
+
+
+def _bounded_year(value: date) -> date | None:
+    # The century fence (money.py's family, background-fetch flavour): an 1888 or 9999
+    # from a malformed payload is noise, not an announcement — SKIP, never raise.
+    return value if 1990 <= value.year <= 2100 else None
+
+
+def _coerce_forward_date(value) -> date | None:
+    """Normalize whatever the forward calendar carries — datetime.date, datetime, pandas
+    Timestamp (duck-typed via a callable .date()), ISO string — to a plain date. Anything
+    else reads as "nothing announced" (None): this module's malformed-data posture."""
+    if isinstance(value, datetime):  # before the date check — datetime IS a date
+        return _bounded_year(value.date())
+    if isinstance(value, date):
+        return _bounded_year(value)
+    to_date = getattr(value, "date", None)
+    if callable(to_date):
+        try:
+            coerced = to_date()
+        except Exception:
+            return None
+        if isinstance(coerced, datetime):
+            coerced = coerced.date()
+        return _bounded_year(coerced) if isinstance(coerced, date) else None
+    if isinstance(value, str):
+        try:
+            return _bounded_year(date.fromisoformat(value))
+        except ValueError:
+            return None
+    return None
+
+
 @dataclass(frozen=True)
 class DailyBar:
     bar_date: date
@@ -44,6 +79,8 @@ class DailyBar:
 
 class PriceProvider(Protocol):
     def fetch_daily(self, ticker: str, start: date) -> list[DailyBar]: ...
+
+    def fetch_next_ex_div(self, ticker: str) -> date | None: ...
 
 
 def build_session(ca_bundle: str | None):
@@ -99,3 +136,17 @@ class YFinanceProvider:
         if skipped:
             logger.debug("%s: skipped %d malformed bars", ticker, skipped)
         return bars
+
+    def fetch_next_ex_div(self, ticker: str) -> date | None:
+        """Yahoo's ANNOUNCED upcoming ex-dividend date, or None when nothing usable is
+        published (2026-08-24 calendar spec §3.2 — confirmed-only, no projections).
+        Raises on transport errors exactly like fetch_daily (the caller isolates per
+        ticker); malformed calendar PAYLOADS degrade to None instead. Lazy import +
+        shared curl_cffi session, fetch_daily's posture."""
+        import yfinance as yf
+
+        calendar_data = yf.Ticker(yahoo_symbol(ticker), session=self._session).calendar
+        getter = getattr(calendar_data, "get", None)
+        if not callable(getter):
+            return None  # None, a DataFrame-less shape, or any non-mapping payload
+        return _coerce_forward_date(getter(EX_DIVIDEND_KEY))

@@ -26,3 +26,37 @@ export function todayIso(): string {
     now.getDate(),
   ).padStart(2, '0')}`
 }
+
+// Day-level ISO math for the calendar grid. The y/m/d Date CONSTRUCTOR is local and
+// safe — the never-parse-ISO rule guards `new Date(string)` (UTC parsing), not this.
+export function addDays(iso: string, delta: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const dt = new Date(y, m - 1, d + delta)
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(
+    dt.getDate(),
+  ).padStart(2, '0')}`
+}
+
+// 0 = Sunday … 6 = Saturday (the calendar grid is Sunday-first).
+export function isoWeekday(iso: string): number {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d).getDay()
+}
+
+// The month's grid as whole Sunday-first weeks: leading/trailing out-of-month days pad
+// to full rows. A 28-day February starting on Sunday is exactly 4 rows, no padding.
+export function monthGrid(monthIso: string): string[][] {
+  let cursor = addDays(monthIso, -isoWeekday(monthIso))
+  const lastOfMonth = addDays(addMonths(monthIso, 1), -1)
+  const gridEnd = addDays(lastOfMonth, 6 - isoWeekday(lastOfMonth))
+  const weeks: string[][] = []
+  while (cursor <= gridEnd) {
+    const week: string[] = []
+    for (let i = 0; i < 7; i += 1) {
+      week.push(cursor)
+      cursor = addDays(cursor, 1)
+    }
+    weeks.push(week)
+  }
+  return weeks
+}

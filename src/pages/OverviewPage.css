@@ -99,3 +99,34 @@
 .overview-freshness .stale {
   color: #c98500;
 }
+
+/* Up-next strip: the forward-looking sibling of the freshness footer below it. */
+.up-next {
+  margin-top: 1.25rem;
+}
+
+.up-next-list {
+  list-style: none;
+  margin: 0 0 0.35rem;
+  padding: 0;
+}
+
+.up-next-list li {
+  padding: 2px 0;
+}
+
+.up-next-link {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+
+.up-next-link:hover {
+  text-decoration: underline;
+}
+
+.up-next-date {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.25rem;
+}

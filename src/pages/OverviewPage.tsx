@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import { fetchCalendar } from '../api/calendar'
 import { ApiError } from '../api/client'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
@@ -10,6 +11,7 @@ import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { attentionItems } from '../components/overview/attention'
+import { UP_NEXT_WINDOW_DAYS, upNextItems } from '../components/overview/upNext'
 import { ytdStats } from '../components/overview/ytd'
 import {
   netWorthSparkOption,
@@ -20,6 +22,7 @@ import {
 import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
 import StatTile from '../components/StatTile'
 import type {
+  CalendarEvent,
   DividendOut,
   EsppLotsResponse,
   HoldingsResponse,
@@ -33,7 +36,7 @@ import type {
   TaxYearOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../utils/format'
-import { todayIso } from '../utils/months'
+import { addDays, todayIso } from '../utils/months'
 import { isStaleQuote } from '../utils/staleness'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
@@ -63,6 +66,30 @@ export default function OverviewPage() {
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const seqRef = useRef(0)
+
+  // The forward-looking strip is a SEPARATE fetch with its own tiny error state: the
+  // snapshot Promise.all above stays untouched (its all-or-nothing contract is the
+  // page's point), and a calendar hiccup must not take the overview down — or the
+  // reverse. It renders inside the snapshot branch because it SITS with the freshness
+  // footer; a failed first snapshot shows the banner alone, house posture.
+  const [upNext, setUpNext] = useState<CalendarEvent[] | null>(null)
+  const [upNextFailed, setUpNextFailed] = useState(false)
+  const upNextSeq = useRef(0)
+
+  const loadUpNext = () => {
+    const seq = ++upNextSeq.current
+    const today = todayIso()
+    fetchCalendar(today, addDays(today, UP_NEXT_WINDOW_DAYS))
+      .then((data) => {
+        if (seq !== upNextSeq.current) return
+        setUpNext(data.events)
+        setUpNextFailed(false)
+      })
+      .catch(() => {
+        if (seq !== upNextSeq.current) return
+        setUpNextFailed(true)
+      })
+  }
 
   // Plain function + inline chain (preserve-manual-memoization wall — Plan 3/5 notes).
   // Promise.all is deliberate: the page renders one coherent snapshot, and a partial
@@ -103,6 +130,7 @@ export default function OverviewPage() {
 
   useEffect(() => {
     load()
+    loadUpNext()
     // mount-only: load is a plain function over stable setters (house idiom)
   }, [])
 
@@ -111,6 +139,7 @@ export default function OverviewPage() {
   const reload = () => {
     setBusy(true)
     load()
+    loadUpNext()
   }
 
   // The only memoized values on the page — EChart keys its setOption effect on [option],
@@ -378,6 +407,33 @@ export default function OverviewPage() {
                 <p className="empty-note">No spending months yet.</p>
               )}
             </section>
+          </div>
+          <div className="up-next">
+            <h2 className="eyebrow">
+              Up next
+              <InfoHint text="The next few dated events — vests, ESPP dates, ex-dividends, paydays, deadlines — from the calendar." />
+            </h2>
+            {upNextFailed ? (
+              <p className="drill-hint">Couldn&apos;t load upcoming events.</p>
+            ) : upNext === null ? null : upNextItems(upNext, todayIso()).length === 0 ? (
+              <p className="drill-hint">
+                Nothing scheduled in the next {UP_NEXT_WINDOW_DAYS} days.
+              </p>
+            ) : (
+              <ul className="up-next-list">
+                {upNextItems(upNext, todayIso()).map((event) => (
+                  <li key={`${event.type}-${event.date}-${event.label}`}>
+                    <NavLink to={event.href} className="up-next-link">
+                      <span className="up-next-date">{formatDate(event.date)}</span>{' '}
+                      {event.label}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <NavLink className="drill-hint" to="/calendar">
+              Open calendar →
+            </NavLink>
           </div>
           {/* Three different clocks: quotes move daily, snapshots and spending months are
               hand-entered. The page says which date each half of it is standing on. */}

@@ -10,6 +10,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api import (
     app_settings,
     auth,
+    calendar,
     comp,
     espp,
     import_,
@@ -80,6 +81,7 @@ app.include_router(taxes.router, prefix="/api/v1")
 app.include_router(espp.router, prefix="/api/v1")
 app.include_router(paycheck.router, prefix="/api/v1")
 app.include_router(comp.router, prefix="/api/v1")
+app.include_router(calendar.router, prefix="/api/v1")
 app.include_router(projection.router, prefix="/api/v1")
 app.include_router(app_settings.router, prefix="/api/v1")
 

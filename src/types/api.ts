@@ -1010,6 +1010,34 @@ export interface VestingScheduleOut {
   warnings: string[]
 }
 
+// --- calendar ---
+
+export type CalendarEventType =
+  | 'rsu_vest'
+  | 'espp_purchase'
+  | 'espp_qualify'
+  | 'ex_dividend'
+  | 'payday'
+  | 'offering_start'
+  | 'tax_deadline'
+  | 'update_due'
+
+// One forward-looking event (2026-08-24 spec §5). No money fields in v1 — labels and
+// details carry share counts and prices as text. Sorted by (date, type, label) on the
+// server; the label carries identity (grant label, lot purchase date) so ICS UIDs built
+// from it never collide on same-day same-type events.
+export interface CalendarEvent {
+  date: string // ISO YYYY-MM-DD
+  type: CalendarEventType
+  label: string
+  detail: string | null
+  href: string
+}
+
+export interface CalendarResponse {
+  events: CalendarEvent[]
+}
+
 // --- projection ---
 // GET /projection — the FIRE modeler (the ESPP modeler's shape: knobs as query params,
 // the echo is what the page's form seeds from). Money 2dp; rates 6dp when a param was

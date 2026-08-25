@@ -1,6 +1,6 @@
 # Financial Calendar (+ Announced Ex-Dividend Capture) — Design Spec
 
-**Date:** 2026-08-24 · **Status:** approved, not yet implemented
+**Date:** 2026-08-24 · **Status:** implemented 2026-08-24 (branch financial-calendar)
 **Touches:** one additive migration (`securities.next_ex_div_date`), `services/price_provider.py` (forward-calendar fetch), `services/price_service.py` (refresh integration), new pure services (`services/business_days.py`, `services/calendar_events.py`), new router (`api/calendar.py`), new `/calendar` page + nav item, Overview "Up next" strip, ICS export (client-side).
 
 ## 1. Context & goals

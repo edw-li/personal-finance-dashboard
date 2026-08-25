@@ -148,3 +148,60 @@ def test_build_session_normalizes_bundle_and_impersonates(monkeypatch):
     assert calls == {"impersonate": "chrome", "verify": True}
     build_session("  C:/certs/corp.pem  ")
     assert calls == {"impersonate": "chrome", "verify": "C:/certs/corp.pem"}
+
+
+def _fake_yf_calendar(calendar_value, seen=None):
+    seen = seen if seen is not None else {}
+
+    class FakeTicker:
+        def __init__(self, symbol, session=None):
+            seen["symbol"] = symbol
+            seen["session"] = session
+            self.calendar = calendar_value
+
+    return SimpleNamespace(Ticker=FakeTicker)
+
+
+def test_fetch_next_ex_div_reads_the_forward_calendar(monkeypatch):
+    seen = {}
+    monkeypatch.setitem(
+        sys.modules,
+        "yfinance",
+        _fake_yf_calendar({"Ex-Dividend Date": date(2026, 9, 3)}, seen),
+    )
+    provider = YFinanceProvider.__new__(YFinanceProvider)  # skip session build
+    provider._session = "SENTINEL"
+    assert provider.fetch_next_ex_div("BRK.B") == date(2026, 9, 3)
+    assert seen["symbol"] == "BRK-B"  # yahoo_symbol mapping, same as fetch_daily
+    assert seen["session"] == "SENTINEL"
+
+
+def test_fetch_next_ex_div_coerces_timestamp_datetime_and_iso(monkeypatch):
+    from datetime import datetime
+
+    provider = YFinanceProvider.__new__(YFinanceProvider)
+    provider._session = None
+    # pandas Timestamp duck-type: anything with a callable .date().
+    stamp = SimpleNamespace(date=lambda: date(2026, 9, 3))
+    for value in (stamp, datetime(2026, 9, 3, 12, 30), "2026-09-03"):
+        monkeypatch.setitem(sys.modules, "yfinance", _fake_yf_calendar({"Ex-Dividend Date": value}))
+        assert provider.fetch_next_ex_div("NVDA") == date(2026, 9, 3), value
+
+
+def test_fetch_next_ex_div_returns_none_on_missing_or_malformed(monkeypatch):
+    provider = YFinanceProvider.__new__(YFinanceProvider)
+    provider._session = None
+    cases = [
+        None,  # no calendar published
+        object(),  # not even dict-like (no .get)
+        {},  # key absent
+        {"Ex-Dividend Date": None},
+        {"Ex-Dividend Date": "not a date"},
+        {"Ex-Dividend Date": 20260903},  # a number is not an announcement
+        {"Ex-Dividend Date": [date(2026, 9, 3)]},  # a list is not an announcement
+        {"Ex-Dividend Date": date(1888, 1, 1)},  # absurd year — the century fence
+        {"Ex-Dividend Date": date(9999, 12, 31)},
+    ]
+    for value in cases:
+        monkeypatch.setitem(sys.modules, "yfinance", _fake_yf_calendar(value))
+        assert provider.fetch_next_ex_div("NVDA") is None, value

@@ -1,0 +1,143 @@
+/* Page-scoped rules only (OverviewPage.css's charter): .page/.card/.eyebrow/.button/
+   .error-banner/.empty-note/.drill-hint/.loading-dim live in panels.css. */
+
+.cal-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.cal-title {
+  margin: 0 0 0 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+/* The 7-col month grid. Chips need links and multi-event days, which is why this is
+   CSS grid and not a chart surface. */
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.cal-dow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 6px 4px;
+}
+
+.cal-day {
+  min-height: 92px;
+  border: 1px solid var(--surface-2);
+  border-radius: 8px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+
+.cal-day-outside {
+  opacity: 0.45;
+}
+
+.cal-day-today {
+  border-color: var(--accent);
+}
+
+.cal-day-number {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+/* Chips: color is the LEFT BORDER (the attention-item accent grammar) and the label
+   text always rides along — type identity never rides color alone. */
+.cal-chip {
+  display: block;
+  margin-top: 3px;
+  padding: 1px 5px;
+  border-left: 3px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.68rem;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-chip:hover {
+  filter: brightness(1.15);
+}
+
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.cal-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cal-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* The date-grouped list — also the mobile rendering (the grid hides when cramped). */
+.cal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cal-list > li {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--surface-2);
+}
+
+.cal-list ul {
+  list-style: none;
+  margin: 0.15rem 0 0;
+  padding: 0;
+}
+
+.cal-list-date {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cal-list-link {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.cal-list-link:hover {
+  text-decoration: underline;
+}
+
+.cal-list-detail {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 720px) {
+  /* Spec §6: the list IS the mobile rendering when the grid gets cramped. */
+  .cal-grid {
+    display: none;
+  }
+}
