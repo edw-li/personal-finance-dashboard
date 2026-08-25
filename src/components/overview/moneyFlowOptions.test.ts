@@ -218,6 +218,46 @@ describe('moneyFlowOption — the four pinned columns', () => {
     expect(moneyFlowOption(flowOut({ retained_equity: '-0.01' }))).toBeNull()
   })
 
+  it('refuses a category named after an upstream node rather than emitting a cycle', () => {
+    // 'Gross income' as a category would add Take-home cash → Gross income on top of the
+    // Gross income → Take-home cash the builder always emits. echarts throws on a non-DAG
+    // from inside setOption, which would blank the whole route; the card's own
+    // "nothing to draw" note is the honest, isolated outcome.
+    expect(
+      moneyFlowOption(
+        flowOut({
+          categories: [{ name: 'Gross income', amount: '24000.00' }],
+          other_spend: null,
+          total_spend: '24000.00',
+          saved: '96000.00',
+        }),
+      ),
+    ).toBeNull()
+    // A source label loops the same way, through Gross income.
+    expect(
+      moneyFlowOption(
+        flowOut({
+          categories: [{ name: 'RSU vests', amount: '24000.00' }],
+          other_spend: null,
+          total_spend: '24000.00',
+          saved: '96000.00',
+        }),
+      ),
+    ).toBeNull()
+    // Same-column names are NOT reserved: 'Taxes' merges (the /spending posture) and the
+    // chart still draws.
+    expect(
+      moneyFlowOption(
+        flowOut({
+          categories: [{ name: 'Taxes', amount: '24000.00' }],
+          other_spend: null,
+          total_spend: '24000.00',
+          saved: '96000.00',
+        }),
+      ),
+    ).not.toBeNull()
+  })
+
   it('lists the six jurisdictions on the Taxes node and delegates everything else', () => {
     const format = tooltipOf(moneyFlowOption(flowOut())!)
     const taxes = format({ dataType: 'node', name: 'Taxes' })

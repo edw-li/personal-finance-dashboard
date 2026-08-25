@@ -10,9 +10,14 @@ import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../ch
 import type { MoneyFlowOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 
-// Fixed node names. A user category with one of these exact names would merge with the
-// app node (sankey nodes key on name) — the spending sankey's accepted 'Other'
-// collision, a little wider here.
+// Fixed node names. Sankey nodes key on NAME, so a user category that spells one of these
+// exactly collides with the app's own node — and the collision has two very different
+// consequences, split by column:
+//   - SAME-COLUMN names (Taxes, Pre-tax savings, Retained equity & other, Saved, Other)
+//     simply MERGE with the app node: the spending sankey's accepted 'Other' collision,
+//     a little wider here. Ugly, still a DAG, still drawn.
+//   - UPSTREAM names (the five sources, Gross income, Take-home cash, Drawdown) would
+//     close a CYCLE, which is not drawable at all — see RESERVED_NAMES below.
 const GROSS = 'Gross income'
 const TAXES = 'Taxes'
 const PRE_TAX = 'Pre-tax savings'
@@ -38,6 +43,20 @@ const SOURCES: {
   { key: 'investment_income', label: 'Investment income', color: PALETTE[3] },
   { key: 'other_income', label: 'Other income', color: PALETTE[4] },
 ]
+
+// Every node that is a link SOURCE somewhere left of the category column. A category
+// sharing one of these names closes a loop — 'Gross income' as a category yields
+// Take-home cash → Gross income on top of Gross income → Take-home cash; 'Take-home cash'
+// or 'Drawdown' yields a self-loop; a source label loops through Gross income. Drawdown
+// is reserved unconditionally even though it only fans out in a deficit year: one stray
+// category name must not make the card's drawability depend on whether the year happened
+// to overspend.
+const RESERVED_NAMES = new Set<string>([
+  GROSS,
+  TAKE_HOME,
+  DRAWDOWN,
+  ...SOURCES.map((source) => source.label),
+])
 
 // The Taxes tooltip's six jurisdiction lines, in the engine's own order (tax_keys).
 const JURISDICTION_LINES: { key: keyof MoneyFlowOut['taxes']; label: string }[] = [
@@ -78,6 +97,13 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
     ...(flow.other_spend === null ? [] : [flow.other_spend]),
   ].map(Number)
   if (structural.some((value) => !Number.isFinite(value) || value < 0)) return null
+  // Cycle backstop, the second half of the negative backstop's job: a non-DAG is not a
+  // wrong picture, it is NO picture — echarts' sankeyLayout throws "Sankey is a DAG..."
+  // from inside EChart's setOption effect, where the route boundary catches it by
+  // blanking the WHOLE Overview, defeating the very isolation this card is built around.
+  // Refusing here falls to the card's own "nothing to draw" note instead, which dents one
+  // card exactly as designed. (Same-column collisions are left to merge — see above.)
+  if (flow.categories.some((category) => RESERVED_NAMES.has(category.name))) return null
 
   const nodes: SankeyNode[] = []
   const links: SankeyLink[] = []

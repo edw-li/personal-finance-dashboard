@@ -11,6 +11,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from app.services.money_flow import (
     NEGATIVE_RESIDUAL_REASON,
+    NEGATIVE_TAXES_REASON,
     NET_PAY_COVERAGE_WARNING,
     NO_INPUTS_REASON,
     NO_INPUTS_WARNING,
@@ -215,6 +216,44 @@ def test_negative_other_income_refuses_with_reason_and_still_carries_figures():
     assert flow.gross_income == compute_breakdown(2026, inputs, BRACKETS).totals.gross_income
     assert flow.take_home_cash == D("120000.00")
     assert flow.total_spend == D("44000.00")
+
+
+def test_negative_pretax_savings_refuses():
+    # A negative stored contribution (a correction entry keyed the wrong way) drags the
+    # pre-tax sum below zero. Plain input sums, so the figure is hand-checkable:
+    # -5000 + 4000 + 300. It reaches its own branch because every earlier one is clean —
+    # gross is positive, other_income is still 1000, and the flat brackets keep total tax
+    # positive.
+    flow = compose(inputs={**INPUTS, "trad_401k_contributions": D("-5000")})
+    assert flow.renderable is False
+    assert flow.pre_tax_savings == D("-700")
+    assert flow.reason == (
+        "Pre-tax savings for 2026 sum to -700.00 — a negative ribbon cannot be drawn."
+    )
+    # A refusal still carries what it could compute (spec §5).
+    assert flow.sources.other_income == D("1000")
+    assert flow.total_spend == D("44000.00")
+
+
+def test_negative_total_tax_refuses():
+    # NOT a defensive branch: the engine subtracts state_exemption_credits from the state
+    # walk WITHOUT clamping (it only warns), and total_tax sums that raw — so a large
+    # enough credit really does drive the total negative. Engine-derived, so the figure in
+    # the sentence is taken FROM the engine.
+    inputs = {"latest_w2_income": D("100000"), "state_exemption_credits": D("500000")}
+    flow = compose(inputs=inputs)
+    breakdown = compute_breakdown(2026, inputs, BRACKETS)
+    assert flow.renderable is False
+    assert flow.taxes.total == breakdown.totals.total_tax
+    assert flow.taxes.total < 0
+    assert flow.reason == NEGATIVE_TAXES_REASON.format(
+        year=2026,
+        taxes=breakdown.totals.total_tax.quantize(D("0.01"), rounding=ROUND_HALF_UP),
+    )
+    # The engine's own advisory rides along on the passthrough.
+    assert "state tax negative after exemption credits" in flow.warnings
+    # The sources column is still balanced — this refusal is about the middle column only.
+    assert flow.sources.other_income == D("0")
 
 
 def test_negative_residual_refuses():
