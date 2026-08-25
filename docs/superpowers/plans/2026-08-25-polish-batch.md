@@ -312,7 +312,7 @@ export function usePageTitle(): void {
 - Modify: `src/components/Layout.tsx`, `src/components/Layout.css`
 - Test: `src/components/Layout.test.tsx` (create)
 
-- [ ] **Step 1: Write the failing tests** — create `src/components/Layout.test.tsx`:
+- [x] **Step 1: Write the failing tests** — create `src/components/Layout.test.tsx`:
 
 ```tsx
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -424,9 +424,9 @@ describe('Layout — skip link and navigation reset', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/Layout.test.tsx` → FAIL (no "Primary" nav, no skip link, "Net Worth" casing, no title).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/Layout.test.tsx` → FAIL (no "Primary" nav, no skip link, "Net Worth" casing, no title).
 
-- [ ] **Step 3: Rewrite `src/components/Layout.tsx`** — full replacement (the RouteBoundary comment block is the existing one, kept verbatim):
+- [x] **Step 3: Rewrite `src/components/Layout.tsx`** — full replacement (the RouteBoundary comment block is the existing one, kept verbatim):
 
 ```tsx
 import { LogOut } from 'lucide-react'
@@ -512,7 +512,7 @@ export default function Layout() {
 
 (The old in-file `NAV_ITEMS` const is gone — the registry moved to `navItems.ts` in Task 2. Icon imports shrink to `LogOut` alone.)
 
-- [ ] **Step 4: Layout.css.** Three edits:
+- [x] **Step 4: Layout.css.** Three edits:
   1. Replace the `.sidebar nav` rule with the section trio:
 
 ```css
@@ -591,9 +591,9 @@ export default function Layout() {
 }
 ```
 
-- [ ] **Step 5: Run** — `npx vitest run src/components/Layout.test.tsx` → PASS.
+- [x] **Step 5: Run** — `npx vitest run src/components/Layout.test.tsx` → PASS.
 
-- [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(polish): sidebar v2, skip link, navigation focus/scroll reset"`
+- [x] **Step 6: Commit** — `git add -A && git commit -m "feat(polish): sidebar v2, skip link, navigation focus/scroll reset"`
 
 ### Task 4: Real 404
 

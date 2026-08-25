@@ -29,8 +29,24 @@
 .sidebar nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0.45rem; /* between sections; the old 2px per-link rhythm lives inside them */
   flex: 1;
+}
+
+.nav-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-heading {
+  margin: 0.35rem 0 0.1rem;
+  padding: 0 0.75rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 .nav-link {
@@ -47,9 +63,16 @@
   color: var(--text);
 }
 
+/* Active ≠ hover: a 3px accent inset + accent icon on top of the hover surface, so the
+   current page stays legible even under the pointer. */
 .nav-link.active {
   background: var(--surface-2);
   color: var(--text);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.nav-link.active svg {
+  color: var(--accent);
 }
 
 .logout-button {
@@ -96,4 +119,35 @@
   background: var(--surface-2);
   color: var(--text);
   cursor: pointer;
+}
+
+/* The separator between Settings and Log out (2026-08-25 polish §7). */
+.sidebar-separator {
+  border-top: 1px solid var(--border);
+  margin: 0.5rem 0.25rem;
+}
+
+/* Skip link (polish §5): parked above the viewport until keyboard focus arrives. */
+.skip-link {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 15;
+  padding: 0.5rem 0.9rem;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #0b0e14;
+  font-weight: 600;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+/* Programmatic focus target (the skip link + the navigation hand-off) — never a visible
+   ring: the whole page lighting up on every navigation would be noise, and main is not
+   in the tab order. */
+.content:focus {
+  outline: none;
 }
