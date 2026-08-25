@@ -122,7 +122,7 @@ Pure extraction, zero behavior change: the existing `test_prices_api.py` suite I
 **Files:**
 - Modify: `backend/app/api/prices.py`
 
-- [ ] **Step 1: Extract.** In `backend/app/api/prices.py`, replace the whole `refresh_status` endpoint (currently the `@router.get("/refresh-status", ...)` decorator through its final `return RefreshStatusOut(...)`) with the pair below. The composition body moves VERBATIM — including the actionability comment — only the function boundary is new:
+- [x] **Step 1: Extract.** In `backend/app/api/prices.py`, replace the whole `refresh_status` endpoint (currently the `@router.get("/refresh-status", ...)` decorator through its final `return RefreshStatusOut(...)`) with the pair below. The composition body moves VERBATIM — including the actionability comment — only the function boundary is new:
 
 ```python
 async def compose_refresh_status(db: AsyncSession) -> RefreshStatusOut:
@@ -174,9 +174,9 @@ async def refresh_status(db: AsyncSession = Depends(get_db)) -> RefreshStatusOut
     return await compose_refresh_status(db)
 ```
 
-- [ ] **Step 2: Prove nothing moved** — `cd backend && .venv/Scripts/python -m pytest tests/test_prices_api.py -q` → ALL PASS (the empty-status, pre-feature-payload and deactivated-ticker-filter pins in particular).
+- [x] **Step 2: Prove nothing moved** — `cd backend && .venv/Scripts/python -m pytest tests/test_prices_api.py -q` → ALL PASS (the empty-status, pre-feature-payload and deactivated-ticker-filter pins in particular).
 
-- [ ] **Step 3: Commit** — `git add -A && git commit -m "refactor(prices): extract compose_refresh_status — endpoint behavior unchanged"`
+- [x] **Step 3: Commit** — `git add -A && git commit -m "refactor(prices): extract compose_refresh_status — endpoint behavior unchanged"`
 
 ### Task 3: System schemas + router + mount
 
