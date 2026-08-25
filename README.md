@@ -540,7 +540,7 @@ on the first successful refresh.
 | Check | Where | Expected |
 |---|---|---|
 | Net worth identity | /net-worth totals vs the sheet's NET WORTH row | equal with the five component flags set (7.3), less the After-Tax component by design |
-| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent except the state chain** (the deliberate CA capital-gains divergence, below); 2023 / 2025 / 2026 additionally differ by the known sheet drifts (below) |
+| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent except the state chain** (the deliberate CA capital-gains divergence, below); 2023 / 2025 / 2026 differ by the known sheet drifts (below), plus the CA divergence where the year carries gains |
 | Holdings | cost basis, per row | within ~$0.10 of the sheet (6dp shares × 4dp prices folding) |
 | Scheduler | /settings → price refresh cron | day **names** (`10 13 * * mon-fri`), never numbers |
 
