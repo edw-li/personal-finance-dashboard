@@ -1,7 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { SANKEY_MARKS, makeSankeyTooltipFormatter } from './sankey'
+import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter } from './sankey'
 import type { SankeyLink, SankeyNode } from './sankey'
 import { INK } from './theme'
+
+describe('claimNodeName', () => {
+  it('passes a free name through and registers it as taken', () => {
+    const taken = new Set(['Net pay'])
+    expect(claimNodeName('Rent', taken)).toBe('Rent')
+    expect(taken.has('Rent')).toBe(true)
+  })
+
+  it('suffixes a collision visibly and keeps every claim unique', () => {
+    const taken = new Set(['Taxes'])
+    expect(claimNodeName('Taxes', taken)).toBe('Taxes (spending)')
+    // A pathological second collision still resolves — uniqueness is the contract that
+    // keeps echarts alive (duplicate names crash sankey setOption, 2026-08-25 incident).
+    expect(claimNodeName('Taxes', taken)).toBe('Taxes (spending 2)')
+    expect(taken.size).toBe(3)
+  })
+})
 
 const NODES: SankeyNode[] = [
   { name: 'Net pay', value: 5000, itemStyle: { color: '#8b93a3' } },

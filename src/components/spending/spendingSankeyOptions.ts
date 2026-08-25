@@ -6,7 +6,7 @@
 // (buildMonthSlices / buildYearSlices), so a category wears the exact hue its stacked-bar
 // segment wears — same entity, same color everywhere, gray "Other" fold included.
 import type { EChartsOption } from '../../charts/echarts'
-import { SANKEY_MARKS, makeSankeyTooltipFormatter } from '../../charts/sankey'
+import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
 import type { CategoryOut, SpendingMatrix, SpendingYearly, YearRollup } from '../../types/api'
@@ -83,8 +83,11 @@ export function spendingFlowPeriod(
   }
 }
 
-// Fixed node names. A user category with one of these exact names would merge with the
-// app node (sankey nodes key on name) — the same accepted collision as the pie's 'Other'.
+// Fixed node names. Sankey nodes key on NAME, and a user category spelling one of these
+// is NOT a benign merge: 'Net pay' is a self-loop (the DAG throw) and 'Saved'/'Drawdown'
+// duplicate a node, which echarts 6 drops and then crashes wiring (the 2026-08-25
+// Overview money-flow incident, same engine path). Slice names are claimed through
+// claimNodeName below, so collisions draw under a visible ' (spending)' suffix instead.
 const NET_PAY = 'Net pay'
 const SAVED = 'Saved'
 const DRAWDOWN = 'Drawdown'
@@ -113,7 +116,15 @@ export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption 
   // No net pay — or an unusable one (a negative period cannot source a flow) — is the
   // page's empty-note, never a blank canvas (spec §2).
   if (netPay === null || !Number.isFinite(netPay) || netPay < 0) return null
-  const spent = cents(period.slices.reduce((acc, slice) => acc + slice.value, 0))
+  // Claim every slice name against the structural nodes (see the constants above): the
+  // fold's own 'Other' entry claims through the same set in emission order, so a real
+  // category named 'Other' keeps its name and the fold wears the suffix.
+  const taken = new Set([NET_PAY, SAVED, DRAWDOWN])
+  const slices = period.slices.map((slice) => ({
+    ...slice,
+    name: claimNodeName(slice.name, taken),
+  }))
+  const spent = cents(slices.reduce((acc, slice) => acc + slice.value, 0))
   const saved = cents(netPay - spent)
   const shortfall = cents(spent - netPay)
   const deficit = shortfall >= A_CENT
@@ -128,7 +139,7 @@ export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption 
   if (deficit) {
     nodes.push({ name: DRAWDOWN, value: shortfall, itemStyle: { color: NEGATIVE } })
   }
-  for (const slice of period.slices) {
+  for (const slice of slices) {
     nodes.push({
       name: slice.name,
       value: slice.value,
@@ -142,7 +153,7 @@ export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption 
   if (deficit) {
     // Saved is omitted (spec §3). Sub-cent slivers are dropped on BOTH legs — a
     // zero-width link is tooltip noise (the vesting-tooltip lesson).
-    for (const slice of period.slices) {
+    for (const slice of slices) {
       const fromNet = spent > 0 ? cents((slice.value * netPay) / spent) : 0
       const fromDrawdown = cents(slice.value - fromNet)
       if (fromNet >= A_CENT) {
@@ -153,7 +164,7 @@ export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption 
       }
     }
   } else {
-    for (const slice of period.slices) {
+    for (const slice of slices) {
       links.push({ source: NET_PAY, target: slice.name, value: slice.value })
     }
     // Saved wears POSITIVE green — the one deliberate exception to the reserved-status-

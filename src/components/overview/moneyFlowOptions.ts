@@ -4,20 +4,18 @@
 // through the shared factory — never a layout-derived link sum (the ±$0.01
 // reconciliation drift the paycheck sankey documents is invisible at link-width scale).
 import type { EChartsOption } from '../../charts/echarts'
-import { SANKEY_MARKS, makeSankeyTooltipFormatter } from '../../charts/sankey'
+import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
 import type { MoneyFlowOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 
-// Fixed node names. Sankey nodes key on NAME, so a user category that spells one of these
-// exactly collides with the app's own node — and the collision has two very different
-// consequences, split by column:
-//   - SAME-COLUMN names (Taxes, Pre-tax savings, Retained equity & other, Saved, Other)
-//     simply MERGE with the app node: the spending sankey's accepted 'Other' collision,
-//     a little wider here. Ugly, still a DAG, still drawn.
-//   - UPSTREAM names (the five sources, Gross income, Take-home cash, Drawdown) would
-//     close a CYCLE, which is not drawable at all — see RESERVED_NAMES below.
+// Fixed node names. Sankey nodes key on NAME, so a user category spelling one of these
+// exactly would either duplicate a node (echarts 6 drops it, then CRASHES wiring its
+// links — the 2026-08-25 Overview incident, a real category named 'Taxes') or, for
+// upstream names, close a cycle (the "Sankey is a DAG" throw). Every category name is
+// therefore claimed through claimNodeName against these constants — a colliding category
+// draws under a visible ' (spending)' suffix instead of taking the route down.
 const GROSS = 'Gross income'
 const TAXES = 'Taxes'
 const PRE_TAX = 'Pre-tax savings'
@@ -44,19 +42,21 @@ const SOURCES: {
   { key: 'other_income', label: 'Other income', color: PALETTE[4] },
 ]
 
-// Every node that is a link SOURCE somewhere left of the category column. A category
-// sharing one of these names closes a loop — 'Gross income' as a category yields
-// Take-home cash → Gross income on top of Gross income → Take-home cash; 'Take-home cash'
-// or 'Drawdown' yields a self-loop; a source label loops through Gross income. Drawdown
-// is reserved unconditionally even though it only fans out in a deficit year: one stray
-// category name must not make the card's drawability depend on whether the year happened
-// to overspend.
-const RESERVED_NAMES = new Set<string>([
+// The claim seed: every structural node this builder can emit, seeded UNCONDITIONALLY
+// (a zero-omitted source or a surplus year's absent Drawdown must not change how a
+// colliding category renders from one year to the next). OTHER_SPEND is deliberately NOT
+// seeded — the fold entry claims through the same set in emission order, so a real
+// category named 'Other' keeps its name and the fold wears the suffix.
+const STRUCTURAL_NAMES = [
   GROSS,
+  TAXES,
+  PRE_TAX,
+  RETAINED,
   TAKE_HOME,
+  SAVED,
   DRAWDOWN,
   ...SOURCES.map((source) => source.label),
-])
+]
 
 // The Taxes tooltip's six jurisdiction lines, in the engine's own order (tax_keys).
 const JURISDICTION_LINES: { key: keyof MoneyFlowOut['taxes']; label: string }[] = [
@@ -97,13 +97,11 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
     ...(flow.other_spend === null ? [] : [flow.other_spend]),
   ].map(Number)
   if (structural.some((value) => !Number.isFinite(value) || value < 0)) return null
-  // Cycle backstop, the second half of the negative backstop's job: a non-DAG is not a
-  // wrong picture, it is NO picture — echarts' sankeyLayout throws "Sankey is a DAG..."
-  // from inside EChart's setOption effect, where the route boundary catches it by
-  // blanking the WHOLE Overview, defeating the very isolation this card is built around.
-  // Refusing here falls to the card's own "nothing to draw" note instead, which dents one
-  // card exactly as designed. (Same-column collisions are left to merge — see above.)
-  if (flow.categories.some((category) => RESERVED_NAMES.has(category.name))) return null
+
+  // The name-claim set (see STRUCTURAL_NAMES): category names pass through claimNodeName
+  // so no node name can ever duplicate or cycle — echarts crashes on both, from inside
+  // setOption, where the route boundary would blank the WHOLE Overview.
+  const taken = new Set(STRUCTURAL_NAMES)
 
   const nodes: SankeyNode[] = []
   const links: SankeyLink[] = []
@@ -154,13 +152,19 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
       // Slot i = PALETTE[i], the /spending fold's exact assignment (biggest-first). The
       // server pins the fold at 7 (TOP_N_CATEGORIES, tested backend-side), so slots 0..6
       // always land inside the 8-slot palette; the folded remainder wears gray Other.
-      name: category.name,
+      name: claimNodeName(category.name, taken),
       value: Number(category.amount),
       color: PALETTE[slot],
     })),
     ...(flow.other_spend === null
       ? []
-      : [{ name: OTHER_SPEND, value: Number(flow.other_spend), color: OTHER_SERIES_COLOR }]),
+      : [
+          {
+            name: claimNodeName(OTHER_SPEND, taken),
+            value: Number(flow.other_spend),
+            color: OTHER_SERIES_COLOR,
+          },
+        ]),
   ]
   for (const slice of slices) {
     if (slice.value < A_CENT) continue

@@ -218,44 +218,61 @@ describe('moneyFlowOption — the four pinned columns', () => {
     expect(moneyFlowOption(flowOut({ retained_equity: '-0.01' }))).toBeNull()
   })
 
-  it('refuses a category named after an upstream node rather than emitting a cycle', () => {
-    // 'Gross income' as a category would add Take-home cash → Gross income on top of the
-    // Gross income → Take-home cash the builder always emits. echarts throws on a non-DAG
-    // from inside setOption, which would blank the whole route; the card's own
-    // "nothing to draw" note is the honest, isolated outcome.
-    expect(
-      moneyFlowOption(
-        flowOut({
-          categories: [{ name: 'Gross income', amount: '24000.00' }],
-          other_spend: null,
-          total_spend: '24000.00',
-          saved: '96000.00',
-        }),
-      ),
-    ).toBeNull()
-    // A source label loops the same way, through Gross income.
-    expect(
-      moneyFlowOption(
-        flowOut({
-          categories: [{ name: 'RSU vests', amount: '24000.00' }],
-          other_spend: null,
-          total_spend: '24000.00',
-          saved: '96000.00',
-        }),
-      ),
-    ).toBeNull()
-    // Same-column names are NOT reserved: 'Taxes' merges (the /spending posture) and the
-    // chart still draws.
-    expect(
-      moneyFlowOption(
-        flowOut({
-          categories: [{ name: 'Taxes', amount: '24000.00' }],
-          other_spend: null,
-          total_spend: '24000.00',
-          saved: '96000.00',
-        }),
-      ),
-    ).not.toBeNull()
+  it('renames colliding categories — a duplicate node name is a CRASH, not a merge', () => {
+    // echarts sankey keys nodes on NAME. A user category spelling one of the chart's own
+    // nodes is not a benign merge: echarts 6 drops the duplicate node ("Graph nodes have
+    // duplicate name or id") and then crashes wiring its links (TypeError: Cannot set
+    // properties of undefined (setting 'dataIndex')) inside setOption, where the route
+    // boundary blanks the WHOLE Overview — the 2026-08-25 prod incident, triggered by the
+    // user's real 'Taxes' spending category. Upstream names ('Gross income', a source
+    // label) would additionally close a cycle. Both die at the source: colliding
+    // categories wear a visible ' (spending)' suffix and everything still draws.
+    const option = moneyFlowOption(
+      flowOut({
+        categories: [
+          { name: 'Taxes', amount: '24000.00' },
+          { name: 'Gross income', amount: '6000.00' },
+          { name: 'RSU vests', amount: '4200.00' },
+        ],
+        other_spend: null,
+        total_spend: '34200.00',
+        saved: '85800.00',
+      }),
+    )
+    expect(option).not.toBeNull()
+    const series = sankeyOf(option!)
+    const names = (series.data ?? []).map((n) => n.name)
+    expect(new Set(names).size).toBe(names.length) // the invariant that keeps echarts alive
+    expect(names.filter((name) => name === 'Taxes')).toHaveLength(1) // the structural node
+    expect(names).toContain('Taxes (spending)')
+    expect(names).toContain('Gross income (spending)')
+    expect(names).toContain('RSU vests (spending)')
+    expect(series.links).toContainEqual({
+      source: 'Take-home cash',
+      target: 'Taxes (spending)',
+      value: 24000,
+    })
+    // The jurisdiction tooltip stays pinned to the STRUCTURAL Taxes node alone.
+    const format = tooltipOf(option!)
+    expect(format({ dataType: 'node', name: 'Taxes' })).toContain('Federal')
+    expect(format({ dataType: 'node', name: 'Taxes (spending)' })).not.toContain('Federal')
+  })
+
+  it('keeps a real category named Other distinct from the fold node', () => {
+    const option = moneyFlowOption(
+      flowOut({
+        categories: [{ name: 'Other', amount: '24000.00' }],
+        other_spend: '1000.00',
+        total_spend: '25000.00',
+        saved: '95000.00',
+      }),
+    )
+    expect(option).not.toBeNull()
+    const names = (sankeyOf(option!).data ?? []).map((n) => n.name)
+    expect(new Set(names).size).toBe(names.length)
+    // Emission order claims first: the REAL category keeps its name, the fold renames.
+    expect(names).toContain('Other')
+    expect(names).toContain('Other (spending)')
   })
 
   it('lists the six jurisdictions on the Taxes node and delegates everything else', () => {

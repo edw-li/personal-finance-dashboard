@@ -257,4 +257,33 @@ describe('spendingSankeyOption — deficit and degenerate periods', () => {
     const edge = format({ dataType: 'edge', data: { source: 'Net pay', target: 'Saved' } })
     expect(edge).toContain('$3,420.00')
   })
+
+  it('renames slices that collide with the chart’s own nodes — duplicates crash echarts', () => {
+    // Same failure mode as the 2026-08-25 Overview money-flow incident: echarts 6 drops a
+    // duplicate-named node and then throws TypeError wiring its links, inside setOption,
+    // where the route boundary blanks the page. 'Net pay' as a category is additionally a
+    // self-loop. Colliding slice names wear the visible ' (spending)' suffix instead.
+    const option = spendingSankeyOption({
+      label: 'Jul 2026',
+      netPay: '6000.00',
+      slices: [
+        { name: 'Net pay', value: 2000, slot: 0 },
+        { name: 'Saved', value: 1500, slot: 1 },
+        { name: 'Drawdown', value: 500, slot: 2 },
+      ],
+    })
+    expect(option).not.toBeNull()
+    const series = sankeyOf(option!)
+    const names = (series.data ?? []).map((n) => n.name)
+    expect(new Set(names).size).toBe(names.length)
+    expect(names).toContain('Net pay (spending)')
+    expect(names).toContain('Saved (spending)')
+    expect(names).toContain('Drawdown (spending)')
+    expect(names).toContain('Saved') // the structural surplus tail still draws
+    expect(series.links).toContainEqual({
+      source: 'Net pay',
+      target: 'Net pay (spending)',
+      value: 2000,
+    })
+  })
 })

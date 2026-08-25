@@ -23,6 +23,29 @@ export interface SankeyLink {
   value: number
 }
 
+/**
+ * Claim a node name in a sankey's name-keyed node space, renaming on collision.
+ *
+ * echarts keys sankey nodes on NAME, and a duplicate is NOT a merge: echarts 6 drops the
+ * second node ("Graph nodes have duplicate name or id") and then throws wiring its links
+ * (TypeError: Cannot set properties of undefined (setting 'dataIndex')) from inside
+ * setOption — where the route boundary catches it by blanking the whole page (the
+ * 2026-08-25 Overview incident: a real spending category named 'Taxes'). A user name
+ * matching an UPSTREAM node would instead close a cycle ("Sankey is a DAG..."), the same
+ * crash by another door. So builders seed `taken` with their structural node names and
+ * pass every user-text name through here: collisions wear a visible ' (spending)' suffix
+ * — both flow charts' user column is spending — and every claim registers, so the
+ * invariant is total: no two nodes ever share a name.
+ */
+export function claimNodeName(name: string, taken: Set<string>): string {
+  let candidate = name
+  if (taken.has(candidate)) candidate = `${name} (spending)`
+  let n = 2
+  while (taken.has(candidate)) candidate = `${name} (spending ${n++})`
+  taken.add(candidate)
+  return candidate
+}
+
 export const SANKEY_MARKS: SankeySeriesOption = {
   type: 'sankey',
   orient: 'horizontal',
