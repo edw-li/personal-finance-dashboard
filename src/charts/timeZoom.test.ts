@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rangeStartIndex, timeZoom } from './timeZoom'
+import { rangeStartIndex, rangeZoom, timeZoom } from './timeZoom'
 
 // 24 first-of-month strings, Jan 2024 … Dec 2025 — the app's month currency.
 const MONTHS = Array.from({ length: 24 }, (_, i) => {
@@ -56,5 +56,29 @@ describe('timeZoom', () => {
         moveOnMouseWheel: false,
       },
     ])
+  })
+})
+
+describe('rangeZoom', () => {
+  it('is exactly the preset zoom when no manual window is mirrored', () => {
+    expect(rangeZoom(MONTHS, { preset: '1y' })).toEqual(timeZoom(MONTHS, '1y'))
+  })
+
+  it('layers a mirrored {startValue, endValue} window over the preset', () => {
+    const [zoom] = rangeZoom(MONTHS, { preset: '1y', window: { startValue: 2, endValue: 5 } })
+    expect(zoom.startValue).toBe(2)
+    expect(zoom.endValue).toBe(5)
+    // The inside-zoom contract itself is untouched — chips still cover presets, the
+    // wheel stays ctrl-gated.
+    expect(zoom.type).toBe('inside')
+    expect(zoom.zoomOnMouseWheel).toBe('ctrl')
+    expect(zoom.moveOnMouseWheel).toBe(false)
+  })
+
+  it('a fresh preset-only state (the chips) snaps the window away', () => {
+    // RangeChips hand back {preset} with NO window — that IS the snap-back contract.
+    const [snapped] = rangeZoom(MONTHS, { preset: 'all' })
+    expect(snapped.startValue).toBe(0)
+    expect(snapped.endValue).toBeUndefined()
   })
 })

@@ -28,6 +28,9 @@ export interface InsideZoomOption {
   type: 'inside'
   /** Index into the category axis — appended categories (the live ping) don't shift it. */
   startValue: number
+  /** Present only when a page mirrors a manual window back in (rangeZoom below) —
+   * presets deliberately omit it so every window runs to the newest point. */
+  endValue?: number
   /** Bare wheel keeps scrolling the page; ctrl+wheel zooms (drag still pans when zoomed). */
   zoomOnMouseWheel: 'ctrl'
   moveOnMouseWheel: false
@@ -47,4 +50,33 @@ export function timeZoom(dates: string[], preset: RangePreset): InsideZoomOption
       moveOnMouseWheel: false,
     },
   ]
+}
+
+export interface ZoomWindow {
+  /** Category-axis indices, read back off the chart's option by EChart's datazoom
+   * mirror — appended categories (the live ping) don't shift them. */
+  startValue: number
+  endValue: number
+}
+
+/**
+ * A page's whole window state (2026-08-25 spec §2e): the chips' preset plus, transiently,
+ * a manual ctrl+wheel wander. The chips hand back a fresh `{ preset }` carrying NO window
+ * — overwriting this state is exactly their existing snap-back contract, now made
+ * explicit in the type.
+ */
+export interface RangeState {
+  preset: RangePreset
+  window?: ZoomWindow
+}
+
+/**
+ * timeZoom with any mirrored manual window layered over the preset, so option rebuilds
+ * (refetches, notMerge) and same-axis sibling charts keep the window the user dragged
+ * out instead of snapping back to the preset on every re-render.
+ */
+export function rangeZoom(dates: string[], range: RangeState): InsideZoomOption[] {
+  const [zoom] = timeZoom(dates, range.preset)
+  if (range.window === undefined) return [zoom]
+  return [{ ...zoom, startValue: range.window.startValue, endValue: range.window.endValue }]
 }

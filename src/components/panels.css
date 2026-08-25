@@ -438,3 +438,11 @@
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+/* The inside-zoom caption (2026-08-25 spec §2f) — muted, small, under the canvas. */
+.chart-zoom-hint {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-align: right;
+}

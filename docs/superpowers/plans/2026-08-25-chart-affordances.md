@@ -532,7 +532,7 @@ import type { ExportConfig } from './ChartExportMenu'
 - Create: `src/components/ChartZoomHint.tsx`, `src/components/ChartZoomHint.test.tsx`
 - Modify: `src/charts/timeZoom.ts`, `src/charts/timeZoom.test.ts`, `src/components/panels.css`
 
-- [ ] **Step 1: Write the failing tests.** Create `src/components/ChartZoomHint.test.tsx`:
+- [x] **Step 1: Write the failing tests.** Create `src/components/ChartZoomHint.test.tsx`:
 
 ```tsx
 import { cleanup, render, screen } from '@testing-library/react'
@@ -576,9 +576,9 @@ describe('rangeZoom', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/components/ChartZoomHint.test.tsx src/charts/timeZoom.test.ts` → FAIL (missing module / missing export).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/components/ChartZoomHint.test.tsx src/charts/timeZoom.test.ts` → FAIL (missing module / missing export).
 
-- [ ] **Step 3: Implement.** Create `src/components/ChartZoomHint.tsx`:
+- [x] **Step 3: Implement.** Create `src/components/ChartZoomHint.tsx`:
 
 ```tsx
 import './panels.css'
@@ -646,9 +646,9 @@ Append to `src/components/panels.css`:
 }
 ```
 
-- [ ] **Step 4: Run** — `npx vitest run src/components/ChartZoomHint.test.tsx src/charts/timeZoom.test.ts` → PASS.
+- [x] **Step 4: Run** — `npx vitest run src/components/ChartZoomHint.test.tsx src/charts/timeZoom.test.ts` → PASS.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): ChartZoomHint caption + rangeZoom manual-window state"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(charts): ChartZoomHint caption + rangeZoom manual-window state"`
 
 ---
 
