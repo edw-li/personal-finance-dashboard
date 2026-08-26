@@ -12,6 +12,7 @@ from app.api import (
     auth,
     calendar,
     comp,
+    credit_cards,
     espp,
     import_,
     net_worth,
@@ -84,6 +85,7 @@ app.include_router(espp.router, prefix="/api/v1")
 app.include_router(paycheck.router, prefix="/api/v1")
 app.include_router(comp.router, prefix="/api/v1")
 app.include_router(calendar.router, prefix="/api/v1")
+app.include_router(credit_cards.router, prefix="/api/v1")
 app.include_router(projection.router, prefix="/api/v1")
 app.include_router(app_settings.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
