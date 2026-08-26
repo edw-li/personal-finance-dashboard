@@ -1,0 +1,95 @@
+.matrix-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.matrix-header .eyebrow {
+  margin-right: auto;
+}
+
+.matrix-scroll {
+  overflow-x: auto;
+}
+
+.rewards-matrix .sub {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.matrix-card-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: right;
+}
+.matrix-card-btn:hover,
+.matrix-card-btn:focus-visible {
+  text-decoration: underline;
+}
+
+.rewards-matrix td.mx-cell.is-best {
+  background: rgba(63, 185, 104, 0.14);
+  color: var(--positive);
+  font-weight: 600;
+}
+.rewards-matrix td.mx-na {
+  color: var(--muted);
+}
+.mx-note {
+  color: var(--accent);
+  cursor: help;
+  margin-left: 2px;
+}
+.mx-tie {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 0.68rem;
+}
+
+.mx-cell-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  padding: 2px 8px;
+  cursor: pointer;
+  min-width: 3.2rem;
+}
+.mx-cell-btn.is-editing {
+  border-color: var(--accent);
+}
+
+.mx-inspector {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+  padding: 0.6rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.mx-inspector label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.mx-inspector-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  align-self: center;
+}
