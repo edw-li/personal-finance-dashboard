@@ -29,3 +29,6 @@ vite.config.ts.timestamp-*
 
 # Brainstorming visual companion sessions
 .superpowers/
+
+# Repo-local smoke/repro drivers and their screenshots (repro driver house pattern)
+scratchpad/
