@@ -1,0 +1,8 @@
+/* Word boxes and pickers read as words, not figures (CompPage.css precedent).
+   Scoped to this page; AmountInput always carries inputmode="decimal" and date
+   boxes carry type="date", so both stay right-aligned money style. */
+.credit-cards-page input.field-input:not([inputmode]):not([type]),
+.credit-cards-page select.field-input {
+  text-align: left;
+  font-family: inherit;
+}

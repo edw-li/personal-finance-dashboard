@@ -1213,3 +1213,118 @@ export interface MoneyFlowOut {
   /** SIGNED: take_home_cash − total_spend; negative draws a red Drawdown source. */
   saved: string
 }
+
+// --- credit cards (2026-08-25 spec §2/§3) -----------------------------------------------
+
+export type RewardsCurrency = 'cash' | 'points' | 'miles'
+
+export interface CardCreditOut {
+  id: number
+  label: string
+  annual_value: string
+  counts: boolean
+}
+
+export interface CardCreditIn {
+  label: string
+  annual_value: string
+  counts: boolean
+}
+
+export interface CreditLimitEventOut {
+  id: number
+  effective_date: string
+  limit_amount: string
+  note: string | null
+}
+
+export interface CreditLimitEventIn {
+  effective_date: string
+  limit_amount: string
+  note: string | null
+}
+
+export interface CreditCardOut {
+  id: number
+  name: string
+  slug: string
+  annual_fee: string
+  rewards_currency: RewardsCurrency
+  point_value_cents: string
+  primary_holder: string | null
+  authorized_users: string | null
+  opened_on: string | null
+  is_active: boolean
+  account_id: number | null
+  notes: string | null
+  sort_order: number
+  credits: CardCreditOut[]
+  /** Latest limit event's amount; null when no events yet. */
+  current_limit: string | null
+  limit_events: CreditLimitEventOut[]
+}
+
+/** POST and PATCH body — full object, house style. */
+export interface CreditCardIn {
+  name: string
+  annual_fee: string
+  rewards_currency: RewardsCurrency
+  point_value_cents: string
+  primary_holder: string | null
+  authorized_users: string | null
+  opened_on: string | null
+  is_active: boolean
+  account_id: number | null
+  notes: string | null
+  sort_order: number
+}
+
+export interface RewardCategoryOut {
+  id: number
+  name: string
+  slug: string
+  sort_order: number
+  is_active: boolean
+  /** Manual annual-spend override; null = derive from the mapping (or unweighted). */
+  annual_spend: string | null
+  spending_category_id: number | null
+  pinned_card_id: number | null
+}
+
+export interface RewardCategoryCreate {
+  name: string
+  sort_order?: number
+  annual_spend?: string | null
+  spending_category_id?: number | null
+  pinned_card_id?: number | null
+}
+
+/** PATCH semantics: omitted = untouched; explicit null CLEARS a nullable column
+ *  (annual_spend / spending_category_id / pinned_card_id). name/sort_order/is_active
+ *  ignore null (NOT NULL columns). */
+export interface RewardCategoryUpdate {
+  name?: string
+  sort_order?: number
+  is_active?: boolean
+  annual_spend?: string | null
+  spending_category_id?: number | null
+  pinned_card_id?: number | null
+}
+
+export interface RewardRateOut {
+  id: number
+  card_id: number
+  category_id: number
+  multiplier: string
+  note: string | null
+  monthly_cap: string | null
+}
+
+/** Bulk matrix save row. multiplier null DELETES the cell (back to N/A). */
+export interface RewardRatePut {
+  card_id: number
+  category_id: number
+  multiplier: string | null
+  note: string | null
+  monthly_cap: string | null
+}

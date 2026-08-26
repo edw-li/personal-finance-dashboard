@@ -3,6 +3,7 @@ import {
   Briefcase,
   CalendarCheck,
   CalendarDays,
+  CreditCard,
   LayoutDashboard,
   LineChart,
   PiggyBank,
@@ -44,6 +45,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/net-worth', label: 'Net worth', icon: TrendingUp },
       { to: '/spending', label: 'Spending', icon: Wallet },
       { to: '/portfolio', label: 'Portfolio', icon: LineChart },
+      { to: '/credit-cards', label: 'Credit cards', icon: CreditCard },
     ],
   },
   {

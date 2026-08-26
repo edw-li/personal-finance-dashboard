@@ -21,7 +21,10 @@ from app.importer.report import SheetReport
 from app.models import (
     Account,
     AccountBalance,
+    CardCredit,
     CategoryBudget,
+    CreditCard,
+    CreditLimitEvent,
     CustomEvent,
     DividendPayment,
     EsppOffering,
@@ -31,6 +34,8 @@ from app.models import (
     NetWorthSnapshot,
     PortfolioValueHistory,
     PositionTransaction,
+    RewardCategory,
+    RewardRate,
     RsuGrant,
     Security,
     SpendingCategory,
@@ -1051,3 +1056,74 @@ async def test_importer_never_writes_custom_events(db):
     }
     assert after == before
     assert all("custom_events" not in sheet.entities for sheet in report.sheets.values())
+
+
+def credit_card_rows(model):
+    """Column-reflection snapshots, as grant_row above — a column added to any
+    credit-card table later is covered without anyone editing this pin."""
+
+    def snapshot(rows):
+        return {row.id: tuple(getattr(row, c.key) for c in model.__table__.columns) for row in rows}
+
+    return snapshot
+
+
+async def test_importer_never_writes_credit_card_tables(db):
+    """All five credit-card tables are dashboard-only (2026-08-25 spec §2, the
+    rsu_grants posture): the workbook's Credit Card Matrix sheet is reference material,
+    never a source — a re-import must not create, update or delete a row in any of
+    them, even while it diff-updates the spending category a reward category maps to."""
+    from app.importer.service import run_import
+
+    # Map onto a category the workbook WILL diff-update (the budgets pin's trick):
+    # slug "food" matches the workbook's Food column, sort_order 99 does not.
+    spending = SpendingCategory(name="Food", slug="food", sort_order=99)
+    db.add(spending)
+    await db.flush()
+    card = CreditCard(
+        name="Venture X",
+        slug="venture-x",
+        annual_fee=Decimal("395.00"),
+        rewards_currency="miles",
+        point_value_cents=Decimal("1.7"),
+    )
+    db.add(card)
+    await db.flush()
+    category = RewardCategory(
+        name="Dining", slug="dining", spending_category_id=spending.id, pinned_card_id=card.id
+    )
+    db.add(category)
+    await db.flush()
+    db.add(CardCredit(card_id=card.id, label="Travel credit", annual_value=Decimal("300")))
+    db.add(RewardRate(card_id=card.id, category_id=category.id, multiplier=Decimal("2")))
+    db.add(
+        CreditLimitEvent(
+            card_id=card.id, effective_date=date(2023, 5, 12), limit_amount=Decimal("20000")
+        )
+    )
+    await db.commit()
+
+    models = [CreditCard, CardCredit, RewardCategory, RewardRate, CreditLimitEvent]
+    before = {}
+    for model in models:
+        rows = (await db.execute(select(model))).scalars().all()
+        before[model.__tablename__] = credit_card_rows(model)(rows)
+    assert all(len(snap) == 1 for snap in before.values())  # a pin over nothing pins nothing
+
+    for _ in range(2):
+        report = await run_import(build_workbook(), db, dry_run=False)
+        assert report.applied is True  # a blocked import would pin nothing
+
+    # populate_existing, or the identity map would hand back the pre-import objects and
+    # this would pass even if the import had rewritten every column (the dividends pin's
+    # note).
+    after = {}
+    for model in models:
+        rows = (
+            (await db.execute(select(model).execution_options(populate_existing=True)))
+            .scalars()
+            .all()
+        )
+        after[model.__tablename__] = credit_card_rows(model)(rows)
+    assert after == before
+    assert all(table not in sheet.entities for sheet in report.sheets.values() for table in after)

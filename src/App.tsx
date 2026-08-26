@@ -14,6 +14,7 @@ const MonthlyUpdatePage = lazy(() => import('./pages/MonthlyUpdatePage'))
 const NetWorthPage = lazy(() => import('./pages/NetWorthPage'))
 const SpendingPage = lazy(() => import('./pages/SpendingPage'))
 const PortfolioPage = lazy(() => import('./pages/PortfolioPage'))
+const CreditCardsPage = lazy(() => import('./pages/CreditCardsPage'))
 const TaxesPage = lazy(() => import('./pages/TaxesPage'))
 const EsppPage = lazy(() => import('./pages/EsppPage'))
 const PaycheckPage = lazy(() => import('./pages/PaycheckPage'))
@@ -36,6 +37,7 @@ export default function App() {
                 <Route path="/net-worth" element={<NetWorthPage />} />
                 <Route path="/spending" element={<SpendingPage />} />
                 <Route path="/portfolio" element={<PortfolioPage />} />
+                <Route path="/credit-cards" element={<CreditCardsPage />} />
                 <Route path="/taxes" element={<TaxesPage />} />
                 <Route path="/espp" element={<EsppPage />} />
                 <Route path="/paycheck" element={<PaycheckPage />} />

@@ -1,0 +1,63 @@
+/* CardsPanel only. The shared vocabulary (.card, .eyebrow, .data-table, .badge,
+   .field-input, .button, .error-banner, .empty-note) lives in panels.css and is not
+   redefined here. */
+
+.roster-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem 0.8rem;
+  margin-bottom: 0.9rem;
+}
+.roster-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.roster-form .span-2 {
+  grid-column: span 2;
+}
+.roster-form-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+/* Free text and word-lists, not figures: panels.css's .field-input is a right-aligned
+   monospace money box, and a card's NAME wearing it reads as a number (CompPage.css's
+   `.comp-form .span-2 .field-input` / `select.field-input` rules, same reasoning).
+   Selected by what they are NOT: the two AmountInputs always render inputmode="decimal"
+   and the Opened box is type="date", so the four plain word boxes are exactly the inputs
+   carrying neither attribute — and both pickers hold words too. */
+.roster-form input.field-input:not([inputmode]):not([type]),
+.roster-form select.field-input {
+  text-align: left;
+  font-family: inherit;
+}
+/* .sub is per-feature CSS in this codebase (portfolio.css precedent), not global. */
+.roster-table td .sub {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+/* The house's row-action and edited-row rules (CompPage.css / EsppPage.css) are PAGE-scoped
+   in those features, and this feature's page sheet is deliberately empty — the feature CSS
+   travels with the components. So they live here, scoped to this panel's own table rather
+   than leaking a bare `.row-actions` into every sibling panel on the page. */
+.roster-table .row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.roster-table .row-actions .button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+.roster-table tr.is-editing td {
+  background: var(--surface-2);
+}
+@media (max-width: 900px) {
+  .roster-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

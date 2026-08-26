@@ -52,6 +52,7 @@ describe('Layout — sidebar v2', () => {
       'Net worth',
       'Spending',
       'Portfolio',
+      'Credit cards',
       'Paycheck',
       'Comp',
       'ESPP',
