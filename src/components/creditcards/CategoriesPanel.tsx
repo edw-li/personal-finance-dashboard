@@ -118,7 +118,14 @@ export default function CategoriesPanel({
     setBusy(true)
     setError(null)
     const request =
-      editingId !== null ? updateRewardCategory(editingId, body) : createRewardCategory(body)
+      editingId !== null
+        ? updateRewardCategory(editingId, body)
+        : // Append, don't default to 0: a new row would otherwise tie the first seeded
+          // row's sort_order and id-break to the top of the matrix (final review M3).
+          createRewardCategory({
+            ...body,
+            sort_order: categories.reduce((acc, c) => Math.max(acc, c.sort_order + 1), 0),
+          })
     request
       .then(() => {
         document.getElementById('reward-category-name')?.focus()

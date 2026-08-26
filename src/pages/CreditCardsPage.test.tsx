@@ -59,6 +59,7 @@ import {
   fetchRewardRates,
   putRewardRates,
   updateCardCredit,
+  updateCreditCard,
 } from '../api/creditCards'
 import { fetchAccounts, fetchMonthBalances, fetchSummary } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
@@ -287,6 +288,27 @@ describe('CreditCardsPage', () => {
       { card_id: 1, category_id: 10, multiplier: '5', note: null, monthly_cap: null },
     ])
     await screen.findByText('5x')
+  })
+
+  it('roster edit preserves is_active and sort_order on the full-replace PATCH', async () => {
+    // The full-replace risk (final review M1): an edit must never silently unarchive
+    // a card or reset its ordering — those fields have no form boxes.
+    vi.mocked(updateCreditCard).mockResolvedValue(vx())
+    vi.mocked(fetchCreditCards).mockResolvedValue([
+      vx({ is_active: false, sort_order: 7 }),
+      SAVOR,
+      RH,
+    ])
+    renderPage()
+    await screen.findByText('Card roster')
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Venture X' }))
+    fireEvent.change(screen.getByLabelText('Card name'), { target: { value: 'Venture X Prime' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save card' }))
+    await waitFor(() => expect(updateCreditCard).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateCreditCard).mock.calls[0]).toEqual([
+      1,
+      expect.objectContaining({ name: 'Venture X Prime', is_active: false, sort_order: 7 }),
+    ])
   })
 
   it('roster add flow POSTs the full card body with defaults filled', async () => {
