@@ -12,34 +12,33 @@ import { PALETTE, SURFACE } from '../../charts/theme'
 import type { NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
 import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
 
-// Axis-free trend (Sparkline.tsx's sanctioned form, but echarts — the page already ships
-// the runtime for the performance lines/bars): tooltip stays, axes hide.
-export function netWorthSparkOption(
+// A full trend chart, dressed exactly like its two card siblings below it. It began life
+// as an axis-free "spark" (Sparkline.tsx's license), but at 220px in a full-width card
+// between two fully-dressed charts the hidden axes and disabled pointer read as BREAKAGE
+// (2026-08-25 user report; audit I-9): the sparkline license is for a 30px table-row
+// strip, not a card that owns the page's first fold.
+export function netWorthTrendOption(
   ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'>,
 ): EChartsOption | null {
   if (ts.months.length < 2) return null
   return {
-    grid: { left: 8, right: 8, top: 10, bottom: 8 },
-    xAxis: { type: 'category', data: ts.months.map(formatMonth), show: false, boundaryGap: false },
-    yAxis: { type: 'value', show: false, scale: true },
-    tooltip: {
-      trigger: 'axis',
-      // No axis pointer: with both axes hidden there is nothing for a vertical rule to
-      // anchor to, so it reads as noise crossing a bare line (the axis-free form's price).
-      axisPointer: { type: 'none' },
-      valueFormatter: (v) => formatCurrency(v as number),
-    },
+    grid: { left: 70, right: 16, top: 12, bottom: 28 },
+    xAxis: { type: 'category', data: ts.months.map(formatMonth), boundaryGap: false },
+    // A washed area over a VISIBLE axis needs the honest zero baseline
+    // (historyChartOptions' rule) — no scale:true, unlike the old axis-free form.
+    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatCurrencyCompact(v) } },
+    // Default axis pointer kept: with axes on screen the dotted rule has something to
+    // point at, and a line chart ships its crosshair by default (dataviz law).
+    tooltip: { trigger: 'axis', valueFormatter: (v) => formatCurrency(v as number) },
     series: [
       {
         type: 'line',
         name: 'Net worth',
         symbol: 'none',
-        lineStyle: { width: 1.5 },
-        // Axis-free shape emphasis, not an area encoding: with no labeled baseline on screen
-        // there is no zero for the fill to misrepresent, and a faint wash under the line is
-        // the common finance-sparkline idiom. Deliberate departure from Sparkline.tsx's
-        // `fill: none` (that SVG spark sits inline in a table row; this one owns a card).
-        areaStyle: { opacity: 0.22 },
+        lineStyle: { width: 2 },
+        // The house visible-axis wash (historyChartOptions' 0.12), now anchored to a
+        // labeled zero it cannot misrepresent.
+        areaStyle: { opacity: 0.12 },
         color: PALETTE[0],
         data: ts.net_worth.map(Number),
       },

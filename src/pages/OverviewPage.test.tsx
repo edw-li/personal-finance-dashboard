@@ -67,7 +67,7 @@ vi.mock('../api/overview', async (importOriginal) => ({
   fetchMoneyFlow: vi.fn(),
 }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
-// charts DRAW is pinned elsewhere — the spark and the bars in
+// charts DRAW is pinned elsewhere — the net-worth trend and the bars in
 // src/components/overview/overviewChartOptions.test.ts, the performance lines in
 // src/components/portfolio/historyChartOptions.test.ts; this file asks only whether a chart
 // is on screen and — via the categories the marker carries — WHICH feed drew it. The async
@@ -622,7 +622,7 @@ describe('OverviewPage snapshot fan-out', () => {
 })
 
 describe('OverviewPage charts', () => {
-  it('feeds the spark, the performance lines and the bars', async () => {
+  it('feeds the net-worth trend, the performance lines and the bars', async () => {
     // Captured once: daysAgo(1) called twice could straddle UTC midnight and disagree.
     const quoted = daysAgo(1)
     // Regression: as_of is the OLDEST quote — here a stale manual-priced straggler. The
@@ -974,7 +974,7 @@ describe('OverviewPage click-through (2026-08-25 spec §2d)', () => {
     expect(screen.getByTestId('location').textContent).toBe('/spending?month=2025-08-01')
   })
 
-  it('performance goes to /portfolio, the spark to /net-worth', async () => {
+  it('performance goes to /portfolio, the net-worth trend to /net-worth', async () => {
     serve()
     renderPage()
     await screen.findByText('Net worth — Aug 2026')

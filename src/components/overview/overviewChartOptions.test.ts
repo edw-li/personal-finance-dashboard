@@ -3,7 +3,7 @@ import type { EChartsOption } from '../../charts/echarts'
 import { PALETTE, SURFACE } from '../../charts/theme'
 import type { TaxSummaryOut } from '../../types/api'
 import {
-  netWorthSparkOption,
+  netWorthTrendOption,
   pickTaxSummary,
   recentSpendOption,
   spendStats,
@@ -95,42 +95,45 @@ function tooltipOf(option: EChartsOption | null): {
     .tooltip
 }
 
-describe('netWorthSparkOption', () => {
-  it('draws one blue line with the axes hidden and the tooltip kept', () => {
-    const option = netWorthSparkOption({
+describe('netWorthTrendOption', () => {
+  it('draws one blue line as a FULL chart — axes visible, default pointer rule kept', () => {
+    const option = netWorthTrendOption({
       months: monthsFrom('2025-11-01', 3),
       net_worth: ['1000.00', '-250.50', '2000.75'],
     })
     const [line] = seriesOf(option)
     expect(line.type).toBe('line')
     expect(line.color).toBe(PALETTE[0])
-    // A trend, not a reading surface: no symbols, no axes — but the months still ride the
-    // hidden category axis so the tooltip can name the point (Sparkline.tsx's form).
     expect(line.symbol).toBe('none')
     expect(line.data).toEqual([1000, -250.5, 2000.75])
     expect(categoriesOf(option)).toEqual(['Nov 2025', 'Dec 2025', 'Jan 2026'])
-    expect(xAxisOf(option).show).toBe(false)
-    expect(yAxisOf(option).show).toBe(false)
-    // The wash under the line is shape emphasis, not an area encoding — pinned so a later
-    // "sparklines don't fill" edit has to argue with this test (see the builder's comment).
-    expect(line.areaStyle?.opacity).toBe(0.22)
+    // 2026-08-25 user report: at 220px in a full-width card beside two fully-dressed
+    // siblings, hidden axes read as BREAKAGE, not a sparkline license (audit I-9). The
+    // axes are now visible — pinned as the absence of the old show:false opt-outs.
+    expect(xAxisOf(option).show).toBeUndefined()
+    expect(yAxisOf(option).show).toBeUndefined()
+    // Compact ticks, exact tooltip: the axis is a scale, the tooltip is a figure
+    // (recentSpendOption's exact grammar).
+    expect(yAxisOf(option).axisLabel?.formatter?.(1500)).toBe('$1.5K')
+    expect(valueFormatterOf(option)(1234.5)).toBe('$1,234.50')
+    // A washed area over a VISIBLE axis needs the honest zero baseline
+    // (historyChartOptions' rule) — so no scale:true, and the wash drops to the house's
+    // visible-axis opacity.
+    expect(yAxisOf(option).scale).toBeUndefined()
+    expect(line.areaStyle?.opacity).toBe(0.12)
     // No half-category padding: the line has to touch both card edges or the fill leaves
     // gutters that read as missing months.
     expect(xAxisOf(option).boundaryGap).toBe(false)
-    // Zero-anchoring a net-worth spark flattens it: scale lets the frame follow the line.
-    expect(yAxisOf(option).scale).toBe(true)
-    expect(valueFormatterOf(option)(1234.5)).toBe('$1,234.50')
-    // Axis trigger keeps the hover target the whole column (a 1.5px line is unhittable),
-    // but the pointer RULE is off: with both axes hidden it has nothing to point AT, so it
-    // reads as a stray vertical stroke across the card. Pinned — echarts' default for an
-    // axis-triggered tooltip is a visible line, so this is an explicit opt-out.
+    // With axes on screen the pointer rule has something to point at: echarts' default
+    // dotted rule stays (no opt-out) — the dataviz law that a line chart ships its
+    // crosshair by default, and the second half of the user report.
     expect(tooltipOf(option).trigger).toBe('axis')
-    expect(tooltipOf(option).axisPointer?.type).toBe('none')
+    expect(tooltipOf(option).axisPointer).toBeUndefined()
   })
 
   it('returns null under two months — one point is not a trend', () => {
-    expect(netWorthSparkOption({ months: [], net_worth: [] })).toBeNull()
-    expect(netWorthSparkOption({ months: ['2026-01-01'], net_worth: ['1000.00'] })).toBeNull()
+    expect(netWorthTrendOption({ months: [], net_worth: [] })).toBeNull()
+    expect(netWorthTrendOption({ months: ['2026-01-01'], net_worth: ['1000.00'] })).toBeNull()
   })
 })
 
@@ -178,8 +181,8 @@ describe('recentSpendOption', () => {
     // Compact ticks, exact tooltip: the axis is a scale, the tooltip is a figure.
     expect(yAxisOf(option).axisLabel?.formatter?.(1500)).toBe('$1.5K')
     expect(valueFormatterOf(option)(1234.5)).toBe('$1,234.50')
-    // The counterpart to the spark's `axisPointer: 'none'`: this chart HAS labeled axes, so
-    // echarts' default pointer rule points at something and stays.
+    // Labeled axes, so echarts' default pointer rule points at something and stays —
+    // the same posture the net-worth trend now wears.
     expect(tooltipOf(option).axisPointer).toBeUndefined()
     expect(recentSpendOption({ months: [], totals: [] })).toBeNull()
   })

@@ -18,7 +18,7 @@ import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import { UP_NEXT_WINDOW_DAYS, upNextItems } from '../components/overview/upNext'
 import { ytdStats } from '../components/overview/ytd'
 import {
-  netWorthSparkOption,
+  netWorthTrendOption,
   pickTaxSummary,
   RECENT_SPEND_MONTHS,
   recentSpendOption,
@@ -178,7 +178,7 @@ export default function OverviewPage() {
   // The only memoized values on the page — EChart keys its setOption effect on [option],
   // so a fresh object every render would redraw all three charts on every keystroke
   // elsewhere. Everything else below is a plain const.
-  const spark = useMemo(() => (data ? netWorthSparkOption(data.ts) : null), [data])
+  const nwTrend = useMemo(() => (data ? netWorthTrendOption(data.ts) : null), [data])
   const perf = useMemo(
     () =>
       data ? portfolioHistoryOption(data.history, liveFromHoldings(data.holdings)) : null,
@@ -416,9 +416,9 @@ export default function OverviewPage() {
               <NavLink className="drill-hint" to="/net-worth">
                 Open net worth →
               </NavLink>
-              {spark ? (
+              {nwTrend ? (
                 <EChart
-                  option={spark}
+                  option={nwTrend}
                   height={220}
                   ariaLabel="Line chart of net worth at every monthly snapshot"
                   onClick={() => navigate('/net-worth')}

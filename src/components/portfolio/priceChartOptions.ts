@@ -30,8 +30,9 @@ export function priceHistoryOption(points: PricePoint[]): EChartsOption | null {
       type: 'value',
       // scale, unlike the money charts' zero anchor: a price line carries no area wash and
       // no additive reading, and pinning a ~$580 close to a $0 floor flattens the year to
-      // a ribbon (netWorthSparkOption's posture, here with the axis showing — the labeled
-      // ticks are what keep the scaled frame honest).
+      // a ribbon. The labeled ticks are what keep the scaled frame honest — which is also
+      // why washed charts (netWorthTrendOption) must NOT scale: a fill floats on a
+      // non-zero floor.
       scale: true,
       axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
     },
