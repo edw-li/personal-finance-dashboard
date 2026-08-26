@@ -1,0 +1,56 @@
+/* CardDetail only. The shared vocabulary (.page-header, .card, .card-grid, .span-6,
+   .eyebrow, .chip-row, .chip, .data-table, .field-input, .button, .stat-tile,
+   .error-banner, .empty-note, .drill-hint) lives in panels.css and is not redefined
+   here. */
+
+.card-detail .card-detail-title {
+  margin: 0;
+  font-size: 1.3rem;
+}
+.card-detail .card-detail-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.card-detail .chip-row {
+  margin-bottom: 0.9rem;
+}
+/* These chips are READ-ONLY spans, not the series-picker buttons panels.css writes .chip
+   for — a hand cursor here would promise a click that does nothing. */
+.card-detail .chip-row .chip {
+  cursor: default;
+}
+.credit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.86rem;
+}
+.credit-row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.credit-add,
+.limit-add {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  flex-wrap: wrap;
+}
+.credit-add .field-input,
+.limit-add .field-input {
+  flex: 1;
+  min-width: 8rem;
+}
+/* Scoped to this table rather than leaking a bare `.row-actions` into every sibling
+   panel — roster.css's rule, same reason (the house's page-scoped precedent). */
+.limit-table .row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.limit-table .row-actions .button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
