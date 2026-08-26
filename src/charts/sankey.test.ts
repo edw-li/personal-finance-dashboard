@@ -31,7 +31,10 @@ describe('SANKEY_MARKS', () => {
     expect(SANKEY_MARKS.type).toBe('sankey')
     expect(SANKEY_MARKS.orient).toBe('horizontal')
     expect(SANKEY_MARKS.nodeWidth).toBe(12)
-    expect(SANKEY_MARKS.nodeGap).toBe(8)
+    // 14: adjacent label centers sit ≥ one nodeGap apart, and 14 > the 12px label —
+    // the geometric fix for labels printing over each other on tiny adjacent nodes
+    // (2026-08-25 /paycheck report; labelLayout does not apply to sankey, probe-proven).
+    expect(SANKEY_MARKS.nodeGap).toBe(14)
     expect(SANKEY_MARKS.draggable).toBe(false)
     // 0 = vertical node order is DATA order — both builders emit a meaningful order.
     expect(SANKEY_MARKS.layoutIterations).toBe(0)

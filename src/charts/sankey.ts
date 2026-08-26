@@ -50,7 +50,13 @@ export const SANKEY_MARKS: SankeySeriesOption = {
   type: 'sankey',
   orient: 'horizontal',
   nodeWidth: 12,
-  nodeGap: 8,
+  // 14, raised from the spec's original 8 (2026-08-25): adjacent label CENTERS sit at
+  // least one nodeGap apart (worst case: two near-zero nodes, e.g. per-check Dental &
+  // vision beside HSA), so a gap wider than the 12px label is the only thing that stops
+  // labels printing over each other. echarts' labelLayout/moveOverlap does NOT apply to
+  // sankey labels (verified by a full-bundle probe, not just the tree-shaken build) —
+  // geometry is the fix, not a feature flag.
+  nodeGap: 14,
   draggable: false,
   // 0 iterations = vertical node order IS data order (echarts' documented escape hatch
   // from its crossing-minimizer). Both builders emit a meaningful order — biggest-first

@@ -23,7 +23,8 @@ The app shows composition (stacked bars, pies) but never *flow*. Two flows are a
 
 ### Shared mark/interaction specs (both sankeys)
 
-- `nodeWidth: 12`, `nodeGap: 8`, `draggable: false`, horizontal orient, node `borderRadius: 2`, no node borders.
+- `nodeWidth: 12`, `nodeGap: 14`, `draggable: false`, horizontal orient, node `borderRadius: 2`, no node borders.
+  *(2026-08-25 revision: nodeGap raised 8 → 14 after a user report of labels printing over each other on tiny adjacent /paycheck nodes — adjacent label centers sit ≥ one nodeGap apart, and 14 clears the 12px label height. echarts' labelLayout was probe-proven not to apply to sankey, so the gap is the fix.)*
 - Links wear the **source node's color at ~0.3 opacity**, flat (no gradient — minimal-theme posture).
 - Node labels in INK (entity name only — text wears text tokens, never values-in-series-color); amounts live in the tooltip, formatted by `formatCurrency`. Category names are user text → `escapeHtml` in any HTML tooltip (house law).
 - `emphasis: { focus: 'adjacency' }` — hovering a node highlights its flows.

@@ -21,6 +21,10 @@ import {
 import * as echarts from 'echarts/core'
 // Bar-to-pie morph for the spending month drill-in; keys off series ids across
 // notMerge setOption calls. Inert when animation is off (reduced motion).
+// (LabelLayout is deliberately NOT registered: the labelLayout option does not apply
+// to sankey labels at all — full-bundle probe, 2026-08-25 — and nothing else here
+// uses it. Sankey label collisions are prevented geometrically via SANKEY_MARKS'
+// nodeGap instead.)
 import { UniversalTransition } from 'echarts/features'
 import { CanvasRenderer } from 'echarts/renderers'
 import type {
