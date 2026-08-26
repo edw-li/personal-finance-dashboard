@@ -266,6 +266,18 @@ export default function CreditCardsPage() {
           )}
 
           <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
+            {cards !== null && <CardsPanel cards={cards} accounts={accounts} onChanged={load} />}
+
+            {categories !== null && (
+              <CategoriesPanel
+                categories={categories}
+                cards={cards ?? []}
+                spendingCategories={spendingCategories}
+                suggested={suggested}
+                onChanged={load}
+              />
+            )}
+
             {activeCards.length > 0 && activeCategories.length > 0 ? (
               <RewardsMatrix
                 cards={activeCards}
@@ -284,7 +296,7 @@ export default function CreditCardsPage() {
                   <h2 className="eyebrow">Rewards matrix</h2>
                   <div className="empty-note">
                     The matrix appears once there is at least one active card and one category —
-                    add a card below
+                    add a card above
                     {cards !== null && (categories ?? []).length === 0
                       ? ' and seed the categories'
                       : ''}
@@ -313,18 +325,6 @@ export default function CreditCardsPage() {
                 )}
               </div>
             )}
-
-            {categories !== null && (
-              <CategoriesPanel
-                categories={categories}
-                cards={cards ?? []}
-                spendingCategories={spendingCategories}
-                suggested={suggested}
-                onChanged={load}
-              />
-            )}
-
-            {cards !== null && <CardsPanel cards={cards} accounts={accounts} onChanged={load} />}
 
             <div className="card span-12">
               <h2 className="eyebrow">
