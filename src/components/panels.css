@@ -431,7 +431,11 @@
   justify-content: flex-end;
   align-items: center;
   gap: 0.4rem;
-  margin-bottom: 0.25rem;
+  /* The menu stacks directly under whatever controls the card header ends with (range
+     chips, Monthly/Quarterly) — without top air the two right-aligned control rows
+     touch and read as one crowded blob (2026-08-25 user report: /net-worth,
+     /portfolio). One house gap unit separates them into two deliberate rows. */
+  margin: 0.4rem 0 0.25rem;
 }
 
 .chart-export-glyph {
