@@ -8,6 +8,14 @@ from app.models.comp import (
     PaycheckProfile,
     RsuGrant,
 )
+from app.models.credit_cards import (
+    REWARDS_CURRENCIES,
+    CardCredit,
+    CreditCard,
+    CreditLimitEvent,
+    RewardCategory,
+    RewardRate,
+)
 from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.models.portfolio import (
     DIVIDEND_SOURCES,
@@ -31,8 +39,11 @@ __all__ = [
     "Account",
     "AccountBalance",
     "AppSetting",
+    "CardCredit",
     "CategoryBudget",
     "CompEvent",
+    "CreditCard",
+    "CreditLimitEvent",
     "CustomEvent",
     "DIVIDEND_SOURCES",
     "DividendPayment",
@@ -49,6 +60,9 @@ __all__ = [
     "PortfolioValueHistory",
     "PositionTransaction",
     "PriceHistory",
+    "REWARDS_CURRENCIES",
+    "RewardCategory",
+    "RewardRate",
     "RsuGrant",
     "Security",
     "SpendingCategory",

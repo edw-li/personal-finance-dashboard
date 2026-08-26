@@ -16,6 +16,7 @@ PCT_QUANTUM = Decimal("0.000001")
 # Numeric(14,2) keeps 12 integer digits, Numeric(12,2) keeps only 10.
 MONEY_MAX_ABS = Decimal(10) ** 12  # Numeric(14,2): account balances
 MONEY_MAX_ABS_12_2 = Decimal(10) ** 10  # Numeric(12,2): spending amounts, net_pay
+MONEY_MAX_ABS_8_2 = Decimal(10) ** 6  # Numeric(8,2): card annual fees / credit values
 SHARE_QUANTUM = Decimal("0.000001")
 PRICE_QUANTUM = Decimal("0.0001")
 MONEY_MAX_ABS_10_2 = Decimal(10) ** 8  # Numeric(10,2): transaction fees
