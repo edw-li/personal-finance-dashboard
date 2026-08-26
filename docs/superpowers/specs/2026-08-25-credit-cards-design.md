@@ -1,6 +1,6 @@
 # Credit Cards — Rewards Optimizer & Credit-Line Tracker — Design Spec
 
-**Date:** 2026-08-25 · **Status:** approved, not yet implemented
+**Date:** 2026-08-25 · **Status:** implemented 2026-08-26 (branch credit-cards, merged to local main @586d6ad)
 **Touches:** one additive migration (5 tables), new `models/credit_cards.py` + `schemas/credit_cards.py` + `api/credit_cards.py`, `main.py` router registration, new `/credit-cards` page + `src/components/creditcards/*` (matrix, drill-in, roster, math module, chart options), `navItems.ts`, `App.tsx`, `src/api/creditCards.ts`, `src/types/api.ts`.
 
 ## 1. Context & goals
