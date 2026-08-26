@@ -26,3 +26,6 @@ vite.config.ts.timestamp-*
 
 # Worktrees
 .worktrees/
+
+# Brainstorming visual companion sessions
+.superpowers/
