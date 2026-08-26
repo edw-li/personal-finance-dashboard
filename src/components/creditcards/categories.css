@@ -21,6 +21,20 @@
   font-size: 0.72rem;
   font-weight: 400;
 }
+/* Same panel-scoped row-action/edited-row rules as roster.css — without them the
+   spec-required is-editing class is inert and portfolio.css's bare `.row-actions
+   button` rules (globally bundled) leak into this table. */
+.categories-table .row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.categories-table .row-actions .button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+.categories-table tr.is-editing td {
+  background: var(--surface-2);
+}
 @media (max-width: 900px) {
   .categories-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
