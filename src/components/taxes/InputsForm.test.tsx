@@ -62,6 +62,58 @@ function inputsFixture(): TaxInputsOut {
   }
 }
 
+// What the partner's rows hold once the year is filed jointly. Deliberately sparse: a person
+// with no row yet must render BLANK, never "0" — blank is what unsets an input.
+const PARTNER_ROWS: Record<string, { value: string | null; suggested: string | null }> = {
+  annual_salary: { value: '90000.0000', suggested: null },
+  // The server derives suggestions PER COLUMN, so the partner has one of their own. Only the
+  // primary's is offered (design §5.3), which is what the chip test below pins.
+  gross_paycheck: { value: null, suggested: '7500.0000' },
+  hsa_contributions: { value: null, suggested: null },
+}
+
+// The same year, as the API answers it once the year is filed jointly: every PER-PERSON
+// definition comes back once per person COLUMN, each carrying its own person_id, value and
+// suggestion, while a household key still comes back exactly once with person_id null.
+// Non-contiguous ids on purpose: nothing here may work by array position.
+function marriedInputs(): TaxInputsOut {
+  const single = inputsFixture()
+  return {
+    ...single,
+    filing_status: 'married_joint',
+    people: [
+      { id: 1, name: 'Alex' },
+      { id: 4, name: 'Sam' },
+    ],
+    sections: single.sections.map((section) => ({
+      ...section,
+      items: section.items.flatMap((item) =>
+        item.is_per_person
+          ? [
+              { ...item, person_id: 1 },
+              { ...item, person_id: 4, ...PARTNER_ROWS[item.key] },
+            ]
+          : [item],
+      ),
+    })),
+  }
+}
+
+// A married year on a database with fewer than two people: the server falls back to ONE
+// column (a null one when the roster is empty), which is the pre-household payload exactly.
+function marriedNoRoster(): TaxInputsOut {
+  const single = inputsFixture()
+  return {
+    ...single,
+    filing_status: 'married_joint',
+    people: [],
+    sections: single.sections.map((section) => ({
+      ...section,
+      items: section.items.map((item) => ({ ...item, person_id: null })),
+    })),
+  }
+}
+
 const saveButton = () => screen.getByRole('button', { name: /save inputs/i }) as HTMLButtonElement
 const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement
 
@@ -313,5 +365,102 @@ describe('InputsForm', () => {
     expect(field('Annual Salary').value).toBe('$200,000.00')
     expect(saveButton().disabled).toBe(true)
     expect(screen.queryByText(/pasted/i)).toBeNull()
+  })
+
+  // --- filing status: per-person columns (2026-08-26 design §6) ---
+
+  it('renders a single-status year with one box per key and the ids it always had', () => {
+    const { container } = render(<InputsForm inputs={inputsFixture()} onSaved={vi.fn()} />)
+
+    // The zero-diff pin. Every other test in this file is the rest of it: a single-status
+    // year must render, request and PUT exactly what it did before columns existed.
+    expect(container.querySelectorAll('.tax-input-row .field-input')).toHaveLength(4)
+    expect(document.getElementById('tax-input-annual_salary')).not.toBeNull()
+    expect(document.getElementById('tax-input-qualified_dividends')).not.toBeNull()
+    expect(container.querySelector('.tax-input-grid.is-split')).toBeNull()
+    expect(container.querySelector('.tax-input-head')).toBeNull()
+    expect(container.querySelector('.field-input.tax-input-wide')).toBeNull()
+    // Still a real <label htmlFor>, not an aria-label: one box means one control to point at.
+    expect(field('Annual Salary').labels?.[0]?.tagName).toBe('LABEL')
+  })
+
+  it('splits the per-person keys into named columns on a married year', () => {
+    const { container } = render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+
+    expect(field('Annual Salary — Alex').value).toBe('$200,000.00')
+    expect(field('Annual Salary — Sam').value).toBe('$90,000.00')
+    // A person with no row yet is BLANK, never "0" — blank is what unsets an input.
+    expect(field('Gross Paycheck — Sam').value).toBe('')
+    // A household key keeps ONE box, spanning both person tracks rather than leaving a hole.
+    expect(screen.getByLabelText('Qualified Dividends').className).toContain('tax-input-wide')
+    expect(screen.queryByLabelText('Qualified Dividends — Alex')).toBeNull()
+    // Ids are person-qualified, and nothing looks them up as a CSS selector.
+    expect(document.getElementById('tax-input-annual_salary:4')).not.toBeNull()
+    expect(document.getElementById('tax-input-qualified_dividends')).not.toBeNull()
+    // Headers only over the sections that HAVE per-person lines: capital gains is purely
+    // household here, so it keeps its single full-width column and no names.
+    expect(container.querySelectorAll('.tax-input-head')).toHaveLength(2)
+    expect(screen.getAllByText('Alex')).toHaveLength(2)
+    expect(screen.getAllByText('Sam')).toHaveLength(2)
+  })
+
+  it('splits the PUT body by column: household keys unqualified, person rows named', async () => {
+    render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+    fireEvent.change(field('Annual Salary — Sam'), { target: { value: '95000' } })
+    fireEvent.change(field('Qualified Dividends'), { target: { value: '100' } })
+    fireEvent.click(saveButton())
+
+    // Untouched cells are absent from both halves — sending one blank would DELETE a stored
+    // input the user never looked at.
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
+        values: { qualified_dividends: '100' },
+        rows: [{ key: 'annual_salary', person_id: 4, value: '95000' }],
+      }),
+    )
+  })
+
+  it('omits the row list entirely when only household lines moved', async () => {
+    render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+    fireEvent.change(field('Qualified Dividends'), { target: { value: '100' } })
+    fireEvent.click(saveButton())
+
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
+        values: { qualified_dividends: '100' },
+      }),
+    )
+  })
+
+  it('offers the derived suggestion once, over the primary person’s column', () => {
+    render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+    // Derived suggestions are the primary person's (design §5.3) — one chip per row, not two,
+    // even though the payload carries the partner's own suggestion too.
+    const applies = screen.getAllByRole('button', { name: 'Apply suggestion for Gross Paycheck' })
+    expect(applies).toHaveLength(1)
+
+    fireEvent.click(applies[0])
+    expect(field('Gross Paycheck — Alex').value).toBe('$8,333.33')
+    expect(field('Gross Paycheck — Sam').value).toBe('')
+  })
+
+  it('keeps one column when the roster has fewer than two people, and says where to fix it', () => {
+    render(<InputsForm inputs={marriedNoRoster()} onSaved={vi.fn()} />)
+    // The server answered with one (null) column, so the honest degrade is today's layout —
+    // whose unqualified per-person keys it resolves onto the primary person.
+    expect(field('Annual Salary').value).toBe('$200,000.00')
+    expect(screen.queryByLabelText('Annual Salary — Alex')).toBeNull()
+    expect(screen.getByText(/Settings → Household/)).toBeTruthy()
+  })
+
+  it('heads a blank-named person Me and Partner rather than an empty column', () => {
+    const inputs = marriedInputs()
+    inputs.people = [
+      { id: 1, name: '  ' },
+      { id: 4, name: '' },
+    ]
+    render(<InputsForm inputs={inputs} onSaved={vi.fn()} />)
+    expect(field('Annual Salary — Me').value).toBe('$200,000.00')
+    expect(field('Annual Salary — Partner').value).toBe('$90,000.00')
   })
 })

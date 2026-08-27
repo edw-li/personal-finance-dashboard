@@ -84,8 +84,41 @@
   min-width: 0;
 }
 
-.tax-input-label label {
+.tax-input-label label,
+.tax-input-label .tax-input-name {
   font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Married-joint years only. The auto-fill masonry collapses to ONE grid column so a section's
+   person header sits directly over the boxes it names — at two grid columns the header would
+   line up with the left one and lie about the right. A one-column year never gets this class,
+   so its two-up layout is untouched. */
+.tax-input-grid.is-split {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tax-input-grid.is-split .tax-input-row {
+  grid-template-columns: minmax(0, 1fr) 120px 120px 170px;
+}
+
+.tax-input-grid.is-split .field-input.tax-input-wide {
+  grid-column: span 2;
+}
+
+/* Names, not data: the row is aria-hidden and must not read like a line item. */
+.tax-input-head {
+  padding-bottom: 0.1rem;
+}
+
+.tax-input-person {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
