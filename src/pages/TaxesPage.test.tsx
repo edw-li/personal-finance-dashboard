@@ -1377,4 +1377,37 @@ describe('filing status (2026-08-26 design §6)', () => {
     expect(await screen.findByText("Where 2024's gross income went")).toBeTruthy()
     expect(screen.queryByText(/bracket tables for 2024/)).toBeNull()
   })
+
+  it('drops a flagged year out of the trend and names it underneath', async () => {
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
+      years: [summaryFor(2024)],
+      incomplete: [
+        { year: 2026, filing_status: 'married_joint', brackets_missing_for_status: ['federal'] },
+      ],
+    })
+    renderPage()
+
+    // The feed keeps a refusal year OUT of `years` — it carries no sections at all, so a
+    // column for it would be a lie the chart builder could not even draw — and names it in
+    // `incomplete` instead. The chart shows what was computed; the note shows what was not.
+    await waitFor(() => expect(trendCategories()).toBe('2024'))
+    expect(screen.getByText(/Not charted: 2026/)).toBeTruthy()
+  })
+
+  it('says why the trend is empty when every year is flagged', async () => {
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
+      years: [],
+      incomplete: [
+        { year: 2024, filing_status: 'married_joint', brackets_missing_for_status: ['federal'] },
+      ],
+    })
+    renderPage()
+
+    // Distinct from "no years with stored inputs": there ARE years, they simply cannot be
+    // compared yet.
+    expect(
+      await screen.findByText(/every year with stored inputs is missing bracket tables/i),
+    ).toBeTruthy()
+    expect(screen.queryByText(/no years with stored inputs/i)).toBeNull()
+  })
 })

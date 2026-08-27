@@ -41,6 +41,10 @@ export default function SummaryPanel({
   // null = the feed has not answered yet (never [] — an empty feed is a real answer, and
   // the two say different things under the chart).
   const [years, setYears] = useState<TaxSummaryOut[] | null>(null)
+  // The years the feed had to SKIP: a year whose filing status has no bracket tables carries
+  // no sections at all, so the trend leaves it out rather than drawing a zero column that
+  // would read as a real answer. Named under the chart instead.
+  const [incompleteYears, setIncompleteYears] = useState<number[]>([])
   const [error, setError] = useState<string | null>(null)
   // Year drill-in: the year whose jurisdiction pie replaces the trend chart — READ from
   // the URL (?year=YYYY, 2026-08-25 spec §2d) so a drill is shareable. Stored as the
@@ -75,6 +79,7 @@ export default function SummaryPanel({
       .then((data) => {
         if (seq !== seqRef.current) return
         setYears(data.years)
+        setIncompleteYears((data.incomplete ?? []).map((row) => row.year))
         setError(null)
       })
       .catch((err: unknown) => {
@@ -89,7 +94,27 @@ export default function SummaryPanel({
     () => (missing.length > 0 ? null : waterfallOption(summary)),
     [summary, missing.length],
   )
-  const trend = useMemo(() => (years === null ? null : trendOption(years)), [years])
+  // Belt-and-braces against the feed's own contract: `years` should never contain a refusal
+  // year (its sections are null, so trendOption would read figures that are not there), and
+  // one that slipped through is named alongside the feed's own `incomplete` list rather than
+  // charted.
+  const chartable = useMemo(
+    () =>
+      years === null
+        ? null
+        : years.filter((y) => (y.brackets_missing_for_status ?? []).length === 0),
+    [years],
+  )
+  const flaggedYears = useMemo(() => {
+    const slipped = (years ?? [])
+      .filter((y) => (y.brackets_missing_for_status ?? []).length > 0)
+      .map((y) => y.year)
+    return [...new Set([...incompleteYears, ...slipped])].sort((a, b) => a - b)
+  }, [years, incompleteYears])
+  const trend = useMemo(
+    () => (chartable === null ? null : trendOption(chartable)),
+    [chartable],
+  )
 
   // The drilled year's summary comes out of THIS panel's all-years feed, so a save that
   // moves the year's figures redraws the open pie with the fresh ones.
@@ -242,20 +267,30 @@ export default function SummaryPanel({
               <p className="empty-note">No tax computed for {detailSummary.year}.</p>
             )}
           </>
-        ) : trend && years ? (
+        ) : trend && chartable ? (
           <>
             <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
+            {flaggedYears.length > 0 && (
+              <p className="drill-hint">
+                Not charted: {flaggedYears.join(', ')} — no bracket tables for that
+                year&apos;s filing status.
+              </p>
+            )}
             <EChart
               option={trend}
               height={320}
               onClick={handleTrendClick}
-              exportConfig={{ name: 'tax-trend', csv: () => taxTrendCsv(years) }}
+              exportConfig={{ name: 'tax-trend', csv: () => taxTrendCsv(chartable) }}
             />
           </>
         ) : (
           !error && (
             <p className="empty-note">
-              {years === null ? 'Loading…' : 'No years with stored inputs to compare yet.'}
+              {years === null
+                ? 'Loading…'
+                : flaggedYears.length > 0
+                  ? 'No comparable years yet — every year with stored inputs is missing bracket tables for its filing status.'
+                  : 'No years with stored inputs to compare yet.'}
             </p>
           )
         )}
