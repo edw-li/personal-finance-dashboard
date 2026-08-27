@@ -250,6 +250,7 @@ function withholdingFor(year: number): WithholdingOut {
   const leg = { ytd: '2000.00', projected: '4000.00' }
   return {
     year,
+    filing_status: 'single',
     liability_total: '5000.00',
     salary: leg,
     vest: {
@@ -261,6 +262,13 @@ function withholdingFor(year: number): WithholdingOut {
     balance_projected: '1000.00',
     checks_elapsed: 12,
     checks_total: 24,
+    // A single filer: no partner leg, no surtax gap, no missing tables — the silences the
+    // panel's own file exercises in full.
+    partner_wages: null,
+    partner_withheld_fed: null,
+    partner_withheld_state: null,
+    additional_medicare_gap: '0.00',
+    brackets_missing_for_status: [],
     safe_harbor: null,
     warnings: [],
   }

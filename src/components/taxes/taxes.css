@@ -303,6 +303,49 @@
   overflow-wrap: anywhere;
 }
 
+/* The partner mini-section: three read-only facts under the tiles. A definition list, not a
+   grid of inputs — the inputs form below this card owns these rows (see the component's
+   note), and the visual difference is the point. */
+.withholding-partner {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, transparent);
+}
+
+.withholding-partner > .eyebrow {
+  margin: 0 0 8px;
+}
+
+.withholding-partner-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+}
+
+.withholding-partner-facts dt {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.withholding-partner-facts dd {
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The trap callout and the missing-brackets call to action are `.hint` sentences with a
+   rule down the side — loud enough to read as a finding, quiet enough not to be an error
+   banner (the card's warnings posture). */
+.withholding-panel .withholding-trap,
+.withholding-panel .withholding-cta {
+  border-left: 3px solid var(--accent, currentColor);
+  padding-left: 10px;
+}
+
 /* The tab row sits between the card's hint and the first table: the .segmented treatment is
    panels.css's, so only its placement is this file's business. */
 .bracket-status-tabs {

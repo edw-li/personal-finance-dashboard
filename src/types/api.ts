@@ -758,31 +758,19 @@ export interface WithholdingLegOut {
   projected: string
 }
 
-// !!! KNOWN DIVERGENCE FROM THE WIRE — this interface is OUT OF DATE ON PURPOSE !!!
-// The merged backend (backend/app/schemas/taxes.py, class WithholdingOut) has moved and this
-// type has not caught up yet. Four specifics, so nobody has to diff the two by hand:
-//
-//   1. NULLABLE NOW. `liability_total` and `balance_projected` are `Decimal | None` on the
-//      wire — null exactly when the engine REFUSED, i.e. a married year whose bracket tables
-//      for that filing status have not been entered. Both are typed non-null `string` below,
-//      so TypeScript will not make anyone handle the null.
-//   2. TWO FIELDS MISSING FROM THIS TYPE: `filing_status` (string, defaults to "single") and
-//      `brackets_missing_for_status` (string[], non-empty only on a married year whose tables
-//      are missing — the same field TaxSummaryOut already carries above).
-//   3. IT ONLY LOOKS FINE BY ACCIDENT. WithholdingPanel renders the liability through
-//      formatCurrency(), whose runtime null-guard returns "—" — an accident of that helper,
-//      NOT something this type earned or promises. The sign math beside it is not so lucky:
-//      `Number(withholding.balance_projected)` reads a null as 0, which a refusal year would
-//      display as a confident "dead even".
-//   4. DO NOT RETYPE THIS HERE. docs/superpowers/plans/2026-08-26-withholding-flow-verification.md
-//      (Wave 4, Task 6) owns the retype and does it TOGETHER with the WithholdingPanel rewrite
-//      that learns to render a refusal — widening the type on its own would only spray
-//      unhandled nulls through a panel that is about to be replaced.
 export interface WithholdingOut {
   year: number
+  // 'single' | 'married_joint' | 'married_separate' — a plain string on the wire (the
+  // backend validates it Python-side, like `group`), so the card compares rather than
+  // switches on a union it would have to keep in lockstep.
+  filing_status: string
   // The engine's liability for the year — the same figure TaxSummaryOut.totals.total_tax
-  // carries, verbatim. NULLABLE on the wire; see the divergence note above.
-  liability_total: string
+  // carries, verbatim. NULL exactly when the engine REFUSED: a married year with no bracket
+  // table for its filing status (see `brackets_missing_for_status`). The withholding legs
+  // below are still real — they come from profiles, grants and prices — but there is
+  // nothing honest to compare them against, and the card must say so rather than compare
+  // against a zero.
+  liability_total: string | null
   // The salary leg is all-in: the user's withholding_pct already carries its FICA, so no
   // salary-side FICA is added anywhere.
   salary: WithholdingLegOut
@@ -798,11 +786,28 @@ export interface WithholdingOut {
   }
   total: WithholdingLegOut
   // liability_total - total.projected: POSITIVE means "will owe", negative is a refund.
-  // NULLABLE on the wire; see the divergence note above.
-  balance_projected: string
+  // NULL whenever `liability_total` is — a subtraction with no minuend. Never read this
+  // through a bare Number(): null would arrive as a confident 0, i.e. "dead even".
+  balance_projected: string | null
   // Paychecks received / expected this year — the progress denominator for the salary leg.
   checks_elapsed: number
   checks_total: number
+  // The partner leg — ENTERED, not simulated (the partner has no paycheck profile yet).
+  // NULL is a different silence from "0.00" in all three: `partner_wages` is null when this
+  // year's return covers one person (single, MFS, or a household with no partner row) and
+  // "0.00" when a partner is on the return with no W-2 entered; the two withheld fields are
+  // null when nothing is stored — the state the server also warns about — and "0.00" only
+  // when a zero was really entered.
+  partner_wages: string | null
+  partner_withheld_fed: string | null
+  partner_withheld_state: string | null
+  // SIGNED. Positive is the under-withholding trap (each employer withholds the 0.9% surtax
+  // only above $200k of its own wages; a joint return owes it above a lower combined
+  // threshold), negative is over-withholding, "0.00" is one earner or no surtax tier.
+  additional_medicare_gap: string
+  // Jurisdictions with no bracket table for THIS filing status — a call to action, never a
+  // silent zero. Non-empty is exactly the state in which the two fields above are null.
+  brackets_missing_for_status: string[]
   // Null in two different silences. A MISSING prior year says nothing at all — a first year
   // on the app has no comparison to make and no warning to raise. A prior year that EXISTS
   // but computes a total tax <= 0 does warn, because a threshold anything clears would make
@@ -810,7 +815,12 @@ export interface WithholdingOut {
   safe_harbor: {
     prior_year: number
     prior_total_tax: string
-    threshold: string // prior_total_tax x 1.10
+    prior_agi: string // the AGI the statutory gate was tested against
+    multiplier: string // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at or below it
+    threshold: string // prior_total_tax x multiplier
+    // The status the REFERENCE return was filed under, which is not this year's on a
+    // wedding year — a labelling matter, never a math one.
+    prior_filing_status: string
     met: boolean // total.projected >= threshold
   } | null
   warnings: string[]
