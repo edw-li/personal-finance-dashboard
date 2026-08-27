@@ -410,7 +410,7 @@ export default function MonthlyUpdatePage() {
           // A DELETION the user asked for by blanking a box: the counts sentence above
           // never mentions the cashflow row that just went away, so the confirmation says
           // it — and says it from the server's own flag, not from what we hoped we sent.
-          (spendResult.net_pay_cleared ? ' Net pay cleared.' : ''),
+          (spendResult.net_pay_cleared ? ' Household take-home cleared.' : ''),
       )
       // What the wire received IS what the boxes now hold. Adopting the canonical values
       // into the STATE as well as the baseline is load-bearing: a cell advanced past by
@@ -865,12 +865,12 @@ export default function MonthlyUpdatePage() {
           onPaste={(e) => handlePaste(e, categories, (id) => `amt-${id}`, setAmounts)}
         >
           <h2 className="eyebrow">
-            Spending & net pay
-            <InfoHint text="The month&apos;s spend per category plus take-home pay — a blank net pay skips the cashflow row." />
+            Spending & take-home
+            <InfoHint text="The month&apos;s spend per category plus the household&apos;s take-home pay — a blank take-home skips the cashflow row." />
           </h2>
           <div className="meta-row">
             <label>
-              Net pay (take-home)
+              Household take-home
               <AmountInput
                 className={netPay.trim() === '' || isAmount(netPay) ? undefined : 'invalid'}
                 autoFocus

@@ -136,11 +136,11 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
   const foodInput = await screen.findByLabelText('Food')
   expect((foodInput as HTMLInputElement).value).toBe('$0.00')
   // The step's own autofocus, pinned rather than merely implied by the echo above.
-  expect(document.activeElement).toBe(screen.getByLabelText('Net pay (take-home)'))
+  expect(document.activeElement).toBe(screen.getByLabelText('Household take-home'))
   fireEvent.change(foodInput, { target: { value: '250.00' } })
-  // The exact label, not /net pay/i: the step's ⓘ hint carries "net pay" in its aria-label,
-  // which getByLabelText reads as a label too — same box, tighter selector.
-  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '9000.00' } })
+  // The exact label, not /take-home/i: the step's ⓘ hint carries "take-home" in its
+  // aria-label, which getByLabelText reads as a label too — same box, tighter selector.
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9000.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
 
   // Step 3: preview totals, then save.
@@ -299,7 +299,7 @@ it('canonicalizes tolerant and =-expression entries into the PUT bodies', async 
   fireEvent.change(balanceInput, { target: { value: '$1,600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '=200+50' } })
-  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '9,000' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9,000' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await waitFor(() => {
@@ -469,7 +469,7 @@ it('keeps the live spending footer in sync while entering amounts', async () => 
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '250' } })
-  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '1000' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '1000' } })
   // Same lesson as the balances footer: select the totals bar by its label, not by role.
   const footer = screen.getByRole('status', { name: /live totals/i })
   expect(within(footer).getByText('$250.00')).toBeDefined()
@@ -486,7 +486,7 @@ it('clears a previously saved net pay when the box is blanked', async () => {
   })
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  const netPayBox = await screen.findByLabelText('Net pay (take-home)')
+  const netPayBox = await screen.findByLabelText('Household take-home')
   fireEvent.change(netPayBox, { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
@@ -498,7 +498,7 @@ it('clears a previously saved net pay when the box is blanked', async () => {
   })
   // A deletion the user asked for by BLANKING a box deserves saying out loud — the counts
   // sentence alone never mentions the cashflow row that just went away.
-  await screen.findByText(/net pay cleared/i)
+  await screen.findByText(/household take-home cleared/i)
 })
 
 it('keeps sending the clear on the retry after a failed save', async () => {
@@ -509,7 +509,7 @@ it('keeps sending the clear on the retry after a failed save', async () => {
   vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  fireEvent.change(await screen.findByLabelText('Net pay (take-home)'), { target: { value: '' } })
+  fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByRole('alert')
@@ -545,7 +545,7 @@ it('a post-save blur never resurrects a phantom draft', async () => {
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   // Tolerant text advanced past by CLICKS — no blur, so state keeps the raw '9,000'
   // while the wire (and the server) got the canonical '9000'.
-  const netPay = await screen.findByLabelText('Net pay (take-home)')
+  const netPay = await screen.findByLabelText('Household take-home')
   fireEvent.change(netPay, { target: { value: '9,000' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
@@ -556,7 +556,7 @@ it('a post-save blur never resurrects a phantom draft', async () => {
   // it and file a draft for work that is fully saved — the next visit would then greet
   // the user with "Restored unsaved entries — they are not saved yet" about nothing.
   fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
-  const again = await screen.findByLabelText('Net pay (take-home)')
+  const again = await screen.findByLabelText('Household take-home')
   act(() => {
     // Bare .focus() outside act queues the focused re-render without flushing it
     // (React 19 emits no warning) — the blur would then run against stale render state.
@@ -711,7 +711,7 @@ it('leaves a multi-line paste in the notes box to the browser', async () => {
 it('starts a column paste at the first row when the pasted-into cell is outside the table', async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  const netPayBox = (await screen.findByLabelText('Net pay (take-home)')) as HTMLInputElement
+  const netPayBox = (await screen.findByLabelText('Household take-home')) as HTMLInputElement
   fireEvent.paste(netPayBox, { clipboardData: { getData: () => '10\n20' } })
 
   // Net pay is an AmountInput like any other, but it sits OUTSIDE the table and carries no
@@ -848,4 +848,14 @@ it('keeps the flat group walk for a one-person household', async () => {
   expect(document.querySelector('tr.entry-owner-row')).toBeNull()
   expect(document.querySelector('tr.entry-owner-subtotal-row')).toBeNull()
   expect(document.querySelectorAll('tr.entry-subtotal-row').length).toBe(1)
+})
+
+it('names the pay box as a HOUSEHOLD figure — one stream, two earners', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  // The field, the step heading and the ⓘ hint all say the same word; a box still called
+  // "Net pay" on a married household reads as one person's paycheck.
+  expect(await screen.findByLabelText('Household take-home')).toBeTruthy()
+  expect(screen.queryByLabelText('Net pay (take-home)')).toBeNull()
+  expect(screen.getByRole('heading', { name: /spending & take-home/i })).toBeTruthy()
 })
