@@ -1,7 +1,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { AppSettingsOut, ImportReport, ImportSheetReport, SystemStatus } from '../types/api'
+import type {
+  AccountOut,
+  AppSettingsOut,
+  ImportReport,
+  ImportSheetReport,
+  PersonOut,
+  SystemStatus,
+} from '../types/api'
 import SettingsPage from './SettingsPage'
 
 // Four api modules, all stubbed. No EChart mock here: this page draws nothing, so the
@@ -23,9 +30,35 @@ vi.mock('../api/system', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/system')>()),
   fetchSystemStatus: vi.fn(),
 }))
+// The three management cards each own a fetch of their own; unmocked, they would make real
+// network calls from every test in this file.
+vi.mock('../api/household', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/household')>()),
+  fetchHousehold: vi.fn(),
+  createPerson: vi.fn(),
+  updatePerson: vi.fn(),
+  putMarriageDate: vi.fn(),
+}))
+vi.mock('../api/netWorth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/netWorth')>()),
+  fetchAccounts: vi.fn(),
+  createAccount: vi.fn(),
+  updateAccount: vi.fn(),
+  deleteAccount: vi.fn(),
+}))
+vi.mock('../api/spending', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/spending')>()),
+  fetchCategories: vi.fn(),
+  createCategory: vi.fn(),
+  updateCategory: vi.fn(),
+  deleteCategory: vi.fn(),
+}))
 import { changePassword } from '../api/auth'
+import { fetchHousehold } from '../api/household'
 import { importXlsx } from '../api/importer'
+import { fetchAccounts } from '../api/netWorth'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
+import { fetchCategories } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
 
 // A promise this file settles by hand — the only way to look at the page while a request
@@ -75,7 +108,11 @@ const confirmPwBox = () => screen.getByLabelText('Confirm new password') as HTML
 // 'Change password' -> 'Changing…'), so the in-flight tests can still find the button.
 // The password one is ANCHORED at both ends: the card's ⓘ hint is a button whose aria-label
 // ("Changes your login password…") is a name too, and a bare /^chang/i now matches both.
-const saveButton = () => screen.getByRole('button', { name: /^sav/i }) as HTMLButtonElement
+// Anchored at BOTH ends, like pwButton and dryButton: the management cards below render
+// "Save marriage date", "Save name", "Save account" and "Save category", and a bare
+// /^sav/i now matches all of them.
+const saveButton = () =>
+  screen.getByRole('button', { name: /^sav(e settings|ing…)$/i }) as HTMLButtonElement
 const pwButton = () =>
   screen.getByRole('button', { name: /^chang(e password|ing…)$/i }) as HTMLButtonElement
 const type = (box: HTMLInputElement, value: string) =>
@@ -154,12 +191,28 @@ const pick = (file: File) => fireEvent.change(fileBox(), { target: { files: [fil
 // file; only the decline test flips it (BracketsEditor.test.tsx's arrangement).
 const confirmSpy = vi.spyOn(window, 'confirm')
 
+const ME: PersonOut = { id: 1, name: 'Me', is_primary: true }
+const CHECKING: AccountOut = {
+  id: 10,
+  name: 'Joint Checking',
+  slug: 'joint-checking',
+  group: 'cash',
+  sort_order: 1,
+  is_active: true,
+  is_component: false,
+  parent_account_id: null,
+  person_id: null,
+}
+
 beforeEach(() => {
   vi.mocked(fetchAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(putAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(changePassword).mockResolvedValue(undefined)
   vi.mocked(importXlsx).mockResolvedValue(makeReport())
   vi.mocked(fetchSystemStatus).mockResolvedValue(SYSTEM)
+  vi.mocked(fetchHousehold).mockResolvedValue({ people: [ME], marriage_date: null })
+  vi.mocked(fetchAccounts).mockResolvedValue([CHECKING])
+  vi.mocked(fetchCategories).mockResolvedValue([])
   confirmSpy.mockReturnValue(true)
 })
 
@@ -710,5 +763,40 @@ describe('SettingsPage — system card', () => {
     render(<SettingsPage />)
     await screen.findByText('No refresh recorded yet')
     expect(screen.getByText('No backup recorded')).toBeDefined()
+  })
+})
+
+describe('SettingsPage — household, accounts and categories cards', () => {
+  it('mounts the three management cards and feeds the roster its people', async () => {
+    render(<SettingsPage />)
+
+    expect(await screen.findByText('Household')).toBeTruthy()
+    expect(screen.getByText('Accounts')).toBeTruthy()
+    expect(screen.getByText('Spending categories')).toBeTruthy()
+
+    // The people list is LIFTED out of the Household card so the Accounts owner select is
+    // never a render behind it: a partner added above is selectable below without a reload.
+    // (Both management tables carry a "Sort order" box, so page-level queries must never
+    // reach for that label — the Owner select is unique.)
+    await waitFor(() =>
+      expect(
+        [...(screen.getByLabelText('Owner') as HTMLSelectElement).options].map(
+          (o) => o.textContent,
+        ),
+      ).toEqual(['Joint', 'Me']),
+    )
+  })
+
+  it('offers none of the three cards when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    render(<SettingsPage />)
+
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    // They share the import card's `loadedOnce` gate: a settings GET that failed means the
+    // API is unreachable, and three cards that could only fail are not worth offering.
+    expect(screen.queryByText('Household')).toBeNull()
+    expect(screen.queryByText('Accounts')).toBeNull()
+    expect(screen.queryByText('Spending categories')).toBeNull()
+    expect(vi.mocked(fetchHousehold)).not.toHaveBeenCalled()
   })
 })
