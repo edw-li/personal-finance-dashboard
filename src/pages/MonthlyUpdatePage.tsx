@@ -9,6 +9,7 @@ import {
   fetchTimeseries,
   putMonthBalances,
 } from '../api/netWorth'
+import { fetchHousehold } from '../api/household'
 import {
   fetchCategories,
   fetchMatrix,
@@ -19,7 +20,7 @@ import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
-import type { AccountOut, CategoryOut, SpendingMatrix } from '../types/api'
+import type { AccountOut, CategoryOut, HouseholdOut, SpendingMatrix } from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
@@ -106,6 +107,9 @@ export default function MonthlyUpdatePage() {
 
   const [accounts, setAccounts] = useState<AccountOut[]>([])
   const [categories, setCategories] = useState<CategoryOut[]>([])
+  // Who lives in this household — the balance grid's outer grouping. Server-derived like
+  // `matrix`, and deliberately NOT part of the draft snapshot.
+  const [people, setPeople] = useState<HouseholdOut['people']>([])
   const [balances, setBalances] = useState<Record<number, string>>({})
   const [amounts, setAmounts] = useState<Record<number, string>>({})
   const [netPay, setNetPay] = useState('')
@@ -180,6 +184,10 @@ export default function MonthlyUpdatePage() {
       // matrix that fails must never take the whole wizard down with it, because the
       // month still has to be enterable without any history to compare against.
       fetchMatrix().catch((): SpendingMatrix | null => null),
+      // The owner grouping is an entry AID like the Typical column: if the household
+      // endpoint is down, the grid falls back to today's flat group walk rather than
+      // refusing to render the month.
+      fetchHousehold().catch((): HouseholdOut | null => null),
     ])
       .then(([
         accountList,
@@ -189,6 +197,7 @@ export default function MonthlyUpdatePage() {
         spendMonth,
         timeseries,
         matrixData,
+        householdData,
       ]) => {
         setError(null)
         setSaved(null)
@@ -200,6 +209,7 @@ export default function MonthlyUpdatePage() {
         setMonthExisted(thisMonth.exists)
         setCoveredMonths(new Set(timeseries.months))
         setMatrix(matrixData)
+        setPeople(householdData?.people ?? [])
         setHadNetPay(spendMonth.net_pay !== null)
         setMonthBudgets(
           Object.fromEntries(spendMonth.budgets.map((b) => [b.category_id, b.amount])),
@@ -455,11 +465,38 @@ export default function MonthlyUpdatePage() {
   const nextEntryMonth = latestCovered === undefined ? current : addMonths(latestCovered, 1)
   const anchor = nextEntryMonth > current ? nextEntryMonth : current
 
-  // The balances rows in RENDERED order (groups render in GROUP_ORDER, not array order) —
-  // the same walk the table below performs. Hoisted because three things must agree on it:
-  // the autofocus target, the Enter/arrow protocol's DOM order, and where a positional
-  // paste puts its first value. Deriving it twice is how those three drift apart.
-  const orderedBalanceRows = GROUP_ORDER.flatMap((g) => accounts.filter((a) => a.group === g))
+  // The balance grid's outer grouping. ONE person (or a household endpoint that failed)
+  // means one unlabelled section holding every account — byte-identical to the pre-owner
+  // rendering, which is what keeps this page's whole existing test suite honest.
+  const ownerSections = useMemo<{ key: string; label: string | null; rows: AccountOut[] }[]>(() => {
+    if (people.length < 2) return [{ key: 'all', label: null, rows: accounts }]
+    const ordered = [...people].sort(
+      (a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id,
+    )
+    // nestComponents is re-run PER SECTION on purpose: a component whose parent sits in
+    // another owner's bucket keeps its own position, which is exactly that helper's
+    // documented contract for an absent parent.
+    const sections = ordered.map((person) => ({
+      key: `p${person.id}`,
+      label: person.name,
+      rows: nestComponents(accounts.filter((a) => a.person_id === person.id)),
+    }))
+    sections.push({
+      key: 'joint',
+      label: 'Joint',
+      rows: nestComponents(accounts.filter((a) => a.person_id === null)),
+    })
+    // An owner with nothing to enter gets no header and no subtotal row.
+    return sections.filter((section) => section.rows.length > 0)
+  }, [accounts, people])
+
+  // The balances rows in RENDERED order — the same walk the table below performs. Hoisted
+  // because three things must agree on it: the autofocus target, the Enter/arrow protocol's
+  // DOM order, and where a positional paste puts its first value. Deriving it twice is how
+  // those three drift apart.
+  const orderedBalanceRows = ownerSections.flatMap((section) =>
+    GROUP_ORDER.flatMap((g) => section.rows.filter((a) => a.group === g)),
+  )
   const firstBalanceId = orderedBalanceRows[0]?.id
 
   // Range paste (spec §4.1): the PARENT owns the entry state, so the scope container does
@@ -543,16 +580,17 @@ export default function MonthlyUpdatePage() {
   // Committed value of one cell for the live columns — the preview memo's rule.
   const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
 
-  // Per-group live subtotal + its prior twin (components excluded, exactly like net worth).
+  // Live subtotal + its prior twin for ANY row set (components excluded, exactly like net
+  // worth) — one helper now serves the per-group rows and the per-owner section above them.
   // DELIBERATE scope divergence, not an oversight: prevNetWorth (and so the footer's "vs
   // prior month") reduces over the RAW accountList — inactive accounts included — because
   // that is the true net-worth delta; these subtotals and the Last-month column cover the
   // ACTIVE rows on screen only, because they are an entry aid. "Fixing" the footer to
   // match active-only would falsify the delta the month is actually judged by.
-  const groupTotals = (group: (typeof GROUP_ORDER)[number]) => {
-    const rows = accounts.filter((a) => a.group === group && !a.is_component)
-    const now = rows.reduce((acc, a) => acc + committed(balances[a.id]), 0)
-    const prior = rows.reduce(
+  const subtotalOf = (rows: AccountOut[]) => {
+    const counted = rows.filter((a) => !a.is_component)
+    const now = counted.reduce((acc, a) => acc + committed(balances[a.id]), 0)
+    const prior = counted.reduce(
       (acc, a) => acc + (priorBalances[a.id] === undefined ? 0 : Number(priorBalances[a.id])),
       0,
     )
@@ -665,81 +703,119 @@ export default function MonthlyUpdatePage() {
               </tr>
             </thead>
             <tbody>
-              {GROUP_ORDER.map((group) => {
-                const groupAccounts = accounts.filter((a) => a.group === group)
-                if (groupAccounts.length === 0) return null
-                const totals = groupTotals(group)
-                // Same cents rule as the footer's delta above (and the spending Δ below):
-                // two sums of doubles that ought to cancel can miss by a few ulp, and this
-                // row is exactly where a conserving transfer shows up. Text only — the
-                // subtotal Δ carries no tone class, so rounding here fixes the "-$0.00".
-                const subCents = Math.round((totals.now - totals.prior) * 100)
+              {ownerSections.map((section) => {
+                const ownerTotals = subtotalOf(section.rows)
+                // Same cents rule as every other subtotal here.
+                const ownerCents = Math.round((ownerTotals.now - ownerTotals.prior) * 100)
                 return (
-                  <Fragment key={group}>
-                    <tr className="entry-group-row">
-                      <th colSpan={4}>{GROUP_LABELS[group]}</th>
-                    </tr>
-                    {groupAccounts.map((account) => {
-                      const value = balances[account.id] ?? ''
-                      const prior = priorBalances[account.id]
-                      const delta = prior === undefined ? null : committed(value) - Number(prior)
+                  <Fragment key={section.key}>
+                    {section.label !== null && (
+                      <tr className="entry-owner-row">
+                        <th colSpan={4}>{section.label}</th>
+                      </tr>
+                    )}
+                    {GROUP_ORDER.map((group) => {
+                      const groupAccounts = section.rows.filter((a) => a.group === group)
+                      if (groupAccounts.length === 0) return null
+                      const totals = subtotalOf(groupAccounts)
+                      // Same cents rule as the footer's delta above (and the spending Δ
+                      // below): two sums of doubles that ought to cancel can miss by a few
+                      // ulp, and this row is exactly where a conserving transfer shows up.
+                      // Text only — the subtotal Δ carries no tone class, so rounding here
+                      // fixes the "-$0.00".
+                      const subCents = Math.round((totals.now - totals.prior) * 100)
                       return (
-                        <tr key={account.id}>
-                          <td className={account.is_component ? 'entry-component' : undefined}>
-                            <label htmlFor={`bal-${account.id}`}>
-                              {account.name}
-                              {account.is_component && <span className="badge">component</span>}
-                            </label>
-                          </td>
-                          <td className="num entry-ref">
-                            {prior === undefined ? '—' : formatCurrency(prior)}
-                          </td>
-                          <td className="num entry-cell-col">
-                            <AmountInput
-                              id={`bal-${account.id}`}
-                              className={
-                                `${isAmount(value) ? '' : 'invalid'}${
-                                  flashIds.has(`bal-${account.id}`) ? ' pasted-flash' : ''
-                                }`.trim() || undefined
-                              }
-                              autoFocus={account.id === firstBalanceId}
-                              value={value}
-                              onValueChange={(next) =>
-                                setBalances((cur) => ({ ...cur, [account.id]: next }))
-                              }
-                            />
-                          </td>
-                          <td
-                            className={`num entry-delta${
-                              delta === null || delta === 0
-                                ? ''
-                                : delta > 0
-                                  ? ' delta-positive'
-                                  : ' delta-negative'
-                            }`}
-                          >
-                            {/* Typo tripwire: a fat-fingered digit shows a huge Δ instantly. */}
-                            {delta === null ? '—' : formatCurrency(delta)}
-                          </td>
-                        </tr>
+                        <Fragment key={group}>
+                          <tr className="entry-group-row">
+                            <th colSpan={4}>{GROUP_LABELS[group]}</th>
+                          </tr>
+                          {groupAccounts.map((account) => {
+                            const value = balances[account.id] ?? ''
+                            const prior = priorBalances[account.id]
+                            const delta =
+                              prior === undefined ? null : committed(value) - Number(prior)
+                            return (
+                              <tr key={account.id}>
+                                <td
+                                  className={account.is_component ? 'entry-component' : undefined}
+                                >
+                                  <label htmlFor={`bal-${account.id}`}>
+                                    {account.name}
+                                    {account.is_component && (
+                                      <span className="badge">component</span>
+                                    )}
+                                  </label>
+                                </td>
+                                <td className="num entry-ref">
+                                  {prior === undefined ? '—' : formatCurrency(prior)}
+                                </td>
+                                <td className="num entry-cell-col">
+                                  <AmountInput
+                                    id={`bal-${account.id}`}
+                                    className={
+                                      `${isAmount(value) ? '' : 'invalid'}${
+                                        flashIds.has(`bal-${account.id}`) ? ' pasted-flash' : ''
+                                      }`.trim() || undefined
+                                    }
+                                    autoFocus={account.id === firstBalanceId}
+                                    value={value}
+                                    onValueChange={(next) =>
+                                      setBalances((cur) => ({ ...cur, [account.id]: next }))
+                                    }
+                                  />
+                                </td>
+                                <td
+                                  className={`num entry-delta${
+                                    delta === null || delta === 0
+                                      ? ''
+                                      : delta > 0
+                                        ? ' delta-positive'
+                                        : ' delta-negative'
+                                  }`}
+                                >
+                                  {/* Typo tripwire: a fat-fingered digit shows a huge Δ instantly. */}
+                                  {delta === null ? '—' : formatCurrency(delta)}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                          <tr className="entry-subtotal-row">
+                            <td>Subtotal</td>
+                            {/* No prior month at all (the first-ever entry) means there is
+                                no prior subtotal — '—', never a fabricated $0.00 that would
+                                read as "you had nothing" and make every Δ look like pure
+                                growth. Per-row cells already say '—' via the missing
+                                priorBalances. */}
+                            <td className="num entry-ref">
+                              {prevNetWorth === null ? '—' : formatCurrency(totals.prior)}
+                            </td>
+                            <td className="num">{formatCurrency(totals.now)}</td>
+                            <td className="num entry-delta">
+                              {prevNetWorth === null
+                                ? '—'
+                                : formatCurrency(subCents === 0 ? 0 : subCents / 100)}
+                            </td>
+                          </tr>
+                        </Fragment>
                       )
                     })}
-                    <tr className="entry-subtotal-row">
-                      <td>Subtotal</td>
-                      {/* No prior month at all (the first-ever entry) means there is no
-                          prior subtotal — '—', never a fabricated $0.00 that would read
-                          as "you had nothing" and make every Δ look like pure growth.
-                          Per-row cells already say '—' via the missing priorBalances. */}
-                      <td className="num entry-ref">
-                        {prevNetWorth === null ? '—' : formatCurrency(totals.prior)}
-                      </td>
-                      <td className="num">{formatCurrency(totals.now)}</td>
-                      <td className="num entry-delta">
-                        {prevNetWorth === null
-                          ? '—'
-                          : formatCurrency(subCents === 0 ? 0 : subCents / 100)}
-                      </td>
-                    </tr>
+                    {/* The owner total sits a LEVEL ABOVE the group subtotals — coarser,
+                        not a replacement — and closes its section the way every subtotal in
+                        this table follows the rows it sums. */}
+                    {section.label !== null && (
+                      <tr className="entry-owner-subtotal-row">
+                        <td>{section.label} total</td>
+                        <td className="num entry-ref">
+                          {prevNetWorth === null ? '—' : formatCurrency(ownerTotals.prior)}
+                        </td>
+                        <td className="num">{formatCurrency(ownerTotals.now)}</td>
+                        <td className="num entry-delta">
+                          {prevNetWorth === null
+                            ? '—'
+                            : formatCurrency(ownerCents === 0 ? 0 : ownerCents / 100)}
+                        </td>
+                      </tr>
+                    )}
                   </Fragment>
                 )
               })}

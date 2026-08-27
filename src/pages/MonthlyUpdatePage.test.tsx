@@ -15,25 +15,47 @@ vi.mock('../api/spending', () => ({
   fetchSpendingMonth: vi.fn(),
   putSpendingMonth: vi.fn(),
 }))
+vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 
 import * as netWorthApi from '../api/netWorth'
 import * as spendingApi from '../api/spending'
+import * as householdApi from '../api/household'
 import { formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
-  sort_order: 1, is_active: true, is_component: false, parent_account_id: null, person_id: null,
+  sort_order: 1, is_active: true, is_component: false, parent_account_id: null,
+  person_id: 1,
 }
 // The default fixture is one account, which cannot show ORDER — the paste tests that care
 // about where a range lands opt into this second row.
 const savings = {
   id: 2, name: 'Savings', slug: 'savings', group: 'cash' as const,
-  sort_order: 2, is_active: true, is_component: false, parent_account_id: null, person_id: null,
+  sort_order: 2, is_active: true, is_component: false, parent_account_id: null,
+  person_id: 1,
+}
+// Owner-grouping fixtures: one per ownership kind, in three different groups so the walk's
+// owner → group → row nesting is unambiguous in the assertions.
+const samBrokerage = {
+  id: 3, name: 'Sam Brokerage', slug: 'sam-brokerage', group: 'taxable' as const,
+  sort_order: 3, is_active: true, is_component: false, parent_account_id: null,
+  person_id: 2,
+}
+const jointSavings = {
+  id: 4, name: 'Joint Savings', slug: 'joint-savings', group: 'cash' as const,
+  sort_order: 4, is_active: true, is_component: false, parent_account_id: null,
+  person_id: null,
 }
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 
 beforeEach(() => {
+  // One-person household by default: every pre-existing test in this file asserts the FLAT
+  // group walk, and that is exactly what a single person must keep rendering.
+  vi.mocked(householdApi.fetchHousehold).mockResolvedValue({
+    people: [{ id: 1, name: 'Me', is_primary: true }],
+    marriage_date: null,
+  })
   vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account])
   vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
     month,
@@ -750,4 +772,80 @@ it('leaves unbudgeted rows without the subtext', async () => {
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   const food = await screen.findByLabelText('Food')
   expect(within(food.closest('tr') as HTMLElement).queryByText(/^of \$/)).toBeNull()
+})
+
+// --- owner grouping (2026-08-26 household spec §6) ---------------------------------------
+
+function twoPersonHousehold() {
+  vi.mocked(householdApi.fetchHousehold).mockResolvedValue({
+    people: [
+      { id: 1, name: 'Me', is_primary: true },
+      { id: 2, name: 'Sam', is_primary: false },
+    ],
+    marriage_date: '2026-09-12',
+  })
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, samBrokerage, jointSavings])
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-07-01',
+    recorded_on: null,
+    notes: null,
+    balances:
+      month === '2026-07-01'
+        ? [
+            { account_id: 1, balance: '100.00' },
+            { account_id: 3, balance: '1000.00' },
+            { account_id: 4, balance: '70.00' },
+          ]
+        : [],
+  }))
+}
+
+it('walks owner -> group -> rows with a subtotal per owner, primary first and Joint last', async () => {
+  twoPersonHousehold()
+  renderWizard()
+  await screen.findByLabelText('Checking')
+
+  const ownerHeads = [...document.querySelectorAll('tr.entry-owner-row')] as HTMLElement[]
+  expect(ownerHeads.map((r) => r.textContent)).toEqual(['Me', 'Sam', 'Joint'])
+
+  const ownerTotals = [
+    ...document.querySelectorAll('tr.entry-owner-subtotal-row'),
+  ] as HTMLElement[]
+  expect(ownerTotals.map((r) => within(r).getAllByRole('cell')[0].textContent)).toEqual([
+    'Me total', 'Sam total', 'Joint total',
+  ])
+  // Cells are [label, last month, this month, Δ]; the month seeds from the prior one, so
+  // "this month" equals "last month" and every Δ is a clean $0.00.
+  expect(ownerTotals.map((r) => within(r).getAllByRole('cell')[2].textContent)).toEqual([
+    '$100.00', '$1,000.00', '$70.00',
+  ])
+
+  // The group subtotals survive UNDERNEATH the owner ones — one level finer, not replaced.
+  const groupSubtotals = [...document.querySelectorAll('tr.entry-subtotal-row')] as HTMLElement[]
+  expect(groupSubtotals.map((r) => within(r).getAllByRole('cell')[2].textContent)).toEqual([
+    '$100.00', '$1,000.00', '$70.00',
+  ])
+})
+
+it('makes the owner walk the DOM order a positional paste fills down', async () => {
+  twoPersonHousehold()
+  renderWizard()
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  // Three values down the rendered column: Me's row, then Sam's, then Joint's.
+  fireEvent.paste(checking, { clipboardData: { getData: () => '1\n2\n3' } })
+
+  expect(checking.value).toBe('1')
+  expect((screen.getByLabelText('Sam Brokerage') as HTMLInputElement).value).toBe('$2.00')
+  expect((screen.getByLabelText('Joint Savings') as HTMLInputElement).value).toBe('$3.00')
+})
+
+it('keeps the flat group walk for a one-person household', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, savings])
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  // No owner layer at all — not an empty header, not a "Me" section of one.
+  expect(document.querySelector('tr.entry-owner-row')).toBeNull()
+  expect(document.querySelector('tr.entry-owner-subtotal-row')).toBeNull()
+  expect(document.querySelectorAll('tr.entry-subtotal-row').length).toBe(1)
 })
