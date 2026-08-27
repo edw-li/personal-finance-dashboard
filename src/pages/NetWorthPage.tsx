@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
+import type { OwnerScope } from '../api/netWorth'
+import { fetchHousehold } from '../api/household'
 import { ApiError } from '../api/client'
 import ChartZoomHint from '../components/ChartZoomHint'
 import EChart from '../components/EChart'
@@ -25,7 +27,12 @@ import {
   MUTED,
   PALETTE,
 } from '../charts/theme'
-import type { AccountGroup, NetWorthSummary, NetWorthTimeseries } from '../types/api'
+import type {
+  AccountGroup,
+  HouseholdOut,
+  NetWorthSummary,
+  NetWorthTimeseries,
+} from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import {
   formatCurrency,
@@ -54,6 +61,15 @@ function pctChange(curr: string | null, prev: string | null): number | null {
 export default function NetWorthPage() {
   const navigate = useNavigate()
   const [granularity, setGranularity] = useState<'monthly' | 'quarterly'>('monthly')
+  // The page's ownership scope: null = the whole household (and NO owner param at all, so
+  // the request is byte-identical to the pre-ownership one). It scopes the tiles, both
+  // charts and the accounts table, which is why the chips sit above the tiles rather than
+  // inside a card header.
+  const [owner, setOwner] = useState<OwnerScope>(null)
+  // Fetched on its own, never inside the page's Promise.all: the chips are an affordance,
+  // and a household hiccup must not blank the net worth (OverviewPage's isolated-fetch
+  // posture). null covers both "not loaded yet" and "failed".
+  const [household, setHousehold] = useState<HouseholdOut | null>(null)
   const [data, setData] = useState<NetWorthTimeseries | null>(null)
   const [summary, setSummary] = useState<NetWorthSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,7 +108,7 @@ export default function NetWorthPage() {
   // body of the effect below (react-hooks/set-state-in-effect — the same constraint
   // AuthContext documents; the rule reads `await` continuations as synchronous).
   const load = useCallback(() => {
-    Promise.all([fetchTimeseries(granularity), fetchSummary()])
+    Promise.all([fetchTimeseries(granularity, owner), fetchSummary(owner)])
       .then(([ts, sum]) => {
         setData(ts)
         setSummary(sum)
@@ -120,7 +136,7 @@ export default function NetWorthPage() {
         setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')
       })
       .finally(() => setLoading(false))
-  }, [granularity])
+  }, [granularity, owner])
 
   // The "we're fetching" flip therefore lives in the event handlers that cause a fetch —
   // the mount fetch is covered by useState's initial `true`.
@@ -132,6 +148,45 @@ export default function NetWorthPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  // Once per visit, and deliberately not part of `load`: setState lives in the promise
+  // continuations, never in the effect body (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    fetchHousehold()
+      .then(setHousehold)
+      .catch(() => setHousehold(null))
+  }, [])
+
+  // Primary first, then everyone else by id — the same order the server uses for
+  // owner_series/owner_totals, so chips and stack read left-to-right the same way. The
+  // `?? []` lives INSIDE the memo: a fresh literal in the dep list would re-sort on every
+  // render (react-hooks/exhaustive-deps), which is the memo doing nothing.
+  const orderedPeople = useMemo(
+    () =>
+      [...(household?.people ?? [])].sort(
+        (a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id,
+      ),
+    [household],
+  )
+  // One person means there is nothing to choose between: no chips, no stack toggle.
+  const ownerScopes: { scope: OwnerScope; label: string }[] =
+    orderedPeople.length > 1
+      ? [
+          { scope: null, label: 'All' },
+          ...orderedPeople.map((p) => ({ scope: p.id as OwnerScope, label: p.name })),
+          { scope: 'joint' as OwnerScope, label: 'Joint' },
+        ]
+      : []
+
+  const selectOwner = (next: OwnerScope) => {
+    if (next === owner) return
+    beginLoad()
+    // The drill-down holds ACCOUNT ids, and the next scope may not contain them — clear it
+    // and let the seed pick this scope's biggest account instead of leaving empty series.
+    setDrill([])
+    seededDrillRef.current = false
+    setOwner(next)
+  }
 
   const filledMonths = useMemo(() => new Set(coverageMonths), [coverageMonths])
   const anchor = useMemo(() => {
@@ -295,6 +350,26 @@ export default function NetWorthPage() {
           <PencilLine size={15} /> Enter month
         </button>
       </div>
+
+      {ownerScopes.length > 0 && (
+        <div className="networth-owner-row">
+          <span className="eyebrow">Whose money</span>
+          <div className="segmented" role="group" aria-label="Owner">
+            {ownerScopes.map(({ scope, label }) => (
+              <button
+                key={label}
+                type="button"
+                className={owner === scope ? 'active' : ''}
+                aria-pressed={owner === scope}
+                onClick={() => selectOwner(scope)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <InfoHint text="A person's view is their own accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts." />
+        </div>
+      )}
 
       {error && (
         <div className="error-banner" role="alert">
