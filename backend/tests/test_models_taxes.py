@@ -48,7 +48,7 @@ async def test_one_value_per_year_per_key(db):
 
 
 async def test_definitions_constant_is_complete():
-    assert len(TAX_INPUT_DEFINITIONS) == 43
+    assert len(TAX_INPUT_DEFINITIONS) == 45
     keys = [d[0] for d in TAX_INPUT_DEFINITIONS]
     assert len(keys) == len(set(keys)), "duplicate keys"
 
@@ -59,7 +59,7 @@ async def test_seed_inserts_definitions(db):
     await seed_tax_definitions(db)
     await db.commit()
     count = (await db.execute(select(func.count(TaxInputDefinition.key)))).scalar_one()
-    assert count == 43
+    assert count == 45
     # payload fidelity, not just count — a transposed tuple in tax_keys.py fits the columns
     row = await db.get(TaxInputDefinition, "gross_paycheck")
     assert (row.label, row.section, row.sort_order, row.is_derived) == (
@@ -72,7 +72,7 @@ async def test_seed_inserts_definitions(db):
     await seed_tax_definitions(db)
     await db.commit()
     count = (await db.execute(select(func.count(TaxInputDefinition.key)))).scalar_one()
-    assert count == 43
+    assert count == 45
 
 
 async def test_tax_input_value_keeps_four_decimal_places(db):
@@ -170,3 +170,85 @@ async def test_bracket_defaults_to_single(db):
     )
     await db.commit()
     assert (await db.execute(select(TaxBracket))).scalar_one().filing_status == "single"
+
+
+# --- person scope (2026-08-26 spec §4) ---
+
+
+async def test_per_person_keys_are_defined_and_flagged(db):
+    from app.seed import seed_tax_definitions
+    from app.tax_keys import PER_PERSON_KEYS
+
+    defined = {key for key, *_ in TAX_INPUT_DEFINITIONS}
+    assert set(PER_PERSON_KEYS) <= defined
+    assert len(PER_PERSON_KEYS) == 19
+    assert len(set(PER_PERSON_KEYS)) == 19
+    # The two tracker-only keys are per-person and stored, but the engine never reads them.
+    from app.services.tax_service import ENGINE_INPUT_KEYS, SUGGESTION_KEYS
+
+    for key in ("w2_fed_withholding", "w2_state_withholding"):
+        assert key in PER_PERSON_KEYS
+        assert key in defined
+        assert key not in ENGINE_INPUT_KEYS
+        assert key not in SUGGESTION_KEYS
+
+    await seed_tax_definitions(db)
+    await db.commit()
+    flagged = {
+        row.key
+        for row in (await db.execute(select(TaxInputDefinition))).scalars()
+        if row.is_per_person
+    }
+    assert flagged == set(PER_PERSON_KEYS)
+
+
+async def test_household_rows_cannot_duplicate_nulls_not_distinct(db):
+    """PG16 NULLS NOT DISTINCT: two NULL-person rows for one (year, key) must collide.
+
+    Without it a plain unique index treats every NULL as unique, so the engine's
+    per-key SUM would silently double-count a household line."""
+    db.add(TaxYear(year=2026))
+    db.add(
+        TaxInputDefinition(
+            key="interest_total", label="Interest", section="ordinary_income", sort_order=190
+        )
+    )
+    await db.flush()
+    db.add(TaxInput(year=2026, key="interest_total", value=Decimal("100")))
+    await db.commit()
+    db.add(TaxInput(year=2026, key="interest_total", value=Decimal("200")))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
+async def test_the_same_key_may_repeat_across_people(db):
+    from app.models import Person
+
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    db.add(TaxYear(year=2026))
+    db.add(
+        TaxInputDefinition(
+            key="latest_w2_income",
+            label="Latest W2 Income",
+            section="ordinary_income",
+            sort_order=40,
+            is_per_person=True,
+        )
+    )
+    await db.flush()
+    db.add(TaxInput(year=2026, key="latest_w2_income", person_id=me.id, value=Decimal("150000")))
+    db.add(
+        TaxInput(year=2026, key="latest_w2_income", person_id=partner.id, value=Decimal("100000"))
+    )
+    await db.commit()
+    stored = (await db.execute(select(TaxInput))).scalars().all()
+    assert sorted(row.value for row in stored) == [Decimal("100000"), Decimal("150000")]
+
+    # ...but one person still gets one row per key.
+    db.add(TaxInput(year=2026, key="latest_w2_income", person_id=me.id, value=Decimal("1")))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
