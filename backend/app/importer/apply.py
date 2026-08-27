@@ -493,6 +493,12 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
             await db.execute(select(TaxInput).where(TaxInput.year.in_(imported_years)))
         ).scalars()
     }
+    # The sweep below may only touch keys the workbook itself carries. A key with no value in
+    # any year column never reaches parsed.inputs, so hand-entered / UI-only rows (and the
+    # per-person keys the married-taxes batch adds) are invisible to the sweep and survive.
+    # Union across parsed years on purpose: a cell blanked in ONE year while the same sheet
+    # row still carries another year is still a sheet key, and still sync-deletes as today.
+    sheet_input_keys = {item.key for item in parsed.inputs}
     incoming_input_keys: set[tuple[int, str]] = set()
     for item in parsed.inputs:
         key = (item.year, item.key)
@@ -510,7 +516,7 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
                 f"tax_inputs[{item.year}/{item.key}]",
             )
     for key, row in existing_inputs.items():
-        if key not in incoming_input_keys:
+        if key not in incoming_input_keys and key[1] in sheet_input_keys:
             await db.delete(row)
             input_counts.deletes += 1
             report.add_sample(f"tax_inputs[{key[0]}/{key[1]}]: deleted (cell left sheet)")

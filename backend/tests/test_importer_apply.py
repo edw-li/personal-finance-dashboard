@@ -477,6 +477,56 @@ async def test_apply_taxes_syncs_brackets_and_inputs_within_imported_years(db):
     assert untouched.value == Decimal("1.0000")
 
 
+async def test_apply_taxes_keeps_inputs_for_keys_the_sheet_does_not_carry(db):
+    # P0 (marriage spec section 3.1): a key the workbook carries NO value for in ANY year
+    # column is outside the sheet's vocabulary — its rows are hand/UI-owned and must survive
+    # a re-import. Sheet-carried cells still win exactly as before.
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import TaxInput
+    from tests.workbook_builder import default_taxes_rows
+
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
+    await db.commit()
+    assert report.entities["tax_inputs"].creates == 86
+
+    hand_edited = (
+        await db.execute(
+            select(TaxInput).where(TaxInput.year == 2023, TaxInput.key == "capital_loss_deductions")
+        )
+    ).scalar_one()
+    hand_edited.value = Decimal("-3000.0000")
+    await db.commit()
+
+    rows = default_taxes_rows()
+    for row in rows:
+        if row[1] == "Capital Loss Deductions":
+            row[2] = row[3] = row[4] = None
+        if row[1] == "Annual Salary":
+            row[2] = 111.0
+    report2 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets(taxes=rows)["Taxes"]), report2)
+    await db.commit()
+
+    assert report2.entities["tax_inputs"].deletes == 0
+    assert report2.entities["tax_inputs"].updates == 1  # annual_salary 2023 only
+    assert report2.entities["tax_inputs"].skips == 83  # 42 sheet keys x 2 years, minus that 1
+    survivors = {
+        row.year: row.value
+        for row in (
+            await db.execute(select(TaxInput).where(TaxInput.key == "capital_loss_deductions"))
+        ).scalars()
+    }
+    assert survivors == {2023: Decimal("-3000.0000"), 2024: Decimal("225.0000")}
+    salary = (
+        await db.execute(
+            select(TaxInput.value).where(TaxInput.year == 2023, TaxInput.key == "annual_salary")
+        )
+    ).scalar_one()
+    assert salary == Decimal("111.0000")
+
+
 async def test_apply_espp_lots_and_periods(db):
     from app.importer.apply import apply_espp
     from app.importer.parsers import parse_espp
