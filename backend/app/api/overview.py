@@ -130,5 +130,8 @@ async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db))
         net_pay_months=len(pay_rows),
         spending_months=spending_months,
         available_years=available_years,
+        filing_status=feed.filing_status,
+        earners=feed.earners,
+        brackets_missing_for_status=feed.brackets_missing_for_status,
     )
     return _money_flow_out(flow)
