@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
@@ -1125,8 +1125,12 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
 })
 
 describe('filing status (2026-08-26 design §6)', () => {
+  // Scoped to the YEAR card's control: the brackets editor below renders a tab row with the
+  // same three names, and only this one changes how the year is filed.
   const statusButton = (name: string) =>
-    screen.getByRole('button', { name }) as HTMLButtonElement
+    within(screen.getByRole('group', { name: 'Filing status' })).getByRole('button', {
+      name,
+    }) as HTMLButtonElement
 
   const CA_CAVEAT =
     'California is a community-property state; true MFS requires 50/50 community-income ' +
@@ -1274,5 +1278,53 @@ describe('filing status (2026-08-26 design §6)', () => {
     // mounted, every new box would read blank.
     const partner = (await screen.findByLabelText('Annual Salary — Sam')) as HTMLInputElement
     expect(partner.value).toBe('$90,000.00')
+  })
+
+  it('leaves the year’s own tables in place when another status tab saves', async () => {
+    // An MFJ tab opened from a year still filed single: the tab's own tables are empty.
+    vi.mocked(fetchTaxBrackets).mockImplementation(async (year: number, status) => ({
+      ...bracketsFor(year),
+      filing_status: status,
+      statuses_with_rows: ['single', 'married_joint'],
+      jurisdictions:
+        status === 'single'
+          ? bracketsFor(year).jurisdictions
+          : {
+              federal: [], state: [], medicare: [],
+              social_security: [], disability: [], capital_gains: [],
+            },
+    }))
+    // The echo of a one-jurisdiction save still carries the whole year+status payload —
+    // including a STATE table this editor never asked about.
+    vi.mocked(putTaxBrackets).mockImplementation(async (year: number, body) => ({
+      ...bracketsFor(year),
+      filing_status: body.filing_status,
+      statuses_with_rows: ['single', 'married_joint'],
+      jurisdictions: {
+        federal: [{ bracket_index: 1, rate: '0.1000', threshold: '0.00' }],
+        state: [{ bracket_index: 1, rate: '0.0930', threshold: '0.00' }],
+        medicare: [], social_security: [], disability: [], capital_gains: [],
+      },
+    }))
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    // Scoped: the YEAR card carries a control with the same three names.
+    const tabs = within(screen.getByRole('group', { name: 'Bracket filing status' }))
+    fireEvent.click(tabs.getByRole('button', { name: 'Married filing jointly' }))
+    await waitFor(() =>
+      expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024, 'married_joint'),
+    )
+    await screen.findByText('No brackets for Federal.')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
+    await waitFor(() =>
+      expect(screen.getByLabelText('Federal bracket 1 rate (%)')).toBeTruthy(),
+    )
+    // A save re-syncs THAT table only. `detail.brackets` is the YEAR's tables, so an echo
+    // from another status must not replace it — adopting it would remount this editor on the
+    // page's key and throw away every other jurisdiction's half-edited rows with it.
+    expect(screen.getByText('No brackets for State.')).toBeTruthy()
+    expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
   })
 })

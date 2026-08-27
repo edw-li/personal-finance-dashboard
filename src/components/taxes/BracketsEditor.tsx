@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import {
+  fetchTaxBrackets,
   FILING_STATUS_LABELS,
+  FILING_STATUSES,
   JURISDICTIONS,
   jurisdictionLabel,
   putTaxBrackets,
@@ -9,7 +11,7 @@ import {
 import type { Jurisdiction } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
-import type { TaxBracketOut, TaxBracketsOut } from '../../types/api'
+import type { FilingStatus, TaxBracketOut, TaxBracketsOut } from '../../types/api'
 import { canonicalAmount, parseAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
@@ -81,36 +83,100 @@ function validate(name: string, rows: RowState[]): string | null {
 
 export default function BracketsEditor({
   brackets,
+  yearStatus = brackets.filing_status,
   onSaved,
   onDirtyChange,
 }: {
   brackets: TaxBracketsOut
+  /**
+   * The YEAR's own status: always a tab, even before it has a single row. Defaults to the
+   * payload's status, which IS the year's on every page load — the page passes it explicitly
+   * so the tab survives the render in which the row has flipped but the payload has not.
+   */
+  yearStatus?: FilingStatus
   onSaved: (updated: TaxBracketsOut) => void
   onDirtyChange?: (dirty: boolean) => void
 }) {
-  // A useState INITIALIZER, so a prop replacement (the page refetching the SAME year)
-  // leaves half-typed tables alone; only a save echo, or a remount on a real year switch,
-  // re-adopts the server's rows.
+  // The tab on screen, and the payload behind it. Both seed from the page's prop and are
+  // then this editor's own: a tab press fetches, a save re-syncs. A useState INITIALIZER, so
+  // a prop replacement (the page refetching the SAME year and status) leaves half-typed
+  // tables alone; only a save echo, a tab switch, or a remount re-adopts the server's rows.
+  const [activeStatus, setActiveStatus] = useState<FilingStatus>(brackets.filing_status)
+  const [payload, setPayload] = useState<TaxBracketsOut>(brackets)
   const [tables, setTables] = useState<Record<string, RowState[]>>(() => tablesOf(brackets))
   // Single-flight across the whole editor: one jurisdiction saves at a time, and the
   // in-flight name is what disables the others' buttons.
   const [saving, setSaving] = useState<string | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  // The tab machinery's own flight and banner — a failed tab load is not a jurisdiction's
+  // error, and putting it in `errors` would file it under a table nobody asked about.
+  const [tabBusy, setTabBusy] = useState(false)
+  const [tabError, setTabError] = useState<string | null>(null)
+  // Tabs can be clicked faster than a fetch comes back; only the newest may land.
+  const tabSeqRef = useRef(0)
 
   // JURISDICTIONS is a readonly tuple, so its .includes() takes the literal union — the
   // house cast (MonthlyUpdatePage's `STEPS.includes(stepParam as Step)`). An importer can
   // write a jurisdiction this API refuses, and a GET still returns it.
-  const extras = Object.keys(brackets.jurisdictions)
+  const extras = Object.keys(payload.jurisdictions)
     .filter((name) => !JURISDICTIONS.includes(name as Jurisdiction))
     .sort()
+
+  // The tab set: 'single' ALWAYS (the column default, the only status the importer writes and
+  // the source every clone copies from), the year's own status (the one the engine walks,
+  // even before it has tables), and any status that already has rows — so an MFJ table
+  // entered ahead of the wedding stays reachable from a year still filed single.
+  const tabs = FILING_STATUSES.filter(
+    (status) =>
+      status === 'single' || status === yearStatus || payload.statuses_with_rows.includes(status),
+  )
 
   // Unsaved work = the editable tables no longer read like the payload they came from.
   // Compared as text because that IS what is in the boxes ("10." is not yet "10"), and the
   // page turns this into the confirm that guards a year switch.
-  const dirty = JSON.stringify(tables) !== JSON.stringify(tablesOf(brackets))
+  const dirty = JSON.stringify(tables) !== JSON.stringify(tablesOf(payload))
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
+
+  // Switching tabs replaces every table on screen, so it asks the same question the page's
+  // reload doors ask — and it asks it BEFORE the request, so a declined confirm cannot leave
+  // a fetch in flight against a tab nobody opened.
+  const openStatus = (status: FilingStatus) => {
+    if (status === activeStatus || tabBusy) return
+    if (
+      dirty &&
+      !window.confirm(
+        `Discard unsaved ${FILING_STATUS_LABELS[activeStatus]} bracket changes for ${brackets.year}?`,
+      )
+    ) {
+      return
+    }
+    const seq = ++tabSeqRef.current
+    setTabBusy(true)
+    setTabError(null)
+    // Belongs to the tab being left: a jurisdiction's error describes a table that is about
+    // to be replaced.
+    setErrors({})
+    fetchTaxBrackets(brackets.year, status)
+      .then((next) => {
+        if (seq !== tabSeqRef.current) return
+        setActiveStatus(status)
+        setPayload(next)
+        setTables(tablesOf(next))
+      })
+      .catch((err: unknown) => {
+        if (seq !== tabSeqRef.current) return
+        setTabError(
+          err instanceof ApiError
+            ? err.message
+            : `Failed to load the ${FILING_STATUS_LABELS[status]} bracket tables`,
+        )
+      })
+      .finally(() => {
+        if (seq === tabSeqRef.current) setTabBusy(false)
+      })
+  }
 
   // A jurisdiction's error describes the table as it was when Save was pressed; the first
   // keystroke anywhere in it may be the fix, so the stale sentence goes then and there.
@@ -167,7 +233,7 @@ export default function BracketsEditor({
       rows.length === 0 &&
       !window.confirm(
         `Delete all ${label(name)} brackets for ${brackets.year} (${
-          FILING_STATUS_LABELS[brackets.filing_status]
+          FILING_STATUS_LABELS[activeStatus]
         })?`,
       )
     ) {
@@ -180,7 +246,7 @@ export default function BracketsEditor({
     // off, which the server would read as 'single' — would rewrite tables the user never
     // opened.
     putTaxBrackets(brackets.year, {
-      filing_status: brackets.filing_status,
+      filing_status: activeStatus,
       jurisdictions: {
         [name]: rows.map((row) => ({
           rate: shiftPoint(row.rate, -2),
@@ -190,8 +256,10 @@ export default function BracketsEditor({
     })
       .then((echo) => {
         // Re-sync THIS table only (the server renumbered and quantized it); another
-        // jurisdiction may be half-edited and must not be thrown away.
+        // jurisdiction may be half-edited and must not be thrown away. The payload moves with
+        // it so the dirty baseline stays the server's answer rather than the pre-save one.
         setTables((current) => ({ ...current, [name]: rowsOf(echo.jurisdictions[name] ?? []) }))
+        setPayload(echo)
         onSaved(echo)
       })
       .catch((err: unknown) => {
@@ -215,6 +283,32 @@ export default function BracketsEditor({
         Every table starts at a 0 threshold and climbs; saving an empty table deletes that
         jurisdiction&apos;s rows. Each table saves on its own.
       </p>
+      {/* One tab per status this year can be filed as. The same six tables exist behind each
+          one — a full replace is per (jurisdiction, status) — so the tab is what decides
+          which of them a Save rewrites. */}
+      <div
+        className="segmented bracket-status-tabs"
+        role="group"
+        aria-label="Bracket filing status"
+      >
+        {tabs.map((status) => (
+          <button
+            key={status}
+            type="button"
+            className={status === activeStatus ? 'active' : ''}
+            aria-pressed={status === activeStatus}
+            disabled={tabBusy}
+            onClick={() => openStatus(status)}
+          >
+            {FILING_STATUS_LABELS[status]}
+          </button>
+        ))}
+      </div>
+      {tabError && (
+        <div className="error-banner" role="alert">
+          {tabError}
+        </div>
+      )}
       {JURISDICTIONS.map((name) => {
         const rows = tables[name] ?? []
         const message = errors[name]

@@ -302,3 +302,9 @@
      the card sideways (the .tax-warnings rule). */
   overflow-wrap: anywhere;
 }
+
+/* The tab row sits between the card's hint and the first table: the .segmented treatment is
+   panels.css's, so only its placement is this file's business. */
+.bracket-status-tabs {
+  margin-bottom: 1rem;
+}

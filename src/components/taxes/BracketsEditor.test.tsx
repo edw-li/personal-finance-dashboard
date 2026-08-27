@@ -1,15 +1,18 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
-import type { TaxBracketsOut } from '../../types/api'
+import type { FilingStatus, TaxBracketsOut } from '../../types/api'
 import BracketsEditor from './BracketsEditor'
 
-// JURISDICTIONS stays real (it drives render order); only the writer is stubbed.
+// JURISDICTIONS, the labels and the status vocabulary stay real (they drive render order and
+// wording); only the two writers and the tab reader are stubbed.
 vi.mock('../../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/taxes')>()),
+  fetchTaxBrackets: vi.fn(),
   putTaxBrackets: vi.fn(),
+  cloneBrackets: vi.fn(),
 }))
-import { putTaxBrackets } from '../../api/taxes'
+import { fetchTaxBrackets, putTaxBrackets } from '../../api/taxes'
 
 function bracketsFixture(): TaxBracketsOut {
   return {
@@ -30,6 +33,19 @@ function bracketsFixture(): TaxBracketsOut {
   }
 }
 
+// The same year seen through another status' tab: the status is on the payload, and
+// statuses_with_rows is year-global, so it names every tab that already has tables.
+function statusFixture(
+  status: FilingStatus,
+  withRows: FilingStatus[] = ['single'],
+): TaxBracketsOut {
+  return { ...bracketsFixture(), filing_status: status, statuses_with_rows: withRows }
+}
+
+const EMPTY_TABLES = {
+  federal: [], state: [], medicare: [], social_security: [], disability: [], capital_gains: [],
+}
+
 const rate = (jurisdiction: string, index: number) =>
   screen.getByLabelText(`${jurisdiction} bracket ${index} rate (%)`) as HTMLInputElement
 const threshold = (jurisdiction: string, index: number) =>
@@ -43,6 +59,12 @@ const confirmSpy = vi.spyOn(window, 'confirm')
 
 beforeEach(() => {
   vi.mocked(putTaxBrackets).mockResolvedValue(bracketsFixture())
+  vi.mocked(fetchTaxBrackets).mockImplementation(async (_year: number, status: FilingStatus) => ({
+    ...bracketsFixture(),
+    filing_status: status,
+    // A tab the user has not filled in yet is six EMPTY tables, not a 404.
+    jurisdictions: status === 'single' ? bracketsFixture().jurisdictions : EMPTY_TABLES,
+  }))
   confirmSpy.mockReturnValue(true)
 })
 
@@ -367,5 +389,99 @@ describe('BracketsEditor', () => {
     fireEvent.click(save('Federal'))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('federal: at most 12 brackets per jurisdiction')
+  })
+})
+
+describe('BracketsEditor — filing-status tabs', () => {
+  const tab = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+
+  it('offers Single alone when nothing else has tables and the year is filed single', () => {
+    render(<BracketsEditor brackets={bracketsFixture()} yearStatus="single" onSaved={vi.fn()} />)
+    expect(tab('Single').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByRole('button', { name: 'Married filing jointly' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Married filing separately' })).toBeNull()
+  })
+
+  it('always keeps Single, adds the year’s own status, and adds any status with rows', () => {
+    render(
+      <BracketsEditor
+        brackets={statusFixture('married_joint', ['single', 'married_separate'])}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+    // Single is the clone source and the importer's only status, so it is never hidden; the
+    // year's own status is the one the engine walks; and an MFS table entered early stays
+    // reachable from a year filed jointly.
+    expect(tab('Single').getAttribute('aria-pressed')).toBe('false')
+    expect(tab('Married filing jointly').getAttribute('aria-pressed')).toBe('true')
+    expect(tab('Married filing separately')).toBeTruthy()
+  })
+
+  it('loads the pressed tab’s tables and edits THAT status', async () => {
+    vi.mocked(fetchTaxBrackets).mockResolvedValue({
+      ...statusFixture('married_joint'),
+      jurisdictions: {
+        ...EMPTY_TABLES,
+        federal: [{ bracket_index: 1, rate: '0.1200', threshold: '0.00' }],
+      },
+    })
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(tab('Married filing jointly'))
+    await waitFor(() =>
+      expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024, 'married_joint'),
+    )
+    await waitFor(() => expect(rate('Federal', 1).value).toBe('12%'))
+    // The single table it replaced had two rows; nothing of it is left on screen.
+    expect(screen.queryByLabelText('Federal bracket 2 rate (%)')).toBeNull()
+
+    fireEvent.click(save('Federal'))
+    await waitFor(() =>
+      expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'married_joint',
+        jurisdictions: { federal: [{ rate: '0.12', threshold: '0.00' }] },
+      }),
+    )
+  })
+
+  it('asks before a tab switch that would discard typed rows', () => {
+    confirmSpy.mockReturnValue(false)
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+    fireEvent.change(rate('Federal', 2), { target: { value: '12' } })
+
+    fireEvent.click(tab('Married filing jointly'))
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved Single bracket changes for 2024?')
+    expect(vi.mocked(fetchTaxBrackets)).not.toHaveBeenCalled()
+    expect(rate('Federal', 2).value).toBe('12%')
+  })
+
+  it('surfaces a tab load failure and stays on the tab that is loaded', async () => {
+    vi.mocked(fetchTaxBrackets).mockRejectedValue(new ApiError('brackets unavailable', 503))
+    render(
+      <BracketsEditor
+        brackets={statusFixture('single', ['single', 'married_joint'])}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(tab('Married filing jointly'))
+    expect(await screen.findByText('brackets unavailable')).toBeTruthy()
+    // Nothing swapped: the single tables are still the ones being edited.
+    expect(tab('Single').getAttribute('aria-pressed')).toBe('true')
+    expect(rate('Federal', 2).value).toBe('37%')
   })
 })

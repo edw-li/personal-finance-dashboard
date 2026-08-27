@@ -302,7 +302,13 @@ export default function TaxesPage() {
 
   const onBracketsSaved = (echo: TaxBracketsOut) => {
     setDetail((current) =>
-      current !== null && current.brackets.year === echo.year
+      current !== null &&
+      current.brackets.year === echo.year &&
+      // `detail.brackets` is the tables the ENGINE reads — the year's own status'. The editor
+      // has status TABS, so a save (or a clone) can legitimately answer for another status:
+      // adopting that here would put tables the engine never walks under the year's heading
+      // AND change bracketsKey mid-edit, remounting the editor over its own work.
+      current.brackets.filing_status === echo.filing_status
         ? { ...current, brackets: echo }
         : current,
     )
@@ -639,6 +645,7 @@ export default function TaxesPage() {
           <BracketsEditor
             key={bracketsKey(detail.brackets)}
             brackets={detail.brackets}
+            yearStatus={filingStatus}
             onSaved={onBracketsSaved}
             onDirtyChange={setBracketsDirty}
           />
