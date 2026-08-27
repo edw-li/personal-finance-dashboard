@@ -3,15 +3,18 @@ from decimal import Decimal
 
 import pytest
 
-from app.models import Account, AccountBalance, AppSetting, NetWorthSnapshot
+from app.models import Account, AccountBalance, AppSetting, NetWorthSnapshot, Person
 from app.services.net_worth_calc import (
     INVESTABLE_GROUPS,
+    JOINT,
     get_swr_pct,
     group_totals_for,
     investable_base,
     investable_bases,
     load_balance_matrix,
     net_worth_for,
+    owner_clause,
+    owner_totals_for,
 )
 
 
@@ -124,3 +127,98 @@ async def test_investable_bases_without_snapshots_and_with_an_empty_one(db):
     batched = await investable_bases(db, [date(2026, 1, 1)])
     assert batched == [await investable_base(db, date(2026, 1, 1))]
     assert batched == [Decimal("0")]
+
+
+# --- ownership views (2026-08-26 household spec §5.2) -------------------------------------
+
+
+@pytest.fixture
+async def owned_world(db):
+    """One account per ownership kind plus a component, in a single snapshot.
+
+    The component belongs to the partner and is deliberately fat (400) — every rollup here
+    excludes it, so any number that moves by 400 is a rollup that forgot the exclusion.
+    """
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Sam", is_primary=False)
+    db.add_all([me, partner])
+    await db.flush()
+    mine = Account(
+        name="My Checking", slug="my-checking", group="cash", sort_order=1, person_id=me.id
+    )
+    theirs = Account(
+        name="Sam 401k", slug="sam-401k", group="pre_tax", sort_order=2, person_id=partner.id
+    )
+    bucket = Account(
+        name="Sam 401k Bucket",
+        slug="sam-401k-bucket",
+        group="pre_tax",
+        sort_order=3,
+        is_component=True,
+        person_id=partner.id,
+    )
+    joint = Account(
+        name="Joint Savings", slug="joint-savings", group="cash", sort_order=4, person_id=None
+    )
+    snap = NetWorthSnapshot(month=date(2026, 8, 1))
+    db.add_all([mine, theirs, bucket, joint, snap])
+    await db.flush()
+    for account, value in (
+        (mine, "100.00"),
+        (theirs, "1000.00"),
+        (bucket, "400.00"),
+        (joint, "70.00"),
+    ):
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal(value)))
+    await db.commit()
+    return me, partner, snap
+
+
+async def test_person_view_is_owned_plus_joint(db, owned_world):
+    me, _partner, snap = owned_world
+    _snaps, accounts, balances = await load_balance_matrix(db, owner_clause(str(me.id)))
+    assert [a.slug for a in accounts] == ["my-checking", "joint-savings"]
+    # "Primary holder + spouse secondary" is what a joint account IS: my view is mine AND ours.
+    assert net_worth_for(snap.id, accounts, balances) == Decimal("170.00")
+    assert group_totals_for(snap.id, accounts, balances)["cash"] == Decimal("170.00")
+
+
+async def test_joint_view_is_null_owned_only(db, owned_world):
+    _me, _partner, snap = owned_world
+    _snaps, accounts, balances = await load_balance_matrix(db, owner_clause(JOINT))
+    assert [a.slug for a in accounts] == ["joint-savings"]
+    assert net_worth_for(snap.id, accounts, balances) == Decimal("70.00")
+
+
+async def test_partner_view_excludes_their_own_component(db, owned_world):
+    _me, partner, snap = owned_world
+    _snaps, accounts, balances = await load_balance_matrix(db, owner_clause(str(partner.id)))
+    assert [a.slug for a in accounts] == ["sam-401k", "sam-401k-bucket", "joint-savings"]
+    # 1000 + 70; the 400 component is listed but never counted.
+    assert net_worth_for(snap.id, accounts, balances) == Decimal("1070.00")
+
+
+async def test_absent_owner_loads_the_whole_household(db, owned_world):
+    _me, _partner, snap = owned_world
+    _snaps, accounts, balances = await load_balance_matrix(db)
+    assert len(accounts) == 4
+    assert net_worth_for(snap.id, accounts, balances) == Decimal("1170.00")
+
+
+async def test_owner_totals_are_disjoint_and_sum_to_net_worth(db, owned_world):
+    me, partner, snap = owned_world
+    _snaps, accounts, balances = await load_balance_matrix(db)
+    totals = owner_totals_for(snap.id, accounts, balances)
+    # Each account counted ONCE, under its stored owner; None is the Joint bucket.
+    assert totals == {
+        me.id: Decimal("100.00"),
+        partner.id: Decimal("1000.00"),
+        None: Decimal("70.00"),
+    }
+    assert sum(totals.values()) == net_worth_for(snap.id, accounts, balances)
+
+
+def test_owner_clause_rejects_anything_that_is_not_an_id_or_joint():
+    for bad in ("", "nobody", "-1", "0", "1.5", "1e3", " 1", "99999999999", "²"):
+        with pytest.raises(ValueError):
+            owner_clause(bad)
