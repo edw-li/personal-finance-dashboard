@@ -233,6 +233,7 @@ async def test_summary_empty_db(auth_client):
         "mom_delta": None,
         "mom_pct": None,
         "groups": [],
+        "owner_totals": [],
     }
 
 
@@ -496,3 +497,126 @@ async def test_account_defaults_to_joint_when_no_owner_is_sent(auth_client):
         )
     ).json()
     assert created["person_id"] is None
+
+
+# --- ownership views (2026-08-26 household spec §5.2) -------------------------------------
+
+
+async def _seed_owned_timeseries(db):
+    """Two months x {mine, theirs, joint}. Every figure below is hand-checkable:
+    household 1170 -> 1330, my view 170 -> 230, their view 1070 -> 1180, joint 70 -> 80."""
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Sam", is_primary=False)
+    db.add_all([me, partner])
+    await db.flush()
+    mine = Account(
+        name="My Checking", slug="my-checking", group="cash", sort_order=1, person_id=me.id
+    )
+    theirs = Account(
+        name="Sam Brokerage",
+        slug="sam-brokerage",
+        group="taxable",
+        sort_order=2,
+        person_id=partner.id,
+    )
+    joint = Account(
+        name="Joint Savings", slug="joint-savings", group="cash", sort_order=3, person_id=None
+    )
+    snaps = [NetWorthSnapshot(month=date(2026, 7, 1)), NetWorthSnapshot(month=date(2026, 8, 1))]
+    db.add_all([mine, theirs, joint, *snaps])
+    await db.flush()
+    for snap, account, value in (
+        (snaps[0], mine, "100.00"),
+        (snaps[0], theirs, "1000.00"),
+        (snaps[0], joint, "70.00"),
+        (snaps[1], mine, "150.00"),
+        (snaps[1], theirs, "1100.00"),
+        (snaps[1], joint, "80.00"),
+    ):
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal(value)))
+    await db.commit()
+    return me, partner
+
+
+async def test_timeseries_without_owner_is_the_whole_household(auth_client, db):
+    me, partner = await _seed_owned_timeseries(db)
+    body = (await auth_client.get("/api/v1/net-worth/timeseries")).json()
+    assert body["net_worth"] == ["1170.00", "1330.00"]
+    assert len(body["accounts"]) == 3
+    # Exclusive per-owner series: primary first, then the rest by id, Joint last, and the
+    # three columns add up to net_worth month by month.
+    assert body["owner_series"] == [
+        {"person_id": me.id, "name": "Me", "values": ["100.00", "150.00"]},
+        {"person_id": partner.id, "name": "Sam", "values": ["1000.00", "1100.00"]},
+        {"person_id": None, "name": None, "values": ["70.00", "80.00"]},
+    ]
+
+
+async def test_timeseries_owner_person_is_owned_plus_joint(auth_client, db):
+    me, _partner = await _seed_owned_timeseries(db)
+    body = (await auth_client.get(f"/api/v1/net-worth/timeseries?owner={me.id}")).json()
+    assert body["net_worth"] == ["170.00", "230.00"]
+    assert [a["slug"] for a in body["accounts"]] == ["my-checking", "joint-savings"]
+    assert body["group_totals"]["cash"] == ["170.00", "230.00"]
+    assert body["group_totals"]["taxable"] == ["0.00", "0.00"]
+    # The scoped view's own owner split still sums to the scoped net worth.
+    assert body["owner_series"] == [
+        {"person_id": me.id, "name": "Me", "values": ["100.00", "150.00"]},
+        {"person_id": None, "name": None, "values": ["70.00", "80.00"]},
+    ]
+
+
+async def test_timeseries_owner_joint_is_null_owned_only(auth_client, db):
+    await _seed_owned_timeseries(db)
+    body = (await auth_client.get("/api/v1/net-worth/timeseries?owner=joint")).json()
+    assert body["net_worth"] == ["70.00", "80.00"]
+    assert [a["slug"] for a in body["accounts"]] == ["joint-savings"]
+    assert body["owner_series"] == [{"person_id": None, "name": None, "values": ["70.00", "80.00"]}]
+
+
+async def test_summary_owner_totals_and_scoped_deltas(auth_client, db):
+    me, partner = await _seed_owned_timeseries(db)
+
+    household = (await auth_client.get("/api/v1/net-worth/summary")).json()
+    assert household["net_worth"] == "1330.00"
+    assert household["mom_delta"] == "160.00"
+    assert household["owner_totals"] == [
+        {"person_id": me.id, "name": "Me", "total": "150.00"},
+        {"person_id": partner.id, "name": "Sam", "total": "1100.00"},
+        {"person_id": None, "name": None, "total": "80.00"},
+    ]
+
+    scoped = (await auth_client.get(f"/api/v1/net-worth/summary?owner={me.id}")).json()
+    assert scoped["net_worth"] == "230.00"
+    assert scoped["mom_delta"] == "60.00"
+    assert scoped["mom_pct"] == "0.352941"  # 60/170, 6dp HALF_UP
+    assert scoped["owner_totals"] == [
+        {"person_id": me.id, "name": "Me", "total": "150.00"},
+        {"person_id": None, "name": None, "total": "80.00"},
+    ]
+
+    joint = (await auth_client.get("/api/v1/net-worth/summary?owner=joint")).json()
+    assert joint["net_worth"] == "80.00"
+    assert joint["mom_pct"] == "0.142857"  # 10/70
+    assert joint["owner_totals"] == [{"person_id": None, "name": None, "total": "80.00"}]
+
+
+async def test_owner_param_rejects_garbage_on_both_endpoints(auth_client, db):
+    await _seed_owned_timeseries(db)
+    for bad in ("nobody", "-1", "0", "1.5", "99999999999"):
+        assert (
+            await auth_client.get(f"/api/v1/net-worth/timeseries?owner={bad}")
+        ).status_code == 422, bad
+        assert (
+            await auth_client.get(f"/api/v1/net-worth/summary?owner={bad}")
+        ).status_code == 422, bad
+
+
+async def test_owner_series_on_a_peopleless_database_is_one_joint_row(auth_client, db):
+    """The pre-household shape: no people rows, every account NULL-owned. The payload must
+    still be honest and still sum to net_worth rather than 500 on the missing join."""
+    await _seed_timeseries(db)
+    body = (await auth_client.get("/api/v1/net-worth/timeseries")).json()
+    assert body["owner_series"] == [
+        {"person_id": None, "name": None, "values": ["900.00", "1120.00", "1500.00"]}
+    ]

@@ -93,6 +93,15 @@ class AccountSeries(BaseModel):
     values: list[Decimal | None]
 
 
+class OwnerSeries(BaseModel):
+    """One EXCLUSIVE owner column, aligned with `months`. `name` is null for the joint
+    (NULL-owned) row — the client owns that label, the server does not invent a person."""
+
+    person_id: int | None
+    name: str | None
+    values: list[Decimal]
+
+
 class TimeseriesOut(BaseModel):
     months: list[date]
     accounts: list[AccountOut]
@@ -103,6 +112,9 @@ class TimeseriesOut(BaseModel):
     # Aligned with months, like every other parallel list here: the wizard has collected
     # snapshot notes since Plan 3, and this is what finally lets a chart show them.
     notes: list[str | None]
+    # Exclusive per-owner net worth, primary person first and Joint last. Sums to
+    # `net_worth` month by month by construction — that is what lets the page stack it.
+    owner_series: list[OwnerSeries]
 
 
 class GroupSummary(BaseModel):
@@ -111,9 +123,18 @@ class GroupSummary(BaseModel):
     mom_delta: Decimal | None
 
 
+class OwnerTotal(BaseModel):
+    person_id: int | None
+    name: str | None
+    total: Decimal
+
+
 class SummaryOut(BaseModel):
     month: date | None
     net_worth: Decimal | None
     mom_delta: Decimal | None
     mom_pct: Decimal | None
     groups: list[GroupSummary]
+    # Beside `groups`, never instead of it: the same latest snapshot split the other way.
+    # Empty when there are no snapshots. Sums to `net_worth`.
+    owner_totals: list[OwnerTotal]
