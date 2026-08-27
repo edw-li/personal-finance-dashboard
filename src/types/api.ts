@@ -758,10 +758,30 @@ export interface WithholdingLegOut {
   projected: string
 }
 
+// !!! KNOWN DIVERGENCE FROM THE WIRE — this interface is OUT OF DATE ON PURPOSE !!!
+// The merged backend (backend/app/schemas/taxes.py, class WithholdingOut) has moved and this
+// type has not caught up yet. Four specifics, so nobody has to diff the two by hand:
+//
+//   1. NULLABLE NOW. `liability_total` and `balance_projected` are `Decimal | None` on the
+//      wire — null exactly when the engine REFUSED, i.e. a married year whose bracket tables
+//      for that filing status have not been entered. Both are typed non-null `string` below,
+//      so TypeScript will not make anyone handle the null.
+//   2. TWO FIELDS MISSING FROM THIS TYPE: `filing_status` (string, defaults to "single") and
+//      `brackets_missing_for_status` (string[], non-empty only on a married year whose tables
+//      are missing — the same field TaxSummaryOut already carries above).
+//   3. IT ONLY LOOKS FINE BY ACCIDENT. WithholdingPanel renders the liability through
+//      formatCurrency(), whose runtime null-guard returns "—" — an accident of that helper,
+//      NOT something this type earned or promises. The sign math beside it is not so lucky:
+//      `Number(withholding.balance_projected)` reads a null as 0, which a refusal year would
+//      display as a confident "dead even".
+//   4. DO NOT RETYPE THIS HERE. docs/superpowers/plans/2026-08-26-withholding-flow-verification.md
+//      (Wave 4, Task 6) owns the retype and does it TOGETHER with the WithholdingPanel rewrite
+//      that learns to render a refusal — widening the type on its own would only spray
+//      unhandled nulls through a panel that is about to be replaced.
 export interface WithholdingOut {
   year: number
   // The engine's liability for the year — the same figure TaxSummaryOut.totals.total_tax
-  // carries, verbatim.
+  // carries, verbatim. NULLABLE on the wire; see the divergence note above.
   liability_total: string
   // The salary leg is all-in: the user's withholding_pct already carries its FICA, so no
   // salary-side FICA is added anywhere.
@@ -778,6 +798,7 @@ export interface WithholdingOut {
   }
   total: WithholdingLegOut
   // liability_total - total.projected: POSITIVE means "will owe", negative is a refund.
+  // NULLABLE on the wire; see the divergence note above.
   balance_projected: string
   // Paychecks received / expected this year — the progress denominator for the salary leg.
   checks_elapsed: number

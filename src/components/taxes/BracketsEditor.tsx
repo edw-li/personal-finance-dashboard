@@ -189,8 +189,6 @@ export default function BracketsEditor({
       })
   }
 
-  // A jurisdiction's error describes the table as it was when Save was pressed; the first
-  // keystroke anywhere in it may be the fix, so the stale sentence goes then and there.
   // A status tab with no rows at all. Six empty tables are not an editing surface — they are
   // 42 rows of hand transcription — so the tab offers the clone instead.
   const isEmpty = Object.values(payload.jurisdictions).every((rows) => rows.length === 0)
@@ -236,6 +234,8 @@ export default function BracketsEditor({
     return null
   }
 
+  // A jurisdiction's error describes the table as it was when Save was pressed; the first
+  // keystroke anywhere in it may be the fix, so the stale sentence goes then and there.
   const clearError = (name: string) =>
     setErrors((current) => (current[name] ? { ...current, [name]: '' } : current))
 

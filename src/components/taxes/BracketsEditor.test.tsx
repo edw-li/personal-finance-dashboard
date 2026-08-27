@@ -571,13 +571,24 @@ describe('BracketsEditor — filing-status tabs', () => {
     })
     render(
       <BracketsEditor
-        brackets={{ ...statusFixture('married_joint', ['single', 'married_joint']) }}
+        // EMPTY, which is what puts the clone button on screen — and a clone is the ONLY
+        // thing that ever produces a badge. Seeded tables would make this test pass without
+        // a badge ever rendering, which is no test at all.
+        brackets={{ ...statusFixture('married_joint'), jurisdictions: EMPTY_TABLES }}
         yearStatus="married_joint"
         onSaved={vi.fn()}
       />,
     )
-    // Seeded non-empty, so the clone offer is reached by emptying the tab first — open the
-    // single tab and come back is the shorter route to "flags describe ANOTHER tab".
+    fireEvent.click(screen.getByRole('button', { name: 'Clone from 2024 single tables' }))
+    // The badges are really there first, so their absence below means something.
+    await waitFor(() =>
+      expect(screen.getAllByText('review thresholds').length).toBeGreaterThan(0),
+    )
+    await waitFor(() => expect(tab('Single').disabled).toBe(false))
+
+    // They describe the tables that clone just wrote into THIS status. The single tab's
+    // tables were the source, not the copy, so carrying the badges across would ask the user
+    // to re-check the very numbers they were copied from.
     fireEvent.click(tab('Single'))
     await waitFor(() => expect(tab('Single').getAttribute('aria-pressed')).toBe('true'))
     expect(screen.queryByText('review thresholds')).toBeNull()
