@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.models import Person
+from app.models import Account, Person
 
 
 async def test_person_defaults_to_not_primary(db):
@@ -45,3 +45,17 @@ async def test_person_name_is_unique(db):
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
+
+
+async def test_account_owner_is_nullable_and_null_means_joint(db):
+    person = Person(name="Me", is_primary=True)
+    db.add(person)
+    await db.flush()
+    joint = Account(name="Joint Checking", slug="joint-checking", group="cash")
+    mine = Account(name="Fidelity HSA", slug="fidelity-hsa", group="pre_tax", person_id=person.id)
+    db.add_all([joint, mine])
+    await db.commit()
+    # NULL is JOINT, not "unknown": migration a8d24b6e9107 backfilled every pre-existing
+    # account to the primary person, so an unset owner is a deliberate statement.
+    assert joint.person_id is None
+    assert mine.person_id == person.id
