@@ -16,8 +16,10 @@ import pytest
 from app.services.tax_service import (
     EarnerWages,
     compute_breakdown,
+    derive_suggestions,
     earner_from_inputs,
     niit_advisory,
+    salt_cap,
 )
 from app.tax_keys import MARRIED_JOINT, MARRIED_SEPARATE, SINGLE
 from tests.test_tax_service import YEAR_BRACKETS, YEAR_INPUTS, YEARS, actuals
@@ -303,3 +305,112 @@ def test_niit_status_reaches_the_breakdown_warnings():
     flagged = [w for w in joint.warnings if w.startswith("capital-gains rates 0.15/0.2 contradict")]
     assert len(flagged) == 1
     assert "250000" in flagged[0]
+
+
+# --------------------------------------------------------------------------------------
+# derive_suggestions: SALT cap by status + the OBBBA phase-down, capital-loss clamp
+# --------------------------------------------------------------------------------------
+
+SALT_ITEMS = {
+    "itemized_salt": D("50000"),
+    "itemized_donations": D("0"),
+    "itemized_vehicle_reg": D("0"),
+    "itemized_sec199a_div": D("0"),
+    "itemized_other": D("0"),
+}
+
+
+def salt_year(year: int, status: str, magi: Decimal) -> Decimal:
+    """The itemized suggestion with 50000 of SALT and one W-2 line carrying the MAGI, so
+    the answer IS the applied cap."""
+    inputs = dict(SALT_ITEMS) | {"latest_w2_income": magi}
+    return derive_suggestions(year, inputs, status)["itemized_deduction"]
+
+
+def test_salt_cap_halves_for_married_filing_separately():
+    # Below every phase-down threshold, so this is the base cap alone.
+    assert salt_year(2024, SINGLE, D("0")) == D("10000")
+    assert salt_year(2024, MARRIED_SEPARATE, D("0")) == D("5000")
+    assert salt_year(2025, SINGLE, D("0")) == D("40000")
+    assert salt_year(2025, MARRIED_JOINT, D("0")) == D("40000")  # MFJ is NOT 2x single
+    assert salt_year(2025, MARRIED_SEPARATE, D("0")) == D("20000")
+
+
+def test_salt_phase_down_boundaries():
+    # Strictly ">": exactly 500000 of MAGI keeps the whole cap.
+    assert salt_year(2025, SINGLE, D("500000")) == D("40000")
+    # 40000 - 30% x 50000 = 25000.
+    assert salt_year(2025, SINGLE, D("550000")) == D("25000")
+    # 40000 - 30% x 100000 = 10000, exactly the floor.
+    assert salt_year(2025, SINGLE, D("600000")) == D("10000")
+    # Far past it: the floor holds rather than going negative.
+    assert salt_year(2025, SINGLE, D("900000")) == D("10000")
+    # MFS halves the threshold, the cap AND the floor: 20000 - 30% x 50000 = 5000.
+    assert salt_year(2025, MARRIED_SEPARATE, D("250000")) == D("20000")
+    assert salt_year(2025, MARRIED_SEPARATE, D("300000")) == D("5000")
+    assert salt_year(2025, MARRIED_SEPARATE, D("400000")) == D("5000")
+    # Pre-2025 the cap is already the floor, so no phase-down applies at any MAGI.
+    assert salt_year(2024, SINGLE, D("900000")) == D("10000")
+    assert salt_year(2024, MARRIED_SEPARATE, D("900000")) == D("5000")
+
+
+def test_salt_cap_reads_the_engine_definition_of_agi():
+    """MAGI is the engine's own federal AGI — pre-tax deductions pull it down, so a
+    401(k) can rescue the cap. One AGI definition, two consumers."""
+    assert salt_cap(2025, SINGLE, D("560000")) == D("22000")
+    inputs = dict(SALT_ITEMS) | {
+        "latest_w2_income": D("560000"),
+        "trad_401k_contributions": D("60000"),
+    }
+    # AGI 500000 -> no phase-down at all.
+    assert derive_suggestions(2025, inputs, SINGLE)["itemized_deduction"] == D("40000")
+
+
+def test_salt_cap_never_raises_the_suggestion_above_the_entered_amount():
+    """The cap is a ceiling, not a floor: 3000 of SALT stays 3000 under a 40000 cap."""
+    items = dict(SALT_ITEMS) | {"itemized_salt": D("3000"), "itemized_donations": D("250")}
+    assert derive_suggestions(2025, items, SINGLE)["itemized_deduction"] == D("3250")
+
+
+def test_capital_loss_suggestion_is_clamped_by_status():
+    """The deductible loss per return: 3000, or 1500 filing separately (spec §5.3). The
+    ENGINE's AGI math is untouched — capital_loss_deductions stays out of
+    ENGINE_INPUT_KEYS, which is what keeps the goldens byte-identical."""
+    big = {"ltcg_total": D("-5000"), "stcg_standard": D("1000")}  # nets to -4000
+    assert derive_suggestions(2025, big, SINGLE)["capital_loss_deductions"] == D("-3000")
+    assert derive_suggestions(2025, big, MARRIED_JOINT)["capital_loss_deductions"] == D("-3000")
+    assert derive_suggestions(2025, big, MARRIED_SEPARATE)["capital_loss_deductions"] == D("-1500")
+
+    # A loss under the cap is untouched, and MFS clamps it only once it passes 1500.
+    small = {"ltcg_total": D("-1000")}
+    assert derive_suggestions(2025, small, SINGLE)["capital_loss_deductions"] == D("-1000")
+    assert derive_suggestions(2025, small, MARRIED_SEPARATE)["capital_loss_deductions"] == D(
+        "-1000"
+    )
+    mid = {"ltcg_total": D("-2000")}
+    assert derive_suggestions(2025, mid, SINGLE)["capital_loss_deductions"] == D("-2000")
+    assert derive_suggestions(2025, mid, MARRIED_SEPARATE)["capital_loss_deductions"] == D("-1500")
+
+    # A gain still suggests 0, not a clamp.
+    assert derive_suggestions(2025, {"ltcg_total": D("500")}, SINGLE)[
+        "capital_loss_deductions"
+    ] == D("0")
+
+
+def test_capital_loss_clamp_never_reaches_the_engine():
+    """The clamp is advisory only: feeding the UNCLAMPED loss to the engine changes
+    nothing, because the key is not an engine input."""
+    inputs = dict(MFJ_INPUTS) | {"capital_loss_deductions": D("-99999")}
+    assert (
+        compute_breakdown(
+            MFJ_YEAR, inputs, MFJ_BRACKETS, filing_status=MARRIED_JOINT, earners=MFJ_EARNERS
+        ).federal.agi
+        == mfj_breakdown().federal.agi
+    )
+
+
+def test_derive_suggestions_defaults_to_single():
+    """No status argument is single's answer — the shipped call sites (and the golden
+    suite) pass two arguments and must keep meaning what they meant."""
+    items = dict(SALT_ITEMS) | {"itemized_salt": D("50000")}
+    assert derive_suggestions(2025, items) == derive_suggestions(2025, items, SINGLE)

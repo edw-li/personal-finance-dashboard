@@ -661,10 +661,15 @@ def test_suggestion_stcg_netting_branches(standard, espp, ltcg, expected):
 
 
 def test_suggestion_capital_loss_negative():
+    """The netting rule is unchanged; the SUGGESTION is now clamped to the statutory
+    3000 per return (2026-08-26 spec §5.3 — an approved behavior change, not a bug fix:
+    the sheet offered the whole un-nettable remainder). The engine still never reads this
+    key, so no breakdown moved."""
     inputs = {"ltcg_total": Decimal("-5000"), "stcg_standard": Decimal("1000")}
     suggested = derive_suggestions(2025, inputs)
-    assert suggested["capital_loss_deductions"] == Decimal("-4000")
+    # The un-nettable remainder is still -4000 — the STCG line proves the netting ran.
     assert suggested["stcg_total"] == Decimal("0")  # the loss lands on r27, not the STCG line
+    assert suggested["capital_loss_deductions"] == Decimal("-3000")
 
 
 def test_suggestions_default_missing_references_to_zero():

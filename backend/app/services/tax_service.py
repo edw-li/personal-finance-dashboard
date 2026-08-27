@@ -69,6 +69,18 @@ PAYCHECKS_PER_YEAR = Decimal("24")
 SALT_CAP_FIRST_RAISED_YEAR = 2025
 SALT_CAP_BEFORE = Decimal("10000")
 SALT_CAP_FROM = Decimal("40000")
+# OBBBA's phase-down of the RAISED cap: above 500000 of MAGI the cap sheds 30 cents per
+# dollar, never falling below the 10000 base. Statutory constants in code, bracket values
+# as data — the same split the SALT cap itself has always used.
+SALT_PHASEDOWN_MAGI = Decimal("500000")
+SALT_PHASEDOWN_RATE = Decimal("0.30")
+SALT_PHASEDOWN_FLOOR = Decimal("10000")
+# The deductible capital LOSS per return. This clamps the SUGGESTION only: the engine's
+# AGI math never reads capital_loss_deductions (it is deliberately absent from
+# ENGINE_INPUT_KEYS), so the goldens' breakdowns cannot move.
+CAPITAL_LOSS_LIMIT = Decimal("3000")
+# Married-filing-separately halves the per-return statutory figures.
+MFS_HALF = Decimal("2")
 
 # Every input key `compute_breakdown` reads, in tax_keys definition order (== the order
 # the inputs form renders), so the missing-key warning reads like the form.
@@ -501,13 +513,47 @@ def compute_breakdown(
     )
 
 
-def derive_suggestions(year: int, inputs: dict[str, Decimal]) -> dict[str, Decimal]:
+def salt_cap(year: int, filing_status: str, magi: Decimal) -> Decimal:
+    """The SALT deduction cap the itemized suggestion applies (spec §5.3).
+
+    The sheet hardcodes the cap per column (10000 through 2024, 40000 after) and this
+    keeps doing that; what it adds is the two statutory dimensions the sheet never had —
+    MFS halving, and the >500k-MAGI phase-down of the raised cap. Pre-2025 there is no
+    phase-down to apply: the cap already sits at the floor.
+    """
+    cap = SALT_CAP_FROM if year >= SALT_CAP_FIRST_RAISED_YEAR else SALT_CAP_BEFORE
+    threshold = SALT_PHASEDOWN_MAGI
+    floor = SALT_PHASEDOWN_FLOOR
+    if filing_status == MARRIED_SEPARATE:
+        cap /= MFS_HALF
+        threshold /= MFS_HALF
+        floor /= MFS_HALF
+    if year >= SALT_CAP_FIRST_RAISED_YEAR and magi > threshold:
+        phased = cap - SALT_PHASEDOWN_RATE * (magi - threshold)
+        cap = phased if phased > floor else floor
+    return cap
+
+
+def derive_suggestions(
+    year: int, inputs: dict[str, Decimal], filing_status: str = SINGLE
+) -> dict[str, Decimal]:
     """Advisory values for the sheet's gray (formula) input cells, quantized 4dp HALF_UP.
 
     Computed from the STORED values of the referenced keys — sheet-faithful, because the
     gray formulas reference cells rather than recursing. Missing references default to 0
     (an empty cell is a zero), so all ten suggestions are always offered; the caller
     decides whether to surface a chip. Never applied automatically.
+
+    Two of the ten are status-aware (spec §5.3): the SALT slice of the itemized total, and
+    the capital-loss line, which the statute caps per RETURN at 3000 (1500 filing
+    separately) however large the netted loss is. Both are SUGGESTIONS — the engine's own
+    arithmetic is status-neutral and unchanged, so a status flip never silently rewrites a
+    stored number.
+
+    The derived-W2 chain (gross_paycheck / latest_w2_income / other_w2_income) is one
+    PERSON's, so the caller feeds one person's rows at a time (api/taxes.py builds a
+    suggestion map per column); the household keys it also reads are shared and give the
+    same answer in every column.
     """
 
     def value(key: str) -> Decimal:
@@ -525,8 +571,20 @@ def derive_suggestions(year: int, inputs: dict[str, Decimal]) -> dict[str, Decim
     else:
         stcg_total = ZERO
 
-    # The SALT cap is hardcoded per column in the sheet: 10000 through 2024, 40000 after.
-    cap = SALT_CAP_FROM if year >= SALT_CAP_FIRST_RAISED_YEAR else SALT_CAP_BEFORE
+    # r27 carries the un-nettable remainder of the loss, so it is negative or zero — and
+    # only the deductible slice of it is worth suggesting.
+    loss_limit = CAPITAL_LOSS_LIMIT
+    if filing_status == MARRIED_SEPARATE:
+        loss_limit /= MFS_HALF
+    if netted < 0:
+        capital_loss = netted if netted > -loss_limit else -loss_limit
+    else:
+        capital_loss = ZERO
+
+    # The SALT cap is hardcoded per column in the sheet (10000 through 2024, 40000 after);
+    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is the engine's
+    # own federal AGI — the same definition compute_breakdown walks.
+    cap = salt_cap(year, filing_status, _federal_agi(value))
     salt = value("itemized_salt")
     itemized = (salt if salt < cap else cap) + (
         value("itemized_donations")
@@ -549,8 +607,7 @@ def derive_suggestions(year: int, inputs: dict[str, Decimal]) -> dict[str, Decim
         "stcg_total": stcg_total,
         "unqualified_dividends": value("unq_div_us_treasuries_etf") + value("unq_div_other"),
         "interest_total": value("interest_standard") + value("interest_us_treasuries"),
-        # r27 carries the un-nettable remainder of the loss, so it is negative or zero.
-        "capital_loss_deductions": netted if netted < 0 else ZERO,
+        "capital_loss_deductions": capital_loss,
         "other_pretax_deductions": value("pretax_dental") + value("pretax_vision"),
         "itemized_deduction": itemized,
         "ltcg_total": value("ltcg_brokerage") + value("ltcg_espp_component"),
