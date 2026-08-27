@@ -22,6 +22,11 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("w2_espp_sale_component", "W2: ESPP Sale Component", ORDINARY_INCOME, 90, False),
     ("w2_employer_hsa", "W2: Employer HSA Contribution", ORDINARY_INCOME, 100, False),
     ("w2_other", "W2: Other", ORDINARY_INCOME, 110, False),
+    # Tracker-only (2026-08-26 spec §5.6): the withholding card's partner side reads these
+    # two, the engine never does. Stored inputs outside ENGINE_INPUT_KEYS, exactly like
+    # capital_loss_deductions — real values the user enters, zero effect on any liability.
+    ("w2_fed_withholding", "W2: Federal Withholding", ORDINARY_INCOME, 112, False),
+    ("w2_state_withholding", "W2: State Withholding", ORDINARY_INCOME, 114, False),
     ("stcg_total", "Short Term Capital Gain/Loss", ORDINARY_INCOME, 120, True),
     ("stcg_standard", "STCG: Standard Gain/Loss", ORDINARY_INCOME, 130, False),
     ("stcg_espp_component", "STCG: ESPP Sale Component", ORDINARY_INCOME, 140, False),
@@ -65,4 +70,40 @@ JURISDICTIONS = (
     "social_security",
     "disability",
     "capital_gains",
+)
+
+# Filing status (2026-08-26 spec §4). Python-validated like `accounts.group`, and stored
+# as a plain String(20) so a future status (head_of_household) is a one-line change plus
+# data, never a migration. `single` is the default everywhere: every stored year predates
+# the marriage, and the engine's single path must stay byte-identical.
+SINGLE = "single"
+MARRIED_JOINT = "married_joint"
+MARRIED_SEPARATE = "married_separate"
+FILING_STATUSES = (SINGLE, MARRIED_JOINT, MARRIED_SEPARATE)
+
+# The input keys that belong to a PERSON rather than the household (audit §3.2's list of
+# 17, plus the two tracker keys above). Every OTHER key is household-level and stores
+# exactly one row per year with person_id NULL — after the person migration, NULL means
+# household, strictly. Only six of these reach the engine's walks; the rest feed the
+# suggestion formulas and the withholding card.
+PER_PERSON_KEYS: tuple[str, ...] = (
+    "annual_salary",
+    "gross_paycheck",
+    "pay_periods",
+    "latest_w2_income",
+    "other_w2_income",
+    "w2_stock_rsus_sold",
+    "w2_bonuses",
+    "w2_salary_checkpoint",
+    "w2_espp_sale_component",
+    "w2_employer_hsa",
+    "w2_other",
+    "w2_fed_withholding",
+    "w2_state_withholding",
+    "trad_401k_contributions",
+    "hsa_contributions",
+    "hsa_contributions_employer",
+    "other_pretax_deductions",
+    "pretax_dental",
+    "pretax_vision",
 )

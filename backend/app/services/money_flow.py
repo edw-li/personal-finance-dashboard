@@ -24,9 +24,11 @@ from decimal import ROUND_HALF_UP, Decimal
 from app.services.tax_service import (
     MISSING_INPUTS_WARNING,
     Bracket,
+    EarnerWages,
     TaxBreakdown,
     compute_breakdown,
 )
+from app.tax_keys import SINGLE
 
 ZERO = Decimal("0")
 MONTHS_IN_YEAR = 12
@@ -61,6 +63,7 @@ NO_NET_PAY_WARNING = "no net pay entered for {year}"
 NET_PAY_COVERAGE_WARNING = "net pay entered {n}/12 months"
 NO_SPENDING_WARNING = "no spending entered for {year}"
 SPENDING_COVERAGE_WARNING = "spending entered {n}/12 months"
+BRACKETS_MISSING_WARNING = "no {status} bracket tables for {year}: {jurisdictions}"
 
 NO_INPUTS_REASON = (
     "No tax inputs are stored for {year} — enter the year on the Taxes page to draw its money flow."
@@ -79,6 +82,10 @@ NEGATIVE_PRETAX_REASON = (
 NEGATIVE_RESIDUAL_REASON = (
     "Taxes, pre-tax savings and take-home cash exceed gross income for {year} by {gap} — "
     "the retained-equity residual would be negative."
+)
+BRACKETS_MISSING_REASON = (
+    "{year} is filed as {status}, and {jurisdictions} have no bracket table for that status — "
+    "enter them on the Taxes page to draw its money flow."
 )
 
 
@@ -143,6 +150,10 @@ def compose_money_flow(
     net_pay_months: int,
     spending_months: int,
     available_years: list[int],
+    *,
+    filing_status: str = SINGLE,
+    earners: list[EarnerWages] | None = None,
+    brackets_missing_for_status: list[str] | tuple[str, ...] = (),
 ) -> MoneyFlow:
     """One reconciled year of money flow (spec §5's node table).
 
@@ -152,13 +163,20 @@ def compose_money_flow(
     `spending_months` counts distinct entered spending months. This function never
     re-derives an engine figure: gross income and every tax line are compute_breakdown's
     own outputs (the state-AGI capital-gains fold rides along for free).
+
+    `filing_status`/`earners` are passed STRAIGHT THROUGH to the engine, so the card's tax
+    decomposition is the same arithmetic the Taxes summary shows — with the defaults, that
+    is byte-for-byte today's answer. The source-node aggregation below is deliberately
+    untouched: a labelled per-person income node is a later plan's work.
     """
 
     def value(key: str) -> Decimal:
         found = inputs.get(key)
         return ZERO if found is None else found
 
-    breakdown: TaxBreakdown = compute_breakdown(year, inputs, brackets)
+    breakdown: TaxBreakdown = compute_breakdown(
+        year, inputs, brackets, filing_status=filing_status, earners=earners
+    )
 
     salary_and_bonus = sum((value(key) for key in SALARY_KEYS), ZERO)
     rsu_vests = value(RSU_KEY)
@@ -202,6 +220,14 @@ def compose_money_flow(
     warnings: list[str] = [
         warning for warning in breakdown.warnings if not warning.startswith(_ENGINE_MISSING_PREFIX)
     ]
+    if brackets_missing_for_status:
+        warnings.append(
+            BRACKETS_MISSING_WARNING.format(
+                year=year,
+                status=filing_status,
+                jurisdictions=", ".join(brackets_missing_for_status),
+            )
+        )
     if not inputs:
         warnings.append(NO_INPUTS_WARNING.format(year=year))
     if net_pay_months == 0:
@@ -217,7 +243,16 @@ def compose_money_flow(
     # negative saved is NOT here — a deficit is drawable (red Drawdown source). Negative
     # take_home_cash is unreachable (net_pay writes reject negatives).
     reason: str | None = None
-    if gross_income <= 0:
+    if brackets_missing_for_status:
+        # First, ahead of every data reason: with the wrong-status tables absent, the tax
+        # ribbons are zeros and the residual is wrong BECAUSE of that. Naming the residual
+        # would send the user hunting for a data error that is not there.
+        reason = BRACKETS_MISSING_REASON.format(
+            year=year,
+            status=filing_status,
+            jurisdictions=", ".join(brackets_missing_for_status),
+        )
+    elif gross_income <= 0:
         reason = (
             NO_INPUTS_REASON.format(year=year)
             if not inputs

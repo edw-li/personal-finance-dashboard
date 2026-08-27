@@ -1,8 +1,8 @@
 """Overview API: cross-domain, server-composed payloads for the dashboard's cards.
 
 Reads only. `GET /overview/money-flow` (2026-08-25 spec §5) loads one year's tax inputs +
-brackets exactly the way the taxes router does — its `_stored_inputs`/`_engine_tables`,
-IMPORTED, one loader per concept (app_settings.py's cross-router-borrow precedent) —
+brackets exactly the way the taxes router does — its `_engine_feed`, IMPORTED, one loader
+per concept (app_settings.py's cross-router-borrow precedent) —
 sums the calendar year's spending/cashflow, and hands everything to the pure
 services.money_flow.compose_money_flow. GETs never reject stored data: an unknown or
 empty year answers 200 with renderable=False and a reason sentence, never a 404.
@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.api.taxes import YEAR_MAX, YEAR_MIN, _engine_tables, _money, _stored_inputs
+from app.api.taxes import YEAR_MAX, YEAR_MIN, _engine_feed, _money
 from app.database import get_db
 from app.models import MonthlyCashflow, MonthlySpending, SpendingCategory, TaxInput
 from app.schemas.overview import (
@@ -85,8 +85,7 @@ async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db))
         # evening is already tomorrow — and on Dec 31 that would be next YEAR.
         year = product_today().year
 
-    inputs = await _stored_inputs(db, year)
-    brackets = await _engine_tables(db, year)
+    feed = await _engine_feed(db, year)
 
     # Calendar-year window as [Jan 1, next Jan 1): months are first-of-month dates, so
     # the half-open bound can never leak a neighbouring December in.
@@ -124,12 +123,15 @@ async def money_flow(year: YearQuery = None, db: AsyncSession = Depends(get_db))
 
     flow = compose_money_flow(
         year=year,
-        inputs=inputs,
-        brackets=brackets,
+        inputs=feed.inputs,
+        brackets=feed.tables,
         category_sums=category_sums,
         net_pay_sum=net_pay_sum,
         net_pay_months=len(pay_rows),
         spending_months=spending_months,
         available_years=available_years,
+        filing_status=feed.filing_status,
+        earners=feed.earners,
+        brackets_missing_for_status=feed.brackets_missing_for_status,
     )
     return _money_flow_out(flow)

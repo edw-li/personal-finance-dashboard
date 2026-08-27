@@ -10,7 +10,7 @@ from app.config import settings
 from app.database import SessionLocal, engine
 from app.models import AppSetting, Person, TaxInputDefinition, User
 from app.security import hash_password
-from app.tax_keys import TAX_INPUT_DEFINITIONS
+from app.tax_keys import PER_PERSON_KEYS, TAX_INPUT_DEFINITIONS
 
 
 async def seed_admin_user(db: AsyncSession) -> None:
@@ -53,6 +53,10 @@ async def seed_tax_definitions(db: AsyncSession) -> None:
                     section=section,
                     sort_order=sort_order,
                     is_derived=is_derived,
+                    # The flag is a property of the KEY, so it is seeded rather than
+                    # migrated for any database that meets these rows for the first time
+                    # (a create_all test DB, or a fresh deploy).
+                    is_per_person=key in PER_PERSON_KEYS,
                 )
             )
 

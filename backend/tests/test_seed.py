@@ -112,7 +112,7 @@ async def test_seed_tax_definitions_inserts_all_and_is_insert_only(db):
     await seed_tax_definitions(db)
     await db.commit()
     rows = (await db.execute(select(TaxInputDefinition))).scalars().all()
-    assert len(rows) == len(TAX_INPUT_DEFINITIONS) == 43
+    assert len(rows) == len(TAX_INPUT_DEFINITIONS) == 45
     # Insert-only contract (Plan 1 forward note): label edits do NOT propagate.
     edited = await db.get(TaxInputDefinition, "annual_salary")
     edited.label = "User Edited Label"

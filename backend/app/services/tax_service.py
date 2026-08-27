@@ -26,10 +26,11 @@ money.py's bounded `quantize_money` — and range-guard rates before `quantize_p
 either guard skipped, a GET raises on data the API itself accepted.
 """
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.tax_keys import JURISDICTIONS
+from app.tax_keys import JURISDICTIONS, MARRIED_JOINT, MARRIED_SEPARATE, SINGLE
 
 ZERO = Decimal("0")
 
@@ -49,6 +50,14 @@ NIIT_WARNING = (
 # year whose AGI later crosses the threshold silently keeps the wrong pair; we advise
 # rather than override, because the stored brackets are the user's to edit.
 NIIT_AGI_THRESHOLD = Decimal("200000")
+# Statutory and non-indexed (audit §5), so constants rather than data: MFJ is 250000 and
+# MFS 125000, neither of which is "2x single". An unknown status reads single's figure —
+# this is a pure read over stored data and must never raise on it.
+NIIT_AGI_THRESHOLDS: dict[str, Decimal] = {
+    SINGLE: NIIT_AGI_THRESHOLD,
+    MARRIED_JOINT: Decimal("250000"),
+    MARRIED_SEPARATE: Decimal("125000"),
+}
 NIIT_RATES = (Decimal("0.188"), Decimal("0.238"))
 BASE_CG_RATES = (Decimal("0.15"), Decimal("0.20"))
 
@@ -60,6 +69,18 @@ PAYCHECKS_PER_YEAR = Decimal("24")
 SALT_CAP_FIRST_RAISED_YEAR = 2025
 SALT_CAP_BEFORE = Decimal("10000")
 SALT_CAP_FROM = Decimal("40000")
+# OBBBA's phase-down of the RAISED cap: above 500000 of MAGI the cap sheds 30 cents per
+# dollar, never falling below the 10000 base. Statutory constants in code, bracket values
+# as data — the same split the SALT cap itself has always used.
+SALT_PHASEDOWN_MAGI = Decimal("500000")
+SALT_PHASEDOWN_RATE = Decimal("0.30")
+SALT_PHASEDOWN_FLOOR = Decimal("10000")
+# The deductible capital LOSS per return. This clamps the SUGGESTION only: the engine's
+# AGI math never reads capital_loss_deductions (it is deliberately absent from
+# ENGINE_INPUT_KEYS), so the goldens' breakdowns cannot move.
+CAPITAL_LOSS_LIMIT = Decimal("3000")
+# Married-filing-separately halves the per-return statutory figures.
+MFS_HALF = Decimal("2")
 
 # Every input key `compute_breakdown` reads, in tax_keys definition order (== the order
 # the inputs form renders), so the missing-key warning reads like the form.
@@ -144,6 +165,104 @@ def stack(brackets: list[Bracket], base: Decimal, amount: Decimal) -> Decimal:
     return total
 
 
+def _federal_agi(value: Callable[[str], Decimal]) -> Decimal:
+    """Federal AGI, the sheet's clean model (rows 96-99).
+
+    ONE definition with two consumers: `compute_breakdown`'s income chain and the SALT
+    phase-down's MAGI in `derive_suggestions`. Term order is the canonical formula's, so
+    the goldens pin it to the cent. capital_loss_deductions is deliberately absent — the
+    sheet models it as a line but no output formula ever reads it.
+    """
+    return (
+        value("latest_w2_income")
+        + value("other_w2_income")
+        + value("stcg_total")
+        + value("unqualified_dividends")
+        + value("interest_total")
+        + value("other_income_1099")
+    ) - (
+        value("trad_401k_contributions")
+        + value("hsa_contributions")
+        + value("hsa_contributions_employer")
+        + value("other_pretax_deductions")
+    )
+
+
+@dataclass(frozen=True)
+class EarnerWages:
+    """One person's W-2 wage bundle for the per-earner payroll walks (spec §5.3).
+
+    THREE fields, not one, because the sheet's FICA bases differ per family: Social
+    Security and Medicare run on wages net of HSA *and* the other pre-tax deductions,
+    while CA SDI subtracts dental/vision alone (the CA quirk in the FICA note below). A
+    single `w2_wages` scalar could not reproduce both, so each earner carries the two
+    pre-tax legs and the engine derives the bases here — one definition, two consumers,
+    exactly as the aggregate path did.
+    """
+
+    w2_wages: Decimal
+    pretax_hsa: Decimal = ZERO
+    other_pretax: Decimal = ZERO
+
+    @property
+    def fica_wages(self) -> Decimal:
+        """The Medicare / Social Security base for this person."""
+        return self.w2_wages - (self.pretax_hsa + self.other_pretax)
+
+    @property
+    def sdi_wages(self) -> Decimal:
+        """The CA SDI base: dental/vision out, HSA deliberately left IN."""
+        return self.w2_wages - self.other_pretax
+
+
+def earner_from_inputs(values: Mapping[str, Decimal]) -> EarnerWages:
+    """One person's bundle from THEIR OWN input rows — the exact composition
+    `compute_breakdown` synthesizes when `earners` is None, so the API can build a
+    two-earner list without a second definition of "what a W-2 is"."""
+
+    def value(key: str) -> Decimal:
+        found = values.get(key)
+        return ZERO if found is None else found
+
+    return EarnerWages(
+        w2_wages=value("latest_w2_income") + value("other_w2_income"),
+        pretax_hsa=value("hsa_contributions") + value("hsa_contributions_employer"),
+        other_pretax=value("other_pretax_deductions"),
+    )
+
+
+def shift_earners(
+    earners: list[EarnerWages] | None,
+    before: dict[str, Decimal],
+    after: dict[str, Decimal],
+) -> list[EarnerWages] | None:
+    """Re-base a wage-bundle list onto a what-if scenario's inputs.
+
+    Every what-if leg is the PRIMARY person's — their brokerage lots, their ESPP lots, the
+    app models no partner equity — so the whole wage delta lands on the FIRST bundle and
+    the partner's own wage base is untouched beside it. `None` (and an empty list) passes
+    straight through, so a single-earner year keeps taking the engine's own synthesis
+    path and stays byte-identical.
+    """
+    if not earners:
+        return earners
+
+    def delta(key: str) -> Decimal:
+        return after.get(key, ZERO) - before.get(key, ZERO)
+
+    head = earners[0]
+    return [
+        EarnerWages(
+            w2_wages=head.w2_wages + delta("latest_w2_income") + delta("other_w2_income"),
+            pretax_hsa=head.pretax_hsa
+            + delta("hsa_contributions")
+            + delta("hsa_contributions_employer"),
+            other_pretax=head.other_pretax + delta("other_pretax_deductions"),
+        ),
+        *earners[1:],
+    ]
+
+
 @dataclass
 class JurisdictionResult:
     """One tax family's line; the fields that family does not have stay None.
@@ -195,18 +314,22 @@ def _rate(tax: Decimal, base: Decimal) -> Decimal | None:
     return (tax / base) + ZERO
 
 
-def niit_advisory(fed_agi: Decimal, cg_brackets: list[Bracket]) -> str | None:
+def niit_advisory(
+    fed_agi: Decimal, cg_brackets: list[Bracket], filing_status: str = SINGLE
+) -> str | None:
     """Flag stored CG rates that contradict the sheet's AGI-driven NIIT rule.
 
     Returns None when the table is too short to carry both rates (nothing to compare) or
     when the stored pair already matches. Never edits the brackets: the engine walks what
-    is stored, verbatim.
+    is stored, verbatim. The threshold is the filing status's (200k / 250k / 125k) — an
+    unknown status reads single's, because a GET must never fail on stored data.
     """
     if len(cg_brackets) < 3:
         return None
+    threshold = NIIT_AGI_THRESHOLDS.get(filing_status, NIIT_AGI_THRESHOLD)
     ordered = sorted(cg_brackets, key=lambda bracket: bracket[1])
     stored = (ordered[1][0], ordered[2][0])
-    above = fed_agi > NIIT_AGI_THRESHOLD
+    above = fed_agi > threshold
     expected = NIIT_RATES if above else BASE_CG_RATES
     if stored == expected:
         return None
@@ -218,7 +341,7 @@ def niit_advisory(fed_agi: Decimal, cg_brackets: list[Bracket]) -> str | None:
         stored=stored[0].normalize(),
         stored_top=stored[1].normalize(),
         side="above" if above else "at or below",
-        threshold=NIIT_AGI_THRESHOLD,
+        threshold=threshold,
         expected=expected[0].normalize(),
         expected_top=expected[1].normalize(),
     )
@@ -228,6 +351,9 @@ def compute_breakdown(
     year: int,
     inputs: dict[str, Decimal],
     brackets: dict[str, list[Bracket]],
+    *,
+    filing_status: str = SINGLE,
+    earners: list[EarnerWages] | None = None,
 ) -> TaxBreakdown:
     """The canonical model, per the Plan 5 Workbook reference.
 
@@ -235,6 +361,16 @@ def compute_breakdown(
     in form order. A jurisdiction that is missing — or explicitly stored as an empty
     bracket list — yields 0 tax plus a warning. Effective rates are full-precision ratios,
     None when the denominator is 0; the schema layer quantizes.
+
+    `filing_status` selects nothing here but the NIIT advisory's threshold: every OTHER
+    status-dependent number lives in the bracket TABLES the caller selected, which is why
+    a wrong-status table is refused upstream rather than compensated for down here.
+
+    `earners` is the per-person wage split the payroll walks need (2026-08-26 spec §5.3).
+    With None the engine synthesizes the single bundle from `inputs` exactly as it always
+    did, so the whole default path — and the golden suite — is byte-identical. An EMPTY
+    list is not "one earner with nothing": it means no wage data at all, and reads like a
+    year with no W-2.
     """
     values: dict[str, Decimal] = {}
     missing_inputs: list[str] = []
@@ -259,19 +395,7 @@ def compute_breakdown(
 
     # Federal (sheet rows 96-99). capital_loss_deductions (r27) is modelled as a line but
     # no output formula ever reads it — ported faithfully, so it does NOT reach AGI.
-    fed_agi = (
-        values["latest_w2_income"]
-        + values["other_w2_income"]
-        + values["stcg_total"]
-        + values["unqualified_dividends"]
-        + values["interest_total"]
-        + values["other_income_1099"]
-    ) - (
-        values["trad_401k_contributions"]
-        + values["hsa_contributions"]
-        + values["hsa_contributions_employer"]
-        + values["other_pretax_deductions"]
-    )
+    fed_agi = _federal_agi(values.__getitem__)
     fed_deduction = max(values["standard_deduction"], values["itemized_deduction"])
     fed_ti = fed_agi - fed_deduction
     fed_tax = walk(tables["federal"], fed_ti)
@@ -309,29 +433,44 @@ def compute_breakdown(
 
     # FICA (rows 104-115): the wage bases deliberately keep trad-401k in — it is pre-tax
     # for income tax only. SDI subtracts dental/vision alone, not HSA (the CA quirk).
-    w2_income = values["latest_w2_income"] + values["other_w2_income"]
-    medicare_wages = w2_income - (
-        values["hsa_contributions"]
-        + values["hsa_contributions_employer"]
-        + values["other_pretax_deductions"]
-    )
+    # One earner or many, the REPORTED aggregates are identical sums; what changes is
+    # where the per-person caps bite (2026-08-26 spec §5.3).
+    bundles = [earner_from_inputs(values)] if earners is None else list(earners)
+    w2_income = sum((earner.w2_wages for earner in bundles), ZERO)
+    # Medicare is a COMBINED-wage walk on purpose, and its shape is unchanged: the 1.45%
+    # base is linear, and the 0.9% additional tier is legally assessed on COMBINED wages
+    # above the status threshold (Form 8959). Correctness therefore comes from the
+    # status-selected medicare table (MFJ's tier at 250k, MFS's at 125k), never from
+    # splitting the wages — a per-person split would UNDER-charge a two-earner couple.
+    medicare_wages = sum((earner.fica_wages for earner in bundles), ZERO)
     medicare_tax = walk(tables["medicare"], medicare_wages)
 
     # The SS wage base is modelled as a terminal 0-rate bracket; r109's min() makes the cap
     # explicit so taxable_wages reads as the capped figure the sheet displays. It is
     # tax-neutral by construction (income inside a 0-rate bracket contributes nothing), and
     # it is only a cap when that top rate really is 0 — a table without the terminal row,
-    # or with a genuinely progressive top tier, reports (and taxes) uncapped wages.
+    # or with a genuinely progressive top tier, reports (and taxes) uncapped wages. The cap
+    # is PER PERSON: two earners get two wage bases, which is the single worst wrong-money
+    # consequence of the old shared figure (audit §3.2).
     ss_table = tables["social_security"]
-    ss_wages = medicare_wages
+    ss_cap: Decimal | None = None
     if len(ss_table) > 1:
         top_rate, top_threshold = max(ss_table, key=lambda bracket: bracket[1])
         if top_rate == 0:
-            ss_wages = min(medicare_wages, top_threshold)
-    ss_tax = walk(ss_table, ss_wages)
+            ss_cap = top_threshold
+    ss_bases = [
+        earner.fica_wages if ss_cap is None else min(earner.fica_wages, ss_cap)
+        for earner in bundles
+    ]
+    ss_wages = sum(ss_bases, ZERO)
+    ss_tax = sum((walk(ss_table, base) for base in ss_bases), ZERO)
 
-    sdi_wages = w2_income - values["other_pretax_deductions"]
-    sdi_tax = walk(tables["disability"], sdi_wages)
+    # SDI likewise walks per earner (the sheet-derived data carries a pseudo-cap row, and a
+    # cap is a per-person parameter), while the REPORTED taxable_wages stays the uncapped
+    # aggregate the sheet displays — pinned by the 2024 golden's 235424.46.
+    sdi_table = tables["disability"]
+    sdi_wages = sum((earner.sdi_wages for earner in bundles), ZERO)
+    sdi_tax = sum((walk(sdi_table, earner.sdi_wages) for earner in bundles), ZERO)
 
     # The federal CG stack (row 120): cg_amount was netted above the state section, which
     # shares it; the gains stack on top of federal taxable income.
@@ -353,7 +492,7 @@ def compute_breakdown(
     )
     total_tax = fed_tax + state_tax + medicare_tax + ss_tax + sdi_tax + cg_tax
 
-    advisory = niit_advisory(fed_agi, tables["capital_gains"])
+    advisory = niit_advisory(fed_agi, tables["capital_gains"], filing_status)
     if advisory is not None:
         warnings.append(advisory)
 
@@ -406,13 +545,47 @@ def compute_breakdown(
     )
 
 
-def derive_suggestions(year: int, inputs: dict[str, Decimal]) -> dict[str, Decimal]:
+def salt_cap(year: int, filing_status: str, magi: Decimal) -> Decimal:
+    """The SALT deduction cap the itemized suggestion applies (spec §5.3).
+
+    The sheet hardcodes the cap per column (10000 through 2024, 40000 after) and this
+    keeps doing that; what it adds is the two statutory dimensions the sheet never had —
+    MFS halving, and the >500k-MAGI phase-down of the raised cap. Pre-2025 there is no
+    phase-down to apply: the cap already sits at the floor.
+    """
+    cap = SALT_CAP_FROM if year >= SALT_CAP_FIRST_RAISED_YEAR else SALT_CAP_BEFORE
+    threshold = SALT_PHASEDOWN_MAGI
+    floor = SALT_PHASEDOWN_FLOOR
+    if filing_status == MARRIED_SEPARATE:
+        cap /= MFS_HALF
+        threshold /= MFS_HALF
+        floor /= MFS_HALF
+    if year >= SALT_CAP_FIRST_RAISED_YEAR and magi > threshold:
+        phased = cap - SALT_PHASEDOWN_RATE * (magi - threshold)
+        cap = phased if phased > floor else floor
+    return cap
+
+
+def derive_suggestions(
+    year: int, inputs: dict[str, Decimal], filing_status: str = SINGLE
+) -> dict[str, Decimal]:
     """Advisory values for the sheet's gray (formula) input cells, quantized 4dp HALF_UP.
 
     Computed from the STORED values of the referenced keys — sheet-faithful, because the
     gray formulas reference cells rather than recursing. Missing references default to 0
     (an empty cell is a zero), so all ten suggestions are always offered; the caller
     decides whether to surface a chip. Never applied automatically.
+
+    Two of the ten are status-aware (spec §5.3): the SALT slice of the itemized total, and
+    the capital-loss line, which the statute caps per RETURN at 3000 (1500 filing
+    separately) however large the netted loss is. Both are SUGGESTIONS — the engine's own
+    arithmetic is status-neutral and unchanged, so a status flip never silently rewrites a
+    stored number.
+
+    The derived-W2 chain (gross_paycheck / latest_w2_income / other_w2_income) is one
+    PERSON's, so the caller feeds one person's rows at a time (api/taxes.py builds a
+    suggestion map per column); the household keys it also reads are shared and give the
+    same answer in every column.
     """
 
     def value(key: str) -> Decimal:
@@ -430,8 +603,20 @@ def derive_suggestions(year: int, inputs: dict[str, Decimal]) -> dict[str, Decim
     else:
         stcg_total = ZERO
 
-    # The SALT cap is hardcoded per column in the sheet: 10000 through 2024, 40000 after.
-    cap = SALT_CAP_FROM if year >= SALT_CAP_FIRST_RAISED_YEAR else SALT_CAP_BEFORE
+    # r27 carries the un-nettable remainder of the loss, so it is negative or zero — and
+    # only the deductible slice of it is worth suggesting.
+    loss_limit = CAPITAL_LOSS_LIMIT
+    if filing_status == MARRIED_SEPARATE:
+        loss_limit /= MFS_HALF
+    if netted < 0:
+        capital_loss = netted if netted > -loss_limit else -loss_limit
+    else:
+        capital_loss = ZERO
+
+    # The SALT cap is hardcoded per column in the sheet (10000 through 2024, 40000 after);
+    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is the engine's
+    # own federal AGI — the same definition compute_breakdown walks.
+    cap = salt_cap(year, filing_status, _federal_agi(value))
     salt = value("itemized_salt")
     itemized = (salt if salt < cap else cap) + (
         value("itemized_donations")
@@ -454,8 +639,7 @@ def derive_suggestions(year: int, inputs: dict[str, Decimal]) -> dict[str, Decim
         "stcg_total": stcg_total,
         "unqualified_dividends": value("unq_div_us_treasuries_etf") + value("unq_div_other"),
         "interest_total": value("interest_standard") + value("interest_us_treasuries"),
-        # r27 carries the un-nettable remainder of the loss, so it is negative or zero.
-        "capital_loss_deductions": netted if netted < 0 else ZERO,
+        "capital_loss_deductions": capital_loss,
         "other_pretax_deductions": value("pretax_dental") + value("pretax_vision"),
         "itemized_deduction": itemized,
         "ltcg_total": value("ltcg_brokerage") + value("ltcg_espp_component"),

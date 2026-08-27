@@ -215,3 +215,22 @@ async def test_money_flow_available_years_lists_every_inputs_year(auth_client, d
     assert resp.status_code == 200
     body = (await auth_client.get(f"{MONEY_FLOW}?year=2026")).json()
     assert body["available_years"] == [2024, 2026]
+
+
+async def test_money_flow_refuses_a_married_year_without_its_tables(auth_client, db):
+    """The Overview card inherits the engine's refusal instead of drawing a single
+    filer's numbers under a married heading."""
+    from app.models import TaxInput, TaxInputDefinition, TaxYear
+    from app.seed import seed_tax_definitions
+
+    await seed_tax_definitions(db)
+    db.add(TaxYear(year=2026, filing_status="married_joint"))
+    await db.flush()
+    db.add(TaxInput(year=2026, key="latest_w2_income", value=Decimal("200000.0000")))
+    await db.commit()
+    assert (await db.get(TaxInputDefinition, "latest_w2_income")) is not None
+
+    body = (await auth_client.get("/api/v1/overview/money-flow", params={"year": 2026})).json()
+    assert body["renderable"] is False
+    assert "married_joint" in body["reason"]
+    assert any("married_joint" in warning for warning in body["warnings"])

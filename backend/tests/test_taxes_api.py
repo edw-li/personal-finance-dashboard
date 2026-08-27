@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.models import (
     EsppLot,
@@ -102,8 +102,20 @@ async def test_years_list_empty_then_reports_counts(auth_client, db, definitions
 
     body = (await auth_client.get(YEARS)).json()
     assert [y["year"] for y in body] == [2023, 2024]  # ascending, not insertion order
-    assert body[0] == {"year": 2023, "notes": None, "input_count": 0, "bracket_count": 0}
-    assert body[1] == {"year": 2024, "notes": "imported", "input_count": 2, "bracket_count": 1}
+    assert body[0] == {
+        "year": 2023,
+        "notes": None,
+        "filing_status": "single",
+        "input_count": 0,
+        "bracket_count": 0,
+    }
+    assert body[1] == {
+        "year": 2024,
+        "notes": "imported",
+        "filing_status": "single",
+        "input_count": 2,
+        "bracket_count": 1,
+    }
 
 
 async def test_delete_year_404_when_missing(auth_client, definitions):
@@ -131,7 +143,13 @@ async def test_delete_year_removes_the_whole_year_vertical(auth_client, db, defi
     assert (await auth_client.delete(f"{YEARS}/2030")).status_code == 204
     # 2030 gone and nothing recreated it; 2029 untouched, child counts and all.
     assert (await auth_client.get(YEARS)).json() == [
-        {"year": 2029, "notes": None, "input_count": 1, "bracket_count": 1}
+        {
+            "year": 2029,
+            "notes": None,
+            "filing_status": "single",
+            "input_count": 1,
+            "bracket_count": 1,
+        }
     ]
     assert (await auth_client.get(f"{YEARS}/2030/inputs")).status_code == 404
     n_inputs = (
@@ -174,7 +192,7 @@ async def test_get_inputs_lists_every_definition_with_null_values(auth_client, d
     assert body["year"] == 2024
     assert [section["section"] for section in body["sections"]] == list(SECTIONS)
     items = items_by_key(body)
-    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 43
+    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 45
     for section in body["sections"]:
         orders = [item["sort_order"] for item in section["items"]]
         assert orders == sorted(orders)
@@ -317,7 +335,13 @@ async def test_put_brackets_replaces_one_jurisdiction_at_a_time(auth_client, def
     ]
     assert (await auth_client.get(f"{YEARS}/2030/brackets")).json() == second
     assert (await auth_client.get(YEARS)).json() == [
-        {"year": 2030, "notes": None, "input_count": 0, "bracket_count": 2}
+        {
+            "year": 2030,
+            "notes": None,
+            "filing_status": "single",
+            "input_count": 0,
+            "bracket_count": 2,
+        }
     ]
 
 
@@ -1033,3 +1057,747 @@ async def test_taxes_endpoints_require_auth(client):
     assert (await client.get(f"{YEARS}/2024/summary")).status_code == 401
     assert (await client.get(ALL_SUMMARY)).status_code == 401
     assert (await client.post(WHAT_IF, json={"year": 2024})).status_code == 401
+
+
+# --- filing status ---
+
+
+@pytest.fixture
+async def household(db):
+    """Me + Partner. `create_all` seeds no people, so every OTHER test in this file runs
+    on an empty roster — which is exactly the pre-household spelling the API still has to
+    support."""
+    from app.models import Person
+
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    await db.commit()
+    return me, partner
+
+
+async def set_status(auth_client, year: int, status: str) -> dict:
+    resp = await auth_client.patch(f"{YEARS}/{year}", json={"filing_status": status})
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def test_years_default_to_single_and_patch_sets_the_status(auth_client, definitions):
+    await put_inputs(auth_client, 2026, {"annual_salary": "150000"})
+    assert (await auth_client.get(YEARS)).json()[0]["filing_status"] == "single"
+
+    body = await set_status(auth_client, 2026, "married_joint")
+    assert body == {
+        "year": 2026,
+        "notes": None,
+        "filing_status": "married_joint",
+        "input_count": 1,
+        "bracket_count": 0,
+    }
+    assert (await auth_client.get(YEARS)).json()[0]["filing_status"] == "married_joint"
+
+
+async def test_patch_year_rejects_unknown_status_and_missing_year(auth_client, definitions):
+    await put_inputs(auth_client, 2026, {})
+    bad = await auth_client.patch(f"{YEARS}/2026", json={"filing_status": "widow"})
+    assert bad.status_code == 422
+    assert (await auth_client.get(YEARS)).json()[0]["filing_status"] == "single"
+    # No auto-create: a status is a statement ABOUT a year that must already exist.
+    missing = await auth_client.patch(f"{YEARS}/2027", json={"filing_status": "married_joint"})
+    assert missing.status_code == 404
+    assert "2027" in missing.json()["detail"]
+
+
+async def test_single_summary_shape_is_unchanged(auth_client, definitions):
+    """The additive keys, and nothing else: a single year still carries every section."""
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+
+    body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
+    assert body["filing_status"] == "single"
+    assert body["brackets_missing_for_status"] == []
+    assert body["totals"]["total_tax"] == "72755.83"
+
+
+async def test_single_year_with_no_brackets_still_computes(auth_client, definitions):
+    """The grandfathered path: 'single' NEVER gates. A partial single-filer year has
+    always computed with per-jurisdiction warnings, and stored history depends on it."""
+    await put_inputs(auth_client, 2033, {"latest_w2_income": "1000"})
+
+    body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
+    assert body["brackets_missing_for_status"] == []
+    assert body["totals"]["total_tax"] == "0.00"
+    assert JURISDICTION_WARN_MISSING.format(j="federal", year=2033) in body["warnings"]
+
+
+async def test_married_year_without_its_tables_refuses_to_compute(auth_client, definitions):
+    """Never garbage, never a 500: the single-filer tables are RIGHT THERE and would
+    produce a confident, wrong number."""
+    await put_inputs(auth_client, 2026, inputs_payload(2026))
+    await put_brackets(auth_client, 2026, brackets_payload(2026)["jurisdictions"])
+    await set_status(auth_client, 2026, "married_joint")
+
+    resp = await auth_client.get(f"{YEARS}/2026/summary")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["year"] == 2026
+    assert body["filing_status"] == "married_joint"
+    assert body["brackets_missing_for_status"] == list(JURISDICTIONS)
+    for section in (
+        "federal",
+        "state",
+        "medicare",
+        "social_security",
+        "disability",
+        "capital_gains",
+        "totals",
+    ):
+        assert body[section] is None, section
+    assert body["warnings"] == [
+        "2026 is filed as married_joint and has no married_joint bracket table for: "
+        "federal, state, medicare, social_security, disability, capital_gains"
+    ]
+
+
+async def test_trend_feed_skips_and_names_the_refused_years(auth_client, definitions):
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+    await put_inputs(auth_client, 2026, inputs_payload(2026))
+    await put_brackets(auth_client, 2026, brackets_payload(2026)["jurisdictions"])
+    await set_status(auth_client, 2026, "married_separate")
+
+    body = (await auth_client.get(ALL_SUMMARY)).json()
+    assert [year["year"] for year in body["years"]] == [2024]  # 2026 cannot be drawn
+    assert body["incomplete"] == [
+        {
+            "year": 2026,
+            "filing_status": "married_separate",
+            "brackets_missing_for_status": list(JURISDICTIONS),
+        }
+    ]
+
+
+def test_filing_status_literal_matches_the_constant():
+    from typing import get_args
+
+    from app.schemas.taxes import FilingStatus
+    from app.tax_keys import FILING_STATUSES
+
+    assert get_args(FilingStatus) == FILING_STATUSES
+
+
+# --- per-person inputs ---
+
+
+async def test_inputs_payload_shape_is_unchanged_without_a_roster(auth_client, definitions):
+    """No people seeded (the `create_all` default): one column, person_id null, exactly
+    the payload shipped today plus the additive keys."""
+    await put_inputs(auth_client, 2024, {"annual_salary": "150000"})
+
+    body = (await auth_client.get(f"{YEARS}/2024/inputs")).json()
+    assert body["filing_status"] == "single"
+    assert body["people"] == []
+    items = items_by_key(body)
+    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 45
+    assert items["annual_salary"]["value"] == "150000.0000"
+    assert items["annual_salary"]["person_id"] is None
+    assert items["annual_salary"]["is_per_person"] is True
+    assert items["interest_total"]["is_per_person"] is False
+    assert items["w2_fed_withholding"]["is_per_person"] is True
+    assert items["w2_fed_withholding"]["suggested"] is None  # tracker-only, never derived
+
+
+async def test_inputs_render_one_column_per_person_on_a_joint_year(
+    auth_client, db, household, definitions
+):
+    me, partner = household
+    await put_inputs(auth_client, 2026, {"annual_salary": "150000"})
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    assert body["people"] == [
+        {"id": me.id, "name": "Me"},
+        {"id": partner.id, "name": "Partner"},
+    ]
+    salary = [
+        item
+        for section in body["sections"]
+        for item in section["items"]
+        if item["key"] == "annual_salary"
+    ]
+    assert [item["person_id"] for item in salary] == [me.id, partner.id]
+    # The legacy `values` write landed on the PRIMARY person.
+    assert [item["value"] for item in salary] == ["150000.0000", None]
+    # Household keys stay single-column.
+    interest = [
+        item
+        for section in body["sections"]
+        for item in section["items"]
+        if item["key"] == "interest_total"
+    ]
+    assert [item["person_id"] for item in interest] == [None]
+
+
+async def test_person_qualified_write_round_trip(auth_client, db, household, definitions):
+    me, partner = household
+    resp = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "values": {"interest_total": "2000"},
+            "rows": [
+                {"key": "annual_salary", "person_id": me.id, "value": "150000"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "90000"},
+                {"key": "w2_fed_withholding", "person_id": partner.id, "value": "12000"},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    by_slot = {
+        (item["key"], item["person_id"]): item["value"]
+        for section in body["sections"]
+        for item in section["items"]
+    }
+    assert by_slot[("annual_salary", me.id)] == "150000.0000"
+    assert by_slot[("annual_salary", partner.id)] == "90000.0000"
+    assert by_slot[("w2_fed_withholding", partner.id)] == "12000.0000"
+    assert by_slot[("interest_total", None)] == "2000.0000"
+    # The PUT body IS the GET shape.
+    assert (await auth_client.get(f"{YEARS}/2026/inputs")).json() == body
+
+    # A null clears one PERSON's row and leaves the other alone.
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={"rows": [{"key": "annual_salary", "person_id": partner.id, "value": None}]},
+    )
+    after = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    remaining = {
+        (item["key"], item["person_id"]): item["value"]
+        for section in after["sections"]
+        for item in section["items"]
+    }
+    assert remaining[("annual_salary", partner.id)] is None
+    assert remaining[("annual_salary", me.id)] == "150000.0000"
+
+
+async def test_suggestions_are_computed_per_column(auth_client, db, household, definitions):
+    """The derived-W2 chain is one PERSON's: the partner's pay_periods x gross_paycheck
+    must not be built from the primary's salary."""
+    me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "pay_periods", "person_id": me.id, "value": "24"},
+                {"key": "gross_paycheck", "person_id": me.id, "value": "6000"},
+                {"key": "pay_periods", "person_id": partner.id, "value": "24"},
+                {"key": "gross_paycheck", "person_id": partner.id, "value": "4000"},
+                {"key": "itemized_salt", "value": "9000"},
+            ]
+        },
+    )
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    suggested = {
+        (item["key"], item["person_id"]): item["suggested"]
+        for section in body["sections"]
+        for item in section["items"]
+    }
+    assert suggested[("latest_w2_income", me.id)] == "144000.0000"
+    assert suggested[("latest_w2_income", partner.id)] == "96000.0000"
+    # A household suggestion is column-invariant, so it renders once.
+    assert suggested[("itemized_deduction", None)] == "9000.0000"
+
+
+async def test_put_inputs_rejects_person_on_a_household_key(auth_client, household, definitions):
+    me, _partner = household
+    resp = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={"rows": [{"key": "interest_total", "person_id": me.id, "value": "5"}]},
+    )
+    assert resp.status_code == 422
+    assert "interest_total" in resp.json()["detail"]
+    assert (await auth_client.get(YEARS)).json() == []  # not even the year row
+
+
+async def test_put_inputs_rejects_unknown_person_and_duplicate_slots(
+    auth_client, household, definitions
+):
+    me, _partner = household
+    unknown = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={"rows": [{"key": "annual_salary", "person_id": 9999, "value": "1"}]},
+    )
+    assert unknown.status_code == 422
+    assert "9999" in unknown.json()["detail"]
+
+    duplicate = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "values": {"annual_salary": "1"},
+            "rows": [{"key": "annual_salary", "person_id": me.id, "value": "2"}],
+        },
+    )
+    # `values` resolves to the primary person, so this IS the same slot twice.
+    assert duplicate.status_code == 422
+    assert "annual_salary" in duplicate.json()["detail"]
+    assert (await auth_client.get(YEARS)).json() == []
+
+
+async def test_a_legacy_null_row_is_adopted_not_duplicated(auth_client, db, household, definitions):
+    """A row written before the roster existed carries person_id NULL on a per-person key.
+    The next write must move it, never insert a second row the unique key would reject."""
+    from app.models import TaxInput as TaxInputModel
+
+    me, _partner = household
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    db.add(TaxInputModel(year=2026, key="annual_salary", value=Decimal("100000.0000")))
+    await db.commit()
+
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={"rows": [{"key": "annual_salary", "person_id": me.id, "value": "150000"}]},
+    )
+    stored = (
+        (
+            await db.execute(
+                select(TaxInputModel).where(
+                    TaxInputModel.year == 2026, TaxInputModel.key == "annual_salary"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(stored) == 1
+    assert (stored[0].person_id, stored[0].value) == (me.id, Decimal("150000.0000"))
+
+
+async def test_one_legacy_null_row_is_adopted_by_only_one_column(
+    auth_client, db, household, definitions
+):
+    """Both columns written in ONE body, over a single legacy NULL row.
+
+    Only one person can inherit that row; the other needs a fresh insert. Handing it to
+    each of them in turn would keep just the last column's value and silently drop the
+    first — a wrong-money bug on exactly the write the household migration invites."""
+    from app.models import TaxInput as TaxInputModel
+
+    me, partner = household
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    db.add(TaxInputModel(year=2026, key="annual_salary", value=Decimal("100000.0000")))
+    await db.commit()
+
+    resp = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "annual_salary", "person_id": me.id, "value": "150000"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "90000"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    stored = {
+        row.person_id: row.value
+        for row in (
+            await db.execute(
+                select(TaxInputModel).where(
+                    TaxInputModel.year == 2026, TaxInputModel.key == "annual_salary"
+                )
+            )
+        ).scalars()
+    }
+    assert stored == {me.id: Decimal("150000.0000"), partner.id: Decimal("90000.0000")}
+
+
+async def test_a_partner_write_never_adopts_the_primarys_legacy_null_row(
+    auth_client, db, household, definitions
+):
+    """Only the PRIMARY may adopt a legacy NULL row — every read already says it is theirs.
+
+    `_owner_column` folds a per-person NULL onto columns[0], so the summary has been
+    counting that 100000 as the primary's all along. A partner write of the same key must
+    therefore insert its OWN row: adopting would move the money into the partner's column
+    without the primary's line being touched, and a partner `null` would delete it outright.
+    """
+    from app.models import TaxInput as TaxInputModel
+
+    me, partner = household
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    db.add(TaxInputModel(year=2026, key="annual_salary", value=Decimal("100000.0000")))
+    await db.commit()
+
+    async def salaries() -> dict[int | None, Decimal]:
+        return {
+            row.person_id: row.value
+            for row in (
+                await db.execute(
+                    select(TaxInputModel).where(
+                        TaxInputModel.year == 2026, TaxInputModel.key == "annual_salary"
+                    )
+                )
+            ).scalars()
+        }
+
+    async def write(person_id: int, value: str | None):
+        resp = await auth_client.put(
+            f"{YEARS}/2026/inputs",
+            json={"rows": [{"key": "annual_salary", "person_id": person_id, "value": value}]},
+        )
+        assert resp.status_code == 200, resp.text
+
+    await write(partner.id, "90000")
+    assert await salaries() == {None: Decimal("100000.0000"), partner.id: Decimal("90000.0000")}
+
+    # ...and unsetting the partner's line takes only the partner's row with it.
+    await write(partner.id, None)
+    assert await salaries() == {None: Decimal("100000.0000")}
+
+    # The primary still adopts, exactly as before: one row, never two.
+    await write(me.id, "150000")
+    assert await salaries() == {me.id: Decimal("150000.0000")}
+
+
+# --- brackets by status ---
+
+
+async def test_brackets_default_to_single_and_statuses_are_independent(auth_client, definitions):
+    await put_brackets(auth_client, 2026, {"federal": rows(("0.10", "0"))})
+    joint = await auth_client.put(
+        f"{YEARS}/2026/brackets",
+        json={"filing_status": "married_joint", "jurisdictions": {"federal": rows(("0.12", "0"))}},
+    )
+    assert joint.status_code == 200, joint.text
+    assert joint.json()["filing_status"] == "married_joint"
+
+    single_body = (await auth_client.get(f"{YEARS}/2026/brackets")).json()
+    assert single_body["filing_status"] == "single"
+    assert single_body["statuses_with_rows"] == ["married_joint", "single"]
+    assert single_body["jurisdictions"]["federal"] == [
+        {"bracket_index": 1, "rate": "0.1000", "threshold": "0.00"}
+    ]
+    joint_body = (
+        await auth_client.get(f"{YEARS}/2026/brackets", params={"filing_status": "married_joint"})
+    ).json()
+    assert joint_body["jurisdictions"]["federal"] == [
+        {"bracket_index": 1, "rate": "0.1200", "threshold": "0.00"}
+    ]
+    # A full replace of one status leaves the other's TABLES alone...
+    await auth_client.put(
+        f"{YEARS}/2026/brackets",
+        json={"filing_status": "married_joint", "jurisdictions": {"federal": []}},
+    )
+    after = (await auth_client.get(f"{YEARS}/2026/brackets")).json()
+    assert after["filing_status"] == single_body["filing_status"]
+    assert after["jurisdictions"] == single_body["jurisdictions"]
+    # ...while the emptied status honestly drops off the year's tab list.
+    assert after["statuses_with_rows"] == ["single"]
+
+
+async def test_get_brackets_rejects_an_unknown_status(auth_client, definitions):
+    await put_brackets(auth_client, 2026, {"federal": rows(("0.10", "0"))})
+    resp = await auth_client.get(f"{YEARS}/2026/brackets", params={"filing_status": "widow"})
+    assert resp.status_code == 422
+
+
+async def test_clone_as_married_joint_copies_the_single_tables_with_review_flags(
+    auth_client, definitions
+):
+    """The "Clone as MFJ" flow: same year, single tables in, MFJ tables out."""
+    await put_brackets(auth_client, 2026, brackets_payload(2026)["jurisdictions"])
+
+    resp = await auth_client.post(
+        f"{YEARS}/2026/clone-brackets-from/2026", params={"target_status": "married_joint"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["filing_status"] == "married_joint"
+    source = (await auth_client.get(f"{YEARS}/2026/brackets")).json()
+    assert body["jurisdictions"] == source["jurisdictions"]  # verbatim, index for index
+    assert body["review_flags"] == {
+        "verbatim_ok": ["social_security", "disability"],
+        "review": ["federal", "state", "capital_gains", "medicare"],
+    }
+
+    # A second clone into the same status is a 409, never a silent merge.
+    conflict = await auth_client.post(
+        f"{YEARS}/2026/clone-brackets-from/2026", params={"target_status": "married_joint"}
+    )
+    assert conflict.status_code == 409
+    assert "2026" in conflict.json()["detail"]
+    assert "married_joint" in conflict.json()["detail"]
+    # ...and the single tables it cloned FROM are untouched.
+    assert (await auth_client.get(f"{YEARS}/2026/brackets")).json() == source
+
+
+async def test_clone_only_ever_reads_the_source_years_single_tables(auth_client, definitions):
+    """MFJ tables are never a clone SOURCE: the helper's whole job is "start my married
+    tables from my single ones"."""
+    await auth_client.put(
+        f"{YEARS}/2024/brackets",
+        json={"filing_status": "married_joint", "jurisdictions": {"federal": rows(("0.12", "0"))}},
+    )
+    missing = await auth_client.post(f"{YEARS}/2025/clone-brackets-from/2024")
+    assert missing.status_code == 404
+    assert "2024" in missing.json()["detail"]
+
+
+async def test_clone_target_status_defaults_to_single(auth_client, definitions):
+    await put_brackets(auth_client, 2024, {"federal": rows(("0.10", "0"))})
+    body = (await auth_client.post(f"{YEARS}/2025/clone-brackets-from/2024")).json()
+    assert body["filing_status"] == "single"
+    assert body["jurisdictions"]["federal"] == [
+        {"bracket_index": 1, "rate": "0.1000", "threshold": "0.00"}
+    ]
+
+
+async def test_brackets_missing_state_clears_once_the_tables_are_cloned(auth_client, definitions):
+    """End to end: flip to MFJ, get the call-to-action, clone, get numbers."""
+    await put_inputs(auth_client, 2026, inputs_payload(2026))
+    await put_brackets(auth_client, 2026, brackets_payload(2026)["jurisdictions"])
+    await set_status(auth_client, 2026, "married_joint")
+    assert (await auth_client.get(f"{YEARS}/2026/summary")).json()["totals"] is None
+
+    await auth_client.post(
+        f"{YEARS}/2026/clone-brackets-from/2026", params={"target_status": "married_joint"}
+    )
+    body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert body["brackets_missing_for_status"] == []
+    # Cloned verbatim from the single tables, so the figures are the single goldens.
+    assert body["totals"]["total_tax"] == "98584.56"
+
+
+async def test_married_year_reports_only_the_missing_tables(auth_client, definitions):
+    await put_inputs(auth_client, 2026, inputs_payload(2026))
+    await set_status(auth_client, 2026, "married_joint")
+    await auth_client.put(
+        f"{YEARS}/2026/brackets",
+        json={
+            "filing_status": "married_joint",
+            "jurisdictions": {"federal": rows(("0.10", "0")), "state": rows(("0.05", "0"))},
+        },
+    )
+    body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert body["brackets_missing_for_status"] == [
+        "medicare",
+        "social_security",
+        "disability",
+        "capital_gains",
+    ]
+    assert body["totals"] is None
+
+
+async def test_married_joint_sums_both_people_and_splits_the_wage_base(
+    auth_client, db, household, definitions
+):
+    """The end-to-end wrong-money fix: two W-2s, two Social-Security wage bases."""
+    me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "latest_w2_income", "person_id": me.id, "value": "200000"},
+                {"key": "latest_w2_income", "person_id": partner.id, "value": "100000"},
+            ]
+        },
+    )
+    tables = {
+        "federal": rows(("0.10", "0")),
+        "state": rows(("0.05", "0")),
+        "medicare": rows(("0.0145", "0")),
+        "social_security": rows(("0.062", "0"), ("0", "180000")),
+        "disability": rows(("0.01", "0")),
+        "capital_gains": rows(("0.15", "0")),
+    }
+    for status in ("single", "married_joint"):
+        resp = await auth_client.put(
+            f"{YEARS}/2026/brackets", json={"filing_status": status, "jurisdictions": tables}
+        )
+        assert resp.status_code == 200, resp.text
+
+    single = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    # One shared wage base: min(300000, 180000) x .062.
+    assert single["social_security"]["tax"] == "11160.00"
+    assert single["social_security"]["w2_income"] == "200000.00"  # partner is off this return
+
+    await set_status(auth_client, 2026, "married_joint")
+    joint = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert joint["social_security"]["w2_income"] == "300000.00"  # both W-2s now
+    # 180000 x .062 + 100000 x .062 = 11160 + 6200.
+    assert joint["social_security"]["tax"] == "17360.00"
+    assert joint["social_security"]["taxable_wages"] == "280000.00"
+    assert joint["medicare"]["taxable_wages"] == "300000.00"  # combined walk, as designed
+
+
+async def test_married_separate_covers_the_primary_person_alone(
+    auth_client, db, household, definitions
+):
+    """An MFS return carries one spouse's income. The partner's rows stay stored — they
+    belong to the joint year — but they are not on THIS return."""
+    me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "latest_w2_income", "person_id": me.id, "value": "200000"},
+                {"key": "latest_w2_income", "person_id": partner.id, "value": "100000"},
+            ]
+        },
+    )
+    await put_brackets(auth_client, 2026, {"medicare": rows(("0.0145", "0"))})
+    await auth_client.put(
+        f"{YEARS}/2026/brackets",
+        json={
+            "filing_status": "married_separate",
+            "jurisdictions": {
+                name: (rows(("0.0145", "0")) if name == "medicare" else rows(("0.10", "0")))
+                for name in JURISDICTIONS
+            },
+        },
+    )
+    await set_status(auth_client, 2026, "married_separate")
+
+    body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
+    assert body["medicare"]["w2_income"] == "200000.00"
+    assert body["brackets_missing_for_status"] == []
+
+
+# --- the what-if on a married year ---
+
+
+async def test_what_if_refuses_a_year_whose_status_has_no_tables(auth_client, definitions):
+    await seeded_2024(auth_client)
+    await set_status(auth_client, 2024, "married_joint")
+
+    resp = await auth_client.post(WHAT_IF, json={"year": 2024})
+    assert resp.status_code == 409
+    assert "married_joint" in resp.json()["detail"]
+
+
+async def test_what_if_moves_the_primary_earners_fica_on_a_joint_year(
+    auth_client, db, household, definitions
+):
+    """A what-if leg is the PRIMARY person's sale, so its wage delta lands on their
+    bundle — with the partner's own wage base untouched beside it."""
+    me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "latest_w2_income", "person_id": me.id, "value": "100000"},
+                {"key": "latest_w2_income", "person_id": partner.id, "value": "100000"},
+            ]
+        },
+    )
+    tables = {
+        "federal": rows(("0.10", "0")),
+        "state": rows(("0.05", "0")),
+        "medicare": rows(("0.0145", "0")),
+        "social_security": rows(("0.062", "0"), ("0", "150000")),
+        "disability": rows(("0.01", "0")),
+        "capital_gains": rows(("0.15", "0")),
+    }
+    for status in ("single", "married_joint"):
+        await auth_client.put(
+            f"{YEARS}/2026/brackets", json={"filing_status": status, "jurisdictions": tables}
+        )
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (
+        await auth_client.post(
+            WHAT_IF,
+            json={"year": 2026, "overrides": {"other_w2_income": "80000"}},
+        )
+    ).json()
+    # Baseline: 100000 + 100000, both under the 150000 base -> 200000 x .062 = 12400.
+    assert body["baseline"]["social_security"]["tax"] == "12400.00"
+    # Scenario: the primary's bundle becomes 180000, capped at 150000; the partner stays
+    # at 100000. (150000 + 100000) x .062 = 15500.
+    assert body["scenario"]["social_security"]["tax"] == "15500.00"
+    assert body["delta"]["social_security_tax"] == "3100.00"
+
+
+async def test_earner_bundles_follow_column_order_not_a_string_sort(auth_client, db, definitions):
+    """Primary id=2, partner id=10 — the roster where the two orderings DISAGREE.
+
+    Every other household test runs on conftest's RESTART IDENTITY ids (1, 2), where
+    column order and `sorted(per_person, key=str)` happen to agree, so none of them can
+    see the bug this pins: with a 10 in the roster the string sort puts "10" ahead of "2"
+    and `shift_earners` — which re-bases the what-if on `earners[0]` because that is
+    meant to be the PRIMARY's — silently moves the primary's sale onto the partner's
+    wage base. Asymmetric wages (100000 vs 40000) and a Social Security cap at 150000
+    make the two orderings answer with different money.
+
+    PROVEN discriminating. Reverting `_assemble_earners`' last line to
+    `[earner_from_inputs(per_person[c]) for c in sorted(per_person, key=str)]` fails it
+    twice over:
+
+        At index 0 diff: Decimal('40000.0000') != Decimal('100000')  # bundle[0] is theirs
+        AssertionError: assert '13640.00' == '11780.00'              # social_security
+
+    (13640 is the partner absorbing the 80000 leg and still sitting under the base —
+    100000 + 120000 — while the primary's own wages never move. The BASELINE stays
+    8680.00 under either ordering, because that side only ever sums the two bundles.)
+    """
+    from app.api.taxes import _engine_feed
+    from app.models import Person
+
+    # EXPLICIT ids. `people.id` is a plain identity column, so an explicit insert does not
+    # advance the sequence — push it past 10 so a later auto-id person in this test could
+    # not collide on 2.
+    db.add_all(
+        [
+            Person(id=2, name="Me", is_primary=True),
+            Person(id=10, name="Partner", is_primary=False),
+        ]
+    )
+    await db.flush()
+    await db.execute(text("SELECT setval('people_id_seq', 10, true)"))
+    await db.commit()
+
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "latest_w2_income", "person_id": 2, "value": "100000"},
+                {"key": "latest_w2_income", "person_id": 10, "value": "40000"},
+            ]
+        },
+    )
+    tables = {
+        "federal": rows(("0.10", "0")),
+        "state": rows(("0.05", "0")),
+        "medicare": rows(("0.0145", "0")),
+        "social_security": rows(("0.062", "0"), ("0", "150000")),
+        "disability": rows(("0.01", "0")),
+        "capital_gains": rows(("0.15", "0")),
+    }
+    for status in ("single", "married_joint"):
+        await auth_client.put(
+            f"{YEARS}/2026/brackets", json={"filing_status": status, "jurisdictions": tables}
+        )
+    await set_status(auth_client, 2026, "married_joint")
+
+    # The ordering contract itself: bundle[0] is the primary's, whatever the ids sort like.
+    feed = await _engine_feed(db, 2026)
+    assert [earner.w2_wages for earner in feed.earners] == [Decimal("100000"), Decimal("40000")]
+
+    # ...and the money it decides. Baseline: 100000 + 40000, both under the 150000 base,
+    # (140000) x .062 = 8680.
+    body = (
+        await auth_client.post(
+            WHAT_IF, json={"year": 2026, "overrides": {"other_w2_income": "80000"}}
+        )
+    ).json()
+    assert body["baseline"]["social_security"]["tax"] == "8680.00"
+    # The 80000 is the PRIMARY's leg: their bundle becomes 180000, capped at 150000, next
+    # to the partner's untouched 40000. (150000 + 40000) x .062 = 11780.
+    assert body["scenario"]["social_security"]["tax"] == "11780.00"
+    assert body["delta"]["social_security_tax"] == "3100.00"

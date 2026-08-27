@@ -11,12 +11,34 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.tax_keys import SINGLE
+
+# The wire spelling of tax_keys.FILING_STATUSES. A Literal, not a str + validator, so
+# FastAPI 422s an unknown status at the boundary with its own message; the constant tuple
+# stays the source of truth and `test_filing_status_literal_matches_the_constant` pins the
+# two together.
+FilingStatus = Literal["single", "married_joint", "married_separate"]
+
 
 class TaxYearOut(BaseModel):
     year: int
     notes: str | None
+    filing_status: str
     input_count: int
     bracket_count: int
+
+
+class TaxYearUpdate(BaseModel):
+    # One field this batch: notes are still importer-owned, and the bracket tables are
+    # NOT moved by a status change (see the router docstring).
+    filing_status: FilingStatus
+
+
+class TaxPersonOut(BaseModel):
+    """The person COLUMNS this year's return has, in render order (primary first)."""
+
+    id: int
+    name: str
 
 
 class TaxInputItemOut(BaseModel):
@@ -24,9 +46,14 @@ class TaxInputItemOut(BaseModel):
     label: str
     sort_order: int
     is_derived: bool
+    # True for tax_keys.PER_PERSON_KEYS: this line renders one item per person column.
+    is_per_person: bool = False
+    # The column this item belongs to. Null for household keys — and also for per-person
+    # keys on a database with no people roster, which is the pre-household spelling.
+    person_id: int | None = None
     value: Decimal | None
-    # The sheet's gray-cell formula for this key, when it has one. Advisory: the UI offers
-    # a chip, nothing is ever applied server-side.
+    # The sheet's gray-cell formula for this key, when it has one, computed from THIS
+    # column's own values. Advisory: the UI offers a chip, nothing is applied server-side.
     suggested: Decimal | None
 
 
@@ -37,13 +64,27 @@ class TaxInputSectionOut(BaseModel):
 
 class TaxInputsOut(BaseModel):
     year: int
+    filing_status: str = SINGLE
+    people: list[TaxPersonOut] = Field(default_factory=list)
     sections: list[TaxInputSectionOut]
+
+
+class TaxInputRowIn(BaseModel):
+    key: str
+    # Null on a per-person key means "the primary person" — which is what every client
+    # that predates this batch says by saying nothing at all.
+    person_id: int | None = None
+    value: Decimal | None
 
 
 class TaxInputsIn(BaseModel):
     # Free-form keys, validated against the definition table by the router (which is the
     # only place that knows which keys are seeded); null deletes the stored row.
-    values: dict[str, Decimal | None]
+    # `values` is the household/primary shorthand every shipped client sends; `rows` is
+    # its person-qualified form. Both are merged, and the same (key, person) twice is a
+    # 422 rather than a last-write-wins surprise.
+    values: dict[str, Decimal | None] = Field(default_factory=dict)
+    rows: list[TaxInputRowIn] = Field(default_factory=list)
 
 
 class BracketOut(BaseModel):
@@ -60,12 +101,36 @@ class BracketIn(BaseModel):
 class BracketsOut(BaseModel):
     # All six jurisdictions always present, possibly with empty tables.
     year: int
+    filing_status: str = SINGLE
+    # The statuses this YEAR has at least one stored bracket row for, sorted. The status
+    # tabs read it: an empty tab is a setup state the page has to be able to show.
+    statuses_with_rows: list[str]
     jurisdictions: dict[str, list[BracketOut]]
 
 
 class BracketsIn(BaseModel):
-    # Per-jurisdiction FULL REPLACE; jurisdictions absent from the body are untouched.
+    # Per-jurisdiction FULL REPLACE within ONE status; jurisdictions absent from the body
+    # are untouched, and so is every other status's copy of them.
+    filing_status: FilingStatus = "single"
     jurisdictions: dict[str, list[BracketIn]]
+
+
+class BracketReviewFlags(BaseModel):
+    """Which cloned tables are typically right as-is, and which need threshold edits.
+
+    Social Security and SDI are PER-PERSON parameters — the wage base and the rate do not
+    change with filing status, so a verbatim copy is correct. The other four carry
+    per-RETURN thresholds that are emphatically not "2x single" (audit §5): the MFJ 37%
+    band starts below 2x, the 20% capital-gains tier likewise, and the medicare table's
+    additional tier moves from 200k to 250k (MFJ) or 125k (MFS).
+    """
+
+    verbatim_ok: list[str]
+    review: list[str]
+
+
+class ClonedBracketsOut(BracketsOut):
+    review_flags: BracketReviewFlags
 
 
 class IncomeTaxOut(BaseModel):
@@ -99,18 +164,36 @@ class TaxTotalsOut(BaseModel):
 
 class TaxSummaryOut(BaseModel):
     year: int
-    federal: IncomeTaxOut
-    state: IncomeTaxOut
-    medicare: WageTaxOut
-    social_security: WageTaxOut
-    disability: WageTaxOut
-    capital_gains: CapitalGainsTaxOut
-    totals: TaxTotalsOut
+    filing_status: str = SINGLE
+    # Jurisdictions with NO bracket table under this year's filing status. Always empty
+    # for 'single': a partial single-filer year has always computed, with per-jurisdiction
+    # warnings, and stored history depends on that. Non-empty only for a married year
+    # whose tables have not been entered yet — where every section below is null rather
+    # than a confidently wrong zero computed against a single filer's brackets.
+    brackets_missing_for_status: list[str] = Field(default_factory=list)
+    federal: IncomeTaxOut | None = None
+    state: IncomeTaxOut | None = None
+    medicare: WageTaxOut | None = None
+    social_security: WageTaxOut | None = None
+    disability: WageTaxOut | None = None
+    capital_gains: CapitalGainsTaxOut | None = None
+    totals: TaxTotalsOut | None = None
     warnings: list[str]
+
+
+class IncompleteYearOut(BaseModel):
+    """A year the trend feed had to skip — named so the page can offer the fix."""
+
+    year: int
+    filing_status: str
+    brackets_missing_for_status: list[str]
 
 
 class TaxSummariesOut(BaseModel):
     years: list[TaxSummaryOut]
+    # Kept OUT of `years` on purpose: the trend chart consumes that list positionally and
+    # a null-sectioned entry would be a landmine in every consumer.
+    incomplete: list[IncompleteYearOut] = Field(default_factory=list)
 
 
 class SaleLegIn(BaseModel):
@@ -210,17 +293,28 @@ class WithholdingVestOut(BaseModel):
 class SafeHarborOut(BaseModel):
     prior_year: int
     prior_total_tax: Decimal
-    threshold: Decimal  # prior_total_tax x 1.10
+    # The AGI the statutory gate is tested against, and the multiplier it selected. Both
+    # are rendered: a threshold that is not 1.10x the number beside it would otherwise
+    # read as a bug.
+    prior_agi: Decimal
+    multiplier: Decimal  # 1.10 above the gate, 1.00 at or below it
+    threshold: Decimal  # prior_total_tax x multiplier
     met: bool  # projected total withholding >= threshold
 
 
 class WithholdingOut(BaseModel):
     year: int
-    liability_total: Decimal
+    filing_status: str = SINGLE
+    # See TaxSummaryOut: non-empty only for a married year whose tables are not entered.
+    brackets_missing_for_status: list[str] = Field(default_factory=list)
+    # Null exactly when the engine refused: the withholding legs below are still real
+    # (they come from profiles, grants and prices), but there is nothing honest to compare
+    # them against.
+    liability_total: Decimal | None
     salary: WithholdingLegOut
     vest: WithholdingVestOut
     total: WithholdingLegOut
-    balance_projected: Decimal  # liability - projected withholding; positive = will owe
+    balance_projected: Decimal | None  # liability - projected withholding; positive = will owe
     checks_elapsed: int
     checks_total: int
     safe_harbor: SafeHarborOut | None

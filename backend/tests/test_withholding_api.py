@@ -466,6 +466,8 @@ async def test_withholding_safe_harbor_is_110_pct_of_the_prior_year(
     assert body["safe_harbor"] == {
         "prior_year": YEAR - 1,
         "prior_total_tax": prior_tax,
+        "prior_agi": "400000.00",
+        "multiplier": "1.10",
         "threshold": "88718.52",  # 80653.20 x 1.10, at cents
         "met": True,  # projected withholding 96883.00 clears it
     }
@@ -505,3 +507,88 @@ async def test_withholding_safe_harbor_not_met_when_the_prior_year_was_bigger(
     assert body["safe_harbor"]["threshold"] == "127328.52"  # 115753.20 x 1.10
     assert body["safe_harbor"]["met"] is False
     assert Decimal(body["total"]["projected"]) < Decimal(body["safe_harbor"]["threshold"])
+
+
+async def test_withholding_safe_harbor_drops_to_100_pct_under_the_agi_gate(
+    auth_client, db, world, frozen_today
+):
+    """The statutory gate that was never checked (audit §3.2): 110% is for prior-year AGI
+    ABOVE 150000. Under it the safe harbor is 100% of last year's tax, full stop."""
+    await seed_tax_year(db, YEAR - 1, "100000.0000")
+    body = await get_withholding(auth_client)
+
+    # 10000 + 5000 + 1450 + 6200 + 1100 = 23750.
+    assert body["safe_harbor"] == {
+        "prior_year": YEAR - 1,
+        "prior_total_tax": "23750.00",
+        "prior_agi": "100000.00",
+        "multiplier": "1.00",
+        "threshold": "23750.00",
+        "met": True,
+    }
+
+
+async def test_withholding_safe_harbor_gate_halves_for_married_filing_separately(
+    auth_client, db, world, frozen_today
+):
+    """MFS's gate is 75000, so the same AGI that stays at 100% for a single filer takes
+    the 110% multiplier here. The status read is the PRIOR year's — it is that return's
+    AGI being tested."""
+    await seed_tax_year(db, YEAR - 1, "100000.0000")
+    for status in ("single", "married_separate"):
+        resp = await auth_client.put(
+            f"{YEARS}/{YEAR - 1}/brackets",
+            json={
+                "filing_status": status,
+                "jurisdictions": {
+                    name: [{"rate": rate, "threshold": threshold} for rate, threshold in table]
+                    for name, table in BRACKETS.items()
+                },
+            },
+        )
+        assert resp.status_code == 200, resp.text
+    assert (
+        await auth_client.patch(f"{YEARS}/{YEAR - 1}", json={"filing_status": "married_separate"})
+    ).status_code == 200
+
+    body = await get_withholding(auth_client)
+    assert body["safe_harbor"]["multiplier"] == "1.10"
+    assert body["safe_harbor"]["threshold"] == "26125.00"  # 23750 x 1.10
+
+
+async def test_withholding_refuses_a_liability_it_cannot_compute(
+    auth_client, db, world, frozen_today
+):
+    """A married current year with no married tables: the withholding legs are still real
+    (they come from profiles and vests), but the liability they are compared against is
+    not — so it is null, with the reason named, rather than a single-filer number."""
+    assert (
+        await auth_client.patch(f"{YEARS}/{YEAR}", json={"filing_status": "married_joint"})
+    ).status_code == 200
+
+    body = await get_withholding(auth_client)
+    assert body["filing_status"] == "married_joint"
+    assert body["brackets_missing_for_status"] == [
+        "federal",
+        "state",
+        "medicare",
+        "social_security",
+        "disability",
+        "capital_gains",
+    ]
+    assert body["liability_total"] is None
+    assert body["balance_projected"] is None
+    assert any("married_joint bracket table" in warning for warning in body["warnings"])
+    # The salary and supplemental legs are unaffected — they come from the stored profile
+    # and the flat supplemental rates, not from brackets.
+    assert body["salary"]["projected"] == "67320.00"
+    assert body["vest"]["supplemental_projected"] == "27395.50"
+    # The vest MARGINAL-FICA leg is a bracket walk, though, so with no married FICA tables
+    # it degrades to 0 and names each one, exactly as an empty single-filer table does.
+    # Falling back to the single tables here is the very substitution this plan forbids.
+    assert body["vest"]["fica_projected"] == "0.00"
+    for name in ("medicare", "social_security", "disability"):
+        assert f"no {name} brackets for {YEAR}: {name} tax computed as 0" in body["warnings"]
+    # 96883.00 - the 2167.50 vest-FICA leg. One missing comparison plus one excluded leg,
+    # not an outage.
+    assert body["total"]["projected"] == "94715.50"

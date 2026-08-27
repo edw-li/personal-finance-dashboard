@@ -324,3 +324,76 @@ def test_engine_bracket_warnings_pass_through_and_missing_keys_do_not():
     # leaves several engine keys unset, so the engine DID emit it — and it must not
     # reach the payload.
     assert not any(w.startswith("missing inputs defaulted to 0") for w in flow.warnings)
+
+
+# --- filing status passthrough (2026-08-26 spec §5.5) ---
+
+
+def test_filing_status_and_earners_reach_the_engine():
+    """The card's tax decomposition IS compute_breakdown's output, so it has to be handed
+    the same status and the same wage split the summary uses — otherwise the Overview
+    total and the Taxes total disagree on a married year."""
+    from app.services.tax_service import EarnerWages
+
+    earners = [EarnerWages(w2_wages=D("120000")), EarnerWages(w2_wages=D("110000"))]
+    brackets = dict(BRACKETS) | {"social_security": [(D("0.062"), D("0")), (D("0"), D("150000"))]}
+    inputs = dict(INPUTS) | {"latest_w2_income": D("230000"), "other_w2_income": D("0")}
+
+    shared = compose_money_flow(
+        year=2026,
+        inputs=inputs,
+        brackets=brackets,
+        category_sums={},
+        net_pay_sum=D("0"),
+        net_pay_months=0,
+        spending_months=0,
+        available_years=[2026],
+    )
+    split = compose_money_flow(
+        year=2026,
+        inputs=inputs,
+        brackets=brackets,
+        category_sums={},
+        net_pay_sum=D("0"),
+        net_pay_months=0,
+        spending_months=0,
+        available_years=[2026],
+        filing_status="married_joint",
+        earners=earners,
+    )
+    # One shared base: 150000 x .062. Two bases: 230000 x .062.
+    assert shared.taxes.social_security == D("150000") * D("0.062")
+    assert split.taxes.social_security == D("230000") * D("0.062")
+    assert split.taxes.total > shared.taxes.total
+
+
+def test_missing_status_brackets_refuse_to_render():
+    from app.services.money_flow import BRACKETS_MISSING_REASON, BRACKETS_MISSING_WARNING
+
+    flow = compose_money_flow(
+        year=2026,
+        inputs=INPUTS,
+        brackets={},
+        category_sums={"Groceries": D("1000")},
+        net_pay_sum=D("50000"),
+        net_pay_months=12,
+        spending_months=12,
+        available_years=[2026],
+        filing_status="married_joint",
+        brackets_missing_for_status=["federal", "medicare"],
+    )
+    assert flow.renderable is False
+    assert flow.reason == BRACKETS_MISSING_REASON.format(
+        year=2026, status="married_joint", jurisdictions="federal, medicare"
+    )
+    # It wins the ladder: with no tables the residual would ALSO be wrong, and naming the
+    # residual would send the user hunting for a data error that is not there.
+    assert (
+        BRACKETS_MISSING_WARNING.format(
+            year=2026, status="married_joint", jurisdictions="federal, medicare"
+        )
+        in flow.warnings
+    )
+    # Everything it COULD compute still rides along (the module's stated posture).
+    assert flow.take_home_cash == D("50000")
+    assert flow.total_spend == D("1000")
