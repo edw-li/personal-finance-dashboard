@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from app.services.withholding_calc import (
     WithholdingEstimate,
+    additional_medicare_tier,
     check_dates,
     estimate,
 )
@@ -12,6 +13,7 @@ D = Decimal
 MEDICARE = [(D("0.0145"), D("0"))]
 SS = [(D("0.062"), D("0")), (D("0"), D("168600"))]
 SDI = [(D("0.011"), D("0"))]
+ZERO_D = D("0")
 
 # Module-level singletons because ruff's B008 bans call expressions in argument defaults;
 # Decimal is immutable, so these are the same values the defaults would have held.
@@ -255,3 +257,134 @@ def test_additional_medicare_tier_rides_the_bracket_walk():
     assert result.salary_gross_ytd == D("110000.00")
     assert result.vest_supplemental_ytd == D("32230.00")  # 100000 x 0.3223
     assert result.vest_fica_ytd == D("6273.20")  # 1540 + 3633.20 + 1100
+
+
+# --- two-earner block (2026-08-26 spec §5.6) ---
+
+# An MFJ medicare table: 1.45% base, then the 0.9% surtax folded into a 2.35% row at the
+# JOINT threshold. The single table below carries the same tier at 200,000.
+MEDICARE_MFJ = [(D("0.0145"), D("0")), (D("0.0235"), D("250000"))]
+MEDICARE_SINGLE = [(D("0.0145"), D("0")), (D("0.0235"), D("200000"))]
+
+PARTNER_MISSING = (
+    "partner withholding not entered — their W-2 withholding counts as 0 until you enter it"
+)
+
+
+def run(**over):
+    """`estimate` with the salary/vest legs SILENCED — these tests are about the two-earner
+    block only, and `warnings` is most of what they assert on.
+
+    Silenced, not empty: `profiles=[]` is not neutral, it raises NO_PROFILES_WARNING, which
+    would sit in every list below and hide the one warning under test. One ordinary profile
+    and no vests is the quiet configuration.
+    """
+    kwargs = dict(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    kwargs.update(over)
+    return estimate(**kwargs)
+
+
+def test_additional_medicare_tier_is_read_off_the_stored_table():
+    assert additional_medicare_tier(MEDICARE_MFJ) == (D("0.0090"), D("250000"))
+    assert additional_medicare_tier(MEDICARE_SINGLE) == (D("0.0090"), D("200000"))
+    # A flat table has no tier at all, and neither does an empty one.
+    assert additional_medicare_tier(MEDICARE) is None
+    assert additional_medicare_tier([]) is None
+    # A terminal 0-rate row (the SS wage-base shape) is a CAP, not a surtax tier.
+    assert additional_medicare_tier(SS) is None
+
+
+def test_additional_medicare_gap_is_the_two_earner_trap_in_dollars():
+    # 240k + 150k = 390k combined. Owed on a joint return: (390000 - 250000) x 0.9% = 1260.
+    # Withheld by the two employers: only the 40k above ONE employer's 200k = 360. The
+    # 900.00 difference is the trap: neither salary alone crosses 200k of its own employer's
+    # wages far enough to cover a joint liability that starts at 250k.
+    result = run(medicare=MEDICARE_MFJ, primary_wages=D("240000"), partner_wages=D("150000"))
+    assert result.additional_medicare_gap == D("900.00")
+
+
+def test_additional_medicare_gap_is_zero_for_one_earner_on_a_single_table():
+    # The self-cancelling case, and the reason the single path needs no branch: one earner's
+    # owed side and their employer's withheld side are the SAME expression.
+    result = run(medicare=MEDICARE_SINGLE, primary_wages=D("390000"), partner_wages=ZERO_D)
+    assert result.additional_medicare_gap == D("0.00")
+
+
+def test_additional_medicare_gap_goes_negative_when_one_earner_carries_the_household():
+    # 390k from one job on a JOINT table: the employer withholds above its own 200k while
+    # the return only owes above 250k, so 450.00 is over-withheld. Signed, not clamped.
+    result = run(medicare=MEDICARE_MFJ, primary_wages=D("390000"), partner_wages=ZERO_D)
+    assert result.additional_medicare_gap == D("-450.00")
+
+
+def test_additional_medicare_gap_is_zero_without_a_surtax_tier():
+    result = run(medicare=MEDICARE, primary_wages=D("240000"), partner_wages=D("150000"))
+    assert result.additional_medicare_gap == D("0.00")
+
+
+def test_partner_withholding_sums_both_jurisdictions():
+    result = run(
+        medicare=MEDICARE_MFJ,
+        primary_wages=D("240000"),
+        partner_wages=D("150000"),
+        partner_withheld_fed=D("18000"),
+        partner_withheld_state=D("6000"),
+    )
+    assert result.partner_withheld_total == D("24000.00")
+    assert result.warnings == []
+
+
+def test_partner_with_wages_but_no_withholding_entered_warns_and_counts_zero():
+    # Entered-not-simulated is the whole asymmetry of this leg: an empty field is a 0, and
+    # a silent 0 here would understate the household's withholding without saying so.
+    result = run(medicare=MEDICARE_MFJ, primary_wages=D("240000"), partner_wages=D("150000"))
+    assert result.partner_withheld_total == D("0.00")
+    assert result.warnings == [PARTNER_MISSING]
+
+
+def test_one_entered_jurisdiction_is_enough_to_silence_the_warning():
+    # Zero state withholding is a real answer (a no-income-tax state, or a W-4 that zeroed
+    # it); only BOTH fields being unset means "not entered".
+    result = run(
+        medicare=MEDICARE_MFJ,
+        primary_wages=D("240000"),
+        partner_wages=D("150000"),
+        partner_withheld_fed=D("18000"),
+    )
+    assert result.partner_withheld_total == D("18000.00")
+    assert result.warnings == []
+
+
+def test_no_partner_means_no_warning_and_no_partner_total():
+    result = run(medicare=MEDICARE_MFJ, primary_wages=D("240000"))
+    assert result.partner_withheld_total == D("0.00")
+    assert result.warnings == []
+
+
+def test_single_earner_defaults_leave_the_estimate_byte_identical():
+    # The whole point of the defaults: the existing single-earner call site passes none of
+    # the new arguments and gets exactly today's object back.
+    base = estimate(
+        year=2026,
+        today=date(2026, 7, 1),
+        profiles=[Profile(date(2025, 1, 1), D("240000"))],
+        past_vests=[],
+        future_vests=[],
+        medicare=MEDICARE,
+        social_security=SS,
+        disability=SDI,
+    )
+    assert base.salary_ytd == D("30855.00")
+    assert base.salary_projected == D("67320.00")
+    assert base.partner_withheld_total == D("0.00")
+    assert base.additional_medicare_gap == D("0.00")
+    assert base.warnings == []
