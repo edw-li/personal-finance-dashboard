@@ -17,6 +17,8 @@ degrades where the editors above raise — see its section comment.
 """
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
@@ -38,6 +40,7 @@ from app.database import get_db
 from app.models import (
     EsppLot,
     PaycheckProfile,
+    Person,
     RsuGrant,
     TaxBracket,
     TaxInput,
@@ -53,6 +56,7 @@ from app.schemas.taxes import (
     ChangedInput,
     EsppSaleDetailOut,
     IncomeTaxOut,
+    IncompleteYearOut,
     SafeHarborOut,
     SaleDetailOut,
     TaxInputItemOut,
@@ -63,6 +67,7 @@ from app.schemas.taxes import (
     TaxSummaryOut,
     TaxTotalsOut,
     TaxYearOut,
+    TaxYearUpdate,
     WageTaxOut,
     WhatIfDelta,
     WhatIfIn,
@@ -81,15 +86,18 @@ from app.services.money import (
     quantize_price,
     quantize_shares,
 )
+from app.services.people import load_people
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
 from app.services.scheduler import product_today
 from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
     Bracket,
+    EarnerWages,
     JurisdictionResult,
     TaxBreakdown,
     compute_breakdown,
     derive_suggestions,
+    earner_from_inputs,
 )
 from app.services.tax_whatif import (
     EsppSaleDetail,
@@ -98,7 +106,14 @@ from app.services.tax_whatif import (
     classify_sale,
     decompose_espp,
 )
-from app.tax_keys import JURISDICTIONS, SECTIONS, TAX_INPUT_DEFINITIONS
+from app.tax_keys import (
+    JURISDICTIONS,
+    MARRIED_JOINT,
+    PER_PERSON_KEYS,
+    SECTIONS,
+    SINGLE,
+    TAX_INPUT_DEFINITIONS,
+)
 
 router = APIRouter(prefix="/taxes", tags=["taxes"], dependencies=[Depends(get_current_user)])
 
@@ -131,23 +146,129 @@ async def _ensure_year(db: AsyncSession, year: int) -> None:
         await db.flush()  # the inputs/brackets FK to it inside this same transaction
 
 
-async def _stored_inputs(db: AsyncSession, year: int) -> dict[str, Decimal]:
-    rows = (await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars()
-    return {row.key: row.value for row in rows}
+BRACKETS_MISSING_WARNING = (
+    "{year} is filed as {status} and has no {status} bracket table for: {jurisdictions}"
+)
+# A sentinel, not None: None is a legal person column (the pre-household spelling), so
+# "this row belongs to somebody else" needs its own value.
+OFF_RETURN = object()
 
 
-async def _engine_tables(db: AsyncSession, year: int) -> dict[str, list[Bracket]]:
-    """One year's bracket tables in the shape `compute_breakdown` (and `walk`) take them.
+@dataclass
+class EngineFeed:
+    """Everything `compute_breakdown` needs for one year, resolved ONCE.
 
-    ONE loader for every engine caller — the summary, the what-if and the withholding card —
-    so they can never disagree about which rows the engine saw. The full key order, not just
-    bracket_index: `walk`/`stack` sort defensively, so this pins one table order across all of
-    them rather than leaving it to whatever the planner returns.
+    The summary, the trend feed, the what-if, the withholding card and the Overview
+    money-flow all read this, so they can never disagree about which filing status was
+    assumed, which bracket tables were selected, or whose W-2 rows were counted.
+    """
+
+    year: int
+    filing_status: str
+    inputs: dict[str, Decimal]
+    earners: list[EarnerWages] | None
+    tables: dict[str, list[Bracket]]
+    brackets_missing_for_status: list[str] = dataclass_field(default_factory=list)
+
+    @property
+    def computable(self) -> bool:
+        """'single' always computes (the grandfathered path every stored year uses); a
+        married status refuses rather than walk a single filer's thresholds."""
+        return self.filing_status == SINGLE or not self.brackets_missing_for_status
+
+    def warning(self) -> str:
+        return BRACKETS_MISSING_WARNING.format(
+            year=self.year,
+            status=self.filing_status,
+            jurisdictions=", ".join(self.brackets_missing_for_status),
+        )
+
+
+def _return_people(people: list[Person], filing_status: str) -> list[Person]:
+    """The people whose per-person rows belong on THIS year's return.
+
+    Married-joint is one return for two people, so both columns count. Single and MFS are
+    one return for ONE person: an MFS return carries only that spouse's wages (the
+    community-property caveat the page renders is exactly about what this does NOT model),
+    and a partner's rows entered for a later year must never leak into a settled single
+    year. An empty roster is a database older than the household migration — every row is
+    simply the primary person's, spelled NULL.
+    """
+    if not people:
+        return []
+    return list(people) if filing_status == MARRIED_JOINT else people[:1]
+
+
+def _owner_column(person_id: int | None, columns: list[int | None]):
+    """Which person column a stored row belongs to, or OFF_RETURN when it belongs to
+    somebody this year's return does not cover.
+
+    A NULL person_id on a PER-PERSON key is the pre-household spelling of "the primary
+    person", so it folds onto the first column — which is what makes a `create_all` test
+    database (no people at all) read exactly as it did before the migration.
+    """
+    if person_id is None:
+        return columns[0]
+    if person_id in columns:
+        return person_id
+    return OFF_RETURN
+
+
+def _assemble_inputs(rows: list[TaxInput], columns: list[int | None]) -> dict[str, Decimal]:
+    """The engine's flat input dict: household keys verbatim, per-person keys SUMMED
+    across the people on this return (spec §5.4)."""
+    values: dict[str, Decimal] = {}
+    for row in rows:
+        if row.key in PER_PERSON_KEYS and _owner_column(row.person_id, columns) is OFF_RETURN:
+            continue
+        existing = values.get(row.key)
+        values[row.key] = row.value if existing is None else existing + row.value
+    return values
+
+
+def _assemble_earners(rows: list[TaxInput], columns: list[int | None]) -> list[EarnerWages] | None:
+    """One wage bundle per person on the return — or None when there is at most one.
+
+    None is not a fallback: it is the instruction to the engine to synthesize the single
+    bundle from `inputs` exactly as it always has, which is what keeps every single-filer
+    year byte-identical.
+    """
+    per_person: dict[int | None, dict[str, Decimal]] = {}
+    for row in rows:
+        if row.key not in PER_PERSON_KEYS:
+            continue
+        column = _owner_column(row.person_id, columns)
+        if column is OFF_RETURN:
+            continue
+        bucket = per_person.setdefault(column, {})
+        existing = bucket.get(row.key)
+        bucket[row.key] = row.value if existing is None else existing + row.value
+    if len(per_person) < 2:
+        return None
+    return [earner_from_inputs(per_person[column]) for column in sorted(per_person, key=str)]
+
+
+async def _filing_status(db: AsyncSession, year: int) -> str:
+    """A year that does not exist reads as single — the engine's default, and the answer
+    every GET-never-rejects path needs for an unknown year."""
+    row = await db.get(TaxYear, year)
+    return SINGLE if row is None else row.filing_status
+
+
+async def _engine_tables(
+    db: AsyncSession, year: int, filing_status: str = SINGLE
+) -> dict[str, list[Bracket]]:
+    """One year+status's bracket tables in the shape `compute_breakdown` (and `walk`) take.
+
+    ONE loader for every engine caller — the summary, the what-if and the withholding card
+    — so they can never disagree about which rows the engine saw. The full key order, not
+    just bracket_index: `walk`/`stack` sort defensively, so this pins one table order
+    across all of them rather than leaving it to whatever the planner returns.
     """
     rows = (
         await db.execute(
             select(TaxBracket)
-            .where(TaxBracket.year == year)
+            .where(TaxBracket.year == year, TaxBracket.filing_status == filing_status)
             .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
         )
     ).scalars()
@@ -157,9 +278,47 @@ async def _engine_tables(db: AsyncSession, year: int) -> dict[str, list[Bracket]
     return tables
 
 
+def _missing_for_status(tables: dict[str, list[Bracket]], filing_status: str) -> list[str]:
+    """Jurisdictions with no table under this status, in tax_keys order. Always empty for
+    'single' — see EngineFeed.computable."""
+    if filing_status == SINGLE:
+        return []
+    return [name for name in JURISDICTIONS if not tables.get(name)]
+
+
+async def _engine_feed(db: AsyncSession, year: int) -> EngineFeed:
+    filing_status = await _filing_status(db, year)
+    columns = [person.id for person in _return_people(await load_people(db), filing_status)] or [
+        None
+    ]
+    rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
+    tables = await _engine_tables(db, year, filing_status)
+    return EngineFeed(
+        year=year,
+        filing_status=filing_status,
+        inputs=_assemble_inputs(rows, columns),
+        earners=_assemble_earners(rows, columns),
+        tables=tables,
+        brackets_missing_for_status=_missing_for_status(tables, filing_status),
+    )
+
+
+def _breakdown_for(feed: EngineFeed) -> TaxBreakdown:
+    return compute_breakdown(
+        feed.year,
+        feed.inputs,
+        feed.tables,
+        filing_status=feed.filing_status,
+        earners=feed.earners,
+    )
+
+
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     definitions = list((await db.execute(select(TaxInputDefinition))).scalars())
-    stored = await _stored_inputs(db, year)
+    stored = {
+        row.key: row.value
+        for row in (await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars()
+    }
     suggestions = derive_suggestions(year, stored)
     by_section: dict[str, list[TaxInputItemOut]] = {}
     for definition in sorted(definitions, key=lambda d: (d.sort_order, d.key)):
@@ -202,6 +361,26 @@ async def _brackets_payload(db: AsyncSession, year: int) -> BracketsOut:
     return BracketsOut(year=year, jurisdictions=tables)
 
 
+async def _year_out(db: AsyncSession, row: TaxYear) -> TaxYearOut:
+    inputs = (
+        await db.execute(
+            select(func.count()).select_from(TaxInput).where(TaxInput.year == row.year)
+        )
+    ).scalar_one()
+    brackets = (
+        await db.execute(
+            select(func.count()).select_from(TaxBracket).where(TaxBracket.year == row.year)
+        )
+    ).scalar_one()
+    return TaxYearOut(
+        year=row.year,
+        notes=row.notes,
+        filing_status=row.filing_status,
+        input_count=inputs,
+        bracket_count=brackets,
+    )
+
+
 @router.get("/years", response_model=list[TaxYearOut])
 async def list_years(db: AsyncSession = Depends(get_db)) -> list[TaxYearOut]:
     years = list((await db.execute(select(TaxYear).order_by(TaxYear.year))).scalars())
@@ -215,11 +394,33 @@ async def list_years(db: AsyncSession = Depends(get_db)) -> list[TaxYearOut]:
         TaxYearOut(
             year=row.year,
             notes=row.notes,
+            filing_status=row.filing_status,
             input_count=input_counts.get(row.year, 0),
             bracket_count=bracket_counts.get(row.year, 0),
         )
         for row in years
     ]
+
+
+@router.patch("/years/{year}", response_model=TaxYearOut)
+async def update_year(
+    year: YearPath, body: TaxYearUpdate, db: AsyncSession = Depends(get_db)
+) -> TaxYearOut:
+    """Set a year's filing status — the one field on a year row the editors can change.
+
+    NO auto-create (the PUTs own that affordance): a status is a statement ABOUT a year
+    that must already exist. Bracket tables are NOT moved or copied: flipping 2026 to
+    married_joint while only single-filer tables exist is a legitimate intermediate state,
+    reported by the summary's `brackets_missing_for_status` and fixed by the clone helper,
+    never guessed at here. Stored inputs are untouched too — the partner's rows simply
+    come onto the return.
+    """
+    row = await db.get(TaxYear, year)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"tax year {year} not found")
+    row.filing_status = body.filing_status
+    await db.commit()
+    return await _year_out(db, row)
 
 
 @router.delete("/years/{year}", status_code=204)
@@ -472,7 +673,7 @@ def _wage_out(result: JurisdictionResult, name: str, warnings: list[str]) -> Wag
     )
 
 
-def _summary_out(breakdown: TaxBreakdown) -> TaxSummaryOut:
+def _summary_out(breakdown: TaxBreakdown, feed: EngineFeed | None = None) -> TaxSummaryOut:
     warnings = list(breakdown.warnings)  # engine warnings first, serializer's appended after
     federal = _income_out(breakdown.federal, "federal", warnings)
     state = _income_out(breakdown.state, "state", warnings)
@@ -495,6 +696,7 @@ def _summary_out(breakdown: TaxBreakdown) -> TaxSummaryOut:
     )
     return TaxSummaryOut(
         year=breakdown.year,
+        filing_status=SINGLE if feed is None else feed.filing_status,
         federal=federal,
         state=state,
         medicare=medicare,
@@ -506,44 +708,55 @@ def _summary_out(breakdown: TaxBreakdown) -> TaxSummaryOut:
     )
 
 
+def _missing_summary_out(feed: EngineFeed) -> TaxSummaryOut:
+    """The refusal payload: the year, its status, the tables it is waiting for, and NO
+    numbers at all. Computing this year against the tables that DO exist would walk a
+    single filer's thresholds over two salaries and report the answer with a straight
+    face — the one outcome the spec's risk table calls out by name."""
+    return TaxSummaryOut(
+        year=feed.year,
+        filing_status=feed.filing_status,
+        brackets_missing_for_status=feed.brackets_missing_for_status,
+        warnings=[feed.warning()],
+    )
+
+
 @router.get("/years/{year}/summary", response_model=TaxSummaryOut)
 async def get_summary(year: YearPath, db: AsyncSession = Depends(get_db)) -> TaxSummaryOut:
     await _require_year(db, year)
-    tables = await _engine_tables(db, year)
-    return _summary_out(compute_breakdown(year, await _stored_inputs(db, year), tables))
+    feed = await _engine_feed(db, year)
+    if not feed.computable:
+        return _missing_summary_out(feed)
+    return _summary_out(_breakdown_for(feed), feed)
 
 
 @router.get("/summary", response_model=TaxSummariesOut)
 async def get_all_summaries(db: AsyncSession = Depends(get_db)) -> TaxSummariesOut:
-    """The trend feed: one summary per year that has at least one stored input."""
-    inputs_by_year: dict[int, dict[str, Decimal]] = {}
-    for row in (await db.execute(select(TaxInput))).scalars():
-        inputs_by_year.setdefault(row.year, {})[row.key] = row.value
-    brackets_by_year: dict[int, dict[str, list[Bracket]]] = {}
-    # The full key order, not just bracket_index: the per-year GET orders the same way, and
-    # `walk`/`stack` sort defensively, so this pins ONE table order across both endpoints
-    # rather than leaving it to whatever the planner returns.
-    bracket_rows = (
-        await db.execute(
-            select(TaxBracket).order_by(
-                TaxBracket.year, TaxBracket.jurisdiction, TaxBracket.bracket_index
-            )
-        )
-    ).scalars()
-    for row in bracket_rows:
-        year_tables = brackets_by_year.setdefault(row.year, {})
-        year_tables.setdefault(row.jurisdiction, []).append((row.rate, row.threshold))
+    """The trend feed: one summary per year that has at least one stored input.
+
+    A year whose status has no tables is SKIPPED rather than served with null sections —
+    `years` is consumed positionally by the chart builders — and named in `incomplete` so
+    the page can offer the fix.
+    """
     years = list((await db.execute(select(TaxYear.year).order_by(TaxYear.year))).scalars())
-    return TaxSummariesOut(
-        years=[
-            _summary_out(
-                compute_breakdown(year, inputs_by_year[year], brackets_by_year.get(year, {}))
+    summaries: list[TaxSummaryOut] = []
+    incomplete: list[IncompleteYearOut] = []
+    for year in years:
+        feed = await _engine_feed(db, year)
+        # A year with no inputs computes an all-zero column — noise in a trend chart.
+        if not feed.inputs:
+            continue
+        if not feed.computable:
+            incomplete.append(
+                IncompleteYearOut(
+                    year=year,
+                    filing_status=feed.filing_status,
+                    brackets_missing_for_status=feed.brackets_missing_for_status,
+                )
             )
-            for year in years
-            # A year with no inputs computes an all-zero column — noise in a trend chart.
-            if inputs_by_year.get(year)
-        ]
-    )
+            continue
+        summaries.append(_summary_out(_breakdown_for(feed), feed))
+    return TaxSummariesOut(years=summaries, incomplete=incomplete)
 
 
 # --- the "Will I owe?" tracker (2026-08-21 spec §4): the engine's liability for the year
@@ -588,8 +801,9 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         raise HTTPException(status_code=422, detail=NON_CURRENT_YEAR_MESSAGE)
     await _require_year(db, year)
 
-    tables = await _engine_tables(db, year)
-    liability = compute_breakdown(year, await _stored_inputs(db, year), tables)
+    feed = await _engine_feed(db, year)
+    tables = feed.tables
+    liability = _breakdown_for(feed)
     warnings: list[str] = [
         JURISDICTION_WARN_MISSING.format(j=name, year=year)
         for name in FICA_JURISDICTIONS
@@ -694,9 +908,7 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
 
     safe_harbor = None
     if await db.get(TaxYear, year - 1) is not None:
-        prior = compute_breakdown(
-            year - 1, await _stored_inputs(db, year - 1), await _engine_tables(db, year - 1)
-        )
+        prior = _breakdown_for(await _engine_feed(db, year - 1))
         # Quantize FIRST, then take 110% of that: the threshold has to be 1.10 x the number
         # rendered beside it, not 1.10 x a full-precision figure nobody can see.
         prior_total = _money(prior.totals.total_tax)
@@ -752,8 +964,9 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     await _require_year(db, year)
     today = date.today()
 
-    stored = await _stored_inputs(db, year)
-    brackets = await _engine_tables(db, year)
+    feed = await _engine_feed(db, year)
+    stored = feed.inputs
+    brackets = feed.tables
 
     # Overrides: the PUT-inputs vocabulary — unknown keys 422, values quantized 4dp.
     await _require_known_input_keys(db, body.overrides)

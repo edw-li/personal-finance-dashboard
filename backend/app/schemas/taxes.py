@@ -11,12 +11,27 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.tax_keys import SINGLE
+
+# The wire spelling of tax_keys.FILING_STATUSES. A Literal, not a str + validator, so
+# FastAPI 422s an unknown status at the boundary with its own message; the constant tuple
+# stays the source of truth and `test_filing_status_literal_matches_the_constant` pins the
+# two together.
+FilingStatus = Literal["single", "married_joint", "married_separate"]
+
 
 class TaxYearOut(BaseModel):
     year: int
     notes: str | None
+    filing_status: str
     input_count: int
     bracket_count: int
+
+
+class TaxYearUpdate(BaseModel):
+    # One field this batch: notes are still importer-owned, and the bracket tables are
+    # NOT moved by a status change (see the router docstring).
+    filing_status: FilingStatus
 
 
 class TaxInputItemOut(BaseModel):
@@ -99,18 +114,36 @@ class TaxTotalsOut(BaseModel):
 
 class TaxSummaryOut(BaseModel):
     year: int
-    federal: IncomeTaxOut
-    state: IncomeTaxOut
-    medicare: WageTaxOut
-    social_security: WageTaxOut
-    disability: WageTaxOut
-    capital_gains: CapitalGainsTaxOut
-    totals: TaxTotalsOut
+    filing_status: str = SINGLE
+    # Jurisdictions with NO bracket table under this year's filing status. Always empty
+    # for 'single': a partial single-filer year has always computed, with per-jurisdiction
+    # warnings, and stored history depends on that. Non-empty only for a married year
+    # whose tables have not been entered yet — where every section below is null rather
+    # than a confidently wrong zero computed against a single filer's brackets.
+    brackets_missing_for_status: list[str] = Field(default_factory=list)
+    federal: IncomeTaxOut | None = None
+    state: IncomeTaxOut | None = None
+    medicare: WageTaxOut | None = None
+    social_security: WageTaxOut | None = None
+    disability: WageTaxOut | None = None
+    capital_gains: CapitalGainsTaxOut | None = None
+    totals: TaxTotalsOut | None = None
     warnings: list[str]
+
+
+class IncompleteYearOut(BaseModel):
+    """A year the trend feed had to skip — named so the page can offer the fix."""
+
+    year: int
+    filing_status: str
+    brackets_missing_for_status: list[str]
 
 
 class TaxSummariesOut(BaseModel):
     years: list[TaxSummaryOut]
+    # Kept OUT of `years` on purpose: the trend chart consumes that list positionally and
+    # a null-sectioned entry would be a landmine in every consumer.
+    incomplete: list[IncompleteYearOut] = Field(default_factory=list)
 
 
 class SaleLegIn(BaseModel):

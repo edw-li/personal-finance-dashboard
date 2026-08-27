@@ -102,8 +102,20 @@ async def test_years_list_empty_then_reports_counts(auth_client, db, definitions
 
     body = (await auth_client.get(YEARS)).json()
     assert [y["year"] for y in body] == [2023, 2024]  # ascending, not insertion order
-    assert body[0] == {"year": 2023, "notes": None, "input_count": 0, "bracket_count": 0}
-    assert body[1] == {"year": 2024, "notes": "imported", "input_count": 2, "bracket_count": 1}
+    assert body[0] == {
+        "year": 2023,
+        "notes": None,
+        "filing_status": "single",
+        "input_count": 0,
+        "bracket_count": 0,
+    }
+    assert body[1] == {
+        "year": 2024,
+        "notes": "imported",
+        "filing_status": "single",
+        "input_count": 2,
+        "bracket_count": 1,
+    }
 
 
 async def test_delete_year_404_when_missing(auth_client, definitions):
@@ -131,7 +143,13 @@ async def test_delete_year_removes_the_whole_year_vertical(auth_client, db, defi
     assert (await auth_client.delete(f"{YEARS}/2030")).status_code == 204
     # 2030 gone and nothing recreated it; 2029 untouched, child counts and all.
     assert (await auth_client.get(YEARS)).json() == [
-        {"year": 2029, "notes": None, "input_count": 1, "bracket_count": 1}
+        {
+            "year": 2029,
+            "notes": None,
+            "filing_status": "single",
+            "input_count": 1,
+            "bracket_count": 1,
+        }
     ]
     assert (await auth_client.get(f"{YEARS}/2030/inputs")).status_code == 404
     n_inputs = (
@@ -317,7 +335,13 @@ async def test_put_brackets_replaces_one_jurisdiction_at_a_time(auth_client, def
     ]
     assert (await auth_client.get(f"{YEARS}/2030/brackets")).json() == second
     assert (await auth_client.get(YEARS)).json() == [
-        {"year": 2030, "notes": None, "input_count": 0, "bracket_count": 2}
+        {
+            "year": 2030,
+            "notes": None,
+            "filing_status": "single",
+            "input_count": 0,
+            "bracket_count": 2,
+        }
     ]
 
 
@@ -1033,3 +1057,130 @@ async def test_taxes_endpoints_require_auth(client):
     assert (await client.get(f"{YEARS}/2024/summary")).status_code == 401
     assert (await client.get(ALL_SUMMARY)).status_code == 401
     assert (await client.post(WHAT_IF, json={"year": 2024})).status_code == 401
+
+
+# --- filing status ---
+
+
+@pytest.fixture
+async def household(db):
+    """Me + Partner. `create_all` seeds no people, so every OTHER test in this file runs
+    on an empty roster — which is exactly the pre-household spelling the API still has to
+    support."""
+    from app.models import Person
+
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    await db.commit()
+    return me, partner
+
+
+async def set_status(auth_client, year: int, status: str) -> dict:
+    resp = await auth_client.patch(f"{YEARS}/{year}", json={"filing_status": status})
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def test_years_default_to_single_and_patch_sets_the_status(auth_client, definitions):
+    await put_inputs(auth_client, 2026, {"annual_salary": "150000"})
+    assert (await auth_client.get(YEARS)).json()[0]["filing_status"] == "single"
+
+    body = await set_status(auth_client, 2026, "married_joint")
+    assert body == {
+        "year": 2026,
+        "notes": None,
+        "filing_status": "married_joint",
+        "input_count": 1,
+        "bracket_count": 0,
+    }
+    assert (await auth_client.get(YEARS)).json()[0]["filing_status"] == "married_joint"
+
+
+async def test_patch_year_rejects_unknown_status_and_missing_year(auth_client, definitions):
+    await put_inputs(auth_client, 2026, {})
+    bad = await auth_client.patch(f"{YEARS}/2026", json={"filing_status": "widow"})
+    assert bad.status_code == 422
+    assert (await auth_client.get(YEARS)).json()[0]["filing_status"] == "single"
+    # No auto-create: a status is a statement ABOUT a year that must already exist.
+    missing = await auth_client.patch(f"{YEARS}/2027", json={"filing_status": "married_joint"})
+    assert missing.status_code == 404
+    assert "2027" in missing.json()["detail"]
+
+
+async def test_single_summary_shape_is_unchanged(auth_client, definitions):
+    """The additive keys, and nothing else: a single year still carries every section."""
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+
+    body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
+    assert body["filing_status"] == "single"
+    assert body["brackets_missing_for_status"] == []
+    assert body["totals"]["total_tax"] == "72755.83"
+
+
+async def test_single_year_with_no_brackets_still_computes(auth_client, definitions):
+    """The grandfathered path: 'single' NEVER gates. A partial single-filer year has
+    always computed with per-jurisdiction warnings, and stored history depends on it."""
+    await put_inputs(auth_client, 2033, {"latest_w2_income": "1000"})
+
+    body = (await auth_client.get(f"{YEARS}/2033/summary")).json()
+    assert body["brackets_missing_for_status"] == []
+    assert body["totals"]["total_tax"] == "0.00"
+    assert JURISDICTION_WARN_MISSING.format(j="federal", year=2033) in body["warnings"]
+
+
+async def test_married_year_without_its_tables_refuses_to_compute(auth_client, definitions):
+    """Never garbage, never a 500: the single-filer tables are RIGHT THERE and would
+    produce a confident, wrong number."""
+    await put_inputs(auth_client, 2026, inputs_payload(2026))
+    await put_brackets(auth_client, 2026, brackets_payload(2026)["jurisdictions"])
+    await set_status(auth_client, 2026, "married_joint")
+
+    resp = await auth_client.get(f"{YEARS}/2026/summary")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["year"] == 2026
+    assert body["filing_status"] == "married_joint"
+    assert body["brackets_missing_for_status"] == list(JURISDICTIONS)
+    for section in (
+        "federal",
+        "state",
+        "medicare",
+        "social_security",
+        "disability",
+        "capital_gains",
+        "totals",
+    ):
+        assert body[section] is None, section
+    assert body["warnings"] == [
+        "2026 is filed as married_joint and has no married_joint bracket table for: "
+        "federal, state, medicare, social_security, disability, capital_gains"
+    ]
+
+
+async def test_trend_feed_skips_and_names_the_refused_years(auth_client, definitions):
+    await put_inputs(auth_client, 2024, inputs_payload(2024))
+    await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
+    await put_inputs(auth_client, 2026, inputs_payload(2026))
+    await put_brackets(auth_client, 2026, brackets_payload(2026)["jurisdictions"])
+    await set_status(auth_client, 2026, "married_separate")
+
+    body = (await auth_client.get(ALL_SUMMARY)).json()
+    assert [year["year"] for year in body["years"]] == [2024]  # 2026 cannot be drawn
+    assert body["incomplete"] == [
+        {
+            "year": 2026,
+            "filing_status": "married_separate",
+            "brackets_missing_for_status": list(JURISDICTIONS),
+        }
+    ]
+
+
+def test_filing_status_literal_matches_the_constant():
+    from typing import get_args
+
+    from app.schemas.taxes import FilingStatus
+    from app.tax_keys import FILING_STATUSES
+
+    assert get_args(FilingStatus) == FILING_STATUSES
