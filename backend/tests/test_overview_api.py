@@ -12,7 +12,15 @@ from decimal import Decimal
 
 import pytest
 
-from app.models import MonthlyCashflow, MonthlySpending, SpendingCategory
+from app.models import (
+    MonthlyCashflow,
+    MonthlySpending,
+    Person,
+    SpendingCategory,
+    TaxBracket,
+    TaxInput,
+    TaxYear,
+)
 from app.seed import seed_tax_definitions
 from app.services.scheduler import product_today
 
@@ -234,3 +242,134 @@ async def test_money_flow_refuses_a_married_year_without_its_tables(auth_client,
     assert body["renderable"] is False
     assert "married_joint" in body["reason"]
     assert any("married_joint" in warning for warning in body["warnings"])
+
+
+# --- married years (2026-08-26 spec §5.7) ---
+#
+# The audit's §3.4 landmine: partner CASH (household net pay) entered without partner INCOME
+# reaching the engine drives `retained_equity` negative and the whole card refuses to render.
+# With a point-read feed, entering the partner's W-2 does not fix it — the partner's row and
+# the primary's row fight over one dict slot. `_engine_feed`/`_assemble_inputs` sum them; these
+# tests pin, through the PUBLIC endpoint, that the card renders.
+
+MFJ_BRACKETS = (
+    ("federal", [("0.1000", "0.00")]),
+    ("state", [("0.0500", "0.00")]),
+    ("medicare", [("0.0145", "0.00"), ("0.0235", "250000.00")]),
+    ("social_security", [("0.0620", "0.00"), ("0.0000", "168600.00")]),
+    ("disability", [("0.0110", "0.00")]),
+    ("capital_gains", [("0.1500", "0.00")]),
+)
+
+
+async def _seed_married_flow_year(db, year: int, with_brackets: bool = True) -> None:
+    """Two earners' W-2 rows + a full year of HOUSEHOLD net pay — the exact combination the
+    audit says blanks the card today."""
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    await db.flush()
+    db.add(TaxYear(year=year, filing_status="married_joint"))
+    await db.flush()
+    db.add_all(
+        [
+            TaxInput(year=year, key="latest_w2_income", value=Decimal("200000"), person_id=me.id),
+            TaxInput(
+                year=year, key="latest_w2_income", value=Decimal("150000"), person_id=partner.id
+            ),
+            TaxInput(
+                year=year,
+                key="trad_401k_contributions",
+                value=Decimal("23000"),
+                person_id=me.id,
+            ),
+            TaxInput(
+                year=year,
+                key="trad_401k_contributions",
+                value=Decimal("4300"),
+                person_id=partner.id,
+            ),
+        ]
+    )
+    if with_brackets:
+        for name, table in MFJ_BRACKETS:
+            for index, (rate, threshold) in enumerate(table, start=1):
+                db.add(
+                    TaxBracket(
+                        year=year,
+                        jurisdiction=name,
+                        bracket_index=index,
+                        rate=Decimal(rate),
+                        threshold=Decimal(threshold),
+                        filing_status="married_joint",
+                    )
+                )
+    for month in range(1, 13):  # a FULL year of household take-home
+        db.add(MonthlyCashflow(month=date(year, month, 1), net_pay=Decimal("20000.00")))
+    await db.commit()
+
+
+async def test_money_flow_renders_for_a_two_earner_year(auth_client, db, definitions):
+    year = product_today().year
+    await _seed_married_flow_year(db, year)
+    resp = await auth_client.get(MONEY_FLOW)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # Both W-2s reach the engine: 200000 + 150000.
+    assert body["gross_income"] == "350000.00"
+    assert body["sources"]["salary_and_bonus"] == "350000.00"
+    # Both 401k rows too — a point read would have kept one of 23000 / 4300.
+    assert body["pre_tax_savings"] == "27300.00"
+    assert body["take_home_cash"] == "240000.00"
+    # THE POINT: the residual is non-negative, so the guard at money_flow.py's
+    # NEGATIVE_RESIDUAL_REASON never fires and the card draws. With a point-read feed gross is
+    # 200000 (or 150000) against 240000 of household cash and the card blanks itself.
+    assert Decimal(body["retained_equity"]) >= 0
+    assert body["renderable"] is True
+    assert body["reason"] is None
+    # Conservation still exact at 2dp (the card's whole contract).
+    assert Decimal(body["taxes"]["total"]) + Decimal(body["pre_tax_savings"]) + Decimal(
+        body["take_home_cash"]
+    ) + Decimal(body["retained_equity"]) == Decimal(body["gross_income"])
+
+
+async def test_money_flow_refuses_a_two_earner_year_whose_status_has_no_brackets(
+    auth_client, db, definitions
+):
+    # MFJ selected before any MFJ table exists. The merged engine REFUSES rather than walking
+    # a single filer's thresholds (test_money_flow_refuses_a_married_year_without_its_tables
+    # pins the plain case) — what matters HERE is which refusal it is: the reason names the
+    # missing tables, never the negative-residual blanking, even though this fixture carries a
+    # full year of two-earner household cash against income the engine was told to refuse.
+    year = product_today().year
+    await _seed_married_flow_year(db, year, with_brackets=False)
+    resp = await auth_client.get(MONEY_FLOW)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["renderable"] is False
+    assert body["reason"] == (
+        f"{year} is filed as married_joint, and federal, state, medicare, social_security, "
+        "disability, capital_gains have no bracket table for that status — enter them on the "
+        "Taxes page to draw its money flow."
+    )
+    assert "retained-equity residual" not in body["reason"]
+    # Both W-2s still reached the feed — the refusal is about the TABLES, not the income.
+    assert body["gross_income"] == "350000.00"
+    assert body["taxes"]["total"] == "0.00"
+
+
+async def test_money_flow_single_year_is_unchanged_by_summing(auth_client, db, definitions):
+    # The single path, through the real PUTs, against the taxes summary — the same
+    # cross-check the rest of this file uses. Nothing here may move.
+    year = product_today().year
+    await seed_tax_year(auth_client, year)
+    await seed_spending_year(db, year)
+    body = (await auth_client.get(MONEY_FLOW)).json()
+    summary = (await auth_client.get(f"{YEARS}/{year}/summary")).json()
+
+    assert body["gross_income"] == summary["totals"]["gross_income"]
+    assert body["taxes"]["total"] == summary["totals"]["total_tax"]
+    assert body["sources"]["salary_and_bonus"] == "220000.00"  # 200000 + 15000 + 5000
+    assert body["renderable"] is True
