@@ -527,6 +527,61 @@ async def test_apply_taxes_keeps_inputs_for_keys_the_sheet_does_not_carry(db):
     assert salary == Decimal("111.0000")
 
 
+async def test_apply_taxes_keeps_brackets_for_jurisdictions_absent_from_the_sheet(db):
+    # P0 (marriage spec section 3.2): bracket tables parked under a jurisdiction the workbook
+    # never mentions are invisible to the sweep. The six sheet jurisdictions still sync-delete
+    # exactly as today — pinned in the same test so a wider fix cannot slip through.
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import TaxBracket
+    from tests.workbook_builder import default_taxes_rows
+
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
+    await db.commit()
+    assert report.entities["tax_brackets"].creates == 14
+
+    db.add(
+        TaxBracket(
+            year=2023,
+            jurisdiction="federal_mfj",
+            bracket_index=1,
+            rate=Decimal("0.1000"),
+            threshold=Decimal("0.00"),
+        )
+    )
+    await db.commit()
+
+    rows = [
+        row
+        for row in default_taxes_rows()
+        if not (row[1] == "Bracket 2 Rate" and row[0] is None)
+        and not (row[1] == "Bracket 2 Threshold" and row[0] is None)
+    ]  # federal bracket 2 removed from the sheet
+    report2 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets(taxes=rows)["Taxes"]), report2)
+    await db.commit()
+
+    assert report2.entities["tax_brackets"].deletes == 2  # 2023 + 2024 federal bracket 2 only
+    gone = (
+        (
+            await db.execute(
+                select(TaxBracket).where(
+                    TaxBracket.jurisdiction == "federal", TaxBracket.bracket_index == 2
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert gone == []
+    survivor = (
+        await db.execute(select(TaxBracket).where(TaxBracket.jurisdiction == "federal_mfj"))
+    ).scalar_one()
+    assert survivor.year == 2023 and survivor.bracket_index == 1
+    assert survivor.rate == Decimal("0.1000")
+
+
 async def test_apply_espp_lots_and_periods(db):
     from app.importer.apply import apply_espp
     from app.importer.parsers import parse_espp

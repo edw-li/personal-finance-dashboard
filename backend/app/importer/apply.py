@@ -527,6 +527,10 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
             await db.execute(select(TaxBracket).where(TaxBracket.year.in_(imported_years)))
         ).scalars()
     }
+    # Defensive scoping, mirroring sheet_input_keys above: jurisdictions the workbook never
+    # mentions are invisible to the sweep. Today parse_taxes hard-errors unless all six of
+    # BRACKET_SECTIONS are present, so this changes nothing for sheet-carried tables.
+    sheet_jurisdictions = {item.jurisdiction for item in parsed.brackets}
     incoming_bracket_keys: set[tuple[int, str, int]] = set()
     for item in parsed.brackets:
         key = (item.year, item.jurisdiction, item.bracket_index)
@@ -551,9 +555,10 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
                 report,
                 f"tax_brackets[{item.year}/{item.jurisdiction}/{item.bracket_index}]",
             )
-    # Stale brackets are load-bearing wrong data for the Plan 5 engine — sync-delete them.
+    # Stale brackets are load-bearing wrong data for the Plan 5 engine — sync-delete them,
+    # but only within jurisdictions the workbook actually carries (see sheet_jurisdictions).
     for key, row in existing_brackets.items():
-        if key not in incoming_bracket_keys:
+        if key not in incoming_bracket_keys and key[1] in sheet_jurisdictions:
             await db.delete(row)
             bracket_counts.deletes += 1
             report.add_sample(f"tax_brackets[{key[0]}/{key[1]}/{key[2]}]: deleted (row left sheet)")
