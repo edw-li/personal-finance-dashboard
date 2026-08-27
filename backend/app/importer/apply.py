@@ -495,7 +495,9 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
     }
     # The sweep below may only touch keys the workbook itself carries. A key with no value in
     # any year column never reaches parsed.inputs, so hand-entered / UI-only rows (and the
-    # per-person keys the married-taxes batch adds) are invisible to the sweep and survive.
+    # sheet-absent per-person keys the married-taxes batch adds) are invisible to the sweep
+    # and survive. Person-scoped rows under sheet-carried keys still sweep until that batch
+    # adds its person_id clause here.
     # Union across parsed years on purpose: a cell blanked in ONE year while the same sheet
     # row still carries another year is still a sheet key, and still sync-deletes as today.
     sheet_input_keys = {item.key for item in parsed.inputs}
