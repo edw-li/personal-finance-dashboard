@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { ApiError } from '../../api/client'
-import { JURISDICTIONS, putTaxBrackets } from '../../api/taxes'
+import {
+  FILING_STATUS_LABELS,
+  JURISDICTIONS,
+  jurisdictionLabel,
+  putTaxBrackets,
+} from '../../api/taxes'
 import type { Jurisdiction } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
@@ -10,14 +15,10 @@ import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import './taxes.css'
 
-const LABELS: Record<string, string> = {
-  federal: 'Federal',
-  state: 'State',
-  medicare: 'Medicare',
-  social_security: 'Social Security',
-  disability: 'Disability',
-  capital_gains: 'Capital gains',
-}
+// The six jurisdictions' human names live in src/api/taxes.ts beside JURISDICTIONS, so this
+// editor's headings and the summary panel's missing-tables call-to-action can never name the
+// same table differently. Aliased rather than re-spelled at ~10 call sites.
+const label = jurisdictionLabel
 
 // Mirrors the API's own ceiling (app/api/taxes.py MAX_BRACKETS).
 const MAX_BRACKETS = 12
@@ -25,10 +26,6 @@ const MAX_BRACKETS = 12
 interface RowState {
   rate: string // percent form — "37", never "0.3700"
   threshold: string
-}
-
-function label(name: string): string {
-  return LABELS[name] ?? name
 }
 
 function rowsOf(rows: TaxBracketOut[]): RowState[] {
@@ -163,11 +160,16 @@ export default function BracketsEditor({
       setErrors((current) => ({ ...current, [name]: message }))
       return
     }
-    // An empty table is a DELETE-ALL — the PUT replaces the jurisdiction wholesale — and
-    // removing the last row leaves Save one stray click from dropping the year's table.
+    // An empty table is a DELETE-ALL — the PUT replaces the (jurisdiction, status) wholesale
+    // — and removing the last row leaves Save one stray click from dropping a year's table.
+    // The status is named because the same jurisdiction has one table PER status.
     if (
       rows.length === 0 &&
-      !window.confirm(`Delete all ${label(name)} brackets for ${brackets.year}?`)
+      !window.confirm(
+        `Delete all ${label(name)} brackets for ${brackets.year} (${
+          FILING_STATUS_LABELS[brackets.filing_status]
+        })?`,
+      )
     ) {
       return
     }

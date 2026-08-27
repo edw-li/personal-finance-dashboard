@@ -312,7 +312,9 @@ describe('BracketsEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove Federal bracket 1' }))
 
     fireEvent.click(save('Federal'))
-    expect(confirmSpy).toHaveBeenCalledWith('Delete all Federal brackets for 2024?')
+    // The status is named: the same table exists per (jurisdiction, status), and "Delete all
+    // Federal brackets" would be an ambiguous question once there is more than one tab.
+    expect(confirmSpy).toHaveBeenCalledWith('Delete all Federal brackets for 2024 (Single)?')
     expect(vi.mocked(putTaxBrackets)).not.toHaveBeenCalled()
 
     confirmSpy.mockReturnValue(true)
