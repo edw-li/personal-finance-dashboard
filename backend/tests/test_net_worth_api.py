@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from app.models import Account, AccountBalance, NetWorthSnapshot
+from app.models import Account, AccountBalance, NetWorthSnapshot, Person
 
 
 async def test_net_worth_requires_auth(client):
@@ -384,3 +384,115 @@ async def test_suggestions_endpoint_is_gone(auth_client):
     """Balance suggestions were removed end to end (2026-08-23 spec §7)."""
     resp = await auth_client.get("/api/v1/net-worth/suggestions")
     assert resp.status_code == 404
+
+
+async def test_account_owner_and_parent_round_trip(auth_client, db):
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner")
+    db.add_all([me, partner])
+    await db.commit()
+
+    parent = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts",
+            json={"name": "Partner 401(k)", "group": "pre_tax", "person_id": partner.id},
+        )
+    ).json()
+    assert parent["person_id"] == partner.id
+    assert parent["parent_account_id"] is None
+
+    child = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts",
+            json={
+                "name": "Partner Employer Match",
+                "group": "pre_tax",
+                "person_id": partner.id,
+                "parent_account_id": parent["id"],
+                "is_component": True,
+            },
+        )
+    ).json()
+    # parent_account_id was unreachable via the API until now — a partner's 401(k)
+    # component nesting was SQL-only (audit §3.1).
+    assert child["parent_account_id"] == parent["id"]
+    assert child["is_component"] is True
+
+    # An explicit null is a WRITE on these two columns: retag to joint, unlink the parent.
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{child['id']}",
+        json={"person_id": None, "parent_account_id": None},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["person_id"] is None
+    assert resp.json()["parent_account_id"] is None
+
+    # ...while an OMITTED key still leaves the column exactly where it was.
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{parent['id']}", json={"sort_order": 9}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["person_id"] == partner.id
+    assert resp.json()["sort_order"] == 9
+
+    # And a person can be reassigned, not only cleared.
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{parent['id']}", json={"person_id": me.id}
+    )
+    assert resp.json()["person_id"] == me.id
+
+
+async def test_account_link_validation(auth_client, db):
+    db.add(Person(name="Me", is_primary=True))
+    await db.commit()
+    # Unknown FK targets 422 with a sentence, instead of surfacing asyncpg's
+    # ForeignKeyViolationError as a 500.
+    assert (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts",
+            json={"name": "Ghost Owner", "group": "cash", "person_id": 999},
+        )
+    ).status_code == 422
+    assert (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts",
+            json={"name": "Orphan", "group": "cash", "parent_account_id": 999},
+        )
+    ).status_code == 422
+    # int32-bounded like every other id on this router: garbage 422s rather than
+    # surfacing asyncpg's DataError.
+    assert (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts",
+            json={"name": "Huge", "group": "cash", "person_id": 2**31},
+        )
+    ).status_code == 422
+
+    created = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Solo", "group": "cash"}
+        )
+    ).json()
+    # An account cannot be its own parent: the UI nests components under their parent, and
+    # a self-link renders as an account inside itself.
+    self_parent = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{created['id']}",
+        json={"parent_account_id": created["id"]},
+    )
+    assert self_parent.status_code == 422
+    assert (
+        await auth_client.patch(
+            f"/api/v1/net-worth/accounts/{created['id']}", json={"person_id": 999}
+        )
+    ).status_code == 422
+
+
+async def test_account_defaults_to_joint_when_no_owner_is_sent(auth_client):
+    # The API does NOT guess the primary person: the migration backfilled history, and a
+    # new account with no owner is a deliberate joint account.
+    created = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "New Joint", "group": "cash"}
+        )
+    ).json()
+    assert created["person_id"] is None

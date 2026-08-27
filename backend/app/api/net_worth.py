@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.importer.cells import slugify
-from app.models import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
+from app.models import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot, Person
 from app.schemas.net_worth import (
     AccountCreate,
     AccountOut,
@@ -29,6 +29,33 @@ from app.services.net_worth_calc import group_totals_for, load_balance_matrix, n
 router = APIRouter(
     prefix="/net-worth", tags=["net-worth"], dependencies=[Depends(get_current_user)]
 )
+
+# The two NULLABLE account columns. Every other patchable column is NOT NULL, so the
+# router's explicit-null-is-a-no-op rule must not swallow these: "person_id": null is how
+# an account becomes JOINT, and "parent_account_id": null is how a component is unlinked
+# (2026-08-26 spec §5.2).
+NULLABLE_ACCOUNT_FIELDS = ("person_id", "parent_account_id")
+
+
+async def _validate_links(
+    db: AsyncSession,
+    person_id: int | None,
+    parent_account_id: int | None,
+    account_id: int | None,
+) -> None:
+    """FK targets checked BEFORE any write, so a bad id 422s with a sentence instead of
+    surfacing asyncpg's ForeignKeyViolationError as a 500. Deeper parent cycles (A->B->A)
+    are deliberately unguarded: parent_account_id is presentation-only and the UI nests
+    exactly one level (nestComponents), so a cycle costs a flat render, not bad money."""
+    if person_id is not None and (await db.get(Person, person_id)) is None:
+        raise HTTPException(status_code=422, detail=f"unknown person_id: {person_id}")
+    if parent_account_id is not None:
+        if parent_account_id == account_id:
+            raise HTTPException(status_code=422, detail="an account cannot be its own parent")
+        if (await db.get(Account, parent_account_id)) is None:
+            raise HTTPException(
+                status_code=422, detail=f"unknown parent_account_id: {parent_account_id}"
+            )
 
 
 @router.get("/accounts", response_model=list[AccountOut])
@@ -59,12 +86,15 @@ async def create_account(body: AccountCreate, db: AsyncSession = Depends(get_db)
     )
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"account {slug!r} already exists")
+    await _validate_links(db, body.person_id, body.parent_account_id, None)
     account = Account(
         name=body.name,
         slug=slug,
         group=body.group,
         sort_order=body.sort_order,
         is_component=body.is_component,
+        person_id=body.person_id,
+        parent_account_id=body.parent_account_id,
     )
     db.add(account)
     await db.commit()
@@ -83,12 +113,13 @@ async def update_account(
     account_id: int, body: AccountUpdate, db: AsyncSession = Depends(get_db)
 ) -> Account:
     account = await _get_account(db, account_id)
-    # Every patchable account column is NOT NULL, so an explicit null is always a no-op
-    # request rather than a write of NULL: "name": null must never reach the ORM.
+    # Every patchable account column is NOT NULL *except* the two in
+    # NULLABLE_ACCOUNT_FIELDS, so an explicit null is a no-op request for the rest
+    # ("name": null must never reach the ORM) and a real write for those two.
     updates = {
         field: value
         for field, value in body.model_dump(exclude_unset=True).items()
-        if value is not None
+        if value is not None or field in NULLABLE_ACCOUNT_FIELDS
     }
     new_name = updates.get("name")
     if new_name is not None and not slugify(new_name):
@@ -109,6 +140,9 @@ async def update_account(
         )
         if clash is not None:
             raise HTTPException(status_code=409, detail="account name already in use")
+    await _validate_links(
+        db, updates.get("person_id"), updates.get("parent_account_id"), account_id
+    )
     # slug is the importer's natural key — never rewritten here. A sheet-side rename is
     # the importer's job (per-run alias semantics, Plan 2 forward note).
     for field, value in updates.items():
