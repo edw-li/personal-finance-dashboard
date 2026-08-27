@@ -16,6 +16,20 @@
   align-items: flex-end;
   gap: 0.5rem;
 }
+/* Cap the row list at ~10 rows and scroll the TABLE, never the page (comp-scroll's
+   law, turned vertical). Shorter lists render naturally — max-height only bites when
+   the list outgrows it. The sticky header needs the card's own solid surface or
+   scrolling rows would ghost through it. */
+.categories-scroll {
+  max-height: 440px;
+  overflow-y: auto;
+}
+.categories-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
 .categories-table td .sub {
   color: var(--muted);
   font-size: 0.72rem;

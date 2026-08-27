@@ -311,71 +311,77 @@ export default function CategoriesPanel({
         </div>
       </form>
       {categories.length > 0 && (
-        <table className="data-table categories-table">
-          <thead>
-            <tr>
-              <th>Category</th>
-              <th className="num">Weight ($/yr est.)</th>
-              <th>Mapped spending category</th>
-              <th>Pinned card</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {categories.map((category) => (
-              <tr
-                key={category.id}
-                className={category.id === editingId ? 'is-editing' : undefined}
-              >
-                <td>{category.name}</td>
-                <td className="num">{weightCell(category)}</td>
-                <td>
-                  {category.spending_category_id === null
-                    ? '—'
-                    : (spendingName.get(category.spending_category_id) ?? '—')}
-                </td>
-                <td>
-                  {category.pinned_card_id === null
-                    ? '—'
-                    : (cardName.get(category.pinned_card_id) ?? '—')}
-                </td>
-                <td>
-                  <span className="badge">{category.is_active ? 'Active' : 'Hidden'}</span>
-                </td>
-                <td className="row-actions">
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Edit ${category.name}`}
-                    disabled={busy}
-                    onClick={() => startEdit(category)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={category.is_active ? `Hide ${category.name}` : `Show ${category.name}`}
-                    disabled={busy}
-                    onClick={() => toggleActive(category)}
-                  >
-                    {category.is_active ? 'Hide' : 'Show'}
-                  </button>
-                  <button
-                    type="button"
-                    className="button"
-                    aria-label={`Delete ${category.name}`}
-                    disabled={busy}
-                    onClick={() => remove(category)}
-                  >
-                    Delete
-                  </button>
-                </td>
+        // Capped + scrollable past ~10 rows (sticky header): the row list grows with
+        // every niche MCC category, and the matrix below must stay reachable.
+        <div className="categories-scroll">
+          <table className="data-table categories-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th className="num">Weight ($/yr est.)</th>
+                <th>Mapped spending category</th>
+                <th>Pinned card</th>
+                <th>Status</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {categories.map((category) => (
+                <tr
+                  key={category.id}
+                  className={category.id === editingId ? 'is-editing' : undefined}
+                >
+                  <td>{category.name}</td>
+                  <td className="num">{weightCell(category)}</td>
+                  <td>
+                    {category.spending_category_id === null
+                      ? '—'
+                      : (spendingName.get(category.spending_category_id) ?? '—')}
+                  </td>
+                  <td>
+                    {category.pinned_card_id === null
+                      ? '—'
+                      : (cardName.get(category.pinned_card_id) ?? '—')}
+                  </td>
+                  <td>
+                    <span className="badge">{category.is_active ? 'Active' : 'Hidden'}</span>
+                  </td>
+                  <td className="row-actions">
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Edit ${category.name}`}
+                      disabled={busy}
+                      onClick={() => startEdit(category)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={
+                        category.is_active ? `Hide ${category.name}` : `Show ${category.name}`
+                      }
+                      disabled={busy}
+                      onClick={() => toggleActive(category)}
+                    >
+                      {category.is_active ? 'Hide' : 'Show'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      aria-label={`Delete ${category.name}`}
+                      disabled={busy}
+                      onClick={() => remove(category)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   )
