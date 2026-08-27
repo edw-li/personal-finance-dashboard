@@ -38,7 +38,10 @@ export function deleteAccount(accountId: number): Promise<void> {
 }
 
 /** The page-level ownership scope. `null` is the household view and sends NO param at all,
- *  so an unfiltered request stays byte-identical to the pre-ownership one. */
+ *  so an unfiltered request stays byte-identical to the pre-ownership one. A person id is
+ *  INCLUSIVE of joint (their accounts plus person_id-NULL accounts — matches how a couple
+ *  reads "mine"); `'joint'` is the NULL-owned accounts alone. The exclusive per-owner
+ *  split lives in the response's `owner_series`, not in this param. */
 export type OwnerScope = number | 'joint' | null
 
 export function fetchTimeseries(

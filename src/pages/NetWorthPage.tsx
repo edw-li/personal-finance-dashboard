@@ -237,7 +237,7 @@ export default function NetWorthPage() {
       },
       series: [
         ...(stackBy === 'owner'
-          ? (data.owner_series ?? []).map((series, i) => ({
+          ? (data.owner_series ?? []).map((series) => ({
               // The server's owner_series is EXCLUSIVE and sums to net_worth, so the stack
               // lands exactly on the line below. `?? []` is stale-deploy armor, like notes.
               name: series.name ?? 'Joint',
@@ -251,10 +251,19 @@ export default function NetWorthPage() {
               symbol: 'none' as const,
               lineStyle: { width: 1 },
               areaStyle: { opacity: 0.5 },
-              // Fixed slot order IS the CVD-safety mechanism (theme.ts) — never more than
-              // PALETTE.length owners, and the order is the server's, so a colour follows
-              // a person rather than their rank in a re-sort.
-              color: PALETTE[i % PALETTE.length],
+              // Colour is keyed by the person's HOUSEHOLD slot (primary first, then by id,
+              // joint last), not by position in this response — owner_series membership
+              // varies with the chip scope, and a person must keep their colour across
+              // scopes. Households are far smaller than PALETTE (theme.ts caps at 8).
+              color:
+                PALETTE[
+                  (series.person_id === null
+                    ? orderedPeople.length
+                    : Math.max(
+                        orderedPeople.findIndex((p) => p.id === series.person_id),
+                        0,
+                      )) % PALETTE.length
+                ],
               data: series.values.map(Number),
             }))
           : [
