@@ -302,11 +302,16 @@ def _missing_for_status(tables: dict[str, list[Bracket]], filing_status: str) ->
     return [name for name in JURISDICTIONS if not tables.get(name)]
 
 
-async def _engine_feed(db: AsyncSession, year: int) -> EngineFeed:
+async def _engine_feed(
+    db: AsyncSession, year: int, people: list[Person] | None = None
+) -> EngineFeed:
+    """One year's feed. `people` is an optional hoist for callers that loop over years —
+    the roster is the same for all of them — and defaults to loading it here, so a
+    single-year caller cannot forget it and read a stale one."""
     filing_status = await _filing_status(db, year)
-    columns = [person.id for person in _return_people(await load_people(db), filing_status)] or [
-        None
-    ]
+    if people is None:
+        people = await load_people(db)
+    columns = [person.id for person in _return_people(people, filing_status)] or [None]
     rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
     tables = await _engine_tables(db, year, filing_status)
     return EngineFeed(
@@ -569,6 +574,10 @@ async def put_inputs(
     people = await load_people(db)
     known_people = {person.id for person in people}
     primary = primary_person(people)
+    # Which column a legacy person_id-NULL row is ALREADY read as. `_owner_column` folds a
+    # per-person NULL onto columns[0], and `_return_people` only ever truncates the roster,
+    # so under every filing status that column is people[0] — the primary.
+    null_row_column = people[0].id if people else None
 
     # Resolve and quantize EVERY row before the first write: a 422 raised halfway through
     # a bulk upsert would otherwise leave the year half-edited (portfolio PATCH posture).
@@ -605,13 +614,18 @@ async def put_inputs(
     }
     for (key, owner), value in resolved.items():
         row = existing.get((key, owner))
-        if row is None and owner is not None:
+        if row is None and owner is not None and owner == null_row_column:
             # The pre-household spelling of the same slot: a NULL row on a per-person key,
             # written before the roster existed. ADOPT it rather than inserting a second
-            # row the (year, key, person) unique key would rightly reject. POP, not get:
-            # one legacy row can only become ONE person's, so a body that writes the same
-            # key for both columns must not hand it to each of them in turn — that would
-            # silently keep only the last column's value.
+            # row the (year, key, person) unique key would rightly reject.
+            #
+            # Only the PRIMARY may, because every read path already attributes that row to
+            # them: letting a PARTNER write take it over would move a value out of the
+            # primary's column without the primary's line being touched, and a partner
+            # `null` would DELETE money the summary was counting as the primary's. A
+            # partner write of such a key therefore inserts its own row and leaves the NULL
+            # one alone. POP, not get, belt-and-braces behind that guard: one legacy row
+            # can only ever become ONE person's.
             row = existing.pop((key, None), None)
         if value is None:
             if row is not None:
@@ -903,10 +917,14 @@ async def get_all_summaries(db: AsyncSession = Depends(get_db)) -> TaxSummariesO
     the page can offer the fix.
     """
     years = list((await db.execute(select(TaxYear.year).order_by(TaxYear.year))).scalars())
+    # The roster is the one loop-invariant, so it is loaded once; the REST of `_engine_feed`
+    # stays per-year on purpose — one resolver every caller shares is worth more than
+    # batching a loop that is at most ~10 years long.
+    people = await load_people(db)
     summaries: list[TaxSummaryOut] = []
     incomplete: list[IncompleteYearOut] = []
     for year in years:
-        feed = await _engine_feed(db, year)
+        feed = await _engine_feed(db, year, people)
         # A year with no inputs computes an all-zero column — noise in a trend chart.
         if not feed.inputs:
             continue

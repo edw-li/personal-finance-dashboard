@@ -1416,6 +1416,55 @@ async def test_one_legacy_null_row_is_adopted_by_only_one_column(
     assert stored == {me.id: Decimal("150000.0000"), partner.id: Decimal("90000.0000")}
 
 
+async def test_a_partner_write_never_adopts_the_primarys_legacy_null_row(
+    auth_client, db, household, definitions
+):
+    """Only the PRIMARY may adopt a legacy NULL row — every read already says it is theirs.
+
+    `_owner_column` folds a per-person NULL onto columns[0], so the summary has been
+    counting that 100000 as the primary's all along. A partner write of the same key must
+    therefore insert its OWN row: adopting would move the money into the partner's column
+    without the primary's line being touched, and a partner `null` would delete it outright.
+    """
+    from app.models import TaxInput as TaxInputModel
+
+    me, partner = household
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    db.add(TaxInputModel(year=2026, key="annual_salary", value=Decimal("100000.0000")))
+    await db.commit()
+
+    async def salaries() -> dict[int | None, Decimal]:
+        return {
+            row.person_id: row.value
+            for row in (
+                await db.execute(
+                    select(TaxInputModel).where(
+                        TaxInputModel.year == 2026, TaxInputModel.key == "annual_salary"
+                    )
+                )
+            ).scalars()
+        }
+
+    async def write(person_id: int, value: str | None):
+        resp = await auth_client.put(
+            f"{YEARS}/2026/inputs",
+            json={"rows": [{"key": "annual_salary", "person_id": person_id, "value": value}]},
+        )
+        assert resp.status_code == 200, resp.text
+
+    await write(partner.id, "90000")
+    assert await salaries() == {None: Decimal("100000.0000"), partner.id: Decimal("90000.0000")}
+
+    # ...and unsetting the partner's line takes only the partner's row with it.
+    await write(partner.id, None)
+    assert await salaries() == {None: Decimal("100000.0000")}
+
+    # The primary still adopts, exactly as before: one row, never two.
+    await write(me.id, "150000")
+    assert await salaries() == {me.id: Decimal("150000.0000")}
+
+
 # --- brackets by status ---
 
 
