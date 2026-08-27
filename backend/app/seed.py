@@ -14,7 +14,13 @@ from app.tax_keys import TAX_INPUT_DEFINITIONS
 
 async def seed_admin_user(db: AsyncSession) -> None:
     email = settings.admin_email.strip().lower()
-    existing = (await db.execute(select(User))).scalars().first()
+    # start.sh runs this on EVERY boot, so it must be deterministic on a multi-row table:
+    # prefer the row that already owns ADMIN_EMAIL (renaming any other row onto it violates
+    # users.email's unique index -> boot 500), else the lowest id. A bare select(User) has no
+    # ORDER BY and returns rows in arbitrary heap order.
+    existing = (await db.execute(select(User).where(User.email == email))).scalars().first()
+    if existing is None:
+        existing = (await db.execute(select(User).order_by(User.id))).scalars().first()
     if existing is None:
         db.add(User(email=email, password_hash=hash_password(settings.admin_password)))
         print(f"Created user {email}")

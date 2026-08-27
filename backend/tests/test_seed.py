@@ -2,6 +2,7 @@ from sqlalchemy import select
 
 from app import seed as seed_module
 from app.models import AppSetting, TaxInputDefinition, User
+from app.security import hash_password
 from app.seed import seed_admin_user, seed_app_settings, seed_tax_definitions
 from app.tax_keys import TAX_INPUT_DEFINITIONS
 
@@ -45,6 +46,48 @@ async def test_seed_admin_user_is_idempotent_and_keeps_password(db, monkeypatch)
     await db.commit()
     user = (await db.execute(select(User))).scalar_one()
     assert user.password_hash == original_hash  # re-seeding never rotates the password
+
+
+async def test_seed_admin_user_renames_the_lowest_id_row(db, monkeypatch):
+    # start.sh runs the seed on EVERY boot; with two rows the old unordered .first() renamed
+    # an arbitrary row. Insert the HIGHER id first so heap order (what an unordered scan
+    # returns) is the reverse of id order — then only an ORDER BY id can pick row 1.
+    monkeypatch.setattr(seed_module.settings, "admin_password", "changeme123")
+    db.add(User(id=2, email="second@example.com", password_hash=hash_password("b")))
+    await db.flush()
+    db.add(User(id=1, email="first@example.com", password_hash=hash_password("a")))
+    await db.commit()
+    assert [u.id for u in (await db.execute(select(User))).scalars()] == [2, 1]
+
+    monkeypatch.setattr(seed_module.settings, "admin_email", "admin@example.com")
+    await seed_admin_user(db)
+    await db.commit()
+    rows = (await db.execute(select(User).order_by(User.id))).scalars().all()
+    assert [(u.id, u.email) for u in rows] == [
+        (1, "admin@example.com"),
+        (2, "second@example.com"),
+    ]
+
+
+async def test_seed_admin_user_prefers_the_row_that_already_owns_admin_email(db, monkeypatch):
+    # The boot-breaking case: renaming any OTHER row onto an email that is already taken
+    # violates users.email's unique index and 500s the container. Match by email first.
+    monkeypatch.setattr(seed_module.settings, "admin_password", "changeme123")
+    db.add_all(
+        [
+            User(id=1, email="stale@example.com", password_hash=hash_password("a")),
+            User(id=2, email="admin@example.com", password_hash=hash_password("b")),
+        ]
+    )
+    await db.commit()
+    monkeypatch.setattr(seed_module.settings, "admin_email", " Admin@Example.com ")
+    await seed_admin_user(db)
+    await db.commit()
+    rows = (await db.execute(select(User).order_by(User.id))).scalars().all()
+    assert [(u.id, u.email) for u in rows] == [
+        (1, "stale@example.com"),
+        (2, "admin@example.com"),
+    ]
 
 
 async def test_seed_app_settings_inserts_defaults_once(db):
