@@ -327,7 +327,7 @@ export default function NetWorthPage() {
           : []),
       ],
     }
-  }, [data, range, legendSelected, stackBy, household])
+  }, [data, range, legendSelected, stackBy, household, orderedPeople])
 
   const drillOption = useMemo<EChartsOption | null>(() => {
     if (!data || drill.length === 0) return null
