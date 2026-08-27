@@ -65,6 +65,23 @@ async def test_apply_then_reapply_is_all_skips(db):
     assert third.sheets["net_worth"].entities["account_balances"].skips == 6
 
 
+async def test_dry_run_after_apply_reports_no_tax_drift(db):
+    # Guard rail for the P0 sweep scoping: a clean DB that was built by this very workbook
+    # must diff as pure skips. Both tax sync-delete sweeps are allowed to become narrower,
+    # never wider, and must never start sparing rows the sheet DOES carry.
+    from app.importer.report import EntityCounts
+
+    applied = await run_import(build_workbook(), db, dry_run=False)
+    assert applied.applied is True and not applied.has_errors
+
+    diff = await run_import(build_workbook(), db, dry_run=True)
+    taxes = diff.sheets["taxes"].entities
+    assert taxes["tax_inputs"] == EntityCounts(creates=0, updates=0, skips=86, deletes=0)
+    assert taxes["tax_brackets"] == EntityCounts(creates=0, updates=0, skips=14, deletes=0)
+    assert taxes["tax_years"] == EntityCounts(creates=0, updates=0, skips=2, deletes=0)
+    assert diff.sheets["taxes"].samples == []
+
+
 async def test_parse_errors_block_apply_entirely(db):
     rows = default_taxes_rows()
     rows[3][1] = "Pay Cadence"  # label drift -> Taxes parser aborts with error
