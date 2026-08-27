@@ -1,8 +1,8 @@
 from sqlalchemy import select
 
 from app import seed as seed_module
-from app.models import AppSetting, TaxInputDefinition, User
-from app.seed import seed_admin_user, seed_app_settings, seed_tax_definitions
+from app.models import AppSetting, Person, TaxInputDefinition, User
+from app.seed import seed_admin_user, seed_app_settings, seed_people, seed_tax_definitions
 from app.tax_keys import TAX_INPUT_DEFINITIONS
 
 
@@ -77,3 +77,20 @@ async def test_seed_tax_definitions_inserts_all_and_is_insert_only(db):
     await seed_tax_definitions(db)
     await db.commit()
     assert (await db.get(TaxInputDefinition, "annual_salary")).label == "User Edited Label"
+
+
+async def test_seed_people_creates_the_primary_member_once(db):
+    await seed_people(db)
+    await db.commit()
+    person = (await db.execute(select(Person))).scalar_one()
+    assert (person.name, person.is_primary) == ("Me", True)
+
+    # Empty-table-only, not key-by-key: a renamed primary must survive every boot, and a
+    # second is_primary row would trip ux_people_single_primary at start-up — which is a
+    # bricked deploy, the exact failure class the seed guard exists to prevent.
+    person.name = "Ed"
+    await db.commit()
+    await seed_people(db)
+    await db.commit()
+    rows = (await db.execute(select(Person))).scalars().all()
+    assert [(p.name, p.is_primary) for p in rows] == [("Ed", True)]

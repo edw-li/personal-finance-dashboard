@@ -1,4 +1,5 @@
-"""Idempotent seed: admin user, tax input definitions, app settings. Run: python -m app.seed"""
+"""Idempotent seed: admin user, household primary, tax input definitions, app settings.
+Run: python -m app.seed"""
 
 import asyncio
 
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.models import AppSetting, TaxInputDefinition, User
+from app.models import AppSetting, Person, TaxInputDefinition, User
 from app.security import hash_password
 from app.tax_keys import TAX_INPUT_DEFINITIONS
 
@@ -21,6 +22,18 @@ async def seed_admin_user(db: AsyncSession) -> None:
     elif existing.email != email:
         existing.email = email  # single-user app: rename, don't duplicate
         print(f"Updated admin email to {email}")
+
+
+async def seed_people(db: AsyncSession) -> None:
+    # Insert-only, and only into an EMPTY table. Migration f3a91c7e2b45 seeds the primary
+    # row on every deployed database; this is the door for one built by
+    # Base.metadata.create_all (pytest, a scratch dev box). Never re-adds a row the user
+    # renamed, and never a second is_primary row — that would trip
+    # ux_people_single_primary at boot, which start.sh has no way to recover from.
+    existing = (await db.execute(select(Person))).scalars().first()
+    if existing is None:
+        db.add(Person(name="Me", is_primary=True))
+        print("Created household member Me")
 
 
 async def seed_tax_definitions(db: AsyncSession) -> None:
@@ -54,6 +67,7 @@ async def seed_app_settings(db: AsyncSession) -> None:
 async def seed() -> None:
     async with SessionLocal() as db:
         await seed_admin_user(db)
+        await seed_people(db)
         await seed_tax_definitions(db)
         await seed_app_settings(db)
         await db.commit()
