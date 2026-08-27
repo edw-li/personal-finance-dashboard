@@ -14,6 +14,8 @@ import { putTaxBrackets } from '../../api/taxes'
 function bracketsFixture(): TaxBracketsOut {
   return {
     year: 2024,
+    filing_status: 'single',
+    statuses_with_rows: ['single'],
     jurisdictions: {
       federal: [
         { bracket_index: 1, rate: '0.1000', threshold: '0.00' },
@@ -87,6 +89,7 @@ describe('BracketsEditor', () => {
     // so shipping all six would replace tables the user never opened. And the percent
     // conversion is pinned here — "37" MUST become "0.37", never 0.37000000000000005.
     expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+      filing_status: 'single',
       jurisdictions: {
         federal: [
           { rate: '0.1', threshold: '0.00' },
@@ -102,6 +105,7 @@ describe('BracketsEditor', () => {
     await waitFor(() => expect(vi.mocked(putTaxBrackets)).toHaveBeenCalled())
     // 9.3 / 100 in floats is 0.09299999999999999; string math keeps it exact.
     expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+      filing_status: 'single',
       jurisdictions: { state: [{ rate: '0.093', threshold: '0.00' }] },
     })
 
@@ -111,6 +115,7 @@ describe('BracketsEditor', () => {
     fireEvent.click(save('Medicare'))
     await waitFor(() => expect(vi.mocked(putTaxBrackets)).toHaveBeenCalled())
     expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+      filing_status: 'single',
       jurisdictions: { medicare: [{ rate: '0.0145', threshold: '0.00' }] },
     })
   })
@@ -180,6 +185,7 @@ describe('BracketsEditor', () => {
     // beside it rides through as a plain percent either way.
     await waitFor(() =>
       expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'single',
         jurisdictions: {
           federal: [
             { rate: '0.1', threshold: '0.00' },
@@ -220,6 +226,7 @@ describe('BracketsEditor', () => {
 
     await waitFor(() =>
       expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'single',
         jurisdictions: {
           social_security: [
             { rate: '0.062', threshold: '0' },
@@ -263,6 +270,7 @@ describe('BracketsEditor', () => {
     await waitFor(() =>
       // The typed text is what ships — the server does the rounding, never the client.
       expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'single',
         jurisdictions: {
           federal: [
             { rate: '0.1', threshold: '0.001' },
@@ -287,6 +295,7 @@ describe('BracketsEditor', () => {
     fireEvent.click(save('Federal'))
     await waitFor(() => expect(vi.mocked(putTaxBrackets)).toHaveBeenCalled())
     expect(vi.mocked(putTaxBrackets).mock.calls[0][1]).toEqual({
+      filing_status: 'single',
       jurisdictions: {
         federal: [
           { rate: '1.00004', threshold: '0.00' },
@@ -310,6 +319,7 @@ describe('BracketsEditor', () => {
     fireEvent.click(save('Federal'))
     await waitFor(() =>
       expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'single',
         jurisdictions: { federal: [] },
       }),
     )

@@ -103,13 +103,23 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-const year2023: TaxYearOut = { year: 2023, notes: null, input_count: 21, bracket_count: 42 }
-const year2024: TaxYearOut = { year: 2024, notes: null, input_count: 21, bracket_count: 42 }
-const year2025: TaxYearOut = { year: 2025, notes: null, input_count: 0, bracket_count: 42 }
+const year2023: TaxYearOut = {
+  year: 2023, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single',
+}
+const year2024: TaxYearOut = {
+  year: 2024, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single',
+}
+const year2025: TaxYearOut = {
+  year: 2025, notes: null, input_count: 0, bracket_count: 42, filing_status: 'single',
+}
 
 function inputsFor(year: number): TaxInputsOut {
   return {
     year,
+    // A single-status year: ONE person column, so the payload is shaped exactly as it was
+    // before filing statuses existed (the server folds the primary's rows into it).
+    filing_status: 'single',
+    people: [{ id: 1, name: 'Alex' }],
     sections: [
       {
         section: 'ordinary_income',
@@ -117,6 +127,7 @@ function inputsFor(year: number): TaxInputsOut {
           {
             key: 'annual_salary', label: 'Annual Salary', sort_order: 10,
             is_derived: false, value: '200000.0000', suggested: null,
+            is_per_person: true, person_id: 1,
           },
         ],
       },
@@ -127,6 +138,8 @@ function inputsFor(year: number): TaxInputsOut {
 function bracketsFor(year: number): TaxBracketsOut {
   return {
     year,
+    filing_status: 'single',
+    statuses_with_rows: ['single'],
     jurisdictions: {
       federal: [{ bracket_index: 1, rate: '0.1000', threshold: '0.00' }],
       state: [],
@@ -558,7 +571,9 @@ describe('TaxesPage', () => {
     const thisYear = new Date().getFullYear()
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ year: thisYear, notes: null, input_count: 0, bracket_count: 0 }])
+      .mockResolvedValueOnce([
+        { year: thisYear, notes: null, input_count: 0, bracket_count: 0, filing_status: 'single' },
+      ])
     renderPage()
 
     expect(await screen.findByText(/no tax years yet/i)).toBeTruthy()
@@ -599,6 +614,7 @@ describe('TaxesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
     await waitFor(() =>
       expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'single',
         jurisdictions: { federal: [{ rate: '0.12', threshold: '0' }] },
       }),
     )
@@ -973,7 +989,7 @@ describe('TaxesPage', () => {
   // nothing at all, and a hard-coded fixture year would rot on a New Year's Day.
 
   const yearRow = (year: number): TaxYearOut => ({
-    year, notes: null, input_count: 21, bracket_count: 42,
+    year, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single',
   })
 
   it('mounts the will-I-owe card on the current year and loads it for that year', async () => {

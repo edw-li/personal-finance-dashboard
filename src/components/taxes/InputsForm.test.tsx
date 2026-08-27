@@ -12,10 +12,16 @@ vi.mock('../../api/taxes', async (importOriginal) => ({
 }))
 import { putTaxInputs } from '../../api/taxes'
 
-// A fresh object per call: two tests mutate their copy into the PUT echo.
+// A fresh object per call: two tests mutate their copy into the PUT echo. Three of the four
+// keys are per-person (the real definitions flag salary, the W-2 family, 401k, HSA and
+// pre-tax deductions) and Qualified Dividends is household — so the same fixture exercises
+// both column shapes once a married year is rendered. A SINGLE year has exactly one person
+// column, so every per-person item still renders once, exactly as it always did.
 function inputsFixture(): TaxInputsOut {
   return {
     year: 2024,
+    filing_status: 'single',
+    people: [{ id: 1, name: 'Alex' }],
     sections: [
       {
         section: 'ordinary_income',
@@ -23,10 +29,12 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'annual_salary', label: 'Annual Salary', sort_order: 10,
             is_derived: false, value: '200000.0000', suggested: null,
+            is_per_person: true, person_id: 1,
           },
           {
             key: 'gross_paycheck', label: 'Gross Paycheck', sort_order: 20,
             is_derived: true, value: '7000.0000', suggested: '8333.3333',
+            is_per_person: true, person_id: 1,
           },
         ],
       },
@@ -36,6 +44,7 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'hsa_contributions', label: 'HSA Contributions', sort_order: 20,
             is_derived: false, value: '4150.0000', suggested: null,
+            is_per_person: true, person_id: 1,
           },
         ],
       },
@@ -45,6 +54,7 @@ function inputsFixture(): TaxInputsOut {
           {
             key: 'qualified_dividends', label: 'Qualified Dividends', sort_order: 40,
             is_derived: false, value: null, suggested: null,
+            is_per_person: false, person_id: null,
           },
         ],
       },

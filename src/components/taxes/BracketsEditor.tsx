@@ -173,9 +173,12 @@ export default function BracketsEditor({
     }
     setSaving(name)
     setErrors((current) => ({ ...current, [name]: '' }))
-    // ONLY this jurisdiction: the PUT is a full replace per key present in the body, so
-    // shipping all six would rewrite tables the user never opened.
+    // ONLY this jurisdiction, and only this STATUS: the PUT is a full replace per
+    // (jurisdiction, status) present in the body, so shipping all six — or leaving the status
+    // off, which the server would read as 'single' — would rewrite tables the user never
+    // opened.
     putTaxBrackets(brackets.year, {
+      filing_status: brackets.filing_status,
       jurisdictions: {
         [name]: rows.map((row) => ({
           rate: shiftPoint(row.rate, -2),

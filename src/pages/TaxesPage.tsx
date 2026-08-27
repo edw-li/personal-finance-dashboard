@@ -267,9 +267,20 @@ export default function TaxesPage() {
         setYears((current) =>
           current.some((y) => y.year === year)
             ? current
-            : [...current, { year, notes: null, input_count: 0, bracket_count: 0 }].sort(
-                (a, b) => a.year - b.year,
-              ),
+            : [
+                ...current,
+                // 'single' is the column's own default, so the placeholder cannot claim a
+                // status the row does not have; the reconcile below replaces it either way.
+                // `satisfies`, not a bare literal: inside the array the status would widen
+                // to plain `string` and stop being a FilingStatus.
+                {
+                  year,
+                  notes: null,
+                  input_count: 0,
+                  bracket_count: 0,
+                  filing_status: 'single',
+                } satisfies TaxYearOut,
+              ].sort((a, b) => a.year - b.year),
         )
         loadYear(year)
         // The main banner owns this one, because the main banner is the thing with Retry.
