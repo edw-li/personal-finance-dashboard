@@ -117,13 +117,15 @@ export default function SummaryPanel({
   )
 
   // The drilled year's summary comes out of THIS panel's all-years feed, so a save that
-  // moves the year's figures redraws the open pie with the fresh ones.
+  // moves the year's figures redraws the open pie with the fresh ones. From `chartable`, not
+  // `years`: a refusal year carries no sections, so a ?year= deep link to one would read
+  // figures that are not there — and the panel falls back to the all-years view instead.
   const detailSummary = useMemo(
     () =>
-      detailYear === null || years === null
+      detailYear === null || chartable === null
         ? null
-        : (years.find((y) => y.year === detailYear) ?? null),
-    [years, detailYear],
+        : (chartable.find((y) => y.year === detailYear) ?? null),
+    [chartable, detailYear],
   )
   const detailPie = useMemo(
     () => (detailSummary === null ? null : yearPieOption(detailSummary)),
@@ -138,7 +140,7 @@ export default function SummaryPanel({
     // The category NAME is the year on every clickable series (bars and rate line
     // alike) — a dataIndex would have to re-derive trendOption's own ascending sort.
     const year = Number(params.name)
-    if (years !== null && years.some((y) => y.year === year)) setDetailYear(year)
+    if (chartable !== null && chartable.some((y) => y.year === year)) setDetailYear(year)
   }
 
   // Null exactly when the engine refused: the tiles read em-dashes (formatCurrency/formatPct
