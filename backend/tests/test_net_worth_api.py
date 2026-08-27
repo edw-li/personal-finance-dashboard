@@ -470,9 +470,7 @@ async def test_account_link_validation(auth_client, db):
     ).status_code == 422
 
     created = (
-        await auth_client.post(
-            "/api/v1/net-worth/accounts", json={"name": "Solo", "group": "cash"}
-        )
+        await auth_client.post("/api/v1/net-worth/accounts", json={"name": "Solo", "group": "cash"})
     ).json()
     # An account cannot be its own parent: the UI nests components under their parent, and
     # a self-link renders as an account inside itself.

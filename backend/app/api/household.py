@@ -95,11 +95,7 @@ async def update_person(
         raise HTTPException(status_code=422, detail="name must not be blank")
     if name != person.name:
         clash = (
-            (
-                await db.execute(
-                    select(Person).where(Person.name == name, Person.id != person_id)
-                )
-            )
+            (await db.execute(select(Person).where(Person.name == name, Person.id != person_id)))
             .scalars()
             .first()
         )

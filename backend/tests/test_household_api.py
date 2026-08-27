@@ -97,9 +97,7 @@ async def test_there_is_no_person_delete_route(auth_client, db):
 
 
 async def test_marriage_date_round_trips_through_its_own_key(auth_client, db):
-    resp = await auth_client.put(
-        f"{HOUSEHOLD}/marriage-date", json={"marriage_date": "2026-09-19"}
-    )
+    resp = await auth_client.put(f"{HOUSEHOLD}/marriage-date", json={"marriage_date": "2026-09-19"})
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"marriage_date": "2026-09-19"}
     assert (await auth_client.get(HOUSEHOLD)).json()["marriage_date"] == "2026-09-19"
