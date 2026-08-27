@@ -293,17 +293,28 @@ class WithholdingVestOut(BaseModel):
 class SafeHarborOut(BaseModel):
     prior_year: int
     prior_total_tax: Decimal
-    threshold: Decimal  # prior_total_tax x 1.10
+    # The AGI the statutory gate is tested against, and the multiplier it selected. Both
+    # are rendered: a threshold that is not 1.10x the number beside it would otherwise
+    # read as a bug.
+    prior_agi: Decimal
+    multiplier: Decimal  # 1.10 above the gate, 1.00 at or below it
+    threshold: Decimal  # prior_total_tax x multiplier
     met: bool  # projected total withholding >= threshold
 
 
 class WithholdingOut(BaseModel):
     year: int
-    liability_total: Decimal
+    filing_status: str = SINGLE
+    # See TaxSummaryOut: non-empty only for a married year whose tables are not entered.
+    brackets_missing_for_status: list[str] = Field(default_factory=list)
+    # Null exactly when the engine refused: the withholding legs below are still real
+    # (they come from profiles, grants and prices), but there is nothing honest to compare
+    # them against.
+    liability_total: Decimal | None
     salary: WithholdingLegOut
     vest: WithholdingVestOut
     total: WithholdingLegOut
-    balance_projected: Decimal  # liability - projected withholding; positive = will owe
+    balance_projected: Decimal | None  # liability - projected withholding; positive = will owe
     checks_elapsed: int
     checks_total: int
     safe_harbor: SafeHarborOut | None

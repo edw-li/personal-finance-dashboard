@@ -231,6 +231,38 @@ def earner_from_inputs(values: Mapping[str, Decimal]) -> EarnerWages:
     )
 
 
+def shift_earners(
+    earners: list[EarnerWages] | None,
+    before: dict[str, Decimal],
+    after: dict[str, Decimal],
+) -> list[EarnerWages] | None:
+    """Re-base a wage-bundle list onto a what-if scenario's inputs.
+
+    Every what-if leg is the PRIMARY person's — their brokerage lots, their ESPP lots, the
+    app models no partner equity — so the whole wage delta lands on the FIRST bundle and
+    the partner's own wage base is untouched beside it. `None` (and an empty list) passes
+    straight through, so a single-earner year keeps taking the engine's own synthesis
+    path and stays byte-identical.
+    """
+    if not earners:
+        return earners
+
+    def delta(key: str) -> Decimal:
+        return after.get(key, ZERO) - before.get(key, ZERO)
+
+    head = earners[0]
+    return [
+        EarnerWages(
+            w2_wages=head.w2_wages + delta("latest_w2_income") + delta("other_w2_income"),
+            pretax_hsa=head.pretax_hsa
+            + delta("hsa_contributions")
+            + delta("hsa_contributions_employer"),
+            other_pretax=head.other_pretax + delta("other_pretax_deductions"),
+        ),
+        *earners[1:],
+    ]
+
+
 @dataclass
 class JurisdictionResult:
     """One tax family's line; the fields that family does not have stay None.

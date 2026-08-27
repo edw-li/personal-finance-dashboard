@@ -1579,3 +1579,58 @@ async def test_married_separate_covers_the_primary_person_alone(
     body = (await auth_client.get(f"{YEARS}/2026/summary")).json()
     assert body["medicare"]["w2_income"] == "200000.00"
     assert body["brackets_missing_for_status"] == []
+
+
+# --- the what-if on a married year ---
+
+
+async def test_what_if_refuses_a_year_whose_status_has_no_tables(auth_client, definitions):
+    await seeded_2024(auth_client)
+    await set_status(auth_client, 2024, "married_joint")
+
+    resp = await auth_client.post(WHAT_IF, json={"year": 2024})
+    assert resp.status_code == 409
+    assert "married_joint" in resp.json()["detail"]
+
+
+async def test_what_if_moves_the_primary_earners_fica_on_a_joint_year(
+    auth_client, db, household, definitions
+):
+    """A what-if leg is the PRIMARY person's sale, so its wage delta lands on their
+    bundle — with the partner's own wage base untouched beside it."""
+    me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "latest_w2_income", "person_id": me.id, "value": "100000"},
+                {"key": "latest_w2_income", "person_id": partner.id, "value": "100000"},
+            ]
+        },
+    )
+    tables = {
+        "federal": rows(("0.10", "0")),
+        "state": rows(("0.05", "0")),
+        "medicare": rows(("0.0145", "0")),
+        "social_security": rows(("0.062", "0"), ("0", "150000")),
+        "disability": rows(("0.01", "0")),
+        "capital_gains": rows(("0.15", "0")),
+    }
+    for status in ("single", "married_joint"):
+        await auth_client.put(
+            f"{YEARS}/2026/brackets", json={"filing_status": status, "jurisdictions": tables}
+        )
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (
+        await auth_client.post(
+            WHAT_IF,
+            json={"year": 2026, "overrides": {"other_w2_income": "80000"}},
+        )
+    ).json()
+    # Baseline: 100000 + 100000, both under the 150000 base -> 200000 x .062 = 12400.
+    assert body["baseline"]["social_security"]["tax"] == "12400.00"
+    # Scenario: the primary's bundle becomes 180000, capped at 150000; the partner stays
+    # at 100000. (150000 + 100000) x .062 = 15500.
+    assert body["scenario"]["social_security"]["tax"] == "15500.00"
+    assert body["delta"]["social_security_tax"] == "3100.00"

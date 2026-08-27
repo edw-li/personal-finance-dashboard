@@ -103,6 +103,7 @@ from app.services.tax_service import (
     compute_breakdown,
     derive_suggestions,
     earner_from_inputs,
+    shift_earners,
 )
 from app.services.tax_whatif import (
     EsppSaleDetail,
@@ -114,6 +115,7 @@ from app.services.tax_whatif import (
 from app.tax_keys import (
     JURISDICTIONS,
     MARRIED_JOINT,
+    MARRIED_SEPARATE,
     PER_PERSON_KEYS,
     SECTIONS,
     SINGLE,
@@ -929,9 +931,17 @@ NON_CURRENT_YEAR_MESSAGE = "withholding tracking is only meaningful for the curr
 NO_TICKER_WARNING = "no ESPP/employer ticker configured — vests are excluded from the estimate"
 NO_QUOTE_WARNING = "no current employer price — future vests are excluded from the projection"
 # The IRS prior-year safe harbor for high earners; "all-in" here, where the real rule is
-# per-jurisdiction (the card's copy says so).
+# per-jurisdiction (the card's copy says so). The 110% tier applies ONLY above the
+# statutory prior-year AGI gate — 150000, halved filing separately (audit §3.2: the
+# multiplier shipped, the gate never did).
 SAFE_HARBOR_MULTIPLIER = Decimal("1.10")
+SAFE_HARBOR_BASE_MULTIPLIER = Decimal("1.00")
+SAFE_HARBOR_AGI_GATE = Decimal("150000")
+SAFE_HARBOR_AGI_GATE_MFS = Decimal("75000")
 SAFE_HARBOR_UNAVAILABLE = "prior year {year} has no computed tax — safe harbor unavailable"
+SAFE_HARBOR_NOT_COMPUTABLE = (
+    "prior year {year} cannot be computed under its filing status — safe harbor unavailable"
+)
 # The three tables the marginal-FICA walks read. Named separately from the engine's own
 # jurisdiction sweep because an empty one is silent HERE: the summary would show a 0 medicare
 # line, but this card would show a 0 vest-FICA leg with nothing to explain it.
@@ -957,8 +967,11 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
 
     feed = await _engine_feed(db, year)
     tables = feed.tables
-    liability = _breakdown_for(feed)
-    warnings: list[str] = [
+    liability = _breakdown_for(feed) if feed.computable else None
+    warnings: list[str] = []
+    if not feed.computable:
+        warnings.append(feed.warning())
+    warnings += [
         JURISDICTION_WARN_MISSING.format(j=name, year=year)
         for name in FICA_JURISDICTIONS
         if not tables.get(name)
@@ -1058,32 +1071,52 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         + estimated.vest_supplemental_projected
         + estimated.vest_fica_projected
     )
-    liability_total = _money(liability.totals.total_tax)
+    liability_total = None if liability is None else _money(liability.totals.total_tax)
 
     safe_harbor = None
     if await db.get(TaxYear, year - 1) is not None:
-        prior = _breakdown_for(await _engine_feed(db, year - 1))
-        # Quantize FIRST, then take 110% of that: the threshold has to be 1.10 x the number
-        # rendered beside it, not 1.10 x a full-precision figure nobody can see.
-        prior_total = _money(prior.totals.total_tax)
-        if prior_total <= ZERO:
-            # A bare tax_years row (or one whose credits swallowed the tax) makes the whole
-            # comparison vacuous: any withholding at all clears a zero-or-negative threshold,
-            # so a met=True badge would be a false all-clear. Say why instead.
-            warnings.append(SAFE_HARBOR_UNAVAILABLE.format(year=year - 1))
+        prior_feed = await _engine_feed(db, year - 1)
+        if not prior_feed.computable:
+            warnings.append(SAFE_HARBOR_NOT_COMPUTABLE.format(year=year - 1))
         else:
-            threshold = _money(prior_total * SAFE_HARBOR_MULTIPLIER)
-            safe_harbor = SafeHarborOut(
-                prior_year=year - 1,
-                prior_total_tax=prior_total,
-                threshold=threshold,
-                # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so the
-                # badge can never contradict the two numbers rendered next to it.
-                met=total_projected >= threshold,
-            )
+            prior = _breakdown_for(prior_feed)
+            # Quantize FIRST, then multiply: the threshold has to be the multiplier times
+            # the number rendered beside it, not times a full-precision figure nobody can
+            # see. The AGI gate is judged on the displayed figure for the same reason.
+            prior_total = _money(prior.totals.total_tax)
+            prior_agi = _money(prior.federal.agi)
+            if prior_total <= ZERO:
+                # A bare tax_years row (or one whose credits swallowed the tax) makes the
+                # whole comparison vacuous: any withholding at all clears a zero-or-negative
+                # threshold, so a met=True badge would be a false all-clear. Say why instead.
+                warnings.append(SAFE_HARBOR_UNAVAILABLE.format(year=year - 1))
+            else:
+                gate = (
+                    SAFE_HARBOR_AGI_GATE_MFS
+                    if prior_feed.filing_status == MARRIED_SEPARATE
+                    else SAFE_HARBOR_AGI_GATE
+                )
+                # The PRIOR year's status, not this year's: it is that return's AGI being
+                # tested, and the wedding year is precisely when the two differ.
+                multiplier = (
+                    SAFE_HARBOR_MULTIPLIER if prior_agi > gate else SAFE_HARBOR_BASE_MULTIPLIER
+                )
+                threshold = _money(prior_total * multiplier)
+                safe_harbor = SafeHarborOut(
+                    prior_year=year - 1,
+                    prior_total_tax=prior_total,
+                    prior_agi=prior_agi,
+                    multiplier=multiplier,
+                    threshold=threshold,
+                    # Judged on the DISPLAYED figures (paycheck.py's negative-net posture),
+                    # so the badge can never contradict the two numbers rendered next to it.
+                    met=total_projected >= threshold,
+                )
 
     return WithholdingOut(
         year=year,
+        filing_status=feed.filing_status,
+        brackets_missing_for_status=feed.brackets_missing_for_status,
         liability_total=liability_total,
         salary=WithholdingLegOut(
             ytd=_money(estimated.salary_ytd),
@@ -1100,7 +1133,9 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         total=WithholdingLegOut(ytd=total_ytd, projected=total_projected),
         # Both sides are already at cents, so this subtracts exactly; `_money` is here for the
         # signed-zero collapse (withholding that lands ON the liability must read "0.00").
-        balance_projected=_money(liability_total - total_projected),
+        balance_projected=(
+            None if liability_total is None else _money(liability_total - total_projected)
+        ),
         checks_elapsed=estimated.checks_elapsed,
         checks_total=estimated.checks_total,
         safe_harbor=safe_harbor,
@@ -1119,6 +1154,11 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     today = date.today()
 
     feed = await _engine_feed(db, year)
+    if not feed.computable:
+        # A POST, not a GET: refusing here is honest, where the summary's GET has to keep
+        # answering. Computing a scenario against a single filer's thresholds would give
+        # the user a delta they might act on.
+        raise HTTPException(status_code=409, detail=feed.warning())
     stored = feed.inputs
     brackets = feed.tables
 
@@ -1237,8 +1277,22 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
     scenario_inputs, scenario_warnings = apply_scenario(
         stored, sale_details, espp_details, overrides
     )
-    baseline = _summary_out(compute_breakdown(year, stored, brackets))
-    scenario = _summary_out(compute_breakdown(year, scenario_inputs, brackets))
+    baseline = _summary_out(
+        compute_breakdown(
+            year, stored, brackets, filing_status=feed.filing_status, earners=feed.earners
+        ),
+        feed,
+    )
+    scenario = _summary_out(
+        compute_breakdown(
+            year,
+            scenario_inputs,
+            brackets,
+            filing_status=feed.filing_status,
+            earners=shift_earners(feed.earners, stored, scenario_inputs),
+        ),
+        feed,
+    )
 
     changed: list[ChangedInput] = []
     labels = {key: label for key, label, _s, _o, _d in TAX_INPUT_DEFINITIONS}
