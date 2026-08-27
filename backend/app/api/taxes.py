@@ -256,7 +256,12 @@ def _assemble_earners(rows: list[TaxInput], columns: list[int | None]) -> list[E
         bucket[row.key] = row.value if existing is None else existing + row.value
     if len(per_person) < 2:
         return None
-    return [earner_from_inputs(per_person[column]) for column in sorted(per_person, key=str)]
+    # In COLUMN order (primary first), not sorted: `shift_earners` re-bases the what-if on
+    # bundle[0] because that is the primary person's, and any other ordering silently moves
+    # their sale onto the partner's wage base. A plain sort cannot express this — `sorted(…,
+    # key=str)` would even put person 10 ahead of person 2 — while `columns` already carries
+    # the order `_return_people` established, and mixes None in safely.
+    return [earner_from_inputs(per_person[column]) for column in columns if column in per_person]
 
 
 async def _filing_status(db: AsyncSession, year: int) -> str:
@@ -603,8 +608,11 @@ async def put_inputs(
         if row is None and owner is not None:
             # The pre-household spelling of the same slot: a NULL row on a per-person key,
             # written before the roster existed. ADOPT it rather than inserting a second
-            # row the (year, key, person) unique key would rightly reject.
-            row = existing.get((key, None))
+            # row the (year, key, person) unique key would rightly reject. POP, not get:
+            # one legacy row can only become ONE person's, so a body that writes the same
+            # key for both columns must not hand it to each of them in turn — that would
+            # silently keep only the last column's value.
+            row = existing.pop((key, None), None)
         if value is None:
             if row is not None:
                 await db.delete(row)  # null means "unset this line", not "store 0"

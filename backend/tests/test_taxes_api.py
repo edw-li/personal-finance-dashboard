@@ -1377,6 +1377,45 @@ async def test_a_legacy_null_row_is_adopted_not_duplicated(auth_client, db, hous
     assert (stored[0].person_id, stored[0].value) == (me.id, Decimal("150000.0000"))
 
 
+async def test_one_legacy_null_row_is_adopted_by_only_one_column(
+    auth_client, db, household, definitions
+):
+    """Both columns written in ONE body, over a single legacy NULL row.
+
+    Only one person can inherit that row; the other needs a fresh insert. Handing it to
+    each of them in turn would keep just the last column's value and silently drop the
+    first — a wrong-money bug on exactly the write the household migration invites."""
+    from app.models import TaxInput as TaxInputModel
+
+    me, partner = household
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    db.add(TaxInputModel(year=2026, key="annual_salary", value=Decimal("100000.0000")))
+    await db.commit()
+
+    resp = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "annual_salary", "person_id": me.id, "value": "150000"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "90000"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    stored = {
+        row.person_id: row.value
+        for row in (
+            await db.execute(
+                select(TaxInputModel).where(
+                    TaxInputModel.year == 2026, TaxInputModel.key == "annual_salary"
+                )
+            )
+        ).scalars()
+    }
+    assert stored == {me.id: Decimal("150000.0000"), partner.id: Decimal("90000.0000")}
+
+
 # --- brackets by status ---
 
 
