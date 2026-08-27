@@ -1,12 +1,12 @@
 import { useSearchParams } from 'react-router-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
-import { fetchAllTaxSummaries } from '../../api/taxes'
+import { fetchAllTaxSummaries, FILING_STATUS_LABELS, jurisdictionLabel } from '../../api/taxes'
 import EChart from '../EChart'
 import type { EChartEventParams } from '../EChart'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
-import type { TaxSummaryOut } from '../../types/api'
+import type { FilingStatus, TaxSummaryOut } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
 import { taxTrendCsv, trendOption, waterfallOption, yearPieOption } from './taxChartOptions'
 // Only this component's own sheet, like its two siblings: the app-wide vocabulary
@@ -25,12 +25,19 @@ import './taxes.css'
  */
 export default function SummaryPanel({
   summary,
+  filingStatus,
   refreshKey = 0,
 }: {
   summary: TaxSummaryOut
+  /** The YEAR's status — what the missing-tables call-to-action names. */
+  filingStatus: FilingStatus
   /** Bumped by the page after a save's fresh totals land; each new value refetches. */
   refreshKey?: number
 }) {
+  // Non-empty means the engine REFUSED to compute this year against another status' tables
+  // (design §5.3), and the payload then carries NO sections at all — the figures are absent,
+  // not zero. Everything that reads one is gated on this.
+  const missing = summary.brackets_missing_for_status ?? []
   // null = the feed has not answered yet (never [] — an empty feed is a real answer, and
   // the two say different things under the chart).
   const [years, setYears] = useState<TaxSummaryOut[] | null>(null)
@@ -78,7 +85,10 @@ export default function SummaryPanel({
 
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every
   // render replays the chart on unrelated state flips (AllocationPanel's note).
-  const waterfall = useMemo(() => waterfallOption(summary), [summary])
+  const waterfall = useMemo(
+    () => (missing.length > 0 ? null : waterfallOption(summary)),
+    [summary, missing.length],
+  )
   const trend = useMemo(() => (years === null ? null : trendOption(years)), [years])
 
   // The drilled year's summary comes out of THIS panel's all-years feed, so a save that
@@ -106,7 +116,9 @@ export default function SummaryPanel({
     if (years !== null && years.some((y) => y.year === year)) setDetailYear(year)
   }
 
-  const totals = summary.totals
+  // Null exactly when the engine refused: the tiles read em-dashes (formatCurrency/formatPct
+  // answer '—' for an absent value) rather than the zeros it declined to compute.
+  const totals = missing.length > 0 ? null : summary.totals
 
   return (
     <>
@@ -119,24 +131,24 @@ export default function SummaryPanel({
           {/* Every figure is the engine's, rendered as it arrived (global rule 9). */}
           <StatTile
             label="Gross income"
-            value={formatCurrency(totals.gross_income)}
+            value={formatCurrency(totals?.gross_income)}
             hint="Every income component summed before any tax — the waterfall&apos;s opening bar."
           />
           <StatTile
             label="Total tax"
-            value={formatCurrency(totals.total_tax)}
+            value={formatCurrency(totals?.total_tax)}
             hint="All six jurisdictions summed: federal, state, Medicare, Social Security, SDI, and capital gains."
           />
           {/* Same size as its three siblings: the hero treatment belongs to pages with ONE
               headline figure, and here it just made take-home shout over the row. */}
           <StatTile
             label="Take-home"
-            value={formatCurrency(totals.take_home)}
+            value={formatCurrency(totals?.take_home)}
             hint="Gross income minus total tax."
           />
           <StatTile
             label="Effective rate"
-            value={formatPct(totals.effective_rate, { signed: false })}
+            value={formatPct(totals?.effective_rate, { signed: false })}
             hint="Total tax ÷ gross income."
           />
         </div>
@@ -154,20 +166,43 @@ export default function SummaryPanel({
           </div>
         )}
 
-        <div className="tax-chart-block">
-          <h3 className="eyebrow">
-            Where {summary.year}&apos;s gross income went
-            <InfoHint text="Gross income walked down to take-home — each floating bar is one jurisdiction&apos;s bite." />
-          </h3>
-          {waterfall ? (
-            <EChart option={waterfall} height={320} />
-          ) : (
-            <p className="empty-note">
-              Nothing to chart yet — this year computes to zero until its inputs are filled
-              in below.
-            </p>
-          )}
-        </div>
+        {missing.length > 0 ? (
+          <div className="tax-chart-block">
+            <h3 className="eyebrow">
+              No {FILING_STATUS_LABELS[filingStatus]} bracket tables for {summary.year}
+              <InfoHint text="Bracket tables are stored per filing status. Until this year&apos;s status has its own, the engine has nothing to walk — so it reports the gap instead of computing against another status&apos; rates." />
+            </h3>
+            <div className="tax-brackets-missing" role="status">
+              <p>
+                {summary.year} is filed as {FILING_STATUS_LABELS[filingStatus]}, and these
+                jurisdictions have no table for that status:
+              </p>
+              <p className="tax-brackets-missing-list">
+                {missing.map(jurisdictionLabel).join(', ')}
+              </p>
+              <p>
+                Open <strong>Bracket tables</strong> below, pick the{' '}
+                {FILING_STATUS_LABELS[filingStatus]} tab, and clone {summary.year}&apos;s
+                single-filer tables — then edit the thresholds that move with filing status.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="tax-chart-block">
+            <h3 className="eyebrow">
+              Where {summary.year}&apos;s gross income went
+              <InfoHint text="Gross income walked down to take-home — each floating bar is one jurisdiction&apos;s bite." />
+            </h3>
+            {waterfall ? (
+              <EChart option={waterfall} height={320} />
+            ) : (
+              <p className="empty-note">
+                Nothing to chart yet — this year computes to zero until its inputs are filled
+                in below.
+              </p>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="card">

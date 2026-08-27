@@ -323,3 +323,31 @@
   color: var(--warn);
   border-color: var(--warn);
 }
+
+/* A call to action, not a failure: the year is fine, its tables are simply not entered yet.
+   Same shape as .tax-warnings above (this card's advisory treatment), toned with --warn
+   because it is asking for something rather than merely noting it. */
+.tax-brackets-missing {
+  margin-top: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.tax-brackets-missing p {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tax-brackets-missing p:last-child {
+  margin-bottom: 0;
+}
+
+.tax-brackets-missing-list {
+  color: var(--text);
+}

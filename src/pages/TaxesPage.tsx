@@ -603,7 +603,11 @@ export default function TaxesPage() {
               which a year switch does not move — remounting it would spend a request to
               redraw the same chart. Its per-year half is a prop, so it follows the year
               anyway. */}
-          <SummaryPanel summary={detail.summary} refreshKey={trendRefresh} />
+          <SummaryPanel
+            summary={detail.summary}
+            filingStatus={filingStatus}
+            refreshKey={trendRefresh}
+          />
           {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
               be stored and summarizable, and this card still cannot be drawn for it) — asked
               here rather than spending a request on the refusal. Keyed by year like the card

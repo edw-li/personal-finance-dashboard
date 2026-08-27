@@ -226,6 +226,23 @@ function summaryFor(year: number): TaxSummaryOut {
   }
 }
 
+// The engine's REFUSAL payload, exactly as the router sends it: the year, its status, the
+// tables it is waiting for, and NO numbers at all — every section is null on the wire
+// (backend _missing_summary_out). TaxSummaryOut types the sections non-nullable so the
+// pinned golden fixtures in taxChartOptions.test.ts / overviewChartOptions.test.ts keep
+// compiling, so this fixture states the real shape through ONE deliberate cast — which is
+// what makes the panel's guard below a real test rather than a fixture-shaped one.
+function missingSummaryFor(year: number, missing: string[]): TaxSummaryOut {
+  return {
+    year,
+    brackets_missing_for_status: missing,
+    warnings: [
+      `${year} is filed as married_joint and has no married_joint bracket table for: ` +
+        missing.join(', '),
+    ],
+  } as unknown as TaxSummaryOut
+}
+
 // The withholding card's feed — the panel has a file of its own (WithholdingPanel.test.tsx),
 // so this is the minimum that renders, with figures deliberately unlike every other fixture's
 // so a tile of it can never be mistaken for one of the summary panel's.
@@ -1326,5 +1343,38 @@ describe('filing status (2026-08-26 design §6)', () => {
     // page's key and throw away every other jurisdiction's half-edited rows with it.
     expect(screen.getByText('No brackets for State.')).toBeTruthy()
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
+  })
+
+  it('replaces the waterfall with a way out when the status has no tables', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
+    vi.mocked(fetchTaxSummary).mockResolvedValue(
+      missingSummaryFor(2024, ['federal', 'state', 'capital_gains']),
+    )
+    renderPage()
+
+    expect(
+      await screen.findByText('No Married filing jointly bracket tables for 2024'),
+    ).toBeTruthy()
+    // The jurisdictions are named with the SAME labels the editor heads its tables with.
+    expect(screen.getByText('Federal, State, Capital gains')).toBeTruthy()
+    // The waterfall is what goes — and the trend feed is empty in this fixture, so no chart
+    // is left on the page at all.
+    await waitFor(() => expect(screen.queryAllByTestId('echart')).toHaveLength(0))
+    // The tiles stay, reading em-dashes: the engine sent no figures, and inventing zeros
+    // would be exactly the confidently-wrong answer it refused to compute.
+    expect(screen.getByText('Total tax')).toBeTruthy()
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('draws the waterfall as usual when the flag list came back empty', async () => {
+    const complete = summaryFor(2024)
+    complete.brackets_missing_for_status = []
+    vi.mocked(fetchTaxSummary).mockResolvedValue(complete)
+    renderPage()
+
+    // An empty list is a COMPLETE year, not a missing one. (The heading's &apos; entity is
+    // an apostrophe in the DOM, so the pin is written with a plain one.)
+    expect(await screen.findByText("Where 2024's gross income went")).toBeTruthy()
+    expect(screen.queryByText(/bracket tables for 2024/)).toBeNull()
   })
 })
