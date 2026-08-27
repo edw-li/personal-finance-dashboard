@@ -189,7 +189,8 @@ export default function WithholdingPanel({ year }: { year: number }) {
               </dl>
               <p className="drill-hint">
                 Your side is simulated from paycheck profiles; your partner&rsquo;s is entered.
-                Edit all three in the inputs form below.
+                Edit all three in the inputs form below. Partner amounts are already counted
+                once in each total above — don&rsquo;t add them again.
               </p>
             </div>
           )}
@@ -200,7 +201,7 @@ export default function WithholdingPanel({ year }: { year: number }) {
             <p className="hint withholding-trap">
               {`Additional Medicare gap ≈${formatCurrency(
                 withholding.additional_medicare_gap,
-              )}: each employer withholds the 0.9% surtax only above $200,000 of its own wages, but a joint return owes it on combined wages above a lower threshold — so two salaries that each fall short still leave this much unwithheld.`}
+              )}: each employer withholds the 0.9% surtax only above $200,000 of its own wages, but this return owes it on its combined wages above a lower threshold — wages that stay under the per-employer line still leave this much unwithheld.`}
               <InfoHint text="Form 8959. Close it with a W-4 line 4(c) extra-withholding amount or a quarterly estimated payment." />
             </p>
           )}
