@@ -92,3 +92,81 @@ async def test_tax_input_value_keeps_four_decimal_places(db):
     await db.commit()
     stored = (await db.execute(select(TaxInput.value))).scalar_one()
     assert stored == Decimal("0.9645")
+
+
+# --- filing status (2026-08-26 spec §4) ---
+
+
+async def test_tax_year_defaults_to_single(db):
+    """History is untouched by the migration: a year written without a status IS single."""
+    db.add(TaxYear(year=2024))
+    await db.commit()
+    assert (await db.get(TaxYear, 2024)).filing_status == "single"
+
+
+async def test_filing_statuses_constant():
+    from app.tax_keys import FILING_STATUSES, MARRIED_JOINT, MARRIED_SEPARATE, SINGLE
+
+    assert FILING_STATUSES == (SINGLE, MARRIED_JOINT, MARRIED_SEPARATE)
+    assert FILING_STATUSES == ("single", "married_joint", "married_separate")
+
+
+async def test_brackets_are_unique_per_year_jurisdiction_status_and_index(db):
+    """The status dimension sits INSIDE the natural key: one year carries a single-filer
+    table and an MFJ table for the same jurisdiction, and the engine walks exactly one."""
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    db.add(
+        TaxBracket(
+            year=2026,
+            jurisdiction="federal",
+            filing_status="single",
+            bracket_index=1,
+            rate=Decimal("0.10"),
+            threshold=Decimal("0"),
+        )
+    )
+    db.add(
+        TaxBracket(
+            year=2026,
+            jurisdiction="federal",
+            filing_status="married_joint",
+            bracket_index=1,
+            rate=Decimal("0.10"),
+            threshold=Decimal("0"),
+        )
+    )
+    await db.commit()
+    stored = (await db.execute(select(TaxBracket))).scalars().all()
+    assert sorted(row.filing_status for row in stored) == ["married_joint", "single"]
+
+    # ...and the SAME (year, jurisdiction, status, index) still collides.
+    db.add(
+        TaxBracket(
+            year=2026,
+            jurisdiction="federal",
+            filing_status="married_joint",
+            bracket_index=1,
+            rate=Decimal("0.22"),
+            threshold=Decimal("0"),
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+
+async def test_bracket_defaults_to_single(db):
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    db.add(
+        TaxBracket(
+            year=2026,
+            jurisdiction="state",
+            bracket_index=1,
+            rate=Decimal("0.01"),
+            threshold=Decimal("0"),
+        )
+    )
+    await db.commit()
+    assert (await db.execute(select(TaxBracket))).scalar_one().filing_status == "single"

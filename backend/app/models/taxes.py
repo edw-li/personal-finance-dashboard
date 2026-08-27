@@ -4,6 +4,7 @@ from sqlalchemy import ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.tax_keys import SINGLE
 
 
 class TaxYear(Base):
@@ -13,15 +14,23 @@ class TaxYear(Base):
     # silently insert year=1 instead of erroring. This is a natural key, not a surrogate.
     year: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     notes: Mapped[str | None] = mapped_column(Text)
+    # One of tax_keys.FILING_STATUSES. server_default AS WELL AS default (the
+    # dividend_payments.source precedent): the migration lands every existing row on
+    # 'single' without a data pass, and any raw-SQL insert lands there too.
+    filing_status: Mapped[str] = mapped_column(String(20), default=SINGLE, server_default=SINGLE)
 
 
 class TaxBracket(Base):
     __tablename__ = "tax_brackets"
-    __table_args__ = (UniqueConstraint("year", "jurisdiction", "bracket_index"),)
+    # The status dimension sits INSIDE the natural key: one year carries a single-filer
+    # table and an MFJ table for the same jurisdiction, and `_engine_tables` selects
+    # exactly one of them for the engine.
+    __table_args__ = (UniqueConstraint("year", "jurisdiction", "filing_status", "bracket_index"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     year: Mapped[int] = mapped_column(ForeignKey("tax_years.year", ondelete="CASCADE"))
     jurisdiction: Mapped[str] = mapped_column(String(20))  # one of tax_keys.JURISDICTIONS
+    filing_status: Mapped[str] = mapped_column(String(20), default=SINGLE, server_default=SINGLE)
     bracket_index: Mapped[int] = mapped_column()
     rate: Mapped[Decimal] = mapped_column(Numeric(7, 4))
     threshold: Mapped[Decimal] = mapped_column(Numeric(12, 2))

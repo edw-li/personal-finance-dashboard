@@ -66,3 +66,12 @@ JURISDICTIONS = (
     "disability",
     "capital_gains",
 )
+
+# Filing status (2026-08-26 spec §4). Python-validated like `accounts.group`, and stored
+# as a plain String(20) so a future status (head_of_household) is a one-line change plus
+# data, never a migration. `single` is the default everywhere: every stored year predates
+# the marriage, and the engine's single path must stay byte-identical.
+SINGLE = "single"
+MARRIED_JOINT = "married_joint"
+MARRIED_SEPARATE = "married_separate"
+FILING_STATUSES = (SINGLE, MARRIED_JOINT, MARRIED_SEPARATE)
