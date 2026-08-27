@@ -60,9 +60,11 @@ from app.schemas.taxes import (
     SafeHarborOut,
     SaleDetailOut,
     TaxInputItemOut,
+    TaxInputRowIn,
     TaxInputSectionOut,
     TaxInputsIn,
     TaxInputsOut,
+    TaxPersonOut,
     TaxSummariesOut,
     TaxSummaryOut,
     TaxTotalsOut,
@@ -86,7 +88,7 @@ from app.services.money import (
     quantize_price,
     quantize_shares,
 )
-from app.services.people import load_people
+from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfolio
 from app.services.scheduler import product_today
 from app.services.tax_service import (
@@ -314,31 +316,64 @@ def _breakdown_for(feed: EngineFeed) -> TaxBreakdown:
 
 
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
+    """Every definition, one item per PERSON COLUMN, each with its own suggestions.
+
+    Columns are the people this year's return covers (`_return_people`): one — the
+    primary — for single and MFS, everybody for married-joint, and a single NULL column on
+    a database with no roster, which reproduces today's payload byte for byte. Household
+    keys always render exactly once, with person_id null.
+    """
     definitions = list((await db.execute(select(TaxInputDefinition))).scalars())
-    stored = {
-        row.key: row.value
-        for row in (await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars()
+    filing_status = await _filing_status(db, year)
+    people = _return_people(await load_people(db), filing_status)
+    columns: list[int | None] = [person.id for person in people] or [None]
+
+    rows = list((await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars())
+    household = {row.key: row.value for row in rows if row.key not in PER_PERSON_KEYS}
+    owned: dict[int | None, dict[str, Decimal]] = {column: {} for column in columns}
+    for row in rows:
+        if row.key not in PER_PERSON_KEYS:
+            continue
+        column = _owner_column(row.person_id, columns)
+        if column is not OFF_RETURN:
+            owned[column][row.key] = row.value
+
+    # One suggestion map per column: the derived-W2 chain is one PERSON's, and the
+    # household references it also reads are shared, so a household key's suggestion is
+    # the same in every column (which is why it can render once, from the first).
+    suggestions = {
+        column: derive_suggestions(year, household | values, filing_status)
+        for column, values in owned.items()
     }
-    suggestions = derive_suggestions(year, stored)
     by_section: dict[str, list[TaxInputItemOut]] = {}
     for definition in sorted(definitions, key=lambda d: (d.sort_order, d.key)):
-        by_section.setdefault(definition.section, []).append(
-            TaxInputItemOut(
-                key=definition.key,
-                label=definition.label,
-                sort_order=definition.sort_order,
-                is_derived=definition.is_derived,
-                value=stored.get(definition.key),
-                # Presence here — not is_derived — is what the UI shows a chip for: the
-                # sheet computes capital_loss_deductions although it seeds as a plain input.
-                suggested=suggestions.get(definition.key),
+        item_columns = columns if definition.is_per_person else [None]
+        for column in item_columns:
+            source = owned[column] if definition.is_per_person else household
+            by_section.setdefault(definition.section, []).append(
+                TaxInputItemOut(
+                    key=definition.key,
+                    label=definition.label,
+                    sort_order=definition.sort_order,
+                    is_derived=definition.is_derived,
+                    is_per_person=definition.is_per_person,
+                    person_id=column if definition.is_per_person else None,
+                    value=source.get(definition.key),
+                    # Presence here — not is_derived — is what the UI shows a chip for: the
+                    # sheet computes capital_loss_deductions although it seeds as a plain
+                    # input.
+                    suggested=suggestions[column if definition.is_per_person else columns[0]].get(
+                        definition.key
+                    ),
+                )
             )
-        )
     # tax_keys order first; a section seeded later still renders (appended, name order).
     ordered = [name for name in SECTIONS if name in by_section]
     ordered += sorted(set(by_section) - set(SECTIONS))
     return TaxInputsOut(
         year=year,
+        filing_status=filing_status,
+        people=[TaxPersonOut(id=person.id, name=person.name) for person in people],
         sections=[TaxInputSectionOut(section=name, items=by_section[name]) for name in ordered],
     )
 
@@ -477,27 +512,72 @@ def _validated_input_value(key: str, value: Decimal | None) -> Decimal | None:
 async def put_inputs(
     year: YearPath, body: TaxInputsIn, db: AsyncSession = Depends(get_db)
 ) -> TaxInputsOut:
-    # Re-import interplay (Plan 2 forward note): the taxes import is sheet-wins within the
-    # years it covers, so edits made here to an imported year are clobbered by the next
-    # re-import. Cutover order is documented, not guarded.
-    await _require_known_input_keys(db, body.values)
-    # Quantize EVERY value before the first write: a 422 raised halfway through a bulk
-    # upsert would otherwise leave the year half-edited (portfolio PATCH posture).
-    quantized = {key: _validated_input_value(key, value) for key, value in body.values.items()}
+    """Bulk upsert of the (key, person) slots in the body; a null value unsets one slot.
+
+    Re-import interplay (Plan 2 forward note): the taxes import is sheet-wins within the
+    years it covers, so edits made here to an imported year are clobbered by the next
+    re-import — for the PRIMARY person's sheet-tracked keys only, since the importer's
+    sweeps are scoped to the sheet's own vocabulary and to that one person.
+    """
+    submitted = [TaxInputRowIn(key=key, value=value) for key, value in body.values.items()]
+    submitted += list(body.rows)
+    await _require_known_input_keys(db, [row.key for row in submitted])
+
+    definitions = {
+        definition.key: definition
+        for definition in (await db.execute(select(TaxInputDefinition))).scalars()
+    }
+    people = await load_people(db)
+    known_people = {person.id for person in people}
+    primary = primary_person(people)
+
+    # Resolve and quantize EVERY row before the first write: a 422 raised halfway through
+    # a bulk upsert would otherwise leave the year half-edited (portfolio PATCH posture).
+    resolved: dict[tuple[str, int | None], Decimal | None] = {}
+    for row in submitted:
+        definition = definitions[row.key]
+        if not definition.is_per_person:
+            if row.person_id is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{row.key} is a household input — person_id must be null",
+                )
+            owner: int | None = None
+        elif row.person_id is None:
+            # Today's clients send no person at all; a per-person line with no owner is
+            # the primary's, which is precisely what every stored row was before the
+            # migration. On a roster-less database that is still NULL.
+            owner = primary.id if primary is not None else None
+        elif row.person_id not in known_people:
+            raise HTTPException(status_code=422, detail=f"unknown person {row.person_id}")
+        else:
+            owner = row.person_id
+        slot = (row.key, owner)
+        if slot in resolved:
+            raise HTTPException(
+                status_code=422, detail=f"{row.key} appears twice for the same person"
+            )
+        resolved[slot] = _validated_input_value(row.key, row.value)
 
     await _ensure_year(db, year)
     existing = {
-        row.key: row
+        (row.key, row.person_id): row
         for row in (await db.execute(select(TaxInput).where(TaxInput.year == year))).scalars()
     }
-    for key, value in quantized.items():
-        row = existing.get(key)
+    for (key, owner), value in resolved.items():
+        row = existing.get((key, owner))
+        if row is None and owner is not None:
+            # The pre-household spelling of the same slot: a NULL row on a per-person key,
+            # written before the roster existed. ADOPT it rather than inserting a second
+            # row the (year, key, person) unique key would rightly reject.
+            row = existing.get((key, None))
         if value is None:
             if row is not None:
                 await db.delete(row)  # null means "unset this line", not "store 0"
         elif row is None:
-            db.add(TaxInput(year=year, key=key, value=value))
+            db.add(TaxInput(year=year, key=key, person_id=owner, value=value))
         else:
+            row.person_id = owner
             row.value = value
     await db.commit()
     return await _inputs_payload(db, year)

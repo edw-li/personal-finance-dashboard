@@ -1184,3 +1184,194 @@ def test_filing_status_literal_matches_the_constant():
     from app.tax_keys import FILING_STATUSES
 
     assert get_args(FilingStatus) == FILING_STATUSES
+
+
+# --- per-person inputs ---
+
+
+async def test_inputs_payload_shape_is_unchanged_without_a_roster(auth_client, definitions):
+    """No people seeded (the `create_all` default): one column, person_id null, exactly
+    the payload shipped today plus the additive keys."""
+    await put_inputs(auth_client, 2024, {"annual_salary": "150000"})
+
+    body = (await auth_client.get(f"{YEARS}/2024/inputs")).json()
+    assert body["filing_status"] == "single"
+    assert body["people"] == []
+    items = items_by_key(body)
+    assert len(items) == len(TAX_INPUT_DEFINITIONS) == 45
+    assert items["annual_salary"]["value"] == "150000.0000"
+    assert items["annual_salary"]["person_id"] is None
+    assert items["annual_salary"]["is_per_person"] is True
+    assert items["interest_total"]["is_per_person"] is False
+    assert items["w2_fed_withholding"]["is_per_person"] is True
+    assert items["w2_fed_withholding"]["suggested"] is None  # tracker-only, never derived
+
+
+async def test_inputs_render_one_column_per_person_on_a_joint_year(
+    auth_client, db, household, definitions
+):
+    me, partner = household
+    await put_inputs(auth_client, 2026, {"annual_salary": "150000"})
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    assert body["people"] == [
+        {"id": me.id, "name": "Me"},
+        {"id": partner.id, "name": "Partner"},
+    ]
+    salary = [
+        item
+        for section in body["sections"]
+        for item in section["items"]
+        if item["key"] == "annual_salary"
+    ]
+    assert [item["person_id"] for item in salary] == [me.id, partner.id]
+    # The legacy `values` write landed on the PRIMARY person.
+    assert [item["value"] for item in salary] == ["150000.0000", None]
+    # Household keys stay single-column.
+    interest = [
+        item
+        for section in body["sections"]
+        for item in section["items"]
+        if item["key"] == "interest_total"
+    ]
+    assert [item["person_id"] for item in interest] == [None]
+
+
+async def test_person_qualified_write_round_trip(auth_client, db, household, definitions):
+    me, partner = household
+    resp = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "values": {"interest_total": "2000"},
+            "rows": [
+                {"key": "annual_salary", "person_id": me.id, "value": "150000"},
+                {"key": "annual_salary", "person_id": partner.id, "value": "90000"},
+                {"key": "w2_fed_withholding", "person_id": partner.id, "value": "12000"},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    by_slot = {
+        (item["key"], item["person_id"]): item["value"]
+        for section in body["sections"]
+        for item in section["items"]
+    }
+    assert by_slot[("annual_salary", me.id)] == "150000.0000"
+    assert by_slot[("annual_salary", partner.id)] == "90000.0000"
+    assert by_slot[("w2_fed_withholding", partner.id)] == "12000.0000"
+    assert by_slot[("interest_total", None)] == "2000.0000"
+    # The PUT body IS the GET shape.
+    assert (await auth_client.get(f"{YEARS}/2026/inputs")).json() == body
+
+    # A null clears one PERSON's row and leaves the other alone.
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={"rows": [{"key": "annual_salary", "person_id": partner.id, "value": None}]},
+    )
+    after = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    remaining = {
+        (item["key"], item["person_id"]): item["value"]
+        for section in after["sections"]
+        for item in section["items"]
+    }
+    assert remaining[("annual_salary", partner.id)] is None
+    assert remaining[("annual_salary", me.id)] == "150000.0000"
+
+
+async def test_suggestions_are_computed_per_column(auth_client, db, household, definitions):
+    """The derived-W2 chain is one PERSON's: the partner's pay_periods x gross_paycheck
+    must not be built from the primary's salary."""
+    me, partner = household
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "pay_periods", "person_id": me.id, "value": "24"},
+                {"key": "gross_paycheck", "person_id": me.id, "value": "6000"},
+                {"key": "pay_periods", "person_id": partner.id, "value": "24"},
+                {"key": "gross_paycheck", "person_id": partner.id, "value": "4000"},
+                {"key": "itemized_salt", "value": "9000"},
+            ]
+        },
+    )
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    suggested = {
+        (item["key"], item["person_id"]): item["suggested"]
+        for section in body["sections"]
+        for item in section["items"]
+    }
+    assert suggested[("latest_w2_income", me.id)] == "144000.0000"
+    assert suggested[("latest_w2_income", partner.id)] == "96000.0000"
+    # A household suggestion is column-invariant, so it renders once.
+    assert suggested[("itemized_deduction", None)] == "9000.0000"
+
+
+async def test_put_inputs_rejects_person_on_a_household_key(auth_client, household, definitions):
+    me, _partner = household
+    resp = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={"rows": [{"key": "interest_total", "person_id": me.id, "value": "5"}]},
+    )
+    assert resp.status_code == 422
+    assert "interest_total" in resp.json()["detail"]
+    assert (await auth_client.get(YEARS)).json() == []  # not even the year row
+
+
+async def test_put_inputs_rejects_unknown_person_and_duplicate_slots(
+    auth_client, household, definitions
+):
+    me, _partner = household
+    unknown = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={"rows": [{"key": "annual_salary", "person_id": 9999, "value": "1"}]},
+    )
+    assert unknown.status_code == 422
+    assert "9999" in unknown.json()["detail"]
+
+    duplicate = await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "values": {"annual_salary": "1"},
+            "rows": [{"key": "annual_salary", "person_id": me.id, "value": "2"}],
+        },
+    )
+    # `values` resolves to the primary person, so this IS the same slot twice.
+    assert duplicate.status_code == 422
+    assert "annual_salary" in duplicate.json()["detail"]
+    assert (await auth_client.get(YEARS)).json() == []
+
+
+async def test_a_legacy_null_row_is_adopted_not_duplicated(auth_client, db, household, definitions):
+    """A row written before the roster existed carries person_id NULL on a per-person key.
+    The next write must move it, never insert a second row the unique key would reject."""
+    from app.models import TaxInput as TaxInputModel
+
+    me, _partner = household
+    db.add(TaxYear(year=2026))
+    await db.flush()
+    db.add(TaxInputModel(year=2026, key="annual_salary", value=Decimal("100000.0000")))
+    await db.commit()
+
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={"rows": [{"key": "annual_salary", "person_id": me.id, "value": "150000"}]},
+    )
+    stored = (
+        (
+            await db.execute(
+                select(TaxInputModel).where(
+                    TaxInputModel.year == 2026, TaxInputModel.key == "annual_salary"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(stored) == 1
+    assert (stored[0].person_id, stored[0].value) == (me.id, Decimal("150000.0000"))

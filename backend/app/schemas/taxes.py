@@ -34,14 +34,26 @@ class TaxYearUpdate(BaseModel):
     filing_status: FilingStatus
 
 
+class TaxPersonOut(BaseModel):
+    """The person COLUMNS this year's return has, in render order (primary first)."""
+
+    id: int
+    name: str
+
+
 class TaxInputItemOut(BaseModel):
     key: str
     label: str
     sort_order: int
     is_derived: bool
+    # True for tax_keys.PER_PERSON_KEYS: this line renders one item per person column.
+    is_per_person: bool = False
+    # The column this item belongs to. Null for household keys — and also for per-person
+    # keys on a database with no people roster, which is the pre-household spelling.
+    person_id: int | None = None
     value: Decimal | None
-    # The sheet's gray-cell formula for this key, when it has one. Advisory: the UI offers
-    # a chip, nothing is ever applied server-side.
+    # The sheet's gray-cell formula for this key, when it has one, computed from THIS
+    # column's own values. Advisory: the UI offers a chip, nothing is applied server-side.
     suggested: Decimal | None
 
 
@@ -52,13 +64,27 @@ class TaxInputSectionOut(BaseModel):
 
 class TaxInputsOut(BaseModel):
     year: int
+    filing_status: str = SINGLE
+    people: list[TaxPersonOut] = Field(default_factory=list)
     sections: list[TaxInputSectionOut]
+
+
+class TaxInputRowIn(BaseModel):
+    key: str
+    # Null on a per-person key means "the primary person" — which is what every client
+    # that predates this batch says by saying nothing at all.
+    person_id: int | None = None
+    value: Decimal | None
 
 
 class TaxInputsIn(BaseModel):
     # Free-form keys, validated against the definition table by the router (which is the
     # only place that knows which keys are seeded); null deletes the stored row.
-    values: dict[str, Decimal | None]
+    # `values` is the household/primary shorthand every shipped client sends; `rows` is
+    # its person-qualified form. Both are merged, and the same (key, person) twice is a
+    # 422 rather than a last-write-wins surprise.
+    values: dict[str, Decimal | None] = Field(default_factory=dict)
+    rows: list[TaxInputRowIn] = Field(default_factory=list)
 
 
 class BracketOut(BaseModel):
