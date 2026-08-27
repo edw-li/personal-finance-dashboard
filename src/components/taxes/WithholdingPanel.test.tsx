@@ -387,7 +387,7 @@ describe('WithholdingPanel', () => {
 
     expect(
       await screen.findByText(
-        /Additional Medicare gap ≈\$900\.00: each employer withholds the 0\.9% surtax only above \$200,000 of its own wages, but a joint return owes it on combined wages above a lower threshold — so two salaries that each fall short still leave this much unwithheld\./,
+        /Additional Medicare gap ≈\$900\.00: each employer withholds the 0\.9% surtax only above \$200,000 of its own wages, but this return owes it on its combined wages above a lower threshold — wages that stay under the per-employer line still leave this much unwithheld\./,
       ),
     ).toBeTruthy()
   })
