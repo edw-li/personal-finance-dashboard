@@ -1,5 +1,7 @@
 import { api } from './client'
 import type {
+  FilingStatus,
+  TaxBracketsCloneOut,
   TaxBracketsOut,
   TaxBracketsUpdate,
   TaxInputsOut,
@@ -7,6 +9,7 @@ import type {
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
+  TaxYearUpdate,
   WithholdingOut,
 } from '../types/api'
 
@@ -27,8 +30,48 @@ export const JURISDICTIONS = [
 
 export type Jurisdiction = (typeof JURISDICTIONS)[number]
 
+// The human name of a jurisdiction, kept HERE rather than in the editor that used to own it:
+// the summary panel's missing-tables call-to-action names the same tables, and two copies
+// could drift into telling the user to open a card that is headed something else.
+export const JURISDICTION_LABELS: Record<string, string> = {
+  federal: 'Federal',
+  state: 'State',
+  medicare: 'Medicare',
+  social_security: 'Social Security',
+  disability: 'Disability',
+  capital_gains: 'Capital gains',
+}
+
+// An importer-written jurisdiction has no label of ours: it comes back verbatim rather than
+// being humanized into something the database does not call it.
+export function jurisdictionLabel(name: string): string {
+  return JURISDICTION_LABELS[name] ?? name
+}
+
+// Tab and selector order. 'single' leads because it is the column's NOT NULL default, the
+// only status the importer writes, and the source every clone copies FROM.
+export const FILING_STATUSES = ['single', 'married_joint', 'married_separate'] as const
+
+export const FILING_STATUS_LABELS: Record<FilingStatus, string> = {
+  single: 'Single',
+  married_joint: 'Married filing jointly',
+  married_separate: 'Married filing separately',
+}
+
 export function fetchTaxYears(): Promise<TaxYearOut[]> {
   return api<TaxYearOut[]>('/taxes/years')
+}
+
+// The year row's one mutable field. Everything the engine reads moves with it — bracket
+// tables are stored per (jurisdiction, status), the inputs grow a second person column, and
+// the summary is computed against the status-selected tables — so the caller reloads all
+// three of the year's payloads once this resolves. PATCH, and no auto-create: a status is a
+// statement ABOUT a year that must already exist (404 otherwise).
+export function patchTaxYear(year: number, body: TaxYearUpdate): Promise<TaxYearOut> {
+  return api<TaxYearOut>(`/taxes/years/${year}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
 }
 
 export function fetchTaxInputs(year: number): Promise<TaxInputsOut> {
@@ -45,8 +88,15 @@ export function putTaxInputs(year: number, body: TaxInputsUpdate): Promise<TaxIn
   })
 }
 
-export function fetchTaxBrackets(year: number): Promise<TaxBracketsOut> {
-  return api<TaxBracketsOut>(`/taxes/years/${year}/brackets`)
+// The tables of ONE filing status. The status is REQUIRED because the server's own default
+// is 'single' rather than the year's status (get_brackets: "the answer must depend on the
+// request, not on a setting the user is mid-way through changing") — so a caller that left
+// it off would read a single filer's tables under a married year and never be told.
+export function fetchTaxBrackets(
+  year: number,
+  filingStatus: FilingStatus,
+): Promise<TaxBracketsOut> {
+  return api<TaxBracketsOut>(`/taxes/years/${year}/brackets?filing_status=${filingStatus}`)
 }
 
 // Full replace per jurisdiction present in the body; the server renumbers bracket_index.
@@ -57,12 +107,22 @@ export function putTaxBrackets(year: number, body: TaxBracketsUpdate): Promise<T
   })
 }
 
-// Seeds an EMPTY year from an existing one: 404 when the source has no brackets, 409
-// when the target already has some (clear it with an empty PUT first — never a merge).
-export function cloneBrackets(year: number, sourceYear: number): Promise<TaxBracketsOut> {
-  return api<TaxBracketsOut>(`/taxes/years/${year}/clone-brackets-from/${sourceYear}`, {
-    method: 'POST',
-  })
+// Seeds an EMPTY (year, status) from an existing year's SINGLE tables: 404 when the source
+// has none, 409 when the target already has some (clear it with an empty PUT first — never
+// a merge). Two callers: the new-year form, which names no status and gets the server's
+// 'single' default — the query is omitted entirely so that wire is byte-identical to what it
+// was before statuses existed — and the brackets editor's empty-tab button, which seeds a
+// married status from the SAME year's single tables (source year === target year).
+export function cloneBrackets(
+  year: number,
+  sourceYear: number,
+  targetStatus?: FilingStatus,
+): Promise<TaxBracketsCloneOut> {
+  const query = targetStatus === undefined ? '' : `?target_status=${targetStatus}`
+  return api<TaxBracketsCloneOut>(
+    `/taxes/years/${year}/clone-brackets-from/${sourceYear}${query}`,
+    { method: 'POST' },
+  )
 }
 
 export function fetchTaxSummary(year: number): Promise<TaxSummaryOut> {

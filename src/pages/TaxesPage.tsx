@@ -16,7 +16,13 @@ import InputsForm from '../components/taxes/InputsForm'
 import SummaryPanel from '../components/taxes/SummaryPanel'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
-import type { TaxBracketsOut, TaxInputsOut, TaxSummaryOut, TaxYearOut } from '../types/api'
+import type {
+  FilingStatus,
+  TaxBracketsOut,
+  TaxInputsOut,
+  TaxSummaryOut,
+  TaxYearOut,
+} from '../types/api'
 import '../components/panels.css'
 import './TaxesPage.css'
 
@@ -87,6 +93,11 @@ export default function TaxesPage() {
   const currentYearRef = useRef<number | null>(null)
 
   const selectedYear = selection?.year ?? null
+  // The selected year's ROW, so the selector reads the same list the chips do — one source
+  // for "how is this year filed". A year the list has not caught up with (the optimistic
+  // chip a create just pushed) reads as 'single', which is the column's own default.
+  const filingStatus: FilingStatus =
+    years.find((y) => y.year === selectedYear)?.filing_status ?? 'single'
   // Only while the editors are mounted: a failed load unmounts them, and their last
   // reported flag must not outlive them into a spurious confirm.
   const dirty = detail !== null && (inputsDirty || bracketsDirty)
@@ -136,12 +147,20 @@ export default function TaxesPage() {
   // The chain lives inline rather than in a useCallback: this component owns eleven
   // setters, and manual memoization React Compiler cannot preserve drops the whole
   // component out of compilation (MonthlyUpdatePage's note).
+  // `filingStatus` is a second reload key, not just a read: the brackets GET names a status
+  // (its server-side default is 'single', NOT the year's own), so the tables on screen would
+  // otherwise be single's under a married year. Both it and `selection` move in ONE batched
+  // render on a status flip, so the pair re-runs this effect exactly once.
   useEffect(() => {
     if (selection === null) return
     const year = selection.year
     currentYearRef.current = year
     const seq = ++seqRef.current
-    Promise.all([fetchTaxInputs(year), fetchTaxBrackets(year), fetchTaxSummary(year)])
+    Promise.all([
+      fetchTaxInputs(year),
+      fetchTaxBrackets(year, filingStatus),
+      fetchTaxSummary(year),
+    ])
       .then(([inputs, brackets, summary]) => {
         if (seq !== seqRef.current) return
         setDetail({ inputs, brackets, summary })
@@ -158,7 +177,7 @@ export default function TaxesPage() {
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
       })
-  }, [selection])
+  }, [selection, filingStatus])
 
   // The "we are fetching" flip lives in the handlers that cause a fetch, never in the
   // effect above.

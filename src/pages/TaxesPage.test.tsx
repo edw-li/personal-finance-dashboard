@@ -3,6 +3,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
+  TaxBracketsCloneOut,
   TaxBracketsOut,
   TaxInputsOut,
   TaxSummariesOut,
@@ -151,6 +152,13 @@ function bracketsFor(year: number): TaxBracketsOut {
   }
 }
 
+// The clone answers with review flags too — the brackets editor reads them. This page only
+// needs the year's tables back, so the flags are empty here; BracketsEditor.test.tsx is
+// where they carry meaning.
+function cloneFor(year: number): TaxBracketsCloneOut {
+  return { ...bracketsFor(year), review_flags: { verbatim_ok: [], review: [] } }
+}
+
 function summaryFor(year: number): TaxSummaryOut {
   const income = { agi: '0.00', taxable_income: '0.00', tax: '0.00', effective_rate: null }
   const wage = { w2_income: '0.00', taxable_wages: '0.00', tax: '0.00', effective_rate: null }
@@ -255,7 +263,7 @@ beforeEach(() => {
   // year's numbers; the tests that are ABOUT the trend fill it in.
   vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [] })
   vi.mocked(fetchWithholding).mockImplementation(async (year: number) => withholdingFor(year))
-  vi.mocked(cloneBrackets).mockImplementation(async (year: number) => bracketsFor(year))
+  vi.mocked(cloneBrackets).mockImplementation(async (year: number) => cloneFor(year))
   vi.mocked(putTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
   vi.mocked(putTaxBrackets).mockImplementation(async (year: number) => bracketsFor(year))
   vi.mocked(deleteTaxYear).mockResolvedValue(undefined)
@@ -275,7 +283,9 @@ describe('TaxesPage', () => {
     // Latest year wins on arrival — the sheet's rightmost column.
     expect((screen.getByRole('button', { name: '2024' }) as HTMLButtonElement).getAttribute('aria-pressed')).toBe('true')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
-    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024)
+    // The status is ALWAYS named: the brackets GET defaults to 'single' server-side rather
+    // than to the year's own status, so an omitted argument would be a silent wrong answer.
+    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024, 'single')
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledWith(2024)
     // The summary panel's tiles render SERVER numbers — nothing is re-derived here.
     expect(await screen.findByText('$123,456.78')).toBeTruthy()
@@ -288,7 +298,7 @@ describe('TaxesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
-    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023)
+    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023, 'single')
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledWith(2023)
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(2)
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
@@ -512,7 +522,7 @@ describe('TaxesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
-    await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023))
+    await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023, 'single'))
     await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
 
     // 2024's echo, landing on 2023's page.
