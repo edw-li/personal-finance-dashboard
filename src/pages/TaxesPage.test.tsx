@@ -1,13 +1,15 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
+  TaxBracketsCloneOut,
   TaxBracketsOut,
   TaxInputsOut,
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
+  TaxYearUpdate,
   WithholdingOut,
 } from '../types/api'
 import TaxesPage from './TaxesPage'
@@ -25,6 +27,7 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   fetchWithholding: vi.fn(),
   putTaxInputs: vi.fn(),
   putTaxBrackets: vi.fn(),
+  patchTaxYear: vi.fn(),
   cloneBrackets: vi.fn(),
   deleteTaxYear: vi.fn(),
 }))
@@ -87,6 +90,7 @@ import {
   fetchTaxSummary,
   fetchTaxYears,
   fetchWithholding,
+  patchTaxYear,
   putTaxBrackets,
   putTaxInputs,
 } from '../api/taxes'
@@ -103,13 +107,23 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-const year2023: TaxYearOut = { year: 2023, notes: null, input_count: 21, bracket_count: 42 }
-const year2024: TaxYearOut = { year: 2024, notes: null, input_count: 21, bracket_count: 42 }
-const year2025: TaxYearOut = { year: 2025, notes: null, input_count: 0, bracket_count: 42 }
+const year2023: TaxYearOut = {
+  year: 2023, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single',
+}
+const year2024: TaxYearOut = {
+  year: 2024, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single',
+}
+const year2025: TaxYearOut = {
+  year: 2025, notes: null, input_count: 0, bracket_count: 42, filing_status: 'single',
+}
 
 function inputsFor(year: number): TaxInputsOut {
   return {
     year,
+    // A single-status year: ONE person column, so the payload is shaped exactly as it was
+    // before filing statuses existed (the server folds the primary's rows into it).
+    filing_status: 'single',
+    people: [{ id: 1, name: 'Alex' }],
     sections: [
       {
         section: 'ordinary_income',
@@ -117,6 +131,7 @@ function inputsFor(year: number): TaxInputsOut {
           {
             key: 'annual_salary', label: 'Annual Salary', sort_order: 10,
             is_derived: false, value: '200000.0000', suggested: null,
+            is_per_person: true, person_id: 1,
           },
         ],
       },
@@ -127,6 +142,8 @@ function inputsFor(year: number): TaxInputsOut {
 function bracketsFor(year: number): TaxBracketsOut {
   return {
     year,
+    filing_status: 'single',
+    statuses_with_rows: ['single'],
     jurisdictions: {
       federal: [{ bracket_index: 1, rate: '0.1000', threshold: '0.00' }],
       state: [],
@@ -136,6 +153,53 @@ function bracketsFor(year: number): TaxBracketsOut {
       capital_gains: [],
     },
   }
+}
+
+// The same year as the API answers it once it is filed jointly: the per-person key comes back
+// once per person COLUMN, each stamped with its own person_id and value. The roster rides on
+// the payload, so the page never asks for it separately.
+function marriedInputsFor(year: number): TaxInputsOut {
+  const single = inputsFor(year)
+  const salary = single.sections[0].items[0]
+  return {
+    ...single,
+    filing_status: 'married_joint',
+    people: [
+      { id: 1, name: 'Alex' },
+      { id: 4, name: 'Sam' },
+    ],
+    sections: [
+      {
+        section: 'ordinary_income',
+        items: [
+          { ...salary, person_id: 1 },
+          { ...salary, person_id: 4, value: '90000.0000' },
+        ],
+      },
+    ],
+  }
+}
+
+// A married year on a database with fewer than two people: ONE null column, which is the
+// pre-household payload exactly.
+function marriedNoRosterFor(year: number): TaxInputsOut {
+  const single = inputsFor(year)
+  return {
+    ...single,
+    filing_status: 'married_joint',
+    people: [],
+    sections: single.sections.map((section) => ({
+      ...section,
+      items: section.items.map((item) => ({ ...item, person_id: null })),
+    })),
+  }
+}
+
+// The clone answers with review flags too — the brackets editor reads them. This page only
+// needs the year's tables back, so the flags are empty here; BracketsEditor.test.tsx is
+// where they carry meaning.
+function cloneFor(year: number): TaxBracketsCloneOut {
+  return { ...bracketsFor(year), review_flags: { verbatim_ok: [], review: [] } }
 }
 
 function summaryFor(year: number): TaxSummaryOut {
@@ -160,6 +224,23 @@ function summaryFor(year: number): TaxSummaryOut {
     },
     warnings: [],
   }
+}
+
+// The engine's REFUSAL payload, exactly as the router sends it: the year, its status, the
+// tables it is waiting for, and NO numbers at all — every section is null on the wire
+// (backend _missing_summary_out). TaxSummaryOut types the sections non-nullable so the
+// pinned golden fixtures in taxChartOptions.test.ts / overviewChartOptions.test.ts keep
+// compiling, so this fixture states the real shape through ONE deliberate cast — which is
+// what makes the panel's guard below a real test rather than a fixture-shaped one.
+function missingSummaryFor(year: number, missing: string[]): TaxSummaryOut {
+  return {
+    year,
+    brackets_missing_for_status: missing,
+    warnings: [
+      `${year} is filed as married_joint and has no married_joint bracket table for: ` +
+        missing.join(', '),
+    ],
+  } as unknown as TaxSummaryOut
 }
 
 // The withholding card's feed — the panel has a file of its own (WithholdingPanel.test.tsx),
@@ -242,10 +323,15 @@ beforeEach(() => {
   // year's numbers; the tests that are ABOUT the trend fill it in.
   vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [] })
   vi.mocked(fetchWithholding).mockImplementation(async (year: number) => withholdingFor(year))
-  vi.mocked(cloneBrackets).mockImplementation(async (year: number) => bracketsFor(year))
+  vi.mocked(cloneBrackets).mockImplementation(async (year: number) => cloneFor(year))
   vi.mocked(putTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
   vi.mocked(putTaxBrackets).mockImplementation(async (year: number) => bracketsFor(year))
   vi.mocked(deleteTaxYear).mockResolvedValue(undefined)
+  // The echo is authoritative: the selector reads the SERVER's status, never the button
+  // that was pressed.
+  vi.mocked(patchTaxYear).mockImplementation(async (year: number, body: TaxYearUpdate) => ({
+    year, notes: null, input_count: 21, bracket_count: 42, filing_status: body.filing_status,
+  }))
   confirmSpy.mockReturnValue(true)
 })
 
@@ -262,7 +348,9 @@ describe('TaxesPage', () => {
     // Latest year wins on arrival — the sheet's rightmost column.
     expect((screen.getByRole('button', { name: '2024' }) as HTMLButtonElement).getAttribute('aria-pressed')).toBe('true')
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024))
-    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024)
+    // The status is ALWAYS named: the brackets GET defaults to 'single' server-side rather
+    // than to the year's own status, so an omitted argument would be a silent wrong answer.
+    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024, 'single')
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledWith(2024)
     // The summary panel's tiles render SERVER numbers — nothing is re-derived here.
     expect(await screen.findByText('$123,456.78')).toBeTruthy()
@@ -275,7 +363,7 @@ describe('TaxesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
-    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023)
+    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023, 'single')
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledWith(2023)
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(2)
     expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
@@ -499,7 +587,7 @@ describe('TaxesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
-    await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023))
+    await waitFor(() => expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2023, 'single'))
     await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
 
     // 2024's echo, landing on 2023's page.
@@ -558,7 +646,9 @@ describe('TaxesPage', () => {
     const thisYear = new Date().getFullYear()
     vi.mocked(fetchTaxYears)
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ year: thisYear, notes: null, input_count: 0, bracket_count: 0 }])
+      .mockResolvedValueOnce([
+        { year: thisYear, notes: null, input_count: 0, bracket_count: 0, filing_status: 'single' },
+      ])
     renderPage()
 
     expect(await screen.findByText(/no tax years yet/i)).toBeTruthy()
@@ -599,6 +689,7 @@ describe('TaxesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
     await waitFor(() =>
       expect(vi.mocked(putTaxBrackets)).toHaveBeenCalledWith(2024, {
+        filing_status: 'single',
         jurisdictions: { federal: [{ rate: '0.12', threshold: '0' }] },
       }),
     )
@@ -973,7 +1064,7 @@ describe('TaxesPage', () => {
   // nothing at all, and a hard-coded fixture year would rot on a New Year's Day.
 
   const yearRow = (year: number): TaxYearOut => ({
-    year, notes: null, input_count: 21, bracket_count: 42,
+    year, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single',
   })
 
   it('mounts the will-I-owe card on the current year and loads it for that year', async () => {
@@ -1047,5 +1138,276 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
     fireEvent.click(screen.getAllByTestId('echart')[1]) // any click in detail mode returns
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
+  })
+})
+
+describe('filing status (2026-08-26 design §6)', () => {
+  // Scoped to the YEAR card's control: the brackets editor below renders a tab row with the
+  // same three names, and only this one changes how the year is filed.
+  const statusButton = (name: string) =>
+    within(screen.getByRole('group', { name: 'Filing status' })).getByRole('button', {
+      name,
+    }) as HTMLButtonElement
+
+  const CA_CAVEAT =
+    'California is a community-property state; true MFS requires 50/50 community-income ' +
+    'splitting (Form 8958), which this calculator does not model.'
+
+  it('renders the selected year status as a segmented control', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
+    expect(statusButton('Married filing jointly').getAttribute('aria-pressed')).toBe('false')
+    expect(statusButton('Married filing separately').getAttribute('aria-pressed')).toBe('false')
+    // The caveat belongs to MFS alone — a single year must not carry a warning about a
+    // filing status it is not filed under.
+    expect(screen.queryByText(CA_CAVEAT)).toBeNull()
+  })
+
+  it('keeps the control off a page with no year selected', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([])
+    renderPage()
+    await screen.findByText(/no tax years yet/i)
+    expect(screen.queryByRole('button', { name: 'Single' })).toBeNull()
+  })
+
+  it('PATCHes the new status and reloads the year under it', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(statusButton('Married filing jointly'))
+
+    await waitFor(() =>
+      expect(vi.mocked(patchTaxYear)).toHaveBeenCalledWith(2024, {
+        filing_status: 'married_joint',
+      }),
+    )
+    // All THREE payloads move with the status — brackets are stored per (jurisdiction,
+    // status), the inputs grow a person column, the summary is computed against the
+    // status-selected tables — and the year is the one already on screen, so this only
+    // happens because `selection` is replaced by a FRESH object.
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenLastCalledWith(2024)
+    expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
+    // ...and the brackets GET names the NEW status, or it would read single's tables under
+    // a married year.
+    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenLastCalledWith(2024, 'married_joint')
+    // The echo replaced the row, so the control follows without a list reload.
+    await waitFor(() =>
+      expect(statusButton('Married filing jointly').getAttribute('aria-pressed')).toBe('true'),
+    )
+  })
+
+  it('neither asks nor sends when the pressed status is already the year’s', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(statusButton('Single'))
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(vi.mocked(patchTaxYear)).not.toHaveBeenCalled()
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks before a status change that would discard typed work', async () => {
+    confirmSpy.mockReturnValue(false)
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+    fireEvent.change(salary(), { target: { value: '999' } })
+
+    fireEvent.click(statusButton('Married filing jointly'))
+    // The same question the other four reload doors ask — a status flip replaces both
+    // editors' payloads, so unsaved work is gone the moment it starts.
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
+    expect(vi.mocked(patchTaxYear)).not.toHaveBeenCalled()
+    expect(salary().value).toBe('$999.00')
+  })
+
+  it('surfaces a status failure verbatim and leaves the year alone', async () => {
+    vi.mocked(patchTaxYear).mockRejectedValue(
+      new ApiError('filing_status must be one of single, married_joint, married_separate', 422),
+    )
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(statusButton('Married filing separately'))
+    expect(
+      await screen.findByText(
+        'filing_status must be one of single, married_joint, married_separate',
+      ),
+    ).toBeTruthy()
+    // Nothing was reloaded, and the control still reads the row the server has.
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
+    expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('stands the California community-property caveat under MFS only', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([
+      { ...year2024, filing_status: 'married_separate' },
+    ])
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    // Verbatim, and not dismissible: an MFS calculation without Form-8958 community-income
+    // splitting is wrong in California, so the sentence stays wherever the number is.
+    expect(screen.getByText(CA_CAVEAT)).toBeTruthy()
+
+    fireEvent.click(statusButton('Married filing jointly'))
+    await waitFor(() => expect(screen.queryByText(CA_CAVEAT)).toBeNull())
+  })
+
+  it('splits the per-person inputs into named columns on a married year', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
+    renderPage()
+
+    expect(await screen.findByLabelText('Annual Salary — Alex')).toBeTruthy()
+    expect(screen.getByLabelText('Annual Salary — Sam')).toBeTruthy()
+    // One request, not two: the person columns ride on the inputs payload, so the page never
+    // spends a second round trip on a roster the server has already narrowed for it.
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps one column when the year payload carries fewer than two people', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedNoRosterFor(year))
+    renderPage()
+
+    // The honest degrade is today's layout — whose unqualified per-person writes the server
+    // still resolves onto the primary person — and it is not an error.
+    expect(await screen.findByLabelText('Annual Salary')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('re-seeds the inputs form when a status flip brings a second column', async () => {
+    vi.mocked(fetchTaxInputs)
+      .mockResolvedValueOnce(inputsFor(2024))
+      .mockResolvedValueOnce(marriedInputsFor(2024))
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(statusButton('Married filing jointly'))
+
+    // The editors are keyed by year AND status, so a flip REMOUNTS them: their value maps are
+    // keyed by cell id, and a one-column year's ids are not a two-column year's — left
+    // mounted, every new box would read blank.
+    const partner = (await screen.findByLabelText('Annual Salary — Sam')) as HTMLInputElement
+    expect(partner.value).toBe('$90,000.00')
+  })
+
+  it('leaves the year’s own tables in place when another status tab saves', async () => {
+    // An MFJ tab opened from a year still filed single: the tab's own tables are empty.
+    vi.mocked(fetchTaxBrackets).mockImplementation(async (year: number, status) => ({
+      ...bracketsFor(year),
+      filing_status: status,
+      statuses_with_rows: ['single', 'married_joint'],
+      jurisdictions:
+        status === 'single'
+          ? bracketsFor(year).jurisdictions
+          : {
+              federal: [], state: [], medicare: [],
+              social_security: [], disability: [], capital_gains: [],
+            },
+    }))
+    // The echo of a one-jurisdiction save still carries the whole year+status payload —
+    // including a STATE table this editor never asked about.
+    vi.mocked(putTaxBrackets).mockImplementation(async (year: number, body) => ({
+      ...bracketsFor(year),
+      filing_status: body.filing_status,
+      statuses_with_rows: ['single', 'married_joint'],
+      jurisdictions: {
+        federal: [{ bracket_index: 1, rate: '0.1000', threshold: '0.00' }],
+        state: [{ bracket_index: 1, rate: '0.0930', threshold: '0.00' }],
+        medicare: [], social_security: [], disability: [], capital_gains: [],
+      },
+    }))
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    // Scoped: the YEAR card carries a control with the same three names.
+    const tabs = within(screen.getByRole('group', { name: 'Bracket filing status' }))
+    fireEvent.click(tabs.getByRole('button', { name: 'Married filing jointly' }))
+    await waitFor(() =>
+      expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledWith(2024, 'married_joint'),
+    )
+    await screen.findByText('No brackets for Federal.')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
+    await waitFor(() =>
+      expect(screen.getByLabelText('Federal bracket 1 rate (%)')).toBeTruthy(),
+    )
+    // A save re-syncs THAT table only. `detail.brackets` is the YEAR's tables, so an echo
+    // from another status must not replace it — adopting it would remount this editor on the
+    // page's key and throw away every other jurisdiction's half-edited rows with it.
+    expect(screen.getByText('No brackets for State.')).toBeTruthy()
+    expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
+  })
+
+  it('replaces the waterfall with a way out when the status has no tables', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
+    vi.mocked(fetchTaxSummary).mockResolvedValue(
+      missingSummaryFor(2024, ['federal', 'state', 'capital_gains']),
+    )
+    renderPage()
+
+    expect(
+      await screen.findByText('No Married filing jointly bracket tables for 2024'),
+    ).toBeTruthy()
+    // The jurisdictions are named with the SAME labels the editor heads its tables with.
+    expect(screen.getByText('Federal, State, Capital gains')).toBeTruthy()
+    // The waterfall is what goes — and the trend feed is empty in this fixture, so no chart
+    // is left on the page at all.
+    await waitFor(() => expect(screen.queryAllByTestId('echart')).toHaveLength(0))
+    // The tiles stay, reading em-dashes: the engine sent no figures, and inventing zeros
+    // would be exactly the confidently-wrong answer it refused to compute.
+    expect(screen.getByText('Total tax')).toBeTruthy()
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('draws the waterfall as usual when the flag list came back empty', async () => {
+    const complete = summaryFor(2024)
+    complete.brackets_missing_for_status = []
+    vi.mocked(fetchTaxSummary).mockResolvedValue(complete)
+    renderPage()
+
+    // An empty list is a COMPLETE year, not a missing one. (The heading's &apos; entity is
+    // an apostrophe in the DOM, so the pin is written with a plain one.)
+    expect(await screen.findByText("Where 2024's gross income went")).toBeTruthy()
+    expect(screen.queryByText(/bracket tables for 2024/)).toBeNull()
+  })
+
+  it('drops a flagged year out of the trend and names it underneath', async () => {
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
+      years: [summaryFor(2024)],
+      incomplete: [
+        { year: 2026, filing_status: 'married_joint', brackets_missing_for_status: ['federal'] },
+      ],
+    })
+    renderPage()
+
+    // The feed keeps a refusal year OUT of `years` — it carries no sections at all, so a
+    // column for it would be a lie the chart builder could not even draw — and names it in
+    // `incomplete` instead. The chart shows what was computed; the note shows what was not.
+    await waitFor(() => expect(trendCategories()).toBe('2024'))
+    expect(screen.getByText(/Not charted: 2026/)).toBeTruthy()
+  })
+
+  it('says why the trend is empty when every year is flagged', async () => {
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
+      years: [],
+      incomplete: [
+        { year: 2024, filing_status: 'married_joint', brackets_missing_for_status: ['federal'] },
+      ],
+    })
+    renderPage()
+
+    // Distinct from "no years with stored inputs": there ARE years, they simply cannot be
+    // compared yet.
+    expect(
+      await screen.findByText(/every year with stored inputs is missing bracket tables/i),
+    ).toBeTruthy()
+    expect(screen.queryByText(/no years with stored inputs/i)).toBeNull()
   })
 })

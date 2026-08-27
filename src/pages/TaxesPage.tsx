@@ -8,6 +8,9 @@ import {
   fetchTaxInputs,
   fetchTaxSummary,
   fetchTaxYears,
+  FILING_STATUS_LABELS,
+  FILING_STATUSES,
+  patchTaxYear,
   putTaxInputs,
 } from '../api/taxes'
 import InfoHint from '../components/InfoHint'
@@ -16,7 +19,13 @@ import InputsForm from '../components/taxes/InputsForm'
 import SummaryPanel from '../components/taxes/SummaryPanel'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
-import type { TaxBracketsOut, TaxInputsOut, TaxSummaryOut, TaxYearOut } from '../types/api'
+import type {
+  FilingStatus,
+  TaxBracketsOut,
+  TaxInputsOut,
+  TaxSummaryOut,
+  TaxYearOut,
+} from '../types/api'
 import '../components/panels.css'
 import './TaxesPage.css'
 
@@ -31,6 +40,27 @@ interface YearDetail {
   inputs: TaxInputsOut
   brackets: TaxBracketsOut
   summary: TaxSummaryOut
+}
+
+/**
+ * The identity that must REMOUNT the two editors, taken from the PAYLOADS rather than from
+ * the page's idea of the year's status.
+ *
+ * Their state is keyed by cell id — (key, person) in the inputs form, (jurisdiction, status)
+ * in the brackets editor — and seeds from a useState INITIALIZER, so a namespace change that
+ * does not remount them leaves every new box reading blank. The page's own `filingStatus`
+ * cannot be that key: a status flip replaces the year ROW (and the selector) one render
+ * BEFORE the new payloads land, so keying on it would remount the editors against the OLD
+ * payloads and then leave them mounted when the real ones arrive. The payload's own status
+ * and column list move exactly when its cell ids do.
+ */
+function inputsKey(inputs: TaxInputsOut): string {
+  const columns = inputs.people.map((person) => person.id).join('.')
+  return `inputs-${inputs.year}-${inputs.filing_status}-${columns}`
+}
+
+function bracketsKey(brackets: TaxBracketsOut): string {
+  return `brackets-${brackets.year}-${brackets.filing_status}`
 }
 
 function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
@@ -65,6 +95,9 @@ export default function TaxesPage() {
   const [error, setError] = useState<string | null>(null)
   const [newYear, setNewYear] = useState('')
   const [creating, setCreating] = useState(false)
+  // The status PATCH is single-flight of its own: it is not a "load", so it must not ride the
+  // detail `busy` flag, and a second press mid-flight would race two reloads of one year.
+  const [statusSaving, setStatusSaving] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   // What the two editors report about their own unsaved work — a reload destroys it, so
   // every path that reloads asks first.
@@ -87,6 +120,11 @@ export default function TaxesPage() {
   const currentYearRef = useRef<number | null>(null)
 
   const selectedYear = selection?.year ?? null
+  // The selected year's ROW, so the selector reads the same list the chips do — one source
+  // for "how is this year filed". A year the list has not caught up with (the optimistic
+  // chip a create just pushed) reads as 'single', which is the column's own default.
+  const filingStatus: FilingStatus =
+    years.find((y) => y.year === selectedYear)?.filing_status ?? 'single'
   // Only while the editors are mounted: a failed load unmounts them, and their last
   // reported flag must not outlive them into a spurious confirm.
   const dirty = detail !== null && (inputsDirty || bracketsDirty)
@@ -136,12 +174,20 @@ export default function TaxesPage() {
   // The chain lives inline rather than in a useCallback: this component owns eleven
   // setters, and manual memoization React Compiler cannot preserve drops the whole
   // component out of compilation (MonthlyUpdatePage's note).
+  // `filingStatus` is a second reload key, not just a read: the brackets GET names a status
+  // (its server-side default is 'single', NOT the year's own), so the tables on screen would
+  // otherwise be single's under a married year. Both it and `selection` move in ONE batched
+  // render on a status flip, so the pair re-runs this effect exactly once.
   useEffect(() => {
     if (selection === null) return
     const year = selection.year
     currentYearRef.current = year
     const seq = ++seqRef.current
-    Promise.all([fetchTaxInputs(year), fetchTaxBrackets(year), fetchTaxSummary(year)])
+    Promise.all([
+      fetchTaxInputs(year),
+      fetchTaxBrackets(year, filingStatus),
+      fetchTaxSummary(year),
+    ])
       .then(([inputs, brackets, summary]) => {
         if (seq !== seqRef.current) return
         setDetail({ inputs, brackets, summary })
@@ -158,7 +204,7 @@ export default function TaxesPage() {
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
       })
-  }, [selection])
+  }, [selection, filingStatus])
 
   // The "we are fetching" flip lives in the handlers that cause a fetch, never in the
   // effect above.
@@ -184,6 +230,35 @@ export default function TaxesPage() {
     if (year === selection?.year) return
     if (!confirmDiscard()) return
     loadYear(year)
+  }
+
+  // The FIFTH reload door (chips, Retry, create, delete, status). Everything the engine
+  // reads moves with the status — bracket tables are stored per (jurisdiction, status), the
+  // per-person inputs split into two columns, and the summary is computed against the
+  // status-selected tables — so it goes through the SAME discard gate and the same
+  // loadYear(), whose fresh `{year}` object (together with the row this replaces) is what
+  // re-runs the load effect for the year already on screen.
+  const changeFilingStatus = (next: FilingStatus) => {
+    if (selectedYear === null || next === filingStatus || statusSaving) return
+    if (!confirmDiscard()) return
+    const year = selectedYear
+    setStatusSaving(true)
+    setError(null)
+    patchTaxYear(year, { filing_status: next })
+      .then((row) => {
+        // The echo is authoritative, and replacing the row HERE means the selector follows
+        // even if no list reload ever happens.
+        setYears((current) => current.map((y) => (y.year === row.year ? row : y)))
+        loadYear(year)
+      })
+      .catch((err: unknown) => {
+        // A 422 (an unknown status) or a 404 (the year went away) lands here verbatim. The
+        // selection is untouched, so the control still reads the row the server has.
+        setError(
+          err instanceof ApiError ? err.message : `Failed to set the filing status for ${year}`,
+        )
+      })
+      .finally(() => setStatusSaving(false))
   }
 
   // Saving inputs or brackets moves the engine's answer, so the totals line is refetched.
@@ -227,7 +302,13 @@ export default function TaxesPage() {
 
   const onBracketsSaved = (echo: TaxBracketsOut) => {
     setDetail((current) =>
-      current !== null && current.brackets.year === echo.year
+      current !== null &&
+      current.brackets.year === echo.year &&
+      // `detail.brackets` is the tables the ENGINE reads — the year's own status'. The editor
+      // has status TABS, so a save (or a clone) can legitimately answer for another status:
+      // adopting that here would put tables the engine never walks under the year's heading
+      // AND change bracketsKey mid-edit, remounting the editor over its own work.
+      current.brackets.filing_status === echo.filing_status
         ? { ...current, brackets: echo }
         : current,
     )
@@ -267,9 +348,20 @@ export default function TaxesPage() {
         setYears((current) =>
           current.some((y) => y.year === year)
             ? current
-            : [...current, { year, notes: null, input_count: 0, bracket_count: 0 }].sort(
-                (a, b) => a.year - b.year,
-              ),
+            : [
+                ...current,
+                // 'single' is the column's own default, so the placeholder cannot claim a
+                // status the row does not have; the reconcile below replaces it either way.
+                // `satisfies`, not a bare literal: inside the array the status would widen
+                // to plain `string` and stop being a FilingStatus.
+                {
+                  year,
+                  notes: null,
+                  input_count: 0,
+                  bracket_count: 0,
+                  filing_status: 'single',
+                } satisfies TaxYearOut,
+              ].sort((a, b) => a.year - b.year),
         )
         loadYear(year)
         // The main banner owns this one, because the main banner is the thing with Retry.
@@ -404,6 +496,38 @@ export default function TaxesPage() {
             ))}
           </div>
         )}
+        {/* The status of the SELECTED year, not another year to pick: its own row under the
+            chips, in the app-wide segmented treatment (RangeChips' .segmented, declared once
+            in panels.css). */}
+        {selectedYear !== null && (
+          <div className="filing-status-row">
+            <span className="filing-status-label">Filing status</span>
+            <InfoHint text="Which bracket tables the engine walks for this year, and whether the per-person inputs below split into two columns. Every year starts as Single." />
+            <div className="segmented" role="group" aria-label="Filing status">
+              {FILING_STATUSES.map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  className={status === filingStatus ? 'active' : ''}
+                  aria-pressed={status === filingStatus}
+                  disabled={statusSaving || busy}
+                  onClick={() => changeFilingStatus(status)}
+                >
+                  {FILING_STATUS_LABELS[status]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Standing, never dismissible: MFS brackets without Form-8958 community-income
+            splitting are wrong in California, and the sentence has to sit wherever the
+            number does (audit §3.2, design decision log "MFS"). */}
+        {selectedYear !== null && filingStatus === 'married_separate' && (
+          <p className="filing-status-caveat" role="note">
+            California is a community-property state; true MFS requires 50/50
+            community-income splitting (Form 8958), which this calculator does not model.
+          </p>
+        )}
         {/* loadedOnce, not !loading: a FIRST load that failed knows nothing about whether
             there are years, and "No tax years yet" under an error banner reads as an
             answer. */}
@@ -479,7 +603,11 @@ export default function TaxesPage() {
               which a year switch does not move — remounting it would spend a request to
               redraw the same chart. Its per-year half is a prop, so it follows the year
               anyway. */}
-          <SummaryPanel summary={detail.summary} refreshKey={trendRefresh} />
+          <SummaryPanel
+            summary={detail.summary}
+            filingStatus={filingStatus}
+            refreshKey={trendRefresh}
+          />
           {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
               be stored and summarizable, and this card still cannot be drawn for it) — asked
               here rather than spending a request on the refusal. Keyed by year like the card
@@ -506,19 +634,22 @@ export default function TaxesPage() {
             initialTicker={whatIfTicker}
             initialLotId={whatIfLotId}
           />
-          {/* Keyed by YEAR, not by load: a real switch remounts the editors (2023's typed
-              rows must not carry into 2024), while a same-year reload — Retry, or the
-              refresh after a save — leaves them mounted. Their state seeds from useState
-              initializers, so the replaced props cannot clobber typed work either. */}
+          {/* Keyed by the payloads' own identity (see inputsKey/bracketsKey), not by load:
+              a real year or status switch remounts the editors — 2023's typed rows must not
+              carry into 2024, and a one-column year's cell ids are not a two-column year's —
+              while a same-year same-status reload (Retry, or the refresh after a save) leaves
+              them mounted. Their state seeds from useState initializers, so the replaced
+              props cannot clobber typed work either. */}
           <InputsForm
-            key={`inputs-${detail.inputs.year}`}
+            key={inputsKey(detail.inputs)}
             inputs={detail.inputs}
             onSaved={onInputsSaved}
             onDirtyChange={setInputsDirty}
           />
           <BracketsEditor
-            key={`brackets-${detail.brackets.year}`}
+            key={bracketsKey(detail.brackets)}
             brackets={detail.brackets}
+            yearStatus={filingStatus}
             onSaved={onBracketsSaved}
             onDirtyChange={setBracketsDirty}
           />

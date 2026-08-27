@@ -41,3 +41,38 @@
   margin: 0;
 }
 
+
+/* The year's filing status. Its own row under the chips, because it is a sentence ABOUT the
+   selected year rather than another year to select; the control itself is panels.css's
+   .segmented (RangeChips' treatment) and is not redefined here. */
+.filing-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.filing-status-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Not an .error-banner — nothing failed — and not a chart warning either: the caveat belongs
+   to the YEAR, so it rides in the year card, toned with --warn because it qualifies every
+   figure below it rather than merely describing them. */
+.filing-status-caveat {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  /* The sentence names a form number and a state; it wraps rather than pushing the card
+     sideways (taxes.css's .tax-warnings rule). */
+  overflow-wrap: anywhere;
+}

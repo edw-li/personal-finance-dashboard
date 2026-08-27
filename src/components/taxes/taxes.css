@@ -84,8 +84,41 @@
   min-width: 0;
 }
 
-.tax-input-label label {
+.tax-input-label label,
+.tax-input-label .tax-input-name {
   font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Married-joint years only. The auto-fill masonry collapses to ONE grid column so a section's
+   person header sits directly over the boxes it names — at two grid columns the header would
+   line up with the left one and lie about the right. A one-column year never gets this class,
+   so its two-up layout is untouched. */
+.tax-input-grid.is-split {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tax-input-grid.is-split .tax-input-row {
+  grid-template-columns: minmax(0, 1fr) 120px 120px 170px;
+}
+
+.tax-input-grid.is-split .field-input.tax-input-wide {
+  grid-column: span 2;
+}
+
+/* Names, not data: the row is aria-hidden and must not read like a line item. */
+.tax-input-head {
+  padding-bottom: 0.1rem;
+}
+
+.tax-input-person {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -268,4 +301,53 @@
   /* A warning naming every unpriced vest date is a long line: it wraps rather than pushing
      the card sideways (the .tax-warnings rule). */
   overflow-wrap: anywhere;
+}
+
+/* The tab row sits between the card's hint and the first table: the .segmented treatment is
+   panels.css's, so only its placement is this file's business. */
+.bracket-status-tabs {
+  margin-bottom: 1rem;
+}
+
+.bracket-clone {
+  margin-bottom: 1.25rem;
+}
+
+.bracket-clone .drill-hint {
+  max-width: 62ch;
+}
+
+/* The one badge that is a TO-DO rather than a label: --warn, matching the MFS caveat's rule
+   on the page, because both qualify numbers that are already on screen. */
+.badge-review {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+/* A call to action, not a failure: the year is fine, its tables are simply not entered yet.
+   Same shape as .tax-warnings above (this card's advisory treatment), toned with --warn
+   because it is asking for something rather than merely noting it. */
+.tax-brackets-missing {
+  margin-top: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.tax-brackets-missing p {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tax-brackets-missing p:last-child {
+  margin-bottom: 0;
+}
+
+.tax-brackets-missing-list {
+  color: var(--text);
 }

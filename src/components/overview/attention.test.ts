@@ -61,7 +61,7 @@ function lotsOut(lots: EsppLotOut[]): EsppLotsResponse {
 }
 
 function taxYear(year: number, inputCount = 21): TaxYearOut {
-  return { year, notes: null, input_count: inputCount, bracket_count: 42 }
+  return { year, notes: null, input_count: inputCount, bracket_count: 42, filing_status: 'single' }
 }
 
 function lastRefreshOut(failed: Record<string, string> = {}): LastRefresh {

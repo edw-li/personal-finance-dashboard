@@ -332,7 +332,9 @@ function serve(over: Partial<Payload> = {}): Payload {
     matrix: matrixOut(),
     taxes: { years: [taxSummaryOut(CURRENT_YEAR)] },
     lots: lotsOut(),
-    taxYears: [{ year: CURRENT_YEAR, notes: null, input_count: 21, bracket_count: 42 }],
+    taxYears: [
+      { year: CURRENT_YEAR, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single' },
+    ],
     yearly: { years: [] },
     dividends: [],
     system: systemOut(),
@@ -753,7 +755,9 @@ describe('OverviewPage attention strip', () => {
       // attention.test.ts, where today is injected.)
       ts: timeseriesOut({ months: [addMonths(current, -4), addMonths(current, -3)] }),
       lots: lotsOut([lotOut(5)]),
-      taxYears: [{ year: CURRENT_YEAR, notes: null, input_count: 0, bracket_count: 42 }],
+      taxYears: [
+        { year: CURRENT_YEAR, notes: null, input_count: 0, bracket_count: 42, filing_status: 'single' },
+      ],
       system: systemOut({ environment: 'prod' }),
     })
     renderPage()

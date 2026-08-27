@@ -464,11 +464,34 @@ export interface LatestPriceOut {
 // the quantum the router picked: inputs 4dp, bracket rates 4dp, thresholds 2dp, summary
 // money 2dp, effective rates 6dp.
 
+// How ONE year is filed, and which of a year's bracket tables a request means. Mirrors the
+// backend's `FilingStatus` Literal (app/schemas/taxes.py), whose columns
+// (`tax_years.filing_status`, `tax_brackets.filing_status`) are NOT NULL default 'single' —
+// so every row that existed before the marriage migrations is a single filer and history is
+// untouched.
+export type FilingStatus = 'single' | 'married_joint' | 'married_separate'
+
 export interface TaxYearOut {
   year: number
   notes: string | null
+  filing_status: FilingStatus
   input_count: number
   bracket_count: number
+}
+
+// PATCH /taxes/years/{year} — the year row's one mutable field. Flipping it changes which
+// bracket tables the engine walks, whether the per-person inputs split into two columns,
+// and therefore every figure on the page: the caller reloads the year afterwards.
+export interface TaxYearUpdate {
+  filing_status: FilingStatus
+}
+
+// One person COLUMN of a year's return, in render order (primary first). Not the household
+// roster: the server has already narrowed it to the people THIS year's status covers —
+// everybody under married-joint, the primary alone under single and MFS.
+export interface TaxPersonOut {
+  id: number
+  name: string
 }
 
 export interface TaxInputItemOut {
@@ -476,10 +499,18 @@ export interface TaxInputItemOut {
   label: string
   sort_order: number
   is_derived: boolean
+  // Definition flag (`tax_input_definitions.is_per_person`): this key is stored once per
+  // PERSON — salary, the W-2 family, 401k, HSA, pre-tax deductions and the two tracker-only
+  // withholding keys — so the payload repeats the item once per person column. Household
+  // keys (interest, dividends, itemized deductions, LTCG…) appear exactly once.
+  is_per_person: boolean
+  // WHICH column this item belongs to. Null for a household key, and also for a per-person
+  // key on a database with no people roster — the pre-household spelling of "the primary".
+  person_id: number | null
   value: string | null
-  // The sheet's gray-cell formula for this key, when it has one. Advisory: the UI offers
-  // a chip, nothing is ever applied server-side. Present-ness (not is_derived) is what a
-  // chip renders on.
+  // The sheet's gray-cell formula for this key, when it has one, computed from THIS column's
+  // own values. Advisory: the UI offers a chip, nothing is ever applied server-side.
+  // Present-ness (not is_derived) is what a chip renders on.
   suggested: string | null
 }
 
@@ -490,13 +521,30 @@ export interface TaxInputSectionOut {
 
 export interface TaxInputsOut {
   year: number
+  // The status these columns were assembled under — the payload's own answer, so the form
+  // can never draw two columns for a year the engine is reading as one return.
+  filing_status: FilingStatus
+  // The person columns, primary first. Empty on a roster-less database, which reproduces
+  // the pre-household payload exactly.
+  people: TaxPersonOut[]
   sections: TaxInputSectionOut[]
 }
 
+// One person-qualified write. `person_id` null on a per-person key means "the primary
+// person" — which is what every client that predates this batch says by saying nothing.
+export interface TaxInputRowIn {
+  key: string
+  person_id: number | null
+  value: string | null
+}
+
 // PUT body — keys unknown to the definition table are a 422, and a null VALUE unsets
-// (deletes) that stored input rather than storing a 0.
+// (deletes) that stored input rather than storing a 0. `values` is the household/primary
+// shorthand every shipped client sends; `rows` is its person-qualified form. The two are
+// merged server-side, and the same (key, person) twice is a 422.
 export interface TaxInputsUpdate {
   values: Record<string, string | null>
+  rows?: TaxInputRowIn[]
 }
 
 export interface TaxBracketOut {
@@ -518,13 +566,36 @@ export interface TaxBracketIn {
 // (src/api/taxes.ts) and append whatever else came back.
 export interface TaxBracketsOut {
   year: number
+  // WHICH status' tables these are. The GET defaults to 'single' rather than the year's own
+  // status, so a caller that cares always names one.
+  filing_status: FilingStatus
+  // Every status this YEAR has at least one stored bracket row for, sorted — the editor's
+  // tab set, so an MFJ table entered ahead of the wedding stays reachable from a year still
+  // filed single.
+  statuses_with_rows: FilingStatus[]
   jurisdictions: Record<string, TaxBracketOut[]>
 }
 
-// Per-jurisdiction FULL REPLACE: a jurisdiction absent from the body is untouched, and
-// an empty array deletes its table. Unknown jurisdiction names are a 422.
+// Per-jurisdiction FULL REPLACE within ONE status: a jurisdiction absent from the body is
+// untouched, and so is every other status' copy of it; an empty array deletes that table.
+// Unknown jurisdiction names are a 422.
 export interface TaxBracketsUpdate {
+  filing_status: FilingStatus
   jurisdictions: Record<string, TaxBracketIn[]>
+}
+
+// Which cloned tables are usually right as they landed, and which need edits. Social
+// Security's wage base and SDI's rate/cap are per-person parameters that do not move with
+// filing status, so the copy IS the answer; federal, state, capital gains and Medicare's
+// additional tier are per-return thresholds and only a starting shape. The classification is
+// FIXED (a property of the tax code), not derived from what the source happened to hold.
+export interface BracketCloneReviewFlags {
+  verbatim_ok: string[]
+  review: string[]
+}
+
+export interface TaxBracketsCloneOut extends TaxBracketsOut {
+  review_flags: BracketCloneReviewFlags
 }
 
 export interface IncomeTaxOut {
@@ -558,6 +629,19 @@ export interface TaxTotalsOut {
 
 export interface TaxSummaryOut {
   year: number
+  // Jurisdictions with NO bracket table for this year's filing status. Always empty for a
+  // single-filer year (a partial single year has always computed, with per-jurisdiction
+  // warnings, and stored history depends on that). Non-empty means the engine REFUSED to
+  // compute rather than walk another status' thresholds — and then **every section below is
+  // null on the wire**, so a reader must check this FIRST and never touch a figure.
+  //
+  // Typed optional rather than required on purpose: the field only started being reported
+  // with the marriage batch, and requiring it would break the pinned golden `TaxSummaryOut`
+  // fixtures in taxChartOptions.test.ts / overviewChartOptions.test.ts that predate it. The
+  // sections stay non-nullable for the same reason — the trend feed keeps refusal years OUT
+  // of `years` entirely (see `incomplete` below), so the ONLY payload that can carry nulls
+  // is GET /years/{y}/summary, which SummaryPanel guards on this list.
+  brackets_missing_for_status?: string[]
   federal: IncomeTaxOut
   state: IncomeTaxOut
   medicare: WageTaxOut
@@ -568,8 +652,19 @@ export interface TaxSummaryOut {
   warnings: string[]
 }
 
+// A year the trend feed had to skip — named so the page can offer the fix.
+export interface TaxIncompleteYearOut {
+  year: number
+  filing_status: FilingStatus
+  brackets_missing_for_status: string[]
+}
+
 export interface TaxSummariesOut {
   years: TaxSummaryOut[]
+  // Kept OUT of `years` on purpose: that list is consumed positionally by the chart builders
+  // and a null-sectioned entry would be a landmine in every consumer. Optional here so the
+  // repo's existing `{ years: [...] }` fixtures keep compiling; read it with `?? []`.
+  incomplete?: TaxIncompleteYearOut[]
 }
 
 // --- taxes: what-if ---
@@ -663,10 +758,30 @@ export interface WithholdingLegOut {
   projected: string
 }
 
+// !!! KNOWN DIVERGENCE FROM THE WIRE — this interface is OUT OF DATE ON PURPOSE !!!
+// The merged backend (backend/app/schemas/taxes.py, class WithholdingOut) has moved and this
+// type has not caught up yet. Four specifics, so nobody has to diff the two by hand:
+//
+//   1. NULLABLE NOW. `liability_total` and `balance_projected` are `Decimal | None` on the
+//      wire — null exactly when the engine REFUSED, i.e. a married year whose bracket tables
+//      for that filing status have not been entered. Both are typed non-null `string` below,
+//      so TypeScript will not make anyone handle the null.
+//   2. TWO FIELDS MISSING FROM THIS TYPE: `filing_status` (string, defaults to "single") and
+//      `brackets_missing_for_status` (string[], non-empty only on a married year whose tables
+//      are missing — the same field TaxSummaryOut already carries above).
+//   3. IT ONLY LOOKS FINE BY ACCIDENT. WithholdingPanel renders the liability through
+//      formatCurrency(), whose runtime null-guard returns "—" — an accident of that helper,
+//      NOT something this type earned or promises. The sign math beside it is not so lucky:
+//      `Number(withholding.balance_projected)` reads a null as 0, which a refusal year would
+//      display as a confident "dead even".
+//   4. DO NOT RETYPE THIS HERE. docs/superpowers/plans/2026-08-26-withholding-flow-verification.md
+//      (Wave 4, Task 6) owns the retype and does it TOGETHER with the WithholdingPanel rewrite
+//      that learns to render a refusal — widening the type on its own would only spray
+//      unhandled nulls through a panel that is about to be replaced.
 export interface WithholdingOut {
   year: number
   // The engine's liability for the year — the same figure TaxSummaryOut.totals.total_tax
-  // carries, verbatim.
+  // carries, verbatim. NULLABLE on the wire; see the divergence note above.
   liability_total: string
   // The salary leg is all-in: the user's withholding_pct already carries its FICA, so no
   // salary-side FICA is added anywhere.
@@ -683,6 +798,7 @@ export interface WithholdingOut {
   }
   total: WithholdingLegOut
   // liability_total - total.projected: POSITIVE means "will owe", negative is a refund.
+  // NULLABLE on the wire; see the divergence note above.
   balance_projected: string
   // Paychecks received / expected this year — the progress denominator for the salary leg.
   checks_elapsed: number

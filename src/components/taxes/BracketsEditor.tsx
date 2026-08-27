@@ -1,23 +1,32 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
-import { JURISDICTIONS, putTaxBrackets } from '../../api/taxes'
+import {
+  cloneBrackets,
+  fetchTaxBrackets,
+  FILING_STATUS_LABELS,
+  FILING_STATUSES,
+  JURISDICTIONS,
+  jurisdictionLabel,
+  putTaxBrackets,
+} from '../../api/taxes'
 import type { Jurisdiction } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
-import type { TaxBracketOut, TaxBracketsOut } from '../../types/api'
+import type {
+  BracketCloneReviewFlags,
+  FilingStatus,
+  TaxBracketOut,
+  TaxBracketsOut,
+} from '../../types/api'
 import { canonicalAmount, parseAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import './taxes.css'
 
-const LABELS: Record<string, string> = {
-  federal: 'Federal',
-  state: 'State',
-  medicare: 'Medicare',
-  social_security: 'Social Security',
-  disability: 'Disability',
-  capital_gains: 'Capital gains',
-}
+// The six jurisdictions' human names live in src/api/taxes.ts beside JURISDICTIONS, so this
+// editor's headings and the summary panel's missing-tables call-to-action can never name the
+// same table differently. Aliased rather than re-spelled at ~10 call sites.
+const label = jurisdictionLabel
 
 // Mirrors the API's own ceiling (app/api/taxes.py MAX_BRACKETS).
 const MAX_BRACKETS = 12
@@ -25,10 +34,6 @@ const MAX_BRACKETS = 12
 interface RowState {
   rate: string // percent form — "37", never "0.3700"
   threshold: string
-}
-
-function label(name: string): string {
-  return LABELS[name] ?? name
 }
 
 function rowsOf(rows: TaxBracketOut[]): RowState[] {
@@ -84,36 +89,150 @@ function validate(name: string, rows: RowState[]): string | null {
 
 export default function BracketsEditor({
   brackets,
+  yearStatus = brackets.filing_status,
   onSaved,
   onDirtyChange,
 }: {
   brackets: TaxBracketsOut
+  /**
+   * The YEAR's own status: always a tab, even before it has a single row. Defaults to the
+   * payload's status, which IS the year's on every page load — the page passes it explicitly
+   * so the tab survives the render in which the row has flipped but the payload has not.
+   */
+  yearStatus?: FilingStatus
   onSaved: (updated: TaxBracketsOut) => void
   onDirtyChange?: (dirty: boolean) => void
 }) {
-  // A useState INITIALIZER, so a prop replacement (the page refetching the SAME year)
-  // leaves half-typed tables alone; only a save echo, or a remount on a real year switch,
-  // re-adopts the server's rows.
+  // The tab on screen, and the payload behind it. Both seed from the page's prop and are
+  // then this editor's own: a tab press fetches, a save re-syncs. A useState INITIALIZER, so
+  // a prop replacement (the page refetching the SAME year and status) leaves half-typed
+  // tables alone; only a save echo, a tab switch, or a remount re-adopts the server's rows.
+  const [activeStatus, setActiveStatus] = useState<FilingStatus>(brackets.filing_status)
+  const [payload, setPayload] = useState<TaxBracketsOut>(brackets)
   const [tables, setTables] = useState<Record<string, RowState[]>>(() => tablesOf(brackets))
   // Single-flight across the whole editor: one jurisdiction saves at a time, and the
   // in-flight name is what disables the others' buttons.
   const [saving, setSaving] = useState<string | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  // The tab machinery's own flight and banner — a failed tab load is not a jurisdiction's
+  // error, and putting it in `errors` would file it under a table nobody asked about.
+  const [tabBusy, setTabBusy] = useState(false)
+  const [tabError, setTabError] = useState<string | null>(null)
+  // Tabs can be clicked faster than a fetch comes back; only the newest may land.
+  const tabSeqRef = useRef(0)
+  // What the last clone said about the tables it just wrote — advisory, and only about THIS
+  // tab: cleared when another status is opened, and per-table when that table is saved (a
+  // reviewed table has nothing left to be told about).
+  const [reviewFlags, setReviewFlags] = useState<BracketCloneReviewFlags | null>(null)
 
   // JURISDICTIONS is a readonly tuple, so its .includes() takes the literal union — the
   // house cast (MonthlyUpdatePage's `STEPS.includes(stepParam as Step)`). An importer can
   // write a jurisdiction this API refuses, and a GET still returns it.
-  const extras = Object.keys(brackets.jurisdictions)
+  const extras = Object.keys(payload.jurisdictions)
     .filter((name) => !JURISDICTIONS.includes(name as Jurisdiction))
     .sort()
+
+  // The tab set: 'single' ALWAYS (the column default, the only status the importer writes and
+  // the source every clone copies from), the year's own status (the one the engine walks,
+  // even before it has tables), and any status that already has rows — so an MFJ table
+  // entered ahead of the wedding stays reachable from a year still filed single.
+  const tabs = FILING_STATUSES.filter(
+    (status) =>
+      status === 'single' || status === yearStatus || payload.statuses_with_rows.includes(status),
+  )
 
   // Unsaved work = the editable tables no longer read like the payload they came from.
   // Compared as text because that IS what is in the boxes ("10." is not yet "10"), and the
   // page turns this into the confirm that guards a year switch.
-  const dirty = JSON.stringify(tables) !== JSON.stringify(tablesOf(brackets))
+  const dirty = JSON.stringify(tables) !== JSON.stringify(tablesOf(payload))
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
+
+  // Switching tabs replaces every table on screen, so it asks the same question the page's
+  // reload doors ask — and it asks it BEFORE the request, so a declined confirm cannot leave
+  // a fetch in flight against a tab nobody opened.
+  const openStatus = (status: FilingStatus) => {
+    if (status === activeStatus || tabBusy) return
+    if (
+      dirty &&
+      !window.confirm(
+        `Discard unsaved ${FILING_STATUS_LABELS[activeStatus]} bracket changes for ${brackets.year}?`,
+      )
+    ) {
+      return
+    }
+    const seq = ++tabSeqRef.current
+    setTabBusy(true)
+    setTabError(null)
+    // Both belong to the tab being left: a jurisdiction's error describes a table that is
+    // about to be replaced, and the review badges describe a clone into another status.
+    setErrors({})
+    setReviewFlags(null)
+    fetchTaxBrackets(brackets.year, status)
+      .then((next) => {
+        if (seq !== tabSeqRef.current) return
+        setActiveStatus(status)
+        setPayload(next)
+        setTables(tablesOf(next))
+      })
+      .catch((err: unknown) => {
+        if (seq !== tabSeqRef.current) return
+        setTabError(
+          err instanceof ApiError
+            ? err.message
+            : `Failed to load the ${FILING_STATUS_LABELS[status]} bracket tables`,
+        )
+      })
+      .finally(() => {
+        if (seq === tabSeqRef.current) setTabBusy(false)
+      })
+  }
+
+  // A status tab with no rows at all. Six empty tables are not an editing surface — they are
+  // 42 rows of hand transcription — so the tab offers the clone instead.
+  const isEmpty = Object.values(payload.jurisdictions).every((rows) => rows.length === 0)
+
+  // Seeds this status from the SAME year's single tables (design §5.5: the clone source is
+  // always single). 409 when the target already has rows, which `isEmpty` already prevents —
+  // it lands in the banner verbatim if the server disagrees.
+  const clone = () => {
+    const seq = ++tabSeqRef.current
+    setTabBusy(true)
+    setTabError(null)
+    cloneBrackets(brackets.year, brackets.year, activeStatus)
+      .then((next) => {
+        if (seq !== tabSeqRef.current) return
+        setPayload(next)
+        setTables(tablesOf(next))
+        setReviewFlags(next.review_flags)
+        // The year's bracket count moved, and when this IS the year's status the summary
+        // moved with it: the page owns both refreshes, through the same door a save uses.
+        onSaved(next)
+      })
+      .catch((err: unknown) => {
+        if (seq !== tabSeqRef.current) return
+        setTabError(err instanceof ApiError ? err.message : 'Clone failed')
+      })
+      .finally(() => {
+        if (seq === tabSeqRef.current) setTabBusy(false)
+      })
+  }
+
+  // Advisory badges from the clone response. Social Security's wage base and SDI's rate/cap
+  // are per-person parameters that do not move with filing status, so the copy IS the answer;
+  // federal, state, capital gains and Medicare's additional tier are status thresholds and
+  // are only a starting shape.
+  const badgeFor = (name: string) => {
+    if (reviewFlags === null) return null
+    if (reviewFlags.review.includes(name)) {
+      return <span className="badge badge-review">review thresholds</span>
+    }
+    if (reviewFlags.verbatim_ok.includes(name)) {
+      return <span className="badge">copied verbatim — usually correct</span>
+    }
+    return null
+  }
 
   // A jurisdiction's error describes the table as it was when Save was pressed; the first
   // keystroke anywhere in it may be the fix, so the stale sentence goes then and there.
@@ -163,19 +282,27 @@ export default function BracketsEditor({
       setErrors((current) => ({ ...current, [name]: message }))
       return
     }
-    // An empty table is a DELETE-ALL — the PUT replaces the jurisdiction wholesale — and
-    // removing the last row leaves Save one stray click from dropping the year's table.
+    // An empty table is a DELETE-ALL — the PUT replaces the (jurisdiction, status) wholesale
+    // — and removing the last row leaves Save one stray click from dropping a year's table.
+    // The status is named because the same jurisdiction has one table PER status.
     if (
       rows.length === 0 &&
-      !window.confirm(`Delete all ${label(name)} brackets for ${brackets.year}?`)
+      !window.confirm(
+        `Delete all ${label(name)} brackets for ${brackets.year} (${
+          FILING_STATUS_LABELS[activeStatus]
+        })?`,
+      )
     ) {
       return
     }
     setSaving(name)
     setErrors((current) => ({ ...current, [name]: '' }))
-    // ONLY this jurisdiction: the PUT is a full replace per key present in the body, so
-    // shipping all six would rewrite tables the user never opened.
+    // ONLY this jurisdiction, and only this STATUS: the PUT is a full replace per
+    // (jurisdiction, status) present in the body, so shipping all six — or leaving the status
+    // off, which the server would read as 'single' — would rewrite tables the user never
+    // opened.
     putTaxBrackets(brackets.year, {
+      filing_status: activeStatus,
       jurisdictions: {
         [name]: rows.map((row) => ({
           rate: shiftPoint(row.rate, -2),
@@ -185,8 +312,19 @@ export default function BracketsEditor({
     })
       .then((echo) => {
         // Re-sync THIS table only (the server renumbered and quantized it); another
-        // jurisdiction may be half-edited and must not be thrown away.
+        // jurisdiction may be half-edited and must not be thrown away. The payload moves with
+        // it so the dirty baseline stays the server's answer rather than the pre-save one.
         setTables((current) => ({ ...current, [name]: rowsOf(echo.jurisdictions[name] ?? []) }))
+        setPayload(echo)
+        // The badge asked for a review; this save IS the review.
+        setReviewFlags((current) =>
+          current === null
+            ? null
+            : {
+                verbatim_ok: current.verbatim_ok.filter((j) => j !== name),
+                review: current.review.filter((j) => j !== name),
+              },
+        )
         onSaved(echo)
       })
       .catch((err: unknown) => {
@@ -210,6 +348,45 @@ export default function BracketsEditor({
         Every table starts at a 0 threshold and climbs; saving an empty table deletes that
         jurisdiction&apos;s rows. Each table saves on its own.
       </p>
+      {/* One tab per status this year can be filed as. The same six tables exist behind each
+          one — a full replace is per (jurisdiction, status) — so the tab is what decides
+          which of them a Save rewrites. */}
+      <div
+        className="segmented bracket-status-tabs"
+        role="group"
+        aria-label="Bracket filing status"
+      >
+        {tabs.map((status) => (
+          <button
+            key={status}
+            type="button"
+            className={status === activeStatus ? 'active' : ''}
+            aria-pressed={status === activeStatus}
+            disabled={tabBusy}
+            onClick={() => openStatus(status)}
+          >
+            {FILING_STATUS_LABELS[status]}
+          </button>
+        ))}
+      </div>
+      {tabError && (
+        <div className="error-banner" role="alert">
+          {tabError}
+        </div>
+      )}
+      {activeStatus !== 'single' && isEmpty && (
+        <div className="bracket-clone">
+          <p className="drill-hint">
+            No {FILING_STATUS_LABELS[activeStatus]} tables for {brackets.year} yet. Copying
+            this year&apos;s single-filer tables gives every jurisdiction the right shape —
+            Social Security and Disability are per-person parameters and come across correct,
+            while the thresholds that move with filing status are then edited below.
+          </p>
+          <button type="button" className="button button-primary" disabled={tabBusy} onClick={clone}>
+            {tabBusy ? 'Cloning…' : `Clone from ${brackets.year} single tables`}
+          </button>
+        </div>
+      )}
       {JURISDICTIONS.map((name) => {
         const rows = tables[name] ?? []
         const message = errors[name]
@@ -226,7 +403,10 @@ export default function BracketsEditor({
               save(name)
             }}
           >
-            <h3 className="eyebrow">{label(name)} brackets</h3>
+            <h3 className="eyebrow">
+              {label(name)} brackets
+              {badgeFor(name)}
+            </h3>
             {message && (
               <div className="error-banner" role="alert">
                 {message}
