@@ -8,6 +8,9 @@ import {
   fetchTaxInputs,
   fetchTaxSummary,
   fetchTaxYears,
+  FILING_STATUS_LABELS,
+  FILING_STATUSES,
+  patchTaxYear,
   putTaxInputs,
 } from '../api/taxes'
 import InfoHint from '../components/InfoHint'
@@ -71,6 +74,9 @@ export default function TaxesPage() {
   const [error, setError] = useState<string | null>(null)
   const [newYear, setNewYear] = useState('')
   const [creating, setCreating] = useState(false)
+  // The status PATCH is single-flight of its own: it is not a "load", so it must not ride the
+  // detail `busy` flag, and a second press mid-flight would race two reloads of one year.
+  const [statusSaving, setStatusSaving] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   // What the two editors report about their own unsaved work — a reload destroys it, so
   // every path that reloads asks first.
@@ -203,6 +209,35 @@ export default function TaxesPage() {
     if (year === selection?.year) return
     if (!confirmDiscard()) return
     loadYear(year)
+  }
+
+  // The FIFTH reload door (chips, Retry, create, delete, status). Everything the engine
+  // reads moves with the status — bracket tables are stored per (jurisdiction, status), the
+  // per-person inputs split into two columns, and the summary is computed against the
+  // status-selected tables — so it goes through the SAME discard gate and the same
+  // loadYear(), whose fresh `{year}` object (together with the row this replaces) is what
+  // re-runs the load effect for the year already on screen.
+  const changeFilingStatus = (next: FilingStatus) => {
+    if (selectedYear === null || next === filingStatus || statusSaving) return
+    if (!confirmDiscard()) return
+    const year = selectedYear
+    setStatusSaving(true)
+    setError(null)
+    patchTaxYear(year, { filing_status: next })
+      .then((row) => {
+        // The echo is authoritative, and replacing the row HERE means the selector follows
+        // even if no list reload ever happens.
+        setYears((current) => current.map((y) => (y.year === row.year ? row : y)))
+        loadYear(year)
+      })
+      .catch((err: unknown) => {
+        // A 422 (an unknown status) or a 404 (the year went away) lands here verbatim. The
+        // selection is untouched, so the control still reads the row the server has.
+        setError(
+          err instanceof ApiError ? err.message : `Failed to set the filing status for ${year}`,
+        )
+      })
+      .finally(() => setStatusSaving(false))
   }
 
   // Saving inputs or brackets moves the engine's answer, so the totals line is refetched.
@@ -433,6 +468,38 @@ export default function TaxesPage() {
               </button>
             ))}
           </div>
+        )}
+        {/* The status of the SELECTED year, not another year to pick: its own row under the
+            chips, in the app-wide segmented treatment (RangeChips' .segmented, declared once
+            in panels.css). */}
+        {selectedYear !== null && (
+          <div className="filing-status-row">
+            <span className="filing-status-label">Filing status</span>
+            <InfoHint text="Which bracket tables the engine walks for this year, and whether the per-person inputs below split into two columns. Every year starts as Single." />
+            <div className="segmented" role="group" aria-label="Filing status">
+              {FILING_STATUSES.map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  className={status === filingStatus ? 'active' : ''}
+                  aria-pressed={status === filingStatus}
+                  disabled={statusSaving || busy}
+                  onClick={() => changeFilingStatus(status)}
+                >
+                  {FILING_STATUS_LABELS[status]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Standing, never dismissible: MFS brackets without Form-8958 community-income
+            splitting are wrong in California, and the sentence has to sit wherever the
+            number does (audit §3.2, design decision log "MFS"). */}
+        {selectedYear !== null && filingStatus === 'married_separate' && (
+          <p className="filing-status-caveat" role="note">
+            California is a community-property state; true MFS requires 50/50
+            community-income splitting (Form 8958), which this calculator does not model.
+          </p>
         )}
         {/* loadedOnce, not !loading: a FIRST load that failed knows nothing about whether
             there are years, and "No tax years yet" under an error banner reads as an

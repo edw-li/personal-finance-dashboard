@@ -9,6 +9,7 @@ import type {
   TaxSummariesOut,
   TaxSummaryOut,
   TaxYearOut,
+  TaxYearUpdate,
   WithholdingOut,
 } from '../types/api'
 import TaxesPage from './TaxesPage'
@@ -26,6 +27,7 @@ vi.mock('../api/taxes', async (importOriginal) => ({
   fetchWithholding: vi.fn(),
   putTaxInputs: vi.fn(),
   putTaxBrackets: vi.fn(),
+  patchTaxYear: vi.fn(),
   cloneBrackets: vi.fn(),
   deleteTaxYear: vi.fn(),
 }))
@@ -88,6 +90,7 @@ import {
   fetchTaxSummary,
   fetchTaxYears,
   fetchWithholding,
+  patchTaxYear,
   putTaxBrackets,
   putTaxInputs,
 } from '../api/taxes'
@@ -267,6 +270,11 @@ beforeEach(() => {
   vi.mocked(putTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
   vi.mocked(putTaxBrackets).mockImplementation(async (year: number) => bracketsFor(year))
   vi.mocked(deleteTaxYear).mockResolvedValue(undefined)
+  // The echo is authoritative: the selector reads the SERVER's status, never the button
+  // that was pressed.
+  vi.mocked(patchTaxYear).mockImplementation(async (year: number, body: TaxYearUpdate) => ({
+    year, notes: null, input_count: 21, bracket_count: 42, filing_status: body.filing_status,
+  }))
   confirmSpy.mockReturnValue(true)
 })
 
@@ -1073,5 +1081,119 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
     fireEvent.click(screen.getAllByTestId('echart')[1]) // any click in detail mode returns
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
+  })
+})
+
+describe('filing status (2026-08-26 design §6)', () => {
+  const statusButton = (name: string) =>
+    screen.getByRole('button', { name }) as HTMLButtonElement
+
+  const CA_CAVEAT =
+    'California is a community-property state; true MFS requires 50/50 community-income ' +
+    'splitting (Form 8958), which this calculator does not model.'
+
+  it('renders the selected year status as a segmented control', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
+    expect(statusButton('Married filing jointly').getAttribute('aria-pressed')).toBe('false')
+    expect(statusButton('Married filing separately').getAttribute('aria-pressed')).toBe('false')
+    // The caveat belongs to MFS alone — a single year must not carry a warning about a
+    // filing status it is not filed under.
+    expect(screen.queryByText(CA_CAVEAT)).toBeNull()
+  })
+
+  it('keeps the control off a page with no year selected', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([])
+    renderPage()
+    await screen.findByText(/no tax years yet/i)
+    expect(screen.queryByRole('button', { name: 'Single' })).toBeNull()
+  })
+
+  it('PATCHes the new status and reloads the year under it', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(statusButton('Married filing jointly'))
+
+    await waitFor(() =>
+      expect(vi.mocked(patchTaxYear)).toHaveBeenCalledWith(2024, {
+        filing_status: 'married_joint',
+      }),
+    )
+    // All THREE payloads move with the status — brackets are stored per (jurisdiction,
+    // status), the inputs grow a person column, the summary is computed against the
+    // status-selected tables — and the year is the one already on screen, so this only
+    // happens because `selection` is replaced by a FRESH object.
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenLastCalledWith(2024)
+    expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2)
+    // ...and the brackets GET names the NEW status, or it would read single's tables under
+    // a married year.
+    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetchTaxBrackets)).toHaveBeenLastCalledWith(2024, 'married_joint')
+    // The echo replaced the row, so the control follows without a list reload.
+    await waitFor(() =>
+      expect(statusButton('Married filing jointly').getAttribute('aria-pressed')).toBe('true'),
+    )
+  })
+
+  it('neither asks nor sends when the pressed status is already the year’s', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(statusButton('Single'))
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(vi.mocked(patchTaxYear)).not.toHaveBeenCalled()
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks before a status change that would discard typed work', async () => {
+    confirmSpy.mockReturnValue(false)
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+    fireEvent.change(salary(), { target: { value: '999' } })
+
+    fireEvent.click(statusButton('Married filing jointly'))
+    // The same question the other four reload doors ask — a status flip replaces both
+    // editors' payloads, so unsaved work is gone the moment it starts.
+    expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
+    expect(vi.mocked(patchTaxYear)).not.toHaveBeenCalled()
+    expect(salary().value).toBe('$999.00')
+  })
+
+  it('surfaces a status failure verbatim and leaves the year alone', async () => {
+    vi.mocked(patchTaxYear).mockRejectedValue(
+      new ApiError('filing_status must be one of single, married_joint, married_separate', 422),
+    )
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(statusButton('Married filing separately'))
+    expect(
+      await screen.findByText(
+        'filing_status must be one of single, married_joint, married_separate',
+      ),
+    ).toBeTruthy()
+    // Nothing was reloaded, and the control still reads the row the server has.
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
+    expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('stands the California community-property caveat under MFS only', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([
+      { ...year2024, filing_status: 'married_separate' },
+    ])
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    // Verbatim, and not dismissible: an MFS calculation without Form-8958 community-income
+    // splitting is wrong in California, so the sentence stays wherever the number is.
+    expect(screen.getByText(CA_CAVEAT)).toBeTruthy()
+
+    fireEvent.click(statusButton('Married filing jointly'))
+    await waitFor(() => expect(screen.queryByText(CA_CAVEAT)).toBeNull())
   })
 })
