@@ -1,3 +1,6 @@
+import os
+import re
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -11,18 +14,31 @@ from app.models import User
 from app.rate_limit import limiter
 from app.security import hash_password
 
+# The test database is disposable and torn down aggressively (drop_all + TRUNCATE between
+# tests), so concurrent suite runs against one database deadlock each other. FINANCE_TEST_DB
+# lets each runner (CI shard, parallel worktree agent) claim its own database; the name must
+# keep a *_test suffix so the destructive statements below can never target a real database.
+_TEST_DB_NAME = os.environ.get("FINANCE_TEST_DB", "finance_test")
+if not re.fullmatch(r"[a-z0-9_]+_test(_[a-z0-9_]+)?", _TEST_DB_NAME):
+    raise RuntimeError(
+        f"FINANCE_TEST_DB={_TEST_DB_NAME!r} must match '<name>_test[_suffix]' "
+        "to guard the destructive test teardown"
+    )
+
 # make_url().set() survives query params / odd DSNs, unlike string surgery; guarantees the
 # destructive drop_all below can only ever target the *_test database.
-TEST_DATABASE_URL = make_url(settings.database_url).set(database="finance_test")
+TEST_DATABASE_URL = make_url(settings.database_url).set(database=_TEST_DB_NAME)
 
 
 async def _ensure_test_database() -> None:
-    """Create finance_test if missing — self-heals stale dev volumes and plain-CI Postgres."""
+    """Create the test database if missing — self-heals stale dev volumes and plain-CI Postgres."""
     admin = create_async_engine(make_url(settings.database_url), isolation_level="AUTOCOMMIT")
     async with admin.connect() as conn:
-        exists = await conn.scalar(text("SELECT 1 FROM pg_database WHERE datname = 'finance_test'"))
+        exists = await conn.scalar(
+            text("SELECT 1 FROM pg_database WHERE datname = :name").bindparams(name=_TEST_DB_NAME)
+        )
         if not exists:
-            await conn.execute(text("CREATE DATABASE finance_test"))
+            await conn.execute(text(f'CREATE DATABASE "{_TEST_DB_NAME}"'))
     await admin.dispose()
 
 
