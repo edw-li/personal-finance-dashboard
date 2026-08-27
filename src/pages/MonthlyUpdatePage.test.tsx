@@ -56,6 +56,7 @@ beforeEach(() => {
     net_worth: ['1500.00'],
     mom_pct: [null],
     notes: [null],
+    owner_series: [],
   })
   vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category])
   // One prior month of history for Food — the spending step's "Typical" column reads it
@@ -252,6 +253,7 @@ it('offers starting the month after the latest covered month', async () => {
     net_worth: ['1500.00'],
     mom_pct: [null],
     notes: [null],
+    owner_series: [],
   })
   render(
     <MemoryRouter initialEntries={[`/update?month=${current}`]}>

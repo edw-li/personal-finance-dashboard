@@ -37,14 +37,21 @@ export function deleteAccount(accountId: number): Promise<void> {
   return api<void>(`/net-worth/accounts/${accountId}`, { method: 'DELETE' })
 }
 
+/** The page-level ownership scope. `null` is the household view and sends NO param at all,
+ *  so an unfiltered request stays byte-identical to the pre-ownership one. */
+export type OwnerScope = number | 'joint' | null
+
 export function fetchTimeseries(
   granularity: 'monthly' | 'quarterly' = 'monthly',
+  owner: OwnerScope = null,
 ): Promise<NetWorthTimeseries> {
-  return api<NetWorthTimeseries>(`/net-worth/timeseries?granularity=${granularity}`)
+  const scope = owner === null ? '' : `&owner=${owner}`
+  return api<NetWorthTimeseries>(`/net-worth/timeseries?granularity=${granularity}${scope}`)
 }
 
-export function fetchSummary(): Promise<NetWorthSummary> {
-  return api<NetWorthSummary>('/net-worth/summary')
+export function fetchSummary(owner: OwnerScope = null): Promise<NetWorthSummary> {
+  const scope = owner === null ? '' : `?owner=${owner}`
+  return api<NetWorthSummary>(`/net-worth/summary${scope}`)
 }
 
 export function fetchMonthBalances(month: string): Promise<MonthBalances> {

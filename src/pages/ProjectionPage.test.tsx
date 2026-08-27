@@ -115,6 +115,7 @@ function timeseries(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries 
     net_worth: ['100000.00', '101000.00', '102010.00'],
     mom_pct: [null, null, null],
     notes: [null, null, null],
+    owner_series: [],
     ...over,
   }
 }
