@@ -56,6 +56,21 @@ export interface BalanceEntry {
   balance: string
 }
 
+/** One EXCLUSIVE owner column of the timeseries — `name` is null for the joint
+ *  (NULL-owned) row; the UI supplies the word "Joint". Values are aligned with `months`
+ *  and sum to `net_worth` month by month, which is why they can be stacked. */
+export interface OwnerSeries {
+  person_id: number | null
+  name: string | null
+  values: string[]
+}
+
+export interface OwnerTotal {
+  person_id: number | null
+  name: string | null
+  total: string
+}
+
 export interface NetWorthTimeseries {
   months: string[]
   accounts: AccountOut[]
@@ -65,6 +80,8 @@ export interface NetWorthTimeseries {
   mom_pct: (string | null)[]
   /** Snapshot notes aligned with months — the chart's annotation layer (user text). */
   notes: (string | null)[]
+  /** Per-owner net worth, primary person first and Joint last — the "By owner" stack. */
+  owner_series: OwnerSeries[]
 }
 
 export interface GroupSummary {
@@ -79,6 +96,8 @@ export interface NetWorthSummary {
   mom_delta: string | null
   mom_pct: string | null
   groups: GroupSummary[]
+  /** The latest snapshot split by owner instead of by group; empty with no snapshots. */
+  owner_totals: OwnerTotal[]
 }
 
 export interface MonthBalances {

@@ -7,10 +7,25 @@
   gap: 1rem;
 }
 
-/* Two segmented controls side by side (time range + granularity); wraps on narrow. */
+/* Up to three segmented controls side by side (stack-by + time range + granularity);
+   wraps on narrow. */
 .networth-chart-controls {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+/* Page-level ownership scope. It sits ABOVE the tiles because it scopes them too — a
+   control that changes the hero number must not be buried in a card header. */
+.networth-owner-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.networth-owner-row .eyebrow {
+  margin: 0;
 }

@@ -8,7 +8,7 @@ and grouped).
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ACCOUNT_GROUPS, Account, AccountBalance, AppSetting, NetWorthSnapshot
@@ -20,18 +20,53 @@ ZERO = Decimal("0.00")
 
 BalanceKey = tuple[int, int]  # (snapshot_id, account_id)
 
+JOINT = "joint"
+INT32_MAX = 2**31 - 1
+
+
+def owner_clause(owner: str) -> ColumnElement[bool]:
+    """THE definition of net-worth ownership (household spec §5.2) — one function, so the
+    two endpoints cannot drift apart.
+
+    `joint` selects the NULL-owned accounts only. A person id selects that person's accounts
+    PLUS the joint ones, because "primary holder, spouse secondary" is what a joint account
+    actually is: a person's view is "mine and ours", never "mine alone". The person views
+    therefore OVERLAP by design and must never be summed — the disjoint split for stacking
+    is owner_totals_for below.
+
+    Raises ValueError on anything else so the router answers 422; an out-of-range id would
+    otherwise reach asyncpg as an int32 overflow, i.e. a 500. `isascii()` guards the
+    superscript digits that `str.isdigit()` accepts and `int()` then rejects.
+    """
+    if owner == JOINT:
+        return Account.person_id.is_(None)
+    if not (owner.isascii() and owner.isdigit()) or not 1 <= int(owner) <= INT32_MAX:
+        raise ValueError(f"owner must be a person id or {JOINT!r}")
+    return or_(Account.person_id == int(owner), Account.person_id.is_(None))
+
 
 async def load_balance_matrix(
     db: AsyncSession,
+    owner_filter: ColumnElement[bool] | None = None,
 ) -> tuple[list[NetWorthSnapshot], list[Account], dict[BalanceKey, Decimal]]:
+    """`owner_filter` (owner_clause's output) scopes the ACCOUNT list, and that is the whole
+    filtering seam: net_worth_for / group_totals_for / owner_totals_for each sum over the
+    list they are handed, so scoping it here scopes every rollup at once — plus the
+    endpoints' own `accounts`/`series` payloads, which should show the same scope the totals
+    describe. A per-function owner argument would be three places to forget.
+
+    Balances stay loaded whole: the out-of-scope rows are inert (nothing looks them up), and
+    a join to filter them would buy nothing at 25 accounts x ~40 snapshots.
+    """
     snapshots = list(
         (await db.execute(select(NetWorthSnapshot).order_by(NetWorthSnapshot.month)))
         .scalars()
         .all()
     )
-    accounts = list(
-        (await db.execute(select(Account).order_by(Account.sort_order, Account.id))).scalars().all()
-    )
+    account_q = select(Account).order_by(Account.sort_order, Account.id)
+    if owner_filter is not None:
+        account_q = account_q.where(owner_filter)
+    accounts = list((await db.execute(account_q)).scalars().all())
     balances = {
         (b.snapshot_id, b.account_id): b.balance
         for b in (await db.execute(select(AccountBalance))).scalars()
@@ -58,6 +93,29 @@ def group_totals_for(
         if account.is_component:
             continue
         totals[account.group] += balances.get((snapshot_id, account.id), ZERO)
+    return totals
+
+
+def owner_totals_for(
+    snapshot_id: int, accounts: list[Account], balances: dict[BalanceKey, Decimal]
+) -> dict[int | None, Decimal]:
+    """EXCLUSIVE ownership: every account counts once, under its stored person_id, with None
+    its own ("Joint") bucket. Deliberately NOT owner_clause's inclusive person view — a stack
+    has to be disjoint, and stacking three inclusive views would count every joint dollar
+    two or three times. The invariant this buys: sum(owner_totals_for(...).values()) ==
+    net_worth_for(...) over the same account list, which is what lets the owner stack land
+    exactly on the net-worth line.
+
+    Only owners that actually hold a non-component account appear; a person with nothing to
+    their name is absent rather than a zero row.
+    """
+    totals: dict[int | None, Decimal] = {}
+    for account in accounts:
+        if account.is_component:
+            continue
+        totals[account.person_id] = totals.get(account.person_id, ZERO) + balances.get(
+            (snapshot_id, account.id), ZERO
+        )
     return totals
 
 

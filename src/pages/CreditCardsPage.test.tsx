@@ -130,7 +130,7 @@ function seedHappyPath() {
   vi.mocked(fetchMatrix).mockResolvedValue(EMPTY_MATRIX)
   vi.mocked(fetchAccounts).mockResolvedValue([])
   vi.mocked(fetchSummary).mockResolvedValue({
-    month: null, net_worth: null, mom_delta: null, mom_pct: null, groups: [],
+    month: null, net_worth: null, mom_delta: null, mom_pct: null, groups: [], owner_totals: [],
   })
   vi.mocked(fetchMonthBalances).mockResolvedValue({
     month: '2026-08-01', exists: false, recorded_on: null, notes: null, balances: [],

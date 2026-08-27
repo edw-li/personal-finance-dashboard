@@ -15,25 +15,47 @@ vi.mock('../api/spending', () => ({
   fetchSpendingMonth: vi.fn(),
   putSpendingMonth: vi.fn(),
 }))
+vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 
 import * as netWorthApi from '../api/netWorth'
 import * as spendingApi from '../api/spending'
+import * as householdApi from '../api/household'
 import { formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
-  sort_order: 1, is_active: true, is_component: false, parent_account_id: null, person_id: null,
+  sort_order: 1, is_active: true, is_component: false, parent_account_id: null,
+  person_id: 1,
 }
 // The default fixture is one account, which cannot show ORDER — the paste tests that care
 // about where a range lands opt into this second row.
 const savings = {
   id: 2, name: 'Savings', slug: 'savings', group: 'cash' as const,
-  sort_order: 2, is_active: true, is_component: false, parent_account_id: null, person_id: null,
+  sort_order: 2, is_active: true, is_component: false, parent_account_id: null,
+  person_id: 1,
+}
+// Owner-grouping fixtures: one per ownership kind, in three different groups so the walk's
+// owner → group → row nesting is unambiguous in the assertions.
+const samBrokerage = {
+  id: 3, name: 'Sam Brokerage', slug: 'sam-brokerage', group: 'taxable' as const,
+  sort_order: 3, is_active: true, is_component: false, parent_account_id: null,
+  person_id: 2,
+}
+const jointSavings = {
+  id: 4, name: 'Joint Savings', slug: 'joint-savings', group: 'cash' as const,
+  sort_order: 4, is_active: true, is_component: false, parent_account_id: null,
+  person_id: null,
 }
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 
 beforeEach(() => {
+  // One-person household by default: every pre-existing test in this file asserts the FLAT
+  // group walk, and that is exactly what a single person must keep rendering.
+  vi.mocked(householdApi.fetchHousehold).mockResolvedValue({
+    people: [{ id: 1, name: 'Me', is_primary: true }],
+    marriage_date: null,
+  })
   vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account])
   vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
     month,
@@ -56,6 +78,7 @@ beforeEach(() => {
     net_worth: ['1500.00'],
     mom_pct: [null],
     notes: [null],
+    owner_series: [],
   })
   vi.mocked(spendingApi.fetchCategories).mockResolvedValue([category])
   // One prior month of history for Food — the spending step's "Typical" column reads it
@@ -113,11 +136,11 @@ it('walks balances -> spending -> review and submits both PUTs', async () => {
   const foodInput = await screen.findByLabelText('Food')
   expect((foodInput as HTMLInputElement).value).toBe('$0.00')
   // The step's own autofocus, pinned rather than merely implied by the echo above.
-  expect(document.activeElement).toBe(screen.getByLabelText('Net pay (take-home)'))
+  expect(document.activeElement).toBe(screen.getByLabelText('Household take-home'))
   fireEvent.change(foodInput, { target: { value: '250.00' } })
-  // The exact label, not /net pay/i: the step's ⓘ hint carries "net pay" in its aria-label,
-  // which getByLabelText reads as a label too — same box, tighter selector.
-  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '9000.00' } })
+  // The exact label, not /take-home/i: the step's ⓘ hint carries "take-home" in its
+  // aria-label, which getByLabelText reads as a label too — same box, tighter selector.
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9000.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
 
   // Step 3: preview totals, then save.
@@ -252,6 +275,7 @@ it('offers starting the month after the latest covered month', async () => {
     net_worth: ['1500.00'],
     mom_pct: [null],
     notes: [null],
+    owner_series: [],
   })
   render(
     <MemoryRouter initialEntries={[`/update?month=${current}`]}>
@@ -275,7 +299,7 @@ it('canonicalizes tolerant and =-expression entries into the PUT bodies', async 
   fireEvent.change(balanceInput, { target: { value: '$1,600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '=200+50' } })
-  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '9,000' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '9,000' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await waitFor(() => {
@@ -445,7 +469,7 @@ it('keeps the live spending footer in sync while entering amounts', async () => 
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '250' } })
-  fireEvent.change(screen.getByLabelText('Net pay (take-home)'), { target: { value: '1000' } })
+  fireEvent.change(screen.getByLabelText('Household take-home'), { target: { value: '1000' } })
   // Same lesson as the balances footer: select the totals bar by its label, not by role.
   const footer = screen.getByRole('status', { name: /live totals/i })
   expect(within(footer).getByText('$250.00')).toBeDefined()
@@ -462,7 +486,7 @@ it('clears a previously saved net pay when the box is blanked', async () => {
   })
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  const netPayBox = await screen.findByLabelText('Net pay (take-home)')
+  const netPayBox = await screen.findByLabelText('Household take-home')
   fireEvent.change(netPayBox, { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
@@ -474,7 +498,7 @@ it('clears a previously saved net pay when the box is blanked', async () => {
   })
   // A deletion the user asked for by BLANKING a box deserves saying out loud — the counts
   // sentence alone never mentions the cashflow row that just went away.
-  await screen.findByText(/net pay cleared/i)
+  await screen.findByText(/household take-home cleared/i)
 })
 
 it('keeps sending the clear on the retry after a failed save', async () => {
@@ -485,7 +509,7 @@ it('keeps sending the clear on the retry after a failed save', async () => {
   vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  fireEvent.change(await screen.findByLabelText('Net pay (take-home)'), { target: { value: '' } })
+  fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByRole('alert')
@@ -521,7 +545,7 @@ it('a post-save blur never resurrects a phantom draft', async () => {
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
   // Tolerant text advanced past by CLICKS — no blur, so state keeps the raw '9,000'
   // while the wire (and the server) got the canonical '9000'.
-  const netPay = await screen.findByLabelText('Net pay (take-home)')
+  const netPay = await screen.findByLabelText('Household take-home')
   fireEvent.change(netPay, { target: { value: '9,000' } })
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
@@ -532,7 +556,7 @@ it('a post-save blur never resurrects a phantom draft', async () => {
   // it and file a draft for work that is fully saved — the next visit would then greet
   // the user with "Restored unsaved entries — they are not saved yet" about nothing.
   fireEvent.click(screen.getByRole('button', { name: /^2\s*spending$/i }))
-  const again = await screen.findByLabelText('Net pay (take-home)')
+  const again = await screen.findByLabelText('Household take-home')
   act(() => {
     // Bare .focus() outside act queues the focused re-render without flushing it
     // (React 19 emits no warning) — the blur would then run against stale render state.
@@ -687,7 +711,7 @@ it('leaves a multi-line paste in the notes box to the browser', async () => {
 it('starts a column paste at the first row when the pasted-into cell is outside the table', async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  const netPayBox = (await screen.findByLabelText('Net pay (take-home)')) as HTMLInputElement
+  const netPayBox = (await screen.findByLabelText('Household take-home')) as HTMLInputElement
   fireEvent.paste(netPayBox, { clipboardData: { getData: () => '10\n20' } })
 
   // Net pay is an AmountInput like any other, but it sits OUTSIDE the table and carries no
@@ -748,4 +772,90 @@ it('leaves unbudgeted rows without the subtext', async () => {
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
   const food = await screen.findByLabelText('Food')
   expect(within(food.closest('tr') as HTMLElement).queryByText(/^of \$/)).toBeNull()
+})
+
+// --- owner grouping (2026-08-26 household spec §6) ---------------------------------------
+
+function twoPersonHousehold() {
+  vi.mocked(householdApi.fetchHousehold).mockResolvedValue({
+    people: [
+      { id: 1, name: 'Me', is_primary: true },
+      { id: 2, name: 'Sam', is_primary: false },
+    ],
+    marriage_date: '2026-09-12',
+  })
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, samBrokerage, jointSavings])
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-07-01',
+    recorded_on: null,
+    notes: null,
+    balances:
+      month === '2026-07-01'
+        ? [
+            { account_id: 1, balance: '100.00' },
+            { account_id: 3, balance: '1000.00' },
+            { account_id: 4, balance: '70.00' },
+          ]
+        : [],
+  }))
+}
+
+it('walks owner -> group -> rows with a subtotal per owner, primary first and Joint last', async () => {
+  twoPersonHousehold()
+  renderWizard()
+  await screen.findByLabelText('Checking')
+
+  const ownerHeads = [...document.querySelectorAll('tr.entry-owner-row')] as HTMLElement[]
+  expect(ownerHeads.map((r) => r.textContent)).toEqual(['Me', 'Sam', 'Joint'])
+
+  const ownerTotals = [
+    ...document.querySelectorAll('tr.entry-owner-subtotal-row'),
+  ] as HTMLElement[]
+  expect(ownerTotals.map((r) => within(r).getAllByRole('cell')[0].textContent)).toEqual([
+    'Me total', 'Sam total', 'Joint total',
+  ])
+  // Cells are [label, last month, this month, Δ]; the month seeds from the prior one, so
+  // "this month" equals "last month" and every Δ is a clean $0.00.
+  expect(ownerTotals.map((r) => within(r).getAllByRole('cell')[2].textContent)).toEqual([
+    '$100.00', '$1,000.00', '$70.00',
+  ])
+
+  // The group subtotals survive UNDERNEATH the owner ones — one level finer, not replaced.
+  const groupSubtotals = [...document.querySelectorAll('tr.entry-subtotal-row')] as HTMLElement[]
+  expect(groupSubtotals.map((r) => within(r).getAllByRole('cell')[2].textContent)).toEqual([
+    '$100.00', '$1,000.00', '$70.00',
+  ])
+})
+
+it('makes the owner walk the DOM order a positional paste fills down', async () => {
+  twoPersonHousehold()
+  renderWizard()
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  // Three values down the rendered column: Me's row, then Sam's, then Joint's.
+  fireEvent.paste(checking, { clipboardData: { getData: () => '1\n2\n3' } })
+
+  expect(checking.value).toBe('1')
+  expect((screen.getByLabelText('Sam Brokerage') as HTMLInputElement).value).toBe('$2.00')
+  expect((screen.getByLabelText('Joint Savings') as HTMLInputElement).value).toBe('$3.00')
+})
+
+it('keeps the flat group walk for a one-person household', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, savings])
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  // No owner layer at all — not an empty header, not a "Me" section of one.
+  expect(document.querySelector('tr.entry-owner-row')).toBeNull()
+  expect(document.querySelector('tr.entry-owner-subtotal-row')).toBeNull()
+  expect(document.querySelectorAll('tr.entry-subtotal-row').length).toBe(1)
+})
+
+it('names the pay box as a HOUSEHOLD figure — one stream, two earners', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  // The field, the step heading and the ⓘ hint all say the same word; a box still called
+  // "Net pay" on a married household reads as one person's paycheck.
+  expect(await screen.findByLabelText('Household take-home')).toBeTruthy()
+  expect(screen.queryByLabelText('Net pay (take-home)')).toBeNull()
+  expect(screen.getByRole('heading', { name: /spending & take-home/i })).toBeTruthy()
 })

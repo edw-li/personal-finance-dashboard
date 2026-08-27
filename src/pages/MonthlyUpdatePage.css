@@ -87,6 +87,22 @@
   color: var(--muted);
   font-size: 0.8rem;
 }
+/* The owner layer: a heavier version of .entry-group-row (it is the coarser heading), and
+   a subtotal that reads as a total rather than as another muted group line. */
+.entry-owner-row th {
+  text-align: left;
+  padding-top: 1.4rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  font-weight: 600;
+}
+.entry-owner-subtotal-row td {
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
 /* The same two variables .stat-delta-positive/-negative use (panels.css) — one delta
    palette across the app; the Δ column and the footer share these. The table-scoped twin
    is load-bearing, not redundant: the muted default above is `.entry-table .entry-delta`

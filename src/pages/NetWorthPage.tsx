@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
+import type { OwnerScope } from '../api/netWorth'
+import { fetchHousehold } from '../api/household'
 import { ApiError } from '../api/client'
 import ChartZoomHint from '../components/ChartZoomHint'
 import EChart from '../components/EChart'
@@ -11,6 +13,7 @@ import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
 import {
   NOTES_SERIES,
+  marriageMarkLine,
   netWorthCsv,
   netWorthStackedTooltipFormatter,
 } from '../components/networth/netWorthChartOptions'
@@ -25,7 +28,12 @@ import {
   MUTED,
   PALETTE,
 } from '../charts/theme'
-import type { AccountGroup, NetWorthSummary, NetWorthTimeseries } from '../types/api'
+import type {
+  AccountGroup,
+  HouseholdOut,
+  NetWorthSummary,
+  NetWorthTimeseries,
+} from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import {
   formatCurrency,
@@ -54,6 +62,18 @@ function pctChange(curr: string | null, prev: string | null): number | null {
 export default function NetWorthPage() {
   const navigate = useNavigate()
   const [granularity, setGranularity] = useState<'monthly' | 'quarterly'>('monthly')
+  // The page's ownership scope: null = the whole household (and NO owner param at all, so
+  // the request is byte-identical to the pre-ownership one). It scopes the tiles, both
+  // charts and the accounts table, which is why the chips sit above the tiles rather than
+  // inside a card header.
+  const [owner, setOwner] = useState<OwnerScope>(null)
+  // Fetched on its own, never inside the page's Promise.all: the chips are an affordance,
+  // and a household hiccup must not blank the net worth (OverviewPage's isolated-fetch
+  // posture). null covers both "not loaded yet" and "failed".
+  const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  // Group stacking stays the default (spec §6): "how is it invested" is the question this
+  // chart has always answered; "whose is it" is the new second reading of the same total.
+  const [stackBy, setStackBy] = useState<'group' | 'owner'>('group')
   const [data, setData] = useState<NetWorthTimeseries | null>(null)
   const [summary, setSummary] = useState<NetWorthSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,7 +112,7 @@ export default function NetWorthPage() {
   // body of the effect below (react-hooks/set-state-in-effect — the same constraint
   // AuthContext documents; the rule reads `await` continuations as synchronous).
   const load = useCallback(() => {
-    Promise.all([fetchTimeseries(granularity), fetchSummary()])
+    Promise.all([fetchTimeseries(granularity, owner), fetchSummary(owner)])
       .then(([ts, sum]) => {
         setData(ts)
         setSummary(sum)
@@ -120,7 +140,7 @@ export default function NetWorthPage() {
         setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')
       })
       .finally(() => setLoading(false))
-  }, [granularity])
+  }, [granularity, owner])
 
   // The "we're fetching" flip therefore lives in the event handlers that cause a fetch —
   // the mount fetch is covered by useState's initial `true`.
@@ -132,6 +152,45 @@ export default function NetWorthPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  // Once per visit, and deliberately not part of `load`: setState lives in the promise
+  // continuations, never in the effect body (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    fetchHousehold()
+      .then(setHousehold)
+      .catch(() => setHousehold(null))
+  }, [])
+
+  // Primary first, then everyone else by id — the same order the server uses for
+  // owner_series/owner_totals, so chips and stack read left-to-right the same way. The
+  // `?? []` lives INSIDE the memo: a fresh literal in the dep list would re-sort on every
+  // render (react-hooks/exhaustive-deps), which is the memo doing nothing.
+  const orderedPeople = useMemo(
+    () =>
+      [...(household?.people ?? [])].sort(
+        (a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id,
+      ),
+    [household],
+  )
+  // One person means there is nothing to choose between: no chips, no stack toggle.
+  const ownerScopes: { scope: OwnerScope; label: string }[] =
+    orderedPeople.length > 1
+      ? [
+          { scope: null, label: 'All' },
+          ...orderedPeople.map((p) => ({ scope: p.id as OwnerScope, label: p.name })),
+          { scope: 'joint' as OwnerScope, label: 'Joint' },
+        ]
+      : []
+
+  const selectOwner = (next: OwnerScope) => {
+    if (next === owner) return
+    beginLoad()
+    // The drill-down holds ACCOUNT ids, and the next scope may not contain them — clear it
+    // and let the seed pick this scope's biggest account instead of leaving empty series.
+    setDrill([])
+    seededDrillRef.current = false
+    setOwner(next)
+  }
 
   const filledMonths = useMemo(() => new Set(coverageMonths), [coverageMonths])
   const anchor = useMemo(() => {
@@ -153,6 +212,7 @@ export default function NetWorthPage() {
         note: (data.notes ?? [])[i],
       }))
       .filter((p): p is { label: string; value: number; note: string } => !!p.note)
+    const marriageMark = marriageMarkLine(data.months, household?.marriage_date ?? null)
     return {
       // Windowed, not sliced: dataZoom keeps the whole series loaded so a ctrl+wheel or a
       // chip flip never refetches, and the y-axis re-scales to the visible window (filter
@@ -164,7 +224,11 @@ export default function NetWorthPage() {
         trigger: 'axis',
         // Asset rows + their subtotal, then liabilities/net worth/notes — the formatter
         // (and its escapeHtml duty on note text) lives in netWorthChartOptions.ts.
-        formatter: netWorthStackedTooltipFormatter(ASSET_GROUPS.map((g) => GROUP_LABELS[g])),
+        // Owner columns already sum to the net-worth row, so an "Assets" subtotal would
+        // just print the same number twice: no asset set in owner mode, no subtotal row.
+        formatter: netWorthStackedTooltipFormatter(
+          stackBy === 'owner' ? [] : ASSET_GROUPS.map((g) => GROUP_LABELS[g]),
+        ),
       },
       xAxis: { type: 'category', data: labels, boundaryGap: false },
       yAxis: {
@@ -172,25 +236,57 @@ export default function NetWorthPage() {
         axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
       },
       series: [
-        ...ASSET_GROUPS.map((group) => ({
-          name: GROUP_LABELS[group],
-          type: 'line' as const,
-          stack: 'assets',
-          symbol: 'none' as const,
-          lineStyle: { width: 1 },
-          areaStyle: { opacity: 0.5 },
-          color: GROUP_COLORS[group],
-          data: data.group_totals[group].map(Number),
-        })),
-        {
-          name: GROUP_LABELS.liability,
-          type: 'line' as const,
-          symbol: 'none' as const,
-          lineStyle: { width: 1 },
-          areaStyle: { opacity: 0.5 },
-          color: GROUP_COLORS.liability,
-          data: data.group_totals.liability.map(Number),
-        },
+        ...(stackBy === 'owner'
+          ? (data.owner_series ?? []).map((series) => ({
+              // The server's owner_series is EXCLUSIVE and sums to net_worth, so the stack
+              // lands exactly on the line below. `?? []` is stale-deploy armor, like notes.
+              name: series.name ?? 'Joint',
+              type: 'line' as const,
+              stack: 'owner',
+              // Owner columns are NET (assets minus that owner's liabilities), so one of
+              // them can go negative. echarts' default 'samesign' strategy would then park
+              // it on the baseline and the stack would stop meeting the net-worth line;
+              // 'all' keeps the sum honest.
+              stackStrategy: 'all' as const,
+              symbol: 'none' as const,
+              lineStyle: { width: 1 },
+              areaStyle: { opacity: 0.5 },
+              // Colour is keyed by the person's HOUSEHOLD slot (primary first, then by id,
+              // joint last), not by position in this response — owner_series membership
+              // varies with the chip scope, and a person must keep their colour across
+              // scopes. Households are far smaller than PALETTE (theme.ts caps at 8).
+              color:
+                PALETTE[
+                  (series.person_id === null
+                    ? orderedPeople.length
+                    : Math.max(
+                        orderedPeople.findIndex((p) => p.id === series.person_id),
+                        0,
+                      )) % PALETTE.length
+                ],
+              data: series.values.map(Number),
+            }))
+          : [
+              ...ASSET_GROUPS.map((group) => ({
+                name: GROUP_LABELS[group],
+                type: 'line' as const,
+                stack: 'assets',
+                symbol: 'none' as const,
+                lineStyle: { width: 1 },
+                areaStyle: { opacity: 0.5 },
+                color: GROUP_COLORS[group],
+                data: data.group_totals[group].map(Number),
+              })),
+              {
+                name: GROUP_LABELS.liability,
+                type: 'line' as const,
+                symbol: 'none' as const,
+                lineStyle: { width: 1 },
+                areaStyle: { opacity: 0.5 },
+                color: GROUP_COLORS.liability,
+                data: data.group_totals.liability.map(Number),
+              },
+            ]),
         {
           name: 'Net worth',
           type: 'line' as const,
@@ -205,6 +301,9 @@ export default function NetWorthPage() {
             formatter: (params: { value?: unknown }) =>
               formatCurrencyCompact(params.value as number),
           },
+          // The wedding rule rides the net-worth line: one annotation, on the series that
+          // is present in BOTH stack modes.
+          ...(marriageMark ? { markLine: marriageMark } : {}),
           data: data.net_worth.map(Number),
         },
         ...(noted.length > 0
@@ -228,7 +327,7 @@ export default function NetWorthPage() {
           : []),
       ],
     }
-  }, [data, range, legendSelected])
+  }, [data, range, legendSelected, stackBy, household, orderedPeople])
 
   const drillOption = useMemo<EChartsOption | null>(() => {
     if (!data || drill.length === 0) return null
@@ -296,6 +395,26 @@ export default function NetWorthPage() {
         </button>
       </div>
 
+      {ownerScopes.length > 0 && (
+        <div className="networth-owner-row">
+          <span className="eyebrow">Whose money</span>
+          <div className="segmented" role="group" aria-label="Owner">
+            {ownerScopes.map(({ scope, label }) => (
+              <button
+                key={label}
+                type="button"
+                className={owner === scope ? 'active' : ''}
+                aria-pressed={owner === scope}
+                onClick={() => selectOwner(scope)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <InfoHint text="A person's view is their own accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts." />
+        </div>
+      )}
+
       {error && (
         <div className="error-banner" role="alert">
           {error}{' '}
@@ -354,6 +473,21 @@ export default function NetWorthPage() {
               <InfoHint text="Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note." />
             </h2>
             <div className="networth-chart-controls">
+              {ownerScopes.length > 0 && (
+                <div className="segmented" role="group" aria-label="Stack by">
+                  {(['group', 'owner'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={stackBy === mode ? 'active' : ''}
+                      aria-pressed={stackBy === mode}
+                      onClick={() => setStackBy(mode)}
+                    >
+                      {mode === 'group' ? 'By group' : 'By owner'}
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* One window for the whole page: the drill-down below follows these chips
                   too (both charts share the month axis). */}
               <RangeChips value={range.preset} onChange={setRange} />

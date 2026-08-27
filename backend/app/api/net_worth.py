@@ -1,9 +1,9 @@
 from datetime import date
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -20,11 +20,20 @@ from app.schemas.net_worth import (
     MonthBalancesOut,
     MonthUpsert,
     MonthUpsertResult,
+    OwnerSeries,
+    OwnerTotal,
     SummaryOut,
     TimeseriesOut,
 )
 from app.services.money import mom_pct, quantize_money, require_first_of_month
-from app.services.net_worth_calc import group_totals_for, load_balance_matrix, net_worth_for
+from app.services.net_worth_calc import (
+    ZERO,
+    group_totals_for,
+    load_balance_matrix,
+    net_worth_for,
+    owner_clause,
+    owner_totals_for,
+)
 
 router = APIRouter(
     prefix="/net-worth", tags=["net-worth"], dependencies=[Depends(get_current_user)]
@@ -173,13 +182,48 @@ async def delete_account(account_id: int, db: AsyncSession = Depends(get_db)) ->
 
 QUARTER_END_MONTHS = (3, 6, 9, 12)
 
+# A bounded string, not an int: the value is either a person id or the literal "joint", and
+# a length cap keeps a garbage query out of the parser before owner_clause even sees it.
+OwnerQuery = Annotated[str | None, Query(max_length=32)]
+
+
+def _owner_filter(owner: str | None) -> ColumnElement[bool] | None:
+    """HTTP contract only — owner_clause owns the SEMANTICS. Absent means household, and
+    the endpoint's answer is then byte-identical to the pre-ownership one."""
+    if owner is None:
+        return None
+    try:
+        return owner_clause(owner)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def _owner_rows(
+    db: AsyncSession, accounts: list[Account]
+) -> list[tuple[int | None, str | None]]:
+    """The owner identities present in `accounts`: primary person first, the rest by id,
+    Joint (NULL-owned) last. Components are excluded from every rollup, so they must not
+    conjure an owner row either — otherwise a partner whose only row is a 401(k) bucket
+    would appear with a phantom $0.00 column."""
+    owned = {a.person_id for a in accounts if not a.is_component}
+    people = list(
+        (await db.execute(select(Person).order_by(Person.is_primary.desc(), Person.id)))
+        .scalars()
+        .all()
+    )
+    rows: list[tuple[int | None, str | None]] = [(p.id, p.name) for p in people if p.id in owned]
+    if None in owned:
+        rows.append((None, None))  # Joint — the client owns that word, not the server
+    return rows
+
 
 @router.get("/timeseries", response_model=TimeseriesOut)
 async def timeseries(
     granularity: Literal["monthly", "quarterly"] = "monthly",
+    owner: OwnerQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> TimeseriesOut:
-    snapshots, accounts, balances = await load_balance_matrix(db)
+    snapshots, accounts, balances = await load_balance_matrix(db, _owner_filter(owner))
     if granularity == "quarterly":
         snapshots = [s for s in snapshots if s.month.month in QUARTER_END_MONTHS]
     net_worth = [net_worth_for(s.id, accounts, balances) for s in snapshots]
@@ -190,6 +234,10 @@ async def timeseries(
     group_totals = {
         group: [totals[group] for totals in per_snapshot_groups] for group in ACCOUNT_GROUPS
     }
+    # Same in-memory matrix, regrouped: no extra queries, and the toggle on the page is a
+    # re-render rather than a refetch.
+    per_snapshot_owners = [owner_totals_for(s.id, accounts, balances) for s in snapshots]
+    owner_rows = await _owner_rows(db, accounts)
     return TimeseriesOut(
         months=[s.month for s in snapshots],
         accounts=[AccountOut.model_validate(a) for a in accounts],
@@ -205,20 +253,40 @@ async def timeseries(
         mom_pct=mom,
         # After the quarterly filter, so the list stays aligned with `months`.
         notes=[s.notes for s in snapshots],
+        owner_series=[
+            OwnerSeries(
+                person_id=person_id,
+                name=name,
+                values=[totals.get(person_id, ZERO) for totals in per_snapshot_owners],
+            )
+            for person_id, name in owner_rows
+        ],
     )
 
 
 @router.get("/summary", response_model=SummaryOut)
-async def summary(db: AsyncSession = Depends(get_db)) -> SummaryOut:
-    snapshots, accounts, balances = await load_balance_matrix(db)
+async def summary(
+    owner: OwnerQuery = None,
+    db: AsyncSession = Depends(get_db),
+) -> SummaryOut:
+    snapshots, accounts, balances = await load_balance_matrix(db, _owner_filter(owner))
     if not snapshots:
-        return SummaryOut(month=None, net_worth=None, mom_delta=None, mom_pct=None, groups=[])
+        return SummaryOut(
+            month=None,
+            net_worth=None,
+            mom_delta=None,
+            mom_pct=None,
+            groups=[],
+            owner_totals=[],
+        )
     latest = snapshots[-1]
     previous = snapshots[-2] if len(snapshots) > 1 else None
     latest_nw = net_worth_for(latest.id, accounts, balances)
     latest_groups = group_totals_for(latest.id, accounts, balances)
     prev_nw = net_worth_for(previous.id, accounts, balances) if previous else None
     prev_groups = group_totals_for(previous.id, accounts, balances) if previous else None
+    latest_owners = owner_totals_for(latest.id, accounts, balances)
+    owner_rows = await _owner_rows(db, accounts)
     return SummaryOut(
         month=latest.month,
         net_worth=latest_nw,
@@ -233,6 +301,10 @@ async def summary(db: AsyncSession = Depends(get_db)) -> SummaryOut:
                 else latest_groups[group] - prev_groups[group],
             )
             for group in ACCOUNT_GROUPS
+        ],
+        owner_totals=[
+            OwnerTotal(person_id=person_id, name=name, total=latest_owners.get(person_id, ZERO))
+            for person_id, name in owner_rows
         ],
     )
 

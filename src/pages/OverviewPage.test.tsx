@@ -134,6 +134,7 @@ function summaryOut(over: Partial<NetWorthSummary> = {}): NetWorthSummary {
     mom_delta: '10000.00',
     mom_pct: '0.008',
     groups: [],
+    owner_totals: [],
     ...over,
   }
 }
@@ -155,6 +156,7 @@ function timeseriesOut(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseri
     net_worth: ['1200000.00', '1224567.00', '1234567.00'],
     mom_pct: [null, '0.020466', '0.008163'],
     notes: [null, null, null],
+    owner_series: [],
     ...over,
   }
 }

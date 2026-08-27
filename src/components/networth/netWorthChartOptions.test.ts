@@ -72,3 +72,33 @@ describe('netWorthCsv', () => {
     ])
   })
 })
+
+import { marriageMarkLine } from './netWorthChartOptions'
+
+describe('marriageMarkLine', () => {
+  const MONTHS = ['2026-06-01', '2026-07-01', '2026-08-01', '2026-09-01']
+
+  it('anchors on the wedding MONTH, whatever day of it the wedding falls on', () => {
+    const mark = marriageMarkLine(MONTHS, '2026-08-14')
+    // The x-axis carries formatMonth labels, so the markLine has to speak the same words.
+    expect(mark?.data).toEqual([{ xAxis: 'Aug 2026' }])
+    expect(mark?.label.formatter).toBe('Married')
+    expect(mark?.lineStyle.type).toBe('dashed')
+    expect(mark?.silent).toBe(true)
+  })
+
+  it('falls forward to the first month on record when the wedding month has no snapshot', () => {
+    expect(marriageMarkLine(['2026-06-01', '2026-09-01'], '2026-08-14')?.data).toEqual([
+      { xAxis: 'Sep 2026' },
+    ])
+  })
+
+  it('draws nothing it cannot honestly place', () => {
+    expect(marriageMarkLine(MONTHS, null)).toBeUndefined()
+    expect(marriageMarkLine(MONTHS, '')).toBeUndefined()
+    expect(marriageMarkLine([], '2026-08-14')).toBeUndefined()
+    // The wedding is after every snapshot: there is no month to mark YET, and clamping it
+    // onto the last one would draw a line at a date that has not happened.
+    expect(marriageMarkLine(MONTHS, '2027-01-02')).toBeUndefined()
+  })
+})
