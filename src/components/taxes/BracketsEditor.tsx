@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import {
+  cloneBrackets,
   fetchTaxBrackets,
   FILING_STATUS_LABELS,
   FILING_STATUSES,
@@ -11,7 +12,12 @@ import {
 import type { Jurisdiction } from '../../api/taxes'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
-import type { FilingStatus, TaxBracketOut, TaxBracketsOut } from '../../types/api'
+import type {
+  BracketCloneReviewFlags,
+  FilingStatus,
+  TaxBracketOut,
+  TaxBracketsOut,
+} from '../../types/api'
 import { canonicalAmount, parseAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
@@ -114,6 +120,10 @@ export default function BracketsEditor({
   const [tabError, setTabError] = useState<string | null>(null)
   // Tabs can be clicked faster than a fetch comes back; only the newest may land.
   const tabSeqRef = useRef(0)
+  // What the last clone said about the tables it just wrote — advisory, and only about THIS
+  // tab: cleared when another status is opened, and per-table when that table is saved (a
+  // reviewed table has nothing left to be told about).
+  const [reviewFlags, setReviewFlags] = useState<BracketCloneReviewFlags | null>(null)
 
   // JURISDICTIONS is a readonly tuple, so its .includes() takes the literal union — the
   // house cast (MonthlyUpdatePage's `STEPS.includes(stepParam as Step)`). An importer can
@@ -155,9 +165,10 @@ export default function BracketsEditor({
     const seq = ++tabSeqRef.current
     setTabBusy(true)
     setTabError(null)
-    // Belongs to the tab being left: a jurisdiction's error describes a table that is about
-    // to be replaced.
+    // Both belong to the tab being left: a jurisdiction's error describes a table that is
+    // about to be replaced, and the review badges describe a clone into another status.
     setErrors({})
+    setReviewFlags(null)
     fetchTaxBrackets(brackets.year, status)
       .then((next) => {
         if (seq !== tabSeqRef.current) return
@@ -180,6 +191,51 @@ export default function BracketsEditor({
 
   // A jurisdiction's error describes the table as it was when Save was pressed; the first
   // keystroke anywhere in it may be the fix, so the stale sentence goes then and there.
+  // A status tab with no rows at all. Six empty tables are not an editing surface — they are
+  // 42 rows of hand transcription — so the tab offers the clone instead.
+  const isEmpty = Object.values(payload.jurisdictions).every((rows) => rows.length === 0)
+
+  // Seeds this status from the SAME year's single tables (design §5.5: the clone source is
+  // always single). 409 when the target already has rows, which `isEmpty` already prevents —
+  // it lands in the banner verbatim if the server disagrees.
+  const clone = () => {
+    const seq = ++tabSeqRef.current
+    setTabBusy(true)
+    setTabError(null)
+    cloneBrackets(brackets.year, brackets.year, activeStatus)
+      .then((next) => {
+        if (seq !== tabSeqRef.current) return
+        setPayload(next)
+        setTables(tablesOf(next))
+        setReviewFlags(next.review_flags)
+        // The year's bracket count moved, and when this IS the year's status the summary
+        // moved with it: the page owns both refreshes, through the same door a save uses.
+        onSaved(next)
+      })
+      .catch((err: unknown) => {
+        if (seq !== tabSeqRef.current) return
+        setTabError(err instanceof ApiError ? err.message : 'Clone failed')
+      })
+      .finally(() => {
+        if (seq === tabSeqRef.current) setTabBusy(false)
+      })
+  }
+
+  // Advisory badges from the clone response. Social Security's wage base and SDI's rate/cap
+  // are per-person parameters that do not move with filing status, so the copy IS the answer;
+  // federal, state, capital gains and Medicare's additional tier are status thresholds and
+  // are only a starting shape.
+  const badgeFor = (name: string) => {
+    if (reviewFlags === null) return null
+    if (reviewFlags.review.includes(name)) {
+      return <span className="badge badge-review">review thresholds</span>
+    }
+    if (reviewFlags.verbatim_ok.includes(name)) {
+      return <span className="badge">copied verbatim — usually correct</span>
+    }
+    return null
+  }
+
   const clearError = (name: string) =>
     setErrors((current) => (current[name] ? { ...current, [name]: '' } : current))
 
@@ -260,6 +316,15 @@ export default function BracketsEditor({
         // it so the dirty baseline stays the server's answer rather than the pre-save one.
         setTables((current) => ({ ...current, [name]: rowsOf(echo.jurisdictions[name] ?? []) }))
         setPayload(echo)
+        // The badge asked for a review; this save IS the review.
+        setReviewFlags((current) =>
+          current === null
+            ? null
+            : {
+                verbatim_ok: current.verbatim_ok.filter((j) => j !== name),
+                review: current.review.filter((j) => j !== name),
+              },
+        )
         onSaved(echo)
       })
       .catch((err: unknown) => {
@@ -309,6 +374,19 @@ export default function BracketsEditor({
           {tabError}
         </div>
       )}
+      {activeStatus !== 'single' && isEmpty && (
+        <div className="bracket-clone">
+          <p className="drill-hint">
+            No {FILING_STATUS_LABELS[activeStatus]} tables for {brackets.year} yet. Copying
+            this year&apos;s single-filer tables gives every jurisdiction the right shape —
+            Social Security and Disability are per-person parameters and come across correct,
+            while the thresholds that move with filing status are then edited below.
+          </p>
+          <button type="button" className="button button-primary" disabled={tabBusy} onClick={clone}>
+            {tabBusy ? 'Cloning…' : `Clone from ${brackets.year} single tables`}
+          </button>
+        </div>
+      )}
       {JURISDICTIONS.map((name) => {
         const rows = tables[name] ?? []
         const message = errors[name]
@@ -325,7 +403,10 @@ export default function BracketsEditor({
               save(name)
             }}
           >
-            <h3 className="eyebrow">{label(name)} brackets</h3>
+            <h3 className="eyebrow">
+              {label(name)} brackets
+              {badgeFor(name)}
+            </h3>
             {message && (
               <div className="error-banner" role="alert">
                 {message}

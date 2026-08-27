@@ -308,3 +308,18 @@
 .bracket-status-tabs {
   margin-bottom: 1rem;
 }
+
+.bracket-clone {
+  margin-bottom: 1.25rem;
+}
+
+.bracket-clone .drill-hint {
+  max-width: 62ch;
+}
+
+/* The one badge that is a TO-DO rather than a label: --warn, matching the MFS caveat's rule
+   on the page, because both qualify numbers that are already on screen. */
+.badge-review {
+  color: var(--warn);
+  border-color: var(--warn);
+}

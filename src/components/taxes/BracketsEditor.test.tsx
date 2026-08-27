@@ -12,7 +12,7 @@ vi.mock('../../api/taxes', async (importOriginal) => ({
   putTaxBrackets: vi.fn(),
   cloneBrackets: vi.fn(),
 }))
-import { fetchTaxBrackets, putTaxBrackets } from '../../api/taxes'
+import { cloneBrackets, fetchTaxBrackets, putTaxBrackets } from '../../api/taxes'
 
 function bracketsFixture(): TaxBracketsOut {
   return {
@@ -483,5 +483,103 @@ describe('BracketsEditor — filing-status tabs', () => {
     // Nothing swapped: the single tables are still the ones being edited.
     expect(tab('Single').getAttribute('aria-pressed')).toBe('true')
     expect(rate('Federal', 2).value).toBe('37%')
+  })
+
+  it('offers a clone instead of six empty tables on an untouched status tab', () => {
+    render(
+      <BracketsEditor
+        brackets={{ ...statusFixture('married_joint'), jurisdictions: EMPTY_TABLES }}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+    // Not "fill in 42 rows by hand": the year's own single tables are the right SHAPE for
+    // every jurisdiction and the right VALUES for the two per-person ones.
+    expect(screen.getByRole('button', { name: 'Clone from 2024 single tables' })).toBeTruthy()
+  })
+
+  it('never offers the clone on the single tab, empty or not', () => {
+    render(
+      <BracketsEditor
+        brackets={{ ...bracketsFixture(), jurisdictions: EMPTY_TABLES }}
+        yearStatus="single"
+        onSaved={vi.fn()}
+      />,
+    )
+    // Single IS the source; a table cannot be cloned from itself.
+    expect(screen.queryByRole('button', { name: /clone from/i })).toBeNull()
+  })
+
+  it('clones into the active status and badges the tables that need review', async () => {
+    vi.mocked(cloneBrackets).mockResolvedValue({
+      ...statusFixture('married_joint', ['single', 'married_joint']),
+      review_flags: {
+        verbatim_ok: ['social_security', 'disability'],
+        review: ['federal', 'state', 'capital_gains', 'medicare'],
+      },
+    })
+    const onSaved = vi.fn()
+    render(
+      <BracketsEditor
+        brackets={{ ...statusFixture('married_joint'), jurisdictions: EMPTY_TABLES }}
+        yearStatus="married_joint"
+        onSaved={onSaved}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clone from 2024 single tables' }))
+    // Source year === target year: the source is always that year's SINGLE tables (§5.5).
+    await waitFor(() =>
+      expect(vi.mocked(cloneBrackets)).toHaveBeenCalledWith(2024, 2024, 'married_joint'),
+    )
+
+    // The rows landed...
+    await waitFor(() => expect(rate('Federal', 1).value).toBe('10%'))
+    // ...and each table says whether the copy is the answer or only a starting shape.
+    expect(screen.getAllByText('review thresholds')).toHaveLength(4)
+    expect(screen.getAllByText('copied verbatim — usually correct')).toHaveLength(2)
+    // The year's bracket count moved and, when this IS the year's status, so did the
+    // summary: the page owns both refreshes.
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  })
+
+  it('retires a table’s badge once that table has been saved', async () => {
+    vi.mocked(cloneBrackets).mockResolvedValue({
+      ...statusFixture('married_joint', ['single', 'married_joint']),
+      review_flags: { verbatim_ok: [], review: ['federal', 'state'] },
+    })
+    render(
+      <BracketsEditor
+        brackets={{ ...statusFixture('married_joint'), jurisdictions: EMPTY_TABLES }}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Clone from 2024 single tables' }))
+    await waitFor(() => expect(screen.getAllByText('review thresholds')).toHaveLength(2))
+
+    fireEvent.click(save('Federal'))
+    // "Review these thresholds" has nothing left to ask once they have been reviewed and
+    // saved; the other table's badge stands.
+    await waitFor(() => expect(screen.getAllByText('review thresholds')).toHaveLength(1))
+  })
+
+  it('clears the badges when another tab is opened', async () => {
+    vi.mocked(cloneBrackets).mockResolvedValue({
+      ...statusFixture('married_joint', ['single', 'married_joint']),
+      review_flags: { verbatim_ok: [], review: ['federal'] },
+    })
+    render(
+      <BracketsEditor
+        brackets={{ ...statusFixture('married_joint', ['single', 'married_joint']) }}
+        yearStatus="married_joint"
+        onSaved={vi.fn()}
+      />,
+    )
+    // Seeded non-empty, so the clone offer is reached by emptying the tab first — open the
+    // single tab and come back is the shorter route to "flags describe ANOTHER tab".
+    fireEvent.click(tab('Single'))
+    await waitFor(() => expect(tab('Single').getAttribute('aria-pressed')).toBe('true'))
+    expect(screen.queryByText('review thresholds')).toBeNull()
   })
 })
