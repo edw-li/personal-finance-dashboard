@@ -4,9 +4,12 @@ import { ApiError } from '../api/client'
 import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
+import AccountsCard from '../components/settings/AccountsCard'
+import CategoriesCard from '../components/settings/CategoriesCard'
+import HouseholdCard from '../components/settings/HouseholdCard'
 import ImportReportView from '../components/settings/ImportReportView'
 import SystemCard from '../components/settings/SystemCard'
-import type { AppSettingsOut, ImportReport } from '../types/api'
+import type { AppSettingsOut, ImportReport, PersonOut } from '../types/api'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
 // The settings family sheet, not only the component's: this page renders .settings-note
@@ -57,6 +60,10 @@ export default function SettingsPage() {
   const [report, setReport] = useState<ImportReport | null>(null)
   const [importBusy, setImportBusy] = useState<'dry' | 'apply' | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
+  // Lifted out of HouseholdCard so the Accounts card's owner select is never a render
+  // behind it: a partner added above must be selectable below without a reload. The page
+  // does no household fetching of its own — this is a relay, not a second source of truth.
+  const [people, setPeople] = useState<PersonOut[]>([])
   const seqRef = useRef(0)
 
   // ~15 setters: the load chain stays a PLAIN function called from the mount effect and
@@ -465,6 +472,14 @@ export default function SettingsPage() {
               </p>
             </form>
           </section>
+
+          {/* The three management cards (2026-08-26 spec §6). Each owns its own fetch and
+              error state (SystemCard's posture) and shares the forms' `loadedOnce` gate:
+              a settings GET that failed means the API is unreachable, and cards that could
+              only fail are not worth offering. */}
+          <HouseholdCard onPeopleChange={setPeople} />
+          <CategoriesCard />
+          <AccountsCard people={people} />
 
           {/* Read-only status, its own fetch/error (SystemCard) — it shares the forms'
               loadedOnce gate like the import card: a settings GET that failed means the

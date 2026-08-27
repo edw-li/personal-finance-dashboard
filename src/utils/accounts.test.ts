@@ -10,6 +10,7 @@ function account(overrides: Partial<AccountOut> & Pick<AccountOut, 'id' | 'name'
     is_active: true,
     is_component: false,
     parent_account_id: null,
+    person_id: null,
     ...overrides,
   }
 }

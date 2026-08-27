@@ -25,6 +25,8 @@ export interface AccountOut {
   is_active: boolean
   is_component: boolean
   parent_account_id: number | null
+  /** NULL = joint/household, never "unknown" — the migration backfilled every row. */
+  person_id: number | null
 }
 
 export interface AccountCreate {
@@ -32,6 +34,21 @@ export interface AccountCreate {
   group: AccountGroup
   sort_order?: number
   is_component?: boolean
+  /** Omitted or null = joint; the API never guesses the primary person. */
+  person_id?: number | null
+  parent_account_id?: number | null
+}
+
+export interface AccountUpdate {
+  name?: string
+  group?: AccountGroup
+  sort_order?: number
+  is_active?: boolean
+  is_component?: boolean
+  /** Explicit null RETAGS to joint; an omitted key leaves the owner alone. */
+  person_id?: number | null
+  /** Explicit null UNLINKS the parent; an omitted key leaves it alone. */
+  parent_account_id?: number | null
 }
 
 export interface BalanceEntry {
@@ -86,6 +103,17 @@ export interface CategoryOut {
   slug: string
   sort_order: number
   is_active: boolean
+}
+
+export interface CategoryCreate {
+  name: string
+  sort_order?: number
+}
+
+export interface CategoryUpdate {
+  name?: string
+  sort_order?: number
+  is_active?: boolean
 }
 
 export interface AmountEntry {
@@ -1327,4 +1355,22 @@ export interface RewardRatePut {
   multiplier: string | null
   note: string | null
   monthly_cap: string | null
+}
+
+// --- household (2026-08-26 spec §5.1) ---
+
+export interface PersonOut {
+  id: number
+  name: string
+  /** Exactly one row carries it, database-enforced; the API never lets it change. */
+  is_primary: boolean
+}
+
+export interface HouseholdOut {
+  people: PersonOut[]
+  marriage_date: string | null
+}
+
+export interface MarriageDateOut {
+  marriage_date: string | null
 }

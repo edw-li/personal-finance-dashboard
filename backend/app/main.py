@@ -14,6 +14,7 @@ from app.api import (
     comp,
     credit_cards,
     espp,
+    household,
     import_,
     net_worth,
     overview,
@@ -77,6 +78,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(import_.router, prefix="/api/v1")
 app.include_router(net_worth.router, prefix="/api/v1")
+app.include_router(household.router, prefix="/api/v1")
 app.include_router(spending.router, prefix="/api/v1")
 app.include_router(portfolio.router, prefix="/api/v1")
 app.include_router(prices.router, prefix="/api/v1")

@@ -28,6 +28,13 @@ class Account(Base):
     parent_account_id: Mapped[int | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="SET NULL"), default=None
     )
+    # NULL = JOINT/household, never "unknown": migration a8d24b6e9107 backfilled every
+    # pre-existing account to the primary person, so an unset owner is a deliberate
+    # statement (2026-08-26 spec §4). SET NULL on delete is belt-and-braces — the API
+    # offers no person delete at all.
+    person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id", ondelete="SET NULL"), default=None
+    )
 
 
 class NetWorthSnapshot(Base):

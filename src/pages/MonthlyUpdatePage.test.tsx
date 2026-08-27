@@ -23,13 +23,13 @@ import { addMonths, currentMonthIso } from '../utils/months'
 
 const account = {
   id: 1, name: 'Checking', slug: 'checking', group: 'cash' as const,
-  sort_order: 1, is_active: true, is_component: false, parent_account_id: null,
+  sort_order: 1, is_active: true, is_component: false, parent_account_id: null, person_id: null,
 }
 // The default fixture is one account, which cannot show ORDER — the paste tests that care
 // about where a range lands opt into this second row.
 const savings = {
   id: 2, name: 'Savings', slug: 'savings', group: 'cash' as const,
-  sort_order: 2, is_active: true, is_component: false, parent_account_id: null,
+  sort_order: 2, is_active: true, is_component: false, parent_account_id: null, person_id: null,
 }
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 
@@ -344,11 +344,11 @@ it('shows last month beside the cell and a live delta as you type', async () => 
 it('excludes components from the group subtotal and the live net worth', async () => {
   const brokerage = {
     id: 2, name: 'Brokerage', slug: 'brokerage', group: 'taxable' as const,
-    sort_order: 2, is_active: true, is_component: false, parent_account_id: null,
+    sort_order: 2, is_active: true, is_component: false, parent_account_id: null, person_id: null,
   }
   const brokerageCash = {
     id: 3, name: 'Brokerage cash', slug: 'brokerage-cash', group: 'taxable' as const,
-    sort_order: 3, is_active: true, is_component: true, parent_account_id: 2,
+    sort_order: 3, is_active: true, is_component: true, parent_account_id: 2, person_id: null,
   }
   vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, brokerage, brokerageCash])
   renderWizard()
