@@ -18,6 +18,7 @@ from sqlalchemy import func, select, text
 from app.models import (
     EsppLot,
     LatestPrice,
+    Person,
     PositionTransaction,
     Security,
     TaxBracket,
@@ -1801,3 +1802,135 @@ async def test_earner_bundles_follow_column_order_not_a_string_sort(auth_client,
     # to the partner's untouched 40000. (150000 + 40000) x .062 = 11780.
     assert body["scenario"]["social_security"]["tax"] == "11780.00"
     assert body["delta"]["social_security_tax"] == "3100.00"
+
+
+# --- person-summed engine feed (2026-08-26 spec §5.4/§5.7) ---
+#
+# `tax_inputs` is unique on (year, key, person_id), so ONE key legitimately carries several
+# rows. Every engine caller must SUM them; a dict keyed on `key` alone silently keeps
+# whichever row the planner returned last, which is a partner's whole W-2 disappearing from
+# the liability, the money flow and the YTD tile depending on nothing but query order.
+# `_engine_feed`/`_assemble_inputs` own that sum; these pins are on the PUBLIC endpoints, so
+# they keep holding whatever the loader is called next.
+
+
+async def _seed_people(db):
+    """(primary id, partner id) — the household this batch's fixtures share."""
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    await db.flush()
+    return me.id, partner.id
+
+
+async def _seed_two_earner_year(db, year: int, status: str = "married_joint"):
+    """One married year: 240k of primary W-2 + 150k of partner W-2, flat MFJ tables."""
+    me_id, partner_id = await _seed_people(db)
+    db.add(TaxYear(year=year, filing_status=status))
+    await db.flush()
+    db.add_all(
+        [
+            TaxInput(year=year, key="latest_w2_income", value=Decimal("240000"), person_id=me_id),
+            TaxInput(
+                year=year, key="latest_w2_income", value=Decimal("150000"), person_id=partner_id
+            ),
+            # A HOUSEHOLD key: one NULL row, which must survive the sum verbatim.
+            TaxInput(year=year, key="interest_total", value=Decimal("2500"), person_id=None),
+        ]
+    )
+    for name, table in (
+        ("federal", [("0.1000", "0.00")]),
+        ("state", [("0.0500", "0.00")]),
+        ("medicare", [("0.0145", "0.00"), ("0.0235", "250000.00")]),
+        ("social_security", [("0.0620", "0.00"), ("0.0000", "168600.00")]),
+        ("disability", [("0.0110", "0.00")]),
+        ("capital_gains", [("0.1500", "0.00")]),
+    ):
+        for index, (rate, threshold) in enumerate(table, start=1):
+            db.add(
+                TaxBracket(
+                    year=year,
+                    jurisdiction=name,
+                    bracket_index=index,
+                    rate=Decimal(rate),
+                    threshold=Decimal(threshold),
+                    filing_status=status,
+                )
+            )
+    await db.commit()
+    return me_id, partner_id
+
+
+async def test_summary_sums_w2_across_people_instead_of_keeping_one_row(
+    auth_client, db, definitions
+):
+    await _seed_two_earner_year(db, 2026)
+    resp = await auth_client.get(f"{YEARS}/2026/summary")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # 240000 + 150000 — NOT 240000 and NOT 150000. This is the whole bug: a point read
+    # returns one of the two and the assertion below fails on whichever the planner picked.
+    assert body["medicare"]["w2_income"] == "390000.00"
+    # The household key rides along untouched: gross = 390000 wages + 2500 interest.
+    assert body["totals"]["gross_income"] == "392500.00"
+
+
+async def test_all_summaries_feed_sums_people_too(auth_client, db, definitions):
+    # /taxes/summary builds ONE feed per year over an all-years roster read, so it is a
+    # SECOND place the collapse could reappear and needs its own pin — this is the feed
+    # behind the Overview page's YTD effective-tax tile.
+    await _seed_two_earner_year(db, 2026)
+    resp = await auth_client.get(ALL_SUMMARY)  # the file's own constant, already defined
+    assert resp.status_code == 200, resp.text
+    years = resp.json()["years"]
+    assert [row["year"] for row in years] == [2026]
+    assert years[0]["medicare"]["w2_income"] == "390000.00"
+    assert years[0]["totals"]["gross_income"] == "392500.00"
+
+
+async def test_single_year_inputs_are_byte_identical_under_summing(auth_client, db, definitions):
+    # The single path must not move: after the migration a single filer's per-person keys sit
+    # on the PRIMARY person, and summing exactly one row is that row.
+    me = Person(name="Me", is_primary=True)
+    db.add(me)
+    await db.flush()
+    db.add(TaxYear(year=2025, filing_status="single"))
+    await db.flush()
+    db.add_all(
+        [
+            TaxInput(year=2025, key="latest_w2_income", value=Decimal("240000"), person_id=me.id),
+            TaxInput(year=2025, key="interest_total", value=Decimal("2500"), person_id=None),
+            TaxInput(
+                year=2025,
+                key="unq_div_state_exempt_pct",
+                value=Decimal("0.4500"),
+                person_id=None,
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            TaxBracket(
+                year=2025,
+                jurisdiction="federal",
+                bracket_index=1,
+                rate=Decimal("0.1000"),
+                threshold=Decimal("0.00"),
+                filing_status="single",
+            ),
+            TaxBracket(
+                year=2025,
+                jurisdiction="medicare",
+                bracket_index=1,
+                rate=Decimal("0.0145"),
+                threshold=Decimal("0.00"),
+                filing_status="single",
+            ),
+        ]
+    )
+    await db.commit()
+
+    body = (await auth_client.get(f"{YEARS}/2025/summary")).json()
+    assert body["medicare"]["w2_income"] == "240000.00"
+    assert body["totals"]["gross_income"] == "242500.00"
+    assert body["federal"]["tax"] == "24250.00"  # 10% of 242500, no deductions stored
