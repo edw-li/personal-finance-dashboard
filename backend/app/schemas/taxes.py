@@ -101,12 +101,36 @@ class BracketIn(BaseModel):
 class BracketsOut(BaseModel):
     # All six jurisdictions always present, possibly with empty tables.
     year: int
+    filing_status: str = SINGLE
+    # The statuses this YEAR has at least one stored bracket row for, sorted. The status
+    # tabs read it: an empty tab is a setup state the page has to be able to show.
+    statuses_with_rows: list[str]
     jurisdictions: dict[str, list[BracketOut]]
 
 
 class BracketsIn(BaseModel):
-    # Per-jurisdiction FULL REPLACE; jurisdictions absent from the body are untouched.
+    # Per-jurisdiction FULL REPLACE within ONE status; jurisdictions absent from the body
+    # are untouched, and so is every other status's copy of them.
+    filing_status: FilingStatus = "single"
     jurisdictions: dict[str, list[BracketIn]]
+
+
+class BracketReviewFlags(BaseModel):
+    """Which cloned tables are typically right as-is, and which need threshold edits.
+
+    Social Security and SDI are PER-PERSON parameters — the wage base and the rate do not
+    change with filing status, so a verbatim copy is correct. The other four carry
+    per-RETURN thresholds that are emphatically not "2x single" (audit §5): the MFJ 37%
+    band starts below 2x, the 20% capital-gains tier likewise, and the medicare table's
+    additional tier moves from 200k to 250k (MFJ) or 125k (MFS).
+    """
+
+    verbatim_ok: list[str]
+    review: list[str]
+
+
+class ClonedBracketsOut(BracketsOut):
+    review_flags: BracketReviewFlags
 
 
 class IncomeTaxOut(BaseModel):

@@ -23,7 +23,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,11 +50,14 @@ from app.models import (
 from app.schemas.taxes import (
     BracketIn,
     BracketOut,
+    BracketReviewFlags,
     BracketsIn,
     BracketsOut,
     CapitalGainsTaxOut,
     ChangedInput,
+    ClonedBracketsOut,
     EsppSaleDetailOut,
+    FilingStatus,
     IncomeTaxOut,
     IncompleteYearOut,
     SafeHarborOut,
@@ -130,6 +133,10 @@ YearPath = Annotated[int, Path(ge=YEAR_MIN, le=YEAR_MAX)]
 YEAR_MESSAGE = f"year must be between {YEAR_MIN} and {YEAR_MAX}"
 
 MAX_BRACKETS = 12
+FilingStatusQuery = Annotated[FilingStatus, Query()]
+# See BracketReviewFlags: per-PERSON parameters clone verbatim, per-RETURN thresholds do not.
+VERBATIM_OK_JURISDICTIONS = ("social_security", "disability")
+REVIEW_JURISDICTIONS = ("federal", "state", "capital_gains", "medicare")
 ZERO = Decimal("0")
 # Above this the ratio is nonsense anyway (near-zero denominator), and quantize_pct would
 # need more digits than the Decimal context has.
@@ -378,11 +385,31 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     )
 
 
-async def _brackets_payload(db: AsyncSession, year: int) -> BracketsOut:
+async def _statuses_with_rows(db: AsyncSession, year: int) -> list[str]:
+    """Every filing status this YEAR has at least one stored bracket row for, sorted.
+
+    The editor's status tabs read it: "which tables have I already entered" is a question
+    about the year, not about the tab currently open, so it rides on every brackets
+    payload rather than being re-derived per tab.
+    """
+    return sorted(
+        (
+            await db.execute(
+                select(TaxBracket.filing_status).where(TaxBracket.year == year).distinct()
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _brackets_payload(
+    db: AsyncSession, year: int, filing_status: str = SINGLE
+) -> BracketsOut:
     rows = (
         await db.execute(
             select(TaxBracket)
-            .where(TaxBracket.year == year)
+            .where(TaxBracket.year == year, TaxBracket.filing_status == filing_status)
             .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
         )
     ).scalars()
@@ -393,7 +420,12 @@ async def _brackets_payload(db: AsyncSession, year: int) -> BracketsOut:
         tables.setdefault(row.jurisdiction, []).append(
             BracketOut(bracket_index=row.bracket_index, rate=row.rate, threshold=row.threshold)
         )
-    return BracketsOut(year=year, jurisdictions=tables)
+    return BracketsOut(
+        year=year,
+        filing_status=filing_status,
+        statuses_with_rows=await _statuses_with_rows(db, year),
+        jurisdictions=tables,
+    )
 
 
 async def _year_out(db: AsyncSession, row: TaxYear) -> TaxYearOut:
@@ -622,17 +654,26 @@ def _validated_table(name: str, table: list[BracketIn]) -> list[Bracket]:
 
 
 @router.get("/years/{year}/brackets", response_model=BracketsOut)
-async def get_brackets(year: YearPath, db: AsyncSession = Depends(get_db)) -> BracketsOut:
+async def get_brackets(
+    year: YearPath,
+    filing_status: FilingStatusQuery = SINGLE,
+    db: AsyncSession = Depends(get_db),
+) -> BracketsOut:
+    """One status's six tables. The default is 'single' rather than the YEAR's status on
+    purpose: the editor renders status TABS and asks for the one it is showing, so the
+    answer must depend on the request, not on a setting the user is mid-way through
+    changing."""
     await _require_year(db, year)
-    return await _brackets_payload(db, year)
+    return await _brackets_payload(db, year, filing_status)
 
 
 @router.put("/years/{year}/brackets", response_model=BracketsOut)
 async def put_brackets(
     year: YearPath, body: BracketsIn, db: AsyncSession = Depends(get_db)
 ) -> BracketsOut:
-    # Re-import interplay: same sheet-wins posture as PUT inputs — a bracket table edited
-    # here for an imported year is replaced by the next workbook import.
+    # Re-import interplay: same sheet-wins posture as PUT inputs — a SINGLE-status bracket
+    # table edited here for an imported year is replaced by the next workbook import. The
+    # married tables are invisible to the importer entirely.
     unknown = sorted(set(body.jurisdictions) - set(JURISDICTIONS))
     if unknown:
         raise HTTPException(status_code=422, detail=f"unknown jurisdiction(s): {unknown}")
@@ -644,49 +685,69 @@ async def put_brackets(
     for name, table in validated.items():
         # Core DELETE rather than ORM deletes: the unit of work flushes INSERTs before
         # DELETEs, so replacing a table in place would trip the
-        # (year, jurisdiction, bracket_index) unique constraint.
+        # (year, jurisdiction, filing_status, bracket_index) unique constraint.
         await db.execute(
-            delete(TaxBracket).where(TaxBracket.year == year, TaxBracket.jurisdiction == name)
+            delete(TaxBracket).where(
+                TaxBracket.year == year,
+                TaxBracket.jurisdiction == name,
+                TaxBracket.filing_status == body.filing_status,
+            )
         )
         for index, (rate, threshold) in enumerate(table, start=1):
             db.add(
                 TaxBracket(
                     year=year,
                     jurisdiction=name,
+                    filing_status=body.filing_status,
                     bracket_index=index,  # 1-based array order, renumbered on every replace
                     rate=rate,
                     threshold=threshold,
                 )
             )
     await db.commit()
-    return await _brackets_payload(db, year)
+    return await _brackets_payload(db, year, body.filing_status)
 
 
-@router.post("/years/{year}/clone-brackets-from/{source_year}", response_model=BracketsOut)
+@router.post("/years/{year}/clone-brackets-from/{source_year}", response_model=ClonedBracketsOut)
 async def clone_brackets(
-    year: YearPath, source_year: YearPath, db: AsyncSession = Depends(get_db)
-) -> BracketsOut:
-    """Seed a new year from an existing one; the rates/thresholds are then edited in place."""
+    year: YearPath,
+    source_year: YearPath,
+    target_status: FilingStatusQuery = SINGLE,
+    db: AsyncSession = Depends(get_db),
+) -> ClonedBracketsOut:
+    """Seed a year+status from an existing year's SINGLE tables; then edited in place.
+
+    The source is always 'single' — the helper's whole job is "start my married tables
+    from my single ones", and the app ships no bracket values of its own (spec §2). The
+    source year may be the target year: cloning 2026-single into 2026-married_joint is
+    exactly the page's "Clone as MFJ" button, and the emptiness guard below is what keeps
+    it from being a no-op or a duplicate.
+    """
     source_rows = list(
         (
             await db.execute(
                 select(TaxBracket)
-                .where(TaxBracket.year == source_year)
+                .where(TaxBracket.year == source_year, TaxBracket.filing_status == SINGLE)
                 .order_by(TaxBracket.jurisdiction, TaxBracket.bracket_index)
             )
         ).scalars()
     )
     if not source_rows:
-        raise HTTPException(status_code=404, detail=f"no brackets to clone from {source_year}")
+        raise HTTPException(
+            status_code=404, detail=f"no single-filer brackets to clone from {source_year}"
+        )
     existing = (
         await db.execute(
-            select(func.count()).select_from(TaxBracket).where(TaxBracket.year == year)
+            select(func.count())
+            .select_from(TaxBracket)
+            .where(TaxBracket.year == year, TaxBracket.filing_status == target_status)
         )
     ).scalar_one()
     if existing:
         # Never a silent merge: clear the target explicitly (PUT brackets with []) first.
         raise HTTPException(
-            status_code=409, detail=f"tax year {year} already has {existing} brackets"
+            status_code=409,
+            detail=f"tax year {year} already has {existing} {target_status} brackets",
         )
 
     await _ensure_year(db, year)
@@ -695,13 +756,26 @@ async def clone_brackets(
             TaxBracket(
                 year=year,
                 jurisdiction=row.jurisdiction,
+                filing_status=target_status,
                 bracket_index=row.bracket_index,
                 rate=row.rate,
                 threshold=row.threshold,
             )
         )
     await db.commit()
-    return await _brackets_payload(db, year)
+    payload = await _brackets_payload(db, year, target_status)
+    return ClonedBracketsOut(
+        year=payload.year,
+        filing_status=payload.filing_status,
+        statuses_with_rows=payload.statuses_with_rows,
+        jurisdictions=payload.jurisdictions,
+        # The FIXED six-table classification, not "what happened to be in the source": the
+        # flags describe which tables are status-SENSITIVE, which is a property of the tax
+        # code rather than of this particular clone.
+        review_flags=BracketReviewFlags(
+            verbatim_ok=list(VERBATIM_OK_JURISDICTIONS), review=list(REVIEW_JURISDICTIONS)
+        ),
+    )
 
 
 def _money(value: Decimal | None) -> Decimal:
