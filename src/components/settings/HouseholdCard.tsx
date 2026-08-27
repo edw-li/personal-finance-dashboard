@@ -53,7 +53,10 @@ export default function HouseholdCard({
 
   useEffect(() => {
     load()
-    // mount-only: a plain function over stable setters (house idiom)
+    // mount-only: a plain function over stable setters (house idiom). Unlike the sibling
+    // cards, `load` also calls the onPeopleChange PROP, which the rule cannot see as
+    // stable — silenced the same way CalendarPage's mount-only load is.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const addPerson = () => {
