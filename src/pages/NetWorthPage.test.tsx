@@ -157,3 +157,37 @@ it('keeps the page alive when the household endpoint fails', async () => {
   expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
   expect(screen.queryByRole('alert')).toBeNull()
 })
+
+const stacked = () => screen.getAllByTestId('echart')[0]
+
+it('stacks by group by default and by owner on demand — no refetch either way', async () => {
+  renderPage()
+  await screen.findByRole('group', { name: 'Stack by' })
+  expect(stacked().getAttribute('data-series')).toBe(
+    'Cash|Pre-tax|Post-tax|Taxable|Equity|Other|Liabilities|Net worth',
+  )
+  const callsBefore = vi.mocked(fetchTimeseries).mock.calls.length
+
+  fireEvent.click(screen.getByRole('button', { name: 'By owner' }))
+  // owner_series ships on the SAME payload, so the toggle is a re-render, not a request.
+  expect(vi.mocked(fetchTimeseries).mock.calls.length).toBe(callsBefore)
+  expect(stacked().getAttribute('data-series')).toBe('Me|Joint|Net worth')
+  // One stack id across the owner columns, so they land on the net-worth line; the line
+  // itself is never stacked.
+  expect(stacked().getAttribute('data-stacks')).toBe('owner|owner|-')
+
+  fireEvent.click(screen.getByRole('button', { name: 'By group' }))
+  expect(stacked().getAttribute('data-series')).toContain('Cash|')
+})
+
+it('marks the wedding month on the trend once a marriage date is set', async () => {
+  vi.mocked(fetchHousehold).mockResolvedValue(household({ marriage_date: '2026-08-14' }))
+  renderPage()
+  await waitFor(() => expect(stacked().getAttribute('data-marriage')).toBe('Aug 2026'))
+})
+
+it('draws no marriage rule when the household has no date yet', async () => {
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  expect(stacked().getAttribute('data-marriage')).toBe('')
+})

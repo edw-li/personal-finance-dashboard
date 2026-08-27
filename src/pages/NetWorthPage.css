@@ -7,7 +7,8 @@
   gap: 1rem;
 }
 
-/* Two segmented controls side by side (time range + granularity); wraps on narrow. */
+/* Up to three segmented controls side by side (stack-by + time range + granularity);
+   wraps on narrow. */
 .networth-chart-controls {
   display: flex;
   align-items: center;

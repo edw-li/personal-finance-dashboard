@@ -13,6 +13,7 @@ import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
 import {
   NOTES_SERIES,
+  marriageMarkLine,
   netWorthCsv,
   netWorthStackedTooltipFormatter,
 } from '../components/networth/netWorthChartOptions'
@@ -70,6 +71,9 @@ export default function NetWorthPage() {
   // and a household hiccup must not blank the net worth (OverviewPage's isolated-fetch
   // posture). null covers both "not loaded yet" and "failed".
   const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  // Group stacking stays the default (spec §6): "how is it invested" is the question this
+  // chart has always answered; "whose is it" is the new second reading of the same total.
+  const [stackBy, setStackBy] = useState<'group' | 'owner'>('group')
   const [data, setData] = useState<NetWorthTimeseries | null>(null)
   const [summary, setSummary] = useState<NetWorthSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -208,6 +212,7 @@ export default function NetWorthPage() {
         note: (data.notes ?? [])[i],
       }))
       .filter((p): p is { label: string; value: number; note: string } => !!p.note)
+    const marriageMark = marriageMarkLine(data.months, household?.marriage_date ?? null)
     return {
       // Windowed, not sliced: dataZoom keeps the whole series loaded so a ctrl+wheel or a
       // chip flip never refetches, and the y-axis re-scales to the visible window (filter
@@ -219,7 +224,11 @@ export default function NetWorthPage() {
         trigger: 'axis',
         // Asset rows + their subtotal, then liabilities/net worth/notes — the formatter
         // (and its escapeHtml duty on note text) lives in netWorthChartOptions.ts.
-        formatter: netWorthStackedTooltipFormatter(ASSET_GROUPS.map((g) => GROUP_LABELS[g])),
+        // Owner columns already sum to the net-worth row, so an "Assets" subtotal would
+        // just print the same number twice: no asset set in owner mode, no subtotal row.
+        formatter: netWorthStackedTooltipFormatter(
+          stackBy === 'owner' ? [] : ASSET_GROUPS.map((g) => GROUP_LABELS[g]),
+        ),
       },
       xAxis: { type: 'category', data: labels, boundaryGap: false },
       yAxis: {
@@ -227,25 +236,48 @@ export default function NetWorthPage() {
         axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
       },
       series: [
-        ...ASSET_GROUPS.map((group) => ({
-          name: GROUP_LABELS[group],
-          type: 'line' as const,
-          stack: 'assets',
-          symbol: 'none' as const,
-          lineStyle: { width: 1 },
-          areaStyle: { opacity: 0.5 },
-          color: GROUP_COLORS[group],
-          data: data.group_totals[group].map(Number),
-        })),
-        {
-          name: GROUP_LABELS.liability,
-          type: 'line' as const,
-          symbol: 'none' as const,
-          lineStyle: { width: 1 },
-          areaStyle: { opacity: 0.5 },
-          color: GROUP_COLORS.liability,
-          data: data.group_totals.liability.map(Number),
-        },
+        ...(stackBy === 'owner'
+          ? (data.owner_series ?? []).map((series, i) => ({
+              // The server's owner_series is EXCLUSIVE and sums to net_worth, so the stack
+              // lands exactly on the line below. `?? []` is stale-deploy armor, like notes.
+              name: series.name ?? 'Joint',
+              type: 'line' as const,
+              stack: 'owner',
+              // Owner columns are NET (assets minus that owner's liabilities), so one of
+              // them can go negative. echarts' default 'samesign' strategy would then park
+              // it on the baseline and the stack would stop meeting the net-worth line;
+              // 'all' keeps the sum honest.
+              stackStrategy: 'all' as const,
+              symbol: 'none' as const,
+              lineStyle: { width: 1 },
+              areaStyle: { opacity: 0.5 },
+              // Fixed slot order IS the CVD-safety mechanism (theme.ts) — never more than
+              // PALETTE.length owners, and the order is the server's, so a colour follows
+              // a person rather than their rank in a re-sort.
+              color: PALETTE[i % PALETTE.length],
+              data: series.values.map(Number),
+            }))
+          : [
+              ...ASSET_GROUPS.map((group) => ({
+                name: GROUP_LABELS[group],
+                type: 'line' as const,
+                stack: 'assets',
+                symbol: 'none' as const,
+                lineStyle: { width: 1 },
+                areaStyle: { opacity: 0.5 },
+                color: GROUP_COLORS[group],
+                data: data.group_totals[group].map(Number),
+              })),
+              {
+                name: GROUP_LABELS.liability,
+                type: 'line' as const,
+                symbol: 'none' as const,
+                lineStyle: { width: 1 },
+                areaStyle: { opacity: 0.5 },
+                color: GROUP_COLORS.liability,
+                data: data.group_totals.liability.map(Number),
+              },
+            ]),
         {
           name: 'Net worth',
           type: 'line' as const,
@@ -260,6 +292,9 @@ export default function NetWorthPage() {
             formatter: (params: { value?: unknown }) =>
               formatCurrencyCompact(params.value as number),
           },
+          // The wedding rule rides the net-worth line: one annotation, on the series that
+          // is present in BOTH stack modes.
+          ...(marriageMark ? { markLine: marriageMark } : {}),
           data: data.net_worth.map(Number),
         },
         ...(noted.length > 0
@@ -283,7 +318,7 @@ export default function NetWorthPage() {
           : []),
       ],
     }
-  }, [data, range, legendSelected])
+  }, [data, range, legendSelected, stackBy, household])
 
   const drillOption = useMemo<EChartsOption | null>(() => {
     if (!data || drill.length === 0) return null
@@ -429,6 +464,21 @@ export default function NetWorthPage() {
               <InfoHint text="Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note." />
             </h2>
             <div className="networth-chart-controls">
+              {ownerScopes.length > 0 && (
+                <div className="segmented" role="group" aria-label="Stack by">
+                  {(['group', 'owner'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={stackBy === mode ? 'active' : ''}
+                      aria-pressed={stackBy === mode}
+                      onClick={() => setStackBy(mode)}
+                    >
+                      {mode === 'group' ? 'By group' : 'By owner'}
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* One window for the whole page: the drill-down below follows these chips
                   too (both charts share the month axis). */}
               <RangeChips value={range.preset} onChange={setRange} />
