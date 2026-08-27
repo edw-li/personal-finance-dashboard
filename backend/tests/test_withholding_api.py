@@ -21,6 +21,7 @@ from app.models import (
     AppSetting,
     LatestPrice,
     PaycheckProfile,
+    Person,
     PriceHistory,
     RsuGrant,
     Security,
@@ -82,8 +83,11 @@ async def definitions(db):
 
 
 async def seed_tax_year(db, year: int, w2_income: str, jurisdictions: dict | None = None) -> None:
-    """A year the engine can price: one W2 input plus bracket tables at column scale."""
-    db.add(TaxYear(year=year))
+    """A year the engine can price: one W2 input plus bracket tables at column scale.
+
+    The status is spelled out rather than left to the column default, so the single-year
+    fixtures below are unambiguous next to the married ones (2026-08-26 spec §5.6)."""
+    db.add(TaxYear(year=year, filing_status="single"))
     await db.flush()  # the inputs/brackets FK to it
     db.add(TaxInput(year=year, key="latest_w2_income", value=Decimal(w2_income)))
     for name, table in (BRACKETS if jurisdictions is None else jurisdictions).items():
@@ -469,6 +473,7 @@ async def test_withholding_safe_harbor_is_110_pct_of_the_prior_year(
         "prior_agi": "400000.00",
         "multiplier": "1.10",
         "threshold": "88718.52",  # 80653.20 x 1.10, at cents
+        "prior_filing_status": "single",
         "met": True,  # projected withholding 96883.00 clears it
     }
     # 110% of the DISPLAYED prior figure, not of a full-precision one nobody can see: the two
@@ -524,6 +529,7 @@ async def test_withholding_safe_harbor_drops_to_100_pct_under_the_agi_gate(
         "prior_agi": "100000.00",
         "multiplier": "1.00",
         "threshold": "23750.00",
+        "prior_filing_status": "single",
         "met": True,
     }
 
@@ -592,3 +598,301 @@ async def test_withholding_refuses_a_liability_it_cannot_compute(
     # 96883.00 - the 2167.50 vest-FICA leg. One missing comparison plus one excluded leg,
     # not an outage.
     assert body["total"]["projected"] == "94715.50"
+
+
+# --- the two-earner tracker (2026-08-26 spec §5.6) ---
+
+PARTNER_MISSING = (
+    "partner withholding not entered — their W-2 withholding counts as 0 until you enter it"
+)
+
+# The married world's tables: the MFJ medicare tier at 250k is what makes the gap nonzero.
+MFJ_BRACKETS: dict[str, list[tuple[str, str]]] = {
+    "federal": [("0.1000", "0.00")],
+    "state": [("0.0500", "0.00")],
+    "medicare": [("0.0145", "0.00"), ("0.0235", "250000.00")],
+    "social_security": [("0.0620", "0.00"), ("0.0000", "168600.00")],
+    "disability": [("0.0110", "0.00")],
+    "capital_gains": [("0.1500", "0.00")],
+}
+
+
+async def seed_household(db) -> tuple[int, int]:
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    await db.flush()
+    await db.commit()
+    return me.id, partner.id
+
+
+async def seed_married_year(
+    db,
+    year: int,
+    me_id: int,
+    partner_id: int,
+    *,
+    status: str = "married_joint",
+    partner_withholding: bool = True,
+    jurisdictions: dict | None = None,
+) -> None:
+    """240k of primary W-2, 150k of partner W-2, and (optionally) the partner's two
+    tracker-only withholding rows. Everything through the ORM: the person vocabulary of the
+    inputs PUT belongs to another plan and this file must not depend on its shape."""
+    db.add(TaxYear(year=year, filing_status=status))
+    await db.flush()
+    db.add_all(
+        [
+            TaxInput(year=year, key="latest_w2_income", value=Decimal("240000"), person_id=me_id),
+            TaxInput(
+                year=year, key="latest_w2_income", value=Decimal("150000"), person_id=partner_id
+            ),
+        ]
+    )
+    if partner_withholding:
+        db.add_all(
+            [
+                TaxInput(
+                    year=year,
+                    key="w2_fed_withholding",
+                    value=Decimal("18000"),
+                    person_id=partner_id,
+                ),
+                TaxInput(
+                    year=year,
+                    key="w2_state_withholding",
+                    value=Decimal("6000"),
+                    person_id=partner_id,
+                ),
+            ]
+        )
+    tables = MFJ_BRACKETS if jurisdictions is None else jurisdictions
+    for name, table in tables.items():
+        for index, (rate, threshold) in enumerate(table, start=1):
+            db.add(
+                TaxBracket(
+                    year=year,
+                    jurisdiction=name,
+                    bracket_index=index,
+                    rate=Decimal(rate),
+                    threshold=Decimal(threshold),
+                    filing_status=status,
+                )
+            )
+    await db.commit()
+
+
+@pytest.fixture
+async def married_world(db, definitions):
+    me_id, partner_id = await seed_household(db)
+    await seed_married_year(db, YEAR, me_id, partner_id)
+    await seed_profile(db)  # the primary's side, simulated exactly as on a single year
+    return me_id, partner_id
+
+
+async def test_withholding_reports_the_partner_leg_from_their_own_input_rows(
+    auth_client, married_world, frozen_today
+):
+    body = await get_withholding(auth_client)
+    assert body["filing_status"] == "married_joint"
+    assert body["partner_wages"] == "150000.00"
+    assert body["partner_withheld_fed"] == "18000.00"
+    assert body["partner_withheld_state"] == "6000.00"
+    # The primary's side is UNCHANGED — the same simulation the single fixture pins.
+    assert body["salary"] == {"ytd": "30855.00", "projected": "67320.00"}
+    assert body["checks_elapsed"] == 11
+    assert PARTNER_MISSING not in body["warnings"]
+
+
+async def test_withholding_total_is_simulated_primary_plus_entered_partner(
+    auth_client, married_world, frozen_today
+):
+    body = await get_withholding(auth_client)
+    partner_total = Decimal(body["partner_withheld_fed"]) + Decimal(body["partner_withheld_state"])
+    assert partner_total == Decimal("24000.00")
+    # Entered, not simulated: the partner's figures are a running snapshot of the same kind
+    # as their W-2 wages, so they count once in EACH leg (no vests in this world).
+    assert body["total"]["ytd"] == "54855.00"  # 30855.00 + 24000.00
+    assert body["total"]["projected"] == "91320.00"  # 67320.00 + 24000.00
+    assert Decimal(body["balance_projected"]) == Decimal(body["liability_total"]) - Decimal(
+        body["total"]["projected"]
+    )
+
+
+async def test_withholding_liability_is_still_the_summary_total_on_a_married_year(
+    auth_client, married_world, frozen_today
+):
+    # Never hand-derived: the MFJ breakdown belongs to the engine, and this card's job is to
+    # show the SAME number the summary panel above it shows.
+    body = await get_withholding(auth_client)
+    summary = await auth_client.get(f"{YEARS}/{YEAR}/summary")
+    assert summary.status_code == 200, summary.text
+    assert body["liability_total"] == summary.json()["totals"]["total_tax"]
+
+
+async def test_withholding_names_the_additional_medicare_gap(
+    auth_client, married_world, frozen_today
+):
+    # 240k + 150k = 390k combined. Owed: (390000 - 250000) x 0.9% = 1260. Withheld by the two
+    # employers: only 240000 crosses ANY employer's own 200k, by 40000 -> 360. The 900.00
+    # difference is the trap this card exists to name.
+    body = await get_withholding(auth_client)
+    assert body["additional_medicare_gap"] == "900.00"
+
+
+async def test_withholding_warns_when_the_partner_withholding_is_not_entered(
+    auth_client, db, definitions, frozen_today
+):
+    me_id, partner_id = await seed_household(db)
+    await seed_married_year(db, YEAR, me_id, partner_id, partner_withholding=False)
+    await seed_profile(db)
+    body = await get_withholding(auth_client)
+
+    assert body["partner_wages"] == "150000.00"
+    assert body["partner_withheld_fed"] is None
+    assert body["partner_withheld_state"] is None
+    assert PARTNER_MISSING in body["warnings"]
+    # Counted as 0, not guessed: the total is the primary's simulation alone.
+    assert body["total"]["projected"] == "67320.00"
+
+
+async def test_withholding_reports_missing_brackets_for_the_status(
+    auth_client, db, definitions, frozen_today
+):
+    # MFJ selected before any MFJ table exists: the card must say WHICH tables are missing
+    # rather than presenting confident zeros. The engine REFUSES outright (merged behaviour),
+    # so the liability is null rather than 0 — and the partner leg is still reported, because
+    # it comes from stored rows rather than from a bracket walk.
+    me_id, partner_id = await seed_household(db)
+    await seed_married_year(db, YEAR, me_id, partner_id, jurisdictions={})
+    await seed_profile(db)
+    body = await get_withholding(auth_client)
+
+    assert body["brackets_missing_for_status"] == [
+        "federal",
+        "state",
+        "medicare",
+        "social_security",
+        "disability",
+        "capital_gains",
+    ]
+    assert body["liability_total"] is None
+    assert body["balance_projected"] is None
+    assert body["partner_wages"] == "150000.00"
+    assert body["additional_medicare_gap"] == "0.00"  # no table, no tier, no gap
+
+
+async def test_withholding_on_a_separate_return_has_no_partner_leg(
+    auth_client, db, definitions, frozen_today
+):
+    # MFS is ONE return for ONE person: `_engine_feed` leaves the partner's wages out of the
+    # liability, so the card must leave them out of the withholding too. Reporting a spouse's
+    # figures beside a liability that never saw them is the one way these two halves can lie.
+    me_id, partner_id = await seed_household(db)
+    await seed_married_year(db, YEAR, me_id, partner_id, status="married_separate")
+    await seed_profile(db)
+    body = await get_withholding(auth_client)
+
+    assert body["filing_status"] == "married_separate"
+    assert body["partner_wages"] is None
+    assert body["partner_withheld_fed"] is None
+    assert body["partner_withheld_state"] is None
+    assert body["total"]["projected"] == "67320.00"  # the primary's simulation, alone
+    assert PARTNER_MISSING not in body["warnings"]
+
+
+async def test_withholding_single_year_carries_the_new_fields_as_silence(
+    auth_client, world, frozen_today
+):
+    # The single path, byte-identical on every pre-existing figure (the rest of this file is
+    # the pin); the additive fields say "there is no second earner here" rather than 0.
+    body = await get_withholding(auth_client)
+    assert body["filing_status"] == "single"
+    assert body["partner_wages"] is None
+    assert body["partner_withheld_fed"] is None
+    assert body["partner_withheld_state"] is None
+    assert body["additional_medicare_gap"] == "0.00"
+    assert body["brackets_missing_for_status"] == []
+    assert body["liability_total"] == "115753.20"
+    assert body["total"] == {"ytd": "51345.00", "projected": "96883.00"}
+    assert body["warnings"] == []
+
+
+# --- safe-harbor prior-year AGI gate (2026-08-26 spec §5.6; IRC 6654(d)(1)(C)) ---
+#
+# The gate itself shipped with the engine plan; what these pin is the gate ON A MARRIED YEAR
+# — the wedding-year shape, where the reference return's status is not this year's — plus the
+# `prior_filing_status` label the card needs to say so.
+
+
+async def seed_prior_year(db, w2: str, status: str = "single") -> None:
+    """A prior year the engine can price, at a chosen AGI and filing status."""
+    db.add(TaxYear(year=YEAR - 1, filing_status=status))
+    await db.flush()
+    db.add(TaxInput(year=YEAR - 1, key="latest_w2_income", value=Decimal(w2)))
+    for name, table in BRACKETS.items():
+        for index, (rate, threshold) in enumerate(table, start=1):
+            db.add(
+                TaxBracket(
+                    year=YEAR - 1,
+                    jurisdiction=name,
+                    bracket_index=index,
+                    rate=Decimal(rate),
+                    threshold=Decimal(threshold),
+                    filing_status=status,
+                )
+            )
+    await db.commit()
+
+
+async def test_safe_harbor_uses_110_pct_above_the_prior_year_agi_gate(
+    auth_client, db, married_world, frozen_today
+):
+    # Prior-year AGI 400,000 > 150,000: the high-earner multiplier applies, and the response
+    # says WHICH multiplier it was rather than leaving the reader to divide.
+    await seed_prior_year(db, "400000")
+    body = await get_withholding(auth_client)
+    harbor = body["safe_harbor"]
+    assert harbor["multiplier"] == "1.10"
+    assert harbor["prior_filing_status"] == "single"
+    assert Decimal(harbor["threshold"]) == (
+        Decimal(harbor["prior_total_tax"]) * Decimal("1.10")
+    ).quantize(Decimal("0.01"))
+
+
+async def test_safe_harbor_drops_to_100_pct_below_the_gate(
+    auth_client, db, married_world, frozen_today
+):
+    # Prior-year AGI 100,000 <= 150,000: the statutory gate the card never checked. 100% of
+    # the prior year's tax IS the safe harbor, and the threshold must be exactly that.
+    await seed_prior_year(db, "100000")
+    body = await get_withholding(auth_client)
+    harbor = body["safe_harbor"]
+    assert harbor["multiplier"] == "1.00"
+    assert harbor["threshold"] == harbor["prior_total_tax"]
+
+
+@pytest.mark.parametrize(
+    ("w2", "multiplier"),
+    [("80000", "1.10"), ("70000", "1.00")],
+)
+async def test_safe_harbor_halves_the_gate_for_a_prior_year_filed_separately(
+    auth_client, db, married_world, frozen_today, w2, multiplier
+):
+    # The gate is 75,000 when the PRECEDING year was filed separately (6654(d)(1)(C)(ii) —
+    # the preceding year's status, not this year's), so 80,000 clears it and 70,000 does not.
+    await seed_prior_year(db, w2, status="married_separate")
+    body = await get_withholding(auth_client)
+    assert body["safe_harbor"]["multiplier"] == multiplier
+    assert body["safe_harbor"]["prior_filing_status"] == "married_separate"
+
+
+async def test_safe_harbor_flags_a_prior_year_filed_under_a_different_status(
+    auth_client, db, married_world, frozen_today
+):
+    # The wedding-year case: this year is MFJ, the reference return is a single filer's. The
+    # number is still the legal safe harbor — the card just has to be able to SAY so.
+    await seed_prior_year(db, "400000")
+    body = await get_withholding(auth_client)
+    assert body["filing_status"] == "married_joint"
+    assert body["safe_harbor"]["prior_filing_status"] == "single"

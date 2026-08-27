@@ -180,6 +180,11 @@ class EngineFeed:
     earners: list[EarnerWages] | None
     tables: dict[str, list[Bracket]]
     brackets_missing_for_status: list[str] = dataclass_field(default_factory=list)
+    # The raw rows `inputs`/`earners` were assembled FROM, carried along so a caller that
+    # also needs "whose money is it" (the withholding card's partner block) re-reads this
+    # list rather than issuing a second query: two queries can straddle a concurrent write
+    # and disagree about the very rows the liability above was computed on.
+    rows: list[TaxInput] = dataclass_field(default_factory=list)
 
     @property
     def computable(self) -> bool:
@@ -321,6 +326,7 @@ async def _engine_feed(
         earners=_assemble_earners(rows, columns),
         tables=tables,
         brackets_missing_for_status=_missing_for_status(tables, filing_status),
+        rows=rows,
     )
 
 
@@ -972,6 +978,29 @@ SAFE_HARBOR_NOT_COMPUTABLE = (
 # jurisdiction sweep because an empty one is silent HERE: the summary would show a 0 medicare
 # line, but this card would show a 0 vest-FICA leg with nothing to explain it.
 FICA_JURISDICTIONS = ("medicare", "social_security", "disability")
+# The two W-2 keys that make up an earner's wage base (`earner_from_inputs`'s own pair), and
+# the two tracker-only keys the partner's withholding is entered under (2026-08-26 spec §5.6
+# — real inputs, deliberately never in the engine's key set, exactly like
+# capital_loss_deductions).
+WAGE_KEYS = ("latest_w2_income", "other_w2_income")
+PARTNER_FED_WITHHOLDING_KEY = "w2_fed_withholding"
+PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
+
+
+def _bucket_input_rows(rows: Iterable[TaxInput]) -> dict[int | None, dict[str, Decimal]]:
+    """The year's stored inputs bucketed by OWNER — None is the household bucket.
+
+    The sibling of `_assemble_inputs`: that one answers "what does the engine see", this one
+    answers "whose money is it", and the withholding card is the only place that needs both.
+    """
+    buckets: dict[int | None, dict[str, Decimal]] = {}
+    for row in rows:
+        buckets.setdefault(row.person_id, {})[row.key] = row.value
+    return buckets
+
+
+def _wage_base(values: dict[str, Decimal]) -> Decimal:
+    return sum((values.get(key, ZERO) for key in WAGE_KEYS), ZERO)
 
 
 @router.get("/years/{year}/withholding", response_model=WithholdingOut)
@@ -1002,6 +1031,35 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         for name in FICA_JURISDICTIONS
         if not tables.get(name)
     ]
+
+    # --- the partner leg (2026-08-26 spec §5.6). The partner has no paycheck profile in this
+    # batch, so their side is ENTERED, not simulated: wages from their own W-2 rows,
+    # withholding from the two tracker-only keys. The people are the ones `_engine_feed`
+    # already put on THIS return (`_return_people`) — so on an MFS year, whose return covers
+    # one spouse, there is no partner leg at all, exactly as the liability above has no
+    # partner wages in it. Every other non-primary person on a joint return folds into one
+    # "partner": the design ships a household of two, and a third person's wages still belong
+    # on the withheld side rather than nowhere.
+    people = await load_people(db)
+    partner_ids = [
+        person.id for person in _return_people(people, feed.filing_status) if not person.is_primary
+    ]
+    # `feed.rows`, not a second query: the buckets below have to be the same rows the engine
+    # was fed, or the two halves of this card describe two different households.
+    buckets = _bucket_input_rows(feed.rows)
+    partner_values: dict[str, Decimal] = {}
+    for person_id in partner_ids:
+        for key, value in buckets.get(person_id, {}).items():
+            partner_values[key] = partner_values.get(key, ZERO) + value
+    partner_wage_base = _wage_base(partner_values)
+    # By SUBTRACTION, not by looking the primary up: household-owned (NULL) W-2 rows from
+    # before the person migration, or a stray third bucket, then still land on the simulated
+    # side instead of disappearing — and the two halves always add back to the figure the
+    # engine taxed.
+    primary_wage_base = _wage_base(feed.inputs) - partner_wage_base
+    has_partner = bool(partner_ids)
+    partner_fed = partner_values.get(PARTNER_FED_WITHHOLDING_KEY) if has_partner else None
+    partner_state = partner_values.get(PARTNER_STATE_WITHHOLDING_KEY) if has_partner else None
 
     # Profiles: the stored-data fence, mirroring paycheck.py's breakdown guard — same rule,
     # same words (PAY_PERIODS_MESSAGE), read from the other end. BOTH bounds bind here, where
@@ -1084,18 +1142,30 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         medicare=tables.get("medicare", []),
         social_security=tables.get("social_security", []),
         disability=tables.get("disability", []),
+        primary_wages=primary_wage_base,
+        partner_wages=partner_wage_base if has_partner else ZERO,
+        partner_withheld_fed=partner_fed,
+        partner_withheld_state=partner_state,
     )
     warnings.extend(estimated.warnings)
 
-    # Salary withholding + vest supplemental + vest marginal FICA. Salary-side FICA is NOT a
-    # term: the user's all-in withholding_pct already carries it (withholding_calc's note).
+    # Salary withholding + vest supplemental + vest marginal FICA, plus the partner's ENTERED
+    # withholding. Salary-side FICA is NOT a term: the user's all-in withholding_pct already
+    # carries it (withholding_calc's note). The partner's figure counts once in EACH leg on
+    # purpose — their withholding inputs are a running snapshot of the same kind as their W-2
+    # wage inputs, which is what the liability above is computed on, so both legs describe the
+    # same household. The three partner_* fields below are what make that visible.
     total_ytd = _money(
-        estimated.salary_ytd + estimated.vest_supplemental_ytd + estimated.vest_fica_ytd
+        estimated.salary_ytd
+        + estimated.vest_supplemental_ytd
+        + estimated.vest_fica_ytd
+        + estimated.partner_withheld_total
     )
     total_projected = _money(
         estimated.salary_projected
         + estimated.vest_supplemental_projected
         + estimated.vest_fica_projected
+        + estimated.partner_withheld_total
     )
     liability_total = None if liability is None else _money(liability.totals.total_tax)
 
@@ -1133,6 +1203,7 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
                     prior_total_tax=prior_total,
                     prior_agi=prior_agi,
                     multiplier=multiplier,
+                    prior_filing_status=prior_feed.filing_status,
                     threshold=threshold,
                     # Judged on the DISPLAYED figures (paycheck.py's negative-net posture),
                     # so the badge can never contradict the two numbers rendered next to it.
@@ -1164,6 +1235,10 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         ),
         checks_elapsed=estimated.checks_elapsed,
         checks_total=estimated.checks_total,
+        partner_wages=_money(partner_wage_base) if has_partner else None,
+        partner_withheld_fed=None if partner_fed is None else _money(partner_fed),
+        partner_withheld_state=None if partner_state is None else _money(partner_state),
+        additional_medicare_gap=_money(estimated.additional_medicare_gap),
         safe_harbor=safe_harbor,
         warnings=warnings,
     )

@@ -299,6 +299,10 @@ class SafeHarborOut(BaseModel):
     prior_agi: Decimal
     multiplier: Decimal  # 1.10 above the gate, 1.00 at or below it
     threshold: Decimal  # prior_total_tax x multiplier
+    # The status the REFERENCE return was filed under, which is also the status whose gate
+    # was applied. Different from this year's on a wedding year — a labelling matter, never
+    # a math one, and the card says so rather than leaving the reader to wonder.
+    prior_filing_status: str = SINGLE
     met: bool  # projected total withholding >= threshold
 
 
@@ -317,5 +321,18 @@ class WithholdingOut(BaseModel):
     balance_projected: Decimal | None  # liability - projected withholding; positive = will owe
     checks_elapsed: int
     checks_total: int
+    # --- the partner leg. NULL is a different silence from 0 in all three: `partner_wages`
+    # is null when this year's return covers one person (single, MFS, or a household with no
+    # partner row) and 0.00 when a partner is ON the return with no W-2 entered; the two
+    # withheld fields are null when no tracker row is stored at all — the state that raises
+    # the "not entered" warning — and 0.00 only when the user really entered a zero.
+    partner_wages: Decimal | None = None
+    partner_withheld_fed: Decimal | None = None
+    partner_withheld_state: Decimal | None = None
+    # SIGNED: positive is the under-withholding trap (each employer withholds the 0.9%
+    # surtax only above 200k of its own wages; a joint return owes it above the status
+    # threshold on combined wages), negative is over-withholding, 0.00 is one earner or a
+    # table with no surtax tier.
+    additional_medicare_gap: Decimal = Decimal("0.00")
     safe_harbor: SafeHarborOut | None
     warnings: list[str]
