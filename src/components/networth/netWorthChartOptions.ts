@@ -1,10 +1,10 @@
 // Pure tooltip/CSV helpers for the net-worth stacked chart — no React, no fetching, no
 // theme decisions of their own (historyChartOptions.ts posture). The option itself stays
 // in NetWorthPage (it reads page state); only the parts worth unit-testing live here.
-import { GROUP_LABELS, GROUP_ORDER } from '../../charts/theme'
+import { GROUP_LABELS, GROUP_ORDER, MUTED } from '../../charts/theme'
 import type { NetWorthTimeseries } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { escapeHtml, formatCurrency } from '../../utils/format'
+import { escapeHtml, formatCurrency, formatMonth } from '../../utils/format'
 
 /** The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
  * the legend, the tooltip branch and the series stay in lockstep (moved verbatim from
@@ -78,5 +78,50 @@ export function netWorthCsv(
       ...GROUP_ORDER.map((g) => ts.group_totals[g][i] ?? ''),
       ts.net_worth[i],
     ]),
+  }
+}
+
+/** The wedding annotation's shape — narrow on purpose, so the test can read it without
+ *  echarts' `any`-ish option types. */
+export interface MarriageMarkLine {
+  silent: true
+  symbol: 'none'
+  lineStyle: { color: string; width: number; type: 'dashed' }
+  label: { show: true; formatter: string; position: 'insideEndTop'; color: string; fontSize: number }
+  data: { xAxis: string }[]
+}
+
+/**
+ * A dashed vertical rule on the trend at the marriage month (household spec §6). The step
+ * at that boundary is REAL — partner history starts fresh there, by decision — so it has to
+ * read as intentional rather than as a data glitch.
+ *
+ * The x-axis is a CATEGORY axis of formatMonth labels, so the markLine's value must be a
+ * label, not an ISO date. The wedding day is normalised to its month; if that exact month
+ * has no snapshot (a gap, or quarterly granularity) the mark falls FORWARD to the first
+ * month on record after it. A wedding later than every snapshot draws nothing — there is
+ * no month to mark yet, and clamping it to the last one would date a line to the future.
+ */
+export function marriageMarkLine(
+  months: string[],
+  marriageDate: string | null | undefined,
+): MarriageMarkLine | undefined {
+  if (!marriageDate || months.length === 0) return undefined
+  // ISO first-of-month strings compare lexicographically (utils/months.ts's contract).
+  const bucket = `${marriageDate.slice(0, 7)}-01`
+  const index = months.findIndex((month) => month >= bucket)
+  if (index === -1) return undefined
+  return {
+    silent: true,
+    symbol: 'none',
+    lineStyle: { color: MUTED, width: 1, type: 'dashed' },
+    label: {
+      show: true,
+      formatter: 'Married',
+      position: 'insideEndTop',
+      color: MUTED,
+      fontSize: 11,
+    },
+    data: [{ xAxis: formatMonth(months[index]) }],
   }
 }
