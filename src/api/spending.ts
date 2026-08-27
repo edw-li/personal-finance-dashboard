@@ -2,7 +2,9 @@ import { api } from './client'
 import type {
   AmountEntry,
   CategoryBudgetEntry,
+  CategoryCreate,
   CategoryOut,
+  CategoryUpdate,
   SpendingMatrix,
   SpendingMonth,
   SpendingUpsertResult,
@@ -11,6 +13,25 @@ import type {
 
 export function fetchCategories(): Promise<CategoryOut[]> {
   return api<CategoryOut[]>('/spending/categories')
+}
+
+export function createCategory(body: CategoryCreate): Promise<CategoryOut> {
+  return api<CategoryOut>('/spending/categories', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function updateCategory(categoryId: number, body: CategoryUpdate): Promise<CategoryOut> {
+  return api<CategoryOut>(`/spending/categories/${categoryId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+// 409s once the category has monthly rows — the server's sentence names the count.
+export function deleteCategory(categoryId: number): Promise<void> {
+  return api<void>(`/spending/categories/${categoryId}`, { method: 'DELETE' })
 }
 
 export function fetchMatrix(): Promise<SpendingMatrix> {
