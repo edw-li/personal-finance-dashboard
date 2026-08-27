@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.models import (
     EsppLot,
@@ -1672,4 +1672,83 @@ async def test_what_if_moves_the_primary_earners_fica_on_a_joint_year(
     # Scenario: the primary's bundle becomes 180000, capped at 150000; the partner stays
     # at 100000. (150000 + 100000) x .062 = 15500.
     assert body["scenario"]["social_security"]["tax"] == "15500.00"
+    assert body["delta"]["social_security_tax"] == "3100.00"
+
+
+async def test_earner_bundles_follow_column_order_not_a_string_sort(auth_client, db, definitions):
+    """Primary id=2, partner id=10 — the roster where the two orderings DISAGREE.
+
+    Every other household test runs on conftest's RESTART IDENTITY ids (1, 2), where
+    column order and `sorted(per_person, key=str)` happen to agree, so none of them can
+    see the bug this pins: with a 10 in the roster the string sort puts "10" ahead of "2"
+    and `shift_earners` — which re-bases the what-if on `earners[0]` because that is
+    meant to be the PRIMARY's — silently moves the primary's sale onto the partner's
+    wage base. Asymmetric wages (100000 vs 40000) and a Social Security cap at 150000
+    make the two orderings answer with different money.
+
+    PROVEN discriminating. Reverting `_assemble_earners`' last line to
+    `[earner_from_inputs(per_person[c]) for c in sorted(per_person, key=str)]` fails it
+    twice over:
+
+        At index 0 diff: Decimal('40000.0000') != Decimal('100000')  # bundle[0] is theirs
+        AssertionError: assert '13640.00' == '11780.00'              # social_security
+
+    (13640 is the partner absorbing the 80000 leg and still sitting under the base —
+    100000 + 120000 — while the primary's own wages never move. The BASELINE stays
+    8680.00 under either ordering, because that side only ever sums the two bundles.)
+    """
+    from app.api.taxes import _engine_feed
+    from app.models import Person
+
+    # EXPLICIT ids. `people.id` is a plain identity column, so an explicit insert does not
+    # advance the sequence — push it past 10 so a later auto-id person in this test could
+    # not collide on 2.
+    db.add_all(
+        [
+            Person(id=2, name="Me", is_primary=True),
+            Person(id=10, name="Partner", is_primary=False),
+        ]
+    )
+    await db.flush()
+    await db.execute(text("SELECT setval('people_id_seq', 10, true)"))
+    await db.commit()
+
+    await auth_client.put(
+        f"{YEARS}/2026/inputs",
+        json={
+            "rows": [
+                {"key": "latest_w2_income", "person_id": 2, "value": "100000"},
+                {"key": "latest_w2_income", "person_id": 10, "value": "40000"},
+            ]
+        },
+    )
+    tables = {
+        "federal": rows(("0.10", "0")),
+        "state": rows(("0.05", "0")),
+        "medicare": rows(("0.0145", "0")),
+        "social_security": rows(("0.062", "0"), ("0", "150000")),
+        "disability": rows(("0.01", "0")),
+        "capital_gains": rows(("0.15", "0")),
+    }
+    for status in ("single", "married_joint"):
+        await auth_client.put(
+            f"{YEARS}/2026/brackets", json={"filing_status": status, "jurisdictions": tables}
+        )
+    await set_status(auth_client, 2026, "married_joint")
+
+    # The ordering contract itself: bundle[0] is the primary's, whatever the ids sort like.
+    feed = await _engine_feed(db, 2026)
+    assert [earner.w2_wages for earner in feed.earners] == [Decimal("100000"), Decimal("40000")]
+
+    # ...and the money it decides. Baseline: 100000 + 40000, both under the 150000 base,
+    # (140000) x .062 = 8680.
+    body = (
+        await auth_client.post(
+            WHAT_IF, json={"year": 2026, "overrides": {"other_w2_income": "80000"}}
+        )
+    ).json()
+    assert body["baseline"]["social_security"]["tax"] == "8680.00"
+    # The 80000 is the PRIMARY's leg: their bundle becomes 180000, capped at 150000, next
+    # to the partner's untouched 40000. (150000 + 40000) x .062 = 11780.
+    assert body["scenario"]["social_security"]["tax"] == "11780.00"
     assert body["delta"]["social_security_tax"] == "3100.00"
