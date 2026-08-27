@@ -463,4 +463,39 @@ describe('InputsForm', () => {
     expect(field('Annual Salary — Me').value).toBe('$200,000.00')
     expect(field('Annual Salary — Partner').value).toBe('$90,000.00')
   })
+
+  it('column paste walks ONE person’s column and skips the other', () => {
+    render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('Annual Salary — Sam'), {
+      clipboardData: { getData: () => '95000\n4000\n2000' },
+    })
+
+    // A sheet column is ONE person's numbers, so the fill walks Sam's three per-person lines
+    // in render order — across the section boundary — and stops there.
+    expect(field('Annual Salary — Sam').value).toBe('$95,000.00')
+    expect(field('Gross Paycheck — Sam').value).toBe('$4,000.00')
+    expect(field('HSA Contributions — Sam').value).toBe('$2,000.00')
+    // Alex's column and the shared line are untouched.
+    expect(field('Annual Salary — Alex').value).toBe('$200,000.00')
+    expect(field('Qualified Dividends').value).toBe('')
+    // The denominator is the COLUMN, not the whole form: three cells were reachable.
+    expect(screen.getByText(/pasted 3 of 3 values/i)).toBeDefined()
+  })
+
+  it('keyed paste fills the pasted-into column and the shared lines, never the other person', () => {
+    render(<InputsForm inputs={marriedInputs()} onSaved={vi.fn()} />)
+    fireEvent.paste(field('Annual Salary — Sam'), {
+      clipboardData: {
+        getData: () => 'HSA Contributions\t2000\nQualified Dividends\t150\nNot A Line\t1',
+      },
+    })
+
+    expect(field('HSA Contributions — Sam').value).toBe('$2,000.00')
+    // Household rows are unambiguous — one cell per key — so a mixed block reaches them too.
+    expect(field('Qualified Dividends').value).toBe('$150.00')
+    // And never the other person's.
+    expect(field('HSA Contributions — Alex').value).toBe('$4,150.00')
+    // Sam's three lines plus the one shared line: four cells a keyed block may reach here.
+    expect(screen.getByText(/pasted 2 of 4 values · 1 unmatched: Not A Line/i)).toBeDefined()
+  })
 })

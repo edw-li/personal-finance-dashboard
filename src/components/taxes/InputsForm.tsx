@@ -273,6 +273,20 @@ export default function InputsForm({
     const plan = classifyPaste(e.clipboardData.getData('text/plain'))
     if (plan === null) return
     e.preventDefault()
+    const target = (e.target as HTMLElement).closest<HTMLInputElement>('input[data-entry-cell]')
+    const targetCell =
+      target === null
+        ? null
+        : (flatCells.find((cell) => `tax-input-${cell.id}` === target.id) ?? null)
+    // The COLUMN a paste fills: the cells that share the pasted-into cell's person. A sheet
+    // column is ONE person's numbers, so a paste into their box must walk THEIR rows and skip
+    // the other column entirely. With no resolvable target (a paste onto the card rather than
+    // into a box) the whole rendered order is the target, as it always was — and on a
+    // one-column year every cell has a null person, so the two are the same list.
+    const column =
+      targetCell === null
+        ? flatCells
+        : flatCells.filter((cell) => cell.personId === targetCell.personId)
     const fills: Record<string, string> = {}
     const flashed = new Set<string>()
     const unmatched: string[] = []
@@ -280,20 +294,15 @@ export default function InputsForm({
     // An empty pasted cell SKIPS its target instead of blanking it: a blank here is the
     // wire's "unset this input", and a stray trailing tab must never delete a stored value.
     let blank = 0
+    // How many cells this paste could have reached — the denominator of the note below.
+    let reachable = column.length
     if (plan.mode === 'positional') {
-      // Fill from the pasted-into cell onward, down the rendered order — across section
-      // boundaries, the way Enter walks it.
-      const target = (e.target as HTMLElement).closest<HTMLInputElement>('input[data-entry-cell]')
-      const startAt =
-        target === null
-          ? 0
-          : Math.max(
-              0,
-              flatCells.findIndex((cell) => `tax-input-${cell.id}` === target.id),
-            )
+      // Fill from the pasted-into cell onward, down the column — across section boundaries,
+      // the way Enter walks it.
+      const startAt = targetCell === null ? 0 : Math.max(0, column.indexOf(targetCell))
       plan.values.forEach((value, i) => {
         const slot = startAt + i
-        if (slot >= flatCells.length) {
+        if (slot >= column.length) {
           overflow += 1
           return
         }
@@ -302,12 +311,26 @@ export default function InputsForm({
           blank += 1
           return
         }
-        fills[flatCells[slot].id] = value
-        flashed.add(flatCells[slot].id)
+        fills[column[slot].id] = value
+        flashed.add(column[slot].id)
       })
     } else {
-      // matchLabel keys on numeric ids, so the INDEX into flatCells serves as one.
-      const labelled = flatCells.map((cell, i) => ({ id: i, name: cell.itemLabel }))
+      // Keyed paste matches the pasted-into COLUMN first, then the household rows — which are
+      // unambiguous, one cell per key — so a mixed block dropped into a person's column fills
+      // their per-person lines and the shared ones, and never the other person's. On a
+      // one-column year both lists are the same cells, so the dedupe leaves exactly the flat
+      // list this form matched against before columns existed.
+      const seen = new Set<string>()
+      const candidates = [...column, ...flatCells.filter((cell) => cell.personId === null)].filter(
+        (cell) => {
+          if (seen.has(cell.id)) return false
+          seen.add(cell.id)
+          return true
+        },
+      )
+      reachable = candidates.length
+      // matchLabel keys on numeric ids, so the INDEX into candidates serves as one.
+      const labelled = candidates.map((cell, i) => ({ id: i, name: cell.itemLabel }))
       for (const { label, value } of plan.rows) {
         const index = matchLabel(labelled, label)
         if (index === null) {
@@ -315,15 +338,15 @@ export default function InputsForm({
         } else if (value === '') {
           blank += 1
         } else {
-          fills[flatCells[index].id] = value
-          flashed.add(flatCells[index].id)
+          fills[candidates[index].id] = value
+          flashed.add(candidates[index].id)
         }
       }
       overflow = plan.skipped
     }
     if (Object.keys(fills).length > 0) setValues((current) => ({ ...current, ...fills }))
     setFlashIds(flashed)
-    const parts = [`Pasted ${Object.keys(fills).length} of ${flatCells.length} values`]
+    const parts = [`Pasted ${Object.keys(fills).length} of ${reachable} values`]
     if (unmatched.length > 0) {
       const shown = unmatched.slice(0, 4).join(', ')
       const more = unmatched.length > 4 ? `, +${unmatched.length - 4} more` : ''
