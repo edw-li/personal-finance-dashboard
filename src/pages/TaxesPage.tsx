@@ -42,6 +42,27 @@ interface YearDetail {
   summary: TaxSummaryOut
 }
 
+/**
+ * The identity that must REMOUNT the two editors, taken from the PAYLOADS rather than from
+ * the page's idea of the year's status.
+ *
+ * Their state is keyed by cell id — (key, person) in the inputs form, (jurisdiction, status)
+ * in the brackets editor — and seeds from a useState INITIALIZER, so a namespace change that
+ * does not remount them leaves every new box reading blank. The page's own `filingStatus`
+ * cannot be that key: a status flip replaces the year ROW (and the selector) one render
+ * BEFORE the new payloads land, so keying on it would remount the editors against the OLD
+ * payloads and then leave them mounted when the real ones arrive. The payload's own status
+ * and column list move exactly when its cell ids do.
+ */
+function inputsKey(inputs: TaxInputsOut): string {
+  const columns = inputs.people.map((person) => person.id).join('.')
+  return `inputs-${inputs.year}-${inputs.filing_status}-${columns}`
+}
+
+function bracketsKey(brackets: TaxBracketsOut): string {
+  return `brackets-${brackets.year}-${brackets.filing_status}`
+}
+
 function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
   // The router already orders by year; reducing makes the page independent of that.
   return years.length === 0 ? undefined : years.reduce((a, b) => (b.year > a.year ? b : a))
@@ -603,18 +624,20 @@ export default function TaxesPage() {
             initialTicker={whatIfTicker}
             initialLotId={whatIfLotId}
           />
-          {/* Keyed by YEAR, not by load: a real switch remounts the editors (2023's typed
-              rows must not carry into 2024), while a same-year reload — Retry, or the
-              refresh after a save — leaves them mounted. Their state seeds from useState
-              initializers, so the replaced props cannot clobber typed work either. */}
+          {/* Keyed by the payloads' own identity (see inputsKey/bracketsKey), not by load:
+              a real year or status switch remounts the editors — 2023's typed rows must not
+              carry into 2024, and a one-column year's cell ids are not a two-column year's —
+              while a same-year same-status reload (Retry, or the refresh after a save) leaves
+              them mounted. Their state seeds from useState initializers, so the replaced
+              props cannot clobber typed work either. */}
           <InputsForm
-            key={`inputs-${detail.inputs.year}`}
+            key={inputsKey(detail.inputs)}
             inputs={detail.inputs}
             onSaved={onInputsSaved}
             onDirtyChange={setInputsDirty}
           />
           <BracketsEditor
-            key={`brackets-${detail.brackets.year}`}
+            key={bracketsKey(detail.brackets)}
             brackets={detail.brackets}
             onSaved={onBracketsSaved}
             onDirtyChange={setBracketsDirty}

@@ -155,6 +155,46 @@ function bracketsFor(year: number): TaxBracketsOut {
   }
 }
 
+// The same year as the API answers it once it is filed jointly: the per-person key comes back
+// once per person COLUMN, each stamped with its own person_id and value. The roster rides on
+// the payload, so the page never asks for it separately.
+function marriedInputsFor(year: number): TaxInputsOut {
+  const single = inputsFor(year)
+  const salary = single.sections[0].items[0]
+  return {
+    ...single,
+    filing_status: 'married_joint',
+    people: [
+      { id: 1, name: 'Alex' },
+      { id: 4, name: 'Sam' },
+    ],
+    sections: [
+      {
+        section: 'ordinary_income',
+        items: [
+          { ...salary, person_id: 1 },
+          { ...salary, person_id: 4, value: '90000.0000' },
+        ],
+      },
+    ],
+  }
+}
+
+// A married year on a database with fewer than two people: ONE null column, which is the
+// pre-household payload exactly.
+function marriedNoRosterFor(year: number): TaxInputsOut {
+  const single = inputsFor(year)
+  return {
+    ...single,
+    filing_status: 'married_joint',
+    people: [],
+    sections: single.sections.map((section) => ({
+      ...section,
+      items: section.items.map((item) => ({ ...item, person_id: null })),
+    })),
+  }
+}
+
 // The clone answers with review flags too — the brackets editor reads them. This page only
 // needs the year's tables back, so the flags are empty here; BracketsEditor.test.tsx is
 // where they carry meaning.
@@ -1195,5 +1235,44 @@ describe('filing status (2026-08-26 design §6)', () => {
 
     fireEvent.click(statusButton('Married filing jointly'))
     await waitFor(() => expect(screen.queryByText(CA_CAVEAT)).toBeNull())
+  })
+
+  it('splits the per-person inputs into named columns on a married year', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
+    renderPage()
+
+    expect(await screen.findByLabelText('Annual Salary — Alex')).toBeTruthy()
+    expect(screen.getByLabelText('Annual Salary — Sam')).toBeTruthy()
+    // One request, not two: the person columns ride on the inputs payload, so the page never
+    // spends a second round trip on a roster the server has already narrowed for it.
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps one column when the year payload carries fewer than two people', async () => {
+    vi.mocked(fetchTaxYears).mockResolvedValue([{ ...year2024, filing_status: 'married_joint' }])
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedNoRosterFor(year))
+    renderPage()
+
+    // The honest degrade is today's layout — whose unqualified per-person writes the server
+    // still resolves onto the primary person — and it is not an error.
+    expect(await screen.findByLabelText('Annual Salary')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('re-seeds the inputs form when a status flip brings a second column', async () => {
+    vi.mocked(fetchTaxInputs)
+      .mockResolvedValueOnce(inputsFor(2024))
+      .mockResolvedValueOnce(marriedInputsFor(2024))
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(statusButton('Married filing jointly'))
+
+    // The editors are keyed by year AND status, so a flip REMOUNTS them: their value maps are
+    // keyed by cell id, and a one-column year's ids are not a two-column year's — left
+    // mounted, every new box would read blank.
+    const partner = (await screen.findByLabelText('Annual Salary — Sam')) as HTMLInputElement
+    expect(partner.value).toBe('$90,000.00')
   })
 })
