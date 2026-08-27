@@ -582,6 +582,127 @@ async def test_apply_taxes_keeps_brackets_for_jurisdictions_absent_from_the_shee
     assert survivor.rate == Decimal("0.1000")
 
 
+async def test_apply_taxes_never_touches_partner_rows_or_married_brackets(db):
+    """The marriage-data hazard (audit §9.1), closed for good.
+
+    A re-import may rewrite the PRIMARY person's sheet-tracked values and the single-filer
+    bracket tables — that is the sheet-wins contract. It must not see anything else."""
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import Person, TaxBracket, TaxInput
+
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    await db.commit()
+
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
+    await db.commit()
+    # Sheet-written per-person rows land on the PRIMARY person; household rows stay NULL.
+    salary = (
+        await db.execute(
+            select(TaxInput).where(TaxInput.year == 2024, TaxInput.key == "annual_salary")
+        )
+    ).scalar_one()
+    assert salary.person_id == me.id
+    interest = (
+        await db.execute(
+            select(TaxInput).where(TaxInput.year == 2024, TaxInput.key == "interest_total")
+        )
+    ).scalar_one()
+    assert interest.person_id is None
+    # Sheet-written brackets are single-filer rows.
+    assert {row.filing_status for row in (await db.execute(select(TaxBracket))).scalars()} == {
+        "single"
+    }
+
+    # Now the marriage data, inside a year the sheet DOES cover.
+    db.add(
+        TaxInput(year=2024, key="latest_w2_income", person_id=partner.id, value=Decimal("90000"))
+    )
+    db.add(
+        TaxInput(year=2024, key="w2_fed_withholding", person_id=partner.id, value=Decimal("12000"))
+    )
+    db.add(
+        TaxBracket(
+            year=2024,
+            jurisdiction="federal",
+            filing_status="married_joint",
+            bracket_index=1,
+            rate=Decimal("0.1000"),
+            threshold=Decimal("0.00"),
+        )
+    )
+    await db.commit()
+
+    report2 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report2)
+    await db.commit()
+
+    assert report2.entities["tax_inputs"].deletes == 0
+    assert report2.entities["tax_brackets"].deletes == 0
+    survivors = (
+        (
+            await db.execute(
+                select(TaxInput).where(TaxInput.year == 2024, TaxInput.person_id == partner.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert sorted(row.key for row in survivors) == ["latest_w2_income", "w2_fed_withholding"]
+    assert sorted(row.value for row in survivors) == [
+        Decimal("12000.0000"),
+        Decimal("90000.0000"),
+    ]
+    joint = (
+        (await db.execute(select(TaxBracket).where(TaxBracket.filing_status == "married_joint")))
+        .scalars()
+        .all()
+    )
+    assert len(joint) == 1
+    # ...and the sheet-covered single data still synced exactly as before.
+    assert report2.entities["tax_inputs"].skips == 86
+    assert report2.entities["tax_brackets"].skips == 14
+
+
+async def test_apply_taxes_still_syncs_the_primary_persons_rows(db):
+    """Immunity is for OTHER people, not for the primary: a cell that leaves the sheet
+    still takes the primary's row with it."""
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import Person, TaxInput
+    from tests.workbook_builder import default_taxes_rows
+
+    db.add(Person(name="Me", is_primary=True))
+    await db.commit()
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets()["Taxes"]), report)
+    await db.commit()
+
+    # One YEAR's cell is blanked, not the label row: parse_taxes pins the whole label
+    # sequence, so a removed row aborts the parse, and blanking EVERY column would take the
+    # key out of the sheet's vocabulary entirely (the P0 immunity next door). Blanking 2023
+    # alone keeps `gross_paycheck` — a per-person key — sheet-carried, so its 2023 row is
+    # squarely the sweep's to retire even though it belongs to the primary person.
+    trimmed = default_taxes_rows()
+    for row in trimmed:
+        if row[1] == "Gross Paycheck":
+            row[2] = None
+    report2 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets(taxes=trimmed)["Taxes"]), report2)
+    await db.commit()
+    assert report2.entities["tax_inputs"].deletes == 1  # 2023 only; 2024 still carries it
+    remaining = {
+        row.year: row.person_id
+        for row in (
+            await db.execute(select(TaxInput).where(TaxInput.key == "gross_paycheck"))
+        ).scalars()
+    }
+    assert remaining == {2024: (await db.execute(select(Person.id))).scalar_one()}
+
+
 async def test_apply_espp_lots_and_periods(db):
     from app.importer.apply import apply_espp
     from app.importer.parsers import parse_espp

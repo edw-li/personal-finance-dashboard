@@ -44,6 +44,8 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services.people import load_people, primary_person
+from app.tax_keys import PER_PERSON_KEYS, SINGLE
 
 
 def _diff_update(obj, fields: dict, counts, report: SheetReport, sample_key: str) -> None:
@@ -475,6 +477,15 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
             )
             return
 
+    # The sheet is ONE person's return: every per-person value it carries is the primary's
+    # (spec §7). On a roster-less database the owner stays NULL — which is exactly what
+    # every imported row was before the person migration.
+    primary = primary_person(await load_people(db))
+    primary_id = None if primary is None else primary.id
+
+    def owner_of(key: str) -> int | None:
+        return primary_id if key in PER_PERSON_KEYS else None
+
     imported_years = sorted({i.year for i in parsed.inputs} | {b.year for b in parsed.brackets})
     existing_years = {y.year for y in (await db.execute(select(TaxYear))).scalars()}
     for year in imported_years:
@@ -488,7 +499,7 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
 
     # Sheet wins on re-import WITHIN imported years; other years are never touched.
     existing_inputs = {
-        (i.year, i.key): i
+        (i.year, i.key, i.person_id): i
         for i in (
             await db.execute(select(TaxInput).where(TaxInput.year.in_(imported_years)))
         ).scalars()
@@ -501,32 +512,57 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
     # Union across parsed years on purpose: a cell blanked in ONE year while the same sheet
     # row still carries another year is still a sheet key, and still sync-deletes as today.
     sheet_input_keys = {item.key for item in parsed.inputs}
-    incoming_input_keys: set[tuple[int, str]] = set()
+    incoming_input_keys: set[tuple[int, str, int | None]] = set()
     for item in parsed.inputs:
-        key = (item.year, item.key)
+        key = (item.year, item.key, owner_of(item.key))
         incoming_input_keys.add(key)
         row = existing_inputs.get(key)
+        if row is None and key[2] is not None:
+            # A row written before the person migration (or before the roster existed)
+            # carries NULL on a per-person key: adopt it rather than inserting a second row
+            # the (year, key, person) unique constraint would reject.
+            row = existing_inputs.get((item.year, item.key, None))
         if row is None:
-            db.add(TaxInput(year=item.year, key=item.key, value=item.value))
+            db.add(
+                TaxInput(
+                    year=item.year, key=item.key, person_id=owner_of(item.key), value=item.value
+                )
+            )
             input_counts.creates += 1
         else:
             _diff_update(
                 row,
-                {"value": item.value},
+                {"value": item.value, "person_id": owner_of(item.key)},
                 input_counts,
                 report,
                 f"tax_inputs[{item.year}/{item.key}]",
             )
     for key, row in existing_inputs.items():
-        if key not in incoming_input_keys and key[1] in sheet_input_keys:
-            await db.delete(row)
-            input_counts.deletes += 1
-            report.add_sample(f"tax_inputs[{key[0]}/{key[1]}]: deleted (cell left sheet)")
+        if key in incoming_input_keys:
+            continue
+        # The sheet's own vocabulary only (the P0 scoping): a key the workbook does not
+        # carry was never the sheet's to delete.
+        if key[1] not in sheet_input_keys:
+            continue
+        # ...and somebody else's row is not the sheet's either. The sheet is one person's
+        # return, so it may only retire the primary's rows (and the NULL rows that used to
+        # spell the same thing).
+        if key[2] is not None and key[2] != primary_id:
+            continue
+        await db.delete(row)
+        input_counts.deletes += 1
+        report.add_sample(f"tax_inputs[{key[0]}/{key[1]}]: deleted (cell left sheet)")
 
+    # SINGLE-status rows only, at every step: the married tables are dashboard-only data
+    # the workbook has no opinion about, so the importer cannot diff, write or delete them.
     existing_brackets = {
         (b.year, b.jurisdiction, b.bracket_index): b
         for b in (
-            await db.execute(select(TaxBracket).where(TaxBracket.year.in_(imported_years)))
+            await db.execute(
+                select(TaxBracket).where(
+                    TaxBracket.year.in_(imported_years), TaxBracket.filing_status == SINGLE
+                )
+            )
         ).scalars()
     }
     # Defensive scoping, mirroring sheet_input_keys above: jurisdictions the workbook never
@@ -544,6 +580,7 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
                 TaxBracket(
                     year=item.year,
                     jurisdiction=item.jurisdiction,
+                    filing_status=SINGLE,
                     bracket_index=item.bracket_index,
                     **fields,
                 )
