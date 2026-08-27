@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { GripVertical } from 'lucide-react'
 import { ApiError } from '../../api/client'
 import {
   createRewardCategory,
@@ -71,7 +72,23 @@ export default function CategoriesPanel({
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Drag-reorder state. pendingOrder renders IMMEDIATELY on drop (optimistic) and is
+  // retired the moment fresh props arrive from the refetch — the adjust-during-render
+  // pattern below, not an effect (react-hooks/set-state-in-effect stays clean).
+  const [pendingOrder, setPendingOrder] = useState<RewardCategoryOut[] | null>(null)
+  const [lastCategories, setLastCategories] = useState(categories)
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [overIndex, setOverIndex] = useState<number | null>(null)
+  // Only the grip arms a row drag — a click-drag on Edit or a text selection must not
+  // pick the row up (the standard drag-handle recipe).
+  const dragArmed = useRef(false)
   const toast = useToast()
+
+  if (lastCategories !== categories) {
+    setLastCategories(categories)
+    setPendingOrder(null)
+  }
+  const ordered = pendingOrder ?? categories
 
   const activeCards = cards.filter((c) => c.is_active)
   const spendingName = new Map(spendingCategories.map((c) => [c.id, c.name]))
@@ -181,6 +198,42 @@ export default function CategoriesPanel({
       })
       .catch((err: unknown) => setError(message(err, 'Delete failed')))
       .finally(() => setBusy(false))
+  }
+
+  /** Persist a new order: sort_order = list index, PATCHing only rows whose stored
+   *  value differs (an adjacent swap writes exactly two rows). Sequential chain — the
+   *  seed's idiom. The refetch re-orders the matrix too (GET orders by sort_order). */
+  const persistOrder = (next: RewardCategoryOut[]) => {
+    // The optimistic rows must CARRY the sort_orders being persisted: a second move
+    // before the refetch lands diffs against these fields, and stale values would make
+    // it a silent no-op (found by the live browser check, pinned in the page test).
+    setPendingOrder(next.map((category, index) => ({ ...category, sort_order: index })))
+    setBusy(true)
+    setError(null)
+    next
+      .reduce(
+        (chain, category, index) =>
+          category.sort_order === index
+            ? chain
+            : chain.then(() =>
+                updateRewardCategory(category.id, { sort_order: index }).then(() => undefined),
+              ),
+        Promise.resolve<undefined>(undefined),
+      )
+      .then(() => onChanged())
+      .catch((err: unknown) => {
+        setPendingOrder(null) // snap back to the server's truth
+        setError(message(err, 'Reorder failed'))
+      })
+      .finally(() => setBusy(false))
+  }
+
+  const moveRow = (from: number, to: number) => {
+    if (busy || to < 0 || to >= ordered.length || from === to) return
+    const next = [...ordered]
+    const [row] = next.splice(from, 1)
+    next.splice(to, 0, row)
+    persistOrder(next)
   }
 
   const seed = () => {
@@ -317,6 +370,7 @@ export default function CategoriesPanel({
           <table className="data-table categories-table">
             <thead>
               <tr>
+                <th className="drag-cell" aria-hidden="true" />
                 <th>Category</th>
                 <th className="num">Weight ($/yr est.)</th>
                 <th>Mapped spending category</th>
@@ -326,11 +380,72 @@ export default function CategoriesPanel({
               </tr>
             </thead>
             <tbody>
-              {categories.map((category) => (
+              {ordered.map((category, index) => (
                 <tr
                   key={category.id}
-                  className={category.id === editingId ? 'is-editing' : undefined}
+                  draggable={!busy}
+                  onDragStart={(e) => {
+                    if (!dragArmed.current) {
+                      e.preventDefault() // only the grip picks a row up
+                      return
+                    }
+                    dragArmed.current = false
+                    setDragIndex(index)
+                    e.dataTransfer.effectAllowed = 'move'
+                    e.dataTransfer.setData('text/plain', String(index)) // Firefox needs data
+                  }}
+                  onDragOver={(e) => {
+                    if (dragIndex === null) return
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                    setOverIndex(index)
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    if (dragIndex !== null) moveRow(dragIndex, index)
+                    setDragIndex(null)
+                    setOverIndex(null)
+                  }}
+                  onDragEnd={() => {
+                    dragArmed.current = false
+                    setDragIndex(null)
+                    setOverIndex(null)
+                  }}
+                  className={
+                    [
+                      category.id === editingId ? 'is-editing' : '',
+                      dragIndex === index ? 'is-dragging' : '',
+                      overIndex === index && dragIndex !== null && dragIndex !== index
+                        ? 'drag-over'
+                        : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ') || undefined
+                  }
                 >
+                  <td className="drag-cell">
+                    <button
+                      type="button"
+                      className="drag-handle"
+                      aria-label={`Reorder ${category.name} — drag, or arrow keys`}
+                      disabled={busy}
+                      onMouseDown={() => {
+                        dragArmed.current = true
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'ArrowUp') {
+                          e.preventDefault()
+                          moveRow(index, index - 1)
+                        }
+                        if (e.key === 'ArrowDown') {
+                          e.preventDefault()
+                          moveRow(index, index + 1)
+                        }
+                      }}
+                    >
+                      <GripVertical size={14} aria-hidden="true" />
+                    </button>
+                  </td>
                   <td>{category.name}</td>
                   <td className="num">{weightCell(category)}</td>
                   <td>

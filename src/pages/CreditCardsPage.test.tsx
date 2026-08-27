@@ -60,6 +60,7 @@ import {
   putRewardRates,
   updateCardCredit,
   updateCreditCard,
+  updateRewardCategory,
 } from '../api/creditCards'
 import { fetchAccounts, fetchMonthBalances, fetchSummary } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
@@ -344,6 +345,42 @@ describe('CreditCardsPage', () => {
         counts: false,
       }),
     )
+  })
+
+  it('reordering a category is optimistic and PATCHes only the rows that moved', async () => {
+    vi.mocked(updateRewardCategory).mockResolvedValue(CATEGORIES[0])
+    renderPage()
+    await screen.findByText('Categories & weights')
+    // Groceries (index 0) moves down one via the keyboard path of the drag handle.
+    fireEvent.keyDown(
+      screen.getByRole('button', { name: 'Reorder Groceries — drag, or arrow keys' }),
+      { key: 'ArrowDown' },
+    )
+    // Optimistic: the list re-renders in the new order before any refetch lands.
+    const handles = screen
+      .getAllByRole('button', { name: /^Reorder / })
+      .map((b) => b.getAttribute('aria-label'))
+    expect(handles[0]).toBe('Reorder Dining — drag, or arrow keys')
+    expect(handles[1]).toBe('Reorder Groceries — drag, or arrow keys')
+    // Persistence: sort_order = index, and ONLY the two moved rows go on the wire
+    // (Rent keeps sort_order 2 and is skipped).
+    await waitFor(() => expect(updateRewardCategory).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(updateRewardCategory).mock.calls).toEqual([
+      [11, { sort_order: 0 }],
+      [10, { sort_order: 1 }],
+    ])
+    // Regression (live-check find): a SECOND move before any refetch must diff against
+    // the just-persisted sort_orders, not the stale wire values — moving back writes
+    // both rows again rather than silently no-oping.
+    fireEvent.keyDown(
+      screen.getByRole('button', { name: 'Reorder Groceries — drag, or arrow keys' }),
+      { key: 'ArrowUp' },
+    )
+    await waitFor(() => expect(updateRewardCategory).toHaveBeenCalledTimes(4))
+    expect(vi.mocked(updateRewardCategory).mock.calls.slice(2)).toEqual([
+      [10, { sort_order: 0 }],
+      [11, { sort_order: 1 }],
+    ])
   })
 
   it('empty state: no categories → the seed button renders', async () => {

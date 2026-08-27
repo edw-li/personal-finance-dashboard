@@ -35,6 +35,30 @@
   font-size: 0.72rem;
   font-weight: 400;
 }
+.categories-table .drag-cell {
+  width: 2rem;
+  padding-right: 0;
+}
+.drag-handle {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: 0;
+  padding: 2px;
+  color: var(--muted);
+  cursor: grab;
+}
+.drag-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: 4px;
+}
+.categories-table tr.is-dragging {
+  opacity: 0.5;
+}
+/* The drop indicator: an accent seam above the row the drag is hovering. */
+.categories-table tr.drag-over td {
+  border-top: 2px solid var(--accent);
+}
 /* Same panel-scoped row-action/edited-row rules as roster.css — without them the
    spec-required is-editing class is inert and portfolio.css's bare `.row-actions
    button` rules (globally bundled) leak into this table. */
