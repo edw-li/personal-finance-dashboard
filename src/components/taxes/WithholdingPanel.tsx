@@ -4,7 +4,7 @@ import { fetchWithholding } from '../../api/taxes'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type { WithholdingOut } from '../../types/api'
-import { formatCurrency } from '../../utils/format'
+import { formatCurrency, formatPct } from '../../utils/format'
 import type { Tone } from '../../utils/tone'
 // This component's own sheet, like its siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.error-banner/.empty-note/.drill-hint) is panels.css, which the
@@ -70,14 +70,31 @@ export default function WithholdingPanel({ year }: { year: number }) {
   // The ONE piece of client math on this card, and display-only: the SIGN of the server's own
   // balance picks the words, the colour and the glyph, and the figure beside them is that same
   // server string formatted — never a number this file computed (global rule 9).
-  const balance = withholding === null ? 0 : Number(withholding.balance_projected)
+  //
+  // NULL is its own state, and the reason this is not a bare Number(): the server sends null
+  // for the liability AND the balance when it REFUSED to price the year (a married year with
+  // no bracket table for its filing status), and Number(null) is 0 — which this card used to
+  // render as a confident "dead even" beside a $0.00 balance. Nothing is known there, so the
+  // tile says nothing and the missing-brackets call to action below explains why.
+  const balance =
+    withholding === null || withholding.balance_projected === null
+      ? null
+      : Number(withholding.balance_projected)
   // Owing is the BAD direction, so the tone is the inverse of the number's sign — and the
   // glyph follows the NUMBER (a balance that grew points up however unwelcome it is), which is
   // exactly the case StatTile's explicit `direction` exists for.
-  const balanceTone: Tone = balance > 0 ? 'negative' : balance < 0 ? 'positive' : 'neutral'
-  const balanceDirection = balance > 0 ? 'up' : balance < 0 ? 'down' : undefined
+  const balanceTone: Tone =
+    balance === null || balance === 0 ? 'neutral' : balance > 0 ? 'negative' : 'positive'
+  const balanceDirection =
+    balance === null || balance === 0 ? undefined : balance > 0 ? 'up' : 'down'
   const balanceWords =
-    balance > 0 ? 'to pay at filing' : balance < 0 ? 'refund expected' : 'dead even'
+    balance === null
+      ? 'no liability to compare'
+      : balance > 0
+        ? 'to pay at filing'
+        : balance < 0
+          ? 'refund expected'
+          : 'dead even'
 
   return (
     <section className="card withholding-panel">
@@ -125,7 +142,7 @@ export default function WithholdingPanel({ year }: { year: number }) {
             />
             <StatTile
               label="Projected balance"
-              value={formatCurrency(Math.abs(balance))}
+              value={formatCurrency(balance === null ? null : Math.abs(balance))}
               delta={balanceWords}
               tone={balanceTone}
               direction={balanceDirection}
@@ -141,13 +158,78 @@ export default function WithholdingPanel({ year }: { year: number }) {
             )}`}
           </p>
 
+          {/* The partner mini-section: read-only on purpose. The inputs form BELOW this card
+              already edits all three rows (they are seeded per-person definitions, so it
+              renders an editable cell for each in the partner column), and a second editor
+              here would be two write paths racing over one row. */}
+          {withholding.partner_wages !== null && (
+            <div className="withholding-partner">
+              <h3 className="eyebrow">Partner — entered, not simulated</h3>
+              <dl className="withholding-partner-facts">
+                <div>
+                  <dt>W-2 wages</dt>
+                  <dd>{formatCurrency(withholding.partner_wages)}</dd>
+                </div>
+                <div>
+                  <dt>Federal withheld</dt>
+                  <dd>
+                    {withholding.partner_withheld_fed === null
+                      ? 'not entered'
+                      : formatCurrency(withholding.partner_withheld_fed)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>State withheld</dt>
+                  <dd>
+                    {withholding.partner_withheld_state === null
+                      ? 'not entered'
+                      : formatCurrency(withholding.partner_withheld_state)}
+                  </dd>
+                </div>
+              </dl>
+              <p className="drill-hint">
+                Your side is simulated from paycheck profiles; your partner&rsquo;s is entered.
+                Edit all three in the inputs form below. Partner amounts are already counted
+                once in each total above — don&rsquo;t add them again.
+              </p>
+            </div>
+          )}
+
+          {/* One sentence, and only when it is real money: the trap is a THRESHOLD mismatch,
+              so a negative gap (over-withholding) is left in the payload and out of the copy. */}
+          {Number(withholding.additional_medicare_gap) > 0 && (
+            <p className="hint withholding-trap">
+              {`Additional Medicare gap ≈${formatCurrency(
+                withholding.additional_medicare_gap,
+              )}: each employer withholds the 0.9% surtax only above $200,000 of its own wages, but this return owes it on its combined wages above a lower threshold — wages that stay under the per-employer line still leave this much unwithheld.`}
+              <InfoHint text="Form 8959. Close it with a W-4 line 4(c) extra-withholding amount or a quarterly estimated payment." />
+            </p>
+          )}
+
+          {/* Not "those lines compute as 0": the engine REFUSES a married year whose tables
+              are missing rather than walking a single filer's thresholds, which is why the
+              two tiles above read "—". This is the call to action that owns that state. */}
+          {withholding.brackets_missing_for_status.length > 0 && (
+            <p className="hint withholding-cta">
+              {`No ${withholding.brackets_missing_for_status.join(
+                ', ',
+              )} bracket table for this year’s filing status — the tax engine cannot price the year until they exist. Add them in the brackets editor below, or clone another year’s and edit the thresholds.`}
+            </p>
+          )}
+
           {/* Nothing at all when the server sent none: a missing prior year is the normal
               first-year case and arrives with no warning of its own, so there is no absence
               here to explain. (A prior year that exists but computes to zero DOES warn, and
-              that sentence lands with the rest of them below.) */}
+              that sentence lands with the rest of them below.) The multiplier is the SERVER'S
+              — 110% only above the IRC 6654(d)(1)(C) prior-year AGI gate, 100% at or below it
+              — never a literal here, or a low-AGI year reads as an arithmetic error next to a
+              threshold that equals the figure beside it. */}
           {withholding.safe_harbor !== null && (
             <p className="hint">
-              {`Safe harbor (approx.): 110% of ${withholding.safe_harbor.prior_year}'s total tax is ${formatCurrency(
+              {`Safe harbor (approx.): ${formatPct(withholding.safe_harbor.multiplier, {
+                signed: false,
+                decimals: 0,
+              })} of ${withholding.safe_harbor.prior_year}'s total tax is ${formatCurrency(
                 withholding.safe_harbor.threshold,
               )} — ${
                 withholding.safe_harbor.met
@@ -157,6 +239,19 @@ export default function WithholdingPanel({ year }: { year: number }) {
               <InfoHint text="Real safe harbor is per-jurisdiction; this compares all-in totals — approximate by construction." />
             </p>
           )}
+
+          {/* The wedding-year note: the reference return is last year's, so on the first
+              married year it was filed under another status. The number is still the legal
+              safe harbor — a labelling matter, never a math one. */}
+          {withholding.safe_harbor !== null &&
+            withholding.safe_harbor.prior_filing_status !== withholding.filing_status && (
+              <p className="hint">
+                {`That reference return was filed as ${withholding.safe_harbor.prior_filing_status.replaceAll(
+                  '_',
+                  ' ',
+                )} — still the legal safe harbor, just a different household.`}
+              </p>
+            )}
 
           {/* The two halves of the app that both know about vest income have to agree: this
               card counts the vests, while the engine's total above it knows only what the

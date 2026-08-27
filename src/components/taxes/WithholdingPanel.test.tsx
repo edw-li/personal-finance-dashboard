@@ -34,6 +34,7 @@ function deferred<T>() {
 function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
   return {
     year: 2026,
+    filing_status: 'single',
     liability_total: '123456.78',
     salary: { ytd: '58666.67', projected: '88000.00' },
     vest: {
@@ -48,15 +49,35 @@ function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
     balance_projected: '18870.20',
     checks_elapsed: 16,
     checks_total: 24,
+    partner_wages: null,
+    partner_withheld_fed: null,
+    partner_withheld_state: null,
+    additional_medicare_gap: '0.00',
+    brackets_missing_for_status: [],
     safe_harbor: {
       prior_year: 2025,
       prior_total_tax: '110000.00',
+      prior_agi: '400000.00',
+      multiplier: '1.10',
       threshold: '121000.00',
+      prior_filing_status: 'single',
       met: false,
     },
     warnings: [],
     ...overrides,
   }
+}
+
+/** The married payload the partner cases share. */
+function married(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
+  return fixture({
+    filing_status: 'married_joint',
+    partner_wages: '150000.00',
+    partner_withheld_fed: '18000.00',
+    partner_withheld_state: '6000.00',
+    additional_medicare_gap: '900.00',
+    ...overrides,
+  })
 }
 
 // A tile is found by its LABEL, then read for the two things the contract is about: the figure
@@ -172,7 +193,10 @@ describe('WithholdingPanel', () => {
         safe_harbor: {
           prior_year: 2025,
           prior_total_tax: '90000.00',
+          prior_agi: '400000.00',
+          multiplier: '1.10',
           threshold: '99000.00',
+          prior_filing_status: 'single',
           met: true,
         },
       }),
@@ -319,5 +343,154 @@ describe('WithholdingPanel', () => {
     })
     expect(screen.queryByText('$11,111.11')).toBeNull()
     expect(screen.getByText('$99,999.99')).toBeTruthy()
+  })
+
+  it('renders NO partner section on a single year', async () => {
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('$123,456.78')
+    expect(screen.queryByText('Partner — entered, not simulated')).toBeNull()
+    expect(screen.queryByText(/Additional Medicare gap/)).toBeNull()
+  })
+
+  it('shows the partner figures and says which side is entered rather than simulated', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(married())
+    render(<WithholdingPanel year={2026} />)
+
+    expect(await screen.findByText('Partner — entered, not simulated')).toBeTruthy()
+    expect(screen.getByText('$150,000.00')).toBeTruthy()
+    expect(screen.getByText('$18,000.00')).toBeTruthy()
+    expect(screen.getByText('$6,000.00')).toBeTruthy()
+    // The card is read-only: the inputs form under it owns these three rows (they are seeded
+    // per-person definitions, so it already renders an editable cell for each), and two write
+    // paths to one row would race each other.
+    expect(
+      screen.getByText(
+        /Your side is simulated from paycheck profiles; your partner’s is entered\. Edit all three in the inputs form below\./,
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('says "not entered" rather than $0.00 for a withholding row the server left null', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      married({ partner_withheld_fed: null, partner_withheld_state: null }),
+    )
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Partner — entered, not simulated')
+    // Blank and zero say very different things about a withholding figure.
+    expect(screen.getAllByText('not entered')).toHaveLength(2)
+  })
+
+  it('explains the Additional-Medicare trap in one sentence when the gap is positive', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(married())
+    render(<WithholdingPanel year={2026} />)
+
+    expect(
+      await screen.findByText(
+        /Additional Medicare gap ≈\$900\.00: each employer withholds the 0\.9% surtax only above \$200,000 of its own wages, but a joint return owes it on combined wages above a lower threshold — so two salaries that each fall short still leave this much unwithheld\./,
+      ),
+    ).toBeTruthy()
+  })
+
+  it('stays quiet about the gap when it is zero or negative', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(married({ additional_medicare_gap: '0.00' }))
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Partner — entered, not simulated')
+    expect(screen.queryByText(/Additional Medicare gap/)).toBeNull()
+    cleanup()
+
+    // Over-withholding is not a trap to shout about — the figure stays in the payload and
+    // out of the copy.
+    vi.mocked(fetchWithholding).mockResolvedValue(married({ additional_medicare_gap: '-450.00' }))
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Partner — entered, not simulated')
+    expect(screen.queryByText(/Additional Medicare gap/)).toBeNull()
+  })
+
+  it('calls the reader to the brackets editor when the status has no tables', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      married({
+        brackets_missing_for_status: ['federal', 'medicare'],
+        liability_total: null,
+        balance_projected: null,
+      }),
+    )
+    render(<WithholdingPanel year={2026} />)
+
+    expect(
+      await screen.findByText(
+        /No federal, medicare bracket table for this year’s filing status — the tax engine cannot price the year until they exist\. Add them in the brackets editor below, or clone another year’s and edit the thresholds\./,
+      ),
+    ).toBeTruthy()
+  })
+
+  it('refuses to call a year with no liability "dead even"', async () => {
+    // The server sends null for both figures when it REFUSED to price the year, and a bare
+    // Number(null) is 0 — which this card used to render as a confident "dead even" beside a
+    // $0.00 balance. Nothing is known here, and the tiles have to say nothing.
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      married({
+        brackets_missing_for_status: ['federal', 'medicare'],
+        liability_total: null,
+        balance_projected: null,
+      }),
+    )
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('Partner — entered, not simulated')
+
+    expect(tile('Projected tax').textContent).toContain('—')
+    const delta = deltaOf('Projected balance')
+    expect(delta.textContent).toContain('no liability to compare')
+    expect(delta.textContent).not.toContain('dead even')
+    expect(delta.textContent).not.toContain('▲')
+    expect(delta.textContent).not.toContain('▼')
+    expect(tile('Projected balance').textContent).not.toContain('$0.00')
+    // The withholding leg is still real money and still shown: it came from profiles and
+    // vests, not from the bracket tables the engine is missing.
+    expect(tile('Projected withholding').textContent).toContain('$104,586.58')
+  })
+
+  it('renders the safe-harbor multiplier the server applied, not a hardcoded 110%', async () => {
+    // Below the IRC 6654(d)(1)(C) AGI gate the safe harbor is a plain 100% of last year's
+    // tax. The old copy said "110%" whatever the wire carried, which read as an arithmetic
+    // error next to a threshold that equals the prior-year figure.
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      fixture({
+        safe_harbor: {
+          prior_year: 2025,
+          prior_total_tax: '110000.00',
+          prior_agi: '100000.00',
+          multiplier: '1.00',
+          threshold: '110000.00',
+          prior_filing_status: 'single',
+          met: false,
+        },
+      }),
+    )
+    render(<WithholdingPanel year={2026} />)
+    expect(
+      await screen.findByText(
+        "Safe harbor (approx.): 100% of 2025's total tax is $110,000.00 — NOT covered by projected withholding",
+      ),
+    ).toBeTruthy()
+  })
+
+  it('labels a safe harbor that references a return filed under another status', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(married())
+    render(<WithholdingPanel year={2026} />)
+
+    // The wedding-year note: the number is still the legal safe harbor, only the household
+    // behind it changed — a labelling matter, never a math one.
+    expect(
+      await screen.findByText(
+        /That reference return was filed as single — still the legal safe harbor, just a different household\./,
+      ),
+    ).toBeTruthy()
+  })
+
+  it('says nothing about the reference status when it matches this year', async () => {
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('$123,456.78')
+    expect(screen.queryByText(/still the legal safe harbor/)).toBeNull()
   })
 })
