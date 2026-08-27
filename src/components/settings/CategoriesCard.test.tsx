@@ -1,0 +1,125 @@
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { ApiError } from '../../api/client'
+import type { CategoryOut } from '../../types/api'
+import ToastProvider from '../ToastProvider'
+import CategoriesCard from './CategoriesCard'
+
+vi.mock('../../api/spending', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/spending')>()),
+  fetchCategories: vi.fn(),
+  createCategory: vi.fn(),
+  updateCategory: vi.fn(),
+  deleteCategory: vi.fn(),
+}))
+import {
+  createCategory,
+  deleteCategory,
+  fetchCategories,
+  updateCategory,
+} from '../../api/spending'
+
+const GROCERIES: CategoryOut = {
+  id: 5,
+  name: 'Groceries',
+  slug: 'groceries',
+  sort_order: 1,
+  is_active: true,
+}
+const PETS: CategoryOut = { id: 6, name: 'Pets', slug: 'pets', sort_order: 2, is_active: false }
+
+beforeEach(() => {
+  vi.mocked(fetchCategories).mockResolvedValue([GROCERIES, PETS])
+  vi.mocked(createCategory).mockResolvedValue(GROCERIES)
+  vi.mocked(updateCategory).mockResolvedValue(GROCERIES)
+  vi.mocked(deleteCategory).mockResolvedValue(undefined)
+})
+
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
+
+it('lists the categories with their retirement state', async () => {
+  render(<CategoriesCard />)
+  const table = within(await screen.findByRole('table'))
+
+  expect(table.getByText('Groceries')).toBeTruthy()
+  expect(table.getByText('Pets')).toBeTruthy()
+  expect(table.getByText('Retired')).toBeTruthy()
+})
+
+it('creates a category', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  fireEvent.change(screen.getByLabelText('Category name'), { target: { value: '  Wedding  ' } })
+  fireEvent.change(screen.getByLabelText('Sort order'), { target: { value: '9' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+
+  await waitFor(() => expect(vi.mocked(createCategory)).toHaveBeenCalledTimes(1))
+  expect(vi.mocked(createCategory).mock.calls[0][0]).toEqual({ name: 'Wedding', sort_order: 9 })
+  await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2))
+})
+
+it('renames through the inline editor', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Groceries' }))
+  expect((screen.getByLabelText('Category name') as HTMLInputElement).value).toBe('Groceries')
+  fireEvent.change(screen.getByLabelText('Category name'), { target: { value: 'Food' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save category' }))
+
+  await waitFor(() =>
+    expect(vi.mocked(updateCategory)).toHaveBeenCalledWith(5, { name: 'Food', sort_order: 1 }),
+  )
+})
+
+it('retires and restores without touching the other columns', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retire Groceries' }))
+  await waitFor(() =>
+    expect(vi.mocked(updateCategory)).toHaveBeenCalledWith(5, { is_active: false }),
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: 'Restore Pets' }))
+  await waitFor(() =>
+    expect(vi.mocked(updateCategory)).toHaveBeenCalledWith(6, { is_active: true }),
+  )
+})
+
+it('surfaces the delete 409 as a toast and keeps the row', async () => {
+  vi.mocked(deleteCategory).mockRejectedValue(
+    new ApiError('category has 31 monthly rows — deactivate it instead', 409),
+  )
+  render(
+    <ToastProvider>
+      <CategoriesCard />
+    </ToastProvider>,
+  )
+  await screen.findByRole('table')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Groceries' }))
+
+  const toast = await screen.findByText('category has 31 monthly rows — deactivate it instead')
+  expect(toast.className).toBe('toast-message')
+  expect(within(screen.getByRole('table')).getByText('Groceries')).toBeTruthy()
+  expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(1)
+})
+
+it('banners a failed load and refetches on Retry', async () => {
+  vi.mocked(fetchCategories)
+    .mockRejectedValueOnce(new ApiError('categories unavailable', 503))
+    .mockResolvedValue([GROCERIES])
+  render(<CategoriesCard />)
+
+  expect(await screen.findByText('categories unavailable')).toBeTruthy()
+  expect(screen.queryByRole('table')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  expect(await screen.findByRole('table')).toBeTruthy()
+  expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2)
+})
