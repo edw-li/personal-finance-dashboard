@@ -16,6 +16,7 @@ from app.models.credit_cards import (
     RewardCategory,
     RewardRate,
 )
+from app.models.household import Person
 from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.models.portfolio import (
     DIVIDEND_SOURCES,
@@ -57,6 +58,7 @@ __all__ = [
     "NetWorthSnapshot",
     "PRICE_SOURCES",
     "PaycheckProfile",
+    "Person",
     "PortfolioValueHistory",
     "PositionTransaction",
     "PriceHistory",
