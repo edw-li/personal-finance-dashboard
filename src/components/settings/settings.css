@@ -85,3 +85,120 @@
     gap: 0.15rem;
   }
 }
+
+/* --- household / accounts / categories cards (2026-08-26 spec §6) --- */
+
+/* The field stack the management cards share. A deliberate near-twin of SettingsPage.css's
+   .settings-form: that sheet is page-only and no component imports it, so a card leaning on
+   it would depend on the page happening to be in the bundle — the same reasoning that keeps
+   .settings-note here rather than there. */
+.settings-card-form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 420px;
+  margin-bottom: 0.9rem;
+}
+
+.accounts-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem 0.8rem;
+  margin-bottom: 0.9rem;
+}
+
+.category-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem 0.8rem;
+  margin-bottom: 0.9rem;
+}
+
+.settings-card-form label,
+.accounts-form label,
+.category-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The checkbox is the one control whose label reads left-to-right, in sentence case. */
+.accounts-form label.accounts-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.78rem;
+}
+
+.settings-card-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+/* The people list: one row per member, the rename editor swapping in place. */
+.household-people {
+  list-style: none;
+  margin: 0 0 0.9rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.household-person {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.household-name {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+/* Cap the roster at ~10 rows and scroll the TABLE, never the page (categories.css's law).
+   The sticky header needs the card's own solid surface or rows would ghost through it. */
+.settings-scroll {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.settings-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
+/* Panel-scoped, like roster.css and categories.css: without these, portfolio.css's bare
+   `.row-actions button` rules (globally bundled) leak into these tables and the is-editing
+   class is inert. */
+.accounts-table .row-actions,
+.category-table .row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.accounts-table .row-actions .button,
+.category-table .row-actions .button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.accounts-table tr.is-editing td,
+.category-table tr.is-editing td {
+  background: var(--surface-2);
+}
+
+@media (max-width: 900px) {
+  .accounts-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
