@@ -21,13 +21,16 @@ import RewardsMatrix from '../components/creditcards/RewardsMatrix'
 import { cardValueChartOption } from '../components/creditcards/cardValueChartOptions'
 import { creditLineChartOption, limitMonths } from '../components/creditcards/creditLineChartOptions'
 import {
+  householdAdvantage,
   optimize,
+  ownerMatches,
   resolveWeight,
   suggestedAnnualSpend,
   toMathCards,
   toMathCategories,
   toMathRates,
 } from '../components/creditcards/rewardsMath'
+import type { OwnerScope } from '../api/netWorth'
 import type {
   AccountOut,
   CategoryOut,
@@ -74,6 +77,8 @@ export default function CreditCardsPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [fromCache, setFromCache] = useState(cached !== undefined)
+  // null = the whole household, and that scope is byte-identical to the pre-ownership page.
+  const [owner, setOwner] = useState<OwnerScope>(null)
 
   // The roster rides its OWN fetch, outside the six-call snapshot: it changes once a year,
   // and folding it into the snapshot would invalidate every cached cards payload
@@ -151,11 +156,29 @@ export default function CreditCardsPage() {
     setError(null)
   }
 
-  const activeCards = useMemo(() => (cards ?? []).filter((c) => c.is_active), [cards])
   const activeCategories = useMemo(
     () => (categories ?? []).filter((c) => c.is_active),
     [categories],
   )
+
+  const activeCard = useMemo(
+    () => (cardParam === null ? null : ((cards ?? []).find((c) => c.slug === cardParam) ?? null)),
+    [cards, cardParam],
+  )
+
+  const householdCards = useMemo(() => (cards ?? []).filter((c) => c.is_active), [cards])
+  const scopedCards = useMemo(
+    () => householdCards.filter((c) => ownerMatches(c.person_id, owner)),
+    [householdCards, owner],
+  )
+  // ONE filter point for the whole page: the roster table, the matrix, the four KPI tiles,
+  // the card-value bars and the credit-line history all read this or a memo derived from it.
+  //
+  // The DRILL opts out on purpose. It renders INSTEAD of the grid and the chips, so a person
+  // chip left active must not make another owner's card fall out of the optimizer — the only
+  // other reason a card has no value is that it is archived, and the detail says exactly
+  // that in words.
+  const activeCards = activeCard === null ? scopedCards : householdCards
 
   const suggested = useMemo(
     () => (matrix ? suggestedAnnualSpend(matrix) : new Map<number, number>()),
@@ -170,17 +193,38 @@ export default function CreditCardsPage() {
   const result = useMemo(
     () =>
       optimize(
-        toMathCards(cards ?? []),
+        toMathCards(activeCards),
         toMathCategories(categories ?? [], weights),
         toMathRates(rates ?? []),
       ),
-    [cards, categories, rates, weights],
+    [activeCards, categories, rates, weights],
   )
 
-  const activeCard = useMemo(
-    () => (cardParam === null ? null : ((cards ?? []).find((c) => c.slug === cardParam) ?? null)),
-    [cards, cardParam],
+  // Scope-INDEPENDENT by design: "is merging our wallets worth it" is a household question,
+  // and the answer must not change because a chip is filtering the table below it.
+  const advantage = useMemo(
+    () =>
+      householdAdvantage(
+        toMathCards(householdCards),
+        toMathCategories(categories ?? [], weights),
+        toMathRates(rates ?? []),
+      ),
+    [householdCards, categories, rates, weights],
   )
+
+  const ownerNames = useMemo(
+    () => new Map(orderedPeople.map((p) => [p.id, p.name])),
+    [orderedPeople],
+  )
+  // One person means there is nothing to choose between: no chips (NetWorthPage's rule).
+  const ownerScopes: { scope: OwnerScope; label: string }[] =
+    orderedPeople.length > 1
+      ? [
+          { scope: null, label: 'All' },
+          ...orderedPeople.map((p) => ({ scope: p.id as OwnerScope, label: p.name })),
+          { scope: 'joint' as OwnerScope, label: 'Joint' },
+        ]
+      : []
 
   const closeDetail = (cardId: number) => {
     setCardParam(null)
@@ -292,6 +336,26 @@ export default function CreditCardsPage() {
         />
       ) : (
         <>
+          {ownerScopes.length > 0 && (
+            <div className="cards-owner-row">
+              <span className="eyebrow">Whose card</span>
+              <div className="segmented" role="group" aria-label="Owner">
+                {ownerScopes.map(({ scope, label }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    className={owner === scope ? 'active' : ''}
+                    aria-pressed={owner === scope}
+                    onClick={() => setOwner(scope)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <InfoHint text="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The roster, the matrix, the tiles and the credit-line chart all follow this." />
+            </div>
+          )}
+
           {kpis && (
             <div className="kpi-row">
               <StatTile
@@ -314,6 +378,18 @@ export default function CreditCardsPage() {
                 value={String(kpis.count)}
                 hint="Archived cards keep their history but sit outside the matrix and the math."
               />
+              {/* ABSENT rather than zero when it has nothing honest to say (spec §6): one
+                  person owning every card has no merge to price, and fees can make the
+                  merge genuinely lose. */}
+              {advantage !== null && (
+                <StatTile
+                  label="Household wallet advantage"
+                  value={`${formatCurrency(advantage)}/yr`}
+                  delta="beats the best single wallet"
+                  tone="positive"
+                  hint="Both wallets are priced the same way — optimal rewards plus counted credits minus every annual fee in that wallet — and a single-owner wallet is that person's cards PLUS the joint ones, because either of you can hold a joint card. Hidden when only one person holds cards, or when merging doesn't win."
+                />
+              )}
             </div>
           )}
 
@@ -344,6 +420,7 @@ export default function CreditCardsPage() {
                 rates={rates ?? []}
                 result={result}
                 weights={weights}
+                ownerNames={ownerNames}
                 busy={busy}
                 onCardClick={(card) => setCardParam(card.slug)}
                 onSaveRates={saveRates}

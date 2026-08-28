@@ -43,6 +43,7 @@ export default function RewardsMatrix({
   rates,
   result,
   weights,
+  ownerNames,
   busy,
   onCardClick,
   onSaveRates,
@@ -52,6 +53,9 @@ export default function RewardsMatrix({
   rates: RewardRateOut[]
   result: OptimizerResult
   weights: Map<number, number | null>
+  /** id -> name for the whole roster. SIZE is the gate: a one-person household has nobody
+   *  to tell apart, so no badge is drawn at all. */
+  ownerNames: Map<number, string>
   busy: boolean
   onCardClick: (card: CreditCardOut) => void
   onSaveRates: (puts: RewardRatePut[]) => Promise<void>
@@ -229,6 +233,13 @@ export default function RewardsMatrix({
                       {Number(card.point_value_cents) !== 1 &&
                         ` ${Number(card.point_value_cents)}¢`}
                     </span>
+                    {ownerNames.size > 1 && (
+                      <span className="sub">
+                        {card.person_id === null
+                          ? 'Joint'
+                          : (ownerNames.get(card.person_id) ?? '—')}
+                      </span>
+                    )}
                   </button>
                 </th>
               ))}
