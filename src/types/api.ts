@@ -1480,6 +1480,9 @@ export interface CreditCardOut {
   annual_fee: string
   rewards_currency: RewardsCurrency
   point_value_cents: string
+  /** Owner; null = JOINT (either spouse can hold the card). Never "unknown": the migration
+   *  backfilled every pre-existing card to the primary person. */
+  person_id: number | null
   primary_holder: string | null
   authorized_users: string | null
   opened_on: string | null
@@ -1499,6 +1502,7 @@ export interface CreditCardIn {
   annual_fee: string
   rewards_currency: RewardsCurrency
   point_value_cents: string
+  person_id: number | null
   primary_holder: string | null
   authorized_users: string | null
   opened_on: string | null

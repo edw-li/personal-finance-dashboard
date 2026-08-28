@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import type { RewardCategoryOut, SpendingMatrix } from '../../types/api'
 import {
   effectiveRate,
+  householdAdvantage,
   optimize,
+  ownerMatches,
   resolveWeight,
   suggestedAnnualSpend,
   type MathCard,
@@ -11,7 +13,16 @@ import {
 } from './rewardsMath'
 
 function card(id: number, name: string, over: Partial<MathCard> = {}): MathCard {
-  return { id, name, annualFee: 0, pointValueCents: 1, isActive: true, countedCredits: 0, ...over }
+  return {
+    id,
+    name,
+    annualFee: 0,
+    pointValueCents: 1,
+    isActive: true,
+    countedCredits: 0,
+    ownerId: null,
+    ...over,
+  }
 }
 function category(id: number, name: string, over: Partial<MathCategory> = {}): MathCategory {
   return { id, name, weight: 1200, pinnedCardId: null, isActive: true, ...over }
@@ -226,5 +237,68 @@ describe('weights', () => {
     ).toBe(2400)
     expect(resolveWeight({ ...base, spending_category_id: 7 }, suggested)).toBe(1200)
     expect(resolveWeight(base, suggested)).toBeNull()
+  })
+})
+
+describe('ownerMatches', () => {
+  // The net-worth grammar, reused verbatim: a PERSON's scope includes the joint rows,
+  // because that is what joint means; `joint` is the NULL-only slice; null is everybody.
+  it('gives a person their own cards PLUS the joint ones', () => {
+    expect(ownerMatches(1, 1)).toBe(true)
+    expect(ownerMatches(null, 1)).toBe(true)
+    expect(ownerMatches(2, 1)).toBe(false)
+  })
+
+  it('scopes `joint` to NULL owners only, and null to everything', () => {
+    expect(ownerMatches(null, 'joint')).toBe(true)
+    expect(ownerMatches(1, 'joint')).toBe(false)
+    expect(ownerMatches(1, null)).toBe(true)
+    expect(ownerMatches(null, null)).toBe(true)
+  })
+})
+
+describe('householdAdvantage', () => {
+  // HAND-CHECKABLE fixture. Two $10,000 categories, no fees, no credits, 1¢ points:
+  //   Alice's A  3x Groceries -> 3% of 10,000 = 300
+  //   Bob's   B  3x Dining    -> 300
+  //   JOINT   J  2x on BOTH   -> 200 per category
+  // household {A,B,J}: 300 + 300 = 600
+  // Alice {A,J}:       300 + 200 = 500      Bob {B,J}: 200 + 300 = 500
+  // advantage = 600 - 500 = 100
+  const A = card(1, 'A card', { ownerId: 1 })
+  const B = card(2, 'B card', { ownerId: 2 })
+  const J = card(3, 'Joint card', { ownerId: null })
+  const CATS = [
+    category(10, 'Groceries', { weight: 10000 }),
+    category(11, 'Dining', { weight: 10000 }),
+  ]
+  const RATES = [rate(1, 10, 3), rate(2, 11, 3), rate(3, 10, 2), rate(3, 11, 2)]
+
+  it('prices the joint card into BOTH single-owner wallets', () => {
+    expect(householdAdvantage([A, B, J], CATS, RATES)).toBeCloseTo(100)
+  })
+
+  it('would read 300 if joint cards were excluded — the rule is pinned, not incidental', () => {
+    // Same fixture minus the joint card: each wallet earns only its own category.
+    expect(householdAdvantage([A, B], CATS, RATES)).toBeCloseTo(300)
+  })
+
+  it('is null when fewer than two people hold active cards', () => {
+    expect(householdAdvantage([A, J], CATS, RATES)).toBeNull()
+    // An ARCHIVED card of Bob's does not conjure a second owner.
+    const archivedB = card(4, 'Old B', { ownerId: 2, isActive: false })
+    expect(householdAdvantage([A, J, archivedB], CATS, RATES)).toBeNull()
+  })
+
+  it('is null when merging does not win — fees can make the delta negative', () => {
+    // Bob's card carries a $600 fee and wins one category worth $300. The household pays
+    // that fee; Alice's own wallet does not, so merging LOSES money and the tile hides
+    // rather than printing a negative or a zero.
+    const pricey = card(2, 'B card', { ownerId: 2, annualFee: 600 })
+    expect(householdAdvantage([A, pricey, J], CATS, RATES)).toBeNull()
+  })
+
+  it('ignores cards nobody could use — an empty rate set has no advantage', () => {
+    expect(householdAdvantage([A, B, J], CATS, [])).toBeNull()
   })
 })
