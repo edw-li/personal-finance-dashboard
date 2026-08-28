@@ -1268,6 +1268,10 @@ export interface CalendarEvent {
   detail: string | null
   href: string | null // null for custom events — they have no page (spec §9.3)
   id: number | null // set only for custom events, the edit/delete handle
+  /** Set only for custom events too. When it is not null the server has already stamped
+   *  " — <name>" onto `label`, and anything that re-saves the row must strip it first
+   *  (calendarView.stripPersonSuffix). */
+  person_id: number | null
 }
 
 export interface CalendarResponse {
@@ -1279,13 +1283,17 @@ export interface CustomEventBody {
   date: string
   label: string
   detail: string | null
+  /** null = household. */
+  person_id: number | null
 }
 
 export interface CustomEventOut {
   id: number
   date: string
+  /** As STORED — unstamped. The suffix is composed by GET /calendar, never persisted. */
   label: string
   detail: string | null
+  person_id: number | null
 }
 
 // --- projection ---

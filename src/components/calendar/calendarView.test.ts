@@ -8,6 +8,8 @@ import {
   eventKey,
   groupByDate,
   hrefLabel,
+  personSuffix,
+  stripPersonSuffix,
 } from './calendarView'
 
 describe('EVENT_COLORS', () => {
@@ -109,5 +111,24 @@ describe('groupByDate', () => {
     const grouped = groupByDate(events)
     expect([...grouped.keys()]).toEqual(['2026-09-15', '2026-09-16'])
     expect(grouped.get('2026-09-15')?.map((e) => e.type)).toEqual(['payday', 'tax_deadline'])
+  })
+})
+
+describe('person suffix', () => {
+  it('is the server grammar verbatim — one shape to build and one to peel', () => {
+    expect(personSuffix('Sam')).toBe(' — Sam')
+    expect(stripPersonSuffix('Dentist — Sam', 'Sam')).toBe('Dentist')
+  })
+
+  it('leaves the label alone when the name is unknown or absent', () => {
+    // A roster that has not loaded, or a person renamed since the fetch: a visible stale
+    // suffix is recoverable, a wrongly-truncated title is not.
+    expect(stripPersonSuffix('Dentist — Sam', undefined)).toBe('Dentist — Sam')
+    expect(stripPersonSuffix('Dentist', 'Sam')).toBe('Dentist')
+  })
+
+  it('peels only the TRAILING occurrence', () => {
+    expect(stripPersonSuffix('Sam — Sam', 'Sam')).toBe('Sam')
+    expect(stripPersonSuffix('Call — Sam about it', 'Sam')).toBe('Call — Sam about it')
   })
 })

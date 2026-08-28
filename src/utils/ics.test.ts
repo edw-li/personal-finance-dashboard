@@ -68,6 +68,22 @@ describe('buildIcs', () => {
     expect(text).toContain('SUMMARY:Vest\\; big\\, day')
     expect(text).toContain('DESCRIPTION:/comp')
   })
+
+  it('carries a person-tagged label straight into SUMMARY', () => {
+    // The server stamps the name into the label, so the ICS export inherits it with no
+    // work here — this pins that the label really is the SUMMARY.
+    const tagged = event({
+      type: 'custom',
+      label: 'Dentist — Sam',
+      detail: null,
+      href: null,
+      id: 41,
+      person_id: 2,
+    })
+    expect(buildIcs([tagged])).toContain('SUMMARY:Dentist — Sam')
+    // The UID still keys on the id, so tagging or untagging UPDATES rather than duplicates.
+    expect(eventUid(tagged)).toBe('custom-41@finance-dashboard')
+  })
 })
 
 describe('downloadIcs', () => {
