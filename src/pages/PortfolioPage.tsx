@@ -33,7 +33,7 @@ import RangeChips from '../components/RangeChips'
 import PageSkeleton from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
 import { useArrivalParam } from '../components/useArrivalParam'
-import { rangeZoom } from '../charts/timeZoom'
+import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type {
   AllocationResponse,
@@ -293,6 +293,13 @@ export default function PortfolioPage() {
   // effect on [option], so a fresh object per render would redraw the chart on every tab
   // click. The zoom is spread on here rather than inside the builder, which stays pure and
   // shared with OverviewPage (whose copy is a fixed snapshot, no chips).
+  // Resolved target for EChart's animated zoom path — memoized so the wrapper's
+  // fingerprint compare runs only when the window can actually have moved.
+  const zoomWindow = useMemo(
+    () => (history === null ? undefined : resolvedWindow(history.dates, range)),
+    [history, range],
+  )
+
   const performanceOption = useMemo(() => {
     if (!history || !holdings) return null
     // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
@@ -455,6 +462,7 @@ export default function PortfolioPage() {
                   height={300}
                   onLegendChange={onLegendChange}
                   onDataZoom={onZoomWindow}
+                  zoomWindow={zoomWindow}
                   exportConfig={{
                     name: 'portfolio-performance',
                     csv: () => portfolioHistoryCsv(history),

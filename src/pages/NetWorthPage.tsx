@@ -19,7 +19,7 @@ import {
   netWorthStackedTooltipFormatter,
 } from '../components/networth/netWorthChartOptions'
 import type { EChartsOption } from '../charts/echarts'
-import { rangeZoom } from '../charts/timeZoom'
+import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import {
   GROUP_COLORS,
@@ -229,6 +229,13 @@ export default function NetWorthPage() {
     const latest = coverageMonths.at(-1)
     return latest && latest > cur ? latest : cur
   }, [coverageMonths])
+
+  // Resolved target for EChart's animated zoom path — memoized so the wrapper's
+  // fingerprint compare runs only when the window can actually have moved.
+  const zoomWindow = useMemo(
+    () => (data === null ? undefined : resolvedWindow(data.months, range)),
+    [data, range],
+  )
 
   const stackedOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.months.length === 0) return null
@@ -553,6 +560,7 @@ export default function NetWorthPage() {
                 height={360}
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                zoomWindow={zoomWindow}
                 exportConfig={{ name: 'net-worth', csv: () => netWorthCsv(data) }}
                 animateEntrance={!fromCache}
               />
@@ -602,6 +610,7 @@ export default function NetWorthPage() {
                 height={280}
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                zoomWindow={zoomWindow}
                 animateEntrance={!fromCache}
               />
               <ChartZoomHint />
