@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from app.models import DividendPayment, LatestPrice, PositionTransaction, PriceHistory, Security
 from app.services.portfolio_calc import allocation, build_holdings, fold_transactions
+from tests.portfolio_factories import acct
 
 D = Decimal
 
@@ -22,7 +23,7 @@ def txn(
     return PositionTransaction(
         id=id,
         security_id=sec,
-        account=account,
+        portfolio_account=acct(account),
         type=type,
         shares=D(shares),
         price=D(price),
@@ -302,7 +303,11 @@ class TestHoldings:
 
     def test_dividends_collected_feeds_xirr_flows(self):
         div = DividendPayment(
-            id=1, security_id=1, account="Acct", pay_date=date(2026, 2, 1), amount=D("30")
+            id=1,
+            security_id=1,
+            portfolio_account=acct("Acct"),
+            pay_date=date(2026, 2, 1),
+            amount=D("30"),
         )
         (h,) = self._one_holding(txn_date=date(2025, 8, 14), dividends=[div])
         assert h.dividends_collected == D("30.00")

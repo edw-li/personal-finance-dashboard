@@ -15,6 +15,7 @@ from app.models import (
 )
 from app.services.price_provider import DailyBar
 from app.services.price_service import LAST_REFRESH_KEY
+from tests.portfolio_factories import acct
 
 REFRESH = "/api/v1/prices/refresh"
 STATUS = "/api/v1/prices/refresh-status"
@@ -124,7 +125,7 @@ async def test_refresh_endpoint_ingests_dividends_and_echoes_the_counts(
     db.add(
         PositionTransaction(
             security_id=security.id,
-            account="RH Taxable",
+            portfolio_account=acct("RH Taxable"),
             type="buy",
             shares=D("10.000000"),
             price=D("100.0000"),
@@ -242,7 +243,7 @@ async def test_refresh_appends_the_live_value_series_and_records_the_run(
     db.add(
         PositionTransaction(
             security_id=security.id,
-            account="Fidelity",
+            portfolio_account=acct("Fidelity"),
             type="buy",
             shares=D("10.000000"),
             price=D("100.0000"),
@@ -289,7 +290,7 @@ async def test_refresh_extends_the_baseline_by_implied_shares(auth_client, db, m
         [
             PositionTransaction(
                 security_id=security.id,
-                account="Fidelity",
+                portfolio_account=acct("Fidelity"),
                 type="buy",
                 shares=D("10.000000"),
                 price=D("100.0000"),
@@ -333,7 +334,7 @@ async def test_refresh_carries_the_baseline_flat_without_benchmark_bars(
         [
             PositionTransaction(
                 security_id=security.id,
-                account="Fidelity",
+                portfolio_account=acct("Fidelity"),
                 type="buy",
                 shares=D("10.000000"),
                 price=D("100.0000"),
@@ -412,7 +413,7 @@ async def test_sparklines_held_only_weekly_downsampled(auth_client, db):
     db.add(
         PositionTransaction(
             security_id=held.id,
-            account="Fidelity",
+            portfolio_account=acct("Fidelity"),
             type="buy",
             shares=D("10.000000"),
             price=D("100.0000"),

@@ -23,6 +23,7 @@ from app.services.price_service import (
     run_refresh,
     set_manual_price,
 )
+from tests.portfolio_factories import acct
 
 D = Decimal
 TODAY = date(2026, 8, 14)
@@ -60,7 +61,7 @@ def bar(day, close, dividend="0"):
 def buy(sec_id, account="RH Taxable", shares="10.000000", price="100.0000"):
     return PositionTransaction(
         security_id=sec_id,
-        account=account,
+        portfolio_account=acct(account),
         type="buy",
         shares=D(shares),
         price=D(price),
@@ -320,7 +321,10 @@ async def test_run_refresh_records_dividend_counts(db):
     db.add(holding)
     db.add(  # 5 days from the August event: the whole event is skipped, not double-counted
         DividendPayment(
-            security_id=sec.id, pay_date=date(2026, 8, 5), amount=D("9.99"), account="RH Taxable"
+            security_id=sec.id,
+            pay_date=date(2026, 8, 5),
+            amount=D("9.99"),
+            portfolio_account=acct("RH Taxable"),
         )
     )
     await db.commit()

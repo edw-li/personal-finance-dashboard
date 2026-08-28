@@ -33,6 +33,8 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    Person,
+    PortfolioAccount,
     PortfolioValueHistory,
     PositionTransaction,
     RewardCategory,
@@ -41,6 +43,7 @@ from app.models import (
     Security,
     SpendingCategory,
 )
+from tests.portfolio_factories import acct
 from tests.workbook_builder import (
     build_workbook,
     default_portfolio_rows,
@@ -164,7 +167,7 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
     db.add(  # stale importer-owned row (as if its sheet row was deleted)
         PositionTransaction(
             security_id=acme_id,
-            account="Old",
+            portfolio_account=acct("Old"),
             type="buy",
             shares=Decimal("1"),
             price=Decimal("1"),
@@ -175,7 +178,7 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
     db.add(  # UI-owned row: source 'ui' keeps it out of the sync's view entirely
         PositionTransaction(
             security_id=acme_id,
-            account="Manual",
+            portfolio_account=acct("Manual"),
             type="buy",
             shares=Decimal("2"),
             price=Decimal("2"),
@@ -189,7 +192,18 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
     await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
     await db.commit()
     assert report2.entities["position_transactions"].deletes == 1
-    remaining = (await db.execute(select(PositionTransaction.account))).scalars().all()
+    remaining = (
+        (
+            await db.execute(
+                select(PortfolioAccount.label).join(
+                    PositionTransaction,
+                    PositionTransaction.portfolio_account_id == PortfolioAccount.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert "Manual" in remaining and "Old" not in remaining
 
 
@@ -203,7 +217,7 @@ async def test_apply_positions_preserves_ui_rows_any_sort_index(db):
     db.add(
         PositionTransaction(
             security_id=acme_id,
-            account="UI Acct",
+            portfolio_account=acct("UI Acct"),
             type="buy",
             shares=Decimal("1"),
             price=Decimal("5"),
@@ -245,7 +259,7 @@ async def test_apply_positions_sort_index_collision_leaves_ui_row_alone(db):
     db.add(
         PositionTransaction(
             security_id=acme_id,
-            account="UI Acct",
+            portfolio_account=acct("UI Acct"),
             type="sell",
             shares=Decimal("3"),
             price=Decimal("7"),
@@ -266,6 +280,60 @@ async def test_apply_positions_sort_index_collision_leaves_ui_row_alone(db):
     assert report.entities["position_transactions"].creates == 1
     ui_row = next(r for r in rows if r.source == "ui")
     assert (ui_row.account, ui_row.type, ui_row.shares) == ("UI Acct", "sell", Decimal("3.000000"))
+
+
+async def test_apply_positions_creates_primary_owned_portfolio_accounts(db):
+    """Sheet labels become owned rows: the importer resolves through the same door the
+    router does (2026-08-28 spec §8), so a re-import needs zero workbook changes."""
+    db.add(Person(name="Me", is_primary=True))
+    await db.commit()
+    me = (await db.execute(select(Person).where(Person.is_primary))).scalar_one()
+
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+
+    rows = (
+        (await db.execute(select(PortfolioAccount).order_by(PortfolioAccount.label)))
+        .scalars()
+        .all()
+    )
+    assert [(r.label, r.person_id) for r in rows] == [("Fido", me.id), ("RH Taxable", me.id)]
+
+
+async def test_reimport_keeps_a_retagged_label_with_its_new_owner(db):
+    """The user re-tags "Fido" to their partner in Settings; the next sheet import must
+    leave that alone — get-or-create GETS."""
+    me, sam = Person(name="Me", is_primary=True), Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.commit()
+
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    fido = (
+        await db.execute(select(PortfolioAccount).where(PortfolioAccount.label == "Fido"))
+    ).scalar_one()
+    fido.person_id = sam.id
+    await db.commit()
+
+    wb2 = sheets()
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+
+    after = (
+        (await db.execute(select(PortfolioAccount).order_by(PortfolioAccount.label)))
+        .scalars()
+        .all()
+    )
+    assert [(r.label, r.person_id) for r in after] == [("Fido", sam.id), ("RH Taxable", me.id)]
+    assert report2.entities["position_transactions"].updates == 0  # and no phantom diffs
 
 
 async def test_apply_net_worth_accounts_snapshots_balances(db):
@@ -1126,10 +1194,15 @@ async def test_importer_never_writes_dividends(db):
     await db.commit()
 
     sec = (await db.execute(select(Security).order_by(Security.id))).scalars().first()
+    # The row apply_positions already minted for the sheet's label — NOT the acct() factory,
+    # which would mint a second row and collide on the unique label (its docstring's rule).
+    rh_taxable = (
+        await db.execute(select(PortfolioAccount).where(PortfolioAccount.label == "RH Taxable"))
+    ).scalar_one()
     manual = DividendPayment(security_id=sec.id, pay_date=date(2026, 5, 1), amount=Decimal("12.34"))
     auto = DividendPayment(
         security_id=sec.id,
-        account="RH Taxable",
+        portfolio_account=rh_taxable,
         pay_date=date(2026, 6, 19),
         amount=Decimal("8.20"),
         source="auto",

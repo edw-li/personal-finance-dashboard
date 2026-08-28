@@ -178,6 +178,27 @@ class AllocationOut(BaseModel):
     slices: list[AllocationSlice]
 
 
+class PortfolioAccountOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    label: str
+    # NULL = JOINT/household (the accounts.person_id grammar), never "unknown": migration
+    # c9f4a7e2b168 backfilled every pre-existing label to the primary person.
+    person_id: int | None
+
+
+class PortfolioAccountUpdate(BaseModel):
+    # extra="forbid": labels ARE the positions' identity this batch, so an attempted rename
+    # must be a loud 422 rather than a key pydantic quietly drops.
+    model_config = ConfigDict(extra="forbid")
+
+    # int32-bounded so a garbage id 422s instead of surfacing asyncpg's DataError; null is
+    # a real write (it is how an account becomes joint), so absence is what "no change"
+    # means — the router reads model_fields_set, not the value.
+    person_id: int | None = Field(default=None, ge=1, le=2_147_483_647)
+
+
 class RealizedRow(BaseModel):
     security_id: int
     ticker: str

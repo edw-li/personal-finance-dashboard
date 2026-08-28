@@ -1,11 +1,14 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
-from app.models import DividendPayment, PositionTransaction, Security
+from app.models import DividendPayment, PortfolioAccount, PositionTransaction, Security
 from app.services.dividend_ingest import DividendIngestResult, ingest_dividends, shares_on
 from app.services.price_provider import DailyBar
+from tests.portfolio_factories import acct
 
 TODAY = date(2026, 8, 20)
 WINDOW_START = date(2025, 8, 15)  # TODAY - 370 days (HISTORY_WINDOW_DAYS), pinned literally
@@ -38,7 +41,7 @@ def txn(
     # matters, because (sort_index, id) is the folding law.
     return PositionTransaction(
         security_id=sec_id,
-        account=account,
+        portfolio_account=acct(account),
         type=type_,
         txn_date=txn_date,
         shares=Decimal(shares),
@@ -50,14 +53,17 @@ def txn(
 
 def manual(sec_id, pay_date, amount, account=None) -> DividendPayment:
     return DividendPayment(
-        security_id=sec_id, account=account, pay_date=pay_date, amount=Decimal(amount)
+        security_id=sec_id,
+        portfolio_account=acct(account),
+        pay_date=pay_date,
+        amount=Decimal(amount),
     )
 
 
 def auto(sec_id, account, ex_date, amount) -> DividendPayment:
     return DividendPayment(
         security_id=sec_id,
-        account=account,
+        portfolio_account=acct(account),
         pay_date=ex_date,
         amount=Decimal(amount),
         source="auto",
@@ -68,14 +74,19 @@ def auto(sec_id, account, ex_date, amount) -> DividendPayment:
 
 
 async def dividend_rows(db, *, source: str | None = None) -> list[DividendPayment]:
-    """All dividend rows, (security, ex_date, account) ordered. populate_existing because
-    the ingest upserts through Core — a row already in the identity map would otherwise
-    read back its pre-write values."""
+    """All dividend rows, (security, ex_date, account LABEL) ordered — the label, not the
+    FK id, so the order stays alphabetical rather than insertion-ordered. populate_existing
+    because the ingest upserts through Core — a row already in the identity map would
+    otherwise read back its pre-write values."""
     stmt = select(DividendPayment)
     if source is not None:
         stmt = stmt.where(DividendPayment.source == source)
-    stmt = stmt.execution_options(populate_existing=True).order_by(
-        DividendPayment.security_id, DividendPayment.ex_date, DividendPayment.account
+    stmt = (
+        stmt.outerjoin(
+            PortfolioAccount, PortfolioAccount.id == DividendPayment.portfolio_account_id
+        )
+        .execution_options(populate_existing=True)
+        .order_by(DividendPayment.security_id, DividendPayment.ex_date, PortfolioAccount.label)
     )
     return list((await db.execute(stmt)).scalars())
 
@@ -305,13 +316,18 @@ def test_shares_on_dateless_counts_always():
         txn(1, "RH Taxable", "3", txn_date=date(2026, 7, 1), sort_index=2),
         txn(2, "Fidelity", "4", sort_index=3),
     ]
+    # shares_on keys on (security_id, portfolio_account_id) since 2026-08-28, and these rows
+    # were never flushed, so their FK id is None (Position's documented case). The DATE
+    # cutoff is what this test pins; the per-account grain is pinned by the DB-backed
+    # test_ingests_per_account_rows_with_exact_amounts / test_self_heal_scope_is_keyed_by_
+    # the_account_row below.
     assert shares_on(txns, date(2026, 5, 1)) == {
-        (1, "RH Taxable"): Decimal("10.000000"),
-        (2, "Fidelity"): Decimal("4.000000"),
+        (1, None): Decimal("10.000000"),
+        (2, None): Decimal("4.000000"),
     }
-    assert shares_on(txns, date(2026, 6, 1))[(1, "RH Taxable")] == Decimal("15")  # inclusive
-    assert shares_on(txns, date(2026, 6, 19))[(1, "RH Taxable")] == Decimal("15")
-    assert shares_on(txns, date(2026, 7, 10))[(1, "RH Taxable")] == Decimal("18")
+    assert shares_on(txns, date(2026, 6, 1))[(1, None)] == Decimal("15")  # inclusive
+    assert shares_on(txns, date(2026, 6, 19))[(1, None)] == Decimal("15")
+    assert shares_on(txns, date(2026, 7, 10))[(1, None)] == Decimal("18")
 
 
 async def test_self_heal_covers_securities_with_bars_but_no_events(db):
@@ -352,3 +368,56 @@ async def test_manual_overlap_boundary_exactly_14_days(db):
     await db.commit()
     assert counts(result) == (1, 0, 0, 0)
     assert [r.amount for r in await dividend_rows(db, source="auto")] == [Decimal("8.20")]
+
+
+async def test_auto_rows_are_unique_per_security_account_and_ex_date(db):
+    """The ported index: (security_id, portfolio_account_id, ex_date) WHERE source='auto'
+    — the same uniqueness the label-keyed index enforced."""
+    # Held as a plain int: the rollback below expires every instance, and a later sec.id
+    # would then emit lazy IO (MissingGreenlet under asyncio) — test_models_portfolio's rule.
+    sec_id = (await seed_security(db)).id
+    db.add(auto(sec_id, "RH Taxable", date(2026, 6, 19), "8.20"))
+    await db.commit()
+    db.add(auto(sec_id, "RH Taxable", date(2026, 6, 19), "8.20"))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+    # Same event, DIFFERENT account -> a second row is legal (per-account grain).
+    db.add(auto(sec_id, "Fidelity", date(2026, 6, 19), "4.10"))
+    await db.commit()
+    assert len(await dividend_rows(db, source="auto")) == 2
+
+    # Manual rows stay unconstrained (the index is partial).
+    db.add_all(
+        [
+            manual(sec_id, date(2026, 6, 19), "1.00", account="RH Taxable"),
+            manual(sec_id, date(2026, 6, 19), "1.00", account="RH Taxable"),
+        ]
+    )
+    await db.commit()
+    assert len(await dividend_rows(db, source="manual")) == 2
+
+
+async def test_self_heal_scope_is_keyed_by_the_account_row(db):
+    """Two accounts hold the same security; the holding in one is sold off. The next run
+    removes THAT account's auto row and leaves the other's — the old account-keyed
+    behavior, now on the FK."""
+    sec = await seed_security(db)
+    db.add_all(
+        [
+            txn(sec.id, "RH Taxable", "10", sort_index=0),
+            txn(sec.id, "Fidelity", "5", sort_index=1),
+        ]
+    )
+    await db.commit()
+    first = await ingest_dividends(db, {sec.id: [bar(date(2026, 6, 19), "0.8200")]}, today=TODAY)
+    await db.commit()
+    assert counts(first) == (2, 0, 0, 0)
+
+    db.add(txn(sec.id, "Fidelity", "5", type_="sell", price="100.0000", sort_index=2))
+    await db.commit()
+    second = await ingest_dividends(db, {sec.id: [bar(date(2026, 6, 19), "0.8200")]}, today=TODAY)
+    await db.commit()
+    assert counts(second) == (0, 1, 1, 0)  # RH rewritten, Fidelity's row removed
+    assert [r.account for r in await dividend_rows(db)] == ["RH Taxable"]

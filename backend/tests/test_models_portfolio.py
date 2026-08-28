@@ -14,6 +14,7 @@ from app.models import (
     PriceHistory,
     Security,
 )
+from tests.portfolio_factories import acct
 
 
 async def test_security_and_transaction_roundtrip(db):
@@ -25,7 +26,7 @@ async def test_security_and_transaction_roundtrip(db):
     db.add(
         PositionTransaction(
             security_id=sec.id,
-            account="RH Taxable",
+            portfolio_account=acct("RH Taxable"),
             type="buy",
             txn_date=None,
             shares=Decimal("119.261466"),
@@ -36,7 +37,7 @@ async def test_security_and_transaction_roundtrip(db):
     db.add(
         DividendPayment(
             security_id=sec.id,
-            account="RH Taxable",
+            portfolio_account=acct("RH Taxable"),
             pay_date=date(2025, 3, 20),
             amount=Decimal("171.55"),
         )
@@ -71,7 +72,7 @@ async def test_position_transaction_source_defaults_to_ui(db):
     await db.flush()
     txn = PositionTransaction(
         security_id=security.id,
-        account="Test",
+        portfolio_account=acct("Test"),
         type="buy",
         shares=Decimal("1"),
         price=Decimal("10"),
@@ -135,7 +136,7 @@ async def test_dividend_source_defaults_manual_and_auto_key_is_unique(db):
 
     auto_kwargs = dict(
         security_id=sec_id,
-        account="RH Taxable",
+        portfolio_account=acct("RH Taxable"),
         pay_date=date(2026, 3, 20),
         amount=Decimal("12.00"),
         source="auto",
@@ -154,7 +155,7 @@ async def test_dividend_source_defaults_manual_and_auto_key_is_unique(db):
     db.add(
         DividendPayment(
             security_id=sec_id,
-            account="RH Taxable",
+            portfolio_account=acct("RH Taxable"),
             pay_date=date(2026, 3, 20),
             amount=Decimal("12.00"),
         )

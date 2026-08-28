@@ -13,6 +13,7 @@ from app.main import app
 from app.models import User
 from app.rate_limit import limiter
 from app.security import hash_password
+from tests.portfolio_factories import reset_accounts
 
 # The test database is disposable and torn down aggressively (drop_all + TRUNCATE between
 # tests), so concurrent suite runs against one database deadlock each other. FINANCE_TEST_DB
@@ -90,6 +91,12 @@ def _no_scheduler_in_tests():
 @pytest.fixture(autouse=True)
 def reset_rate_limiter():
     limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_portfolio_account_factory():
+    # The db fixture TRUNCATEs between tests; the label -> row memo must not outlive it.
+    reset_accounts()
 
 
 @pytest.fixture

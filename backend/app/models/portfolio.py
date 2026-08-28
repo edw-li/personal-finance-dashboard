@@ -12,7 +12,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -43,12 +43,60 @@ class Security(Base):
     next_ex_div_date: Mapped[date | None] = mapped_column(Date)
 
 
+class PortfolioAccount(Base):
+    """A brokerage/platform label with an owner — the identity behind every position row.
+
+    `label` is the EXACT string the sheet and the ledger UI already use ("RH Taxable",
+    "Fidelity Taxable"). It is the positions' natural key, so it is UNIQUE and immutable
+    this batch (the accounts-slug posture): renaming is a data migration, not a PATCH.
+    `person_id` NULL means JOINT/household, never "unknown" — migration c9f4a7e2b168
+    backfilled every pre-existing label to the primary person, so an unset owner is a
+    deliberate statement (the accounts.person_id grammar, 2026-08-26 spec §4).
+    """
+
+    __tablename__ = "portfolio_accounts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(String(80), unique=True)
+    person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id", ondelete="SET NULL"), default=None
+    )
+
+    def __repr__(self) -> str:
+        # The importer's diff samples print this ("portfolio_account Old -> New"), so it
+        # reads as the label rather than as an object address.
+        return self.label if self.label is not None else "<portfolio account>"
+
+
 class PositionTransaction(Base):
     __tablename__ = "position_transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     security_id: Mapped[int] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"))
-    account: Mapped[str] = mapped_column(String(80))
+    portfolio_account_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "portfolio_accounts.id",
+            ondelete="RESTRICT",
+            # Named explicitly: the naming convention derives a 64-character name, one past
+            # Postgres' 63-byte identifier limit, and SQLAlchemy would silently truncate it
+            # to a hash suffix — in create_all AND in the migration. A readable name that
+            # both paths agree on beats two identical hashes.
+            name="fk_position_transactions_portfolio_account",
+        )
+    )
+    # selectin: every SELECT of a transaction carries its label without a per-caller loader
+    # option. An UNLOADED many-to-one raises MissingGreenlet the moment a response
+    # serializes `account`, so rows are always constructed with portfolio_account=<row>,
+    # never with a bare FK id (routers, importer and the tests' factory all do this).
+    portfolio_account: Mapped["PortfolioAccount"] = relationship(lazy="selectin")
+
+    @property
+    def account(self) -> str:
+        """The wire's `account` label, unchanged since before ownership existed
+        (2026-08-28 spec §3 item 1: every response that carried `account: str` still
+        does). Read-only — writes go through services.portfolio_accounts."""
+        return self.portfolio_account.label
+
     type: Mapped[str] = mapped_column(String(10))  # one of TRANSACTION_TYPES
     txn_date: Mapped[date | None] = mapped_column(Date)
     shares: Mapped[Decimal] = mapped_column(Numeric(16, 6))
@@ -67,14 +115,14 @@ class PositionTransaction(Base):
 class DividendPayment(Base):
     __tablename__ = "dividend_payments"
     __table_args__ = (
-        # The auto-ingest idempotency key: one row per (security, account, event date)
-        # for refresh-written rows. Partial — manual rows stay unconstrained, and the
+        # The auto-ingest idempotency key: one row per (security, portfolio account, event
+        # date) for refresh-written rows. Partial — manual rows stay unconstrained, and the
         # index must live HERE (not only in the migration) because the test database is
         # built by Base.metadata.create_all.
         Index(
             "ux_dividend_auto_event",
             "security_id",
-            "account",
+            "portfolio_account_id",
             "ex_date",
             unique=True,
             postgresql_where=text("source = 'auto'"),
@@ -83,7 +131,24 @@ class DividendPayment(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     security_id: Mapped[int] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"))
-    account: Mapped[str | None] = mapped_column(String(80))
+    # NULLABLE, like the label it replaces: a dividend with no account is unattributed and
+    # still crosses the wire as `account: null`. It is therefore HOUSEHOLD-only — an
+    # unattributed payment cannot honestly join a person's view (load_portfolio's rule).
+    portfolio_account_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "portfolio_accounts.id",
+            ondelete="RESTRICT",
+            name="fk_dividend_payments_portfolio_account",
+        ),
+        default=None,
+    )
+    portfolio_account: Mapped["PortfolioAccount | None"] = relationship(lazy="selectin")
+
+    @property
+    def account(self) -> str | None:
+        """The wire's optional `account` label (see PositionTransaction.account)."""
+        return None if self.portfolio_account is None else self.portfolio_account.label
+
     pay_date: Mapped[date] = mapped_column(Date)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     # Ownership contract (the transactions `source` precedent, user decision 2026-08-20):

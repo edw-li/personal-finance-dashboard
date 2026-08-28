@@ -7,7 +7,8 @@ falls inside the refresh window, and ONLY for securities that returned bars this
 it upserts them to match the live book and deletes the ones the book or feed no longer
 supports. Manual rows (source='manual') are never touched here.
 
-Amounts: per-share event × shares held ON the ex-date, one row per (security, account).
+Amounts: per-share event × shares held ON the ex-date, one row per (security, portfolio
+account).
 Shares-on-a-date reuses fold_transactions over the subset of transactions effective by
 then — a dateless (sheet-era) row predates the import by construction and counts as
 held-from-the-beginning; dated rows apply from their date, splits included (a dated
@@ -48,14 +49,19 @@ class DividendIngestResult:
     skipped_manual_overlap: int = 0  # whole events skipped because a manual row overlaps
 
 
-def shares_on(txns: list[PositionTransaction], as_of: date) -> dict[tuple[int, str], Decimal]:
-    """Folded shares per (security_id, account) counting only transactions effective by
-    `as_of` — dateless rows always, dated rows when txn_date <= as_of. Fold warnings are
-    ignored here: only the share counts matter."""
+def shares_on(
+    txns: list[PositionTransaction], as_of: date
+) -> dict[tuple[int, int | None], Decimal]:
+    """Folded shares per (security_id, portfolio_account_id) counting only transactions
+    effective by `as_of` — dateless rows always, dated rows when txn_date <= as_of. Fold
+    warnings are ignored here: only the share counts matter. The FK, not the label, is the
+    key: it is what the auto rows and their unique index are written on."""
     effective = [t for t in txns if t.txn_date is None or t.txn_date <= as_of]
     return {
-        key: pos.shares.quantize(SHARE_Q, rounding=ROUND_HALF_UP)
-        for key, pos in fold_transactions(effective).items()
+        (pos.security_id, pos.portfolio_account_id): pos.shares.quantize(
+            SHARE_Q, rounding=ROUND_HALF_UP
+        )
+        for pos in fold_transactions(effective).values()
     }
 
 
@@ -81,7 +87,7 @@ async def ingest_dividends(
         ).scalars()
     )
     existing = {
-        (row.security_id, row.account, row.ex_date): row
+        (row.security_id, row.portfolio_account_id, row.ex_date): row
         for row in (
             await db.execute(
                 select(DividendPayment).where(
@@ -115,7 +121,7 @@ async def ingest_dividends(
     )
     holdings_by_date = {d: shares_on(txns, d) for d in event_dates}
 
-    desired: dict[tuple[int, str, date], dict] = {}
+    desired: dict[tuple[int, int, date], dict] = {}
     overlap = timedelta(days=MANUAL_OVERLAP_DAYS)
     for sec_id, bars in events_by_security.items():
         # De-dup by date (last wins) and bound the per-share amount — the provider
@@ -135,15 +141,15 @@ async def ingest_dividends(
             ):
                 result.skipped_manual_overlap += 1
                 continue
-            for (pos_sec_id, account), shares in holdings_by_date[event_date].items():
+            for (pos_sec_id, account_id), shares in holdings_by_date[event_date].items():
                 if pos_sec_id != sec_id or shares <= 0:
                     continue
                 amount = (shares * bar.dividend).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
                 if amount == 0:
                     continue  # fractional dust rounds to no money
-                desired[(sec_id, account, event_date)] = {
+                desired[(sec_id, account_id, event_date)] = {
                     "security_id": sec_id,
-                    "account": account,
+                    "portfolio_account_id": account_id,
                     # Honest approximation: Yahoo's chart feed carries no payment date.
                     "pay_date": event_date,
                     "amount": amount,
@@ -166,7 +172,7 @@ async def ingest_dividends(
         stmt = pg_insert(DividendPayment).values(list(desired.values()))
         await db.execute(
             stmt.on_conflict_do_update(
-                index_elements=["security_id", "account", "ex_date"],
+                index_elements=["security_id", "portfolio_account_id", "ex_date"],
                 index_where=text("source = 'auto'"),
                 set_={
                     "pay_date": stmt.excluded.pay_date,

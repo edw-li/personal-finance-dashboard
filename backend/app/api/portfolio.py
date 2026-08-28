@@ -1,15 +1,22 @@
 import re
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import DividendPayment, PortfolioValueHistory, PositionTransaction, Security
+from app.models import (
+    DividendPayment,
+    Person,
+    PortfolioAccount,
+    PortfolioValueHistory,
+    PositionTransaction,
+    Security,
+)
 from app.schemas.portfolio import (
     AllocationOut,
     AllocationSlice,
@@ -19,6 +26,8 @@ from app.schemas.portfolio import (
     HoldingOut,
     HoldingsOut,
     HoldingsTotals,
+    PortfolioAccountOut,
+    PortfolioAccountUpdate,
     PortfolioHistoryOut,
     RealizedOut,
     RealizedRow,
@@ -39,6 +48,7 @@ from app.services.money import (
     quantize_shares,
     require_reasonable_date,
 )
+from app.services.portfolio_accounts import portfolio_owner_clause, resolve_portfolio_account
 from app.services.portfolio_calc import (
     allocation,
     build_holdings,
@@ -79,6 +89,57 @@ def _validated_account(raw: str) -> str:
     account = raw.strip()
     if not account:
         raise HTTPException(status_code=422, detail="account must not be blank")
+    return account
+
+
+# A bounded string, not an int: the value is either a person id or the literal "joint", and
+# a length cap keeps a garbage query out of the parser. Same shape as net_worth.py's
+# OwnerQuery — the SEMANTICS are shared in services/ownership.parse_owner.
+OwnerQuery = Annotated[str | None, Query(max_length=32)]
+
+
+def _owner_filter(owner: str | None) -> ColumnElement[bool] | None:
+    """HTTP contract only — portfolio_owner_clause owns the SEMANTICS. Absent means the
+    whole household, and the endpoint's answer is then byte-identical to the
+    pre-ownership one."""
+    if owner is None:
+        return None
+    try:
+        return portfolio_owner_clause(owner)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/accounts", response_model=list[PortfolioAccountOut])
+async def list_portfolio_accounts(db: AsyncSession = Depends(get_db)) -> list[PortfolioAccount]:
+    """Every label the ledger has ever seen, label-ordered — the roster Settings edits.
+    Rows are never deleted here: a label with no live transactions is still the identity
+    of the history that used it."""
+    return list(
+        (await db.execute(select(PortfolioAccount).order_by(PortfolioAccount.label))).scalars()
+    )
+
+
+@router.patch("/accounts/{account_id}", response_model=PortfolioAccountOut)
+async def update_portfolio_account(
+    account_id: int, body: PortfolioAccountUpdate, db: AsyncSession = Depends(get_db)
+) -> PortfolioAccount:
+    """Ownership only. `person_id: null` is a REAL write — it is how an account becomes
+    joint (the net-worth NULLABLE_ACCOUNT_FIELDS posture) — while an absent key is a no-op
+    request. The label is immutable (PortfolioAccountUpdate forbids extras)."""
+    account = await db.get(PortfolioAccount, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="portfolio account not found")
+    provided = body.model_dump(exclude_unset=True)
+    if "person_id" not in provided:
+        return account
+    person_id = provided["person_id"]
+    # FK target checked BEFORE the write, so a bad id 422s with a sentence instead of
+    # surfacing asyncpg's ForeignKeyViolationError as a 500 (_validate_links' rule).
+    if person_id is not None and (await db.get(Person, person_id)) is None:
+        raise HTTPException(status_code=422, detail=f"unknown person_id: {person_id}")
+    account.person_id = person_id
+    await db.commit()
     return account
 
 
@@ -244,13 +305,20 @@ def _validated_txn_fields(
 
 @router.get("/transactions", response_model=list[TransactionOut])
 async def list_transactions(
-    security_id: int | None = None, db: AsyncSession = Depends(get_db)
+    security_id: int | None = None,
+    owner: OwnerQuery = None,
+    db: AsyncSession = Depends(get_db),
 ) -> list[PositionTransaction]:
     query = select(PositionTransaction).order_by(
         PositionTransaction.sort_index, PositionTransaction.id
     )
     if security_id is not None:
         query = query.where(PositionTransaction.security_id == security_id)
+    owner_filter = _owner_filter(owner)
+    if owner_filter is not None:
+        query = query.join(
+            PortfolioAccount, PortfolioAccount.id == PositionTransaction.portfolio_account_id
+        ).where(owner_filter)
     return list((await db.execute(query)).scalars())
 
 
@@ -266,11 +334,15 @@ async def create_transaction(
     max_index = (
         await db.execute(select(func.coalesce(func.max(PositionTransaction.sort_index), 0)))
     ).scalar_one()
+    # Resolve only after every 422 above: get-or-create flushes, and a label minted for a
+    # request that then fails validation would be a row nobody asked for.
+    account = await resolve_portfolio_account(db, _validated_account(body.account))
     # UI rows fold chronologically LAST (locked decision). A later sheet import may mint
     # the same sort_index for a new row — folding tie-breaks on id; accepted.
     txn = PositionTransaction(
         security_id=body.security_id,
-        account=_validated_account(body.account),
+        # The ROW, not the id: the response serializes `account` off this relationship.
+        portfolio_account=account,
         type=body.type,
         txn_date=body.txn_date,
         sort_index=max_index + 10,
@@ -312,10 +384,15 @@ async def update_transaction(
         provided["account"] = _validated_account(provided["account"])
     if "txn_date" in provided and provided["txn_date"] is not None:
         require_reasonable_date(provided["txn_date"], "txn_date")
+    # Resolve after the last raise and before the first mutation: get-or-create flushes,
+    # and a flush of a half-mutated row is exactly what the rule below forbids.
+    new_account = (
+        await resolve_portfolio_account(db, provided["account"]) if "account" in provided else None
+    )
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
-    if "account" in provided:
-        txn.account = provided["account"]
+    if new_account is not None:
+        txn.portfolio_account = new_account
     if "txn_date" in provided:
         txn.txn_date = provided["txn_date"]
     if "notes" in provided:
@@ -341,13 +418,22 @@ async def delete_transaction(txn_id: int, db: AsyncSession = Depends(get_db)) ->
 
 @router.get("/dividends", response_model=list[DividendOut])
 async def list_dividends(
-    security_id: int | None = None, db: AsyncSession = Depends(get_db)
+    security_id: int | None = None,
+    owner: OwnerQuery = None,
+    db: AsyncSession = Depends(get_db),
 ) -> list[DividendPayment]:
     query = select(DividendPayment).order_by(
         DividendPayment.pay_date.desc(), DividendPayment.id.desc()
     )
     if security_id is not None:
         query = query.where(DividendPayment.security_id == security_id)
+    owner_filter = _owner_filter(owner)
+    if owner_filter is not None:
+        # Inner join: a dividend with no portfolio account is unattributed and stays
+        # household-only (load_portfolio's rule, so the list and the analytics agree).
+        query = query.join(
+            PortfolioAccount, PortfolioAccount.id == DividendPayment.portfolio_account_id
+        ).where(owner_filter)
     return list((await db.execute(query)).scalars())
 
 
@@ -365,13 +451,16 @@ async def create_dividend(
     if await db.get(Security, body.security_id) is None:
         raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
     require_reasonable_date(body.pay_date, "pay_date")
+    amount = _validated_dividend_amount(body.amount)
+    # Blank/whitespace collapse to None — never persist '' as a second spelling of "no
+    # account" (Task 9 review I1), and never mint a portfolio_accounts row for it.
+    label = (body.account or "").strip() or None
+    account = None if label is None else await resolve_portfolio_account(db, label)
     dividend = DividendPayment(
         security_id=body.security_id,
-        # Blank/whitespace collapse to None — never persist '' as a second spelling
-        # of "no account" (Task 9 review I1).
-        account=(body.account or "").strip() or None,
+        portfolio_account=account,
         pay_date=body.pay_date,
-        amount=_validated_dividend_amount(body.amount),
+        amount=amount,
         notes=body.notes,
     )
     db.add(dividend)
@@ -402,10 +491,17 @@ async def update_dividend(
         validated["amount"] = _validated_dividend_amount(provided["amount"])
     if "pay_date" in provided:
         validated["pay_date"] = require_reasonable_date(provided["pay_date"], "pay_date")
+    account_change = False
+    new_account = None
     if "account" in provided:
-        validated["account"] = (provided["account"] or "").strip() or None
+        validated.pop("account")  # not a column any more — it is the relationship below
+        account_change = True
+        label = (provided["account"] or "").strip() or None
+        new_account = None if label is None else await resolve_portfolio_account(db, label)
     for field_name, value in validated.items():
         setattr(dividend, field_name, value)
+    if account_change:
+        dividend.portfolio_account = new_account
     await db.commit()
     return dividend
 
@@ -419,8 +515,10 @@ async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) 
 
 
 @router.get("/holdings", response_model=HoldingsOut)
-async def holdings(db: AsyncSession = Depends(get_db)) -> HoldingsOut:
-    securities, txns, latest, history, dividends = await load_portfolio(db)
+async def holdings(owner: OwnerQuery = None, db: AsyncSession = Depends(get_db)) -> HoldingsOut:
+    securities, txns, latest, history, dividends = await load_portfolio(
+        db, owner_filter=_owner_filter(owner)
+    )
     positions = fold_transactions(txns)
     rows = build_holdings(positions, securities, latest, history, dividends, today=date.today())
 
@@ -511,10 +609,11 @@ async def holdings(db: AsyncSession = Depends(get_db)) -> HoldingsOut:
 @router.get("/allocation", response_model=AllocationOut)
 async def allocation_view(
     by: Literal["industry", "type", "account"] = "industry",
+    owner: OwnerQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> AllocationOut:
     securities, txns, latest, _history, _dividends = await load_portfolio(
-        db, with_history=False, with_dividends=False
+        db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
     )
     positions = fold_transactions(txns)
     buckets = allocation(positions, securities, latest, by)
@@ -564,9 +663,9 @@ async def value_history(db: AsyncSession = Depends(get_db)) -> PortfolioHistoryO
 
 
 @router.get("/realized", response_model=RealizedOut)
-async def realized(db: AsyncSession = Depends(get_db)) -> RealizedOut:
+async def realized(owner: OwnerQuery = None, db: AsyncSession = Depends(get_db)) -> RealizedOut:
     securities, txns, _latest, _history, _dividends = await load_portfolio(
-        db, with_history=False, with_dividends=False
+        db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
     )
     positions = fold_transactions(txns)
     per_security: dict[int, Decimal] = {}
