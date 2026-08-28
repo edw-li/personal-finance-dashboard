@@ -995,4 +995,62 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     expect(screen.getByText('Mar 1, 2026')).toBeTruthy()
     expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
   })
+
+  it('adds the two in-force nets into a household take-home tile', async () => {
+    twoEarners()
+    render(<PaycheckPage />)
+
+    expect(await screen.findByText('Household take-home')).toBeTruthy()
+    // 6768.33 + 5231.34. Each leg is the AUTHORITATIVE monthly figure of one person's
+    // in-force profile — never a sum of the display-rounded waterfall lines (rule 9).
+    expect(screen.getByText('$11,999.67')).toBeTruthy()
+    // The copy says exactly what was added, so the tile can never be read as a forecast.
+    expect(screen.getByText('Me + Sam — the profile in force for each person.')).toBeTruthy()
+    // Both legs ask for the IN-FORCE profile, so neither carries a profile_id.
+    expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id])
+    expect(
+      vi.mocked(fetchBreakdown).mock.calls.every((call) => call[0] === undefined),
+    ).toBe(true)
+  })
+
+  it('leaves the tile out when the partner has no profile in force', async () => {
+    twoEarners(new ApiError('no paycheck profiles', 404))
+    render(<PaycheckPage />)
+    await screen.findByRole('group', { name: 'Person' })
+    await waitFor(() =>
+      expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id]),
+    )
+
+    // Absent, not half-true: one person's net is not a household take-home (spec §6).
+    expect(screen.queryByText('Household take-home')).toBeNull()
+    // ...and the failure costs the TILE only — my own waterfall is untouched and no
+    // banner is raised, because nothing the page promised has failed.
+    expect(screen.getByText('$3,384.16')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('leaves the tile out for a one-person household', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+    await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
+    expect(screen.queryByText('Household take-home')).toBeNull()
+    // The partner legs never fire, so the single-earner page costs exactly one breakdown
+    // request — what it cost before this batch.
+    expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes the household tile after a profile write', async () => {
+    twoEarners()
+    render(<PaycheckPage />)
+    await screen.findByText('$11,999.67')
+    vi.mocked(fetchBreakdown).mockClear()
+
+    type('Effective date', '2026-09-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+
+    // A new profile can change WHOSE profile is in force, so both legs go out again — a
+    // stale household figure is wrong money on screen, which is worse than no figure.
+    await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(3))
+    expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id])
+  })
 })

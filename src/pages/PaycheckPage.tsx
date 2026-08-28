@@ -666,11 +666,21 @@ export default function PaycheckPage() {
   // switcher is an affordance, and a household hiccup must not cost the waterfall
   // (NetWorthPage's isolated-fetch posture). null covers both "not loaded" and "failed".
   const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  // One in-force breakdown per person, fetched on its OWN so a partner failure costs the
+  // tile and nothing else. Deliberately NOT derived from the waterfall above: that one
+  // follows the chips and any pinned row, while this figure is always "the profile in
+  // force for each person" (spec §5). Only people who answered are in here.
+  const [householdNets, setHouseholdNets] = useState<
+    { name: string; monthlyNet: string }[] | null
+  >(null)
+  // Bumped by a profile write — a new profile can change whose profile is in force.
+  const [householdNonce, setHouseholdNonce] = useState(0)
 
   // Two INDEPENDENT loads: a breakdown 404 must not blank the profile table, so each
   // carries its own sequence guard, its own banner and its own busy flag.
   const profilesSeq = useRef(0)
   const breakdownSeq = useRef(0)
+  const householdSeq = useRef(0)
 
   // Primary first, then everyone else by id — the order NetWorthPage's owner chips use, so
   // a person sits in the same place on both pages. The `?? []` lives INSIDE the memo: a
@@ -727,6 +737,31 @@ export default function PaycheckPage() {
       .then(setHousehold)
       .catch(() => setHousehold(null))
   }, [])
+
+  // Two GETs on a two-person household, once per household load (and once per write), and
+  // no requests at all for one person: the price of a figure that cannot drift with a chip
+  // press. Sequence-guarded like the page's other two loads, because a save landing while
+  // these are in flight would otherwise let the older pair overwrite the newer.
+  useEffect(() => {
+    if (orderedPeople.length < 2) return
+    const seq = ++householdSeq.current
+    Promise.all(
+      orderedPeople.map((person, index) =>
+        // Index 0 is the primary, whose param is omitted — the wire's back-compat default.
+        fetchBreakdown(undefined, index === 0 ? undefined : person.id)
+          .then((data) => ({ name: person.name, monthlyNet: data.monthly_net }))
+          // A person with no profile in force 404s; a partner-side outage 5xxs. Both mean
+          // "no figure for them", which is what keeps the tile absent rather than half a
+          // household presented as a whole one (spec §6).
+          .catch(() => null),
+      ),
+    ).then((legs) => {
+      if (seq !== householdSeq.current) return
+      setHouseholdNets(
+        legs.filter((leg): leg is { name: string; monthlyNet: string } => leg !== null),
+      )
+    })
+  }, [orderedPeople, householdNonce])
 
   // The chain lives inline rather than in a useCallback: this component owns nine setters,
   // and manual memoization React Compiler cannot preserve drops the whole component out of
@@ -836,6 +871,17 @@ export default function PaycheckPage() {
     [profiles, switchable, activePersonId],
   )
 
+  // The ONE place this page adds money up, and only because there is no server figure for
+  // it in this batch. Legal here where the waterfall's lines are not (rule 9): each leg is
+  // an AUTHORITATIVE per-person `monthly_net`, not a display-rounded view of a longer
+  // chain. Two 2dp figures added in float and re-rounded to cents (spendingSankey's
+  // `cents` idiom), so the tile can never print a float artefact.
+  const householdTotal =
+    householdNets === null
+      ? null
+      : Math.round(householdNets.reduce((acc, leg) => acc + Number(leg.monthlyNet), 0) * 100) /
+        100
+
   // A profile write moves BOTH halves of the page: the list, and the waterfall (a deleted
   // profile takes its own breakdown with it, so the selection falls back to the server's
   // default rather than 404ing on an id that no longer exists).
@@ -847,6 +893,10 @@ export default function PaycheckPage() {
     reselectWith((current) =>
       deletedId !== undefined && deletedId === current ? null : current,
     )
+    // The tile's legs are the profiles IN FORCE, and this write may have changed which
+    // those are (a new row dated today displaces the current one). A nonce rather than a
+    // direct call: the effect above owns the sequence guard.
+    setHouseholdNonce((n) => n + 1)
   }
 
   return (
@@ -877,6 +927,26 @@ export default function PaycheckPage() {
           </div>
           <InfoHint text="Each person has their own profile timeline. The waterfall, the flow and the history below all follow this chip; the household figure above does not — it is always both of you." />
         </div>
+      )}
+
+      {/* TWO OR MORE answers or nothing: one person's net is not a household take-home, and
+          printing it as one would be a half-truth (spec §6). It sits OUTSIDE the per-check
+          card on purpose — it is not part of any one person's waterfall, and it does not
+          follow the chips. */}
+      {householdNets !== null && householdNets.length > 1 && (
+        <section className="paycheck-household">
+          <div className="kpi-row">
+            <StatTile
+              label="Household take-home"
+              value={formatCurrency(householdTotal)}
+              hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted."
+            />
+          </div>
+          <p className="drill-hint">
+            {householdNets.map((leg) => leg.name).join(' + ')} — the profile in force for
+            each person.
+          </p>
+        </section>
       )}
 
       {breakdownError !== null && !breakdownMissing && (

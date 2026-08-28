@@ -187,3 +187,13 @@
 .paycheck-person-row .eyebrow {
   margin: 0;
 }
+
+/* The household figure is a sibling of the switcher, not part of the per-person card below
+   it. The page's 320px .kpi-row fence already stops a single tile from stretching. */
+.paycheck-household {
+  margin-bottom: 1rem;
+}
+
+.paycheck-household .drill-hint {
+  margin: 0.4rem 0 0;
+}
