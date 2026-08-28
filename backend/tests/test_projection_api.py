@@ -9,7 +9,7 @@ from app.models import (
     NetWorthSnapshot,
     SpendingCategory,
 )
-from app.services.projection import project
+from app.services.projection import drop_schedule, project
 
 # The projection anchors on date.today() (the router's one clock read), so the seeds are
 # built RELATIVE to the run's own month — nothing here goes stale with the calendar.
@@ -417,3 +417,81 @@ def test_project_contribution_growth_two_months_exact():
     #           = 1200.948879293458297412635507 -> HALF_UP -> 1200.95
     points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 2, Decimal("0.12"))
     assert [str(p) for p in points] == ["1000.00", "1100.00", "1200.95"]
+
+
+# --- the retirement schedule (2026-08-28 spec §4.3) ---
+
+
+def test_drop_schedule_sums_a_month_and_folds_index_zero():
+    # Two retirements in one month cost the household BOTH paychecks at once.
+    assert drop_schedule([(7, Decimal("100")), (7, Decimal("40"))]) == {7: Decimal("140")}
+    # t0 carries no contribution (it IS the starting balance), so "already retired when the
+    # projection starts" and "retires at month 1" are the same chain — folded, not dropped.
+    assert drop_schedule([(0, Decimal("40"))]) == {1: Decimal("40")}
+    assert drop_schedule([]) == {}
+
+
+def test_project_without_drops_is_byte_identical():
+    # The back-compat guarantee is a test, not a hope: the four strings below are the ones
+    # test_project_growth_zero_matches_previous_behavior already pins, and the new
+    # parameter must not move them on either the defaulted or the explicit-empty path.
+    plain = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3)
+    assert [str(p) for p in plain] == ["1000.00", "1104.07", "1208.57", "1313.50"]
+    explicit = project(
+        Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3, Decimal("0"), []
+    )
+    assert explicit == plain
+
+
+def test_project_drop_lands_before_that_month_contribution():
+    # r = 0 collapses the compounding to plain addition, so the whole chain is exact:
+    # 100/month until month 3, where a 40 drop leaves 60/month for the rest.
+    points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 5, Decimal("0"),
+                     [(3, Decimal("40.00"))])
+    assert [str(p) for p in points] == [
+        "1000.00", "1100.00", "1200.00", "1260.00", "1320.00", "1380.00"
+    ]
+
+
+def test_project_drop_at_index_zero_is_the_same_chain_as_index_one():
+    at_zero = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"),
+                      [(0, Decimal("40.00"))])
+    at_one = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"),
+                     [(1, Decimal("40.00"))])
+    assert [str(p) for p in at_zero] == ["1000.00", "1060.00", "1120.00", "1180.00"]
+    assert at_zero == at_one
+
+
+def test_project_two_drops_in_one_month_sum():
+    points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"),
+                     [(2, Decimal("30.00")), (2, Decimal("20.00"))])
+    assert [str(p) for p in points] == ["1000.00", "1100.00", "1150.00", "1200.00"]
+
+
+def test_project_floors_the_stream_at_zero_and_growth_cannot_revive_it():
+    # A drop bigger than what is left retires the WHOLE stream; 0 x (1+g) is still 0, so a
+    # 12%/yr escalator must never bring a retired paycheck back.
+    points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 4, Decimal("0.12"),
+                     [(2, Decimal("500.00"))])
+    assert [str(p) for p in points] == ["1000.00", "1100.00", "1100.00", "1100.00", "1100.00"]
+
+
+def test_project_growth_escalates_only_the_remainder():
+    # Dropping 40 at the FIRST contribution is arithmetically a 60/month stream from the
+    # start: the escalator has to compound what is LEFT, never the original 100. Equality
+    # over a 36-month chain is a much sharper pin than any single hand-computed point.
+    dropped = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 36, Decimal("0.12"),
+                      [(1, Decimal("40.00"))])
+    assert dropped == project(Decimal("1000.00"), Decimal("60.00"), Decimal("0"), 36,
+                              Decimal("0.12"))
+    # ...and the first two points are checkable by eye: 1000 + 60, then + 60 x 1.12^(1/12)
+    # = 60.56932757607497844758130414 -> 1120.5693... -> HALF_UP -> 1120.57.
+    assert [str(p) for p in dropped[:3]] == ["1000.00", "1060.00", "1120.57"]
+
+
+def test_project_ignores_a_drop_past_the_horizon():
+    # The API fences the range; the ENGINE stays total rather than raising on one.
+    assert project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"),
+                   [(99, Decimal("40.00"))]) == project(
+        Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0")
+    )
