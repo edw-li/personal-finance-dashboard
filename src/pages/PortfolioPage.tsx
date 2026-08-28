@@ -565,6 +565,16 @@ export default function PortfolioPage() {
               </h2>
               {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
             </div>
+            {/* Outside the ternary on purpose: the caveat is true whether or not there is
+                a history to draw, and it only appears once a chip has actually narrowed
+                the rest of the page (spec §5 — on All it would be noise). */}
+            {owner !== null && (
+              <p className="hint">
+                Performance, sparklines and price refresh always cover the whole household —
+                the owner chips scope holdings, allocation, dividends, transactions and
+                realized gains.
+              </p>
+            )}
             {performanceOption && history ? (
               <>
                 <EChart

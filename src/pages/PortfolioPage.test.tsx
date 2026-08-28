@@ -465,3 +465,46 @@ it('restores the household view after visiting an owner with no positions', asyn
   await waitFor(() => expect(fetchHoldings).toHaveBeenLastCalledWith(null))
   await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
 })
+
+// Pinned verbatim: this sentence is the page's only defence against reading the weekly
+// performance line as one person's (spec §5).
+const HOUSEHOLD_HINT =
+  'Performance, sparklines and price refresh always cover the whole household — the owner ' +
+  'chips scope holdings, allocation, dividends, transactions and realized gains.'
+
+it('says the performance card is household-wide only while a scope is active', async () => {
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  // Nothing is scoped on All, so the caveat would be noise.
+  expect(screen.queryByText(HOUSEHOLD_HINT)).toBeNull()
+
+  fireEvent.click(chip('Sam'))
+  expect(await screen.findByText(HOUSEHOLD_HINT)).toBeTruthy()
+
+  fireEvent.click(chip('Joint'))
+  expect(screen.getByText(HOUSEHOLD_HINT)).toBeTruthy()
+
+  fireEvent.click(chip('All'))
+  await waitFor(() => expect(screen.queryByText(HOUSEHOLD_HINT)).toBeNull())
+})
+
+it('renders the panels real empty notes for an owner who holds nothing', async () => {
+  vi.mocked(fetchHoldings).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? EMPTY_HOLDINGS : holdingsOut()),
+  )
+  vi.mocked(fetchAllocation).mockImplementation((by, scope) =>
+    Promise.resolve(scope === SAM.id ? emptyAllocation(by) : allocationOut(by)),
+  )
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
+
+  fireEvent.click(chip('Sam'))
+  // HoldingsTable's OWN note, not an empty table that reads as a rendering bug.
+  expect(await screen.findByText(NO_HOLDINGS_NOTE)).toBeTruthy()
+  // The treemap and the donut both fall back to their notes rather than empty canvases.
+  expect(screen.getAllByText('No priced holdings yet.').length).toBe(2)
+  // And the performance chart is still up: it is household-wide, and the hint says so.
+  expect(screen.getByText(HOUSEHOLD_HINT)).toBeTruthy()
+  expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)
+})
