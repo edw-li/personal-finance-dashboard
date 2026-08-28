@@ -16,6 +16,7 @@ from app.api import (
     espp,
     household,
     import_,
+    limits,
     net_worth,
     overview,
     paycheck,
@@ -85,6 +86,7 @@ app.include_router(prices.router, prefix="/api/v1")
 app.include_router(taxes.router, prefix="/api/v1")
 app.include_router(espp.router, prefix="/api/v1")
 app.include_router(paycheck.router, prefix="/api/v1")
+app.include_router(limits.router, prefix="/api/v1")
 app.include_router(comp.router, prefix="/api/v1")
 app.include_router(calendar.router, prefix="/api/v1")
 app.include_router(credit_cards.router, prefix="/api/v1")
