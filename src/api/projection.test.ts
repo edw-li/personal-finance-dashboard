@@ -44,3 +44,30 @@ it('keeps the older knobs ahead of the new ones in the query', async () => {
   await fetchProjection({ annualReturn: '0.07', years: '30', volatility: '0.15' })
   expect(path()).toBe('/projection?annual_return=0.07&years=30&volatility=0.15')
 })
+
+it('appends one retire param per filled month and omits the blanks', async () => {
+  await fetchProjection({
+    retirements: [
+      { personId: 1, month: '2035-06' },
+      { personId: 2, month: '' }, // blank = that person works for the whole horizon
+      { personId: 3, month: '2040-01' },
+    ],
+  })
+  // Repeated, not comma-joined: FastAPI reads `retire` as a list, and a comma would be
+  // one malformed value rather than two good ones.
+  expect(path()).toBe('/projection?retire=1%3A2035-06&retire=3%3A2040-01')
+})
+
+it('keeps the knobs ahead of the retirements in the query', async () => {
+  await fetchProjection({
+    annualReturn: '0.07',
+    years: '30',
+    retirements: [{ personId: 2, month: '2035-06' }],
+  })
+  expect(path()).toBe('/projection?annual_return=0.07&years=30&retire=2%3A2035-06')
+})
+
+it('is still the bare projection when every retirement is blank', async () => {
+  await fetchProjection({ retirements: [{ personId: 1, month: '' }] })
+  expect(path()).toBe('/projection')
+})

@@ -2,6 +2,7 @@
 // decisions of its own (historyChartOptions.ts posture). Number() here is display-only:
 // the server's Decimal strings are parsed once and never handed back to the API.
 import type { EChartsOption } from '../../charts/echarts'
+import { MARK_LINE_LABEL, MARK_LINE_STYLE, anchorMonthLabel } from '../../charts/markLine'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { timeZoom } from '../../charts/timeZoom'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
@@ -74,6 +75,48 @@ export function projectionTooltipFormatter(
   }
 }
 
+/** The annotation shape — narrow on purpose, so the test can read it without echarts'
+ *  `any`-ish option types (the MarriageMarkLine posture). */
+export interface RetirementMarkLine {
+  silent: true
+  symbol: 'none'
+  lineStyle: { color: string; width: number; type: 'dashed' }
+  label: { show: true; position: 'insideEndTop'; color: string; fontSize: number }
+  data: { xAxis: string; label: { formatter: string } }[]
+}
+
+/**
+ * One dashed vertical rule per echoed retirement, each labelled with that person's name
+ * — the wedding annotation's grammar, shared through charts/markLine.ts rather than
+ * copied. The step at each rule is REAL (the contribution stream drops there), so it has
+ * to read as intentional rather than as a kink in the data.
+ *
+ * The server has already fenced every month onto this axis, so the fall-forward anchor is
+ * only a guard for a stale payload whose horizon shrank: a rule that cannot be placed is
+ * DROPPED, never clamped onto a month the retirement is not in.
+ */
+export function retirementMarkLine(
+  months: string[],
+  retirements: { month: string; name: string }[],
+): RetirementMarkLine | undefined {
+  const data = retirements
+    .map((retirement) => ({
+      xAxis: anchorMonthLabel(months, retirement.month),
+      label: { formatter: retirement.name },
+    }))
+    .filter((entry): entry is { xAxis: string; label: { formatter: string } } => {
+      return entry.xAxis !== undefined
+    })
+  if (data.length === 0) return undefined
+  return {
+    silent: true,
+    symbol: 'none',
+    lineStyle: { ...MARK_LINE_STYLE },
+    label: { ...MARK_LINE_LABEL },
+    data,
+  }
+}
+
 /**
  * Two trajectories and a threshold: projected (blue, the one wash — the money the plan
  * accumulates), growth-only "coast" (orange — what the balance does by itself, so the gap
@@ -85,11 +128,13 @@ export function projectionTooltipFormatter(
  * series drawn FIRST (so the three real lines stay on top of their own uncertainty).
  */
 export function projectionOption(
-  data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'fi_target' | 'bands'>,
+  data: Pick<ProjectionOut, 'months' | 'projected' | 'coast' | 'fi_target' | 'bands'> &
+    Partial<Pick<ProjectionOut, 'retirements'>>,
 ): EChartsOption | null {
   if (data.months.length < 2) return null
   const target = data.fi_target === null ? null : Number(data.fi_target)
   const bands = data.bands ?? null
+  const retirementMark = retirementMarkLine(data.months, data.retirements ?? [])
   const bandSeries =
     bands === null
       ? []
@@ -183,6 +228,8 @@ export function projectionOption(
         lineStyle: { width: 2 },
         color: PALETTE[0],
         areaStyle: { opacity: 0.12 },
+        // The retirement rules ride the ONE series every payload has, above the fan.
+        ...(retirementMark ? { markLine: retirementMark } : {}),
         data: data.projected.map(Number),
       },
       {

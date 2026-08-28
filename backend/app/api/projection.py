@@ -13,10 +13,16 @@ below) — the fan and today's-dollars framing are on unless you turn them off w
 explicit 0. They echo like every other knob; the page renders them as placeholders rather
 than seeding their boxes, so blank always means "whatever the echo says".
 
+Retirements (2026-08-28 spec §4.3) arrive as repeated `retire=<person_id>:<YYYY-MM>`
+params and are the one input this module resolves against ANOTHER router's rule: the drop
+is the take-home of the paycheck profile `paycheck._default_profile` says is in force
+today. Absent, the response is the pre-retirement one plus an empty `retirements` echo.
+
 `date.today()` is read HERE and only here (paycheck.py's posture): it anchors the
 starting balance and the month axis; services/projection.py takes no clock.
 """
 
+import re
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
@@ -26,12 +32,20 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+
+# Cross-router borrow, on taxes.py's precedent: the paycheck router owns the "profile in
+# force" rule AND the divide-by-zero fence on a stored cadence. The Paycheck page, the
+# Taxes page and this drop must never disagree about which profile is current, and a
+# second copy of either rule here could only drift.
+from app.api.paycheck import MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE, _default_profile
 from app.database import get_db
 from app.models import MonthlyCashflow, MonthlySpending, NetWorthSnapshot
-from app.schemas.projection import ProjectionOut
+from app.schemas.projection import ProjectionOut, RetirementOut
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import get_swr_pct, investable_base
+from app.services.paycheck_calc import breakdown, half_up2
+from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
 
 router = APIRouter(
@@ -68,6 +82,14 @@ CONTRIBUTION_MAX_ABS = Decimal(10) ** 7
 SPEND_MAX_ABS = Decimal(10) ** 9
 
 YearsQuery = Annotated[int, Query(ge=1, le=60)]
+
+# Repeated, order-free, and STRINGS: "<person_id>:<YYYY-MM>" is one value the user can see
+# in the URL, where two parallel int/date lists could arrive at different lengths. No count
+# fence is needed — a second mention of the same person 422s, so the loop below can never
+# run longer than the roster.
+RetireQuery = Annotated[list[str] | None, Query()]
+RETIRE_PATTERN = re.compile(r"^(\d{1,10}):(\d{4})-(\d{2})$")
+RETIRE_FORMAT_MESSAGE = "retire must be '<person_id>:<YYYY-MM>' (e.g. retire=2:2035-06)"
 
 NO_SNAPSHOTS = "no net-worth snapshots to project from"
 NO_CASHFLOW_WARNING = "no cashflow history — monthly contribution defaulted to 0"
@@ -129,6 +151,80 @@ async def _trailing_savings(db: AsyncSession) -> Decimal | None:
     return total / len(cash)
 
 
+async def _resolve_retirements(
+    db: AsyncSession, raw: list[str], months: list[date], years: int, today: date
+) -> list[RetirementOut]:
+    """`retire=<person_id>:<YYYY-MM>` params resolved to the echo rows, sorted by month.
+
+    Every refusal is a 422 carrying the sentence the page renders verbatim, and the FIRST
+    param with a problem is the one that answers: the params are order-free, so reporting
+    them all would only make the message longer, never the fix clearer. Within one param
+    the order is fixed — format, person, duplicate, horizon, profile, cadence — so the
+    message always names the nearest thing to fix.
+
+    The drop is that person's monthly take-home from the profile `_default_profile` says
+    is in force TODAY. It is a today's-dollars figure exactly like `monthly_contribution`,
+    and the caller hands it to the engine UNCONVERTED — see the Fisher note at the call.
+    """
+    people = {person.id: person for person in await load_people(db)}
+    rows: list[RetirementOut] = []
+    seen: set[int] = set()
+    for item in raw:
+        match = RETIRE_PATTERN.match(item.strip())
+        if match is None:
+            raise HTTPException(status_code=422, detail=RETIRE_FORMAT_MESSAGE)
+        person_id = int(match.group(1))
+        try:
+            month = date(int(match.group(2)), int(match.group(3)), 1)
+        except ValueError:
+            # Month 00 or 13: a spelling problem, answered in the spelling's own words.
+            raise HTTPException(status_code=422, detail=RETIRE_FORMAT_MESSAGE) from None
+        person = people.get(person_id)
+        if person is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"retire names person {person_id}, who is not in the household",
+            )
+        if person_id in seen:
+            raise HTTPException(
+                status_code=422, detail=f"{person.name} has more than one retirement month"
+            )
+        seen.add(person_id)
+        if not months[0] <= month <= months[-1]:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{person.name}'s retirement month is outside the {years}-year horizon "
+                    f"({months[0]:%Y-%m} to {months[-1]:%Y-%m})"
+                ),
+            )
+        profile = await _default_profile(db, person_id, today)
+        if profile is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{person.name} has no paycheck profile in force — nothing to drop",
+            )
+        if profile.pay_periods_per_year < MIN_PAY_PERIODS:
+            # The stored-data fence, in paycheck.py's own words: gross = salary / periods,
+            # and a hand-written 0 would be a DivisionByZero 500 inside `breakdown`.
+            raise HTTPException(
+                status_code=422,
+                detail=f"{person.name}'s paycheck profile: {PAY_PERIODS_MESSAGE}",
+            )
+        drop = half_up2(breakdown(profile)["monthly_net"])
+        if drop < ZERO:
+            # An over-committed check nets negative; a retirement must never ADD to the
+            # stream, so a negative take-home simply has nothing to drop.
+            drop = ZERO
+        rows.append(
+            RetirementOut(person_id=person_id, name=person.name, month=month, monthly_drop=drop)
+        )
+    # Sorted by month (person id breaks a tie) so the echo, the chart's markLines and the
+    # engine's schedule all read in the order the drops actually happen.
+    rows.sort(key=lambda row: (row.month, row.person_id))
+    return rows
+
+
 @router.get("", response_model=ProjectionOut)
 async def projection(
     annual_return: Decimal | None = Query(default=None),
@@ -139,6 +235,7 @@ async def projection(
     volatility: Decimal | None = Query(default=None),
     inflation: Decimal | None = Query(default=None),
     contribution_growth: Decimal | None = Query(default=None),
+    retire: RetireQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> ProjectionOut:
     today = date.today()  # the ONLY clock read (module docstring)
@@ -231,15 +328,31 @@ async def projection(
 
     month_count = years * 12
     months = _months_from(start_month, month_count)
+    retirements = await _resolve_retirements(db, retire or [], months, years, today)
+    # (month_index, amount), sorted — the SAME schedule feeds the deterministic line and
+    # the fan, which is what keeps the bands wrapped around the line they belong to.
+    # `months` is contiguous from t0, so the horizon check above guarantees every month
+    # is on the axis.
+    #
+    # The drop does NOT go through the real-terms conversion below: `monthly_drop` is a
+    # TODAY's-dollars take-home, exactly like `monthly_contribution`, and the engine's
+    # escalator is what carries both forward. Deflating it would model a nominal FUTURE
+    # paycheck, which is not what `_default_profile` read. The honest asterisk — the
+    # remaining stream escalates in real terms while the drop does not — is named in the
+    # page's hint rather than papered over here.
+    drops = [(months.index(row.month), row.monthly_drop) for row in retirements]
     # Every ARRAY below runs on `real_return` (= annual_return under an EXPLICIT
     # inflation=0, which is what reproduces the pre-Monte-Carlo arrays byte for byte);
     # the ECHOED `annual_return` stays the NOMINAL value the user provided or the default
     # — the echo is what seeds the form, and `inflation` echoes separately so the page can
     # reconstruct the real rate.
-    projected = project(starting, monthly_contribution, real_return, month_count, real_growth)
+    projected = project(
+        starting, monthly_contribution, real_return, month_count, real_growth, drops
+    )
     # The coast line: the same growth with the contributions turned off — the distance
     # between the two lines is what the saving is buying. Nothing to escalate, so the
-    # escalator is 0 here too.
+    # escalator is 0 here too, and nothing to drop either: a retirement cannot move a
+    # stream that is already off.
     coast = project(starting, ZERO, real_return, month_count, Decimal("0"))
 
     fi_target: Decimal | None = None
@@ -280,6 +393,7 @@ async def projection(
             real_growth,
             month_count,
             fi_target,
+            drops,
         )
         bands = mc.bands
         if fi_target is not None:
@@ -320,4 +434,5 @@ async def projection(
         fi_month_p10=fi_month_p10,
         fi_month_p50=fi_month_p50,
         fi_month_p90=fi_month_p90,
+        retirements=retirements,
     )

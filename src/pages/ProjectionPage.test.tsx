@@ -23,7 +23,13 @@ vi.mock('../components/EChart', async () => {
       option,
       animateEntrance = true,
     }: {
-      option: { xAxis?: { data?: unknown[] }; series?: { name?: string }[] }
+      option: {
+        xAxis?: { data?: unknown[] }
+        series?: {
+          name?: string
+          markLine?: { data?: { xAxis?: string; label?: { formatter?: string } }[] }
+        }[]
+      }
       animateEntrance?: boolean
     }) =>
       createElement('div', {
@@ -34,6 +40,11 @@ vi.mock('../components/EChart', async () => {
         // Series names are the option capture: WHICH curves a payload puts on the chart
         // is the page's business (their geometry is pinned in the builder's own test).
         'data-series': (option.series ?? []).map((s) => s.name ?? '').join(','),
+        // ...and WHICH annotations it puts there (NetWorthPage's data-marriage idiom).
+        'data-marks': (option.series ?? [])
+          .flatMap((s) => s.markLine?.data ?? [])
+          .map((d) => `${d.xAxis ?? ''}=${d.label?.formatter ?? ''}`)
+          .join('|'),
       }),
   }
 })
@@ -41,6 +52,8 @@ vi.mock('../api/netWorth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/netWorth')>()),
   fetchTimeseries: vi.fn(),
 }))
+vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
+import { fetchHousehold } from '../api/household'
 import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 
@@ -79,6 +92,7 @@ function projectionOut(over: Partial<ProjectionOut> = {}): ProjectionOut {
     fi_month_p10: '2050-01-01',
     fi_month_p50: '2055-10-01',
     fi_month_p90: '2061-03-01',
+    retirements: [],
     ...over,
   }
 }
@@ -125,6 +139,13 @@ function timeseries(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries 
   }
 }
 
+function household(people = [
+  { id: 1, name: 'Me', is_primary: true },
+  { id: 2, name: 'Alex', is_primary: false },
+]) {
+  return { people, marriage_date: null }
+}
+
 function renderPage() {
   return render(
     <MemoryRouter>
@@ -149,6 +170,7 @@ beforeEach(() => {
   clearSnapshots()
   vi.mocked(fetchProjection).mockResolvedValue(projectionOut())
   vi.mocked(fetchTimeseries).mockResolvedValue(timeseries())
+  vi.mocked(fetchHousehold).mockResolvedValue(household())
 })
 
 afterEach(() => {
@@ -197,6 +219,7 @@ describe('ProjectionPage', () => {
       inflation: '0.03',
       contributionGrowth: '0.03',
       years: '30',
+      retirements: [],
     })
   })
 
@@ -557,5 +580,115 @@ describe('ProjectionPage — snapshot cache (2026-08-27 spec §1)', () => {
     await waitFor(() => expect(valueOf(tileFor('FI target'))).toBe('$9,000,000.00'))
     // The default key still holds the MOUNT run — a knob run is user-parameterized.
     expect(getSnapshot<ProjectionOut>('projection:default')).toEqual(cachedDefault)
+  })
+})
+
+describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', () => {
+  it('offers one Retires knob per household person, blank by default', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+
+    expect(box('Retires — Me').value).toBe('')
+    expect(box('Retires — Alex').value).toBe('')
+    // Blank is a real answer here, not a derived default: nobody retires.
+    expect(screen.getByText(/Blank means that person works for the whole horizon/)).toBeTruthy()
+  })
+
+  it('renders one knob for a single-person household — same grammar, new capability', async () => {
+    vi.mocked(fetchHousehold).mockResolvedValue(household([{ id: 1, name: 'Me', is_primary: true }]))
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+
+    expect(box('Retires — Me')).toBeTruthy()
+    expect(screen.queryByLabelText('Retires — Alex')).toBeNull()
+  })
+
+  it('renders no retirement knobs on a roster-less database', async () => {
+    vi.mocked(fetchHousehold).mockResolvedValue(household([]))
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+
+    expect(screen.queryByLabelText(/^Retires/)).toBeNull()
+    expect(screen.queryByText(/Blank means that person works/)).toBeNull()
+  })
+
+  it('keeps the whole page alive when the household fetch alone fails', async () => {
+    vi.mocked(fetchHousehold).mockRejectedValue(new ApiError('household unavailable', 500))
+    renderPage()
+
+    expect(await screen.findByText('$1,500,000.00')).toBeTruthy() // tiles still stand
+    expect(screen.queryByLabelText(/^Retires/)).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull() // an affordance, never the page banner
+  })
+
+  it('sends a filled month as a retirement and leaves the blanks out', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+
+    fireEvent.change(box('Retires — Alex'), { target: { value: '2035-06' } })
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+
+    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
+    expect(fetchProjection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ retirements: [{ personId: 2, month: '2035-06' }] }),
+    )
+  })
+
+  it('refuses a malformed month in the box vocabulary, spending no request', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+
+    // A browser WITHOUT a month picker renders type="month" as a plain text box and hands
+    // the typed characters straight through — that is the case this fence exists for. This
+    // jsdom implements the month sanitiser (an invalid value becomes ''), so the box is
+    // demoted to text here to reproduce the browser that does not.
+    const monthBox = box('Retires — Alex')
+    monthBox.type = 'text'
+    fireEvent.change(monthBox, { target: { value: '2035-13' } })
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+
+    expect(screen.getByText("Alex's retirement month must look like YYYY-MM")).toBeTruthy()
+    expect(fetchProjection).toHaveBeenCalledTimes(1) // the mount load only
+  })
+
+  it('draws a dashed rule per echoed retirement, labelled by name', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(
+      projectionOut({
+        retirements: [
+          { person_id: 2, name: 'Alex', month: '2026-09-01', monthly_drop: '2000.00' },
+        ],
+      }),
+    )
+    renderPage()
+
+    const charts = await screen.findAllByTestId('echart')
+    // [1] is the investable chart (DOM order is card order).
+    expect(charts[1].getAttribute('data-marks')).toBe('Sep 2026=Alex')
+    // The net-worth trend above it is untouched by retirements.
+    expect(charts[0].getAttribute('data-marks')).toBe('')
+  })
+
+  it('renders the server refusal verbatim — nothing invented, nothing translated', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    vi.mocked(fetchProjection).mockRejectedValue(
+      new ApiError('Alex has no paycheck profile in force — nothing to drop', 422),
+    )
+
+    fireEvent.change(box('Retires — Alex'), { target: { value: '2035-06' } })
+    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+
+    expect(
+      await screen.findByText(/Alex has no paycheck profile in force — nothing to drop/),
+    ).toBeTruthy()
+    expect(screen.getByRole('alert')).toBeTruthy() // a refusal IS the page banner
+  })
+
+  it('names the approximation the drop actually is', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+
+    expect(screen.getByText(/CURRENT monthly take-home/)).toBeTruthy()
+    expect(screen.getByText(/Spending stays a household figure/)).toBeTruthy()
   })
 })
