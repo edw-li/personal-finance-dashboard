@@ -33,6 +33,15 @@ body {
   color: var(--text);
 }
 
+html {
+  /* The scrollbar's column is reserved even when content is short: without this, the
+     monthly-update wizard's unmount-while-loading dropped the page under viewport
+     height mid month-switch and the vanishing scrollbar shifted the whole layout
+     ~15px sideways until data landed (spec Addendum §A1). Also steadies skeleton
+     phases on short pages. */
+  scrollbar-gutter: stable;
+}
+
 a {
   color: var(--accent);
   text-decoration: none;
