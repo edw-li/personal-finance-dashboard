@@ -63,6 +63,9 @@ NO_NET_PAY_WARNING = "no net pay entered for {year}"
 NET_PAY_COVERAGE_WARNING = "net pay entered {n}/12 months"
 NO_SPENDING_WARNING = "no spending entered for {year}"
 SPENDING_COVERAGE_WARNING = "spending entered {n}/12 months"
+SALARY_SPLIT_MISMATCH_WARNING = (
+    "per-person salary rows sum to {split}, not the year's {total} — showing one salary node"
+)
 BRACKETS_MISSING_WARNING = "no {status} bracket tables for {year}: {jurisdictions}"
 
 NO_INPUTS_REASON = (
@@ -97,12 +100,25 @@ def _display(value: Decimal) -> Decimal:
 
 
 @dataclass
+class MoneyFlowPersonSalary:
+    """One earner's slice of the salary source node (2026-08-27 spec §4.3)."""
+
+    name: str
+    amount: Decimal
+
+
+@dataclass
 class MoneyFlowSources:
     salary_and_bonus: Decimal
     rsu_vests: Decimal
     espp: Decimal
     investment_income: Decimal
     other_income: Decimal
+    # EMPTY is today's single `Salary & bonus` node, byte-identically — single years,
+    # partner-less years and any year whose split does not reconcile. Two or more entries
+    # (primary first) split THAT node per earner: they sum to `salary_and_bonus` above,
+    # which stays the household total, so nothing downstream of the sources column moves.
+    salary_people: list[MoneyFlowPersonSalary] = field(default_factory=list)
 
 
 @dataclass
@@ -154,6 +170,7 @@ def compose_money_flow(
     filing_status: str = SINGLE,
     earners: list[EarnerWages] | None = None,
     brackets_missing_for_status: list[str] | tuple[str, ...] = (),
+    salary_by_person: list[tuple[str, Decimal]] | None = None,
 ) -> MoneyFlow:
     """One reconciled year of money flow (spec §5's node table).
 
@@ -166,8 +183,10 @@ def compose_money_flow(
 
     `filing_status`/`earners` are passed STRAIGHT THROUGH to the engine, so the card's tax
     decomposition is the same arithmetic the Taxes summary shows — with the defaults, that
-    is byte-for-byte today's answer. The source-node aggregation below is deliberately
-    untouched: a labelled per-person income node is a later plan's work.
+    is byte-for-byte today's answer. `salary_by_person` is the ROUTER's per-earner sum of
+    the same SALARY_KEYS this function totals (primary first); this module only checks
+    that a split IS a split — same money, more nodes — and declines to draw one that is
+    not.
     """
 
     def value(key: str) -> Decimal:
@@ -239,6 +258,24 @@ def compose_money_flow(
     elif spending_months < MONTHS_IN_YEAR:
         warnings.append(SPENDING_COVERAGE_WARNING.format(n=spending_months))
 
+    # The per-person split (spec §4.3). Fewer than two entries is not a split at all —
+    # one earner keeps the single node — and a sum that misses `salary_and_bonus` is a
+    # bug upstream, so the node stays whole and the warning names the discrepancy rather
+    # than drawing a column that does not add up.
+    salary_people: list[MoneyFlowPersonSalary] = []
+    if salary_by_person is not None and len(salary_by_person) > 1:
+        split_total = sum((amount for _name, amount in salary_by_person), ZERO)
+        if split_total == salary_and_bonus:
+            salary_people = [
+                MoneyFlowPersonSalary(name=name, amount=amount) for name, amount in salary_by_person
+            ]
+        else:
+            warnings.append(
+                SALARY_SPLIT_MISMATCH_WARNING.format(
+                    split=_display(split_total), total=_display(salary_and_bonus)
+                )
+            )
+
     # Refusal (spec §5 honesty rules): ONE reason, first structural failure wins. A
     # negative saved is NOT here — a deficit is drawable (red Drawdown source). Negative
     # take_home_cash is unreachable (net_pay writes reject negatives).
@@ -278,6 +315,7 @@ def compose_money_flow(
             espp=espp,
             investment_income=investment_income,
             other_income=other_income,
+            salary_people=salary_people,
         ),
         gross_income=gross_income,
         taxes=taxes,

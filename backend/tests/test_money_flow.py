@@ -397,3 +397,50 @@ def test_missing_status_brackets_refuse_to_render():
     # Everything it COULD compute still rides along (the module's stated posture).
     assert flow.take_home_cash == D("50000")
     assert flow.total_spend == D("1000")
+
+
+# --- the per-person salary split (2026-08-27 spec §4.3) ---
+
+
+def test_salary_splits_per_person_without_touching_conservation():
+    flow = compose(salary_by_person=[("Me", D("160000")), ("Sam", D("60000"))])
+    # The SPLIT is new; the node it splits is not: 200000 + 15000 + 5000 unchanged.
+    assert flow.sources.salary_and_bonus == D("220000")
+    assert [(entry.name, entry.amount) for entry in flow.sources.salary_people] == [
+        ("Me", D("160000")),
+        ("Sam", D("60000")),
+    ]
+    # Conservation is the whole contract and it is one node split in two, nothing else.
+    named = (
+        flow.sources.salary_and_bonus
+        + flow.sources.rsu_vests
+        + flow.sources.espp
+        + flow.sources.investment_income
+        + flow.sources.other_income
+    )
+    assert named == flow.gross_income
+    assert (
+        flow.taxes.total + flow.pre_tax_savings + flow.take_home_cash + flow.retained_equity
+        == flow.gross_income
+    )
+    assert flow.renderable is True
+    assert flow.warnings == compose().warnings
+
+
+def test_a_single_entry_is_not_a_split():
+    # One earner is not two nodes with one missing — it is today's single node.
+    assert compose(salary_by_person=[("Me", D("220000"))]).sources.salary_people == []
+    assert compose(salary_by_person=[]).sources.salary_people == []
+    assert compose().sources.salary_people == []
+
+
+def test_a_split_that_does_not_sum_to_the_salary_node_is_refused_with_a_warning():
+    # Not a refusal to RENDER: the card still draws, with the one node it can prove. A
+    # split that does not add up would put a lie in the chart's own conservation.
+    flow = compose(salary_by_person=[("Me", D("160000")), ("Sam", D("50000"))])
+    assert flow.sources.salary_people == []
+    assert flow.renderable is True
+    assert (
+        "per-person salary rows sum to 210000.00, not the year's 220000.00 — "
+        "showing one salary node"
+    ) in flow.warnings
