@@ -8,6 +8,7 @@ import type {
   VestingScheduleOut,
   VestOut,
 } from '../types/api'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import CompPage from './CompPage'
 import ToastProvider from '../components/ToastProvider'
 
@@ -29,10 +30,18 @@ vi.mock('../api/comp', () => ({
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ option }: { option: { xAxis?: { data?: unknown[] } } }) =>
+    default: ({
+      option,
+      animateEntrance = true,
+    }: {
+      option: { xAxis?: { data?: unknown[] } }
+      animateEntrance?: boolean
+    }) =>
       createElement('div', {
         'data-testid': 'echart',
         'data-categories': (option.xAxis?.data ?? []).join(','),
+        // A cached paint must render still (2026-08-27 spec §1).
+        'data-animate': String(animateEntrance),
       }),
   }
 })
@@ -281,6 +290,7 @@ function fillNewGrant() {
 const confirmSpy = vi.spyOn(window, 'confirm')
 
 beforeEach(() => {
+  clearSnapshots()
   vi.mocked(fetchEvents).mockResolvedValue(EVENTS)
   vi.mocked(createEvent).mockResolvedValue(event2027)
   vi.mocked(updateEvent).mockResolvedValue(event2026)
@@ -1258,5 +1268,49 @@ describe('CompPage — the two feeds are independent', () => {
     })
     // The older load answers LAST and must not put the deleted grant back.
     expect(refreshRow()).toBeNull()
+  })
+})
+
+describe('CompPage — snapshot cache (2026-08-27 spec §1)', () => {
+  it('paints the events table instantly from a seeded snapshot and still revalidates', () => {
+    setSnapshot('comp:events', EVENTS)
+    // Never-resolving fetch: whatever is on screen came from the seed alone.
+    vi.mocked(fetchEvents).mockReturnValue(new Promise(() => {}))
+    render(<CompPage />)
+    expect(screen.getByText('$601,854.46')).toBeTruthy() // 2026 tc_after
+    expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2024,2026,2027')
+    // A cached paint renders its chart still, and the revalidation still went out.
+    expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')
+    expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(1)
+  })
+
+  it('seeds the vesting schedule from its own key', () => {
+    setSnapshot('comp:events', EVENTS)
+    setSnapshot('comp:schedule', {
+      ...EMPTY_SCHEDULE,
+      warnings: ['seeded-from-cache warning'],
+    })
+    vi.mocked(fetchVestingSchedule).mockReturnValue(new Promise(() => {}))
+    render(<CompPage />)
+    expect(screen.getByText('seeded-from-cache warning')).toBeTruthy()
+  })
+
+  it('a changed revalidation payload updates the table and re-arms the chart', async () => {
+    setSnapshot('comp:events', EVENTS)
+    vi.mocked(fetchEvents).mockResolvedValue([event2024, event2026])
+    render(<CompPage />)
+    expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2024,2026,2027')
+    await waitFor(() =>
+      expect(screen.getByTestId('echart').getAttribute('data-categories')).toBe('2024,2026'),
+    )
+    expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('true')
+  })
+
+  it('leaves the chart still when the revalidation payload is identical', async () => {
+    setSnapshot('comp:events', EVENTS)
+    render(<CompPage />)
+    await waitFor(() => expect(fetchEvents).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')
   })
 })

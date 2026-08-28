@@ -7,6 +7,7 @@ import {
   fetchVestingSchedule,
   updateEvent,
 } from '../api/comp'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
@@ -456,9 +457,12 @@ function EventsPanel({
 // ── Page ────────────────────────────────────────────────────────────────────────────────
 
 export default function CompPage() {
-  const [events, setEvents] = useState<CompEventOut[] | null>(null)
+  const cachedEvents = getSnapshot<CompEventOut[]>('comp:events')
+  const [events, setEvents] = useState<CompEventOut[] | null>(cachedEvents ?? null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(true)
+  // false once a revalidation actually CHANGES the data — the chart may animate again.
+  const [fromCache, setFromCache] = useState(cachedEvents !== undefined)
   // Two writes in a row are two feeds in flight; only the newest may land or complain
   // (the seqRef recipe — NetWorthPage/PortfolioPage).
   const seqRef = useRef(0)
@@ -466,7 +470,9 @@ export default function CompPage() {
   // The SECOND, independent feed (EsppPage's multi-section pattern): grants and their computed
   // schedule are a different entity from the focal history, so a 503 on one must not blank the
   // other. Its own sequence guard, its own banner, its own busy flag.
-  const [schedule, setSchedule] = useState<VestingScheduleOut | null>(null)
+  const [schedule, setSchedule] = useState<VestingScheduleOut | null>(
+    () => getSnapshot<VestingScheduleOut>('comp:schedule') ?? null,
+  )
   const [scheduleError, setScheduleError] = useState<string | null>(null)
   const [scheduleBusy, setScheduleBusy] = useState(true)
   const scheduleSeq = useRef(0)
@@ -478,8 +484,13 @@ export default function CompPage() {
     fetchEvents()
       .then((data) => {
         if (seq !== seqRef.current) return
-        setEvents(data)
+        const previous = getSnapshot<CompEventOut[]>('comp:events')
+        setSnapshot('comp:events', data)
         setError(null)
+        // Identical payload: nothing re-renders, the chart stays still (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
+        setFromCache(false)
+        setEvents(data)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
@@ -499,8 +510,11 @@ export default function CompPage() {
     fetchVestingSchedule()
       .then((data) => {
         if (seq !== scheduleSeq.current) return
-        setSchedule(data)
+        const previous = getSnapshot<VestingScheduleOut>('comp:schedule')
+        setSnapshot('comp:schedule', data)
         setScheduleError(null)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
+        setSchedule(data)
       })
       .catch((err: unknown) => {
         if (seq !== scheduleSeq.current) return
@@ -590,7 +604,7 @@ export default function CompPage() {
             the proxy, and the line is the server&apos;s own total).
           </p>
           {trajectory ? (
-            <EChart option={trajectory} height={320} />
+            <EChart option={trajectory} height={320} animateEntrance={!fromCache} />
           ) : (
             events !== null && <p className="empty-note">No comp events yet — add one above.</p>
           )}
