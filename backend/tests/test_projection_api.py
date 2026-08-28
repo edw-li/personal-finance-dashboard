@@ -523,9 +523,7 @@ async def test_projection_retirement_reaches_the_monte_carlo_fan(auth_client, db
     base = "/api/v1/projection?volatility=0.15&years=5"
     full = (await auth_client.get(base)).json()
     retired = (
-        await auth_client.get(
-            f"{base}&retire={alex.id}:{_month_param(month_add(this_month, 12))}"
-        )
+        await auth_client.get(f"{base}&retire={alex.id}:{_month_param(month_add(this_month, 12))}")
     ).json()
     # The fan has to wrap the line it belongs to: same seed, smaller stream, lower bands.
     assert Decimal(retired["bands"]["p50"][-1]) < Decimal(full["bands"]["p50"][-1])
@@ -541,8 +539,15 @@ async def test_projection_retirement_validation_table(auth_client, db):
     soon = _month_param(month_add(this_month, 6))
     fmt = "retire must be '<person_id>:<YYYY-MM>' (e.g. retire=2:2035-06)"
 
-    for bad in ("alex", f"{alex.id}", f"{alex.id}:2035", f"{alex.id}:2035-6",
-                f"{alex.id}:2035-13", f"{alex.id}:2035-06-01", f":{soon}"):
+    for bad in (
+        "alex",
+        f"{alex.id}",
+        f"{alex.id}:2035",
+        f"{alex.id}:2035-6",
+        f"{alex.id}:2035-13",
+        f"{alex.id}:2035-06-01",
+        f":{soon}",
+    ):
         resp = await auth_client.get(f"/api/v1/projection?retire={bad}")
         assert resp.status_code == 422, bad
         assert resp.json()["detail"] == fmt, bad
@@ -558,9 +563,7 @@ async def test_projection_retirement_validation_table(auth_client, db):
     assert resp.json()["detail"] == "Alex has more than one retirement month"
 
     for outside in (month_add(this_month, -1), month_add(this_month, 400)):
-        resp = await auth_client.get(
-            f"/api/v1/projection?retire={alex.id}:{_month_param(outside)}"
-        )
+        resp = await auth_client.get(f"/api/v1/projection?retire={alex.id}:{_month_param(outside)}")
         assert resp.status_code == 422
         assert "Alex's retirement month is outside the 30-year horizon" in resp.json()["detail"]
 
@@ -602,8 +605,9 @@ async def test_projection_retirement_of_a_negative_net_drops_nothing(auth_client
     # drop floors at 0 — and the echo says 0.00 rather than inventing a raise.
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
-    await _seed_profile(db, alex, roth_401k_pct=Decimal("0.500000000"),
-                        espp_pct=Decimal("0.800000000"))
+    await _seed_profile(
+        db, alex, roth_401k_pct=Decimal("0.500000000"), espp_pct=Decimal("0.800000000")
+    )
     body = (
         await auth_client.get(
             "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
@@ -620,8 +624,12 @@ async def test_projection_retirement_uses_the_profile_in_force_not_the_newest(au
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
     await _seed_profile(db, alex)  # 24,000 -> 2,000/month, effective 30 days ago
-    await _seed_profile(db, alex, effective_date=date.today() + timedelta(days=400),
-                        annual_salary=Decimal("120000.00"))
+    await _seed_profile(
+        db,
+        alex,
+        effective_date=date.today() + timedelta(days=400),
+        annual_salary=Decimal("120000.00"),
+    )
     body = (
         await auth_client.get(
             f"/api/v1/projection?retire={alex.id}:{_month_param(month_add(this_month, 6))}"
@@ -672,42 +680,75 @@ def test_project_without_drops_is_byte_identical():
     # parameter must not move them on either the defaulted or the explicit-empty path.
     plain = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3)
     assert [str(p) for p in plain] == ["1000.00", "1104.07", "1208.57", "1313.50"]
-    explicit = project(
-        Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3, Decimal("0"), []
-    )
+    explicit = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0.05"), 3, Decimal("0"), [])
     assert explicit == plain
 
 
 def test_project_drop_lands_before_that_month_contribution():
     # r = 0 collapses the compounding to plain addition, so the whole chain is exact:
     # 100/month until month 3, where a 40 drop leaves 60/month for the rest.
-    points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 5, Decimal("0"),
-                     [(3, Decimal("40.00"))])
+    points = project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        5,
+        Decimal("0"),
+        [(3, Decimal("40.00"))],
+    )
     assert [str(p) for p in points] == [
-        "1000.00", "1100.00", "1200.00", "1260.00", "1320.00", "1380.00"
+        "1000.00",
+        "1100.00",
+        "1200.00",
+        "1260.00",
+        "1320.00",
+        "1380.00",
     ]
 
 
 def test_project_drop_at_index_zero_is_the_same_chain_as_index_one():
-    at_zero = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"),
-                      [(0, Decimal("40.00"))])
-    at_one = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"),
-                     [(1, Decimal("40.00"))])
+    at_zero = project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        3,
+        Decimal("0"),
+        [(0, Decimal("40.00"))],
+    )
+    at_one = project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        3,
+        Decimal("0"),
+        [(1, Decimal("40.00"))],
+    )
     assert [str(p) for p in at_zero] == ["1000.00", "1060.00", "1120.00", "1180.00"]
     assert at_zero == at_one
 
 
 def test_project_two_drops_in_one_month_sum():
-    points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"),
-                     [(2, Decimal("30.00")), (2, Decimal("20.00"))])
+    points = project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        3,
+        Decimal("0"),
+        [(2, Decimal("30.00")), (2, Decimal("20.00"))],
+    )
     assert [str(p) for p in points] == ["1000.00", "1100.00", "1150.00", "1200.00"]
 
 
 def test_project_floors_the_stream_at_zero_and_growth_cannot_revive_it():
     # A drop bigger than what is left retires the WHOLE stream; 0 x (1+g) is still 0, so a
     # 12%/yr escalator must never bring a retired paycheck back.
-    points = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 4, Decimal("0.12"),
-                     [(2, Decimal("500.00"))])
+    points = project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        4,
+        Decimal("0.12"),
+        [(2, Decimal("500.00"))],
+    )
     assert [str(p) for p in points] == ["1000.00", "1100.00", "1100.00", "1100.00", "1100.00"]
 
 
@@ -715,10 +756,17 @@ def test_project_growth_escalates_only_the_remainder():
     # Dropping 40 at the FIRST contribution is arithmetically a 60/month stream from the
     # start: the escalator has to compound what is LEFT, never the original 100. Equality
     # over a 36-month chain is a much sharper pin than any single hand-computed point.
-    dropped = project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 36, Decimal("0.12"),
-                      [(1, Decimal("40.00"))])
-    assert dropped == project(Decimal("1000.00"), Decimal("60.00"), Decimal("0"), 36,
-                              Decimal("0.12"))
+    dropped = project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        36,
+        Decimal("0.12"),
+        [(1, Decimal("40.00"))],
+    )
+    assert dropped == project(
+        Decimal("1000.00"), Decimal("60.00"), Decimal("0"), 36, Decimal("0.12")
+    )
     # ...and the first two points are checkable by eye: 1000 + 60, then + 60 x 1.12^(1/12)
     # = 60.56932757607497844758130414 -> 1120.5693... -> HALF_UP -> 1120.57.
     assert [str(p) for p in dropped[:3]] == ["1000.00", "1060.00", "1120.57"]
@@ -726,7 +774,11 @@ def test_project_growth_escalates_only_the_remainder():
 
 def test_project_ignores_a_drop_past_the_horizon():
     # The API fences the range; the ENGINE stays total rather than raising on one.
-    assert project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"),
-                   [(99, Decimal("40.00"))]) == project(
-        Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0")
-    )
+    assert project(
+        Decimal("1000.00"),
+        Decimal("100.00"),
+        Decimal("0"),
+        3,
+        Decimal("0"),
+        [(99, Decimal("40.00"))],
+    ) == project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"))

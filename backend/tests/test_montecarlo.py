@@ -158,10 +158,19 @@ def test_simulate_shares_the_deterministic_drop_schedule():
     # diverge by the drop amount, orders of magnitude above this tolerance. The tolerance
     # itself is float-vs-Decimal dust only (~1e-9 on these magnitudes).
     schedule = [(24, Decimal("2500.00"))]
-    line = project(Decimal("100000"), Decimal("4000"), Decimal("0.05"), 60, Decimal("0.03"),
-                   schedule)
-    fan = simulate(Decimal("100000"), Decimal("4000"), Decimal("0.05"), Decimal("0"),
-                   Decimal("0.03"), 60, None, schedule)
+    line = project(
+        Decimal("100000"), Decimal("4000"), Decimal("0.05"), 60, Decimal("0.03"), schedule
+    )
+    fan = simulate(
+        Decimal("100000"),
+        Decimal("4000"),
+        Decimal("0.05"),
+        Decimal("0"),
+        Decimal("0.03"),
+        60,
+        None,
+        schedule,
+    )
     for index, point in enumerate(line):
         assert abs(fan.bands["p50"][index] - point) <= Decimal("0.05"), index
 
@@ -179,11 +188,18 @@ def test_simulate_drops_lower_every_band_from_the_retirement_month():
 
 def test_simulate_floors_the_stream_at_zero():
     # A drop bigger than the stream retires it entirely; the escalator cannot revive a 0.
-    args = (Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"),
-            Decimal("0.05"))
+    args = (Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0.05"))
     retired = simulate(*args, 36, None, [(6, Decimal("5000.00"))])
-    coasting = simulate(Decimal("100000"), Decimal("0"), Decimal("0.05"), Decimal("0.15"),
-                        Decimal("0.05"), 36, None, [(6, Decimal("5000.00"))])
+    coasting = simulate(
+        Decimal("100000"),
+        Decimal("0"),
+        Decimal("0.05"),
+        Decimal("0.15"),
+        Decimal("0.05"),
+        36,
+        None,
+        [(6, Decimal("5000.00"))],
+    )
     # From month 6 on, a retired stream and a stream that never existed are the same walk
     # — the balances differ only by the five contributions made before the drop (the drop
     # lands BEFORE month 6's own contribution).
