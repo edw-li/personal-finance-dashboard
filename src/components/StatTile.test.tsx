@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { act, cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import StatTile from './StatTile'
 
 afterEach(cleanup)
@@ -116,5 +116,60 @@ describe('StatTile hint', () => {
     render(<StatTile label="Net worth" value="$1.00" delta="$10.00 MoM" tone="positive" />)
     expect(document.querySelector('.info-hint')).toBeNull()
     expect(screen.queryByRole('button')).toBeNull()
+  })
+})
+
+// The count-up is a FIRST-PAINT flourish (2026-08-27 spec §8): the tile settles into its
+// number instead of snapping to it. Three legs have to hold or it does not run at all —
+// the caller passing the prop (pages gate it on a fresh, non-cached paint), motion being
+// allowed, and rAF existing — and whatever it does on the way, the end state has to be the
+// caller's own `value` string, not a formatter's re-rendering of it.
+describe('countUp', () => {
+  const fmt = (n: number) => `$${n.toFixed(2)}`
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('without countUp renders the value string as ever', () => {
+    render(<StatTile label="Net worth" value="$1,234.00" />)
+    expect(screen.getByText('$1,234.00')).toBeTruthy()
+  })
+
+  it('under reduced motion renders the final value immediately', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(
+      <StatTile label="Net worth" value="$100.00" countUp={{ value: 100, format: fmt }} />,
+    )
+    expect(screen.getByText('$100.00')).toBeTruthy()
+  })
+
+  it('animates 0 → value and ends on the exact value string', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frames.push(cb)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+
+    render(
+      <StatTile label="Net worth" value="$100.00" countUp={{ value: 100, format: fmt }} />,
+    )
+    const valueEl = document.querySelector('.stat-value') as HTMLElement
+    // First paint starts at the formatted zero — never a flash of the final number.
+    expect(valueEl.textContent).toBe('$0.00')
+
+    // Mid-flight: an eased intermediate strictly between 0 and the target.
+    act(() => frames[0](175))
+    const mid = Number(valueEl.textContent!.replace('$', ''))
+    expect(mid).toBeGreaterThan(0)
+    expect(mid).toBeLessThan(100)
+
+    // Past the duration: the override clears and the CALLER's exact string renders.
+    act(() => frames[frames.length - 1](400))
+    expect(valueEl.textContent).toBe('$100.00')
   })
 })
