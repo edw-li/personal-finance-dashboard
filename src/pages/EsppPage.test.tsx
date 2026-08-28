@@ -10,6 +10,7 @@ import type {
   EsppOfferingOut,
   EsppPeriodOut,
 } from '../types/api'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import EsppPage from './EsppPage'
 
 // Every request is stubbed; there is no chart on this page (the 25k gauge is a div), so
@@ -281,6 +282,7 @@ const confirmSpy = vi.spyOn(window, 'confirm')
 const renderPage = () => render(<EsppPage />, { wrapper: MemoryRouter })
 
 beforeEach(() => {
+  clearSnapshots()
   vi.mocked(fetchLots).mockResolvedValue(lotsResponse())
   vi.mocked(fetchOfferings).mockResolvedValue([septOffering])
   vi.mocked(fetchModeler).mockResolvedValue(modelerResponse())
@@ -1197,5 +1199,58 @@ describe('EsppPage — modeler', () => {
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledTimes(2))
 
     expect(field('Notes').value).toBe('half-typed lot')
+  })
+})
+
+describe('EsppPage — snapshot cache (2026-08-27 spec §1)', () => {
+  it('paints the lots table instantly from a seeded snapshot and still revalidates', () => {
+    setSnapshot('espp:lots', lotsResponse())
+    // Never-resolving fetch: whatever is on screen came from the seed alone.
+    vi.mocked(fetchLots).mockReturnValue(new Promise(() => {}))
+    renderPage()
+    expect(screen.getByText('NVDA · $171.31 · as of Aug 15, 2026')).toBeTruthy()
+    expect(screen.getByText('$10,720.49')).toBeTruthy()
+    expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(1)
+  })
+
+  it('seeds offerings and the DEFAULT modeler run from their own keys', () => {
+    setSnapshot('espp:offerings', [septOffering])
+    setSnapshot('espp:modeler:default', modelerResponse())
+    vi.mocked(fetchOfferings).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchModeler).mockReturnValue(new Promise(() => {}))
+    renderPage()
+    // The offering row and the modeler's chain are both up before either request answers.
+    expect(screen.getByText('Sep 1, 2023')).toBeTruthy()
+    expect(screen.getByText('$18,917.13 used')).toBeTruthy()
+    // The mount run asks for the default (no params) and caches under the default key.
+    expect(vi.mocked(fetchModeler)).toHaveBeenCalledWith({})
+  })
+
+  it('arms the employer bars on a resolution even when the payload is unchanged', async () => {
+    setSnapshot('espp:lots', lotsResponse())
+    renderPage()
+    // The bars trigger sits BEFORE the equality skip, so the ticker's history is still
+    // fetched on a byte-identical revalidation.
+    await waitFor(() => expect(fetchPriceHistory).toHaveBeenCalledWith('NVDA', 3650))
+  })
+
+  it('a changed revalidation payload updates the lots table', async () => {
+    setSnapshot('espp:lots', lotsResponse())
+    vi.mocked(fetchLots).mockResolvedValue(lotsResponse({ current_price: '200.0000' }))
+    renderPage()
+    expect(screen.getByText('NVDA · $171.31 · as of Aug 15, 2026')).toBeTruthy()
+    expect(await screen.findByText('NVDA · $200.00 · as of Aug 15, 2026')).toBeTruthy()
+  })
+
+  it('never caches a parameterized modeler run under the default key', async () => {
+    renderPage()
+    await screen.findByText('$18,917.13 used')
+    const cachedDefault = getSnapshot<EsppModelerOut>('espp:modeler:default')
+    expect(cachedDefault).toEqual(modelerResponse())
+    // A year chip is a parameterized run: it lands on screen but never in the cache.
+    vi.mocked(fetchModeler).mockResolvedValue(totalsUsing('22222.22'))
+    fireEvent.click(screen.getByRole('button', { name: '2025' }))
+    expect(await screen.findByText('$22,222.22 used')).toBeTruthy()
+    expect(getSnapshot<EsppModelerOut>('espp:modeler:default')).toEqual(cachedDefault)
   })
 })

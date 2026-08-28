@@ -6,6 +6,7 @@ import {
   fetchCalendar,
   updateCustomEvent,
 } from '../api/calendar'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import {
   EVENT_COLORS,
   EVENT_TYPE_LABELS,
@@ -32,12 +33,20 @@ function windowFor(monthIso: string): { start: string; end: string } {
 
 // Which surface the open event's details render on — the grid anchors a popover, the
 // list (also the mobile rendering) expands inline (spec §9.2).
+// One snapshot per shown month — the fetched window is derived from it, so the month IS
+// the parameter.
+function calendarKey(monthIso: string): string {
+  return `calendar:${monthIso}`
+}
+
 type OpenState = { key: string; surface: 'grid' | 'list' } | null
 type FormState = { mode: 'add' } | { mode: 'edit'; id: number } | null
 
 export default function CalendarPage() {
   const [month, setMonth] = useState<string>(currentMonthIso())
-  const [events, setEvents] = useState<CalendarEvent[] | null>(null)
+  const [events, setEvents] = useState<CalendarEvent[] | null>(
+    () => getSnapshot<CalendarEvent[]>(calendarKey(currentMonthIso())) ?? null,
+  )
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const seqRef = useRef(0)
@@ -67,8 +76,14 @@ export default function CalendarPage() {
     fetchCalendar(start, end)
       .then((data) => {
         if (seq !== seqRef.current) return
-        setEvents(data.events)
+        const key = calendarKey(monthIso)
+        const previous = getSnapshot<CalendarEvent[]>(key)
+        setSnapshot(key, data.events)
         setError(null)
+        // Identical payload: nothing re-renders (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data.events))
+          return
+        setEvents(data.events)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
@@ -88,6 +103,10 @@ export default function CalendarPage() {
   const showMonth = (next: string) => {
     setMonth(next)
     setOpen(null)
+    // Already-seen month: paint it instantly and revalidate underneath (handler-side
+    // seed — setState in a handler, never in an effect).
+    const peeked = getSnapshot<CalendarEvent[]>(calendarKey(next))
+    if (peeked !== undefined) setEvents(peeked)
     setBusy(true)
     load(next)
   }

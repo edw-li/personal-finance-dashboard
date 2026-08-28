@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type { CalendarEvent, CalendarResponse } from '../types/api'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import CalendarPage from './CalendarPage'
 import ToastProvider from '../components/ToastProvider'
 
@@ -84,6 +85,7 @@ function grid(): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  clearSnapshots()
 })
 
 // Manual cleanup, OverviewPage.test's hygiene: vitest runs without injected globals, so
@@ -356,5 +358,72 @@ describe('CalendarPage', () => {
       detail: 'policy 8841',
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(3))
+  })
+})
+
+describe('CalendarPage — snapshot cache (2026-08-27 spec §1)', () => {
+  /** Renders without arming a resolution: whatever is on screen came from the seed. */
+  function renderPending() {
+    vi.mocked(fetchCalendar).mockReturnValue(new Promise(() => {}))
+    return render(
+      <MemoryRouter>
+        <ToastProvider>
+          <CalendarPage />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+  }
+
+  it('paints the grid instantly from a seeded month and still revalidates', () => {
+    setSnapshot(`calendar:${MONTH}`, fixtureEvents())
+    renderPending()
+    const texts = Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent)
+    expect(texts).toContain('RSU vest — 2025 offer')
+    expect(screen.queryByText('Loading…')).toBeNull()
+    const [start, end] = windowFor(MONTH)
+    expect(fetchCalendar).toHaveBeenCalledWith(start, end)
+  })
+
+  it('pages to an already-seen month and paints it before its fetch resolves', async () => {
+    const next = addMonths(MONTH, 1)
+    setSnapshot(`calendar:${MONTH}`, fixtureEvents())
+    setSnapshot(`calendar:${next}`, [
+      {
+        date: `${next.slice(0, 8)}09`,
+        type: 'custom' as const,
+        label: 'Next-month seed',
+        detail: null,
+        href: null,
+        id: 77,
+      },
+    ])
+    renderPending()
+    fireEvent.click(screen.getByLabelText('Next month'))
+    // No await: the second month's chips are up from ITS key, with its fetch still open.
+    const texts = Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent)
+    expect(texts).toContain('Next-month seed')
+    expect(texts).not.toContain('RSU vest — 2025 offer')
+    await waitFor(() => expect(fetchCalendar).toHaveBeenCalledTimes(2))
+  })
+
+  it('a changed revalidation payload updates the grid', async () => {
+    setSnapshot(`calendar:${MONTH}`, fixtureEvents())
+    renderPage([
+      {
+        date: DAY_15,
+        type: 'custom' as const,
+        label: 'Fresh from the server',
+        detail: null,
+        href: null,
+        id: 99,
+      },
+    ])
+    expect(
+      Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent),
+    ).toContain('RSU vest — 2025 offer')
+    await screen.findAllByText('Fresh from the server')
+    expect(
+      Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent),
+    ).not.toContain('RSU vest — 2025 offer')
   })
 })
