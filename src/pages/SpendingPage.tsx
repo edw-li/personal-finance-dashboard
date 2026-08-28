@@ -22,7 +22,7 @@ import {
   spendingSankeyOption,
 } from '../components/spending/spendingSankeyOptions'
 import type { EChartsOption } from '../charts/echarts'
-import { rangeZoom } from '../charts/timeZoom'
+import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import {
   INK,
@@ -199,6 +199,13 @@ export default function SpendingPage() {
   // Heatmap row order (biggest all-time at top); row index -> category id, needed by
   // the heatmap option and by the hover mapping onto bar segments.
   const heatmapOrder = useMemo(() => categoryTotals.map((t) => t.id), [categoryTotals])
+
+  // Resolved target for EChart's animated zoom path — memoized so the wrapper's
+  // fingerprint compare runs only when the window can actually have moved.
+  const zoomWindow = useMemo(
+    () => (matrix === null ? undefined : resolvedWindow(matrix.months, range)),
+    [matrix, range],
+  )
 
   const barsOption = useMemo<EChartsOption | null>(() => {
     if (!matrix || matrix.months.length === 0) return null
@@ -687,6 +694,7 @@ export default function SpendingPage() {
                 instanceRef={barsChartRef}
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                zoomWindow={zoomWindow}
                 exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
                 animateEntrance={!fromCache}
               />
@@ -815,6 +823,7 @@ export default function SpendingPage() {
                 option={savingsOption}
                 height={260}
                 onDataZoom={onZoomWindow}
+                zoomWindow={zoomWindow}
                 animateEntrance={!fromCache}
               />
               <ChartZoomHint />
@@ -857,6 +866,7 @@ export default function SpendingPage() {
                 height={220}
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                zoomWindow={zoomWindow}
                 animateEntrance={!fromCache}
               />
               <ChartZoomHint />

@@ -33,7 +33,7 @@ import RangeChips from '../components/RangeChips'
 import PageSkeleton from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
 import { useArrivalParam } from '../components/useArrivalParam'
-import { rangeZoom } from '../charts/timeZoom'
+import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type {
   AllocationResponse,
@@ -313,6 +313,17 @@ export default function PortfolioPage() {
         }
   }, [history, holdings, securities, transactions, dividends, range, legendSelected])
 
+  // Resolved target for EChart's animated zoom path — memoized so the wrapper's
+  // fingerprint compare runs only when the window can actually have moved. Reads the
+  // BUILT option's axis, not history.dates: the live ping appends one category past
+  // the dates (portfolioHistoryOption's extendAxis), and a preset window must resolve
+  // out to it — a dates-derived end index would clip "now" off the chart.
+  const zoomWindow = useMemo(() => {
+    if (history === null || performanceOption === null) return undefined
+    const axis = (performanceOption.xAxis as { data?: unknown[] }).data ?? []
+    return resolvedWindow(history.dates, range, axis.length)
+  }, [history, performanceOption, range])
+
   // The open row's holding, resolved fresh from every reload so the panel always shows
   // the CURRENT figures; a sold-off ticker resolves to null and the panel folds away.
   const detailHolding = useMemo(
@@ -455,6 +466,7 @@ export default function PortfolioPage() {
                   height={300}
                   onLegendChange={onLegendChange}
                   onDataZoom={onZoomWindow}
+                  zoomWindow={zoomWindow}
                   exportConfig={{
                     name: 'portfolio-performance',
                     csv: () => portfolioHistoryCsv(history),

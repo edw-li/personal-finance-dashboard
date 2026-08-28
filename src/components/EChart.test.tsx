@@ -8,6 +8,7 @@ interface FakeChartLike {
   setOption: ReturnType<typeof vi.fn>
   getDataURL: ReturnType<typeof vi.fn>
   getOption: ReturnType<typeof vi.fn>
+  dispatchAction: ReturnType<typeof vi.fn>
 }
 
 // House law keeps real echarts out of jsdom (no canvas). The engine is stubbed at the
@@ -178,13 +179,12 @@ describe('EChart event mirrors', () => {
 // jsdom's matchMedia reports matches: false, so the REDUCED_MOTION path is idle here and
 // the only thing that can force `animation: false` is the new prop.
 describe('EChart animateEntrance (2026-08-27 spec §1)', () => {
-  it('animateEntrance={false} forces animation off in the option', () => {
+  it('animateEntrance={false} suppresses the ENTRANCE only — update animation survives', () => {
     render(<EChart option={{ series: [] } as EChartsOption} animateEntrance={false} />)
-    const chart = lastChart()
-    expect(chart.setOption).toHaveBeenCalledWith(
-      expect.objectContaining({ animation: false }),
-      { notMerge: true },
-    )
+    const chart = instances[0]
+    const [option] = chart.setOption.mock.calls[0] as [Record<string, unknown>]
+    expect(option.animationDuration).toBe(0)
+    expect('animation' in option).toBe(false)
   })
 
   it('animateEntrance defaults on (no forced animation flag)', () => {
@@ -192,5 +192,96 @@ describe('EChart animateEntrance (2026-08-27 spec §1)', () => {
     const chart = lastChart()
     const [option] = chart.setOption.mock.calls[0] as [Record<string, unknown>]
     expect('animation' in option).toBe(false)
+  })
+})
+
+describe('zoomWindow fast path', () => {
+  const series = [{ type: 'line', data: [1, 2, 3] }]
+
+  it('a zoom-only option change dispatches an animated dataZoom instead of rebuilding', () => {
+    const { rerender } = render(
+      <EChart
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption}
+        zoomWindow={{ startValue: 3, endValue: 9 }}
+      />,
+    )
+    const chart = instances[0]
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    rerender(
+      <EChart
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+        zoomWindow={{ startValue: 5, endValue: 9 }}
+      />,
+    )
+    expect(chart.setOption).toHaveBeenCalledTimes(1) // never rebuilt
+    expect(chart.dispatchAction).toHaveBeenCalledWith({
+      type: 'dataZoom',
+      startValue: 5,
+      endValue: 9,
+    })
+  })
+
+  it('an echoed window equal to the chart state settles as a no-op (ctrl+wheel mirror)', () => {
+    const { rerender } = render(
+      <EChart
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption}
+        zoomWindow={{ startValue: 3, endValue: 9 }}
+      />,
+    )
+    const chart = instances[0]
+    rerender(
+      <EChart
+        option={
+          { series, dataZoom: [{ type: 'inside', startValue: 3, endValue: 9 }] } as EChartsOption
+        }
+        zoomWindow={{ startValue: 3, endValue: 9 }}
+      />,
+    )
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    expect(chart.dispatchAction).not.toHaveBeenCalled()
+  })
+
+  it('a data change takes the full notMerge path even with zoomWindow set', () => {
+    const { rerender } = render(
+      <EChart
+        option={
+          {
+            series: [{ type: 'line', data: [1] }],
+            dataZoom: [{ type: 'inside', startValue: 0 }],
+          } as EChartsOption
+        }
+        zoomWindow={{ startValue: 0, endValue: 9 }}
+      />,
+    )
+    const chart = instances[0]
+    rerender(
+      <EChart
+        option={
+          {
+            series: [{ type: 'line', data: [1, 2] }],
+            dataZoom: [{ type: 'inside', startValue: 0 }],
+          } as EChartsOption
+        }
+        zoomWindow={{ startValue: 0, endValue: 9 }}
+      />,
+    )
+    expect(chart.setOption).toHaveBeenCalledTimes(2)
+    expect(chart.dispatchAction).not.toHaveBeenCalled()
+  })
+
+  it('without zoomWindow, a zoom-only change still rebuilds (opt-in contract)', () => {
+    const { rerender } = render(
+      <EChart
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption}
+      />,
+    )
+    const chart = instances[0]
+    rerender(
+      <EChart
+        option={{ series, dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
+      />,
+    )
+    expect(chart.setOption).toHaveBeenCalledTimes(2)
+    expect(chart.dispatchAction).not.toHaveBeenCalled()
   })
 })

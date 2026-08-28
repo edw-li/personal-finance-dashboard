@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { echarts } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
 import { quiesceRipples } from '../charts/motion'
+import type { ZoomWindow } from '../charts/timeZoom'
 import ChartExportMenu from './ChartExportMenu'
 import type { ExportConfig } from './ChartExportMenu'
 
@@ -32,6 +33,7 @@ export default function EChart({
   onDataZoom,
   exportConfig,
   animateEntrance = true,
+  zoomWindow,
 }: {
   option: EChartsOption
   height?: number
@@ -58,9 +60,24 @@ export default function EChart({
    *  entrance dance — 2026-08-27 spec §1). Default true. Merged after the page's
    *  option, exactly like the reduced-motion force. */
   animateEntrance?: boolean
+  /** The resolved target window for the option's dataZoom (timeZoom's resolvedWindow).
+   *  When set, an option change that differs ONLY in its dataZoom is applied as an
+   *  animated dataZoom ACTION on the live instance instead of a notMerge rebuild —
+   *  the range chips morph instead of snapping (spec Addendum §A2). Pass a
+   *  useMemo'd value: the fingerprint compare below runs per effect firing.
+   *  CONTRACT: the fingerprint is JSON — function-valued props (tooltip/axisLabel
+   *  formatters) are invisible to it. A formatter closure may only capture state that
+   *  ALSO surfaces in serializable option parts (series names/ids/data), or a
+   *  formatter-only change would ride the fast path and never reach the chart. All
+   *  six wired options hold this today (verified 2026-08-27). */
+  zoomWindow?: ZoomWindow
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<EChartsInstance | null>(null)
+  // Fingerprint of the last APPLIED option minus its dataZoom (the zoom fast path's
+  // "nothing else changed" proof). Reset whenever the chart itself is rebuilt — a fresh
+  // instance has no applied option to be equal to.
+  const lastStrippedRef = useRef<string | null>(null)
   const onClickRef = useRef(onClick)
   const onHoverRef = useRef(onHover)
   const onHoverEndRef = useRef(onHoverEnd)
@@ -106,6 +123,7 @@ export default function EChart({
       }
     })
     chartRef.current = chart
+    lastStrippedRef.current = null
     if (instanceRef) instanceRef.current = chart
     const observer = new ResizeObserver(() => chart.resize())
     observer.observe(el)
@@ -113,25 +131,64 @@ export default function EChart({
       observer.disconnect()
       chart.dispose()
       chartRef.current = null
+      lastStrippedRef.current = null
       if (instanceRef) instanceRef.current = null
     }
   }, [instanceRef])
 
   useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const stripped = JSON.stringify({ ...option, dataZoom: undefined })
+    // Zoom-only fast path (spec Addendum §A2): same option apart from the window → an
+    // animated dataZoom ACTION morphs the series on the live instance; the notMerge
+    // rebuild below is what used to make the chips snap. Skipped under reduced motion
+    // (the rebuild with animation:false snaps, byte-identical to before) and settled
+    // as a no-op when the chart already sits at the target (the ctrl+wheel mirror's
+    // echo: datazoom event → page state → option rebuild → same window).
+    if (
+      !REDUCED_MOTION &&
+      zoomWindow !== undefined &&
+      lastStrippedRef.current !== null &&
+      lastStrippedRef.current === stripped
+    ) {
+      const current = (
+        chart.getOption() as { dataZoom?: { startValue?: unknown; endValue?: unknown }[] }
+      ).dataZoom?.[0]
+      if (
+        current === undefined ||
+        current.startValue !== zoomWindow.startValue ||
+        current.endValue !== zoomWindow.endValue
+      ) {
+        chart.dispatchAction({
+          type: 'dataZoom',
+          startValue: zoomWindow.startValue,
+          endValue: zoomWindow.endValue,
+        })
+      }
+      return
+    }
     // notMerge: pages always send complete options; merging stale series causes ghosts.
     // Reduced-motion is forced AFTER the spread — a page option must never re-enable
     // animation against the user's OS preference (Global rules a11y promise). The flag
     // alone is not enough: ripple animators ignore it, so quiesceRipples covers the gap.
-    // animateEntrance rides the same override slot: a cached paint is already-seen data.
+    // animateEntrance suppresses the ENTRANCE only (animationDuration: 0) — update
+    // animation must survive a cached paint, or the zoom morphs above and Projection's
+    // trend-span toggles would snap until the first changed revalidation (Addendum §A2).
     const base = REDUCED_MOTION ? quiesceRipples(option) : option
-    chartRef.current?.setOption(
+    chart.setOption(
       {
         ...base,
-        ...(REDUCED_MOTION || !animateEntrance ? { animation: false } : {}),
+        ...(REDUCED_MOTION
+          ? { animation: false }
+          : !animateEntrance
+            ? { animationDuration: 0 }
+            : {}),
       },
       { notMerge: true },
     )
-  }, [option, animateEntrance])
+    lastStrippedRef.current = stripped
+  }, [option, animateEntrance, zoomWindow])
 
   return (
     <>
