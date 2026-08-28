@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { fetchHousehold } from '../api/household'
@@ -99,7 +99,12 @@ function describeRefresh(result: RefreshResult): RefreshNote {
   }
 }
 
-const SNAPSHOT_KEY = 'portfolio'
+// Keyed by the fetch parameters, exactly like NetWorthPage's netWorthKey: an owner switch
+// is a DIFFERENT snapshot. 'all' spells the household view so the key can never collide
+// with a person id.
+function portfolioKey(owner: OwnerScope): string {
+  return `portfolio:${owner ?? 'all'}`
+}
 
 interface PortfolioSnapshot {
   holdings: HoldingsResponse
@@ -116,7 +121,9 @@ interface PortfolioSnapshot {
 }
 
 export default function PortfolioPage() {
-  const cached = getSnapshot<PortfolioSnapshot>(SNAPSHOT_KEY)
+  // The initial fetch scope is the whole household, so the mount seed reads exactly the
+  // key that mount's load() will write.
+  const cached = getSnapshot<PortfolioSnapshot>(portfolioKey(null))
   const [holdings, setHoldings] = useState<HoldingsResponse | null>(cached?.holdings ?? null)
   const [securities, setSecurities] = useState<SecurityOut[]>(cached?.securities ?? [])
   const [transactions, setTransactions] = useState<TransactionOut[]>(cached?.transactions ?? [])
@@ -184,24 +191,33 @@ export default function PortfolioPage() {
   // Four things trigger a load (mount, refresh, three panels' onChanged) and the eleven
   // requests are not ordered — a slow earlier load must never overwrite a later one.
   const seqRef = useRef(0)
+  // What the page is actually SHOWING. The revalidation skip in load() is judged against
+  // this, never against the snapshot cache: render and cache diverge across an owner
+  // switch (the previous scope's panels are still up while the next scope's key is warm),
+  // and skipping on the cache stranded the page on the previous scope forever (the
+  // 2026-08-28 bug NetWorthPage fixed @9e20d15 — no cache-compared skips, house rule).
+  const shown = useRef<PortfolioSnapshot | null>(cached ?? null)
 
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
   // law (see NetWorthPage). One load() refetches EVERYTHING: eleven cheap local queries,
   // and every mutation path (panels' onChanged, refresh) converges through it. Returns
   // the chain so callers can keep their own busy flag up until the data is on screen.
-  const load = () => {
+  // useCallback over [owner] because the mount effect keys on it: flipping the scope IS
+  // what re-runs the effect, and exhaustive-deps requires the dependency now that load
+  // reads a reactive value.
+  const load = useCallback(() => {
     const seq = ++seqRef.current
     return Promise.all([
-      fetchHoldings(),
+      fetchHoldings(owner),
       fetchSecurities(),
-      fetchTransactions(),
-      fetchDividends(),
-      fetchAllocation('industry'),
-      fetchAllocation('type'),
-      fetchAllocation('account'),
+      fetchTransactions(owner),
+      fetchDividends(owner),
+      fetchAllocation('industry', owner),
+      fetchAllocation('type', owner),
+      fetchAllocation('account', owner),
       fetchSparklines(),
       fetchHistory(),
-      fetchRealized(),
+      fetchRealized(owner),
       fetchRefreshStatus(),
     ])
       .then(([h, secs, txns, divs, ind, typ, acct, spark, hist, real, status]) => {
@@ -219,12 +235,13 @@ export default function PortfolioPage() {
           realized: real,
           refreshStatus: status,
         }
-        const previous = getSnapshot<PortfolioSnapshot>(SNAPSHOT_KEY)
-        setSnapshot(SNAPSHOT_KEY, snapshot)
+        setSnapshot(portfolioKey(owner), snapshot)
         setError(null)
-        // Identical payload: nothing re-renders, the charts stay still (spec §1).
-        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+        // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
+        // against the RENDERED snapshot, never the cache (see `shown`).
+        if (shown.current !== null && JSON.stringify(shown.current) === JSON.stringify(snapshot))
           return
+        shown.current = snapshot
         setFromCache(false)
         setHoldings(h)
         setSecurities(secs)
@@ -245,7 +262,7 @@ export default function PortfolioPage() {
       .finally(() => {
         if (seq === seqRef.current) setLoading(false)
       })
-  }
+  }, [owner])
 
   // Panel mutations refetch WITHOUT unmounting the panels (a spinner swap would throw
   // away the form the user is typing in) — the body dims instead.
@@ -263,18 +280,35 @@ export default function PortfolioPage() {
     // The open drill-in holds a TICKER the next scope may not own — close it rather than
     // leave a detail panel resolving to null.
     setDetailTicker(null)
+    // Already-seen scope: paint it instantly and revalidate underneath (NetWorthPage's
+    // selectOwner). Seeding `shown` here is what keeps load()'s equality skip truthful —
+    // the guard is about what is RENDERED, and the destination payload is about to be it.
+    const peeked = getSnapshot<PortfolioSnapshot>(portfolioKey(next))
+    if (peeked !== undefined) {
+      shown.current = peeked
+      setFromCache(true)
+      setHoldings(peeked.holdings)
+      setSecurities(peeked.securities)
+      setTransactions(peeked.transactions)
+      setDividends(peeked.dividends)
+      setIndustry(peeked.industry)
+      setByType(peeked.byType)
+      setByAccount(peeked.byAccount)
+      setSparklines(peeked.sparklines)
+      setHistory(peeked.history)
+      setRealized(peeked.realized)
+      setRefreshStatus(peeked.refreshStatus)
+    }
     setOwner(next)
   }
 
-  // Mount-only fetch. react-hooks 7 reports nothing here (load is re-created per render
-  // but reads no reactive value beyond the setters), so an exhaustive-deps suppression
-  // would be an unused directive — which ESLint 9 flat config warns about by default.
+  // Mount AND every owner switch: `load` changes identity with the scope, which is what
+  // re-runs this effect. A cache hit revalidates under the reload dim (raised by
+  // `reloading`'s initializer on mount, by selectOwner on a switch); the trailing release
+  // is a no-op on a cold mount, where `reloading` never went up.
   useEffect(() => {
-    // A cache hit revalidates under the reload dim (raised by `reloading`'s initializer,
-    // above); a cold mount takes the loading path. The trailing release is a no-op on a
-    // cold mount, where `reloading` never went up.
     load().finally(() => setReloading(false))
-  }, [])
+  }, [load])
 
   // Once per visit, and deliberately not part of `load`: setState lives in the promise
   // continuations, never in the effect body (react-hooks/set-state-in-effect).

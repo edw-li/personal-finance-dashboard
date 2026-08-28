@@ -1,7 +1,7 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { clearSnapshots } from '../api/snapshotCache'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type {
   AllocationDimension,
   AllocationResponse,
@@ -174,12 +174,36 @@ function holdingsOut(): HoldingsResponse {
   }
 }
 
+// A scope whose owner holds nothing: scope-consistent ZERO totals, no rows. What the page
+// must do with it is render the panels' own empty notes (spec §5).
+const EMPTY_HOLDINGS: HoldingsResponse = {
+  as_of: null,
+  latest_quote_at: null,
+  totals: {
+    market_value: '0.00',
+    cost_basis: '0.00',
+    unrealized_gl: '0.00',
+    unrealized_gl_pct: null,
+    day_change_amount: null,
+    day_change_pct: null,
+    realized_gl: '0.00',
+    dividends_collected: '0.00',
+    annual_income: '0.00',
+    unpriced_count: 0,
+  },
+  holdings: [],
+}
+
 function allocationOut(by: AllocationDimension): AllocationResponse {
   return {
     by,
     total_market_value: '4500.00',
     slices: [{ key: 'Index', market_value: '4500.00', weight_pct: '1.0', holdings: 1 }],
   }
+}
+
+function emptyAllocation(by: AllocationDimension): AllocationResponse {
+  return { by, total_market_value: '0.00', slices: [] }
 }
 
 // Two dates minimum — portfolioHistoryOption returns null below that.
@@ -268,5 +292,176 @@ it('keeps the page alive when the household endpoint fails', async () => {
   await waitFor(() => expect(fetchHoldings).toHaveBeenCalled())
   expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
   expect(screen.queryByRole('alert')).toBeNull()
+  await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
+})
+
+it('scopes the five owner-filterable fetches to the picked chip, and back on All', async () => {
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  const historyCallsBefore = vi.mocked(fetchHistory).mock.calls.length
+
+  fireEvent.click(chip('Sam'))
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(SAM.id))
+  expect(fetchTransactions).toHaveBeenCalledWith(SAM.id)
+  expect(fetchDividends).toHaveBeenCalledWith(SAM.id)
+  expect(fetchRealized).toHaveBeenCalledWith(SAM.id)
+  expect(fetchAllocation).toHaveBeenCalledWith('industry', SAM.id)
+  expect(fetchAllocation).toHaveBeenCalledWith('type', SAM.id)
+  expect(fetchAllocation).toHaveBeenCalledWith('account', SAM.id)
+  expect(chip('Sam').getAttribute('aria-pressed')).toBe('true')
+  expect(chip('All').getAttribute('aria-pressed')).toBe('false')
+  // The household-wide four ride the SAME load() but never gain a scope: the weekly
+  // series is one row per Monday by design (spec §2 decision log).
+  expect(vi.mocked(fetchHistory).mock.calls.length).toBeGreaterThan(historyCallsBefore)
+  expect(fetchHistory).toHaveBeenLastCalledWith()
+  expect(fetchSecurities).toHaveBeenLastCalledWith()
+  expect(fetchSparklines).toHaveBeenLastCalledWith()
+  expect(fetchRefreshStatus).toHaveBeenLastCalledWith()
+
+  fireEvent.click(chip('Joint'))
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith('joint'))
+  expect(fetchAllocation).toHaveBeenCalledWith('type', 'joint')
+
+  fireEvent.click(chip('All'))
+  // null, not omitted: the client turns null into no param at all (portfolio.test.ts).
+  await waitFor(() => expect(fetchHoldings).toHaveBeenLastCalledWith(null))
+  expect(fetchRealized).toHaveBeenLastCalledWith(null)
+  expect(fetchAllocation).toHaveBeenLastCalledWith('account', null)
+})
+
+it('re-clicking the active chip spends no request', async () => {
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalledTimes(1))
+  fireEvent.click(chip('All'))
+  expect(vi.mocked(fetchHoldings).mock.calls.length).toBe(1)
+})
+
+it('paints instantly from a seeded snapshot under the household key and revalidates', () => {
+  // 'portfolio:all' — the key mount READS and mount's load() WRITES. A static 'portfolio'
+  // key would make every scope share one slot.
+  setSnapshot('portfolio:all', {
+    holdings: holdingsOut(),
+    securities: SECURITIES,
+    transactions: TRANSACTIONS,
+    dividends: DIVIDENDS,
+    industry: allocationOut('industry'),
+    byType: allocationOut('type'),
+    byAccount: allocationOut('account'),
+    sparklines: {},
+    history: HISTORY,
+    realized: REALIZED,
+    refreshStatus: STATUS,
+  })
+  // Never-resolving holdings: whatever is on screen came from the seed alone.
+  vi.mocked(fetchHoldings).mockReturnValue(new Promise(() => {}))
+  const { container } = renderPage()
+  expect(screen.getByText('Portfolio value')).toBeTruthy()
+  expect(container.querySelector('.page-skeleton')).toBeNull()
+  // Revalidating under the house dim, and the request really went out.
+  expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
+  // A cached paint renders the performance chart still. [0] and not .every(): the
+  // allocation panel's two charts take no animateEntrance prop at all (they redraw on
+  // their own dimension toggle), so only this one carries the flag.
+  expect(screen.getAllByTestId('echart')[0].getAttribute('data-animate')).toBe('false')
+})
+
+it('leaves the charts still when the revalidation payload is identical', async () => {
+  setSnapshot('portfolio:all', {
+    holdings: holdingsOut(),
+    securities: SECURITIES,
+    transactions: TRANSACTIONS,
+    dividends: DIVIDENDS,
+    industry: allocationOut('industry'),
+    byType: allocationOut('type'),
+    byAccount: allocationOut('account'),
+    sparklines: {},
+    history: HISTORY,
+    realized: REALIZED,
+    refreshStatus: STATUS,
+  })
+  const { container } = renderPage()
+  // The dim lifting is the revalidation landing — .finally runs on every resolution.
+  await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+  expect(screen.getAllByTestId('echart')[0].getAttribute('data-animate')).toBe('false')
+})
+
+it('a single-person household issues the pre-ownership requests, scope-free', async () => {
+  vi.mocked(fetchHousehold).mockResolvedValue(household({ people: [ME] }))
+  renderPage()
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalled())
+  // Byte-identity pin (spec §7): null is what the client turns into NO param at all
+  // (portfolio.test.ts), so a one-person household sends exactly the eleven pre-ownership
+  // requests — and there are no chips to send anything else.
+  expect(fetchHoldings).toHaveBeenCalledWith(null)
+  expect(fetchTransactions).toHaveBeenCalledWith(null)
+  expect(fetchDividends).toHaveBeenCalledWith(null)
+  expect(fetchRealized).toHaveBeenCalledWith(null)
+  expect(fetchAllocation).toHaveBeenCalledWith('industry', null)
+  expect(fetchAllocation).toHaveBeenCalledWith('type', null)
+  expect(fetchAllocation).toHaveBeenCalledWith('account', null)
+  expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
+})
+
+it('keys the snapshot by owner — a chip flip is a cache MISS that re-arms the charts', async () => {
+  vi.mocked(fetchHoldings).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? EMPTY_HOLDINGS : holdingsOut()),
+  )
+  setSnapshot('portfolio:all', {
+    holdings: holdingsOut(),
+    securities: SECURITIES,
+    transactions: TRANSACTIONS,
+    dividends: DIVIDENDS,
+    industry: allocationOut('industry'),
+    byType: allocationOut('type'),
+    byAccount: allocationOut('account'),
+    sparklines: {},
+    history: HISTORY,
+    realized: REALIZED,
+    refreshStatus: STATUS,
+  })
+  renderPage()
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(null))
+  fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(SAM.id))
+  // Different key, so the household payload can never satisfy the equality skip.
+  await waitFor(() =>
+    expect(screen.getAllByTestId('echart')[0].getAttribute('data-animate')).toBe('true'),
+  )
+})
+
+// ── Owner-switch stranding regression (2026-08-28 bug class, fixed on NetWorthPage
+// @9e20d15) ──────────────────────────────────────────────────────────────────────────────
+// The identical-payload revalidation skip must be judged against the RENDERED snapshot,
+// never against the snapshot cache: render and cache diverge across a scope switch (the
+// previous scope is still on screen while the next scope's key is already warm), so a
+// cache-compared skip left the empty owner view on screen forever.
+it('restores the household view after visiting an owner with no positions', async () => {
+  vi.mocked(fetchHoldings).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? EMPTY_HOLDINGS : holdingsOut()),
+  )
+  vi.mocked(fetchAllocation).mockImplementation((by, scope) =>
+    Promise.resolve(scope === SAM.id ? emptyAllocation(by) : allocationOut(by)),
+  )
+  vi.mocked(fetchTransactions).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? [] : TRANSACTIONS),
+  )
+  vi.mocked(fetchDividends).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? [] : DIVIDENDS),
+  )
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
+
+  fireEvent.click(chip('Sam'))
+  expect(await screen.findByText(NO_HOLDINGS_NOTE)).toBeTruthy()
+
+  fireEvent.click(chip('All'))
+  // Peek-seed: the warm destination key paints BEFORE its revalidation lands.
+  expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull()
+  // And the revalidation — whose payload is identical to that warm snapshot — must not
+  // undo it or skip its way back into the empty view.
+  await waitFor(() => expect(fetchHoldings).toHaveBeenLastCalledWith(null))
   await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
 })
