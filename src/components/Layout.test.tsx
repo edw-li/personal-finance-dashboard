@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Layout from './Layout'
+import { prefetchRoute, warmAllRoutes } from './routeChunks'
 
 // Layout only reads logout off the context; session plumbing is AuthContext.test's job.
 vi.mock('../contexts/AuthContext', () => ({
@@ -12,6 +13,11 @@ vi.mock('../contexts/AuthContext', () => ({
     login: vi.fn(),
     logout: vi.fn(),
   }),
+}))
+
+vi.mock('./routeChunks', () => ({
+  prefetchRoute: vi.fn(),
+  warmAllRoutes: vi.fn(),
 }))
 
 function renderShell(initialPath = '/') {
@@ -31,6 +37,10 @@ beforeEach(() => {
   // jsdom's scrollTo is a not-implemented stub that logs to the console; the reset
   // assertion wants a spy anyway.
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  // vi.mock factories are hoisted and vi.restoreAllMocks only restores vi.spyOn spies, so
+  // these vi.fn()s would otherwise accumulate call history across this file's tests.
+  vi.mocked(warmAllRoutes).mockClear()
+  vi.mocked(prefetchRoute).mockClear()
 })
 
 afterEach(() => {
@@ -104,5 +114,21 @@ describe('Layout — skip link and navigation reset', () => {
     expect(screen.getByText('spending body')).toBeTruthy()
     expect(document.activeElement).toBe(screen.getByRole('main'))
     expect(window.scrollTo).toHaveBeenCalledWith(0, 0)
+  })
+})
+
+describe('Layout — route prefetch', () => {
+  it('prefetches a destination chunk on hover and on keyboard focus', () => {
+    renderShell()
+    const link = screen.getByRole('link', { name: 'Spending' })
+    fireEvent.mouseOver(link)
+    expect(prefetchRoute).toHaveBeenCalledWith('/spending')
+    fireEvent.focus(screen.getByRole('link', { name: 'Portfolio' }))
+    expect(prefetchRoute).toHaveBeenCalledWith('/portfolio')
+  })
+
+  it('warms all chunks once after mount', () => {
+    renderShell()
+    expect(warmAllRoutes).toHaveBeenCalledTimes(1)
   })
 })
