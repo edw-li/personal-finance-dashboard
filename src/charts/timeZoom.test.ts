@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rangeStartIndex, rangeZoom, timeZoom } from './timeZoom'
+import { rangeStartIndex, rangeZoom, resolvedWindow, timeZoom } from './timeZoom'
 
 // 24 first-of-month strings, Jan 2024 … Dec 2025 — the app's month currency.
 const MONTHS = Array.from({ length: 24 }, (_, i) => {
@@ -97,5 +97,29 @@ describe('rangeZoom', () => {
     const [kept] = rangeZoom(short, { preset: 'all', window: { startValue: 5, endValue: 40 } })
     expect(kept.startValue).toBe(5)
     expect(kept.endValue).toBe(40)
+  })
+})
+
+describe('resolvedWindow', () => {
+  const dates = ['2024-01-01', '2024-06-01', '2025-01-01', '2025-06-01']
+
+  it('resolves a preset to its start index and the LAST axis index', () => {
+    expect(resolvedWindow(dates, { preset: 'all' })).toEqual({ startValue: 0, endValue: 3 })
+  })
+
+  it('a mirrored manual window keeps its own end', () => {
+    expect(
+      resolvedWindow(dates, { preset: 'all', window: { startValue: 1, endValue: 2 } }),
+    ).toEqual({ startValue: 1, endValue: 2 })
+  })
+
+  it('a stale window off a shorter axis falls back to the preset (rangeZoom rule)', () => {
+    expect(
+      resolvedWindow(dates, { preset: 'all', window: { startValue: 9, endValue: 12 } }),
+    ).toEqual({ startValue: 0, endValue: 3 })
+  })
+
+  it('an empty axis resolves to a degenerate zero window', () => {
+    expect(resolvedWindow([], { preset: 'all' })).toEqual({ startValue: 0, endValue: 0 })
   })
 })

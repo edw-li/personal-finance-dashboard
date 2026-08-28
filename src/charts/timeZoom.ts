@@ -86,3 +86,17 @@ export function rangeZoom(dates: string[], range: RangeState): InsideZoomOption[
   if (range.window === undefined || range.window.startValue >= dates.length) return [zoom]
   return [{ ...zoom, startValue: range.window.startValue, endValue: range.window.endValue }]
 }
+
+/**
+ * The window a RangeState RESOLVES to, with endValue made explicit: option-side presets
+ * deliberately omit it ("runs to the newest point"), but the animated dataZoom ACTION
+ * path (EChart's zoomWindow fast path — spec Addendum §A2) needs the index. Layers the
+ * mirrored manual window exactly like rangeZoom, including its stale-window drop.
+ */
+export function resolvedWindow(dates: string[], range: RangeState): ZoomWindow {
+  const [zoom] = rangeZoom(dates, range)
+  return {
+    startValue: zoom.startValue,
+    endValue: zoom.endValue ?? Math.max(0, dates.length - 1),
+  }
+}
