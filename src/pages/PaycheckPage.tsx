@@ -17,6 +17,7 @@ import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptio
 import StatTile from '../components/StatTile'
 import type {
   HouseholdOut,
+  HsaCoverage,
   PaycheckBreakdownOut,
   PaycheckProfileCreate,
   PaycheckProfileOut,
@@ -171,6 +172,7 @@ interface ProfileFormState {
   withholding_pct: string
   dental_vision_per_check: string
   hsa_per_check: string
+  hsa_coverage: HsaCoverage
   notes: string
 }
 
@@ -191,10 +193,23 @@ const PCT_FIELDS: { field: PctField; label: string }[] = [
   { field: 'withholding_pct', label: 'Withholding %' },
 ]
 
+// The tier's own vocabulary, not the column's: the stored value is 'self', the box says
+// "Self only" — the same distinction the percent boxes draw between 13 and 0.13.
+const HSA_COVERAGES: { value: HsaCoverage; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'self', label: 'Self only' },
+  { value: 'family', label: 'Family' },
+]
+
+const COVERAGE_LABELS = new Map<HsaCoverage, string>(
+  HSA_COVERAGES.map((coverage) => [coverage.value, coverage.label]),
+)
+
 const EMPTY_PROFILE: ProfileFormState = {
   effective_date: '', annual_salary: '', pay_periods_per_year: DEFAULT_PAY_PERIODS,
   trad_401k_pct: '', roth_401k_pct: '', after_tax_401k_pct: '', espp_pct: '',
-  withholding_pct: '', dental_vision_per_check: '', hsa_per_check: '', notes: '',
+  withholding_pct: '', dental_vision_per_check: '', hsa_per_check: '',
+  hsa_coverage: 'self', notes: '',
 }
 
 /** Every box of one stored row: the server's own quantized strings, percents shifted. */
@@ -210,6 +225,7 @@ function formFrom(profile: PaycheckProfileOut): ProfileFormState {
     withholding_pct: shiftPoint(profile.withholding_pct, 2),
     dental_vision_per_check: profile.dental_vision_per_check,
     hsa_per_check: profile.hsa_per_check,
+    hsa_coverage: profile.hsa_coverage,
     notes: profile.notes ?? '',
   }
 }
@@ -276,6 +292,14 @@ function ProfilesPanel({
 
   const set = (field: keyof ProfileFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
+
+  // Its own setter rather than `set('hsa_coverage')`: this is the one box whose state is a
+  // UNION rather than free text, and the generic setter's computed key would widen it to
+  // string — a hand-fired change event could then park an unstored tier in state.
+  const setCoverage = (value: string) => {
+    const next = HSA_COVERAGES.find((coverage) => coverage.value === value)
+    if (next !== undefined) setForm((f) => ({ ...f, hsa_coverage: next.value }))
+  }
 
   const startEdit = (profile: PaycheckProfileOut) => {
     setEditingId(profile.id)
@@ -364,6 +388,10 @@ function ProfilesPanel({
       // than an empty string canonicalized to one.
       dental_vision_per_check: canonicalAmount(form.dental_vision_per_check.trim() || '0'),
       hsa_per_check: canonicalAmount(form.hsa_per_check.trim() || '0'),
+      // No belt: a select cannot hold anything outside the union (setCoverage refuses it),
+      // and the column is NOT NULL with a server default, so it travels on both verbs like
+      // every other stored column.
+      hsa_coverage: form.hsa_coverage,
       notes: form.notes.trim() || null,
       // Create only, and only for an explicitly-picked person: an absent person_id resolves
       // to the primary server-side (spec §4.1), so the default create is byte-identical to
@@ -495,6 +523,22 @@ function ProfilesPanel({
           HSA
           <AmountInput value={form.hsa_per_check} onValueChange={set('hsa_per_check')} />
         </label>
+        <label>
+          HSA coverage
+          {/* A tier, not a figure: the three stored values are the whole domain, so this is
+              a select and there is nothing to validate at submit. */}
+          <select
+            className="field-input"
+            value={form.hsa_coverage}
+            onChange={(e) => setCoverage(e.target.value)}
+          >
+            {HSA_COVERAGES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="span-2">
           Notes
           <input
@@ -534,6 +578,7 @@ function ProfilesPanel({
                 <th className="num">Withholding</th>
                 <th className="num">Dental &amp; vision</th>
                 <th className="num">HSA</th>
+                <th>HSA coverage</th>
                 <th>Notes</th>
                 <th />
               </tr>
@@ -571,6 +616,9 @@ function ProfilesPanel({
                   </td>
                   <td className="num">{formatCurrency(profile.dental_vision_per_check)}</td>
                   <td className="num">{formatCurrency(profile.hsa_per_check)}</td>
+                  {/* The stored tier in the plan's words. The map is total over the union,
+                      so the `??` only ever answers a payload from a newer server. */}
+                  <td>{COVERAGE_LABELS.get(profile.hsa_coverage) ?? profile.hsa_coverage}</td>
                   {/* The cell ellipsises a long note (PaycheckPage.css), so the full text
                       is the hover title — `undefined`, never null, or React would render a
                       literal title="null" on every unnoted row. */}

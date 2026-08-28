@@ -460,6 +460,7 @@ describe('PaycheckPage — the profile form', () => {
       withholding_pct: '0.334009167',
       dental_vision_per_check: '12.50',
       hsa_per_check: '100.00',
+      hsa_coverage: 'self',
       notes: 'July raise',
     })
     // A new profile moves both halves of the page: the list, and which one is in force.
@@ -493,6 +494,7 @@ describe('PaycheckPage — the profile form', () => {
       withholding_pct: '0.334009167',
       dental_vision_per_check: '12.50',
       hsa_per_check: '100.00',
+      hsa_coverage: 'self',
       notes: 'Jan 2026 comp',
     })
   })
@@ -728,6 +730,30 @@ describe('PaycheckPage — the profile form', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
 
     expect(await screen.findByText('annual_salary must be positive')).toBeTruthy()
+  })
+
+  it('carries the HSA coverage tier on a save and shows it in the history', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    // Carried forward from the latest row like every other box (the comp-change ritual) —
+    // the tier changes when the plan does, not when the salary does.
+    expect(field('HSA coverage').value).toBe('self')
+
+    type('Effective date', '2026-07-01')
+    fireEvent.change(field('HSA coverage'), { target: { value: 'family' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    // The stored tier decides WHICH HSA cap applies to this person (spec §4.5), so it
+    // travels on the same full-profile body every other column does.
+    expect(vi.mocked(createProfile).mock.calls[0][0].hsa_coverage).toBe('family')
+
+    // ...and it is a column of the history, in the plan's words rather than the column's.
+    const row = screen
+      .getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' })
+      .closest('tr')
+    expect(row?.textContent).toContain('Self only')
   })
 })
 

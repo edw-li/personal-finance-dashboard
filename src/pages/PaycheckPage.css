@@ -197,3 +197,10 @@
 .paycheck-household .drill-hint {
   margin: 0.4rem 0 0;
 }
+
+/* The one non-numeric picker on this form: .field-input is right-aligned monospace for
+   figures, which reads wrong on a tier name (the Notes box takes the same override). */
+.paycheck-form select.field-input {
+  text-align: left;
+  font-family: inherit;
+}
