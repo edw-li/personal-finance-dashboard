@@ -401,7 +401,12 @@
   /* The app's bubble layer (shared with the calendar event popover): floats over chart
      canvases and table rows. */
   z-index: 2;
-  display: none;
+  /* visibility+opacity rather than display (2026-08-27 spec §5): display cannot be
+     transitioned, and hidden visibility hides from assistive tech exactly as display: none
+     did — the AT contract is unchanged. */
+  display: block;
+  visibility: hidden;
+  opacity: 0;
   width: max-content;
   max-width: 280px;
   padding: 0.5rem 0.65rem;
@@ -419,7 +424,8 @@
 }
 .info-hint:hover::after,
 .info-hint:focus-visible::after {
-  display: block;
+  visibility: visible;
+  opacity: 1;
 }
 
 /* ── Chart export menu (2026-08-25 spec §2a) ───────────────────────── */
@@ -472,6 +478,15 @@
   /* Press feedback: felt, barely seen. */
   .button:active {
     transform: scale(0.985);
+  }
+
+  /* The bubble fades; visibility rides the same duration so it stays interactable-none
+     while invisible. AT-equivalent to the old display toggle: hidden visibility is
+     hidden from screen readers too. */
+  .info-hint::after {
+    transition:
+      opacity 100ms ease,
+      visibility 100ms;
   }
 
   /* Page entrance: one fade-rise per navigation. RouteBoundary is keyed by pathname

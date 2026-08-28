@@ -83,3 +83,27 @@
     transition: background-color var(--t-fast) ease;
   }
 }
+
+/* Entrance only — Esc/close stays instant: dismissal must feel immediate. */
+@media (prefers-reduced-motion: no-preference) {
+  .palette-overlay {
+    animation: palette-overlay-in 120ms ease-out;
+  }
+
+  .palette {
+    animation: palette-in 140ms ease-out;
+  }
+
+  @keyframes palette-overlay-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes palette-in {
+    from {
+      opacity: 0;
+      transform: scale(0.985);
+    }
+  }
+}
