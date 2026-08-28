@@ -107,7 +107,9 @@ export default function HoldingsTable({
               key={h.security_id}
               // Whole-row click for the mouse, the .row-toggle button below for the
               // keyboard — the NetWorthPage accounts-table recipe, selection highlight
-              // included.
+              // included. The hover affordance is conditional on onSelect for the same
+              // reason the cursor is: a row that does nothing must not look clickable.
+              className={onSelect ? 'row-click' : undefined}
               onClick={onSelect ? () => onSelect(h.ticker) : undefined}
               style={
                 onSelect

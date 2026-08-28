@@ -629,7 +629,7 @@ export default function NetWorthPage() {
                 return (
                   <tr
                     key={account.id}
-                    className={account.is_component ? 'component-row' : undefined}
+                    className={account.is_component ? 'component-row row-click' : 'row-click'}
                     onClick={() => toggleDrill(account.id)}
                     style={{ cursor: 'pointer', background: selected ? 'var(--surface-2)' : undefined }}
                   >

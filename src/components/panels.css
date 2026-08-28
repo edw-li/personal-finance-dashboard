@@ -489,6 +489,10 @@
       visibility 100ms;
   }
 
+  .row-click {
+    transition: background-color var(--t-fast) ease;
+  }
+
   /* Page entrance: one fade-rise per navigation. RouteBoundary is keyed by pathname
      (Layout.tsx), so the .page element remounts exactly once per route change — the
      animation never replays on data refetches. transform is paint-only; EChart's
@@ -503,4 +507,11 @@
       transform: translateY(6px);
     }
   }
+}
+
+/* Whole-row click targets (the NetWorthPage accounts-table recipe): hover names the
+   row clickable without lying — only rows that actually navigate/toggle carry it.
+   An inline selected background (style attr) still wins over this class rule. */
+.row-click:hover {
+  background: var(--surface-2);
 }
