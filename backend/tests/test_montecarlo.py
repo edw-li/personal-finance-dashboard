@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from app.services.montecarlo import PERCENTILES, SIMULATIONS, reach_percentile, simulate
+from app.services.projection import project
 
 # Pure math over a seeded RNG — no DB, no clock, no HTTP. Every assertion here is either
 # structural (ordering, alignment) or a tolerance; the one hand-computed number is the
@@ -130,3 +131,60 @@ def test_contribution_growth_shifts_bands_up():
         None,
     )
     assert escalating.bands["p50"][-1] > flat.bands["p50"][-1]
+
+
+# --- retirement drops (2026-08-28 spec §4.3) ---
+
+
+def test_simulate_without_drops_is_byte_identical():
+    # CAPTURED FROM simulate() BEFORE THE DROPS PARAMETER EXISTED. The schedule lookup must
+    # cost the walk nothing — not one extra rng draw, not one changed multiply — so these
+    # three strings are what byte-identity is measured against. They are NOT regenerated:
+    # if they stop matching, the simulation moved.
+    args = (Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"))
+    result = simulate(*args, 60, Decimal("500000"))
+    assert str(result.bands["p10"][-1]) == "134857.43"
+    assert str(result.bands["p50"][-1]) == "194732.88"
+    assert str(result.bands["p90"][-1]) == "282599.44"
+    # An EXPLICIT empty schedule is the same walk, and so is one that never fires.
+    assert simulate(*args, 60, Decimal("500000"), []).bands == result.bands
+    assert simulate(*args, 60, Decimal("500000"), [(999, Decimal("500"))]).bands == result.bands
+
+
+def test_simulate_shares_the_deterministic_drop_schedule():
+    # Sigma 0 collapses every path onto exp(mu_m) = (1+r)^(1/12) — the deterministic
+    # recurrence itself — so p50 must TRACK project() month for month. That is what pins
+    # the two functions onto ONE schedule: a mismatched index or a missed sum would
+    # diverge by the drop amount, orders of magnitude above this tolerance. The tolerance
+    # itself is float-vs-Decimal dust only (~1e-9 on these magnitudes).
+    schedule = [(24, Decimal("2500.00"))]
+    line = project(Decimal("100000"), Decimal("4000"), Decimal("0.05"), 60, Decimal("0.03"),
+                   schedule)
+    fan = simulate(Decimal("100000"), Decimal("4000"), Decimal("0.05"), Decimal("0"),
+                   Decimal("0.03"), 60, None, schedule)
+    for index, point in enumerate(line):
+        assert abs(fan.bands["p50"][index] - point) <= Decimal("0.05"), index
+
+
+def test_simulate_drops_lower_every_band_from_the_retirement_month():
+    # Same seed, same draws: the only difference is 2,000 a month leaving the stream at
+    # month 12, so nothing after it can be higher and the end must be strictly lower.
+    args = (Decimal("100000"), Decimal("4000"), Decimal("0.05"), Decimal("0.15"), Decimal("0"))
+    full = simulate(*args, 36, None)
+    retired = simulate(*args, 36, None, [(12, Decimal("2000.00"))])
+    for key in BAND_KEYS:
+        assert retired.bands[key][:12] == full.bands[key][:12]  # nothing before it moves
+        assert retired.bands[key][-1] < full.bands[key][-1]
+
+
+def test_simulate_floors_the_stream_at_zero():
+    # A drop bigger than the stream retires it entirely; the escalator cannot revive a 0.
+    args = (Decimal("100000"), Decimal("1000"), Decimal("0.05"), Decimal("0.15"),
+            Decimal("0.05"))
+    retired = simulate(*args, 36, None, [(6, Decimal("5000.00"))])
+    coasting = simulate(Decimal("100000"), Decimal("0"), Decimal("0.05"), Decimal("0.15"),
+                        Decimal("0.05"), 36, None, [(6, Decimal("5000.00"))])
+    # From month 6 on, a retired stream and a stream that never existed are the same walk
+    # — the balances differ only by the six contributions made before the drop.
+    assert retired.bands["p50"][-1] > coasting.bands["p50"][-1]
+    assert all(v >= Decimal("0") for v in retired.bands["p10"])

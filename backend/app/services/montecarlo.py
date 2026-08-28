@@ -13,7 +13,9 @@ pull the median toward the mean over long horizons — measured ~+8% at month 36
 typical knobs), which is one reason p50 is never drawn as its own curve.
 sigma_m = sigma / sqrt(12). Contributions are added
 after growth each month (the deterministic recurrence's own order) and may escalate
-geometrically. Balances stay positive by construction (multiplicative).
+geometrically. A retirement schedule may decrement it at named month indices
+(services/projection.drop_schedule's rule, floored at 0). Balances stay positive by
+construction (multiplicative).
 
 SEEDED, deliberately: identical knobs must redraw identical bands — the bands answer
 "what does this sigma imply", not "give me fresh noise" — and the tests pin exact values.
@@ -21,8 +23,11 @@ SEEDED, deliberately: identical knobs must redraw identical bands — the bands 
 
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+
+from app.services.projection import drop_schedule
 
 SIMULATIONS = 500
 MC_SEED = 20260820
@@ -60,9 +65,17 @@ def simulate(
     contribution_growth: Decimal,
     months: int,
     target: Decimal | None,
+    drops: Sequence[tuple[int, Decimal]] = (),
 ) -> MonteCarloResult:
     """`annual_return`/`contribution_growth` arrive ALREADY converted to real terms by
-    the router when inflation is in play — this module knows nothing about inflation."""
+    the router when inflation is in play — this module knows nothing about inflation.
+
+    `drops` is the deterministic engine's retirement schedule, normalised by
+    `services.projection.drop_schedule` rather than re-derived here: the fan has to bend
+    exactly where the line bends, so there is one owner of "two drops in one month sum,
+    index 0 folds onto 1". Applying it costs the walk no randomness — one dict lookup per
+    month, no extra rng draw — which is what keeps an empty schedule byte-identical.
+    """
     rng = random.Random(MC_SEED)
     start = float(starting_balance)
     base_contribution = float(monthly_contribution)
@@ -70,6 +83,8 @@ def simulate(
     sigma_m = float(volatility) / math.sqrt(12)
     growth_m = (1 + float(contribution_growth)) ** (1 / 12)
     target_f = None if target is None else float(target)
+    # Converted ONCE, outside the path loop: the schedule is the same for every path.
+    schedule = {index: float(amount) for index, amount in drop_schedule(drops).items()}
 
     paths: list[list[float]] = []
     reach_indices: list[int | None] = []
@@ -79,6 +94,9 @@ def simulate(
         reached: int | None = 0 if target_f is not None and balance >= target_f else None
         contribution = base_contribution
         for month_index in range(1, months + 1):
+            drop = schedule.get(month_index)
+            if drop is not None:
+                contribution = max(contribution - drop, 0.0)
             balance = balance * math.exp(rng.gauss(mu_m, sigma_m)) + contribution
             contribution *= growth_m
             path.append(balance)
