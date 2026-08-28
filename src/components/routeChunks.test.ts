@@ -52,13 +52,18 @@ describe('warmAllRoutes', () => {
         return Promise.resolve({ default: () => null })
       }) as unknown as RouteChunk
     const chunks: Record<string, RouteChunk> = { a: mk('a'), b: mk('b'), c: mk('c') }
-    // Synchronous idle: each scheduled callback runs immediately.
-    vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
+    // Synchronous idle: each scheduled callback runs immediately. The spy count is the
+    // one-per-slot proof — a regression batching all thunks into a single idle callback
+    // would still produce ['a','b','c'] but only one rIC call instead of four
+    // (the kickoff plus one scheduled after each thunk).
+    const idle = vi.fn((cb: () => void) => {
       cb()
       return 1
     })
+    vi.stubGlobal('requestIdleCallback', idle)
     warmAllRoutes(chunks)
     expect(calls).toEqual(['a', 'b', 'c'])
+    expect(idle).toHaveBeenCalledTimes(4)
   })
 
   it('falls back to setTimeout when requestIdleCallback is missing (Safari)', () => {
