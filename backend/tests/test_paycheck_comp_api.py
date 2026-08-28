@@ -643,9 +643,7 @@ async def test_breakdown_profile_id_wins_over_person_id(auth_client, db, me):
     await db.commit()
     mine = await create_profile(auth_client)
     body = (
-        await auth_client.get(
-            BREAKDOWN, params={"profile_id": mine["id"], "person_id": partner.id}
-        )
+        await auth_client.get(BREAKDOWN, params={"profile_id": mine["id"], "person_id": partner.id})
     ).json()
     assert body["profile"]["id"] == mine["id"]
     assert body["profile"]["person_id"] == me.id
@@ -847,9 +845,7 @@ async def test_hsa_coverage_rejects_anything_else(auth_client, me):
     assert bad.json()["detail"] == "hsa_coverage must be 'none', 'self' or 'family'"
 
 
-async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(
-    auth_client, db, me
-):
+async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(auth_client, db, me):
     """The legacy wire, pinned. A one-person household is what every existing deployment
     is, and its two read endpoints must answer character for character as they did before
     profiles had owners — the only difference being the two additive fields."""
@@ -899,9 +895,7 @@ async def test_a_partner_timeline_is_independent_end_to_end(auth_client, db, me)
     theirs_old = await create_profile(
         auth_client, person_id=partner.id, effective_date="2025-01-01", annual_salary="80000"
     )
-    theirs_new = await create_profile(
-        auth_client, person_id=partner.id, annual_salary="96000"
-    )
+    theirs_new = await create_profile(auth_client, person_id=partner.id, annual_salary="96000")
     assert mine_old["id"] != theirs_old["id"]
 
     # One ordered list for the whole household; the UI groups it by person.

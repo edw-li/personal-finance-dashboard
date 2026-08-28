@@ -738,9 +738,7 @@ async def apply_paycheck(
     existing = {
         p.effective_date: p
         for p in (
-            await db.execute(
-                select(PaycheckProfile).where(PaycheckProfile.person_id == primary.id)
-            )
+            await db.execute(select(PaycheckProfile).where(PaycheckProfile.person_id == primary.id))
         ).scalars()
     }
     row = existing.get(effective_date)

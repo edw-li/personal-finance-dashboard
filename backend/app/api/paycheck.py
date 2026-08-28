@@ -290,9 +290,7 @@ async def delete_profile(profile_id: IdPath, db: AsyncSession = Depends(get_db))
     return Response(status_code=204)
 
 
-async def _default_profile(
-    db: AsyncSession, person_id: int, today: date
-) -> PaycheckProfile | None:
+async def _default_profile(db: AsyncSession, person_id: int, today: date) -> PaycheckProfile | None:
     """THIS PERSON's profile in force: their latest one effective today or earlier.
 
     A brand-new user only has a FUTURE profile (the raise lands next month), so rather
