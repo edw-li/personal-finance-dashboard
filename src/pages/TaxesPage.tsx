@@ -13,6 +13,7 @@ import {
   patchTaxYear,
   putTaxInputs,
 } from '../api/taxes'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import InfoHint from '../components/InfoHint'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import InputsForm from '../components/taxes/InputsForm'
@@ -68,6 +69,12 @@ function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
   return years.length === 0 ? undefined : years.reduce((a, b) => (b.year > a.year ? b : a))
 }
 
+// One snapshot per (year, filing status): the brackets GET names a status, so the same
+// year under a different status is a DIFFERENT payload.
+function detailKey(year: number, filingStatus: FilingStatus): string {
+  return `taxes:detail:${year}:${filingStatus}`
+}
+
 export default function TaxesPage() {
   // The deep links' seeds — /taxes?whatif=TICKER from the holdings drill-in, ?whatif-lot={id}
   // from the ESPP lots table. A plain read per render (it is a hook, not a fetch), and the
@@ -82,18 +89,33 @@ export default function TaxesPage() {
   const lotParam = Number(searchParams.get('whatif-lot'))
   const whatIfLotId = Number.isInteger(lotParam) && lotParam > 0 ? lotParam : null
 
-  const [years, setYears] = useState<TaxYearOut[]>([])
+  // The seeded selection replicates loadYears' pick (the latest year), and the seeded
+  // detail reads that year's key using ITS OWN filing status from the cached row.
+  const cachedYears = getSnapshot<TaxYearOut[]>('taxes:years')
+  const cachedLatest = cachedYears !== undefined ? latestOf(cachedYears) : undefined
+  const [years, setYears] = useState<TaxYearOut[]>(cachedYears ?? [])
   // An OBJECT, not a bare number: a fresh identity re-runs the load effect, so selecting
   // the year that is already selected (right after cloning into it) still refetches.
-  const [selection, setSelection] = useState<{ year: number } | null>(null)
-  const [detail, setDetail] = useState<YearDetail | null>(null)
-  const [loading, setLoading] = useState(true) // the year list
+  const [selection, setSelection] = useState<{ year: number } | null>(
+    cachedLatest ? { year: cachedLatest.year } : null,
+  )
+  const [detail, setDetail] = useState<YearDetail | null>(() =>
+    cachedLatest
+      ? (getSnapshot<YearDetail>(detailKey(cachedLatest.year, cachedLatest.filing_status)) ??
+        null)
+      : null,
+  )
+  const [loading, setLoading] = useState(cachedYears === undefined) // the year list
   // A FIRST list load that failed must not also claim the database is empty: the empty
   // state belongs to a load that actually came back (PortfolioPage's null-holdings rule).
-  const [loadedOnce, setLoadedOnce] = useState(false)
+  const [loadedOnce, setLoadedOnce] = useState(cachedYears !== undefined)
   const [busy, setBusy] = useState(true) // the selected year's three payloads
   const [error, setError] = useState<string | null>(null)
-  const [newYear, setNewYear] = useState('')
+  const [newYear, setNewYear] = useState(() =>
+    cachedYears !== undefined
+      ? String(cachedLatest ? cachedLatest.year + 1 : new Date().getFullYear())
+      : '',
+  )
   const [creating, setCreating] = useState(false)
   // The status PATCH is single-flight of its own: it is not a "load", so it must not ride the
   // detail `busy` flag, and a second press mid-flight would race two reloads of one year.
@@ -147,9 +169,16 @@ export default function TaxesPage() {
   const loadYears = () => {
     fetchTaxYears()
       .then((list) => {
-        setYears(list)
+        const previous = getSnapshot<TaxYearOut[]>('taxes:years')
+        setSnapshot('taxes:years', list)
         setLoadedOnce(true)
         setError(null)
+        // Identical list: everything on screen already came from the same seed (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(list)) {
+          if (!latestOf(list)) setBusy(false) // seeded-empty case: nothing to load
+          return
+        }
+        setYears(list)
         const latest = latestOf(list)
         setNewYear(String(latest ? latest.year + 1 : new Date().getFullYear()))
         if (latest) {
@@ -190,7 +219,14 @@ export default function TaxesPage() {
     ])
       .then(([inputs, brackets, summary]) => {
         if (seq !== seqRef.current) return
-        setDetail({ inputs, brackets, summary })
+        const payload: YearDetail = { inputs, brackets, summary }
+        const key = detailKey(year, filingStatus)
+        const previous = getSnapshot<YearDetail>(key)
+        setSnapshot(key, payload)
+        // Identical payload: nothing re-renders (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(payload))
+          return
+        setDetail(payload)
         // No setError(null) here: every path that selects a year already cleared the
         // banner, and clearing it again would wipe a message raised meanwhile by the
         // list reconcile that runs ALONGSIDE this load (the create flow's).
@@ -216,6 +252,10 @@ export default function TaxesPage() {
     setCreateError(null)
     // Any totals refresh still in flight belongs to the year being left.
     summarySeqRef.current += 1
+    // Already-seen year: paint its detail instantly and revalidate underneath.
+    const status = years.find((y) => y.year === year)?.filing_status ?? 'single'
+    const peeked = getSnapshot<YearDetail>(detailKey(year, status))
+    if (peeked !== undefined) setDetail(peeked)
     setSelection({ year })
   }
 
