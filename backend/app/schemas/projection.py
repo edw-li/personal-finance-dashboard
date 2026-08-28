@@ -4,6 +4,20 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 
+class RetirementOut(BaseModel):
+    """One resolved `retire=<person_id>:<YYYY-MM>` param (2026-08-28 spec §4.3).
+
+    `monthly_drop` is that person's take-home from the paycheck profile in force AT
+    REQUEST TIME — today's honest approximation, named in the page's hint — so the echo is
+    also what tells the user what a date actually costs the contribution stream.
+    """
+
+    person_id: int
+    name: str
+    month: date  # always a first-of-month, on the projection's own axis
+    monthly_drop: Decimal
+
+
 class ProjectionOut(BaseModel):
     # Echoed knobs — the values the model actually ran with (the ESPP modeler's posture:
     # the echo IS what the page's form seeds from).
@@ -38,3 +52,8 @@ class ProjectionOut(BaseModel):
     fi_month_p10: date | None = None
     fi_month_p50: date | None = None
     fi_month_p90: date | None = None
+    # The retirements this run applied, SORTED BY MONTH — the order the drops happen, so
+    # the echo, the chart's markLines and the engine's schedule all read the same way.
+    # Empty for every request without a `retire` param, which leaves the rest of this
+    # payload byte-identical to the pre-retirement one.
+    retirements: list[RetirementOut] = []

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app.models import (
@@ -7,6 +7,8 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    PaycheckProfile,
+    Person,
     SpendingCategory,
 )
 from app.services.projection import drop_schedule, project
@@ -60,6 +62,34 @@ async def _seed_book(db, *, with_history: bool = True) -> date:
         )
     await db.commit()
     return this_month
+
+
+async def _seed_person(db, name: str, *, primary: bool = False) -> Person:
+    """`create_all` seeds no roster, so every retirement test names its own people."""
+    person = Person(name=name, is_primary=primary)
+    db.add(person)
+    await db.commit()
+    return person
+
+
+async def _seed_profile(db, person: Person, **overrides) -> PaycheckProfile:
+    """A deliberately round profile: 24,000/yr over 24 periods with every pct and rider at
+    0 nets 1,000.00 a check, i.e. a monthly_net of exactly 2,000.00 — so the drop the
+    endpoint applies is checkable by eye against the 4,000 derived contribution."""
+    fields = {
+        "effective_date": date.today() - timedelta(days=30),
+        "annual_salary": Decimal("24000.00"),
+        "pay_periods_per_year": 24,
+    }
+    fields.update(overrides)
+    profile = PaycheckProfile(person_id=person.id, **fields)
+    db.add(profile)
+    await db.commit()
+    return profile
+
+
+def _month_param(month: date) -> str:
+    return f"{month:%Y-%m}"
 
 
 async def test_projection_requires_auth(client):
@@ -393,6 +423,211 @@ async def test_projection_bounds_the_monte_carlo_knobs(auth_client, db):
         resp = await auth_client.get(f"/api/v1/projection?contribution_growth={bad}")
         assert resp.status_code == 422
         assert resp.json()["detail"] == "contribution_growth must be between 0 and 0.25"
+
+
+# --- dual-career retirements (2026-08-28 spec §4.3) ---
+
+
+async def test_projection_without_retire_params_echoes_an_empty_list(auth_client, db):
+    # The wire GAINS exactly one key. Every array is measured against the SAME constants
+    # the pre-retirement pin uses, so "byte-identical outputs" is a test, not a hope.
+    await _seed_book(db)
+    zeros = "volatility=0&inflation=0&contribution_growth=0"
+    body = (await auth_client.get(f"/api/v1/projection?years=2&{zeros}")).json()
+    assert body["retirements"] == []
+    assert body["projected"] == BACKCOMPAT_PROJECTED_2Y
+    assert body["coast"] == BACKCOMPAT_COAST_2Y
+
+
+async def test_projection_retirement_drops_the_stream_and_echoes_what_it_did(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    retires = month_add(this_month, 12)
+    # Nominal zeros make the chain exact addition: 4,000/month until month 12, where
+    # Alex's 2,000 take-home leaves the stream.
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+            f"&retire={alex.id}:{_month_param(retires)}"
+        )
+    ).json()
+
+    assert body["retirements"] == [
+        {
+            "person_id": alex.id,
+            "name": "Alex",
+            "month": retires.isoformat(),
+            "monthly_drop": "2000.00",
+        }
+    ]
+    assert body["projected"][11] == "144000.00"  # 100,000 + 11 x 4,000
+    assert body["projected"][12] == "146000.00"  # the first HALVED month
+    assert body["projected"][13] == "148000.00"
+    # The coast line has no contribution to drop — it must not move an inch.
+    assert body["coast"][12] == "100000.00"
+
+
+async def test_projection_retirement_drop_is_not_deflated(auth_client, db):
+    # 3% return against 3% inflation is a real rate of exactly 0, and 3% contribution
+    # growth against it is exactly 0 too, so every month-over-month step is the raw
+    # contribution. The drop is a TODAY's-dollars figure like the contribution itself and
+    # crosses the Fisher conversion UNTOUCHED: the step must fall by exactly 2,000.00.
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    retires = month_add(this_month, 6)
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?annual_return=0.03&inflation=0.03&contribution_growth=0.03"
+            f"&volatility=0&retire={alex.id}:{_month_param(retires)}"
+        )
+    ).json()
+
+    def step(i: int) -> Decimal:
+        return Decimal(body["projected"][i]) - Decimal(body["projected"][i - 1])
+
+    assert step(5) == Decimal("4000.00")
+    assert step(6) == Decimal("2000.00")
+    assert step(7) == Decimal("2000.00")
+
+
+async def test_projection_two_retirements_echo_sorted_by_month(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex)
+    await _seed_profile(db, bo, annual_salary=Decimal("48000.00"))  # nets 4,000 a month
+    early, late = month_add(this_month, 6), month_add(this_month, 18)
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+            f"&retire={alex.id}:{_month_param(late)}&retire={bo.id}:{_month_param(early)}"
+        )
+    ).json()
+
+    # Order-free params, an echo in the order the drops actually HAPPEN.
+    assert [row["name"] for row in body["retirements"]] == ["Bo", "Alex"]
+    assert [row["monthly_drop"] for row in body["retirements"]] == ["4000.00", "2000.00"]
+    # Bo's 4,000 retires the whole 4,000 stream at month 6; Alex's 2,000 then has nothing
+    # left to take (the floor), so the balance simply stops moving.
+    assert body["projected"][5] == "120000.00"
+    assert body["projected"][6] == "120000.00"
+    assert body["projected"][19] == "120000.00"
+
+
+async def test_projection_retirement_reaches_the_monte_carlo_fan(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    base = "/api/v1/projection?volatility=0.15&years=5"
+    full = (await auth_client.get(base)).json()
+    retired = (
+        await auth_client.get(
+            f"{base}&retire={alex.id}:{_month_param(month_add(this_month, 12))}"
+        )
+    ).json()
+    # The fan has to wrap the line it belongs to: same seed, smaller stream, lower bands.
+    assert Decimal(retired["bands"]["p50"][-1]) < Decimal(full["bands"]["p50"][-1])
+    assert Decimal(retired["bands"]["p90"][-1]) < Decimal(full["bands"]["p90"][-1])
+    assert retired["bands"]["p50"][:12] == full["bands"]["p50"][:12]
+
+
+async def test_projection_retirement_validation_table(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")  # no profile at all
+    await _seed_profile(db, alex)
+    soon = _month_param(month_add(this_month, 6))
+    fmt = "retire must be '<person_id>:<YYYY-MM>' (e.g. retire=2:2035-06)"
+
+    for bad in ("alex", f"{alex.id}", f"{alex.id}:2035", f"{alex.id}:2035-6",
+                f"{alex.id}:2035-13", f"{alex.id}:2035-06-01", f":{soon}"):
+        resp = await auth_client.get(f"/api/v1/projection?retire={bad}")
+        assert resp.status_code == 422, bad
+        assert resp.json()["detail"] == fmt, bad
+
+    resp = await auth_client.get(f"/api/v1/projection?retire=987654:{soon}")
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "retire names person 987654, who is not in the household"
+
+    resp = await auth_client.get(
+        f"/api/v1/projection?retire={alex.id}:{soon}&retire={alex.id}:{soon}"
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Alex has more than one retirement month"
+
+    for outside in (month_add(this_month, -1), month_add(this_month, 400)):
+        resp = await auth_client.get(
+            f"/api/v1/projection?retire={alex.id}:{_month_param(outside)}"
+        )
+        assert resp.status_code == 422
+        assert "Alex's retirement month is outside the 30-year horizon" in resp.json()["detail"]
+
+    resp = await auth_client.get(f"/api/v1/projection?retire={bo.id}:{soon}")
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Bo has no paycheck profile in force — nothing to drop"
+
+
+async def test_projection_retirement_answers_on_the_first_bad_param(auth_client, db):
+    # Order-free params, ONE answer: the first one with a problem is the one that speaks,
+    # so a fix is a fix rather than the first of several.
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)
+    soon = _month_param(month_add(this_month, 6))
+    resp = await auth_client.get(f"/api/v1/projection?retire=nonsense&retire=987654:{soon}")
+    assert resp.status_code == 422
+    assert resp.json()["detail"].startswith("retire must be")
+
+
+async def test_projection_retirement_degrades_on_unusable_stored_profiles(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    # A hand-written 0 cadence: `gross = salary / periods` would be a DivisionByZero 500,
+    # so the projection refuses in the PAYCHECK router's own words rather than crashing.
+    await _seed_profile(db, alex, pay_periods_per_year=0)
+    resp = await auth_client.get(
+        f"/api/v1/projection?retire={alex.id}:{_month_param(month_add(this_month, 6))}"
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == (
+        "Alex's paycheck profile: pay_periods_per_year must be between 1 and 366"
+    )
+
+
+async def test_projection_retirement_of_a_negative_net_drops_nothing(auth_client, db):
+    # An over-committed check nets negative: gross 1,000 with 50% roth and 80% espp is
+    # -300 a check, -600.00 a month. A retirement must never ADD to the stream, so the
+    # drop floors at 0 — and the echo says 0.00 rather than inventing a raise.
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex, roth_401k_pct=Decimal("0.500000000"),
+                        espp_pct=Decimal("0.800000000"))
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+            f"&retire={alex.id}:{_month_param(month_add(this_month, 6))}"
+        )
+    ).json()
+    assert body["retirements"][0]["monthly_drop"] == "0.00"
+    assert body["projected"][7] == "128000.00"  # 100,000 + 7 x 4,000, untouched
+
+
+async def test_projection_retirement_uses_the_profile_in_force_not_the_newest(auth_client, db):
+    # The Paycheck page, the Taxes page and this drop must never disagree about which
+    # profile is current: a raise dated next year is not today's take-home.
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex)  # 24,000 -> 2,000/month, effective 30 days ago
+    await _seed_profile(db, alex, effective_date=date.today() + timedelta(days=400),
+                        annual_salary=Decimal("120000.00"))
+    body = (
+        await auth_client.get(
+            f"/api/v1/projection?retire={alex.id}:{_month_param(month_add(this_month, 6))}"
+        )
+    ).json()
+    assert body["retirements"][0]["monthly_drop"] == "2000.00"
 
 
 # --- the engine itself (pure Decimal, no DB): the contribution escalator's two pins ---
