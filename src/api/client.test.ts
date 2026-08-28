@@ -1,5 +1,6 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError, setToken } from './client'
+import { clearSnapshots, getSnapshot, setSnapshot } from './snapshotCache'
 
 function mockFetchOk() {
   const spy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) })
@@ -100,4 +101,43 @@ it('rethrows caller-initiated aborts untouched', async () => {
   const error = (await api('/anything').catch((e: unknown) => e)) as DOMException
   expect(error).toBeInstanceOf(DOMException)
   expect(error.name).toBe('AbortError')
+})
+
+describe('api — snapshot invalidation', () => {
+  beforeEach(() => clearSnapshots())
+
+  it('a successful POST wipes the snapshot cache', async () => {
+    setSnapshot('overview', { stale: true })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    )
+    await api('/things', { method: 'POST', body: JSON.stringify({}) })
+    expect(getSnapshot('overview')).toBeUndefined()
+  })
+
+  it('a FAILED POST wipes too — a 500 may still have written', async () => {
+    setSnapshot('overview', { stale: true })
+    mockFetchFailure(500, { detail: 'boom' })
+    await expect(api('/things', { method: 'POST' })).rejects.toThrow()
+    expect(getSnapshot('overview')).toBeUndefined()
+  })
+
+  it('a GET leaves the cache alone', async () => {
+    setSnapshot('overview', { fresh: true })
+    mockFetchOk()
+    await api('/things')
+    expect(getSnapshot('overview')).toEqual({ fresh: true })
+  })
+
+  it('a 401 wipes (snapshots are session data)', async () => {
+    setSnapshot('overview', { stale: true })
+    // jsdom refuses real navigation, so the redirect is stubbed for this case.
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign })
+    mockFetchFailure(401, { detail: 'Not authenticated' })
+    await expect(api('/things')).rejects.toThrow('Session expired')
+    expect(assign).toHaveBeenCalledWith('/login')
+    expect(getSnapshot('overview')).toBeUndefined()
+  })
 })
