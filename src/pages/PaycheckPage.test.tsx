@@ -55,6 +55,7 @@ import {
 
 const profile2026: PaycheckProfileOut = {
   id: 1,
+  person_id: 1,
   effective_date: '2026-01-01',
   annual_salary: '188930.00',
   pay_periods_per_year: 24,
@@ -65,11 +66,13 @@ const profile2026: PaycheckProfileOut = {
   withholding_pct: '0.334009167',
   dental_vision_per_check: '12.50',
   hsa_per_check: '100.00',
+  hsa_coverage: 'self',
   notes: null,
 }
 
 const profile2025: PaycheckProfileOut = {
   id: 2,
+  person_id: 1,
   effective_date: '2025-01-01',
   annual_salary: '162000.00',
   pay_periods_per_year: 24,
@@ -80,6 +83,7 @@ const profile2025: PaycheckProfileOut = {
   withholding_pct: '0.310000000',
   dental_vision_per_check: '11.00',
   hsa_per_check: '75.00',
+  hsa_coverage: 'self',
   notes: '2025 comp',
 }
 
