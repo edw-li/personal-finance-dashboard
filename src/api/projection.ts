@@ -1,6 +1,13 @@
 import { api } from './client'
 import type { ProjectionOut } from '../types/api'
 
+/** One retirement knob's value. A blank `month` is "this person works for the whole
+ *  horizon" and is omitted from the query entirely — the blank-omits rule below. */
+export interface RetirementParam {
+  personId: number
+  month: string
+}
+
 export interface ProjectionParams {
   annualReturn?: string
   monthlyContribution?: string
@@ -10,6 +17,7 @@ export interface ProjectionParams {
   volatility?: string
   inflation?: string
   contributionGrowth?: string
+  retirements?: RetirementParam[]
 }
 
 // Blank knobs are OMITTED (the espp client's rule): a blanked box means "derive it
@@ -26,6 +34,11 @@ export function fetchProjection(params: ProjectionParams = {}): Promise<Projecti
   if (params.volatility) query.set('volatility', params.volatility)
   if (params.inflation) query.set('inflation', params.inflation)
   if (params.contributionGrowth) query.set('contribution_growth', params.contributionGrowth)
+  // APPEND, never set: `retire` is a repeated param server-side, one per retiring person,
+  // and a blank month is the absence of a retirement rather than an empty one.
+  for (const retirement of params.retirements ?? []) {
+    if (retirement.month) query.append('retire', `${retirement.personId}:${retirement.month}`)
+  }
   const qs = query.toString()
   return api<ProjectionOut>(`/projection${qs ? `?${qs}` : ''}`)
 }

@@ -1293,6 +1293,17 @@ export interface CustomEventOut {
 // the echo is what the page's form seeds from). Money 2dp; rates 6dp when a param was
 // quantized, verbatim seeds otherwise ("0.05" / "0.04").
 
+/** One resolved retirement (GET /projection?retire=<person_id>:<YYYY-MM>, 2026-08-28
+ *  spec §4.3). `month` is a first-of-month ISO date on the projection's own axis;
+ *  `monthly_drop` is that person's take-home from the paycheck profile in force at
+ *  request time — today's figure, not a projection of it. */
+export interface RetirementEcho {
+  person_id: number
+  name: string
+  month: string
+  monthly_drop: string
+}
+
 export interface ProjectionOut {
   starting_balance: string
   /** The snapshot month the starting balance came from. */
@@ -1326,6 +1337,10 @@ export interface ProjectionOut {
   fi_month_p10: string | null
   fi_month_p50: string | null
   fi_month_p90: string | null
+  /** Echoed retirements, sorted by month. `[]` from a live server with no `retire`
+   *  param; null/absent from a backend older than the dual-career batch — the `bands`
+   *  posture, so every reader takes it as `?? []`. */
+  retirements: RetirementEcho[] | null
 }
 
 // --- import (mirrors backend/app/importer/report.py) ---

@@ -79,6 +79,7 @@ function projectionOut(over: Partial<ProjectionOut> = {}): ProjectionOut {
     fi_month_p10: '2050-01-01',
     fi_month_p50: '2055-10-01',
     fi_month_p90: '2061-03-01',
+    retirements: [],
     ...over,
   }
 }
