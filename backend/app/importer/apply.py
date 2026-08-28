@@ -723,10 +723,19 @@ async def apply_paycheck(
         "hsa_per_check": parsed.profile.hsa_per_check,
         # pay_periods_per_year stays at its default (24) on create, user-owned on update
     }
+    primary = primary_person(await load_people(db))
+    if primary is None:
+        # paycheck_profiles.person_id is NOT NULL: with no roster there is nobody to own
+        # the row. Named, never silent — and unreachable on a migrated database, where
+        # f3a91c7e2b45 seeds the primary member.
+        report.warnings.append(
+            "Paycheck Modeler: the household has no primary person — profile not imported"
+        )
+        return
     existing = {p.effective_date: p for p in (await db.execute(select(PaycheckProfile))).scalars()}
     row = existing.get(effective_date)
     if row is None:
-        db.add(PaycheckProfile(effective_date=effective_date, **fields))
+        db.add(PaycheckProfile(person_id=primary.id, effective_date=effective_date, **fields))
         counts.creates += 1
         report.add_sample(f"paycheck_profiles[{effective_date.isoformat()}]: created")
     else:

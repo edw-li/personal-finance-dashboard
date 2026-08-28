@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, Numeric, String, Text
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -38,9 +38,20 @@ class EsppPeriod(Base):
 
 class PaycheckProfile(Base):
     __tablename__ = "paycheck_profiles"
+    # ONE timeline PER PERSON: the effective date is unique within an owner, not across
+    # the household, so a couple can both have a profile effective the same January 1.
+    # The old bare-`effective_date` unique lived in three places — this model,
+    # api/paycheck.py's 409 pre-check and migration e301f88ed241 — and all three moved
+    # together (2026-08-27 spec §3.1). It must live HERE too, because the pytest database
+    # is built by Base.metadata.create_all, which never runs a migration (Person's rule).
+    __table_args__ = (UniqueConstraint("person_id", "effective_date"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    effective_date: Mapped[date] = mapped_column(Date, unique=True)
+    # NOT NULL: a paycheck belongs to somebody. RESTRICT, not CASCADE — there is no
+    # person delete route, and pay history must not vanish behind a roster edit
+    # (tax_inputs.person_id's rule).
+    person_id: Mapped[int] = mapped_column(ForeignKey("people.id", ondelete="RESTRICT"))
+    effective_date: Mapped[date] = mapped_column(Date)
     annual_salary: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     pay_periods_per_year: Mapped[int] = mapped_column(default=24)
     trad_401k_pct: Mapped[Decimal] = mapped_column(Numeric(10, 9), default=0)

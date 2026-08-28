@@ -740,8 +740,10 @@ async def test_apply_espp_lots_and_periods(db):
 async def test_apply_paycheck_derives_effective_date_from_focal(db):
     from app.importer.apply import apply_focal_history, apply_paycheck
     from app.importer.parsers import parse_focal_history, parse_paycheck
-    from app.models import CompEvent, PaycheckProfile
+    from app.models import CompEvent, PaycheckProfile, Person
 
+    db.add(Person(name="Me", is_primary=True))
+    await db.flush()
     wb = sheets()
     report = SheetReport()
     focal = parse_focal_history(wb["Focal History"])
@@ -753,6 +755,7 @@ async def test_apply_paycheck_derives_effective_date_from_focal(db):
     profile = (await db.execute(select(PaycheckProfile))).scalar_one()
     assert profile.effective_date == date(2024, 1, 1)  # latest focal year with a New Base
     assert profile.annual_salary == Decimal("120000.00")
+    assert profile.person_id == (await db.execute(select(Person))).scalar_one().id
     assert profile.pay_periods_per_year == 24
     assert any("effective_date" in w for w in report.warnings)
     events = (await db.execute(select(CompEvent))).scalars().all()

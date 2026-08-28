@@ -105,8 +105,18 @@ async def seed_tax_year(db, year: int, w2_income: str, jurisdictions: dict | Non
 
 
 async def seed_profile(db, **overrides) -> PaycheckProfile:
-    """The check test_withholding_calc hand-derives: gross 10000, taxable 9350, hold 2805."""
+    """The check test_withholding_calc hand-derives: gross 10000, taxable 9350, hold 2805.
+
+    A profile needs an owner (paycheck_profiles.person_id is NOT NULL) and `create_all`
+    seeds no roster, so this seeds the primary member when the test has not already —
+    the married tests' `seed_household` runs first and its "Me" is reused."""
+    primary = (await db.execute(select(Person).where(Person.is_primary))).scalars().first()
+    if primary is None:
+        primary = Person(name="Me", is_primary=True)
+        db.add(primary)
+        await db.flush()
     fields = {
+        "person_id": primary.id,
         "effective_date": date(2025, 1, 1),
         "annual_salary": Decimal("240000.00"),
         "pay_periods_per_year": 24,

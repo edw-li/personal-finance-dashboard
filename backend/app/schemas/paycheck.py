@@ -13,12 +13,20 @@ back from the driver as Decimal("0E-9"), which no JS decimal parser reads as a n
 from datetime import date
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.espp import Pct9
 
+# The people PK is an int4: an out-of-range id would reach asyncpg as a bare DataError
+# (a 500 on a plain create), so it is fenced at the boundary — api/paycheck.py's IdPath
+# precedent, applied to the one person field that arrives in a BODY rather than a query.
+INT32_MAX = 2**31 - 1
+
 
 class ProfileIn(BaseModel):
+    # Absent = the primary person: the wire's back-compat rule, since every pre-P3 caller
+    # passes nothing and means the one earner the app modeled.
+    person_id: int | None = Field(default=None, ge=1, le=INT32_MAX)
     effective_date: date
     annual_salary: Decimal
     # The sheet's hardcoded 24 (semi-monthly), as a default rather than a constant.
@@ -36,6 +44,8 @@ class ProfileIn(BaseModel):
 class ProfileUpdate(BaseModel):
     # Every stored column here is NOT NULL except `notes`, so an explicit null is a
     # no-op on all of them (the house PATCH convention) — only `notes` really clears.
+    # `person_id` is deliberately ABSENT: a profile does not change owner, and pydantic
+    # drops the unknown key rather than 422ing on a client that sends one back.
     effective_date: date | None = None
     annual_salary: Decimal | None = None
     pay_periods_per_year: int | None = None
@@ -53,6 +63,9 @@ class ProfileOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    # The owner. Every profile has one (NOT NULL); the list stays a single ordered list
+    # and the UI groups it by this.
+    person_id: int
     effective_date: date
     annual_salary: Decimal
     pay_periods_per_year: int

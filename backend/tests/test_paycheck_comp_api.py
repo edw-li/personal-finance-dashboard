@@ -24,7 +24,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.models import CompEvent, PaycheckProfile
+from app.models import CompEvent, PaycheckProfile, Person
 from app.services.comp_calc import metrics
 from app.services.paycheck_calc import breakdown, half_up2
 
@@ -375,7 +375,18 @@ async def create_profile(auth_client, **overrides) -> dict:
     return resp.json()
 
 
-async def test_profiles_crud_roundtrip(auth_client, db):
+@pytest.fixture
+async def me(db):
+    """The primary person a profile belongs to. `create_all` seeds no roster, so every
+    test that WRITES a profile asks for this explicitly — and the two that must see an
+    empty database (the 404 and the auth wall) deliberately do not."""
+    person = Person(name="Me", is_primary=True)
+    db.add(person)
+    await db.commit()
+    return person
+
+
+async def test_profiles_crud_roundtrip(auth_client, db, me):
     assert (await auth_client.get(PROFILES)).json() == []
 
     older = await create_profile(auth_client, effective_date="2025-01-01")
@@ -406,7 +417,7 @@ async def test_profiles_crud_roundtrip(auth_client, db):
     assert len((await auth_client.get(PROFILES)).json()) == 1
 
 
-async def test_create_profile_defaults_every_optional_pct_to_zero(auth_client):
+async def test_create_profile_defaults_every_optional_pct_to_zero(auth_client, me):
     resp = await auth_client.post(
         PROFILES, json={"effective_date": "2026-01-01", "annual_salary": "120000"}
     )
@@ -418,7 +429,7 @@ async def test_create_profile_defaults_every_optional_pct_to_zero(auth_client):
     assert body["hsa_per_check"] == "0.00"
 
 
-async def test_a_zero_pct_crosses_the_wire_in_plain_notation(auth_client):
+async def test_a_zero_pct_crosses_the_wire_in_plain_notation(auth_client, me):
     # Numeric(10,9) zero is Decimal("0E-9") and pydantic renders Decimals with str():
     # without the schema's plain-format serializer this reaches the frontend as "0E-9".
     created = await create_profile(auth_client)
@@ -432,7 +443,7 @@ async def test_a_zero_pct_crosses_the_wire_in_plain_notation(auth_client):
     assert breakdown_body["profile"]["espp_pct"] == "0.000000000"
 
 
-async def test_create_profile_rejects_a_duplicate_effective_date(auth_client):
+async def test_create_profile_rejects_a_duplicate_effective_date(auth_client, me):
     await create_profile(auth_client)
     clash = await auth_client.post(PROFILES, json=profile_payload(annual_salary="1"))
     assert clash.status_code == 409
@@ -463,13 +474,13 @@ async def test_create_profile_rejects_a_duplicate_effective_date(auth_client):
         ({"hsa_per_check": "1000000"}, "hsa_per_check: |value| must be below 10^6"),
     ],
 )
-async def test_create_profile_validation_rules(auth_client, overrides, message):
+async def test_create_profile_validation_rules(auth_client, me, overrides, message):
     resp = await auth_client.post(PROFILES, json=profile_payload(**overrides))
     assert resp.status_code == 422, resp.text
     assert message in resp.json()["detail"]
 
 
-async def test_create_profile_writes_nothing_when_a_late_rule_fires(auth_client, db):
+async def test_create_profile_writes_nothing_when_a_late_rule_fires(auth_client, db, me):
     resp = await auth_client.post(
         PROFILES, json=profile_payload(hsa_per_check="-1", notes="never stored")
     )
@@ -477,7 +488,7 @@ async def test_create_profile_writes_nothing_when_a_late_rule_fires(auth_client,
     assert (await db.execute(select(PaycheckProfile))).scalars().all() == []
 
 
-async def test_patch_profile_validates_the_merged_row(auth_client):
+async def test_patch_profile_validates_the_merged_row(auth_client, me):
     created = await create_profile(auth_client)
     resp = await auth_client.patch(f"{PROFILES}/{created['id']}", json={"pay_periods_per_year": 0})
     assert resp.status_code == 422
@@ -494,7 +505,7 @@ async def test_patch_profile_validates_the_merged_row(auth_client):
     assert kept.status_code == 200, kept.text  # its own date is not a conflict with itself
 
 
-async def test_patch_profile_explicit_null_is_a_no_op_on_a_not_null_column(auth_client):
+async def test_patch_profile_explicit_null_is_a_no_op_on_a_not_null_column(auth_client, me):
     # House PATCH convention (portfolio.py's update_security): a null on a column that
     # cannot hold one reads as "no change" rather than a 422. `notes` IS nullable, so a
     # null there really clears it.
@@ -522,7 +533,7 @@ async def test_patch_profile_404_and_delete_404(auth_client):
     assert huge.status_code == 422
 
 
-async def test_breakdown_golden_over_the_real_profile(auth_client):
+async def test_breakdown_golden_over_the_real_profile(auth_client, me):
     created = await create_profile(auth_client)
     body = (await auth_client.get(BREAKDOWN)).json()
     assert body["profile"]["id"] == created["id"]
@@ -541,7 +552,7 @@ async def test_breakdown_golden_over_the_real_profile(auth_client):
     assert body["warnings"] == []
 
 
-async def test_breakdown_defaults_to_the_latest_profile_effective_today_or_earlier(auth_client):
+async def test_breakdown_defaults_to_the_latest_profile_effective_today_or_earlier(auth_client, me):
     # Dates relative to the run, never frozen: "today" is read at the ENDPOINT.
     today = date.today()
     await create_profile(auth_client, effective_date=str(today - timedelta(days=400)))
@@ -555,7 +566,7 @@ async def test_breakdown_defaults_to_the_latest_profile_effective_today_or_earli
     assert body["profile"]["annual_salary"] == "200000.00"
 
 
-async def test_breakdown_falls_back_to_the_earliest_future_profile(auth_client):
+async def test_breakdown_falls_back_to_the_earliest_future_profile(auth_client, me):
     today = date.today()
     soon = await create_profile(
         auth_client, effective_date=str(today + timedelta(days=10)), annual_salary="120000"
@@ -567,7 +578,7 @@ async def test_breakdown_falls_back_to_the_earliest_future_profile(auth_client):
     assert body["profile"]["annual_salary"] == "120000.00"
 
 
-async def test_breakdown_accepts_an_explicit_profile_id(auth_client):
+async def test_breakdown_accepts_an_explicit_profile_id(auth_client, me):
     old = await create_profile(auth_client, effective_date="2020-01-01", annual_salary="90000")
     await create_profile(auth_client)
 
@@ -586,7 +597,7 @@ async def test_breakdown_404_when_nothing_is_stored(auth_client):
     assert resp.json()["detail"] == "no paycheck profiles"
 
 
-async def test_breakdown_warns_on_over_100pct_contributions_and_a_negative_net(auth_client):
+async def test_breakdown_warns_on_over_100pct_contributions_and_a_negative_net(auth_client, me):
     await create_profile(
         auth_client,
         annual_salary="60000",
@@ -601,7 +612,7 @@ async def test_breakdown_warns_on_over_100pct_contributions_and_a_negative_net(a
     assert body["warnings"] == ["contribution percentages exceed 100%", "net pay is negative"]
 
 
-async def test_breakdown_warns_on_a_negative_net_alone(auth_client):
+async def test_breakdown_warns_on_a_negative_net_alone(auth_client, me):
     # The contributions sum to EXACTLY 1, so only the second warning may fire: 90% into
     # the traditional 401(k) leaves too little post-tax pay for the 10% ESPP line.
     await create_profile(
@@ -620,7 +631,7 @@ async def test_breakdown_warns_on_a_negative_net_alone(auth_client):
     assert body["warnings"] == ["net pay is negative"]
 
 
-async def test_breakdown_is_silent_at_exactly_100pct_and_a_zero_net(auth_client):
+async def test_breakdown_is_silent_at_exactly_100pct_and_a_zero_net(auth_client, me):
     created = await create_profile(
         auth_client,
         annual_salary="60000",
@@ -638,7 +649,7 @@ async def test_breakdown_is_silent_at_exactly_100pct_and_a_zero_net(auth_client)
     assert body["warnings"] == []
 
 
-async def test_breakdown_judges_the_negative_net_warning_on_the_displayed_net(auth_client):
+async def test_breakdown_judges_the_negative_net_warning_on_the_displayed_net(auth_client, me):
     # The canary for THE warning rule: 1.00 gross, half of it withheld, and a roth pct one
     # ulp over the other half. The full-precision net is -1E-9 — genuinely negative — while
     # the line the warning would sit next to reads "0.00". Judging the rule on the
@@ -660,10 +671,10 @@ async def test_breakdown_judges_the_negative_net_warning_on_the_displayed_net(au
     assert body["warnings"] == []
 
 
-async def test_breakdown_degrades_on_a_stored_zero_pay_period_count(auth_client, db):
+async def test_breakdown_degrades_on_a_stored_zero_pay_period_count(auth_client, db, me):
     # Written STRAIGHT to the table: the API's bounds never saw this row, and
     # `gross = annual_salary / periods` would make a plain GET a DivisionByZero 500.
-    stored = profile(pay_periods_per_year=0)
+    stored = profile(pay_periods_per_year=0, person_id=me.id)
     db.add(stored)
     await db.commit()
 
@@ -684,6 +695,61 @@ async def test_paycheck_endpoints_require_auth(client):
     assert (await client.patch(f"{PROFILES}/1", json={"annual_salary": "1"})).status_code == 401
     assert (await client.delete(f"{PROFILES}/1")).status_code == 401
     assert (await client.get(BREAKDOWN)).status_code == 401
+
+
+async def test_create_profile_defaults_to_the_primary_person(auth_client, me):
+    # Absent person_id = the primary. Every pre-P3 caller passes nothing and means the
+    # one earner the app modeled, so the wire keeps working untouched.
+    created = await create_profile(auth_client)
+    assert created["person_id"] == me.id
+    assert (await auth_client.get(PROFILES)).json()[0]["person_id"] == me.id
+
+
+async def test_create_profile_accepts_an_explicit_person_and_scopes_the_409(auth_client, db, me):
+    partner = Person(name="Partner")
+    db.add(partner)
+    await db.commit()
+
+    mine = await create_profile(auth_client)
+    theirs = await create_profile(auth_client, person_id=partner.id, annual_salary="96000")
+    assert theirs["person_id"] == partner.id
+    # The SAME date on two timelines is not a conflict — that is the whole point of the key.
+    assert theirs["effective_date"] == mine["effective_date"] == "2026-01-01"
+    assert theirs["annual_salary"] == "96000.00"
+
+    clash = await auth_client.post(PROFILES, json=profile_payload(person_id=partner.id))
+    assert clash.status_code == 409
+    assert "2026-01-01" in clash.json()["detail"]
+
+
+async def test_create_profile_404s_an_unknown_person_and_422s_without_a_roster(auth_client, db):
+    missing = await auth_client.post(PROFILES, json=profile_payload(person_id=999))
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "person not found"
+    # No roster at all: there is no primary to default to, and person_id is NOT NULL.
+    empty = await auth_client.post(PROFILES, json=profile_payload())
+    assert empty.status_code == 422
+    assert empty.json()["detail"] == "household has no primary person"
+    assert (await db.execute(select(PaycheckProfile))).scalars().all() == []
+    # int4 fence at the boundary: an out-of-range id must never reach asyncpg as a 500.
+    huge = await auth_client.post(PROFILES, json=profile_payload(person_id=99999999999))
+    assert huge.status_code == 422
+
+
+async def test_patch_profile_never_changes_the_owner(auth_client, db, me):
+    # `person_id` is deliberately absent from ProfileUpdate: a profile does not change
+    # hands, and pydantic drops the unknown key rather than 422ing on it.
+    partner = Person(name="Partner")
+    db.add(partner)
+    await db.commit()
+    created = await create_profile(auth_client)
+    patched = await auth_client.patch(
+        f"{PROFILES}/{created['id']}",
+        json={"person_id": partner.id, "annual_salary": "200000"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["person_id"] == me.id
+    assert patched.json()["annual_salary"] == "200000.00"
 
 
 # --- comp API ---

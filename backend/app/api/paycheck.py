@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import PaycheckProfile
+from app.models import PaycheckProfile, Person
 from app.schemas.paycheck import BreakdownOut, ProfileIn, ProfileOut, ProfileUpdate
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -34,6 +34,7 @@ from app.services.money import (
     require_reasonable_date,
 )
 from app.services.paycheck_calc import breakdown, half_up2
+from app.services.people import load_people, primary_person
 
 router = APIRouter(prefix="/paycheck", tags=["paycheck"], dependencies=[Depends(get_current_user)])
 
@@ -71,6 +72,9 @@ PCT_FIELDS = (
 CONTRIBUTION_FIELDS = ("trad_401k_pct", "roth_401k_pct", "after_tax_401k_pct", "espp_pct")
 CONTRIBUTIONS_WARNING = "contribution percentages exceed 100%"
 NEGATIVE_NET_WARNING = "net pay is negative"
+# A stored profile must have an owner (person_id is NOT NULL), and only a database whose
+# roster was never seeded has nobody to default to.
+NO_PRIMARY_PERSON_MESSAGE = "household has no primary person"
 
 
 def _positive_salary(value: Decimal, field: str) -> Decimal:
@@ -136,11 +140,47 @@ async def _get_profile(db: AsyncSession, profile_id: int) -> PaycheckProfile:
     return profile
 
 
-async def _require_free_effective_date(db: AsyncSession, effective_date: date) -> None:
+async def _resolve_person_id(db: AsyncSession, person_id: int | None) -> int | None:
+    """Who a request is about: the person named, or the PRIMARY when none is.
+
+    Absent means primary everywhere on this router — the wire's back-compat rule, since
+    every pre-P3 caller passes nothing and means the one earner the app modeled.
+
+    None comes back ONLY on a database whose roster was never seeded (a create_all test
+    database). `paycheck_profiles.person_id` is NOT NULL, so such a database can hold no
+    profiles at all: reads turn that into their own empty answer, writes into a 422.
+    """
+    if person_id is None:
+        primary = primary_person(await load_people(db))
+        return None if primary is None else primary.id
+    # 404 in the household router's own words — an unknown person is a missing thing, not
+    # a malformed request. The int4 fence lives on the wire types (IdQuery / ProfileIn),
+    # so this `get` can never reach asyncpg with an out-of-range id.
+    if await db.get(Person, person_id) is None:
+        raise HTTPException(status_code=404, detail="person not found")
+    return person_id
+
+
+async def _require_person(db: AsyncSession, person_id: int | None) -> int:
+    """The WRITE side of `_resolve_person_id`: a stored profile must have an owner."""
+    resolved = await _resolve_person_id(db, person_id)
+    if resolved is None:
+        raise HTTPException(status_code=422, detail=NO_PRIMARY_PERSON_MESSAGE)
+    return resolved
+
+
+async def _require_free_effective_date(
+    db: AsyncSession, person_id: int, effective_date: date
+) -> None:
+    """The unique key, checked in words first — and scoped to the OWNER: two people may
+    each have a profile effective the same day, so the 409 asks about ONE timeline."""
     taken = (
         (
             await db.execute(
-                select(PaycheckProfile).where(PaycheckProfile.effective_date == effective_date)
+                select(PaycheckProfile).where(
+                    PaycheckProfile.person_id == person_id,
+                    PaycheckProfile.effective_date == effective_date,
+                )
             )
         )
         .scalars()
@@ -162,12 +202,16 @@ def _merged(provided: dict, key: str, current):
 
 @router.get("/profiles", response_model=list[ProfileOut])
 async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[PaycheckProfile]:
-    # Newest first — the page opens on the profile in force. effective_date is unique,
-    # so this order needs no id tiebreak.
+    # Newest first — the page opens on the profile in force. ONE list for the whole
+    # household (the UI groups it by person_id). effective_date is only unique PER PERSON
+    # now, so `id` breaks the tie two people sharing a date would otherwise leave to the
+    # planner; on a one-person database no tie exists and the order is unchanged.
     return list(
         (
             await db.execute(
-                select(PaycheckProfile).order_by(PaycheckProfile.effective_date.desc())
+                select(PaycheckProfile).order_by(
+                    PaycheckProfile.effective_date.desc(), PaycheckProfile.id
+                )
             )
         ).scalars()
     )
@@ -175,6 +219,7 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[PaycheckProf
 
 @router.post("/profiles", response_model=ProfileOut, status_code=201)
 async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) -> PaycheckProfile:
+    person_id = await _require_person(db, body.person_id)
     fields = _validated_profile(
         effective_date=body.effective_date,
         annual_salary=body.annual_salary,
@@ -183,11 +228,11 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
         hsa_per_check=body.hsa_per_check,
         pcts={name: getattr(body, name) for name in PCT_FIELDS},
     )
-    # effective_date is the natural key. Plain check-then-409: two concurrent creates of
-    # the same date would race into an IntegrityError, an accepted house class for a
-    # single-user app.
-    await _require_free_effective_date(db, fields["effective_date"])
-    profile = PaycheckProfile(notes=body.notes, **fields)
+    # (person_id, effective_date) is the natural key. Plain check-then-409: two concurrent
+    # creates of the same pair would race into an IntegrityError, an accepted house class
+    # for a single-user app.
+    await _require_free_effective_date(db, person_id, fields["effective_date"])
+    profile = PaycheckProfile(person_id=person_id, notes=body.notes, **fields)
     db.add(profile)
     await db.commit()
     return profile
@@ -212,7 +257,8 @@ async def update_profile(
         pcts={name: _merged(provided, name, getattr(profile, name)) for name in PCT_FIELDS},
     )
     if fields["effective_date"] != profile.effective_date:
-        await _require_free_effective_date(db, fields["effective_date"])
+        # The row's OWN owner: a PATCH never moves a profile between people.
+        await _require_free_effective_date(db, profile.person_id, fields["effective_date"])
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
     for name, value in fields.items():
