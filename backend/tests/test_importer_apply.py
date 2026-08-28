@@ -23,6 +23,7 @@ from app.models import (
     AccountBalance,
     CardCredit,
     CategoryBudget,
+    ContributionLimit,
     CreditCard,
     CreditLimitEvent,
     CustomEvent,
@@ -1395,3 +1396,40 @@ async def test_importer_never_writes_credit_card_tables(db):
         after[model.__tablename__] = credit_card_rows(model)(rows)
     assert after == before
     assert all(table not in sheet.entities for sheet in report.sheets.values() for table in after)
+
+
+def contribution_limit_row(row: ContributionLimit) -> tuple:
+    """EVERY stored column, as grant_row above — a column added later is covered by the
+    pin below without anyone editing it."""
+    return tuple(getattr(row, column.key) for column in ContributionLimit.__table__.columns)
+
+
+async def test_importer_never_writes_contribution_limits(db):
+    """contribution_limits is dashboard-only (2026-08-27 spec §3 item 3, the custom_events
+    posture): no sheet carries IRS caps, so a re-import must neither create, update nor
+    delete a row."""
+    from app.importer.service import run_import
+
+    db.add(ContributionLimit(year=2026, key="limit_401k_elective", value=Decimal("24500.00")))
+    await db.commit()
+    before = {
+        row.id: contribution_limit_row(row)
+        for row in (await db.execute(select(ContributionLimit))).scalars()
+    }
+    assert len(before) == 1  # a pin over nothing pins nothing
+
+    for _ in range(2):
+        report = await run_import(build_workbook(), db, dry_run=False)
+        assert report.applied is True  # a blocked import would pin nothing
+
+    # populate_existing, or the identity map would hand back the pre-import objects and
+    # this would pass even if the import had rewritten every column (the dividends pin's
+    # note).
+    after = {
+        row.id: contribution_limit_row(row)
+        for row in (
+            await db.execute(select(ContributionLimit).execution_options(populate_existing=True))
+        ).scalars()
+    }
+    assert after == before
+    assert all("contribution_limits" not in sheet.entities for sheet in report.sheets.values())
