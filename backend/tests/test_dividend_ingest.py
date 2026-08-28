@@ -1,7 +1,9 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.models import DividendPayment, PortfolioAccount, PositionTransaction, Security
 from app.services.dividend_ingest import DividendIngestResult, ingest_dividends, shares_on
@@ -366,3 +368,56 @@ async def test_manual_overlap_boundary_exactly_14_days(db):
     await db.commit()
     assert counts(result) == (1, 0, 0, 0)
     assert [r.amount for r in await dividend_rows(db, source="auto")] == [Decimal("8.20")]
+
+
+async def test_auto_rows_are_unique_per_security_account_and_ex_date(db):
+    """The ported index: (security_id, portfolio_account_id, ex_date) WHERE source='auto'
+    — the same uniqueness the label-keyed index enforced."""
+    # Held as a plain int: the rollback below expires every instance, and a later sec.id
+    # would then emit lazy IO (MissingGreenlet under asyncio) — test_models_portfolio's rule.
+    sec_id = (await seed_security(db)).id
+    db.add(auto(sec_id, "RH Taxable", date(2026, 6, 19), "8.20"))
+    await db.commit()
+    db.add(auto(sec_id, "RH Taxable", date(2026, 6, 19), "8.20"))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+
+    # Same event, DIFFERENT account -> a second row is legal (per-account grain).
+    db.add(auto(sec_id, "Fidelity", date(2026, 6, 19), "4.10"))
+    await db.commit()
+    assert len(await dividend_rows(db, source="auto")) == 2
+
+    # Manual rows stay unconstrained (the index is partial).
+    db.add_all(
+        [
+            manual(sec_id, date(2026, 6, 19), "1.00", account="RH Taxable"),
+            manual(sec_id, date(2026, 6, 19), "1.00", account="RH Taxable"),
+        ]
+    )
+    await db.commit()
+    assert len(await dividend_rows(db, source="manual")) == 2
+
+
+async def test_self_heal_scope_is_keyed_by_the_account_row(db):
+    """Two accounts hold the same security; the holding in one is sold off. The next run
+    removes THAT account's auto row and leaves the other's — the old account-keyed
+    behavior, now on the FK."""
+    sec = await seed_security(db)
+    db.add_all(
+        [
+            txn(sec.id, "RH Taxable", "10", sort_index=0),
+            txn(sec.id, "Fidelity", "5", sort_index=1),
+        ]
+    )
+    await db.commit()
+    first = await ingest_dividends(db, {sec.id: [bar(date(2026, 6, 19), "0.8200")]}, today=TODAY)
+    await db.commit()
+    assert counts(first) == (2, 0, 0, 0)
+
+    db.add(txn(sec.id, "Fidelity", "5", type_="sell", price="100.0000", sort_index=2))
+    await db.commit()
+    second = await ingest_dividends(db, {sec.id: [bar(date(2026, 6, 19), "0.8200")]}, today=TODAY)
+    await db.commit()
+    assert counts(second) == (0, 1, 1, 0)  # RH rewritten, Fidelity's row removed
+    assert [r.account for r in await dividend_rows(db)] == ["RH Taxable"]

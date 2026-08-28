@@ -33,6 +33,7 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    Person,
     PortfolioAccount,
     PortfolioValueHistory,
     PositionTransaction,
@@ -279,6 +280,60 @@ async def test_apply_positions_sort_index_collision_leaves_ui_row_alone(db):
     assert report.entities["position_transactions"].creates == 1
     ui_row = next(r for r in rows if r.source == "ui")
     assert (ui_row.account, ui_row.type, ui_row.shares) == ("UI Acct", "sell", Decimal("3.000000"))
+
+
+async def test_apply_positions_creates_primary_owned_portfolio_accounts(db):
+    """Sheet labels become owned rows: the importer resolves through the same door the
+    router does (2026-08-28 spec §8), so a re-import needs zero workbook changes."""
+    db.add(Person(name="Me", is_primary=True))
+    await db.commit()
+    me = (await db.execute(select(Person).where(Person.is_primary))).scalar_one()
+
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+
+    rows = (
+        (await db.execute(select(PortfolioAccount).order_by(PortfolioAccount.label)))
+        .scalars()
+        .all()
+    )
+    assert [(r.label, r.person_id) for r in rows] == [("Fido", me.id), ("RH Taxable", me.id)]
+
+
+async def test_reimport_keeps_a_retagged_label_with_its_new_owner(db):
+    """The user re-tags "Fido" to their partner in Settings; the next sheet import must
+    leave that alone — get-or-create GETS."""
+    me, sam = Person(name="Me", is_primary=True), Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.commit()
+
+    wb = sheets()
+    report = SheetReport()
+    by_name = await apply_reference_data(db, parse_reference_data(wb["ReferenceData"]), report)
+    await apply_positions(db, parse_positions(wb["Positions"]), by_name, report)
+    await db.commit()
+    fido = (
+        await db.execute(select(PortfolioAccount).where(PortfolioAccount.label == "Fido"))
+    ).scalar_one()
+    fido.person_id = sam.id
+    await db.commit()
+
+    wb2 = sheets()
+    report2 = SheetReport()
+    by_name2 = await apply_reference_data(db, parse_reference_data(wb2["ReferenceData"]), report2)
+    await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
+    await db.commit()
+
+    after = (
+        (await db.execute(select(PortfolioAccount).order_by(PortfolioAccount.label)))
+        .scalars()
+        .all()
+    )
+    assert [(r.label, r.person_id) for r in after] == [("Fido", sam.id), ("RH Taxable", me.id)]
+    assert report2.entities["position_transactions"].updates == 0  # and no phantom diffs
 
 
 async def test_apply_net_worth_accounts_snapshots_balances(db):
