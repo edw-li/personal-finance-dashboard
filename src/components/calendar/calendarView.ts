@@ -76,3 +76,21 @@ export function groupByDate(events: CalendarEvent[]): Map<string, CalendarEvent[
   }
   return grouped
 }
+
+// The person-tag grammar, mirroring the server's services/calendar_events.person_suffix:
+// a tagged event reads "<label> — <name>" on the grid chip, in the list row, and in the ICS
+// SUMMARY (which is the label verbatim).
+export function personSuffix(name: string): string {
+  return ` — ${name}`
+}
+
+/** The label the user actually TYPED. GET /calendar stamps the owner's name onto a tagged
+ *  event, so the edit form and the delete-Undo re-POST must peel it back off — otherwise the
+ *  next save stores "Dentist — Sam" and the composer stamps it again. Nothing is stripped
+ *  when the name is unknown (a roster that has not loaded, or a person renamed since the
+ *  fetch): a visible stale suffix is recoverable, a wrongly-truncated title is not. */
+export function stripPersonSuffix(label: string, name: string | undefined): string {
+  if (name === undefined) return label
+  const suffix = personSuffix(name)
+  return label.endsWith(suffix) ? label.slice(0, -suffix.length) : label
+}

@@ -63,6 +63,7 @@ class CreditCardOut(BaseModel):
     annual_fee: Decimal
     rewards_currency: str
     point_value_cents: Decimal
+    person_id: int | None
     primary_holder: str | None
     authorized_users: str | None
     opened_on: date | None
@@ -82,6 +83,9 @@ class CreditCardIn(BaseModel):
     annual_fee: Decimal = Decimal("0")
     rewards_currency: str
     point_value_cents: Decimal = Decimal("1")
+    # NULL = joint. The bound mirrors account_id's: a person id is a plain int PK, and a
+    # 10-digit garbage value must 422 in the parser rather than reach the FK.
+    person_id: int | None = Field(default=None, ge=1, le=2_147_483_647)
     primary_holder: str | None = Field(default=None, max_length=80)
     authorized_users: str | None = Field(default=None, max_length=200)
     opened_on: date | None = None

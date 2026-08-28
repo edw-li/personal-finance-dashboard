@@ -1,3 +1,4 @@
+import type { OwnerScope } from '../../api/netWorth'
 import type {
   CreditCardOut,
   RewardCategoryOut,
@@ -15,6 +16,9 @@ export interface MathCard {
   pointValueCents: number
   isActive: boolean
   countedCredits: number
+  /** Owner; null = JOINT. Only householdAdvantage reads it — optimize() is owner-blind by
+   *  design, because the whole lineup is what the matrix is answering about. */
+  ownerId: number | null
 }
 
 export interface MathCategory {
@@ -197,6 +201,17 @@ function totalOf(verdicts: Map<number, CategoryVerdict>): number {
   return total
 }
 
+/** The lineup's net: what the whole set earns, plus what its credits are worth, minus every
+ *  annual fee in it. ONE definition — optimize()'s KPI and householdAdvantage's two sides
+ *  must be priced identically or the difference between them means nothing. */
+function netOf(actives: MathCard[], optimalTotal: number): number {
+  return (
+    optimalTotal +
+    actives.reduce((acc, c) => acc + c.countedCredits, 0) -
+    actives.reduce((acc, c) => acc + c.annualFee, 0)
+  )
+}
+
 export function optimize(
   cards: MathCard[],
   categories: MathCategory[],
@@ -232,12 +247,57 @@ export function optimize(
     }
   })
 
-  const lineupNet =
-    optimalTotal +
-    actives.reduce((acc, c) => acc + c.countedCredits, 0) -
-    actives.reduce((acc, c) => acc + c.annualFee, 0)
+  return {
+    verdicts,
+    cardEarnings,
+    cardValues,
+    optimalTotal,
+    lineupNet: netOf(actives, optimalTotal),
+  }
+}
 
-  return { verdicts, cardEarnings, cardValues, optimalTotal, lineupNet }
+/** Owner-scope membership, the net-worth grammar verbatim: absent (null) is the whole
+ *  household, a person id is THEIR cards plus the JOINT ones — either spouse can hold a
+ *  joint card — and 'joint' is the NULL-owned slice alone. */
+export function ownerMatches(personId: number | null, scope: OwnerScope): boolean {
+  if (scope === null) return true
+  if (scope === 'joint') return personId === null
+  return personId === scope || personId === null
+}
+
+/**
+ * "Merging our wallets is worth $X/yr": the household lineup's net minus the BEST single
+ * owner's, where a single-owner wallet is that person's active cards ∪ the joint ones.
+ *
+ * Returns null — the tile is absent, never zero — when there is nothing honest to say:
+ * fewer than two distinct non-joint owners hold active cards (one person owning everything
+ * has no merge to price), or the delta is not positive. The delta really can be negative:
+ * lineup net subtracts EVERY fee in the wallet, so a partner's high-fee card that wins no
+ * category costs the household more than it costs the other spouse's wallet.
+ *
+ * Cost is `1 + owners` verdict passes, not `1 + owners` optimizations — nothing here needs
+ * the per-card marginal loop that dominates optimize().
+ */
+export function householdAdvantage(
+  cards: MathCard[],
+  categories: MathCategory[],
+  rates: MathRate[],
+): number | null {
+  const actives = cards.filter((c) => c.isActive)
+  const owners = [...new Set(actives.map((c) => c.ownerId).filter((id) => id !== null))]
+  if (owners.length < 2) return null
+  const netFor = (wallet: MathCard[]): number =>
+    netOf(wallet, totalOf(computeVerdicts(wallet, categories, rates)))
+  const household = netFor(actives)
+  const best = Math.max(
+    // ownerMatches is the single owner-of-record rule the sibling test pins: a person's
+    // wallet is their cards plus joint.
+    ...owners.map((owner) => netFor(actives.filter((c) => ownerMatches(c.ownerId, owner)))),
+  )
+  const delta = household - best
+  // TIE_EPSILON, not > 0: float dust from three independent sums must not render as
+  // "$0/yr" under a headline that claims the household wins.
+  return delta > TIE_EPSILON ? delta : null
 }
 
 // --- wire adapters -----------------------------------------------------------------------
@@ -249,6 +309,7 @@ export function toMathCards(cards: CreditCardOut[]): MathCard[] {
     annualFee: Number(c.annual_fee),
     pointValueCents: Number(c.point_value_cents),
     isActive: c.is_active,
+    ownerId: c.person_id,
     countedCredits: c.credits
       .filter((credit) => credit.counts)
       .reduce((acc, credit) => acc + Number(credit.annual_value), 0),

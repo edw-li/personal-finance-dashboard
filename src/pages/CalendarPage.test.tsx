@@ -19,12 +19,14 @@ vi.mock('../utils/ics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/ics')>()),
   downloadIcs: vi.fn(),
 }))
+vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 import {
   createCustomEvent,
   deleteCustomEvent,
   fetchCalendar,
   updateCustomEvent,
 } from '../api/calendar'
+import { fetchHousehold } from '../api/household'
 import { downloadIcs } from '../utils/ics'
 
 // Wall-clock-proof fixtures (OverviewPage.test's NW_MONTHS discipline): the page boots
@@ -41,8 +43,17 @@ function fixtureEvents(): CalendarEvent[] {
       detail: '25 sh — 2025 offer',
       href: '/comp',
       id: null,
+      person_id: null,
     },
-    { date: DAY_15, type: 'payday', label: 'Payday', detail: null, href: '/paycheck', id: null },
+    {
+      date: DAY_15,
+      type: 'payday',
+      label: 'Payday',
+      detail: null,
+      href: '/paycheck',
+      id: null,
+      person_id: null,
+    },
     {
       date: addDays(DAY_15, 3),
       type: 'ex_dividend',
@@ -50,6 +61,7 @@ function fixtureEvents(): CalendarEvent[] {
       detail: 'NVDA',
       href: '/portfolio',
       id: null,
+      person_id: null,
     },
     {
       date: DAY_15,
@@ -58,6 +70,7 @@ function fixtureEvents(): CalendarEvent[] {
       detail: 'policy 8841',
       href: null,
       id: 41,
+      person_id: null,
     },
   ]
 }
@@ -86,6 +99,13 @@ function grid(): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks()
   clearSnapshots()
+  vi.mocked(fetchHousehold).mockResolvedValue({
+    people: [
+      { id: 1, name: 'Ed', is_primary: true },
+      { id: 2, name: 'Sam', is_primary: false },
+    ],
+    marriage_date: null,
+  })
 })
 
 // Manual cleanup, OverviewPage.test's hygiene: vitest runs without injected globals, so
@@ -277,6 +297,7 @@ describe('CalendarPage', () => {
       date: todayIsoStr,
       label: 'Car wash',
       detail: null,
+      person_id: null,
     })
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
@@ -289,6 +310,7 @@ describe('CalendarPage', () => {
       date: todayIsoStr,
       label: 'Car wash',
       detail: null,
+      person_id: null,
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
     // The form closes on success.
@@ -301,6 +323,7 @@ describe('CalendarPage', () => {
       date: DAY_15,
       label: 'Renewal',
       detail: 'policy 8841',
+      person_id: null,
     })
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
@@ -319,6 +342,7 @@ describe('CalendarPage', () => {
       date: DAY_15,
       label: 'Renewal',
       detail: 'policy 8841',
+      person_id: null,
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
   })
@@ -344,6 +368,7 @@ describe('CalendarPage', () => {
       date: DAY_15,
       label: 'Car insurance',
       detail: 'policy 8841',
+      person_id: null,
     })
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
@@ -356,6 +381,7 @@ describe('CalendarPage', () => {
       date: DAY_15,
       label: 'Car insurance',
       detail: 'policy 8841',
+      person_id: null,
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(3))
   })
@@ -425,6 +451,7 @@ describe('CalendarPage — snapshot cache (2026-08-27 spec §1)', () => {
         detail: null,
         href: null,
         id: 99,
+        person_id: null,
       },
     ])
     expect(
@@ -434,5 +461,97 @@ describe('CalendarPage — snapshot cache (2026-08-27 spec §1)', () => {
     expect(
       Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent),
     ).not.toContain('RSU vest — 2025 offer')
+  })
+})
+
+describe('CalendarPage — person tags', () => {
+  // The neighbouring suite's helpers, re-declared: an event renders in BOTH the grid and
+  // the list, so a bare text query is ambiguous and the chip is the surface these drive.
+  function gridChip(text: string): HTMLElement {
+    const node = document.querySelector('.cal-grid')
+    const chip = Array.from(node?.querySelectorAll('button.cal-chip') ?? []).find(
+      (c) => c.textContent === text,
+    )
+    expect(chip).toBeDefined()
+    return chip as HTMLElement
+  }
+
+  it('sends the chosen person and defaults to Household', async () => {
+    vi.mocked(createCustomEvent).mockResolvedValue({
+      id: 99, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
+    })
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+    const select = screen.getByLabelText('Person') as HTMLSelectElement
+    expect(select.value).toBe('') // Household — a tag is always a deliberate choice
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Dentist' } })
+    fireEvent.change(select, { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save event' }))
+    await waitFor(() => expect(createCustomEvent).toHaveBeenCalled())
+    expect(vi.mocked(createCustomEvent).mock.calls[0][0].person_id).toBe(2)
+  })
+
+  it('hides the select for a one-person household and sends null', async () => {
+    vi.mocked(fetchHousehold).mockResolvedValue({
+      people: [{ id: 1, name: 'Ed', is_primary: true }],
+      marriage_date: null,
+    })
+    vi.mocked(createCustomEvent).mockResolvedValue({
+      id: 99, date: DAY_15, label: 'Dentist', detail: null, person_id: null,
+    })
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+    expect(screen.queryByLabelText('Person')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Dentist' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save event' }))
+    await waitFor(() => expect(createCustomEvent).toHaveBeenCalled())
+    expect(vi.mocked(createCustomEvent).mock.calls[0][0].person_id).toBeNull()
+  })
+
+  it('STRIPS the stamped suffix before editing — a re-save must not stamp it twice', async () => {
+    renderPage([
+      {
+        date: DAY_15, type: 'custom', label: 'Dentist — Sam', detail: null, href: null,
+        id: 41, person_id: 2,
+      },
+    ])
+    await screen.findAllByText('Dentist — Sam')
+    fireEvent.click(gridChip('Dentist — Sam'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Dentist')
+    expect((screen.getByLabelText('Person') as HTMLSelectElement).value).toBe('2')
+    vi.mocked(updateCustomEvent).mockResolvedValue({
+      id: 41, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(updateCustomEvent).toHaveBeenCalled())
+    expect(vi.mocked(updateCustomEvent).mock.calls[0][1]).toMatchObject({
+      label: 'Dentist',
+      person_id: 2,
+    })
+  })
+
+  it('STRIPS the suffix before the delete-Undo re-POST too', async () => {
+    vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
+    vi.mocked(createCustomEvent).mockResolvedValue({
+      id: 42, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
+    })
+    renderPage([
+      {
+        date: DAY_15, type: 'custom', label: 'Dentist — Sam', detail: null, href: null,
+        id: 41, person_id: 2,
+      },
+    ])
+    await screen.findAllByText('Dentist — Sam')
+    fireEvent.click(gridChip('Dentist — Sam'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(createCustomEvent).toHaveBeenCalled())
+    expect(vi.mocked(createCustomEvent).mock.calls[0][0]).toMatchObject({
+      label: 'Dentist',
+      person_id: 2,
+    })
   })
 })

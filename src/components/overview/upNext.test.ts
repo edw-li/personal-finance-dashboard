@@ -3,7 +3,15 @@ import type { CalendarEvent } from '../../types/api'
 import { UP_NEXT_LIMIT, UP_NEXT_WINDOW_DAYS, upNextItems } from './upNext'
 
 function ev(date: string): CalendarEvent {
-  return { date, type: 'payday', label: `Event ${date}`, detail: null, href: '/paycheck', id: null }
+  return {
+    date,
+    type: 'payday',
+    label: `Event ${date}`,
+    detail: null,
+    href: '/paycheck',
+    id: null,
+    person_id: null,
+  }
 }
 
 describe('upNextItems', () => {

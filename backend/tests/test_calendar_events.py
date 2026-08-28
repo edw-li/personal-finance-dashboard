@@ -8,7 +8,7 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.services.calendar_events import PaydaySource, compose
+from app.services.calendar_events import CustomRow, PaydaySource, compose, person_suffix
 from app.services.espp_calc import OfferingInfo, StoredPeriod
 
 
@@ -235,8 +235,8 @@ def test_custom_rows_render_and_clip():
             date(2026, 9, 1),
             date(2026, 9, 30),
             custom_rows=[
-                (7, date(2026, 9, 12), "Car insurance renewal", "policy 8841"),
-                (8, date(2026, 10, 2), "Out of range", None),
+                CustomRow(7, date(2026, 9, 12), "Car insurance renewal", "policy 8841"),
+                CustomRow(8, date(2026, 10, 2), "Out of range", None),
             ],
         ),
         "custom",
@@ -244,6 +244,9 @@ def test_custom_rows_render_and_clip():
     assert [(e.event_date, e.label, e.detail, e.href, e.event_id) for e in events] == [
         (date(2026, 9, 12), "Car insurance renewal", "policy 8841", None, 7)
     ]
+    # UNTAGGED rows are byte-identical to before the person column: no suffix, no detail
+    # change, and person_id rides as None.
+    assert events[0].person_id is None
 
 
 def test_computed_events_carry_no_event_id():
@@ -263,7 +266,7 @@ def test_custom_rows_sort_with_computed_events():
         date(2026, 9, 15),
         date(2026, 9, 15),
         payday_sources=[PaydaySource(name="Me", semi_monthly=True)],
-        custom_rows=[(3, date(2026, 9, 15), "Zoo membership", None)],
+        custom_rows=[CustomRow(3, date(2026, 9, 15), "Zoo membership", None)],
     )
     assert [(e.type, e.label) for e in events] == [
         ("custom", "Zoo membership"),
@@ -326,3 +329,40 @@ def test_one_profiled_person_keeps_the_bare_unlabelled_payday():
         "payday",
     )
     assert all(e.label == "Payday" and e.detail is None and e.href == "/paycheck" for e in events)
+
+
+def test_a_tagged_custom_row_wears_the_person_suffix():
+    # The SAME grammar the payday chips use — one helper, so an event tagged to Sam and a
+    # payday of Sam's read identically and the frontend has one shape to strip.
+    events = _of_type(
+        _compose(
+            date(2026, 9, 1),
+            date(2026, 9, 30),
+            custom_rows=[
+                CustomRow(
+                    9, date(2026, 9, 12), "Dentist", "cleaning", person_id=2, person_name="Sam"
+                )
+            ],
+        ),
+        "custom",
+    )
+    assert [(e.label, e.detail, e.person_id) for e in events] == [("Dentist — Sam", "cleaning", 2)]
+
+
+def test_person_suffix_is_the_one_grammar_paydays_already_use():
+    events = _of_type(
+        _compose(
+            date(2026, 8, 1),
+            date(2026, 8, 31),
+            payday_sources=[
+                PaydaySource(name="Me", semi_monthly=True),
+                PaydaySource(name="Sam", semi_monthly=True),
+            ],
+        ),
+        "payday",
+    )
+    assert {e.label for e in events} == {
+        "Payday" + person_suffix("Me"),
+        "Payday" + person_suffix("Sam"),
+    }
+    assert person_suffix("Sam") == " — Sam"

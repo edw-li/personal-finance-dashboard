@@ -33,6 +33,7 @@ vi.mock('../api/netWorth', () => ({
   fetchSummary: vi.fn(),
   fetchMonthBalances: vi.fn(),
 }))
+vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 // ECharts never renders in jsdom (house law): the stub exposes the slices these tests
 // pin — series names for the two chart cards — via data-* attributes.
 vi.mock('../components/EChart', async () => {
@@ -59,6 +60,7 @@ vi.mock('../components/EChart', async () => {
 
 import {
   createCreditCard,
+  deleteCreditCard,
   fetchCreditCards,
   fetchRewardCategories,
   fetchRewardRates,
@@ -67,8 +69,10 @@ import {
   updateCreditCard,
   updateRewardCategory,
 } from '../api/creditCards'
+import { fetchHousehold } from '../api/household'
 import { fetchAccounts, fetchMonthBalances, fetchSummary } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
+import ToastProvider from '../components/ToastProvider'
 
 // --- fixtures: the valuation-flip scenario straight from the spec -----------------------
 // VX: 2x miles @1.7¢ on Groceries (3.4%) — beats Savor's 3x cash (3.0%).
@@ -79,7 +83,7 @@ function vx(over: Partial<CreditCardOut> = {}): CreditCardOut {
     id: 1, name: 'Venture X', slug: 'venture-x', annual_fee: '395.00',
     rewards_currency: 'miles', point_value_cents: '1.7000', primary_holder: 'Ed',
     authorized_users: 'P2', opened_on: '2023-05-12', is_active: true, account_id: null,
-    notes: null, sort_order: 0,
+    person_id: 1, notes: null, sort_order: 0,
     credits: [{ id: 11, label: '$300 travel credit', annual_value: '300.00', counts: true }],
     current_limit: '30000.00',
     limit_events: [
@@ -93,7 +97,7 @@ function vx(over: Partial<CreditCardOut> = {}): CreditCardOut {
 const SAVOR: CreditCardOut = {
   id: 2, name: 'SavorOne', slug: 'savorone', annual_fee: '0.00', rewards_currency: 'cash',
   point_value_cents: '1.0000', primary_holder: 'Ed', authorized_users: null, opened_on: null,
-  is_active: true, account_id: null, notes: null, sort_order: 1, credits: [],
+  is_active: true, account_id: null, person_id: 1, notes: null, sort_order: 1, credits: [],
   current_limit: '10000.00',
   limit_events: [{ id: 23, effective_date: '2024-02-01', limit_amount: '10000.00', note: null }],
 }
@@ -101,7 +105,7 @@ const SAVOR: CreditCardOut = {
 const RH: CreditCardOut = {
   id: 3, name: 'RH Gold', slug: 'rh-gold', annual_fee: '0.00', rewards_currency: 'cash',
   point_value_cents: '1.0000', primary_holder: 'Ed', authorized_users: null, opened_on: null,
-  is_active: true, account_id: null, notes: null, sort_order: 2, credits: [],
+  is_active: true, account_id: null, person_id: 2, notes: null, sort_order: 2, credits: [],
   current_limit: null, limit_events: [],
 }
 
@@ -127,6 +131,11 @@ const EMPTY_MATRIX = {
   four_pct_rule: [], total_budget: [],
 } as unknown as SpendingMatrix
 
+const PEOPLE = [
+  { id: 1, name: 'Ed', is_primary: true },
+  { id: 2, name: 'Sam', is_primary: false },
+]
+
 function seedHappyPath() {
   vi.mocked(fetchCreditCards).mockResolvedValue([vx(), SAVOR, RH])
   vi.mocked(fetchRewardCategories).mockResolvedValue(CATEGORIES)
@@ -134,6 +143,7 @@ function seedHappyPath() {
   vi.mocked(fetchCategories).mockResolvedValue([])
   vi.mocked(fetchMatrix).mockResolvedValue(EMPTY_MATRIX)
   vi.mocked(fetchAccounts).mockResolvedValue([])
+  vi.mocked(fetchHousehold).mockResolvedValue({ people: PEOPLE, marriage_date: null })
   vi.mocked(fetchSummary).mockResolvedValue({
     month: null, net_worth: null, mom_delta: null, mom_pct: null, groups: [], owner_totals: [],
   })
@@ -486,5 +496,149 @@ describe('CreditCardsPage — snapshot cache (2026-08-27 spec §1)', () => {
     expect(
       screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
     ).toBe(true)
+  })
+})
+
+describe('CreditCardsPage — card ownership', () => {
+  it('shows the owner per row and defaults a NEW card to the primary person', async () => {
+    renderPage()
+    await screen.findByText('Card roster')
+    const roster = document.querySelector('.roster-table') as HTMLElement
+    const owners = Array.from(roster.querySelectorAll('tbody tr')).map(
+      (tr) => tr.querySelectorAll('td')[1].textContent,
+    )
+    expect(owners).toEqual(['Ed', 'Ed', 'Sam'])
+    // The fresh form follows the roster once /household lands — Joint must be a CHOICE.
+    // `selector` disambiguates from the chips group, which is also labelled Owner.
+    const select = screen.getByLabelText('Owner', { selector: 'select' }) as HTMLSelectElement
+    expect(select.value).toBe('1')
+  })
+
+  it('sends person_id on create and leaves primary_holder alone', async () => {
+    vi.mocked(createCreditCard).mockResolvedValue(vx())
+    renderPage()
+    await screen.findByText('Card roster')
+    fireEvent.change(screen.getByLabelText('Card name'), { target: { value: 'Blue Cash' } })
+    fireEvent.change(screen.getByLabelText('Owner', { selector: 'select' }), {
+      target: { value: '2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add card' }))
+    await waitFor(() => expect(createCreditCard).toHaveBeenCalled())
+    const body = vi.mocked(createCreditCard).mock.calls[0][0]
+    expect(body.person_id).toBe(2)
+    // The form has no holder box any more; a new card simply has no embossed name yet.
+    expect(body.primary_holder).toBeNull()
+  })
+
+  it('ARCHIVE rebuilds the whole card verbatim — person_id must survive', async () => {
+    vi.mocked(updateCreditCard).mockResolvedValue(RH)
+    renderPage()
+    await screen.findByText('Card roster')
+    fireEvent.click(screen.getByRole('button', { name: 'Archive RH Gold' }))
+    await waitFor(() => expect(updateCreditCard).toHaveBeenCalled())
+    const [id, body] = vi.mocked(updateCreditCard).mock.calls[0]
+    expect(id).toBe(3)
+    expect(body.is_active).toBe(false)
+    // The audit's §3.6 hazard, pinned: a column missing from this rebuild silently CLEARS
+    // — and a cleared person_id reads as "joint", which is a different card.
+    expect(body.person_id).toBe(2)
+    expect(body.primary_holder).toBe('Ed')
+  })
+
+  it('UNDO after delete re-POSTs the card verbatim — person_id must survive', async () => {
+    vi.mocked(deleteCreditCard).mockResolvedValue(undefined)
+    vi.mocked(createCreditCard).mockResolvedValue(RH)
+    render(
+      <MemoryRouter initialEntries={['/credit-cards']}>
+        <ToastProvider>
+          <CreditCardsPage />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByText('Card roster')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete RH Gold' }))
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    fireEvent.click(undo)
+    await waitFor(() => expect(createCreditCard).toHaveBeenCalled())
+    expect(vi.mocked(createCreditCard).mock.calls[0][0].person_id).toBe(2)
+  })
+})
+
+describe('CreditCardsPage — owner chips and the household advantage', () => {
+  it('scopes the matrix, the KPIs and the credit line to the chosen owner — never the roster', async () => {
+    renderPage()
+    await screen.findByText('Rewards matrix — best card per category')
+    // All: three cards in the matrix header, and the KPI count agrees.
+    expect(screen.getByRole('button', { name: 'Open RH Gold details' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Open SavorOne details' })).toBeNull(),
+    )
+    // Sam's scope = Sam's cards ∪ the joint ones. Nothing here is joint, so only RH Gold.
+    expect(screen.getByRole('button', { name: 'Open RH Gold details' })).toBeTruthy()
+    const activeTile = screen
+      .getAllByText('Active cards')[0]
+      .closest('.stat-tile') as HTMLElement
+    expect(activeTile.querySelector('.stat-value')?.textContent).toBe('1')
+    // The credit-line chart only has series for cards in scope (RH Gold has no events at
+    // all, so the card falls back to its empty note).
+    expect(screen.getByText(/No limit history yet/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Joint' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Open RH Gold details' })).toBeNull(),
+    )
+  })
+
+  it('hides the chips entirely for a one-person household', async () => {
+    vi.mocked(fetchHousehold).mockResolvedValue({
+      people: [{ id: 1, name: 'Ed', is_primary: true }],
+      marriage_date: null,
+    })
+    renderPage()
+    await screen.findByText('Card roster')
+    expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
+  })
+
+  it('badges each matrix column with its owner', async () => {
+    renderPage()
+    const header = await screen.findByRole('button', { name: 'Open RH Gold details' })
+    expect(header.textContent).toContain('Sam')
+    const joint = await screen.findByRole('button', { name: 'Open Venture X details' })
+    expect(joint.textContent).toContain('Ed')
+  })
+
+  it('shows the advantage tile only when merging genuinely wins', async () => {
+    renderPage()
+    await screen.findByText('Card roster')
+    // The fixture: Ed holds VX + SavorOne, Sam holds RH Gold (3x Dining, no fee). Ed alone
+    // already wins Dining with SavorOne's 3x, so RH Gold adds nothing — no tile.
+    expect(screen.queryByText('Household wallet advantage')).toBeNull()
+
+    cleanup()
+    // Give Sam a card that wins a category nobody else can: 5x Groceries at 1¢ = 5%.
+    const winner: CreditCardOut = { ...RH, id: 4, name: 'Sam Grocery', slug: 'sam-grocery' }
+    vi.mocked(fetchCreditCards).mockResolvedValue([vx(), SAVOR, winner])
+    vi.mocked(fetchRewardRates).mockResolvedValue([
+      ...RATES,
+      { id: 36, card_id: 4, category_id: 10, multiplier: '5.00', note: null, monthly_cap: null },
+    ])
+    renderPage()
+    await screen.findByText('Card roster')
+    const tile = (await screen.findByText('Household wallet advantage')).closest(
+      '.stat-tile',
+    ) as HTMLElement
+    // Hand-checked against the fixture. Groceries weighs 7,800 and Dining 6,000; VX is
+    // 2x @1.7¢ (3.4%) with a $300 counted credit and a $395 fee, SavorOne 3x @1¢, Sam
+    // Grocery 5x @1¢. RATES' card_id 3 cell is inert here — RH Gold is not in this lineup.
+    //   household {VX, Savor, Sam}: 390 (Sam wins Groceries) + 180 (Savor wins Dining)
+    //                               = 570, +300 credit −395 fee = 475
+    //   Ed's wallet {VX, Savor}:     265.20 + 180 = 445.20, +300 −395 = 350.20
+    //   Sam's wallet {Sam Grocery}:  390 + 0 = 390, no credit, no fee = 390
+    // The BEST single wallet is SAM's, not Ed's — a fee-free card that wins outright beats
+    // a wallet whose $395 fee eats its lead. So the merge is worth 475 − 390 = $85.00/yr.
+    expect(tile.querySelector('.stat-value')?.textContent).toBe('$85.00/yr')
+    expect(tile.textContent).toContain('beats the best single wallet')
   })
 })
