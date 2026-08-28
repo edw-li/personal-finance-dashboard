@@ -19,7 +19,9 @@ REWARDS_CURRENCIES = ("cash", "points", "miles")
 
 
 class CreditCard(Base):
-    """One real card account (holders are informational text — single-user app)."""
+    """One real card account. OWNERSHIP is `person_id` (NULL = joint — either spouse can
+    hold the card); `primary_holder`/`authorized_users` stay as INFORMATIONAL text, e.g.
+    the exact name embossed on the plastic (2026-08-28 spec §3 item 2)."""
 
     __tablename__ = "credit_cards"
     __table_args__ = (
@@ -35,6 +37,11 @@ class CreditCard(Base):
     # Valuation of ONE point/mile in cents; cash stays 1.0. The optimizer's whole
     # cross-currency comparison hangs off this column (spec §1).
     point_value_cents: Mapped[Decimal] = mapped_column(Numeric(6, 4), default=Decimal("1"))
+    # NULL = JOINT, never "unowned": migration c7a2f4e91b53 backfilled every pre-existing
+    # card to the primary person, so NULL only ever arrives from a deliberate choice.
+    person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id", ondelete="SET NULL"), default=None
+    )
     primary_holder: Mapped[str | None] = mapped_column(String(80))
     authorized_users: Mapped[str | None] = mapped_column(String(200))  # free-form, comma chips
     opened_on: Mapped[date | None] = mapped_column(Date)

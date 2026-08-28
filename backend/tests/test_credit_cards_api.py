@@ -5,7 +5,15 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models import Account, CardCredit, CreditCard, CreditLimitEvent, RewardCategory, RewardRate
+from app.models import (
+    Account,
+    CardCredit,
+    CreditCard,
+    CreditLimitEvent,
+    Person,
+    RewardCategory,
+    RewardRate,
+)
 
 CARDS = "/api/v1/credit-cards"
 
@@ -23,6 +31,9 @@ def card_body(name: str = "Venture X", **over) -> dict:
         "account_id": None,
         "notes": None,
         "sort_order": 0,
+        # NULL is JOINT, never "unknown" — the migration backfilled every pre-existing card
+        # to the primary person, so an omitted owner here is a deliberate joint card.
+        "person_id": None,
     }
     body.update(over)
     return body
@@ -324,6 +335,38 @@ async def test_card_patch_full_replace_and_rename_clash(auth_client):
     assert clash.status_code == 409
     same_self = await auth_client.patch(f"{CARDS}/{first['id']}", json=card_body())
     assert same_self.status_code == 200  # renaming to your own name is not a clash
+
+
+async def test_card_owner_roundtrips_and_null_means_joint(auth_client, db):
+    me = Person(name="Me", is_primary=True)
+    sam = Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.commit()
+
+    created = await auth_client.post(CARDS, json=card_body(person_id=sam.id))
+    assert created.status_code == 201, created.text
+    assert created.json()["person_id"] == sam.id
+    card_id = created.json()["id"]
+
+    # The list is the page's only card source — the column must ride it too.
+    listed = await auth_client.get(CARDS)
+    assert [c["person_id"] for c in listed.json()] == [sam.id]
+
+    # Full replace: an explicit null is how a card becomes JOINT (the accounts precedent).
+    joint = await auth_client.patch(f"{CARDS}/{card_id}", json=card_body(person_id=None))
+    assert joint.status_code == 200
+    assert joint.json()["person_id"] is None
+
+    back = await auth_client.patch(f"{CARDS}/{card_id}", json=card_body(person_id=me.id))
+    assert back.status_code == 200
+    assert back.json()["person_id"] == me.id
+
+
+async def test_card_owner_must_exist(auth_client):
+    ghost = await auth_client.post(CARDS, json=card_body(person_id=999))
+    assert ghost.status_code == 422
+    # The server's own sentence — the UI renders it verbatim (net_worth.py's wording).
+    assert ghost.json()["detail"] == "unknown person_id: 999"
 
 
 async def test_card_delete_cascades_children(auth_client, db):

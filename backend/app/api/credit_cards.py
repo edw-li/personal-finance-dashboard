@@ -12,6 +12,7 @@ from app.models import (
     CardCredit,
     CreditCard,
     CreditLimitEvent,
+    Person,
     RewardCategory,
     RewardRate,
     SpendingCategory,
@@ -325,6 +326,9 @@ def _card_out(
         annual_fee=card.annual_fee,
         rewards_currency=card.rewards_currency,
         point_value_cents=card.point_value_cents,
+        # ENUMERATION SITE 1 of 2 (the other is _validated_card_values' dict). A column
+        # missing from either one is silently dropped on the wire — the audit's §3.6 hazard.
+        person_id=card.person_id,
         primary_holder=card.primary_holder,
         authorized_users=card.authorized_users,
         opened_on=card.opened_on,
@@ -377,12 +381,20 @@ async def _validated_card_values(db: AsyncSession, body: CreditCardIn, card_id: 
             raise HTTPException(
                 status_code=422, detail="linked account must be in the liability group"
             )
+    # 422, not 404: the net-worth router's sentence for the same mistake, and the UI renders
+    # it verbatim. Checked BEFORE the write so a bad id never surfaces as asyncpg's
+    # ForeignKeyViolationError inside a 500.
+    if body.person_id is not None and (await db.get(Person, body.person_id)) is None:
+        raise HTTPException(status_code=422, detail=f"unknown person_id: {body.person_id}")
     return {
         "name": body.name,
         "slug": slug,
         "annual_fee": fee,
         "rewards_currency": body.rewards_currency,
         "point_value_cents": point_value,
+        # ENUMERATION SITE 2 of 2 (the other is _card_out). Both verbs share this dict, so
+        # create and full-replace patch carry ownership by construction.
+        "person_id": body.person_id,
         "primary_holder": body.primary_holder,
         "authorized_users": body.authorized_users,
         "opened_on": body.opened_on,
