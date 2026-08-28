@@ -6,6 +6,7 @@ import {
   fetchCalendar,
   updateCustomEvent,
 } from '../api/calendar'
+import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import {
   EVENT_COLORS,
@@ -13,10 +14,11 @@ import {
   EVENT_TYPE_ORDER,
   eventKey,
   groupByDate,
+  stripPersonSuffix,
 } from '../components/calendar/calendarView'
 import EventDetails from '../components/calendar/EventDetails'
 import { useToast } from '../components/ToastProvider'
-import type { CalendarEvent } from '../types/api'
+import type { CalendarEvent, PersonOut } from '../types/api'
 import { formatDate, formatMonth } from '../utils/format'
 import { downloadIcs } from '../utils/ics'
 import { addDays, addMonths, currentMonthIso, monthGrid, todayIso } from '../utils/months'
@@ -55,6 +57,15 @@ export default function CalendarPage() {
   const [fDate, setFDate] = useState('')
   const [fLabel, setFLabel] = useState('')
   const [fDetail, setFDetail] = useState('')
+  const [fPerson, setFPerson] = useState('') // '' = Household; a tag is always deliberate
+  // Its own fetch, outside the per-month snapshot: the roster does not change with the
+  // month, and folding it in would invalidate every cached month (NetWorthPage's pattern).
+  const [people, setPeople] = useState<PersonOut[]>([])
+  useEffect(() => {
+    fetchHousehold()
+      .then((data) => setPeople(data.people))
+      .catch(() => setPeople([]))
+  }, [])
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -155,11 +166,25 @@ export default function CalendarPage() {
     }
   }, [open])
 
+  // Primary first, then by id — the order every other person control on the site uses.
+  const orderedPeople = [...people].sort(
+    (a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id,
+  )
+  const ownerName = new Map(people.map((p) => [p.id, p.name]))
+  // GET /calendar stamps " — <name>" into a tagged event's label. Anything that re-saves
+  // the row starts from the STAMPED text, so it peels first — otherwise the next compose
+  // stamps a second copy.
+  const rawLabel = (event: CalendarEvent): string =>
+    event.person_id === null
+      ? event.label
+      : stripPersonSuffix(event.label, ownerName.get(event.person_id))
+
   const openAddForm = () => {
     setForm({ mode: 'add' })
     setFDate(todayIso())
     setFLabel('')
     setFDetail('')
+    setFPerson('')
     setFormError(null)
   }
 
@@ -167,8 +192,9 @@ export default function CalendarPage() {
     if (event.id === null) return
     setForm({ mode: 'edit', id: event.id })
     setFDate(event.date)
-    setFLabel(event.label)
+    setFLabel(rawLabel(event))
     setFDetail(event.detail ?? '')
+    setFPerson(event.person_id === null ? '' : String(event.person_id))
     setFormError(null)
     setOpen(null)
   }
@@ -177,7 +203,12 @@ export default function CalendarPage() {
     if (form === null) return
     setSaving(true)
     const detail = fDetail.trim()
-    const body = { date: fDate, label: fLabel.trim(), detail: detail === '' ? null : detail }
+    const body = {
+      date: fDate,
+      label: fLabel.trim(),
+      detail: detail === '' ? null : detail,
+      person_id: fPerson === '' ? null : Number(fPerson),
+    }
     const call =
       form.mode === 'add' ? createCustomEvent(body) : updateCustomEvent(form.id, body)
     call
@@ -209,7 +240,13 @@ export default function CalendarPage() {
           action: {
             label: 'Undo',
             onAction: () => {
-              createCustomEvent({ date: event.date, label: event.label, detail: event.detail })
+              createCustomEvent({
+                date: event.date,
+                // The RAW label — see rawLabel: the closure holds the stamped one.
+                label: rawLabel(event),
+                detail: event.detail,
+                person_id: event.person_id,
+              })
                 .then(() => {
                   setBusy(true)
                   load(monthRef.current)
@@ -302,6 +339,23 @@ export default function CalendarPage() {
                     onChange={(e) => setFDetail(e.target.value)}
                   />
                 </label>
+                {orderedPeople.length > 1 && (
+                  <label className="cal-form-field">
+                    Person
+                    <select
+                      className="field-input cal-form-input"
+                      value={fPerson}
+                      onChange={(e) => setFPerson(e.target.value)}
+                    >
+                      <option value="">Household</option>
+                      {orderedPeople.map((person) => (
+                        <option key={person.id} value={String(person.id)}>
+                          {person.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <button
                   type="button"
                   className="button button-primary"
@@ -409,9 +463,10 @@ export default function CalendarPage() {
             <p className="drill-hint">
               Paydays appear only for semi-monthly (24 checks/yr) paycheck profiles — other
               cadences are omitted rather than guessed, and each chip carries the
-              person&apos;s name once more than one person has a profile. Ex-dividend dates
-              are confirmed announcements only: stocks typically publish 2–6 weeks ahead,
-              ETFs often just days ahead, so a quiet stretch may simply be unannounced.
+              person&apos;s name once more than one person has a profile. Your own events
+              carry a name the same way when you tag one. Ex-dividend dates are confirmed
+              announcements only: stocks typically publish 2–6 weeks ahead, ETFs often just
+              days ahead, so a quiet stretch may simply be unannounced.
             </p>
             {events.length === 0 && (
               <p className="empty-note">

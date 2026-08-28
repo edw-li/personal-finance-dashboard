@@ -306,6 +306,7 @@ function upNextEvents(count = 6): CalendarEvent[] {
     detail: null,
     href: '/paycheck',
     id: null,
+    person_id: null,
   }))
 }
 
@@ -998,6 +999,7 @@ it('renders a custom event as a plain row — no page to open (spec §9.2)', asy
         detail: null,
         href: null,
         id: 41,
+        person_id: null,
       },
       ...upNextEvents(2),
     ],

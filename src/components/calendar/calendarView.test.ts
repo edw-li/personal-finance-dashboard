@@ -65,6 +65,7 @@ describe('eventKey', () => {
         detail: null,
         href: null,
         id: 41,
+        person_id: null,
       }),
     ).toBe('custom-41')
     expect(
@@ -75,6 +76,7 @@ describe('eventKey', () => {
         detail: null,
         href: '/paycheck',
         id: null,
+        person_id: null,
       }),
     ).toBe('payday-2026-09-16-Payday')
   })
@@ -90,6 +92,7 @@ describe('groupByDate', () => {
         detail: null,
         href: '/paycheck',
         id: null,
+        person_id: null,
       },
       {
         date: '2026-09-15',
@@ -98,6 +101,7 @@ describe('groupByDate', () => {
         detail: 'Q3 estimated payment',
         href: '/taxes',
         id: null,
+        person_id: null,
       },
       {
         date: '2026-09-16',
@@ -106,6 +110,7 @@ describe('groupByDate', () => {
         detail: '25 sh — 2025 offer',
         href: '/comp',
         id: null,
+        person_id: null,
       },
     ]
     const grouped = groupByDate(events)

@@ -10,6 +10,7 @@ function event(over: Partial<CalendarEvent> = {}): CalendarEvent {
     detail: '25 sh — 2025 offer',
     href: '/comp',
     id: null,
+    person_id: null,
     ...over,
   }
 }

@@ -259,3 +259,10 @@
     display: none;
   }
 }
+
+/* The person picker holds WORDS, not figures: .field-input is the house's right-aligned
+   monospace money box, and a name wearing it reads as an amount (roster.css's rule). */
+.cal-form select.cal-form-input {
+  text-align: left;
+  font-family: inherit;
+}
