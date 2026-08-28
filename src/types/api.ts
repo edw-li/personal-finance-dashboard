@@ -758,6 +758,14 @@ export interface WithholdingLegOut {
   projected: string
 }
 
+/** The partner's SIMULATED salary leg — the primary's leg shape plus its own check grid. */
+export interface WithholdingPartnerLeg {
+  ytd: string
+  projected: string
+  checks_elapsed: number
+  checks_total: number
+}
+
 export interface WithholdingOut {
   year: number
   // 'single' | 'married_joint' | 'married_separate' — a plain string on the wire (the
@@ -792,7 +800,7 @@ export interface WithholdingOut {
   // Paychecks received / expected this year — the progress denominator for the salary leg.
   checks_elapsed: number
   checks_total: number
-  // The partner leg — ENTERED, not simulated (the partner has no paycheck profile yet).
+  // The partner leg — `partner_source` below says which of its two modes is in force.
   // NULL is a different silence from "0.00" in all three: `partner_wages` is null when this
   // year's return covers one person (single, MFS, or a household with no partner row) and
   // "0.00" when a partner is on the return with no W-2 entered; the two withheld fields are
@@ -801,6 +809,13 @@ export interface WithholdingOut {
   partner_wages: string | null
   partner_withheld_fed: string | null
   partner_withheld_state: string | null
+  // 'simulated' exactly when the partner has a paycheck profile, 'entered' otherwise (the
+  // 2026-08-26 fallback). In 'simulated' the two withheld fields above are still stored
+  // facts on the wire, but they are money in no total and a warning says so.
+  partner_source: string
+  // Null in 'entered' mode: a leg that was never simulated has no figures, and '0.00'
+  // would read as "simulated, and it came to nothing".
+  partner_salary: WithholdingPartnerLeg | null
   // SIGNED. Positive is the under-withholding trap (each employer withholds the 0.9% surtax
   // only above $200k of its own wages; a joint return owes it above a lower combined
   // threshold), negative is over-withholding, "0.00" is one earner or no surtax tier.
