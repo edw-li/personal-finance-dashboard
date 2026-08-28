@@ -61,6 +61,12 @@ class PaycheckProfile(Base):
     withholding_pct: Mapped[Decimal] = mapped_column(Numeric(10, 9), default=0)
     dental_vision_per_check: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=0)
     hsa_per_check: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=0)
+    # 'none' | 'self' | 'family' — which HSA cap applies to this person (Plan 4's limit
+    # registry reads it). Python-validated by api/paycheck.py rather than a DB enum or
+    # CHECK (rsu_grants.kind's posture): the vocabulary is the app's, and a constraint
+    # would need a migration every time it grew. The server_default is repeated from the
+    # migration so `alembic check` stays clean (rsu_grants.vest_quantum's precedent).
+    hsa_coverage: Mapped[str] = mapped_column(String(10), default="self", server_default="self")
     notes: Mapped[str | None] = mapped_column(Text)
 
 

@@ -812,6 +812,41 @@ async def test_patch_profile_never_changes_the_owner(auth_client, db, me):
     assert patched.json()["annual_salary"] == "200000.00"
 
 
+async def test_hsa_coverage_defaults_to_self_and_round_trips(auth_client, me):
+    created = await create_profile(auth_client)
+    assert created["hsa_coverage"] == "self"
+
+    patched = await auth_client.patch(
+        f"{PROFILES}/{created['id']}", json={"hsa_coverage": "family"}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["hsa_coverage"] == "family"
+    assert (await auth_client.get(PROFILES)).json()[0]["hsa_coverage"] == "family"
+    assert (await auth_client.get(BREAKDOWN)).json()["profile"]["hsa_coverage"] == "family"
+
+    # The house PATCH convention: an explicit null on a NOT NULL column is a no-op.
+    kept = await auth_client.patch(f"{PROFILES}/{created['id']}", json={"hsa_coverage": None})
+    assert kept.json()["hsa_coverage"] == "family"
+
+
+@pytest.mark.parametrize("coverage", ["none", "self", "family"])
+async def test_hsa_coverage_accepts_every_tier(auth_client, me, coverage):
+    created = await create_profile(auth_client, hsa_coverage=coverage)
+    assert created["hsa_coverage"] == coverage
+
+
+async def test_hsa_coverage_rejects_anything_else(auth_client, me):
+    resp = await auth_client.post(PROFILES, json=profile_payload(hsa_coverage="HDHP"))
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "hsa_coverage must be 'none', 'self' or 'family'"
+    # A PATCH validates the MERGED row, so it refuses in the same words — and casing is
+    # not a near-miss the writer forgives.
+    created = await create_profile(auth_client)
+    bad = await auth_client.patch(f"{PROFILES}/{created['id']}", json={"hsa_coverage": "Self"})
+    assert bad.status_code == 422
+    assert bad.json()["detail"] == "hsa_coverage must be 'none', 'self' or 'family'"
+
+
 # --- comp API ---
 
 

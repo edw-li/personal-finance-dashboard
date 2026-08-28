@@ -38,6 +38,9 @@ class ProfileIn(BaseModel):
     withholding_pct: Decimal = Decimal("0")
     dental_vision_per_check: Decimal = Decimal("0")
     hsa_per_check: Decimal = Decimal("0")
+    # 'none' | 'self' | 'family'; the default matches the column's server_default, so an
+    # old client that never sends it stores exactly what the migration backfilled.
+    hsa_coverage: str = "self"
     notes: str | None = None
 
 
@@ -56,6 +59,7 @@ class ProfileUpdate(BaseModel):
     withholding_pct: Decimal | None = None
     dental_vision_per_check: Decimal | None = None
     hsa_per_check: Decimal | None = None
+    hsa_coverage: str | None = None
     notes: str | None = None
 
 
@@ -76,6 +80,7 @@ class ProfileOut(BaseModel):
     withholding_pct: Pct9
     dental_vision_per_check: Decimal
     hsa_per_check: Decimal
+    hsa_coverage: str
     notes: str | None
 
 

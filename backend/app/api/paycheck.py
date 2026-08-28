@@ -72,6 +72,10 @@ PCT_FIELDS = (
 CONTRIBUTION_FIELDS = ("trad_401k_pct", "roth_401k_pct", "after_tax_401k_pct", "espp_pct")
 CONTRIBUTIONS_WARNING = "contribution percentages exceed 100%"
 NEGATIVE_NET_WARNING = "net pay is negative"
+# Which HSA cap applies to this person. One tuple, one message — the message names the
+# whole vocabulary, so it never needs reading alongside the code (comp.py's GRANT_KINDS).
+HSA_COVERAGES = ("none", "self", "family")
+HSA_COVERAGE_MESSAGE = "hsa_coverage must be 'none', 'self' or 'family'"
 # A stored profile must have an owner (person_id is NOT NULL), and only a database whose
 # roster was never seeded has nobody to default to.
 NO_PRIMARY_PERSON_MESSAGE = "household has no primary person"
@@ -105,12 +109,19 @@ def _validated_pct(value: Decimal, field: str) -> Decimal:
     return quantized
 
 
+def _validated_coverage(value: str) -> str:
+    if value not in HSA_COVERAGES:
+        raise HTTPException(status_code=422, detail=HSA_COVERAGE_MESSAGE)
+    return value
+
+
 def _validated_profile(
     effective_date: date,
     annual_salary: Decimal,
     pay_periods_per_year: int,
     dental_vision_per_check: Decimal,
     hsa_per_check: Decimal,
+    hsa_coverage: str,
     pcts: dict[str, Decimal],
 ) -> dict:
     """One profile's stored columns, validated as a WHOLE row (Plan 4 house law) so a
@@ -129,6 +140,7 @@ def _validated_profile(
             dental_vision_per_check, "dental_vision_per_check"
         ),
         "hsa_per_check": _non_negative_per_check(hsa_per_check, "hsa_per_check"),
+        "hsa_coverage": _validated_coverage(hsa_coverage),
         **{name: _validated_pct(pcts[name], name) for name in PCT_FIELDS},
     }
 
@@ -226,6 +238,7 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
         pay_periods_per_year=body.pay_periods_per_year,
         dental_vision_per_check=body.dental_vision_per_check,
         hsa_per_check=body.hsa_per_check,
+        hsa_coverage=body.hsa_coverage,
         pcts={name: getattr(body, name) for name in PCT_FIELDS},
     )
     # (person_id, effective_date) is the natural key. Plain check-then-409: two concurrent
@@ -254,6 +267,7 @@ async def update_profile(
             provided, "dental_vision_per_check", profile.dental_vision_per_check
         ),
         hsa_per_check=_merged(provided, "hsa_per_check", profile.hsa_per_check),
+        hsa_coverage=_merged(provided, "hsa_coverage", profile.hsa_coverage),
         pcts={name: _merged(provided, name, getattr(profile, name)) for name in PCT_FIELDS},
     )
     if fields["effective_date"] != profile.effective_date:
