@@ -408,9 +408,10 @@ export default function CalendarPage() {
                 data honesty): omissions and confirmed-only are said, not implied. */}
             <p className="drill-hint">
               Paydays appear only for semi-monthly (24 checks/yr) paycheck profiles — other
-              cadences are omitted rather than guessed. Ex-dividend dates are confirmed
-              announcements only: stocks typically publish 2–6 weeks ahead, ETFs often just
-              days ahead, so a quiet stretch may simply be unannounced.
+              cadences are omitted rather than guessed, and each chip carries the
+              person&apos;s name once more than one person has a profile. Ex-dividend dates
+              are confirmed announcements only: stocks typically publish 2–6 weeks ahead,
+              ETFs often just days ahead, so a quiet stretch may simply be unannounced.
             </p>
             {events.length === 0 && (
               <p className="empty-note">

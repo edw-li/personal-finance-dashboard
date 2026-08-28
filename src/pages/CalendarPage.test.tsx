@@ -359,6 +359,15 @@ describe('CalendarPage', () => {
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(3))
   })
+
+  it('tells the reader when payday chips carry a person name', async () => {
+    renderPage()
+    expect(
+      await screen.findByText(
+        /Paydays appear only for semi-monthly \(24 checks\/yr\) paycheck profiles — other cadences are omitted rather than guessed, and each chip carries the person's name once more than one person has a profile\./,
+      ),
+    ).toBeTruthy()
+  })
 })
 
 describe('CalendarPage — snapshot cache (2026-08-27 spec §1)', () => {
