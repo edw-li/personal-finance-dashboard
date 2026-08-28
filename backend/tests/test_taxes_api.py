@@ -9,7 +9,7 @@ Numeric(12,2) brackets come back at column scale and still land on the canonical
 test_tax_service.py).
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -18,6 +18,7 @@ from sqlalchemy import func, select, text
 from app.models import (
     EsppLot,
     LatestPrice,
+    PaycheckProfile,
     Person,
     PositionTransaction,
     Security,
@@ -1311,6 +1312,77 @@ async def test_suggestions_are_computed_per_column(auth_client, db, household, d
     assert suggested[("latest_w2_income", partner.id)] == "96000.0000"
     # A household suggestion is column-invariant, so it renders once.
     assert suggested[("itemized_deduction", None)] == "9000.0000"
+
+
+async def test_annual_salary_suggests_each_persons_in_force_profile(
+    auth_client, db, household, definitions
+):
+    """The head of the derived-W2 chain has no sheet formula — but a person with a
+    paycheck profile has already told the app their salary, so the Taxes page offers it
+    instead of asking twice (spec §4.1). One profile in force PER PERSON."""
+    me, partner = household
+    today = date.today()
+    db.add_all(
+        [
+            PaycheckProfile(
+                person_id=me.id,
+                effective_date=today - timedelta(days=800),
+                annual_salary=Decimal("150000.00"),
+            ),
+            PaycheckProfile(
+                person_id=me.id,
+                effective_date=today - timedelta(days=30),
+                annual_salary=Decimal("188930.00"),
+            ),
+            PaycheckProfile(
+                person_id=partner.id,
+                effective_date=today - timedelta(days=30),
+                annual_salary=Decimal("96000.00"),
+            ),
+        ]
+    )
+    await db.commit()
+    await put_inputs(auth_client, 2026, {})
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    suggested = {
+        (item["key"], item["person_id"]): item["suggested"]
+        for section in body["sections"]
+        for item in section["items"]
+    }
+    # The LATER profile, at the suggestion scale (4dp) every other suggestion uses.
+    assert suggested[("annual_salary", me.id)] == "188930.0000"
+    assert suggested[("annual_salary", partner.id)] == "96000.0000"
+    # Downstream of the head is untouched: gross_paycheck still divides the STORED value,
+    # which is null here, so it keeps suggesting the empty-cell zero.
+    assert suggested[("gross_paycheck", me.id)] == "0.0000"
+
+
+async def test_annual_salary_has_no_suggestion_without_a_profile(
+    auth_client, db, household, definitions
+):
+    me, partner = household
+    db.add(
+        PaycheckProfile(
+            person_id=me.id,
+            effective_date=date.today() - timedelta(days=30),
+            annual_salary=Decimal("188930.00"),
+        )
+    )
+    await db.commit()
+    await put_inputs(auth_client, 2026, {})
+    await set_status(auth_client, 2026, "married_joint")
+
+    body = (await auth_client.get(f"{YEARS}/2026/inputs")).json()
+    suggested = {
+        (item["key"], item["person_id"]): item["suggested"]
+        for section in body["sections"]
+        for item in section["items"]
+    }
+    assert suggested[("annual_salary", me.id)] == "188930.0000"
+    # Nothing is invented for a person the app has no paycheck for.
+    assert suggested[("annual_salary", partner.id)] is None
 
 
 async def test_put_inputs_rejects_person_on_a_household_key(auth_client, household, definitions):

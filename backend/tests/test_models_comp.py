@@ -12,6 +12,7 @@ from app.models import (
     EsppOffering,
     EsppPeriod,
     PaycheckProfile,
+    Person,
     RsuGrant,
 )
 
@@ -35,8 +36,12 @@ async def test_espp_lot_roundtrip(db):
 
 
 async def test_paycheck_profile_roundtrip(db):
+    me = Person(name="Me", is_primary=True)
+    db.add(me)
+    await db.flush()
     db.add(
         PaycheckProfile(
+            person_id=me.id,
             effective_date=date(2026, 3, 1),
             annual_salary=Decimal("188930"),
             trad_401k_pct=Decimal("0.13"),
@@ -52,6 +57,42 @@ async def test_paycheck_profile_roundtrip(db):
     p = (await db.execute(select(PaycheckProfile))).scalar_one()
     assert p.pay_periods_per_year == 24
     assert p.withholding_pct == Decimal("0.334009166")
+    assert p.person_id == me.id
+
+
+async def test_paycheck_profiles_are_unique_per_person_not_per_date(db):
+    """Two earners, one household, the same January 1: the unique key is
+    (person_id, effective_date), so both profiles coexist — and a SECOND profile for the
+    same person on that date is still refused."""
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner")
+    db.add_all([me, partner])
+    await db.flush()
+    db.add_all(
+        [
+            PaycheckProfile(
+                person_id=me.id,
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("188930"),
+            ),
+            PaycheckProfile(
+                person_id=partner.id,
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("96000"),
+            ),
+        ]
+    )
+    await db.commit()
+    assert len((await db.execute(select(PaycheckProfile))).scalars().all()) == 2
+
+    db.add(
+        PaycheckProfile(
+            person_id=me.id, effective_date=date(2026, 1, 1), annual_salary=Decimal("1")
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
 
 
 async def test_comp_event_and_period_and_setting(db):

@@ -10,6 +10,7 @@ from app.models import (
     EsppOffering,
     NetWorthSnapshot,
     PaycheckProfile,
+    Person,
     PositionTransaction,
     RsuGrant,
     Security,
@@ -23,6 +24,14 @@ def freeze_today(monkeypatch):
     # The router imports the name, so the patch lands on app.api.calendar (the
     # test_prices_api freeze_service_today precedent).
     monkeypatch.setattr("app.api.calendar.product_today", lambda: TODAY)
+
+
+async def seed_primary(db) -> Person:
+    """paycheck_profiles.person_id is NOT NULL and `create_all` seeds no roster."""
+    person = Person(name="Me", is_primary=True)
+    db.add(person)
+    await db.flush()
+    return person
 
 
 async def test_calendar_requires_auth(client):
@@ -150,7 +159,13 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     )
     # Semi-monthly profile (model default pay_periods_per_year=24) -> paydays; a June
     # snapshot exists but July 2026 does not -> update_due.
-    db.add(PaycheckProfile(effective_date=date(2026, 1, 1), annual_salary=Decimal("120000")))
+    db.add(
+        PaycheckProfile(
+            person_id=(await seed_primary(db)).id,
+            effective_date=date(2026, 1, 1),
+            annual_salary=Decimal("120000"),
+        )
+    )
     db.add(NetWorthSnapshot(month=date(2026, 6, 1)))
     await db.commit()
 
@@ -199,6 +214,7 @@ async def test_calendar_omits_paydays_for_other_cadences(auth_client, db, monkey
     freeze_today(monkeypatch)
     db.add(
         PaycheckProfile(
+            person_id=(await seed_primary(db)).id,
             effective_date=date(2026, 1, 1),
             annual_salary=Decimal("120000"),
             pay_periods_per_year=26,
