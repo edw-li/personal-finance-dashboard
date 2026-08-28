@@ -249,6 +249,7 @@ async def test_custom_event_crud_roundtrip(auth_client):
         "date": "2026-09-12",
         "label": "Car insurance renewal",
         "detail": None,
+        "person_id": None,
     }
 
     listed = await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")
@@ -260,6 +261,7 @@ async def test_custom_event_crud_roundtrip(auth_client):
             "detail": None,
             "href": None,
             "id": event_id,
+            "person_id": None,
         }
     ]
 
@@ -273,6 +275,7 @@ async def test_custom_event_crud_roundtrip(auth_client):
         "date": "2026-09-13",
         "label": "Renewal",
         "detail": "moved a day",
+        "person_id": None,
     }
 
     # Full-replace also CLEARS: an emptied detail box stores as null (spec §9.3).
@@ -411,3 +414,48 @@ async def test_calendar_falls_back_to_a_future_only_profile(auth_client, db, mon
         "2026-08-14",
         "2026-08-31",
     ]
+
+
+async def test_custom_event_person_tag_stamps_the_label(auth_client, db):
+    me = Person(name="Me", is_primary=True)
+    sam = Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.commit()
+
+    created = await auth_client.post(
+        f"{CALENDAR}/events",
+        json={"date": "2026-09-12", "label": "Dentist", "detail": None, "person_id": sam.id},
+    )
+    assert created.status_code == 201, created.text
+    # The STORED label is what the user typed — the suffix is composed, never persisted, so
+    # a rename of Sam re-reads correctly and a re-save cannot compound it.
+    assert created.json() == {
+        "id": created.json()["id"],
+        "date": "2026-09-12",
+        "label": "Dentist",
+        "detail": None,
+        "person_id": sam.id,
+    }
+    event_id = created.json()["id"]
+
+    listed = await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")
+    custom = [e for e in listed.json()["events"] if e["type"] == "custom"]
+    assert [(e["label"], e["person_id"]) for e in custom] == [("Dentist — Sam", sam.id)]
+
+    # Full replace: an explicit null untags the row and the label goes back to bare.
+    cleared = await auth_client.patch(
+        f"{CALENDAR}/events/{event_id}",
+        json={"date": "2026-09-12", "label": "Dentist", "detail": None, "person_id": None},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["person_id"] is None
+    after = await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")
+    assert [e["label"] for e in after.json()["events"] if e["type"] == "custom"] == ["Dentist"]
+
+
+async def test_custom_event_person_must_exist(auth_client):
+    ghost = await auth_client.post(
+        f"{CALENDAR}/events", json={"date": "2026-09-12", "label": "ok", "person_id": 999}
+    )
+    assert ghost.status_code == 422
+    assert ghost.json()["detail"] == "unknown person_id: 999"

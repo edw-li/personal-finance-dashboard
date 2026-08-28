@@ -19,12 +19,13 @@ from app.models import (
     EsppPeriod,
     NetWorthSnapshot,
     PaycheckProfile,
+    Person,
     PositionTransaction,
     RsuGrant,
     Security,
 )
 from app.schemas.calendar import CalendarEventOut, CalendarOut, CustomEventIn, CustomEventOut
-from app.services.calendar_events import PaydaySource, compose
+from app.services.calendar_events import CustomRow, PaydaySource, compose
 from app.services.espp_calc import OfferingInfo, StoredPeriod
 from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions
@@ -175,7 +176,17 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
         .first()
     )
     custom_rows = [
-        (row.id, row.event_date, row.label, row.detail)
+        CustomRow(
+            event_id=row.id,
+            event_date=row.event_date,
+            label=row.label,
+            detail=row.detail,
+            person_id=row.person_id,
+            # `names` was built above from load_people. A tag pointing at a person who is
+            # somehow absent degrades to UNSTAMPED rather than 500ing (GET-never-rejects) —
+            # the row still renders, just without its name.
+            person_name=None if row.person_id is None else names.get(row.person_id),
+        )
         for row in (
             await db.execute(
                 select(CustomEvent)
@@ -207,6 +218,7 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
                 detail=event.detail,
                 href=event.href,
                 id=event.event_id,
+                person_id=event.person_id,
             )
             for event in events
         ]
@@ -218,7 +230,13 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
 
 
 def _custom_out(row: CustomEvent) -> CustomEventOut:
-    return CustomEventOut(id=row.id, date=row.event_date, label=row.label, detail=row.detail)
+    return CustomEventOut(
+        id=row.id,
+        date=row.event_date,
+        label=row.label,
+        detail=row.detail,
+        person_id=row.person_id,
+    )
 
 
 async def _get_custom_event(db: AsyncSession, event_id: int) -> CustomEvent:
@@ -230,11 +248,24 @@ async def _get_custom_event(db: AsyncSession, event_id: int) -> CustomEvent:
     return row
 
 
+async def _validated_person_id(db: AsyncSession, person_id: int | None) -> int | None:
+    """422 with the net-worth router's sentence, checked before the write so a bad id never
+    surfaces as asyncpg's ForeignKeyViolationError inside a 500."""
+    if person_id is not None and (await db.get(Person, person_id)) is None:
+        raise HTTPException(status_code=422, detail=f"unknown person_id: {person_id}")
+    return person_id
+
+
 @router.post("/events", response_model=CustomEventOut, status_code=201)
 async def create_custom_event(
     body: CustomEventIn, db: AsyncSession = Depends(get_db)
 ) -> CustomEventOut:
-    row = CustomEvent(event_date=body.date, label=body.label, detail=body.detail)
+    row = CustomEvent(
+        event_date=body.date,
+        label=body.label,
+        detail=body.detail,
+        person_id=await _validated_person_id(db, body.person_id),
+    )
     db.add(row)
     await db.commit()
     return _custom_out(row)
@@ -244,8 +275,10 @@ async def create_custom_event(
 async def update_custom_event(
     event_id: int, body: CustomEventIn, db: AsyncSession = Depends(get_db)
 ) -> CustomEventOut:
-    """Full replace — the form always submits all three fields (spec §9.3)."""
+    """Full replace — the form always submits all four fields (spec §9.3). An explicit null
+    person_id is how a tagged event goes back to being the household's."""
     row = await _get_custom_event(db, event_id)
+    row.person_id = await _validated_person_id(db, body.person_id)
     row.event_date = body.date
     row.label = body.label
     row.detail = body.detail

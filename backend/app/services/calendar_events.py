@@ -52,6 +52,13 @@ _MONTH_NAMES = (
 )  # our own literal — calendar.month_name is locale-dependent
 
 
+def person_suffix(name: str) -> str:
+    """The ONE person-tag grammar: `"<label> — <name>"`. Paydays have carried it since the
+    two-income batch and tagged custom events now share the definition, so the frontend's
+    strip-before-edit (`calendarView.stripPersonSuffix`) only ever has one shape to peel."""
+    return f" — {name}"
+
+
 @dataclass(frozen=True)
 class CalendarEvent:
     """One calendar entry. `event_date`, not `date` — the DailyBar.bar_date naming
@@ -64,6 +71,23 @@ class CalendarEvent:
     detail: str | None
     href: str | None  # None for custom events — no page owns them (spec §9.3)
     event_id: int | None = None  # custom rows only: the frontend's edit/delete handle
+    # custom rows only, exactly like event_id: the tag the page's select seeds from, and
+    # what tells the page whether `label` carries a suffix it must strip before editing.
+    person_id: int | None = None
+
+
+@dataclass(frozen=True)
+class CustomRow:
+    """One stored custom event plus the owner's NAME, resolved by the router — this module
+    never reads a person row (its no-DB posture). A dataclass rather than a widening tuple:
+    six positional fields at a call site is where a silent field swap lives."""
+
+    event_id: int
+    event_date: date
+    label: str
+    detail: str | None
+    person_id: int | None = None
+    person_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,7 +111,7 @@ def compose(
     offerings: list[OfferingInfo],
     unsold_lots: list[tuple[date, date]],  # (purchase_date, qualifying_date)
     announced_ex_divs: list[tuple[str, date]],  # (ticker, next_ex_div_date), HELD only
-    custom_rows: list[tuple[int, date, str, str | None]],  # (id, event_date, label, detail)
+    custom_rows: list[CustomRow],
     payday_sources: list[PaydaySource],  # one per person WITH a profile, primary first
     missing_update_month: date | None,  # prev month's 1st when it lacks a snapshot
 ) -> list[CalendarEvent]:
@@ -204,7 +228,7 @@ def compose(
                             # frontend's ICS UID is {type}-{date}-{slug(label)}, and two
                             # people paid the same day would otherwise merge into one
                             # event in a calendar app.
-                            label=f"Payday — {source.name}" if labelled else "Payday",
+                            label=("Payday" + person_suffix(source.name)) if labelled else "Payday",
                             detail=source.name if labelled else None,
                             href="/paycheck",
                         )
@@ -256,16 +280,25 @@ def compose(
     # custom — user-entered informational rows (spec §9.3). No page owns them: href is
     # None and the id rides along so the frontend can edit/delete. The router loads only
     # rows in range; the clip keeps compose total over its inputs regardless.
-    for event_id, event_date, label, detail in custom_rows:
-        if in_range(event_date):
+    #
+    # A TAGGED row's name is stamped into the LABEL, not carried beside it: the label is
+    # what the grid chip, the list row and the ICS SUMMARY all render, so one stamp reaches
+    # all three. person_id rides too, because the page has to strip the suffix back off
+    # before it can re-save the row.
+    for row in custom_rows:
+        if in_range(row.event_date):
+            label = (
+                row.label if row.person_name is None else row.label + person_suffix(row.person_name)
+            )
             events.append(
                 CalendarEvent(
-                    event_date=event_date,
+                    event_date=row.event_date,
                     type="custom",
                     label=label,
-                    detail=detail,
+                    detail=row.detail,
                     href=None,
-                    event_id=event_id,
+                    event_id=row.event_id,
+                    person_id=row.person_id,
                 )
             )
 

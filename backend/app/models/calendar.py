@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from sqlalchemy import Date, String
+from sqlalchemy import Date, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -20,3 +20,10 @@ class CustomEvent(Base):
     event_date: Mapped[date] = mapped_column(Date, index=True)  # `date` shadows the type
     label: Mapped[str] = mapped_column(String(120))
     detail: Mapped[str | None] = mapped_column(String(300))
+    # NULL = HOUSEHOLD, not joint-ownership: an untagged reminder belongs to nobody in
+    # particular. Unlike credit_cards, migration d3b8e05fa726 backfills NOTHING — every
+    # pre-existing event was entered before anybody could tag it, and inventing an owner
+    # would put a name on the chips the user never chose.
+    person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id", ondelete="SET NULL"), default=None
+    )

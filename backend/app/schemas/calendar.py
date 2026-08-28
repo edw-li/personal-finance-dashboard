@@ -30,6 +30,10 @@ class CalendarEventOut(BaseModel):
     detail: str | None
     href: str | None  # null for custom events — they have no page (spec §9.3)
     id: int | None  # set only for custom events, the frontend's edit/delete handle
+    # Set only for custom events too. `label` already carries " — <name>" when this is not
+    # null; the page needs the id both to seed its select and to know there is a suffix to
+    # strip before it re-saves the row.
+    person_id: int | None
 
 
 class CalendarOut(BaseModel):
@@ -37,11 +41,14 @@ class CalendarOut(BaseModel):
 
 
 class CustomEventIn(BaseModel):
-    """POST/PATCH body — full replace: the form always submits all three fields."""
+    """POST/PATCH body — full replace: the form always submits all four fields."""
 
     date: date
     label: str = Field(min_length=1, max_length=120)
     detail: str | None = Field(default=None, max_length=300)
+    # NULL = household. The bound mirrors the accounts router's: a garbage 10-digit value
+    # 422s in the parser rather than reaching the FK.
+    person_id: int | None = Field(default=None, ge=1, le=2_147_483_647)
 
     @field_validator("label")
     @classmethod
@@ -63,5 +70,6 @@ class CustomEventIn(BaseModel):
 class CustomEventOut(BaseModel):
     id: int
     date: date
-    label: str
+    label: str  # as STORED — unstamped; the suffix is composed, never persisted
     detail: str | None
+    person_id: int | None
