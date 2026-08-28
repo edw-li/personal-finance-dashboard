@@ -263,7 +263,7 @@ export default function CalendarPage() {
         </div>
       )}
       {events === null ? (
-        busy && <p className="empty-note">Loading…</p>
+        busy && <p className="empty-note loading-fallback">Loading…</p>
       ) : (
         <div className={`card-grid loading-dim${busy ? ' is-loading' : ''}`}>
           {form !== null && (

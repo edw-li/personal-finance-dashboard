@@ -105,6 +105,17 @@
   font-size: 0.85rem;
   padding: 1.5rem 0;
   text-align: center;
+  /* Appears only after ~250ms: a chunk that lands faster never flashes the fallback.
+     Own keyframes, not panels.css's fallback-appear — this file must stay standalone
+     (the note above). */
+  opacity: 0;
+  animation: route-fallback-appear 200ms ease 250ms forwards;
+}
+
+@keyframes route-fallback-appear {
+  to {
+    opacity: 1;
+  }
 }
 
 /* RouteBoundary's Reload button carries its own styling for the same reason: in the worst
