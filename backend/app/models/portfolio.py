@@ -43,6 +43,31 @@ class Security(Base):
     next_ex_div_date: Mapped[date | None] = mapped_column(Date)
 
 
+class PortfolioAccount(Base):
+    """A brokerage/platform label with an owner — the identity behind every position row.
+
+    `label` is the EXACT string the sheet and the ledger UI already use ("RH Taxable",
+    "Fidelity Taxable"). It is the positions' natural key, so it is UNIQUE and immutable
+    this batch (the accounts-slug posture): renaming is a data migration, not a PATCH.
+    `person_id` NULL means JOINT/household, never "unknown" — migration c9f4a7e2b168
+    backfilled every pre-existing label to the primary person, so an unset owner is a
+    deliberate statement (the accounts.person_id grammar, 2026-08-26 spec §4).
+    """
+
+    __tablename__ = "portfolio_accounts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(String(80), unique=True)
+    person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id", ondelete="SET NULL"), default=None
+    )
+
+    def __repr__(self) -> str:
+        # The importer's diff samples print this ("portfolio_account Old -> New"), so it
+        # reads as the label rather than as an object address.
+        return self.label if self.label is not None else "<portfolio account>"
+
+
 class PositionTransaction(Base):
     __tablename__ = "position_transactions"
 
