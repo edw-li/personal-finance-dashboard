@@ -202,3 +202,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Contribution limits (2026-08-27 spec §5): the year chips sit above a single-column
+   form of five currency boxes — narrow rows, because every value is a plain dollar cap
+   and the labels carry the meaning. */
+.settings-page .card [role='group'][aria-label='Limit year'] {
+  margin-bottom: 0.75rem;
+}
