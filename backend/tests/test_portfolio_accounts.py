@@ -258,3 +258,62 @@ def test_portfolio_owner_clause_rejects_anything_that_is_not_an_id_or_joint():
     for bad in ("nobody", "-1", "0", "1.5", "99999999999", "", "²"):
         with pytest.raises(ValueError):
             portfolio_owner_clause(bad)
+
+
+ACCOUNTS = "/api/v1/portfolio/accounts"
+
+
+async def test_list_accounts_is_label_ordered_with_owners(auth_client, db):
+    me, sam = await _owned_book(db)
+    body = (await auth_client.get(ACCOUNTS)).json()
+    assert [(a["label"], a["person_id"]) for a in body] == [
+        ("Mine", me.id),
+        ("Ours", None),  # NULL = joint; the client owns that word, not the server
+        ("Theirs", sam.id),
+    ]
+    assert set(body[0]) == {"id", "label", "person_id"}
+
+
+async def _mine(db) -> PortfolioAccount:
+    return (
+        await db.execute(select(PortfolioAccount).where(PortfolioAccount.label == "Mine"))
+    ).scalar_one()
+
+
+async def test_patch_account_retags_and_unowns(auth_client, db):
+    _me, sam = await _owned_book(db)
+    mine = await _mine(db)
+
+    retagged = await auth_client.patch(f"{ACCOUNTS}/{mine.id}", json={"person_id": sam.id})
+    assert retagged.status_code == 200, retagged.text
+    assert retagged.json() == {"id": mine.id, "label": "Mine", "person_id": sam.id}
+
+    # Explicit null is a REAL write here: it is how an account becomes joint.
+    joint = await auth_client.patch(f"{ACCOUNTS}/{mine.id}", json={"person_id": None})
+    assert joint.status_code == 200, joint.text
+    assert joint.json()["person_id"] is None
+
+    noop = await auth_client.patch(f"{ACCOUNTS}/{mine.id}", json={})
+    assert noop.status_code == 200
+    assert noop.json()["person_id"] is None
+
+
+async def test_patch_account_rejects_unknown_people_labels_and_ids(auth_client, db):
+    await _owned_book(db)
+    mine = await _mine(db)
+
+    unknown = await auth_client.patch(f"{ACCOUNTS}/{mine.id}", json={"person_id": 9999})
+    assert unknown.status_code == 422
+    assert "unknown person_id" in unknown.json()["detail"]
+
+    # Labels are the positions' identity this batch — a rename is a loud 422, never a
+    # silently dropped key.
+    rename = await auth_client.patch(f"{ACCOUNTS}/{mine.id}", json={"label": "Renamed"})
+    assert rename.status_code == 422
+
+    assert (await auth_client.patch(f"{ACCOUNTS}/999", json={"person_id": None})).status_code == 404
+
+
+async def test_portfolio_accounts_require_auth(client):
+    assert (await client.get(ACCOUNTS)).status_code == 401
+    assert (await client.patch(f"{ACCOUNTS}/1", json={"person_id": None})).status_code == 401

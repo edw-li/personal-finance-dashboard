@@ -11,6 +11,7 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import (
     DividendPayment,
+    Person,
     PortfolioAccount,
     PortfolioValueHistory,
     PositionTransaction,
@@ -25,6 +26,8 @@ from app.schemas.portfolio import (
     HoldingOut,
     HoldingsOut,
     HoldingsTotals,
+    PortfolioAccountOut,
+    PortfolioAccountUpdate,
     PortfolioHistoryOut,
     RealizedOut,
     RealizedRow,
@@ -105,6 +108,39 @@ def _owner_filter(owner: str | None) -> ColumnElement[bool] | None:
         return portfolio_owner_clause(owner)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/accounts", response_model=list[PortfolioAccountOut])
+async def list_portfolio_accounts(db: AsyncSession = Depends(get_db)) -> list[PortfolioAccount]:
+    """Every label the ledger has ever seen, label-ordered — the roster Settings edits.
+    Rows are never deleted here: a label with no live transactions is still the identity
+    of the history that used it."""
+    return list(
+        (await db.execute(select(PortfolioAccount).order_by(PortfolioAccount.label))).scalars()
+    )
+
+
+@router.patch("/accounts/{account_id}", response_model=PortfolioAccountOut)
+async def update_portfolio_account(
+    account_id: int, body: PortfolioAccountUpdate, db: AsyncSession = Depends(get_db)
+) -> PortfolioAccount:
+    """Ownership only. `person_id: null` is a REAL write — it is how an account becomes
+    joint (the net-worth NULLABLE_ACCOUNT_FIELDS posture) — while an absent key is a no-op
+    request. The label is immutable (PortfolioAccountUpdate forbids extras)."""
+    account = await db.get(PortfolioAccount, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="portfolio account not found")
+    provided = body.model_dump(exclude_unset=True)
+    if "person_id" not in provided:
+        return account
+    person_id = provided["person_id"]
+    # FK target checked BEFORE the write, so a bad id 422s with a sentence instead of
+    # surfacing asyncpg's ForeignKeyViolationError as a 500 (_validate_links' rule).
+    if person_id is not None and (await db.get(Person, person_id)) is None:
+        raise HTTPException(status_code=422, detail=f"unknown person_id: {person_id}")
+    account.person_id = person_id
+    await db.commit()
+    return account
 
 
 def _validated_annual_dividend(value: Decimal) -> Decimal:
