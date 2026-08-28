@@ -185,6 +185,7 @@ def test_simulate_floors_the_stream_at_zero():
     coasting = simulate(Decimal("100000"), Decimal("0"), Decimal("0.05"), Decimal("0.15"),
                         Decimal("0.05"), 36, None, [(6, Decimal("5000.00"))])
     # From month 6 on, a retired stream and a stream that never existed are the same walk
-    # — the balances differ only by the six contributions made before the drop.
+    # — the balances differ only by the five contributions made before the drop (the drop
+    # lands BEFORE month 6's own contribution).
     assert retired.bands["p50"][-1] > coasting.bands["p50"][-1]
     assert all(v >= Decimal("0") for v in retired.bands["p10"])

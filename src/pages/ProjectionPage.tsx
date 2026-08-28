@@ -534,7 +534,8 @@ export default function ProjectionPage() {
                 <InfoHint text="Every knob the projection runs on. Blank boxes restore their defaults or re-derive from your data on Recalculate." />
               </h2>
               <p className="drill-hint">
-                Blank boxes re-derive on Recalculate: contribution from the trailing 12
+                Blank DERIVED boxes re-derive on Recalculate (a blank Retires box instead
+                means that person never retires): contribution from the trailing 12
                 months of (net pay − spend), annual spend from the trailing spend, the
                 withdrawal rate from Settings, and the three assumptions from their
                 defaults (15 / 3 / 3). Percents are percents (5 = 5%). Volatility turns on
@@ -643,8 +644,10 @@ export default function ProjectionPage() {
                   A retirement month drops that person&apos;s CURRENT monthly take-home —
                   the paycheck profile in force today, not a projection of it — out of the
                   contribution stream from that month on; whatever is left keeps escalating
-                  at the contribution-growth rate. Spending stays a household figure, so
-                  the FI target does not move. Blank means that person works for the whole
+                  at the contribution-growth rate — so a far-off retirement&apos;s cost is
+                  slightly understated, since the drop never gets that person&apos;s share
+                  of the modelled raises. Spending stays a household figure, so the FI
+                  target does not move. Blank means that person works for the whole
                   horizon.
                 </p>
               )}
