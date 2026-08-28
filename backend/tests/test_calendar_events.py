@@ -8,7 +8,7 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.services.calendar_events import compose
+from app.services.calendar_events import PaydaySource, compose
 from app.services.espp_calc import OfferingInfo, StoredPeriod
 
 
@@ -31,7 +31,7 @@ def _compose(start, end, **over):
         unsold_lots=[],
         announced_ex_divs=[],
         custom_rows=[],
-        payday_semi_monthly=False,
+        payday_sources=[],
         missing_update_month=None,
     )
     inputs.update(over)
@@ -159,7 +159,9 @@ def test_ex_dividend_events_render_the_passed_holdings():
 def test_paydays_only_for_semi_monthly_cadence():
     window = (date(2026, 8, 1), date(2026, 9, 30))
     assert _of_type(_compose(*window), "payday") == []  # cadence != 24: none, ever
-    events = _of_type(_compose(*window, payday_semi_monthly=True), "payday")
+    events = _of_type(
+        _compose(*window, payday_sources=[PaydaySource(name="Me", semi_monthly=True)]), "payday"
+    )
     # Aug 15 2026 is a Saturday -> Fri Aug 14; the other three stand (golden table).
     assert [e.event_date for e in events] == [
         date(2026, 8, 14),
@@ -172,7 +174,11 @@ def test_paydays_only_for_semi_monthly_cadence():
 
 def test_paydays_clip_inside_the_boundary_months():
     events = _of_type(
-        _compose(date(2026, 8, 20), date(2026, 9, 10), payday_semi_monthly=True),
+        _compose(
+            date(2026, 8, 20),
+            date(2026, 9, 10),
+            payday_sources=[PaydaySource(name="Me", semi_monthly=True)],
+        ),
         "payday",
     )
     # Aug 14 is before the start, Sep 15 after the end — only Aug 31 survives.
@@ -241,7 +247,11 @@ def test_custom_rows_render_and_clip():
 
 
 def test_computed_events_carry_no_event_id():
-    events = _compose(date(2026, 1, 1), date(2026, 12, 31), payday_semi_monthly=True)
+    events = _compose(
+        date(2026, 1, 1),
+        date(2026, 12, 31),
+        payday_sources=[PaydaySource(name="Me", semi_monthly=True)],
+    )
     assert events and all(e.event_id is None for e in events)
 
 
@@ -252,7 +262,7 @@ def test_custom_rows_sort_with_computed_events():
     events = _compose(
         date(2026, 9, 15),
         date(2026, 9, 15),
-        payday_semi_monthly=True,
+        payday_sources=[PaydaySource(name="Me", semi_monthly=True)],
         custom_rows=[(3, date(2026, 9, 15), "Zoo membership", None)],
     )
     assert [(e.type, e.label) for e in events] == [
@@ -260,3 +270,59 @@ def test_custom_rows_sort_with_computed_events():
         ("payday", "Payday"),
         ("tax_deadline", "Tax deadline — Q3 estimated payment"),
     ]
+
+
+def test_two_profiled_people_get_labelled_paydays():
+    events = _of_type(
+        _compose(
+            date(2026, 8, 1),
+            date(2026, 8, 31),
+            payday_sources=[
+                PaydaySource(name="Me", semi_monthly=True),
+                PaydaySource(name="Sam", semi_monthly=True),
+            ],
+        ),
+        "payday",
+    )
+    # Two chips per date, sorted by label within the day (compose's (date, type, label)).
+    assert [(e.event_date, e.label, e.detail) for e in events] == [
+        (date(2026, 8, 14), "Payday — Me", "Me"),
+        (date(2026, 8, 14), "Payday — Sam", "Sam"),
+        (date(2026, 8, 31), "Payday — Me", "Me"),
+        (date(2026, 8, 31), "Payday — Sam", "Sam"),
+    ]
+    # The ICS UID is {type}-{date}-{slug(label)}: same-date chips must not collide.
+    assert len({(e.event_date, e.label) for e in events}) == len(events)
+
+
+def test_the_cadence_gate_is_per_person_and_the_label_is_not():
+    # One semi-monthly earner beside a biweekly one: the biweekly side is omitted rather
+    # than guessed (the standing rule), and the surviving chips are STILL labelled —
+    # otherwise a two-earner household would read the remaining chips as household-wide.
+    events = _of_type(
+        _compose(
+            date(2026, 8, 1),
+            date(2026, 8, 31),
+            payday_sources=[
+                PaydaySource(name="Me", semi_monthly=True),
+                PaydaySource(name="Sam", semi_monthly=False),
+            ],
+        ),
+        "payday",
+    )
+    assert [(e.event_date, e.label) for e in events] == [
+        (date(2026, 8, 14), "Payday — Me"),
+        (date(2026, 8, 31), "Payday — Me"),
+    ]
+
+
+def test_one_profiled_person_keeps_the_bare_unlabelled_payday():
+    events = _of_type(
+        _compose(
+            date(2026, 8, 1),
+            date(2026, 8, 31),
+            payday_sources=[PaydaySource(name="Me", semi_monthly=True)],
+        ),
+        "payday",
+    )
+    assert all(e.label == "Payday" and e.detail is None and e.href == "/paycheck" for e in events)

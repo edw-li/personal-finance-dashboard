@@ -24,8 +24,9 @@ from app.models import (
     Security,
 )
 from app.schemas.calendar import CalendarEventOut, CalendarOut, CustomEventIn, CustomEventOut
-from app.services.calendar_events import compose
+from app.services.calendar_events import PaydaySource, compose
 from app.services.espp_calc import OfferingInfo, StoredPeriod
+from app.services.people import load_people, primary_person
 from app.services.portfolio_calc import SHARE_Q, fold_transactions
 from app.services.scheduler import product_today
 
@@ -35,6 +36,12 @@ ZERO = Decimal("0")
 # A year plus wrap slack; the frontend asks for ~3-month windows, the fence is only
 # against a runaway query composing decades of derived events.
 MAX_SPAN_DAYS = 400
+# The one cadence this calendar can date (spec §5). Any other cadence omits that person's
+# paydays entirely — worded on the page legend, never guessed here.
+SEMI_MONTHLY_PERIODS = 24
+# Used only when the roster has not been seeded at all, where there is exactly ONE payday
+# source and the label is therefore never rendered.
+UNNAMED_PERSON = "You"
 
 
 async def _held_ex_dividends(db: AsyncSession) -> list[tuple[str, date]]:
@@ -123,19 +130,41 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
         ).scalars()
     ]
     announced = await _held_ex_dividends(db)
-    # "Latest profile" = newest effective_date (spec §5): the cadence the NEXT paychecks
-    # follow. Any cadence but 24 omits paydays entirely — worded on the page legend,
-    # never guessed here.
-    latest_profile = (
-        (
-            await db.execute(
-                select(PaycheckProfile).order_by(PaycheckProfile.effective_date.desc()).limit(1)
-            )
+    # Paydays follow the profile IN FORCE for EACH person (spec §4.4), not "the newest row
+    # in the table": a future-dated raise must not silence this month's checks, and a
+    # two-earner household has two answers. Same rule as paycheck.py's `_default_profile`
+    # — the latest row effective today or earlier, else the earliest future one — resolved
+    # in ONE ordered pass rather than a query per person.
+    people = await load_people(db)
+    primary = primary_person(people)
+    in_force: dict[int | None, PaycheckProfile] = {}
+    for profile in (
+        await db.execute(select(PaycheckProfile).order_by(PaycheckProfile.effective_date))
+    ).scalars():
+        # A NULL person_id is the pre-household spelling of "the primary" (the taxes
+        # router's `_owner_column` rule), and with no roster at all every profile shares
+        # the one None bucket — which is exactly the single unlabelled household.
+        owner = (
+            profile.person_id
+            if profile.person_id is not None
+            else (None if primary is None else primary.id)
         )
-        .scalars()
-        .first()
-    )
-    semi_monthly = latest_profile is not None and latest_profile.pay_periods_per_year == 24
+        # Rows arrive oldest-first, so a past row always supersedes and the FIRST future
+        # row only lands when nothing past has.
+        if profile.effective_date <= today or owner not in in_force:
+            in_force[owner] = profile
+    # Primary first, then by id (load_people's order) — the order the labels read in.
+    owners: list[int | None] = [person.id for person in people if person.id in in_force]
+    if None in in_force:
+        owners.append(None)
+    names = {person.id: person.name for person in people}
+    payday_sources = [
+        PaydaySource(
+            name=UNNAMED_PERSON if owner is None else names.get(owner, UNNAMED_PERSON),
+            semi_monthly=in_force[owner].pay_periods_per_year == SEMI_MONTHLY_PERIODS,
+        )
+        for owner in owners
+    ]
     # The update reminder probes the PREVIOUS month's snapshot (the wizard enters a
     # month after it closes).
     prev_month_last_day = date(today.year, today.month, 1) - timedelta(days=1)
@@ -166,7 +195,7 @@ async def get_calendar(start: date, end: date, db: AsyncSession = Depends(get_db
         unsold_lots=unsold_lots,
         announced_ex_divs=announced,
         custom_rows=custom_rows,
-        payday_semi_monthly=semi_monthly,
+        payday_sources=payday_sources,
         missing_update_month=None if snapshot is not None else prev_month,
     )
     return CalendarOut(

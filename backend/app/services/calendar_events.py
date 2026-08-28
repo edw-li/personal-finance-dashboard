@@ -66,6 +66,17 @@ class CalendarEvent:
     event_id: int | None = None  # custom rows only: the frontend's edit/delete handle
 
 
+@dataclass(frozen=True)
+class PaydaySource:
+    """One person's IN-FORCE paycheck profile, reduced to what the payday composer needs:
+    the name that labels their chips and whether their cadence is the semi-monthly one
+    this calendar can date (2026-08-27 spec §4.4). The ROUTER decides which profile is in
+    force; nothing here reads a profile row."""
+
+    name: str
+    semi_monthly: bool
+
+
 def compose(
     start: date,
     end: date,
@@ -77,7 +88,7 @@ def compose(
     unsold_lots: list[tuple[date, date]],  # (purchase_date, qualifying_date)
     announced_ex_divs: list[tuple[str, date]],  # (ticker, next_ex_div_date), HELD only
     custom_rows: list[tuple[int, date, str, str | None]],  # (id, event_date, label, detail)
-    payday_semi_monthly: bool,
+    payday_sources: list[PaydaySource],  # one per person WITH a profile, primary first
     missing_update_month: date | None,  # prev month's 1st when it lacks a snapshot
 ) -> list[CalendarEvent]:
     """Every event in [start, end] inclusive, sorted by (date, type, label) — the spec's
@@ -168,9 +179,19 @@ def compose(
             )
 
     # payday — ONLY the semi-monthly cadence (spec §5: pay_periods_per_year == 24; any
-    # other cadence omits paydays entirely — the page legend says so in words — because
-    # guessing biweekly anchors would be wrong money on the calendar).
-    if payday_semi_monthly:
+    # other cadence omits THAT PERSON's paydays entirely — the page legend says so in
+    # words — because guessing biweekly anchors would be wrong money on the calendar).
+    # The gate is PER PROFILE, so a semi-monthly earner still gets their chips beside a
+    # biweekly partner's silence.
+    #
+    # Labels only when there is somebody to tell apart: a one-profile household keeps the
+    # bare "Payday" it has always drawn (byte-identical, pinned). The count is of PROFILED
+    # people, not of the semi-monthly ones — when one of two earners is omitted by the
+    # cadence gate, the surviving chips especially need to say whose they are.
+    labelled = len(payday_sources) > 1
+    for source in payday_sources:
+        if not source.semi_monthly:
+            continue
         year, month = start.year, start.month
         while (year, month) <= (end.year, end.month):
             for payday in semi_monthly_paydays(year, month):
@@ -179,8 +200,12 @@ def compose(
                         CalendarEvent(
                             event_date=payday,
                             type="payday",
-                            label="Payday",
-                            detail=None,
+                            # IDENTITY in the label, this file's standing rule: the
+                            # frontend's ICS UID is {type}-{date}-{slug(label)}, and two
+                            # people paid the same day would otherwise merge into one
+                            # event in a calendar app.
+                            label=f"Payday — {source.name}" if labelled else "Payday",
+                            detail=source.name if labelled else None,
                             href="/paycheck",
                         )
                     )

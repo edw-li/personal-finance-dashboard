@@ -6,7 +6,14 @@
 import type { EChartsOption } from '../../charts/echarts'
 import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
-import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
+import {
+  MUTED,
+  NEGATIVE,
+  OTHER_SERIES_COLOR,
+  PALETTE,
+  POSITIVE,
+  SEQUENTIAL_BLUE,
+} from '../../charts/theme'
 import type { MoneyFlowOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 
@@ -25,17 +32,33 @@ const SAVED = 'Saved'
 const DRAWDOWN = 'Drawdown'
 const OTHER_SPEND = 'Other'
 
-// The five sources in the spec's own order, on FIXED PALETTE slots per ENTITY (the
-// paycheck sankey's grammar): an omitted zero source never reshuffles its neighbours'
-// hues. Categories reuse slots 0..6 on the far right — a deliberate repetition: left is
-// income identity, right is the /spending pages' own category slots (same entity, same
-// hue as the stacked bars), and the MUTED intermediates keep the columns apart.
+// The salary node's two spellings. One earner keeps the label the card has always drawn;
+// a split names each earner (spec §4.3), and `people.name` is UNIQUE in the database, so
+// two source nodes can never collide with each other.
+const SALARY = 'Salary & bonus'
+const SALARY_PREFIX = 'Salary — '
+
+// The salary hue FAMILY, in split order. Slot 0 is PALETTE[0] verbatim — the single-node
+// path and the primary earner draw the exact color they always have — and the rest are
+// lightness steps of the theme's own validated ramp (SEQUENTIAL_BLUE, whose index 6 IS
+// PALETTE[0]); no hue is invented here, which is charts/theme.ts's standing rule.
+// #86b6ef measures L* 72.7 against PALETTE[0]'s 55.9: dE 28.5 normal, 25.1 protanope,
+// 28.9 deuteranope, 15.1 tritanope — every one past the palette's own 8.4 adjacency floor
+// — at 8.25:1 on the #171a21 surface. The third step covers a three-person household;
+// beyond that the last tint repeats and the LABELS carry the distinction.
+const SALARY_TINTS = [PALETTE[0], SEQUENTIAL_BLUE[9], SEQUENTIAL_BLUE[3]] as const
+
+// The four FIXED sources, on FIXED PALETTE slots per ENTITY (the paycheck sankey's
+// grammar): an omitted zero source never reshuffles its neighbours' hues. Salary is not
+// here because it is one node or many; it is always emitted FIRST, on slot 0's family.
+// Categories reuse slots 0..6 on the far right — a deliberate repetition: left is income
+// identity, right is the /spending pages' own category slots (same entity, same hue as the
+// stacked bars), and the MUTED intermediates keep the columns apart.
 const SOURCES: {
-  key: keyof MoneyFlowOut['sources']
+  key: keyof Omit<MoneyFlowOut['sources'], 'salary_and_bonus' | 'salary_people'>
   label: string
   color: string
 }[] = [
-  { key: 'salary_and_bonus', label: 'Salary & bonus', color: PALETTE[0] },
   { key: 'rsu_vests', label: 'RSU vests', color: PALETTE[1] },
   { key: 'espp', label: 'ESPP', color: PALETTE[2] },
   { key: 'investment_income', label: 'Investment income', color: PALETTE[3] },
@@ -46,7 +69,8 @@ const SOURCES: {
 // (a zero-omitted source or a surplus year's absent Drawdown must not change how a
 // colliding category renders from one year to the next). OTHER_SPEND is deliberately NOT
 // seeded — the fold entry claims through the same set in emission order, so a real
-// category named 'Other' keeps its name and the fold wears the suffix.
+// category named 'Other' keeps its name and the fold wears the suffix. The SPLIT labels
+// are dynamic (they carry user text) and are added to the set per payload below.
 const STRUCTURAL_NAMES = [
   GROSS,
   TAXES,
@@ -55,8 +79,22 @@ const STRUCTURAL_NAMES = [
   TAKE_HOME,
   SAVED,
   DRAWDOWN,
+  SALARY,
   ...SOURCES.map((source) => source.label),
 ]
+
+/** The depth-0 salary node(s): one per earner on a split payload, else the single node. */
+function salaryNodes(flow: MoneyFlowOut): { label: string; value: number; color: string }[] {
+  const people = flow.sources.salary_people
+  if (people.length < 2) {
+    return [{ label: SALARY, value: Number(flow.sources.salary_and_bonus), color: PALETTE[0] }]
+  }
+  return people.map((person, index) => ({
+    label: `${SALARY_PREFIX}${person.name}`,
+    value: Number(person.amount),
+    color: SALARY_TINTS[Math.min(index, SALARY_TINTS.length - 1)],
+  }))
+}
 
 // The Taxes tooltip's six jurisdiction lines, in the engine's own order (tax_keys).
 const JURISDICTION_LINES: { key: keyof MoneyFlowOut['taxes']; label: string }[] = [
@@ -83,34 +121,53 @@ const cents = (value: number) => Math.round(value * 100) / 100
  */
 export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
   if (!flow.renderable) return null
+  const salary = salaryNodes(flow)
   // Negative backstop (the paycheck sankey's refusal): the server refuses these itself,
   // but a negative ribbon must never be drawable from a payload that slipped through.
-  // `saved` is exempt — it is signed by design and drawn as Drawdown below.
+  // `saved` is exempt — it is signed by design and drawn as Drawdown below. The salary
+  // TOTAL is checked alongside the per-earner slices: the split can only reconcile to a
+  // number that is itself drawable.
   const structural = [
     flow.gross_income,
     flow.taxes.total,
     flow.pre_tax_savings,
     flow.take_home_cash,
     flow.retained_equity,
+    flow.sources.salary_and_bonus,
     ...SOURCES.map((source) => flow.sources[source.key]),
     ...flow.categories.map((category) => category.amount),
     ...(flow.other_spend === null ? [] : [flow.other_spend]),
   ].map(Number)
   if (structural.some((value) => !Number.isFinite(value) || value < 0)) return null
+  if (salary.some((node) => !Number.isFinite(node.value) || node.value < 0)) return null
 
   // The name-claim set (see STRUCTURAL_NAMES): category names pass through claimNodeName
   // so no node name can ever duplicate or cycle — echarts crashes on both, from inside
-  // setOption, where the route boundary would blank the WHOLE Overview.
-  const taken = new Set(STRUCTURAL_NAMES)
+  // setOption, where the route boundary would blank the WHOLE Overview. The split labels
+  // join the set because they carry USER TEXT on the left column for the first time: a
+  // spending category spelled 'Salary — Sam' must wear the suffix, not take the node.
+  const taken = new Set([...STRUCTURAL_NAMES, ...salary.map((node) => node.label)])
 
   const nodes: SankeyNode[] = []
   const links: SankeyLink[] = []
 
-  for (const source of SOURCES) {
-    const value = Number(flow.sources[source.key])
-    if (value < A_CENT) continue
-    nodes.push({ name: source.label, value, depth: 0, itemStyle: { color: source.color } })
-    links.push({ source: source.label, target: GROSS, value })
+  const sourceNodes = [
+    ...salary,
+    ...SOURCES.map((source) => ({
+      label: source.label,
+      value: Number(flow.sources[source.key]),
+      color: source.color,
+    })),
+  ]
+  for (const source of sourceNodes) {
+    if (source.value < A_CENT) continue
+    nodes.push({
+      name: source.label,
+      value: source.value,
+      depth: 0,
+      itemStyle: { color: source.color },
+    })
+    links.push({ source: source.label, target: GROSS, value: source.value })
   }
   const gross = Number(flow.gross_income)
   if (links.length === 0 || gross < A_CENT) return null

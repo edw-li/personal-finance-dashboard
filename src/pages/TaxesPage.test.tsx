@@ -268,6 +268,8 @@ function withholdingFor(year: number): WithholdingOut {
     partner_wages: null,
     partner_withheld_fed: null,
     partner_withheld_state: null,
+    partner_source: 'entered',
+    partner_salary: null,
     additional_medicare_gap: '0.00',
     brackets_missing_for_status: [],
     safe_harbor: null,

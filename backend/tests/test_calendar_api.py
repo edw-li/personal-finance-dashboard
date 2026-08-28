@@ -320,3 +320,93 @@ async def test_custom_events_load_only_the_requested_range(auth_client):
 async def test_custom_event_requires_auth(client):
     resp = await client.post(f"{CALENDAR}/events", json={"date": "2026-09-12", "label": "nope"})
     assert resp.status_code == 401
+
+
+async def test_calendar_labels_paydays_when_two_people_have_profiles(auth_client, db, monkeypatch):
+    freeze_today(monkeypatch)
+    me = Person(name="Me", is_primary=True)
+    sam = Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.flush()
+    db.add_all(
+        [
+            PaycheckProfile(
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("120000"),
+                person_id=me.id,
+            ),
+            PaycheckProfile(
+                effective_date=date(2026, 2, 1),
+                annual_salary=Decimal("90000"),
+                person_id=sam.id,
+            ),
+        ]
+    )
+    await db.commit()
+
+    resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-08-31")
+    assert resp.status_code == 200
+    paydays = [e for e in resp.json()["events"] if e["type"] == "payday"]
+    assert [(e["date"], e["label"], e["detail"]) for e in paydays] == [
+        ("2026-08-14", "Payday — Me", "Me"),
+        ("2026-08-14", "Payday — Sam", "Sam"),
+        ("2026-08-31", "Payday — Me", "Me"),
+        ("2026-08-31", "Payday — Sam", "Sam"),
+    ]
+
+
+async def test_calendar_uses_each_persons_IN_FORCE_profile_not_the_newest_row(
+    auth_client, db, monkeypatch
+):
+    # "In force" (spec §4.4), not "the latest row in the table": a raise dated next year —
+    # which may even change cadence — must not silence the checks landing this month.
+    freeze_today(monkeypatch)
+    me = Person(name="Me", is_primary=True)
+    db.add(me)
+    await db.flush()
+    db.add_all(
+        [
+            PaycheckProfile(
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("120000"),
+                pay_periods_per_year=24,
+                person_id=me.id,
+            ),
+            PaycheckProfile(
+                effective_date=date(2027, 1, 1),
+                annual_salary=Decimal("150000"),
+                pay_periods_per_year=26,
+                person_id=me.id,
+            ),
+        ]
+    )
+    await db.commit()
+
+    resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-08-31")
+    assert [e["date"] for e in resp.json()["events"] if e["type"] == "payday"] == [
+        "2026-08-14",
+        "2026-08-31",
+    ]
+
+
+async def test_calendar_falls_back_to_a_future_only_profile(auth_client, db, monkeypatch):
+    # paycheck.py's own rule, mirrored: a brand-new user whose only profile starts next
+    # month gets the checks that are COMING rather than an empty calendar.
+    freeze_today(monkeypatch)
+    me = Person(name="Me", is_primary=True)
+    db.add(me)
+    await db.flush()
+    db.add(
+        PaycheckProfile(
+            effective_date=date(2026, 12, 1),
+            annual_salary=Decimal("120000"),
+            person_id=me.id,
+        )
+    )
+    await db.commit()
+
+    resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-08-31")
+    assert [e["date"] for e in resp.json()["events"] if e["type"] == "payday"] == [
+        "2026-08-14",
+        "2026-08-31",
+    ]

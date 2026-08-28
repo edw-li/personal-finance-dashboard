@@ -225,6 +225,7 @@ function moneyFlowOut(over: Partial<MoneyFlowOut> = {}): MoneyFlowOut {
     sources: {
       salary_and_bonus: '220000.00', rsu_vests: '80000.00', espp: '4000.00',
       investment_income: '2500.00', other_income: '1000.00',
+      salary_people: [],
     },
     gross_income: '307500.00',
     taxes: {

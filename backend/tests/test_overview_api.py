@@ -162,7 +162,10 @@ async def test_money_flow_composes_the_year_and_cross_checks_the_engine(
     # Conservation at the WIRE: with flat brackets every term is exact cents, so both
     # identities survive quantization verbatim (in general the wire tolerates the
     # paycheck sankey's documented ±$0.01 reconciliation drift).
-    sources_sum = sum(Decimal(v) for v in body["sources"].values())
+    # `salary_people` is excluded by NAME, not by type: it re-slices `salary_and_bonus`
+    # per earner rather than adding a sixth source, so summing it in would double-count
+    # exactly the money it splits (2026-08-27 spec §4.3).
+    sources_sum = sum(Decimal(v) for key, v in body["sources"].items() if key != "salary_people")
     assert sources_sum == Decimal(body["gross_income"])
     mid = (
         Decimal(body["taxes"]["total"])
@@ -373,3 +376,76 @@ async def test_money_flow_single_year_is_unchanged_by_summing(auth_client, db, d
     assert body["taxes"]["total"] == summary["totals"]["total_tax"]
     assert body["sources"]["salary_and_bonus"] == "220000.00"  # 200000 + 15000 + 5000
     assert body["renderable"] is True
+
+
+async def test_money_flow_splits_the_salary_node_per_earner(auth_client, db, definitions):
+    year = product_today().year
+    await _seed_married_flow_year(db, year)
+    body = (await auth_client.get(MONEY_FLOW)).json()
+
+    # Primary first — the column order `_return_people` establishes.
+    assert body["sources"]["salary_people"] == [
+        {"name": "Me", "amount": "200000.00"},
+        {"name": "Partner", "amount": "150000.00"},
+    ]
+    # The node they split is unchanged, and so is everything computed from it.
+    assert body["sources"]["salary_and_bonus"] == "350000.00"
+    assert body["gross_income"] == "350000.00"
+    assert body["renderable"] is True
+    assert Decimal(body["taxes"]["total"]) + Decimal(body["pre_tax_savings"]) + Decimal(
+        body["take_home_cash"]
+    ) + Decimal(body["retained_equity"]) == Decimal(body["gross_income"])
+
+
+async def test_money_flow_single_year_carries_an_empty_split(auth_client, db, definitions):
+    # The byte-identity pin: one earner draws one node, and the wire says so with [].
+    year = product_today().year
+    await seed_tax_year(auth_client, year)
+    body = (await auth_client.get(MONEY_FLOW)).json()
+    assert body["sources"]["salary_people"] == []
+    assert body["sources"]["salary_and_bonus"] == "220000.00"
+
+
+async def test_money_flow_does_not_split_when_only_one_earner_has_w2_rows(
+    auth_client, db, definitions
+):
+    # A married year where the partner has no salary yet: a zero node the chart would drop
+    # anyway, leaving a lone labelled node where the plain one belongs. Don't split.
+    year = product_today().year
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    await db.flush()
+    db.add(TaxYear(year=year, filing_status="married_joint"))
+    await db.flush()
+    db.add(TaxInput(year=year, key="latest_w2_income", value=Decimal("200000"), person_id=me.id))
+    for name, table in MFJ_BRACKETS:
+        for index, (rate, threshold) in enumerate(table, start=1):
+            db.add(
+                TaxBracket(
+                    year=year,
+                    jurisdiction=name,
+                    bracket_index=index,
+                    rate=Decimal(rate),
+                    threshold=Decimal(threshold),
+                    filing_status="married_joint",
+                )
+            )
+    await db.commit()
+
+    body = (await auth_client.get(MONEY_FLOW)).json()
+    assert body["sources"]["salary_people"] == []
+    assert body["sources"]["salary_and_bonus"] == "200000.00"
+
+
+async def test_money_flow_on_a_separate_return_does_not_split(auth_client, db, definitions):
+    # MFS is one return for ONE person — the partner's W-2 is off it entirely, so there is
+    # nothing to split and the single node is the honest one.
+    year = product_today().year
+    await _seed_married_flow_year(db, year)
+    row = await db.get(TaxYear, year)
+    row.filing_status = "married_separate"
+    await db.commit()
+
+    body = (await auth_client.get(MONEY_FLOW)).json()
+    assert body["sources"]["salary_people"] == []

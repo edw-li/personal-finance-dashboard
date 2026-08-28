@@ -1,6 +1,11 @@
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class MoneyFlowPersonSalaryOut(BaseModel):
+    name: str
+    amount: Decimal
 
 
 class MoneyFlowSourcesOut(BaseModel):
@@ -11,6 +16,10 @@ class MoneyFlowSourcesOut(BaseModel):
     # BALANCING node: engine gross minus the four named sources (1099 income, employer
     # HSA, w2_other, and any stored-total-vs-component drift live here).
     other_income: Decimal
+    # EMPTY on single, MFS and partner-less years — the card draws today's ONE salary node.
+    # Two or more entries (primary first) split it per earner; they sum to
+    # `salary_and_bonus`, which stays the household total.
+    salary_people: list[MoneyFlowPersonSalaryOut] = Field(default_factory=list)
 
 
 class MoneyFlowTaxesOut(BaseModel):

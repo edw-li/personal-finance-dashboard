@@ -52,6 +52,8 @@ function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
     partner_wages: null,
     partner_withheld_fed: null,
     partner_withheld_state: null,
+    partner_source: 'entered',
+    partner_salary: null,
     additional_medicare_gap: '0.00',
     brackets_missing_for_status: [],
     safe_harbor: {
@@ -492,5 +494,67 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     await screen.findByText('$123,456.78')
     expect(screen.queryByText(/still the legal safe harbor/)).toBeNull()
+  })
+
+  /** The married payload with the partner SIMULATED — a profile exists, so the tracker
+      rows are stored history and the leg is the card's answer. */
+  function simulated(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
+    return married({
+      partner_source: 'simulated',
+      partner_salary: {
+        ytd: '13750.00',
+        projected: '30000.00',
+        checks_elapsed: 11,
+        checks_total: 24,
+      },
+      ...overrides,
+    })
+  }
+
+  it('says the partner is SIMULATED and shows their leg instead of the tracker rows', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(simulated())
+    render(<WithholdingPanel year={2026} />)
+
+    expect(await screen.findByText('Partner — simulated')).toBeTruthy()
+    expect(screen.queryByText('Partner — entered, not simulated')).toBeNull()
+    // Their wages still come from the W-2 inputs — only the WITHHOLDING side moved.
+    expect(screen.getByText('$150,000.00')).toBeTruthy()
+    expect(screen.getByText('Withheld so far')).toBeTruthy()
+    expect(screen.getByText('$13,750.00')).toBeTruthy()
+    // "Projected for the year", not "Projected withholding": the latter is already this
+    // card's own stat-tile label for the HOUSEHOLD total, and one card must not spell two
+    // different figures the same way.
+    expect(screen.getByText('Projected for the year')).toBeTruthy()
+    expect(screen.getByText('$30,000.00')).toBeTruthy()
+    // The two tracker rows are GONE from the facts list — one source of truth at a time.
+    expect(screen.queryByText('Federal withheld')).toBeNull()
+    expect(screen.queryByText('State withheld')).toBeNull()
+    expect(screen.queryByText('$18,000.00')).toBeNull()
+  })
+
+  it('names the provenance of the simulated partner leg', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(simulated())
+    render(<WithholdingPanel year={2026} />)
+
+    expect(
+      await screen.findByText(
+        /Simulated from their paycheck profile — 11 of 24 checks at their all-in withholding %\. Their entered W-2 withholding rows are ignored while that profile exists\./,
+      ),
+    ).toBeTruthy()
+    // The entered-mode sentence is not also on screen.
+    expect(screen.queryByText(/your partner’s is entered/)).toBeNull()
+  })
+
+  it('keeps the entered fallback rendering when there is no partner profile', async () => {
+    // The byte-identity pin, stated as its own test: the same payload the P2 cases use
+    // still draws the P2 card, heading and sentence included.
+    vi.mocked(fetchWithholding).mockResolvedValue(married())
+    render(<WithholdingPanel year={2026} />)
+
+    expect(await screen.findByText('Partner — entered, not simulated')).toBeTruthy()
+    expect(screen.getByText('Federal withheld')).toBeTruthy()
+    expect(screen.getByText('State withheld')).toBeTruthy()
+    expect(screen.queryByText('Withheld so far')).toBeNull()
+    expect(screen.queryByText(/Simulated from their paycheck profile/)).toBeNull()
   })
 })

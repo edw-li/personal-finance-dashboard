@@ -96,6 +96,14 @@ export default function WithholdingPanel({ year }: { year: number }) {
           ? 'refund expected'
           : 'dead even'
 
+  // Which partner story this card is telling. The SOURCE picks the words (it is the
+  // server's own decision, and the only field that can say "a profile exists"); the LEG
+  // supplies the figures. A 'simulated' source with no leg would be a server bug — the
+  // heading would say simulated and the rows would fall back to the entered ones rather
+  // than crash on a null.
+  const partnerSimulated = withholding !== null && withholding.partner_source === 'simulated'
+  const partnerLeg = withholding === null ? null : withholding.partner_salary
+
   return (
     <section className="card withholding-panel">
       <h2 className="eyebrow">
@@ -161,37 +169,70 @@ export default function WithholdingPanel({ year }: { year: number }) {
           {/* The partner mini-section: read-only on purpose. The inputs form BELOW this card
               already edits all three rows (they are seeded per-person definitions, so it
               renders an editable cell for each in the partner column), and a second editor
-              here would be two write paths racing over one row. */}
+              here would be two write paths racing over one row. Simulated mode swaps the two
+              tracker rows for the leg the server computed — the rows stay editable below,
+              they simply stop being this card's answer. */}
           {withholding.partner_wages !== null && (
             <div className="withholding-partner">
-              <h3 className="eyebrow">Partner — entered, not simulated</h3>
+              <h3 className="eyebrow">
+                {partnerSimulated ? 'Partner — simulated' : 'Partner — entered, not simulated'}
+              </h3>
               <dl className="withholding-partner-facts">
                 <div>
                   <dt>W-2 wages</dt>
+                  {/* Both modes: wages are the year's W-2 inputs, never the simulation —
+                      the liability beside them is computed on exactly these. */}
                   <dd>{formatCurrency(withholding.partner_wages)}</dd>
                 </div>
-                <div>
-                  <dt>Federal withheld</dt>
-                  <dd>
-                    {withholding.partner_withheld_fed === null
-                      ? 'not entered'
-                      : formatCurrency(withholding.partner_withheld_fed)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>State withheld</dt>
-                  <dd>
-                    {withholding.partner_withheld_state === null
-                      ? 'not entered'
-                      : formatCurrency(withholding.partner_withheld_state)}
-                  </dd>
-                </div>
+                {partnerSimulated ? (
+                  <>
+                    <div>
+                      <dt>Withheld so far</dt>
+                      <dd>{formatCurrency(partnerLeg === null ? null : partnerLeg.ytd)}</dd>
+                    </div>
+                    <div>
+                      {/* NOT "Projected withholding": that is the label of this card's own
+                          stat tile, which carries the HOUSEHOLD total. Two rows spelled the
+                          same with different money on one card is the ambiguity this whole
+                          batch exists to remove. */}
+                      <dt>Projected for the year</dt>
+                      <dd>{formatCurrency(partnerLeg === null ? null : partnerLeg.projected)}</dd>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <dt>Federal withheld</dt>
+                      <dd>
+                        {withholding.partner_withheld_fed === null
+                          ? 'not entered'
+                          : formatCurrency(withholding.partner_withheld_fed)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>State withheld</dt>
+                      <dd>
+                        {withholding.partner_withheld_state === null
+                          ? 'not entered'
+                          : formatCurrency(withholding.partner_withheld_state)}
+                      </dd>
+                    </div>
+                  </>
+                )}
               </dl>
-              <p className="drill-hint">
-                Your side is simulated from paycheck profiles; your partner&rsquo;s is entered.
-                Edit all three in the inputs form below. Partner amounts are already counted
-                once in each total above — don&rsquo;t add them again.
-              </p>
+              {partnerSimulated ? (
+                partnerLeg !== null && (
+                  <p className="drill-hint">
+                    {`Simulated from their paycheck profile — ${partnerLeg.checks_elapsed} of ${partnerLeg.checks_total} checks at their all-in withholding %. Their entered W-2 withholding rows are ignored while that profile exists.`}
+                  </p>
+                )
+              ) : (
+                <p className="drill-hint">
+                  Your side is simulated from paycheck profiles; your partner&rsquo;s is
+                  entered. Edit all three in the inputs form below. Partner amounts are already
+                  counted once in each total above — don&rsquo;t add them again.
+                </p>
+              )}
             </div>
           )}
 

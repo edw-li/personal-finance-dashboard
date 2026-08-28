@@ -906,3 +906,108 @@ async def test_safe_harbor_flags_a_prior_year_filed_under_a_different_status(
     body = await get_withholding(auth_client)
     assert body["filing_status"] == "married_joint"
     assert body["safe_harbor"]["prior_filing_status"] == "single"
+
+
+# --- the SIMULATED partner leg (2026-08-27 spec §4.2) ---
+
+PARTNER_TRACKER_IGNORED = (
+    "partner withholding simulated from their paycheck profile — the entered "
+    "w2_fed_withholding / w2_state_withholding rows are ignored"
+)
+
+
+async def seed_partner_profile(db, partner_id: int) -> PaycheckProfile:
+    """The partner's check: 150000 / 24 = 6250 gross, nothing pre-tax, 20% all-in ->
+    1250.00 a check. A DIFFERENT effective_date from the primary's so the row is legal
+    under either unique constraint, and early enough that no check predates it."""
+    return await seed_profile(
+        db,
+        person_id=partner_id,
+        effective_date=date(2025, 2, 1),
+        annual_salary=Decimal("150000.00"),
+        trad_401k_pct=Decimal("0"),
+        withholding_pct=Decimal("0.200000000"),
+        dental_vision_per_check=Decimal("0.00"),
+        hsa_per_check=Decimal("0.00"),
+    )
+
+
+async def test_withholding_simulates_the_partner_when_they_have_a_profile(
+    auth_client, db, married_world, frozen_today
+):
+    _me_id, partner_id = married_world
+    await seed_partner_profile(db, partner_id)
+    body = await get_withholding(auth_client)
+
+    assert body["partner_source"] == "simulated"
+    assert body["partner_salary"] == {
+        "ytd": "13750.00",  # 11 of 24 checks x 1250.00
+        "projected": "30000.00",
+        "checks_elapsed": 11,
+        "checks_total": 24,
+    }
+    # The primary's leg is untouched — a partner profile must never land in their bucket.
+    assert body["salary"] == {"ytd": "30855.00", "projected": "67320.00"}
+    # Simulated on BOTH sides now, so the two legs no longer agree between ytd and
+    # projected the way an entered snapshot does: 30855 + 13750 and 67320 + 30000.
+    assert body["total"]["ytd"] == "44605.00"
+    assert body["total"]["projected"] == "97320.00"
+    # The gap is wage arithmetic and does not move.
+    assert body["additional_medicare_gap"] == "900.00"
+
+
+async def test_a_partner_profile_ignores_their_tracker_rows_but_still_reports_them(
+    auth_client, db, married_world, frozen_today
+):
+    # married_world seeds both tracker rows. They are STORED facts, so they stay on the
+    # wire; they are simply not money in any total, and the note says which side won.
+    _me_id, partner_id = married_world
+    await seed_partner_profile(db, partner_id)
+    body = await get_withholding(auth_client)
+
+    assert body["partner_withheld_fed"] == "18000.00"
+    assert body["partner_withheld_state"] == "6000.00"
+    assert PARTNER_TRACKER_IGNORED in body["warnings"]
+    assert PARTNER_MISSING not in body["warnings"]
+    # 24000 of entered withholding is nowhere in the total (which would be 121320.00).
+    assert body["total"]["projected"] == "97320.00"
+
+
+async def test_a_partner_profile_on_a_separate_return_is_not_simulated(
+    auth_client, db, definitions, frozen_today
+):
+    # MFS is ONE return for ONE person: the spouse's inputs are off it (the P2 pin), and
+    # so is their paycheck. Their profile must neither simulate a leg nor — the real trap
+    # — fall into the primary's bucket and inflate the primary's own salary withholding.
+    me_id, partner_id = await seed_household(db)
+    await seed_married_year(db, YEAR, me_id, partner_id, status="married_separate")
+    await seed_profile(db, person_id=me_id)
+    await seed_partner_profile(db, partner_id)
+    body = await get_withholding(auth_client)
+
+    assert body["partner_source"] == "entered"
+    assert body["partner_salary"] is None
+    assert body["partner_wages"] is None
+    assert body["salary"] == {"ytd": "30855.00", "projected": "67320.00"}
+
+
+async def test_withholding_without_a_partner_profile_is_the_entered_fallback(
+    auth_client, married_world, frozen_today
+):
+    # THE pin: the P2 world, untouched. Every figure below is the one that file already
+    # asserts — repeated here so a regression names the source flag as the cause.
+    body = await get_withholding(auth_client)
+    assert body["partner_source"] == "entered"
+    assert body["partner_salary"] is None
+    assert body["total"]["ytd"] == "54855.00"
+    assert body["total"]["projected"] == "91320.00"
+
+
+async def test_single_year_carries_the_source_flag_as_entered(
+    auth_client, db, definitions, frozen_today
+):
+    await seed_tax_year(db, YEAR, "240000")
+    await seed_profile(db)
+    body = await get_withholding(auth_client)
+    assert body["partner_source"] == "entered"
+    assert body["partner_salary"] is None

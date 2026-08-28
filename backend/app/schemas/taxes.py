@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.services.withholding_calc import PARTNER_ENTERED
 from app.tax_keys import SINGLE
 
 # The wire spelling of tax_keys.FILING_STATUSES. A Literal, not a str + validator, so
@@ -290,6 +291,16 @@ class WithholdingVestOut(BaseModel):
     fica_projected: Decimal
 
 
+class WithholdingPartnerLegOut(BaseModel):
+    """The partner's SIMULATED salary leg — the primary's `salary` shape plus its OWN check
+    grid, because the cadence is their profile's and need not match the primary's."""
+
+    ytd: Decimal
+    projected: Decimal
+    checks_elapsed: int
+    checks_total: int
+
+
 class SafeHarborOut(BaseModel):
     prior_year: int
     prior_total_tax: Decimal
@@ -329,6 +340,14 @@ class WithholdingOut(BaseModel):
     partner_wages: Decimal | None = None
     partner_withheld_fed: Decimal | None = None
     partner_withheld_state: Decimal | None = None
+    # "simulated" exactly when the partner has a paycheck profile, "entered" otherwise (the
+    # 2026-08-26 fallback, byte-identical). ONE source at a time: in "simulated" the two
+    # withheld fields above are still reported — they are stored facts — but they are money
+    # in no total, and a warning names the ignoring.
+    partner_source: str = PARTNER_ENTERED
+    # NULL in "entered" mode. A leg that was never simulated has no figures at all, and
+    # 0.00 would read as "simulated, and it came to nothing".
+    partner_salary: WithholdingPartnerLegOut | None = None
     # SIGNED: positive is the under-withholding trap (each employer withholds the 0.9%
     # surtax only above 200k of its own wages; a joint return owes it above the status
     # threshold on combined wages), negative is over-withholding, 0.00 is one earner or a
