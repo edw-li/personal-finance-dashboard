@@ -401,7 +401,12 @@
   /* The app's bubble layer (shared with the calendar event popover): floats over chart
      canvases and table rows. */
   z-index: 2;
-  display: none;
+  /* visibility+opacity rather than display (2026-08-27 spec §5): display cannot be
+     transitioned, and hidden visibility hides from assistive tech exactly as display: none
+     did — the AT contract is unchanged. */
+  display: block;
+  visibility: hidden;
+  opacity: 0;
   width: max-content;
   max-width: 280px;
   padding: 0.5rem 0.65rem;
@@ -419,7 +424,8 @@
 }
 .info-hint:hover::after,
 .info-hint:focus-visible::after {
-  display: block;
+  visibility: visible;
+  opacity: 1;
 }
 
 /* ── Chart export menu (2026-08-25 spec §2a) ───────────────────────── */
@@ -512,4 +518,63 @@
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* ── Motion grammar (2026-08-27 spec §4) ───────────────────────────── */
+/* Opt-in via no-preference (the PortfolioPage.css spinner precedent): under reduced
+   motion every rule below is simply absent — hover states snap, exactly as before. */
+
+@media (prefers-reduced-motion: no-preference) {
+  .button,
+  .chip,
+  .month-chip,
+  .row-toggle,
+  .info-hint,
+  .segmented button {
+    transition:
+      background-color var(--t-fast) ease,
+      border-color var(--t-fast) ease,
+      color var(--t-fast) ease,
+      filter var(--t-fast) ease;
+  }
+
+  /* Press feedback: felt, barely seen. */
+  .button:active {
+    transform: scale(0.985);
+  }
+
+  /* The bubble fades; visibility rides the same duration so it stays interactable-none
+     while invisible. AT-equivalent to the old display toggle: hidden visibility is
+     hidden from screen readers too. */
+  .info-hint::after {
+    transition:
+      opacity 100ms ease,
+      visibility 100ms;
+  }
+
+  .row-click {
+    transition: background-color var(--t-fast) ease;
+  }
+
+  /* Page entrance: one fade-rise per navigation. RouteBoundary is keyed by pathname
+     (Layout.tsx), so the .page element remounts exactly once per route change — the
+     animation never replays on data refetches. transform is paint-only; EChart's
+     ResizeObserver sees no size change. */
+  .page {
+    animation: page-enter var(--t-page) ease-out;
+  }
+
+  @keyframes page-enter {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+}
+
+/* Whole-row click targets (the NetWorthPage accounts-table recipe): hover names the
+   row clickable without lying — only rows that actually navigate/toggle carry it.
+   An inline selected background (style attr) still wins over this class rule. */
+.row-click:hover {
+  background: var(--surface-2);
 }

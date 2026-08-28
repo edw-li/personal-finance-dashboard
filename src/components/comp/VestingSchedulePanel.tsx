@@ -30,7 +30,7 @@ function DayRows({
   return (
     <>
       <tr
-        className={day.is_past ? 'vest-past' : undefined}
+        className={day.is_past ? 'vest-past row-click' : 'row-click'}
         onClick={onToggle}
         style={{ cursor: 'pointer', background: expanded ? 'var(--surface-2)' : undefined }}
       >

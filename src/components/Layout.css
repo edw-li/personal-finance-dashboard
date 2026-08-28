@@ -163,3 +163,16 @@
 .content:focus {
   outline: none;
 }
+
+/* Motion grammar (2026-08-27 spec §4) — sidebar residents. The skip link is deliberately
+   absent: its focus reveal must stay instant. */
+@media (prefers-reduced-motion: no-preference) {
+  .nav-link,
+  .logout-button,
+  .route-fallback-button {
+    transition:
+      background-color var(--t-fast) ease,
+      border-color var(--t-fast) ease,
+      color var(--t-fast) ease;
+  }
+}

@@ -206,8 +206,9 @@ describe('TransactionsPanel', () => {
       }),
     )
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
-    // The undo toast is consumed by its own action.
-    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+    // The undo toast is consumed by its own action — waitFor, not a bare assert, because
+    // the consumed toast now spends ToastProvider's exit window on screen before it goes.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull())
   })
 })
 

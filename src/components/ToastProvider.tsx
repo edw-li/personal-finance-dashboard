@@ -32,10 +32,16 @@ interface ToastEntry {
   variant: ToastVariant
   message: string
   action?: ToastAction
+  /** Exit phase: still rendered (with .toast-leaving) but no longer armable. */
+  leaving?: boolean
 }
 
 // Long enough to read and reach Undo, short enough never to queue up (hover pauses it).
 const AUTO_DISMISS_MS = 6000
+
+// The exit animation's length plus a hair; removal is timer-driven (not animationend)
+// so reduced-motion and jsdom behave identically.
+const LEAVE_MS = 160
 
 // The deliberate INVERSE of useAuth's throw: toasts are an ambient layer, and a host
 // rendered without it — every pre-existing direct-render test of the four delete hosts —
@@ -51,6 +57,13 @@ export function useToast(): ToastApi {
 export default function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastEntry[]>([])
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
+  // Exit timers live apart from the auto-dismiss map: hold/release pauses reading time,
+  // and a toast already leaving has no reading time left to pause.
+  const removalTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
+  // One-shot actions: a leaving toast keeps its buttons mounted for LEAVE_MS after the
+  // first activation, and a habitual double-click lands inside that window — the second
+  // press must not re-fire the action (every host's Undo re-POSTs a deleted row).
+  const firedActions = useRef(new Set<number>())
   // TWO latches, ORed into "paused", never one shared flag: the pointer and the keyboard
   // hold the clock for different reasons, so a pointer leaving a region the keyboard is
   // still inside must not start the countdown under the user's hands.
@@ -59,12 +72,32 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   const nextId = useRef(1)
   const regionRef = useRef<HTMLDivElement>(null)
 
-  const dismiss = useCallback((id: number) => {
-    const timer = timers.current.get(id)
+  const remove = useCallback((id: number) => {
+    const timer = removalTimers.current.get(id)
     if (timer !== undefined) clearTimeout(timer)
-    timers.current.delete(id)
+    removalTimers.current.delete(id)
+    firedActions.current.delete(id)
     setToasts((current) => current.filter((toast) => toast.id !== id))
   }, [])
+
+  // Two-phase: mark, animate, THEN drop. The entry has to outlive the click by the length
+  // of the exit animation or there is nothing left on screen to animate.
+  const dismiss = useCallback(
+    (id: number) => {
+      if (removalTimers.current.has(id)) return // already on its way out
+      const timer = timers.current.get(id)
+      if (timer !== undefined) clearTimeout(timer)
+      timers.current.delete(id)
+      setToasts((current) =>
+        current.map((toast) => (toast.id === id ? { ...toast, leaving: true } : toast)),
+      )
+      removalTimers.current.set(
+        id,
+        setTimeout(() => remove(id), LEAVE_MS),
+      )
+    },
+    [remove],
+  )
 
   const arm = useCallback(
     (id: number) => {
@@ -112,7 +145,9 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   // still holds.
   const releaseTimers = () => {
     if (hoverPaused.current || focusPaused.current) return
-    for (const toast of toasts) arm(toast.id)
+    // Leaving entries are skipped: re-arming one would schedule a second dismiss for a
+    // toast already on its way out (and hovering a dying toast must not resurrect it).
+    for (const toast of toasts) if (!toast.leaving) arm(toast.id)
   }
 
   // Activating Undo or Dismiss unmounts the very button that holds the focus latch, and
@@ -120,12 +155,15 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   // would wedge true, leaving every LATER toast born unarmed and immortal. Re-checking
   // containment here (an effect, after the removal) is the only reliable release: in the
   // click handler the button is still mounted and still focused.
+  // With the exit phase the unmount is LEAVE_MS late (the leaving toast keeps rendering
+  // its buttons, so the first pass here still finds focus inside and correctly holds) —
+  // the removal is itself a `toasts` change, so this effect always gets its release pass.
   useEffect(() => {
     if (!focusPaused.current) return
     const region = regionRef.current
     if (region !== null && region.contains(document.activeElement)) return
     focusPaused.current = false
-    if (!hoverPaused.current) for (const toast of toasts) arm(toast.id)
+    if (!hoverPaused.current) for (const toast of toasts) if (!toast.leaving) arm(toast.id)
   }, [toasts, arm])
 
   return (
@@ -157,7 +195,10 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((toast) => {
           const action = toast.action
           return (
-            <div key={toast.id} className={`toast toast-${toast.variant}`}>
+            <div
+              key={toast.id}
+              className={`toast toast-${toast.variant}${toast.leaving ? ' toast-leaving' : ''}`}
+            >
               <span className="toast-message">{toast.message}</span>
               {action !== undefined && (
                 <button
@@ -167,6 +208,9 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
                     // Consume FIRST: an action that itself toasts (an undo that fails)
                     // must not race a dismiss aimed at the wrong entry.
                     dismiss(toast.id)
+                    // ...and exactly once: the button outlives this click by LEAVE_MS.
+                    if (firedActions.current.has(toast.id)) return
+                    firedActions.current.add(toast.id)
                     action.onAction()
                   }}
                 >
