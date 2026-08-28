@@ -1,0 +1,107 @@
+/* Contribution-pace meters (2026-08-27 spec §5): the BudgetPanel meter grammar — thin
+   4px rounded tracks, figures in the app's text tokens — with three tones instead of
+   two. Its own sheet rather than an import of the spending one: a paycheck component
+   must not depend on a spending stylesheet's class names. */
+
+.pace-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.pace-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 240px) 1fr minmax(160px, auto) minmax(90px, auto);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pace-name {
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.pace-meter {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-2);
+}
+
+.pace-fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.pace-fill.is-ok {
+  background: var(--accent);
+}
+
+.pace-fill.is-warn {
+  background: var(--warn);
+}
+
+.pace-fill.is-over {
+  background: var(--negative);
+}
+
+/* The beyond-100% marker: a small negative-toned tick just past the track's end — a
+   POSITION channel for over-ness, redundant with the colour (CVD-safe), exactly as the
+   budget meters do it. */
+.pace-overflow-tick {
+  position: absolute;
+  top: -3px;
+  right: -6px;
+  width: 3px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--negative);
+}
+
+.pace-figures {
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  text-align: right;
+  color: var(--muted);
+}
+
+.pace-verdict {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.pace-verdict-word {
+  font-size: 0.7rem;
+  text-transform: lowercase;
+}
+
+.pace-figures.tone-warn,
+.pace-verdict.tone-warn {
+  color: var(--warn);
+}
+
+.pace-figures.tone-over,
+.pace-verdict.tone-over {
+  color: var(--negative);
+}
+
+.pace-cta {
+  grid-column: 3 / -1;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .pace-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .pace-meter {
+    grid-column: 1 / -1;
+  }
+}
