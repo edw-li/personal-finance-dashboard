@@ -13,6 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ACCOUNT_GROUPS, Account, AccountBalance, AppSetting, NetWorthSnapshot
 
+# Re-exported: tests and future readers look for the household vocabulary next to the
+# function that uses it, and moving the constant would be churn for nothing.
+from app.services.ownership import JOINT, parse_owner  # noqa: F401
+
 INVESTABLE_GROUPS = ("pre_tax", "post_tax", "taxable", "equity")
 DEFAULT_SWR_PCT = Decimal("0.04")
 
@@ -20,13 +24,12 @@ ZERO = Decimal("0.00")
 
 BalanceKey = tuple[int, int]  # (snapshot_id, account_id)
 
-JOINT = "joint"
-INT32_MAX = 2**31 - 1
-
 
 def owner_clause(owner: str) -> ColumnElement[bool]:
     """THE definition of net-worth ownership (household spec §5.2) — one function, so the
-    two endpoints cannot drift apart.
+    two endpoints cannot drift apart. The portfolio's twin is
+    services.portfolio_accounts.portfolio_owner_clause; both parse through
+    services.ownership.parse_owner, so the GRAMMAR cannot drift either.
 
     `joint` selects the NULL-owned accounts only. A person id selects that person's accounts
     PLUS the joint ones, because "primary holder, spouse secondary" is what a joint account
@@ -34,15 +37,12 @@ def owner_clause(owner: str) -> ColumnElement[bool]:
     therefore OVERLAP by design and must never be summed — the disjoint split for stacking
     is owner_totals_for below.
 
-    Raises ValueError on anything else so the router answers 422; an out-of-range id would
-    otherwise reach asyncpg as an int32 overflow, i.e. a 500. `isascii()` guards the
-    superscript digits that `str.isdigit()` accepts and `int()` then rejects.
+    Raises ValueError (via parse_owner) on anything else so the router answers 422.
     """
-    if owner == JOINT:
+    person_id = parse_owner(owner)
+    if person_id is None:
         return Account.person_id.is_(None)
-    if not (owner.isascii() and owner.isdigit()) or not 1 <= int(owner) <= INT32_MAX:
-        raise ValueError(f"owner must be a person id or {JOINT!r}")
-    return or_(Account.person_id == int(owner), Account.person_id.is_(None))
+    return or_(Account.person_id == person_id, Account.person_id.is_(None))
 
 
 async def load_balance_matrix(

@@ -1,9 +1,14 @@
 """portfolio_accounts: the label registry every position row points at."""
 
+from datetime import date
+from decimal import Decimal
+
+import pytest
 from sqlalchemy import select
 
-from app.models import Person, PortfolioAccount
-from app.services.portfolio_accounts import resolve_portfolio_account
+from app.models import DividendPayment, Person, PortfolioAccount, PositionTransaction, Security
+from app.services.portfolio_accounts import portfolio_owner_clause, resolve_portfolio_account
+from app.services.portfolio_calc import fold_transactions, load_portfolio
 
 
 async def test_resolve_creates_one_row_per_label_owned_by_the_primary(db):
@@ -152,3 +157,104 @@ async def test_dividend_account_stays_optional(auth_client, db):
     assert blank.status_code == 201, blank.text
     assert blank.json()["account"] is None  # whitespace collapses to None, never a '' row
     assert (await db.execute(select(PortfolioAccount))).scalars().all() == []
+
+
+async def _owned_book(db):
+    """Mine 10 sh, Theirs 5 sh, Ours 2 sh of one security, plus three dividends: one on
+    Mine, one on Ours, one with NO account at all."""
+    me, sam = Person(name="Me", is_primary=True), Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.flush()
+    mine = PortfolioAccount(label="Mine", person_id=me.id)
+    theirs = PortfolioAccount(label="Theirs", person_id=sam.id)
+    ours = PortfolioAccount(label="Ours", person_id=None)
+    security = Security(ticker="VOO", name="Vanguard", holding_type="etf")
+    db.add_all([mine, theirs, ours, security])
+    await db.flush()
+    db.add_all(
+        [
+            PositionTransaction(
+                security_id=security.id,
+                portfolio_account=mine,
+                type="buy",
+                shares=Decimal("10"),
+                price=Decimal("50"),
+                sort_index=10,
+            ),
+            PositionTransaction(
+                security_id=security.id,
+                portfolio_account=theirs,
+                type="buy",
+                shares=Decimal("5"),
+                price=Decimal("60"),
+                sort_index=20,
+            ),
+            PositionTransaction(
+                security_id=security.id,
+                portfolio_account=ours,
+                type="buy",
+                shares=Decimal("2"),
+                price=Decimal("40"),
+                sort_index=30,
+            ),
+            DividendPayment(
+                security_id=security.id,
+                portfolio_account=mine,
+                pay_date=date(2026, 6, 30),
+                amount=Decimal("10.00"),
+            ),
+            DividendPayment(
+                security_id=security.id,
+                portfolio_account=ours,
+                pay_date=date(2026, 6, 30),
+                amount=Decimal("2.00"),
+            ),
+            DividendPayment(
+                security_id=security.id,
+                portfolio_account=None,
+                pay_date=date(2026, 6, 30),
+                amount=Decimal("99.00"),
+            ),
+        ]
+    )
+    await db.commit()
+    return me, sam
+
+
+async def test_load_portfolio_scopes_transactions_and_dividends(db):
+    me, sam = await _owned_book(db)
+
+    _s, txns, _l, _h, dividends = await load_portfolio(db)
+    assert sorted(t.account for t in txns) == ["Mine", "Ours", "Theirs"]
+    assert sum(d.amount for d in dividends) == Decimal("111.00")  # household sees all three
+
+    _s, txns, _l, _h, dividends = await load_portfolio(
+        db, owner_filter=portfolio_owner_clause(str(me.id))
+    )
+    assert sorted(t.account for t in txns) == ["Mine", "Ours"]  # mine AND ours, never theirs
+    assert sum(d.amount for d in dividends) == Decimal("12.00")  # the account-less 99 is out
+
+    _s, txns, _l, _h, dividends = await load_portfolio(
+        db, owner_filter=portfolio_owner_clause(str(sam.id))
+    )
+    assert sorted(t.account for t in txns) == ["Ours", "Theirs"]
+
+    _s, txns, _l, _h, dividends = await load_portfolio(
+        db, owner_filter=portfolio_owner_clause("joint")
+    )
+    assert [t.account for t in txns] == ["Ours"]  # joint = NULL-owned only
+    assert sum(d.amount for d in dividends) == Decimal("2.00")
+
+
+async def test_scoped_fold_keeps_the_label_key(db):
+    me, _sam = await _owned_book(db)
+    _s, txns, _l, _h, _d = await load_portfolio(db, owner_filter=portfolio_owner_clause(str(me.id)))
+    positions = fold_transactions(txns)
+    assert sorted(positions) == [(1, "Mine"), (1, "Ours")]
+    assert positions[(1, "Mine")].shares == Decimal("10")
+
+
+def test_portfolio_owner_clause_rejects_anything_that_is_not_an_id_or_joint():
+    for bad in ("nobody", "-1", "0", "1.5", "99999999999", "", "²"):
+        with pytest.raises(ValueError):
+            portfolio_owner_clause(bad)

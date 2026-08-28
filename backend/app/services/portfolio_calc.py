@@ -9,12 +9,13 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     DividendPayment,
     LatestPrice,
+    PortfolioAccount,
     PositionTransaction,
     PriceHistory,
     Security,
@@ -277,7 +278,11 @@ def allocation(
 
 
 async def load_portfolio(
-    db: AsyncSession, *, with_history: bool = True, with_dividends: bool = True
+    db: AsyncSession,
+    *,
+    with_history: bool = True,
+    with_dividends: bool = True,
+    owner_filter: ColumnElement[bool] | None = None,
 ) -> tuple[
     dict[int, Security],
     list[PositionTransaction],
@@ -285,17 +290,28 @@ async def load_portfolio(
     dict[int, list[PriceHistory]],
     list[DividendPayment],
 ]:
-    """/allocation and /realized skip history+dividends they never read (Task 10 review I1)."""
+    """/allocation and /realized skip history+dividends they never read (Task 10 review I1).
+
+    `owner_filter` (portfolio_owner_clause's output) scopes the TRANSACTION and DIVIDEND
+    loads by portfolio-account membership, and that is the whole filtering seam: holdings,
+    totals, XIRR inputs, allocation weights and realized totals are all derived from the
+    rows handed back here, so a scoped response is scope-consistent by construction rather
+    than by five separate arithmetic decisions. None = the whole household, byte-identical
+    to the pre-ownership answer.
+
+    Securities and prices stay whole: they are lookups, not money. Dividends with NO
+    portfolio account (the column is nullable there) are HOUSEHOLD-only — an unattributed
+    payment cannot honestly join a person's view, and the inner join drops it.
+    """
     securities = {s.id: s for s in (await db.execute(select(Security))).scalars()}
-    txns = list(
-        (
-            await db.execute(
-                select(PositionTransaction).order_by(
-                    PositionTransaction.sort_index, PositionTransaction.id
-                )
-            )
-        ).scalars()
+    txn_q = select(PositionTransaction).order_by(
+        PositionTransaction.sort_index, PositionTransaction.id
     )
+    if owner_filter is not None:
+        txn_q = txn_q.join(
+            PortfolioAccount, PortfolioAccount.id == PositionTransaction.portfolio_account_id
+        ).where(owner_filter)
+    txns = list((await db.execute(txn_q)).scalars())
     latest = {p.security_id: p for p in (await db.execute(select(LatestPrice))).scalars()}
     history: dict[int, list[PriceHistory]] = {}
     if with_history:
@@ -306,7 +322,12 @@ async def load_portfolio(
         ).scalars()
         for row in rows:
             history.setdefault(row.security_id, []).append(row)
-    dividends = (
-        list((await db.execute(select(DividendPayment))).scalars()) if with_dividends else []
-    )
+    dividends: list[DividendPayment] = []
+    if with_dividends:
+        div_q = select(DividendPayment)
+        if owner_filter is not None:
+            div_q = div_q.join(
+                PortfolioAccount, PortfolioAccount.id == DividendPayment.portfolio_account_id
+            ).where(owner_filter)
+        dividends = list((await db.execute(div_q)).scalars())
     return securities, txns, latest, history, dividends
