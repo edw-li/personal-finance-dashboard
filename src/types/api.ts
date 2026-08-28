@@ -376,6 +376,22 @@ export interface RealizedResponse {
   rows: RealizedRow[]
 }
 
+// GET /portfolio/accounts — the labels behind every transaction's and dividend's `account`
+// string, with their owner. person_id null = JOINT (the net-worth convention, never
+// "unknown": the migration backfilled every pre-existing label to the primary person).
+// Labels are immutable this batch — they are the positions' identity.
+export interface PortfolioAccountOut {
+  id: number
+  label: string
+  person_id: number | null
+}
+
+// PATCH /portfolio/accounts/{id} — person_id ONLY, and always explicitly: an omitted key
+// means "leave the owner alone" server-side, so retagging to joint must send null.
+export interface PortfolioAccountUpdate {
+  person_id: number | null
+}
+
 export interface RefreshResult {
   updated: string[]
   failed: Record<string, string>
