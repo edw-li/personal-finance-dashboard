@@ -142,3 +142,67 @@ def test_the_coverage_map_covers_both_hdhp_tiers():
     # 'none' is deliberately absent: no HDHP means NEITHER cap applies, and a row would
     # have to pick one of the two to measure against.
     assert "none" not in HSA_LIMIT_KEY_BY_COVERAGE
+
+
+async def test_clone_seeds_an_empty_year_from_a_populated_one(auth_client):
+    await auth_client.put(
+        "/api/v1/limits/2026",
+        json={"values": {"limit_401k_elective": "24500", "limit_hsa_family": "8900"}},
+    )
+    resp = await auth_client.post("/api/v1/limits/2027/clone-from/2026")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["year"] == 2027
+    values = {item["key"]: item["value"] for item in body["items"]}
+    assert values["limit_401k_elective"] == "24500.00"
+    assert values["limit_hsa_family"] == "8900.00"
+    # Only what the source had: an unentered key stays unentered, not zeroed.
+    assert values["limit_espp_423"] is None
+
+
+async def test_clone_leaves_the_source_year_alone(auth_client):
+    await auth_client.put("/api/v1/limits/2026", json={"values": {"limit_hsa_self": "4400"}})
+    await auth_client.post("/api/v1/limits/2027/clone-from/2026")
+    resp = await auth_client.get("/api/v1/limits?year=2026")
+    values = {item["key"]: item["value"] for item in resp.json()["items"]}
+    assert values["limit_hsa_self"] == "4400.00"
+
+
+async def test_clone_from_an_empty_source_is_404(auth_client):
+    resp = await auth_client.post("/api/v1/limits/2027/clone-from/2026")
+    assert resp.status_code == 404
+    assert "2026" in resp.json()["detail"]
+
+
+async def test_clone_into_a_non_empty_target_is_409(auth_client):
+    await auth_client.put("/api/v1/limits/2026", json={"values": {"limit_hsa_self": "4400"}})
+    await auth_client.put("/api/v1/limits/2027", json={"values": {"limit_espp_423": "25000"}})
+    resp = await auth_client.post("/api/v1/limits/2027/clone-from/2026")
+    assert resp.status_code == 409
+    assert "2027" in resp.json()["detail"]
+
+
+async def test_a_409_clone_writes_nothing(auth_client, db):
+    await auth_client.put("/api/v1/limits/2026", json={"values": {"limit_hsa_self": "4400"}})
+    await auth_client.put("/api/v1/limits/2027", json={"values": {"limit_espp_423": "25000"}})
+    await auth_client.post("/api/v1/limits/2027/clone-from/2026")
+    rows = (
+        await db.execute(select(ContributionLimit.key).where(ContributionLimit.year == 2027))
+    ).scalars()
+    assert list(rows) == ["limit_espp_423"]
+
+
+async def test_clone_into_a_year_whose_rows_were_all_deleted_succeeds(auth_client):
+    """A year emptied by null PUTs is empty for the guard's purposes too — that is the
+    documented way to re-clone (never a merge)."""
+    await auth_client.put("/api/v1/limits/2026", json={"values": {"limit_hsa_self": "4400"}})
+    await auth_client.put("/api/v1/limits/2027", json={"values": {"limit_hsa_self": "9999"}})
+    await auth_client.put("/api/v1/limits/2027", json={"values": {"limit_hsa_self": None}})
+    resp = await auth_client.post("/api/v1/limits/2027/clone-from/2026")
+    assert resp.status_code == 200, resp.text
+    values = {item["key"]: item["value"] for item in resp.json()["items"]}
+    assert values["limit_hsa_self"] == "4400.00"
+
+
+async def test_clone_requires_auth(client):
+    assert (await client.post("/api/v1/limits/2027/clone-from/2026")).status_code == 401

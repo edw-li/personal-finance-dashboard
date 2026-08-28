@@ -116,3 +116,31 @@ async def put_limits(
             row.value = value
     await db.commit()
     return _payload(year, await _stored(db, year))
+
+
+@router.post("/{year}/clone-from/{source_year}", response_model=LimitsOut)
+async def clone_limits(
+    year: YearPath, source_year: YearPath, db: AsyncSession = Depends(get_db)
+) -> LimitsOut:
+    """Seed an EMPTY year from an existing one; then edited in place.
+
+    "Last year's numbers, then bump the two that moved" is how the caps actually change,
+    and the app ships none of its own to start from. The source year may equal the target
+    only in the degenerate sense that the emptiness guard below would then always fire.
+    """
+    source = await _stored(db, source_year)
+    if not source:
+        raise HTTPException(
+            status_code=404, detail=f"no contribution limits to clone from {source_year}"
+        )
+    existing = await _stored(db, year)
+    if existing:
+        # Never a silent merge (clone_brackets' grammar): clear the target explicitly —
+        # a PUT with nulls — first.
+        raise HTTPException(
+            status_code=409, detail=f"{year} already has {len(existing)} contribution limits"
+        )
+    for key, value in source.items():
+        db.add(ContributionLimit(year=year, key=key, value=value))
+    await db.commit()
+    return _payload(year, await _stored(db, year))
