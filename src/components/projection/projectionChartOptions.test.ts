@@ -45,6 +45,13 @@ function read(option: EChartsOption | null) {
       tooltip?: { show: boolean }
       emphasis?: { disabled: boolean }
       lineStyle: { type?: string; width?: number }
+      markLine?: {
+        silent: boolean
+        symbol: string
+        lineStyle: { color: string; width: number; type: string }
+        label: { show: boolean; position: string; color: string; fontSize: number }
+        data: { xAxis: string; label: { formatter: string } }[]
+      }
       areaStyle?: { opacity: number }
       data: number[]
     }[]
@@ -346,5 +353,66 @@ describe('projectionCsv', () => {
     })
     expect(csv.headers).toEqual(['Month', 'Projected', 'Growth only', 'p10', 'p50', 'p90'])
     expect(csv.rows[1]).toEqual(['2026-10-01', '1100.00', '1005.00', '950.00', '1080.00', '1300.00'])
+  })
+})
+
+import { MARK_LINE_LABEL, MARK_LINE_STYLE } from '../../charts/markLine'
+import { retirementMarkLine } from './projectionChartOptions'
+
+describe('retirementMarkLine', () => {
+  const MONTHS = ['2026-08-01', '2026-09-01', '2026-10-01']
+
+  it('draws one dashed muted rule per retirement, each labelled with the name', () => {
+    const mark = retirementMarkLine(MONTHS, [
+      { month: '2026-09-01', name: 'Alex' },
+      { month: '2026-10-01', name: 'Bo' },
+    ])
+    // The axis carries formatMonth labels, so the rules have to speak the same words.
+    expect(mark?.data).toEqual([
+      { xAxis: 'Sep 2026', label: { formatter: 'Alex' } },
+      { xAxis: 'Oct 2026', label: { formatter: 'Bo' } },
+    ])
+    expect(mark?.lineStyle).toEqual(MARK_LINE_STYLE)
+    expect(mark?.label).toEqual(MARK_LINE_LABEL)
+    expect(mark?.silent).toBe(true)
+    expect(mark?.symbol).toBe('none')
+  })
+
+  it('draws nothing it cannot honestly place', () => {
+    expect(retirementMarkLine(MONTHS, [])).toBeUndefined()
+    // A payload whose horizon shrank under a stale tab: the server fences the month into
+    // the axis, so this is a guard, and it DROPS the rule rather than clamping it.
+    expect(retirementMarkLine(MONTHS, [{ month: '2040-01-01', name: 'Alex' }])).toBeUndefined()
+    expect(retirementMarkLine([], [{ month: '2026-09-01', name: 'Alex' }])).toBeUndefined()
+  })
+})
+
+describe('projectionOption retirement rules', () => {
+  it('hangs the rules on the Projected series, above the fan', () => {
+    const option = read(
+      projectionOption({
+        ...DATA,
+        retirements: [
+          {
+            person_id: 2,
+            name: 'Alex',
+            month: '2026-09-01',
+            monthly_drop: '2000.00',
+          },
+        ],
+      }),
+    )
+    const projected = option.series.find((s) => s.name === PROJECTION_SERIES[0])
+    expect(projected?.markLine?.data).toEqual([{ xAxis: 'Sep 2026', label: { formatter: 'Alex' } }])
+    // One annotation, on the ONE series every payload has.
+    expect(option.series.filter((s) => s.markLine !== undefined)).toHaveLength(1)
+  })
+
+  it('carries no markLine at all without retirements — back-compat', () => {
+    // Both shapes: a live server's empty list and a stale payload with no key.
+    for (const data of [{ ...DATA, retirements: [] }, DATA]) {
+      const option = read(projectionOption(data))
+      expect(option.series.every((s) => s.markLine === undefined)).toBe(true)
+    }
   })
 })
