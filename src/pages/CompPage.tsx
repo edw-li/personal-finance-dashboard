@@ -11,6 +11,7 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
+import { SkeletonCard } from '../components/PageSkeleton'
 import RsuGrantsPanel from '../components/comp/RsuGrantsPanel'
 import VestingSchedulePanel from '../components/comp/VestingSchedulePanel'
 import {
@@ -580,7 +581,7 @@ export default function CompPage() {
           then the chart it draws — and the computed vesting surfaces after: grants (the
           input), then the schedule they produce. */}
       {events === null ? (
-        busy && <p className="empty-note">Loading comp events…</p>
+        busy && <SkeletonCard height={240} label="Loading comp events…" />
       ) : (
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
           {/* NOT keyed: a reload re-renders this panel with a replaced array, so its
@@ -626,7 +627,7 @@ export default function CompPage() {
         </div>
       )}
       {schedule === null ? (
-        scheduleBusy && <p className="empty-note">Loading the vesting schedule…</p>
+        scheduleBusy && <SkeletonCard height={280} label="Loading the vesting schedule…" />
       ) : (
         // One payload, one dim: the grants table IS the schedule card's input, and a bright
         // form beside a card that says it may be stale would invite an edit against figures

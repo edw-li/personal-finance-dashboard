@@ -11,6 +11,7 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
+import { SkeletonCard } from '../components/PageSkeleton'
 import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptions'
 import StatTile from '../components/StatTile'
 import type {
@@ -792,7 +793,7 @@ export default function PaycheckPage() {
           </p>
         </section>
       ) : breakdown === null ? (
-        breakdownBusy && <p className="empty-note">Loading the breakdown…</p>
+        breakdownBusy && <SkeletonCard height={320} label="Loading the breakdown…" />
       ) : (
         <div className={`loading-dim${breakdownBusy ? ' is-loading' : ''}`}>
           <BreakdownPanel data={breakdown} />
@@ -819,7 +820,7 @@ export default function PaycheckPage() {
         </div>
       )}
       {profiles === null ? (
-        profilesBusy && <p className="empty-note">Loading profiles…</p>
+        profilesBusy && <SkeletonCard height={240} label="Loading profiles…" />
       ) : (
         <div className={`loading-dim${profilesBusy ? ' is-loading' : ''}`}>
           {/* NOT keyed, and a sibling of the panel above: a breakdown refetch re-renders

@@ -1132,3 +1132,44 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
     ).toBe(true)
   })
 })
+
+describe('OverviewPage — skeleton first paint (2026-08-27 spec §3)', () => {
+  it('ghosts the page chrome on a cache miss and announces it once', () => {
+    serve()
+    pendAllSnapshotFetches()
+    const { container } = renderPage()
+
+    // Nothing seeded, nothing answered: the first paint is the page's own shape in
+    // ghost form — four tiles and four cards — not a centered line of text.
+    const skeleton = container.querySelector('.page-skeleton')
+    expect(skeleton).not.toBeNull()
+    expect(skeleton?.className).toContain('loading-fallback')
+    expect(container.querySelectorAll('.page-skeleton .kpi-row .stat-tile').length).toBe(4)
+    expect(container.querySelectorAll('.page-skeleton .card-grid .card').length).toBe(4)
+
+    // The sentence the old `p.empty-note` carried is still announced, exactly once, and
+    // the ghosts themselves are silent.
+    const status = screen.getByRole('status')
+    expect(status.textContent).toBe('Loading…')
+    expect(status.className).toContain('visually-hidden')
+    expect(
+      container.querySelector('.page-skeleton .kpi-row')?.getAttribute('aria-hidden'),
+    ).toBe('true')
+    expect(
+      container.querySelector('.page-skeleton .card-grid')?.getAttribute('aria-hidden'),
+    ).toBe('true')
+  })
+
+  it('revalidates a seeded page under the dim, never behind a skeleton', () => {
+    const payload = serve()
+    setSnapshot('overview', snapshotOf(payload))
+    pendAllSnapshotFetches()
+    const { container } = renderPage()
+
+    // A cache HIT never regresses to a ghost: the real numbers stay up and the reload
+    // shows as the house dim (spec §3 — skeletons are cache-miss only).
+    expect(container.querySelector('.page-skeleton')).toBeNull()
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  })
+})

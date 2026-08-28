@@ -16,6 +16,7 @@ import InfoHint from '../components/InfoHint'
 import { eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
+import PageSkeleton from '../components/PageSkeleton'
 import { UP_NEXT_WINDOW_DAYS, upNextItems } from '../components/overview/upNext'
 import { ytdStats } from '../components/overview/ytd'
 import {
@@ -335,7 +336,17 @@ export default function OverviewPage() {
       {data === null ? (
         // A failed FIRST load shows the banner alone rather than a page of $0.00 tiles that
         // reads as "you are broke" (PortfolioPage posture).
-        busy && <p className="empty-note">Loading…</p>
+        busy && (
+          <PageSkeleton
+            tiles={4}
+            cards={[
+              { span: 6, height: 220 },
+              { span: 6, height: 280 },
+              { span: 6, height: 240 },
+              { span: 6, height: 200 },
+            ]}
+          />
+        )
       ) : (
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
           {/* The dashboard's to-do list: each line is a condition the snapshot itself

@@ -15,6 +15,7 @@ import {
 } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import InfoHint from '../components/InfoHint'
+import PageSkeleton from '../components/PageSkeleton'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import InputsForm from '../components/taxes/InputsForm'
 import SummaryPanel from '../components/taxes/SummaryPanel'
@@ -627,7 +628,12 @@ export default function TaxesPage() {
       </section>
 
       {(loading || (busy && detail === null && years.length > 0)) && (
-        <p className="empty-note">Loading…</p>
+        <PageSkeleton
+          cards={[
+            { span: 12, height: 90 },
+            { span: 12, height: 320 },
+          ]}
+        />
       )}
 
       {/* Only a delete gets here: every other path either selects a year or has no years to

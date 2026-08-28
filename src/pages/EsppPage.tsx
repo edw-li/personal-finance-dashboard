@@ -20,6 +20,7 @@ import { fetchPriceHistory } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
+import { SkeletonCard } from '../components/PageSkeleton'
 import type {
   EsppLotCreate,
   EsppLotOut,
@@ -1366,7 +1367,7 @@ export default function EsppPage() {
         </div>
       )}
       {lots === null ? (
-        lotsBusy && <p className="empty-note">Loading lots…</p>
+        lotsBusy && <SkeletonCard height={260} label="Loading lots…" />
       ) : (
         <div className={`loading-dim${lotsBusy ? ' is-loading' : ''}`}>
           {/* NOT keyed, and a sibling of the two cards below: a modeler or offerings
@@ -1391,7 +1392,7 @@ export default function EsppPage() {
         </div>
       )}
       {offerings === null ? (
-        offeringsBusy && <p className="empty-note">Loading offerings…</p>
+        offeringsBusy && <SkeletonCard height={220} label="Loading offerings…" />
       ) : (
         <div className={`loading-dim${offeringsBusy ? ' is-loading' : ''}`}>
           <OfferingsPanel offerings={offerings} bars={bars} onChanged={onOfferingsChanged} />

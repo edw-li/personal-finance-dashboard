@@ -30,6 +30,7 @@ import RealizedPanel from '../components/portfolio/RealizedPanel'
 import SecuritiesPanel from '../components/portfolio/SecuritiesPanel'
 import TransactionsPanel from '../components/portfolio/TransactionsPanel'
 import RangeChips from '../components/RangeChips'
+import PageSkeleton from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
 import { useArrivalParam } from '../components/useArrivalParam'
 import { rangeZoom } from '../charts/timeZoom'
@@ -379,7 +380,13 @@ export default function PortfolioPage() {
       )}
       {error && <div className="error-banner" role="alert">{error}</div>}
       {loading ? (
-        <p className="empty-note">Loading…</p>
+        <PageSkeleton
+          tiles={4}
+          cards={[
+            { span: 12, height: 340 },
+            { span: 12, height: 300 },
+          ]}
+        />
       ) : holdings ? (
         // A failed FIRST load leaves holdings null: show the error banner alone rather
         // than a page of empty tables that read as "you own nothing".

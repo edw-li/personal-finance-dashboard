@@ -15,6 +15,7 @@ import {
   projectionOption,
 } from '../components/projection/projectionChartOptions'
 import StatTile from '../components/StatTile'
+import PageSkeleton from '../components/PageSkeleton'
 import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
@@ -594,7 +595,9 @@ export default function ProjectionPage() {
           </div>
         )
       )}
-      {data === null && !missing && busy && <p className="empty-note">Loading the projection…</p>}
+      {data === null && !missing && busy && (
+        <PageSkeleton tiles={3} cards={[{ span: 12, height: 340 }]} />
+      )}
     </div>
   )
 }
