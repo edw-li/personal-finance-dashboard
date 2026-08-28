@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ApiError } from '../api/client'
+import { fetchHousehold } from '../api/household'
 import {
   fetchAllocation,
   fetchDividends,
@@ -11,6 +12,7 @@ import {
   fetchTransactions,
   updateSecurity,
 } from '../api/portfolio'
+import type { OwnerScope } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartZoomHint from '../components/ChartZoomHint'
@@ -39,6 +41,7 @@ import type {
   AllocationResponse,
   DividendOut,
   HoldingsResponse,
+  HouseholdOut,
   PortfolioHistory,
   RealizedResponse,
   RefreshResult,
@@ -158,6 +161,15 @@ export default function PortfolioPage() {
   // that resorts the table cannot mis-target, and a ticker that vanished simply finds no
   // holding and the panel folds away: SpendingPage's detailMonth posture).
   const [detailTicker, setDetailTicker] = useState<string | null>(null)
+  // The page's ownership scope: null = the whole household (and NO owner param at all, so
+  // the requests stay byte-identical to the pre-ownership ones). It scopes the tiles, the
+  // holdings table, the allocation charts and the three record tabs — which is why the
+  // chips sit under the page header rather than inside one card.
+  const [owner, setOwner] = useState<OwnerScope>(null)
+  // Fetched on its own, never inside the page's Promise.all: the chips are an affordance,
+  // and a household hiccup must not blank the portfolio (NetWorthPage's isolated-fetch
+  // posture). null covers both "not loaded yet" and "failed".
+  const [household, setHousehold] = useState<HouseholdOut | null>(null)
   // Seeded off the cache: the `loading ?` render branch must not swallow a seeded paint.
   const [loading, setLoading] = useState(cached === undefined)
   // false once a revalidation actually CHANGES the data — charts may animate again.
@@ -242,6 +254,18 @@ export default function PortfolioPage() {
     load().finally(() => setReloading(false))
   }
 
+  // Scope switches dim the body rather than swapping in the skeleton: a chip must not
+  // unmount the panels (and the tab the user is reading) under them.
+  const selectOwner = (next: OwnerScope) => {
+    if (next === owner) return
+    setReloading(true)
+    setError(null)
+    // The open drill-in holds a TICKER the next scope may not own — close it rather than
+    // leave a detail panel resolving to null.
+    setDetailTicker(null)
+    setOwner(next)
+  }
+
   // Mount-only fetch. react-hooks 7 reports nothing here (load is re-created per render
   // but reads no reactive value beyond the setters), so an exhaustive-deps suppression
   // would be an unused directive — which ESLint 9 flat config warns about by default.
@@ -250,6 +274,14 @@ export default function PortfolioPage() {
     // above); a cold mount takes the loading path. The trailing release is a no-op on a
     // cold mount, where `reloading` never went up.
     load().finally(() => setReloading(false))
+  }, [])
+
+  // Once per visit, and deliberately not part of `load`: setState lives in the promise
+  // continuations, never in the effect body (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    fetchHousehold()
+      .then(setHousehold)
+      .catch(() => setHousehold(null))
   }, [])
 
   const onRefresh = () => {
@@ -268,6 +300,27 @@ export default function PortfolioPage() {
       })
       .finally(() => setRefreshing(false))
   }
+
+  // Primary first, then everyone else by id — the same order the server uses, so these
+  // chips read left-to-right like the net-worth ones. The `?? []` lives INSIDE the memo: a
+  // fresh literal in the dep list would re-sort on every render, which is the memo doing
+  // nothing.
+  const orderedPeople = useMemo(
+    () =>
+      [...(household?.people ?? [])].sort(
+        (a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id,
+      ),
+    [household],
+  )
+  // One person means there is nothing to choose between: no chips at all.
+  const ownerScopes: { scope: OwnerScope; label: string }[] =
+    orderedPeople.length > 1
+      ? [
+          { scope: null, label: 'All' },
+          ...orderedPeople.map((p) => ({ scope: p.id as OwnerScope, label: p.name })),
+          { scope: 'joint' as OwnerScope, label: 'Joint' },
+        ]
+      : []
 
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
@@ -347,6 +400,25 @@ export default function PortfolioPage() {
           </button>
         </div>
       </header>
+      {ownerScopes.length > 0 && (
+        <div className="portfolio-owner-row">
+          <span className="eyebrow">Whose money</span>
+          <div className="segmented" role="group" aria-label="Owner">
+            {ownerScopes.map(({ scope, label }) => (
+              <button
+                key={label}
+                type="button"
+                className={owner === scope ? 'active' : ''}
+                aria-pressed={owner === scope}
+                onClick={() => selectOwner(scope)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <InfoHint text="A person's view is their own portfolio accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts. Performance, sparklines and price refresh always cover the whole household." />
+        </div>
+      )}
       {/* One element, always mounted: a live region added at announce-time is not read.
           Partial failures are an alert, not a status — they need the user's attention. */}
       <div

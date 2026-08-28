@@ -48,3 +48,17 @@
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 }
+
+/* Page-level ownership scope (2026-08-28 spec §5). It sits directly under the header
+   because it scopes the tiles too — a control that changes the hero number must not be
+   buried in a card header. Mirrors .networth-owner-row; neither file reaches into the
+   other. */
+.portfolio-owner-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.portfolio-owner-row .eyebrow { margin: 0; }
