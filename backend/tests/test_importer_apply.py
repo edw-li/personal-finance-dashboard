@@ -789,6 +789,45 @@ async def test_apply_paycheck_without_focal_new_base_skips(db):
     assert any("no focal year" in w.lower() for w in report.warnings)
 
 
+async def test_apply_paycheck_never_touches_a_partner_profile(db):
+    """The paycheck twin of the tax sweep's immunity (audit §9.1, spec §4.1): the workbook
+    is ONE person's paycheck, so a partner's profile — even on the very date the sheet
+    derives — is invisible to Apply."""
+    from app.importer.apply import apply_focal_history, apply_paycheck
+    from app.importer.parsers import parse_focal_history, parse_paycheck
+    from app.models import PaycheckProfile, Person
+
+    me = Person(name="Me", is_primary=True)
+    partner = Person(name="Partner", is_primary=False)
+    db.add_all([me, partner])
+    await db.flush()
+    db.add(
+        PaycheckProfile(
+            person_id=partner.id,
+            effective_date=date(2024, 1, 1),  # the date the sheet derives, on purpose
+            annual_salary=Decimal("96000.00"),
+            withholding_pct=Decimal("0.220000000"),
+        )
+    )
+    await db.commit()
+
+    wb = sheets()
+    report = SheetReport()
+    focal = parse_focal_history(wb["Focal History"])
+    await apply_focal_history(db, focal, report)
+    await apply_paycheck(db, parse_paycheck(wb["Paycheck Modeler"]), focal, report)
+    await db.commit()
+
+    # A CREATE on the primary's timeline, not an update of somebody else's row.
+    assert report.entities["paycheck_profiles"].creates == 1
+    assert report.entities["paycheck_profiles"].updates == 0
+    rows = {row.person_id: row for row in (await db.execute(select(PaycheckProfile))).scalars()}
+    assert rows[partner.id].annual_salary == Decimal("96000.00")
+    assert rows[partner.id].withholding_pct == Decimal("0.220000000")
+    assert rows[me.id].annual_salary == Decimal("120000.00")  # the sheet's, on the primary
+    assert rows[me.id].effective_date == date(2024, 1, 1)
+
+
 async def test_apply_espp_warns_on_stale_period_rows(db):
     import datetime as dt
 

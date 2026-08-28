@@ -732,7 +732,17 @@ async def apply_paycheck(
             "Paycheck Modeler: the household has no primary person — profile not imported"
         )
         return
-    existing = {p.effective_date: p for p in (await db.execute(select(PaycheckProfile))).scalars()}
+    # The sheet may only ever read or WRITE the primary person's timeline (apply_taxes'
+    # person clause, spec §4.1). A partner's profile — even on this very date — is
+    # invisible here: import-immune, pinned by test.
+    existing = {
+        p.effective_date: p
+        for p in (
+            await db.execute(
+                select(PaycheckProfile).where(PaycheckProfile.person_id == primary.id)
+            )
+        ).scalars()
+    }
     row = existing.get(effective_date)
     if row is None:
         db.add(PaycheckProfile(person_id=primary.id, effective_date=effective_date, **fields))
