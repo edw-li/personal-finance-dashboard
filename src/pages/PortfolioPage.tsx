@@ -293,13 +293,6 @@ export default function PortfolioPage() {
   // effect on [option], so a fresh object per render would redraw the chart on every tab
   // click. The zoom is spread on here rather than inside the builder, which stays pure and
   // shared with OverviewPage (whose copy is a fixed snapshot, no chips).
-  // Resolved target for EChart's animated zoom path — memoized so the wrapper's
-  // fingerprint compare runs only when the window can actually have moved.
-  const zoomWindow = useMemo(
-    () => (history === null ? undefined : resolvedWindow(history.dates, range)),
-    [history, range],
-  )
-
   const performanceOption = useMemo(() => {
     if (!history || !holdings) return null
     // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
@@ -319,6 +312,17 @@ export default function PortfolioPage() {
           dataZoom: rangeZoom(history.dates, range),
         }
   }, [history, holdings, securities, transactions, dividends, range, legendSelected])
+
+  // Resolved target for EChart's animated zoom path — memoized so the wrapper's
+  // fingerprint compare runs only when the window can actually have moved. Reads the
+  // BUILT option's axis, not history.dates: the live ping appends one category past
+  // the dates (portfolioHistoryOption's extendAxis), and a preset window must resolve
+  // out to it — a dates-derived end index would clip "now" off the chart.
+  const zoomWindow = useMemo(() => {
+    if (history === null || performanceOption === null) return undefined
+    const axis = (performanceOption.xAxis as { data?: unknown[] }).data ?? []
+    return resolvedWindow(history.dates, range, axis.length)
+  }, [history, performanceOption, range])
 
   // The open row's holding, resolved fresh from every reload so the panel always shows
   // the CURRENT figures; a sold-off ticker resolves to null and the panel folds away.

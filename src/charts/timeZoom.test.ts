@@ -122,4 +122,17 @@ describe('resolvedWindow', () => {
   it('an empty axis resolves to a degenerate zero window', () => {
     expect(resolvedWindow([], { preset: 'all' })).toEqual({ startValue: 0, endValue: 0 })
   })
+
+  it('an axis running past the dates (the live-ping category) resolves a preset to the AXIS end', () => {
+    expect(resolvedWindow(dates, { preset: 'all' }, dates.length + 1)).toEqual({
+      startValue: 0,
+      endValue: 4,
+    })
+  })
+
+  it('a manual window keeps its own end even on an extended axis', () => {
+    expect(
+      resolvedWindow(dates, { preset: 'all', window: { startValue: 1, endValue: 2 } }, 5),
+    ).toEqual({ startValue: 1, endValue: 2 })
+  })
 })

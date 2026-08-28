@@ -92,11 +92,18 @@ export function rangeZoom(dates: string[], range: RangeState): InsideZoomOption[
  * deliberately omit it ("runs to the newest point"), but the animated dataZoom ACTION
  * path (EChart's zoomWindow fast path — spec Addendum §A2) needs the index. Layers the
  * mirrored manual window exactly like rangeZoom, including its stale-window drop.
+ * `axisLength` covers axes that run PAST the dates array (Portfolio's appended live-ping
+ * category): a preset must resolve to the real axis end, or the dispatch would clip the
+ * ping that the option-side "no endValue" deliberately keeps in frame.
  */
-export function resolvedWindow(dates: string[], range: RangeState): ZoomWindow {
+export function resolvedWindow(
+  dates: string[],
+  range: RangeState,
+  axisLength: number = dates.length,
+): ZoomWindow {
   const [zoom] = rangeZoom(dates, range)
   return {
     startValue: zoom.startValue,
-    endValue: zoom.endValue ?? Math.max(0, dates.length - 1),
+    endValue: zoom.endValue ?? Math.max(0, axisLength - 1),
   }
 }

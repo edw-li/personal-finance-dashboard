@@ -64,7 +64,12 @@ export default function EChart({
    *  When set, an option change that differs ONLY in its dataZoom is applied as an
    *  animated dataZoom ACTION on the live instance instead of a notMerge rebuild —
    *  the range chips morph instead of snapping (spec Addendum §A2). Pass a
-   *  useMemo'd value: the fingerprint compare below runs per effect firing. */
+   *  useMemo'd value: the fingerprint compare below runs per effect firing.
+   *  CONTRACT: the fingerprint is JSON — function-valued props (tooltip/axisLabel
+   *  formatters) are invisible to it. A formatter closure may only capture state that
+   *  ALSO surfaces in serializable option parts (series names/ids/data), or a
+   *  formatter-only change would ride the fast path and never reach the chart. All
+   *  six wired options hold this today (verified 2026-08-27). */
   zoomWindow?: ZoomWindow
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
