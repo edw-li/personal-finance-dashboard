@@ -591,6 +591,66 @@ async def test_breakdown_accepts_an_explicit_profile_id(auth_client, me):
     assert missing.json()["detail"] == "paycheck profile not found"
 
 
+async def test_breakdown_takes_a_person_and_defaults_to_the_primary(auth_client, db, me):
+    partner = Person(name="Partner")
+    db.add(partner)
+    await db.commit()
+    today = date.today()
+    await create_profile(auth_client, effective_date=str(today - timedelta(days=30)))
+    await create_profile(
+        auth_client,
+        person_id=partner.id,
+        effective_date=str(today - timedelta(days=30)),
+        annual_salary="96000",
+    )
+
+    mine = (await auth_client.get(BREAKDOWN)).json()
+    assert mine["profile"]["person_id"] == me.id
+    assert mine["profile"]["annual_salary"] == "188930.00"
+
+    theirs = (await auth_client.get(BREAKDOWN, params={"person_id": partner.id})).json()
+    assert theirs["profile"]["person_id"] == partner.id
+    assert theirs["gross"] == "4000.00"  # 96000 / 24
+
+    # Absent = primary, byte for byte.
+    assert (await auth_client.get(BREAKDOWN, params={"person_id": me.id})).json() == mine
+
+
+async def test_breakdown_404s_an_unknown_person_and_an_empty_timeline(auth_client, db, me):
+    partner = Person(name="Partner")
+    db.add(partner)
+    await db.commit()
+    await create_profile(auth_client)
+
+    unknown = await auth_client.get(BREAKDOWN, params={"person_id": 999})
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"] == "person not found"
+
+    # A real person with an empty timeline never borrows somebody else's profile.
+    empty = await auth_client.get(BREAKDOWN, params={"person_id": partner.id})
+    assert empty.status_code == 404
+    assert empty.json()["detail"] == "no paycheck profiles"
+
+    huge = await auth_client.get(BREAKDOWN, params={"person_id": 99999999999})
+    assert huge.status_code == 422
+
+
+async def test_breakdown_profile_id_wins_over_person_id(auth_client, db, me):
+    # An explicit ROW is explicit: person_id only names whose profile in force to pick,
+    # and there is nothing to pick once the row itself is named.
+    partner = Person(name="Partner")
+    db.add(partner)
+    await db.commit()
+    mine = await create_profile(auth_client)
+    body = (
+        await auth_client.get(
+            BREAKDOWN, params={"profile_id": mine["id"], "person_id": partner.id}
+        )
+    ).json()
+    assert body["profile"]["id"] == mine["id"]
+    assert body["profile"]["person_id"] == me.id
+
+
 async def test_breakdown_404_when_nothing_is_stored(auth_client):
     resp = await auth_client.get(BREAKDOWN)
     assert resp.status_code == 404

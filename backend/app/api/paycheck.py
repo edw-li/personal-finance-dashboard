@@ -276,18 +276,27 @@ async def delete_profile(profile_id: IdPath, db: AsyncSession = Depends(get_db))
     return Response(status_code=204)
 
 
-async def _default_profile(db: AsyncSession, today: date) -> PaycheckProfile | None:
-    """The profile in force: the latest one effective today or earlier.
+async def _default_profile(
+    db: AsyncSession, person_id: int, today: date
+) -> PaycheckProfile | None:
+    """THIS PERSON's profile in force: their latest one effective today or earlier.
 
     A brand-new user only has a FUTURE profile (the raise lands next month), so rather
     than 404 on a table that is not empty, fall back to the earliest future one — the
     page then models the check that is coming.
+
+    One profile in force PER PERSON, and the timelines never mix: a partner whose first
+    profile starts next year does not borrow the primary's current one. `today` is a
+    parameter, never a clock read — see the module docstring.
     """
     current = (
         (
             await db.execute(
                 select(PaycheckProfile)
-                .where(PaycheckProfile.effective_date <= today)
+                .where(
+                    PaycheckProfile.person_id == person_id,
+                    PaycheckProfile.effective_date <= today,
+                )
                 .order_by(PaycheckProfile.effective_date.desc())
                 .limit(1)
             )
@@ -301,7 +310,10 @@ async def _default_profile(db: AsyncSession, today: date) -> PaycheckProfile | N
         (
             await db.execute(
                 select(PaycheckProfile)
-                .where(PaycheckProfile.effective_date > today)
+                .where(
+                    PaycheckProfile.person_id == person_id,
+                    PaycheckProfile.effective_date > today,
+                )
                 .order_by(PaycheckProfile.effective_date)
                 .limit(1)
             )
@@ -313,13 +325,24 @@ async def _default_profile(db: AsyncSession, today: date) -> PaycheckProfile | N
 
 @router.get("/breakdown", response_model=BreakdownOut)
 async def get_breakdown(
-    profile_id: IdQuery = None, db: AsyncSession = Depends(get_db)
+    profile_id: IdQuery = None,
+    person_id: IdQuery = None,
+    db: AsyncSession = Depends(get_db),
 ) -> BreakdownOut:
     if profile_id is not None:
+        # An explicit row wins outright: `person_id` only names WHOSE profile in force to
+        # pick, and there is nothing to pick when the row itself is named.
         profile = await _get_profile(db, profile_id)
     else:
-        profile = await _default_profile(db, date.today())  # the ONLY clock read here
+        owner = await _resolve_person_id(db, person_id)  # absent = the primary person
+        profile = (
+            None
+            if owner is None
+            else await _default_profile(db, owner, date.today())  # the ONLY clock read here
+        )
         if profile is None:
+            # Also the roster-less answer: person_id is NOT NULL, so a database with no
+            # people has no profiles either — the legacy 404, word for word.
             raise HTTPException(status_code=404, detail="no paycheck profiles")
 
     # The stored-data guard, and the one thing this read CAN reject: every writer bounds
