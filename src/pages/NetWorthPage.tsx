@@ -467,6 +467,12 @@ export default function NetWorthPage() {
             hero
             label={`Net worth — ${formatMonth(summary.month)}`}
             value={formatCurrency(summary.net_worth)}
+            // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
+            countUp={
+              !fromCache && summary.net_worth !== null
+                ? { value: Number(summary.net_worth), format: formatCurrency }
+                : undefined
+            }
             delta={
               summary.mom_delta === null
                 ? undefined

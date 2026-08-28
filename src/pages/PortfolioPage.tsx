@@ -396,6 +396,12 @@ export default function PortfolioPage() {
               <StatTile
                 label="Portfolio value"
                 value={formatCurrency(totals.market_value)}
+                // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
+                countUp={
+                  !fromCache
+                    ? { value: Number(totals.market_value), format: formatCurrency }
+                    : undefined
+                }
                 delta={
                   totals.day_change_amount !== null || totals.day_change_pct !== null
                     ? `${formatCurrency(totals.day_change_amount)} today (${formatPct(totals.day_change_pct)})`
