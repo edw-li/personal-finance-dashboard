@@ -60,6 +60,33 @@ function renderBackShell() {
   )
 }
 
+// Search-param drill: pathname stays put; only the query (and location.key) change.
+function DrillProbe() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate('/spending?cat=dining')}>drill</button>
+}
+
+function renderDrillShell() {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/" element={<div>home body</div>} />
+          <Route
+            path="/spending"
+            element={
+              <div>
+                spending body
+                <DrillProbe />
+              </div>
+            }
+          />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
 beforeEach(() => {
   // jsdom's scrollTo is a not-implemented stub that logs to the console; the reset
   // assertion wants a spy anyway.
@@ -192,6 +219,21 @@ describe('Layout — scroll restoration', () => {
     expect(screen.getByText('home body')).toBeTruthy()
     expect(window.scrollTo).toHaveBeenLastCalledWith(0, 480)
     expect(document.activeElement).toBe(screen.getByRole('main'))
+  })
+
+  it('never yanks focus or scroll on a search-param navigation (page-drill contract)', () => {
+    renderDrillShell()
+    // PUSH to /spending: the reset fires once, as on any pathname change.
+    fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
+    expect(window.scrollTo).toHaveBeenCalledTimes(1)
+
+    // Drill: location.key changes, pathname does not — focus and depth must survive.
+    const drill = screen.getByRole('button', { name: 'drill' })
+    drill.focus()
+    fireEvent.click(drill)
+    expect(screen.getByText('spending body')).toBeTruthy()
+    expect(window.scrollTo).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).toBe(drill)
   })
 
   it('defaults a POP with no recording to the top', () => {
