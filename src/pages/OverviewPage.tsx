@@ -9,6 +9,7 @@ import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import EChart from '../components/EChart'
 import type { EChartEventParams } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
@@ -68,10 +69,25 @@ interface OverviewData {
   system: SystemStatus
 }
 
+const SNAPSHOT_KEY = 'overview'
+
+// The up-next window slides with the calendar day — key it by today so a date rollover
+// misses cleanly instead of painting yesterday's window.
+function upNextKey(): string {
+  return `overview:upnext:${todayIso()}`
+}
+
+function flowKey(year: number | null): string {
+  return `overview:flow:${year ?? 'auto'}`
+}
+
 export default function OverviewPage() {
   const navigate = useNavigate()
-  const [data, setData] = useState<OverviewData | null>(null)
+  const cachedData = getSnapshot<OverviewData>(SNAPSHOT_KEY)
+  const [data, setData] = useState<OverviewData | null>(cachedData ?? null)
   const [busy, setBusy] = useState(true)
+  // false once a revalidation actually CHANGES the data — charts may animate again.
+  const [fromCache, setFromCache] = useState(cachedData !== undefined)
   const [error, setError] = useState<string | null>(null)
   const seqRef = useRef(0)
 
@@ -80,7 +96,9 @@ export default function OverviewPage() {
   // page's point), and a calendar hiccup must not take the overview down — or the
   // reverse. It renders inside the snapshot branch because it SITS with the freshness
   // footer; a failed first snapshot shows the banner alone, house posture.
-  const [upNext, setUpNext] = useState<CalendarEvent[] | null>(null)
+  const [upNext, setUpNext] = useState<CalendarEvent[] | null>(
+    () => getSnapshot<CalendarEvent[]>(upNextKey()) ?? null,
+  )
   const [upNextFailed, setUpNextFailed] = useState(false)
   const upNextSeq = useRef(0)
 
@@ -90,8 +108,13 @@ export default function OverviewPage() {
     fetchCalendar(today, addDays(today, UP_NEXT_WINDOW_DAYS))
       .then((data) => {
         if (seq !== upNextSeq.current) return
-        setUpNext(data.events)
+        const key = upNextKey()
+        const previous = getSnapshot<CalendarEvent[]>(key)
+        setSnapshot(key, data.events)
         setUpNextFailed(false)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data.events))
+          return
+        setUpNext(data.events)
       })
       .catch(() => {
         if (seq !== upNextSeq.current) return
@@ -102,7 +125,9 @@ export default function OverviewPage() {
   // The money-flow card is the SECOND isolated fetch (spec §5, the Up-next pattern):
   // its own state, its own seq, its own inline error — a tax-engine hiccup dents one
   // card and never the snapshot, and vice versa.
-  const [flow, setFlow] = useState<MoneyFlowOut | null>(null)
+  const [flow, setFlow] = useState<MoneyFlowOut | null>(
+    () => getSnapshot<MoneyFlowOut>(flowKey(null)) ?? null,
+  )
   const [flowFailed, setFlowFailed] = useState(false)
   // null = let the server pick the year (the current product year); a chip click pins it.
   const [flowYear, setFlowYear] = useState<number | null>(null)
@@ -113,13 +138,26 @@ export default function OverviewPage() {
     fetchMoneyFlow(year ?? undefined)
       .then((data) => {
         if (seq !== flowSeq.current) return
-        setFlow(data)
+        const previous = getSnapshot<MoneyFlowOut>(flowKey(year))
+        setSnapshot(flowKey(year), data)
         setFlowFailed(false)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
+        setFlow(data)
       })
       .catch(() => {
         if (seq !== flowSeq.current) return
         setFlowFailed(true)
       })
+  }
+
+  // Chip flip: an already-seen year paints instantly and revalidates underneath. The peek
+  // lives HERE rather than inside loadFlow because loadFlow also runs in the mount effect's
+  // body, where a synchronous setState is a house react-hooks violation.
+  const showFlowYear = (year: number | null) => {
+    setFlowYear(year)
+    const peeked = getSnapshot<MoneyFlowOut>(flowKey(year))
+    if (peeked !== undefined) setFlow(peeked)
+    loadFlow(year)
   }
 
   // Plain function + inline chain (preserve-manual-memoization wall — Plan 3/5 notes).
@@ -144,10 +182,17 @@ export default function OverviewPage() {
       .then(
         ([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system]) => {
           if (seq !== seqRef.current) return
-          setData({
+          const snapshot: OverviewData = {
             summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system,
-          })
+          }
+          const previous = getSnapshot<OverviewData>(SNAPSHOT_KEY)
+          setSnapshot(SNAPSHOT_KEY, snapshot)
           setError(null)
+          // Identical payload: nothing re-renders, the charts stay still (spec §1).
+          if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+            return
+          setFromCache(false)
+          setData(snapshot)
         },
       )
       .catch((err: unknown) => {
@@ -422,6 +467,7 @@ export default function OverviewPage() {
                   height={220}
                   ariaLabel="Line chart of net worth at every monthly snapshot"
                   onClick={() => navigate('/net-worth')}
+                  animateEntrance={!fromCache}
                 />
               ) : (
                 <p className="empty-note">No snapshots yet.</p>
@@ -441,6 +487,7 @@ export default function OverviewPage() {
                   height={280}
                   ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
                   onClick={() => navigate('/portfolio')}
+                  animateEntrance={!fromCache}
                 />
               ) : (
                 <p className="empty-note">No performance history yet.</p>
@@ -460,6 +507,7 @@ export default function OverviewPage() {
                   height={240}
                   ariaLabel="Bar chart of total spending for each of the last 12 entered months"
                   onClick={openSpendingMonth}
+                  animateEntrance={!fromCache}
                 />
               ) : (
                 <p className="empty-note">No spending months yet.</p>
@@ -469,10 +517,7 @@ export default function OverviewPage() {
               flow={flow}
               failed={flowFailed}
               onRetry={() => loadFlow(flowYear)}
-              onYearChange={(year) => {
-                setFlowYear(year)
-                loadFlow(year)
-              }}
+              onYearChange={showFlowYear}
             />
           </div>
           <div className="up-next">

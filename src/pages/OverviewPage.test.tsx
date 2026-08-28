@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type {
   CalendarEvent,
   DividendOut,
@@ -20,7 +21,7 @@ import type {
   TaxYearOut,
 } from '../types/api'
 import { formatDate, formatMonth } from '../utils/format'
-import { addMonths, currentMonthIso } from '../utils/months'
+import { addMonths, currentMonthIso, todayIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
 
 // Six modules, eleven clients, one snapshot: the page's whole contract is that these
@@ -78,13 +79,17 @@ vi.mock('../components/EChart', async () => {
     default: ({
       option,
       onClick,
+      animateEntrance = true,
     }: {
       option: { xAxis?: { data?: unknown[] } }
       onClick?: (params: { dataIndex?: number }) => void
+      animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
         'data-categories': (option.xAxis?.data ?? []).join(','),
+        // A cached paint must render still (2026-08-27 spec §1).
+        'data-animate': String(animateEntrance),
         // A click stands in for a click on the chart's FIRST point (dataIndex 0) —
         // enough to walk the click-through door without a canvas (SpendingPage.test's
         // idiom). Charts given no handler stay inert, like the real thing.
@@ -420,7 +425,50 @@ function categoriesOf(chart: Element): string {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  clearSnapshots()
 })
+
+/** The eleven-client snapshot exactly as the page stores it (the `flow` leg is its own
+ *  isolated track, so it never rides the 'overview' key). */
+function snapshotOf(payload: Payload) {
+  return {
+    summary: payload.summary,
+    ts: payload.ts,
+    holdings: payload.holdings,
+    history: payload.history,
+    matrix: payload.matrix,
+    taxes: payload.taxes,
+    lots: payload.lots,
+    taxYears: payload.taxYears,
+    yearly: payload.yearly,
+    dividends: payload.dividends,
+    system: payload.system,
+  }
+}
+
+/** The three PAGE-level charts (net-worth trend, performance, recent spending) in render
+ *  order. MoneyFlowCard's sankey trails them and is a documented scope cut for the
+ *  entrance-stillness rule — its chart lives inside a child component. */
+function pageCharts(): HTMLElement[] {
+  return screen.getAllByTestId('echart').slice(0, 3)
+}
+
+/** Holds every one of the eleven snapshot clients pending, so anything on screen came
+ *  from the seed alone. The two isolated tracks keep their own resolutions. */
+function pendAllSnapshotFetches(): void {
+  const pending = () => new Promise<never>(() => {})
+  vi.mocked(fetchSummary).mockImplementation(pending)
+  vi.mocked(fetchTimeseries).mockImplementation(pending)
+  vi.mocked(fetchHoldings).mockImplementation(pending)
+  vi.mocked(fetchHistory).mockImplementation(pending)
+  vi.mocked(fetchMatrix).mockImplementation(pending)
+  vi.mocked(fetchAllTaxSummaries).mockImplementation(pending)
+  vi.mocked(fetchLots).mockImplementation(pending)
+  vi.mocked(fetchTaxYears).mockImplementation(pending)
+  vi.mocked(fetchYearly).mockImplementation(pending)
+  vi.mocked(fetchDividends).mockImplementation(pending)
+  vi.mocked(fetchSystemStatus).mockImplementation(pending)
+}
 
 afterEach(() => {
   cleanup()
@@ -1026,4 +1074,61 @@ it('Refresh refetches the money flow alongside the snapshot', async () => {
   await waitFor(() => expect(fetchMoneyFlow).toHaveBeenCalledTimes(2))
   // No year pinned by a chip yet, so the reload keeps the server-default call shape.
   expect(vi.mocked(fetchMoneyFlow).mock.calls[1]).toEqual([undefined])
+})
+
+describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
+  it('paints instantly from a seeded snapshot and still revalidates', () => {
+    const payload = serve()
+    setSnapshot('overview', snapshotOf(payload))
+    pendAllSnapshotFetches()
+    const { container } = renderPage()
+    // The hero tile's number is up on the very first paint, with no Loading… line.
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    expect(screen.queryByText('Loading…')).toBeNull()
+    // Revalidating under the house dim, and the requests really went out.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    expect(vi.mocked(fetchSummary)).toHaveBeenCalledTimes(1)
+    // A cached paint renders its charts still.
+    expect(
+      pageCharts().every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
+  })
+
+  it('seeds the up-next strip from its own day-keyed track', () => {
+    const payload = serve()
+    setSnapshot('overview', snapshotOf(payload))
+    pendAllSnapshotFetches()
+    // todayIso() is LOCAL-date based (utils/months) — the UTC slice would miss by a day.
+    setSnapshot(`overview:upnext:${todayIso()}`, upNextEvents())
+    vi.mocked(fetchCalendar).mockImplementation(() => new Promise(() => {}))
+    renderPage()
+    // The strip is up before the calendar answers — its own key, its own fetch.
+    expect(screen.getByText('Upcoming event 1')).toBeTruthy()
+  })
+
+  it('a changed revalidation payload updates the page and re-arms the charts', async () => {
+    const payload = serve()
+    setSnapshot('overview', snapshotOf(payload))
+    serve({ summary: summaryOut({ net_worth: '2000000.00' }) })
+    const { container } = renderPage()
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
+    await waitFor(() =>
+      expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$2,000,000.00'),
+    )
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+    expect(
+      pageCharts().every((el) => el.getAttribute('data-animate') === 'true'),
+    ).toBe(true)
+  })
+
+  it('leaves the charts still when the revalidation payload is identical', async () => {
+    const payload = serve()
+    setSnapshot('overview', snapshotOf(payload))
+    const { container } = renderPage()
+    // The dim lifting is the revalidation landing — .finally runs on every resolution.
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+    expect(
+      pageCharts().every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
+  })
 })
