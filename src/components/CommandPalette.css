@@ -76,3 +76,10 @@
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+/* Motion grammar (2026-08-27 spec §4). */
+@media (prefers-reduced-motion: no-preference) {
+  .palette-option {
+    transition: background-color var(--t-fast) ease;
+  }
+}

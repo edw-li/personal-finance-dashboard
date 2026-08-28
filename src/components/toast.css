@@ -70,3 +70,13 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* Motion grammar (2026-08-27 spec §4). */
+@media (prefers-reduced-motion: no-preference) {
+  .toast-action,
+  .toast-close {
+    transition:
+      border-color var(--t-fast) ease,
+      color var(--t-fast) ease;
+  }
+}

@@ -450,3 +450,42 @@
   font-size: 0.7rem;
   text-align: right;
 }
+
+/* ── Motion grammar (2026-08-27 spec §4) ───────────────────────────── */
+/* Opt-in via no-preference (the PortfolioPage.css spinner precedent): under reduced
+   motion every rule below is simply absent — hover states snap, exactly as before. */
+
+@media (prefers-reduced-motion: no-preference) {
+  .button,
+  .chip,
+  .month-chip,
+  .row-toggle,
+  .info-hint,
+  .segmented button {
+    transition:
+      background-color var(--t-fast) ease,
+      border-color var(--t-fast) ease,
+      color var(--t-fast) ease,
+      filter var(--t-fast) ease;
+  }
+
+  /* Press feedback: felt, barely seen. */
+  .button:active {
+    transform: scale(0.985);
+  }
+
+  /* Page entrance: one fade-rise per navigation. RouteBoundary is keyed by pathname
+     (Layout.tsx), so the .page element remounts exactly once per route change — the
+     animation never replays on data refetches. transform is paint-only; EChart's
+     ResizeObserver sees no size change. */
+  .page {
+    animation: page-enter var(--t-page) ease-out;
+  }
+
+  @keyframes page-enter {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+}

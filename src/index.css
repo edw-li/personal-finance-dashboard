@@ -16,6 +16,10 @@
      literal (charts/theme.ts PALETTE[3] and everything derived from it): a CSS custom
      property cannot reach an ECharts canvas. */
   --warn: #c98500;
+  /* Motion tokens (2026-08-27 spec §4). Consumed only inside
+     prefers-reduced-motion: no-preference blocks — under `reduce` nothing reads them. */
+  --t-fast: 120ms;
+  --t-page: 180ms;
   font-family: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
