@@ -35,7 +35,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.comp import _close_on_or_before, _employer_bars
 from app.api.deps import get_current_user
 from app.api.espp import _espp_quote
-from app.api.paycheck import MAX_PAY_PERIODS, MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE
+from app.api.paycheck import (
+    MAX_PAY_PERIODS,
+    MIN_PAY_PERIODS,
+    PAY_PERIODS_MESSAGE,
+    _default_profile,
+)
 from app.database import get_db
 from app.models import (
     EsppLot,
@@ -96,6 +101,7 @@ from app.services.portfolio_calc import SHARE_Q, fold_transactions, load_portfol
 from app.services.scheduler import product_today
 from app.services.tax_service import (
     JURISDICTION_WARN_MISSING,
+    SUGGESTION_QUANTUM,
     Bracket,
     EarnerWages,
     JurisdictionResult,
@@ -143,6 +149,8 @@ ZERO = Decimal("0")
 # Above this the ratio is nonsense anyway (near-zero denominator), and quantize_pct would
 # need more digits than the Decimal context has.
 RATE_MAX_ABS = Decimal("1e12")
+# Spelled once: the ONE per-person key whose suggestion comes from outside tax_inputs.
+ANNUAL_SALARY_KEY = "annual_salary"
 
 
 async def _require_year(db: AsyncSession, year: int) -> None:
@@ -340,6 +348,30 @@ def _breakdown_for(feed: EngineFeed) -> TaxBreakdown:
     )
 
 
+async def _profile_salaries(
+    db: AsyncSession, columns: list[int | None], today: date
+) -> dict[int, Decimal]:
+    """Each person column's annual salary from THEIR paycheck profile in force, or no
+    entry at all for a person who has none.
+
+    `_default_profile` is the paycheck router's own "profile in force" rule, borrowed
+    rather than re-derived (this module's cross-router note): the Paycheck page and the
+    Taxes page must never disagree about which profile is current, which is also why the
+    clock read here is `date.today()` — the same one that router reads. One query per
+    person on a household of two or three.
+    """
+    salaries: dict[int, Decimal] = {}
+    for column in columns:
+        if column is None:
+            continue  # the roster-less column: no person, so no profile can exist
+        profile = await _default_profile(db, column, today)
+        if profile is not None:
+            salaries[column] = profile.annual_salary.quantize(
+                SUGGESTION_QUANTUM, rounding=ROUND_HALF_UP
+            )
+    return salaries
+
+
 async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
     """Every definition, one item per PERSON COLUMN, each with its own suggestions.
 
@@ -370,6 +402,14 @@ async def _inputs_payload(db: AsyncSession, year: int) -> TaxInputsOut:
         column: derive_suggestions(year, household | values, filing_status)
         for column, values in owned.items()
     }
+    # The HEAD of the derived-W2 chain. `annual_salary` has no sheet formula, so
+    # derive_suggestions never offers one — but a person with a paycheck profile in force
+    # has already told the app their salary, and this page should offer it rather than ask
+    # twice (2026-08-27 spec §4.1). Per column, from THAT person's profile: a column whose
+    # person has none keeps today's empty suggestion, and nothing downstream moves, because
+    # gross_paycheck still divides the STORED annual_salary.
+    for column, salary in (await _profile_salaries(db, columns, date.today())).items():
+        suggestions[column][ANNUAL_SALARY_KEY] = salary
     by_section: dict[str, list[TaxInputItemOut]] = {}
     for definition in sorted(definitions, key=lambda d: (d.sort_order, d.key)):
         item_columns = columns if definition.is_per_person else [None]
