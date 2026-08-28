@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
 
@@ -23,6 +24,7 @@ vi.mock('../components/EChart', async () => {
       onLegendChange,
       onDataZoom,
       exportConfig,
+      animateEntrance = true,
     }: {
       option: {
         series?: { links?: { source?: string; target?: string; value?: number }[] }[]
@@ -35,10 +37,13 @@ vi.mock('../components/EChart', async () => {
       onLegendChange?: (selected: Record<string, boolean>) => void
       onDataZoom?: (window: { startValue: number; endValue: number }) => void
       exportConfig?: { name: string }
+      animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
         'aria-label': ariaLabel,
+        // A cached paint must render still (2026-08-27 spec §1).
+        'data-animate': String(animateEntrance),
         'data-links': (option.series?.[0]?.links ?? [])
           .map((l) => `${l.source}>${l.target}=${l.value}`)
           .join('|'),
@@ -120,6 +125,7 @@ function renderPage(entry = '/spending') {
 }
 
 beforeEach(() => {
+  clearSnapshots()
   vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture())
   vi.mocked(fetchYearly).mockResolvedValue(YEARLY)
 })
@@ -243,6 +249,62 @@ describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'All months' }))
     await screen.findByText(/Monthly spend vs net pay/)
     expect(screen.getByTestId('location').textContent).toBe('/spending')
+  })
+})
+
+describe('SpendingPage — snapshot cache (2026-08-27 spec §1)', () => {
+  it('paints instantly from a seeded snapshot and still revalidates', () => {
+    setSnapshot('spending', { matrix: matrixFixture(), yearly: YEARLY })
+    // Never-resolving fetches: whatever is on screen came from the seed alone.
+    vi.mocked(fetchMatrix).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchYearly).mockReturnValue(new Promise(() => {}))
+    renderPage()
+    // Content only the matrix can produce, up on the very first paint.
+    expect(screen.getByText('Where Jul 2026 went')).toBeTruthy()
+    expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/Loading/)).toBeNull()
+    // …and the revalidation went out anyway.
+    expect(vi.mocked(fetchMatrix)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchYearly)).toHaveBeenCalledTimes(1)
+  })
+
+  it('a changed revalidation payload updates the page', async () => {
+    setSnapshot('spending', { matrix: matrixFixture(), yearly: YEARLY })
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({ months: ['2026-06', '2026-09'], net_pay: ['6000.00', '7000.00'] }),
+    )
+    renderPage()
+    // The seed painted July; the revalidation carries September instead.
+    expect(screen.getByText('Where Jul 2026 went')).toBeTruthy()
+    expect(await screen.findByText('Where Sep 2026 went')).toBeTruthy()
+  })
+
+  it('stills the charts on a cached paint and lets them animate once data changes', async () => {
+    setSnapshot('spending', { matrix: matrixFixture(), yearly: YEARLY })
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({ months: ['2026-06', '2026-09'], net_pay: ['6000.00', '7000.00'] }),
+    )
+    renderPage()
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
+    await screen.findByText('Where Sep 2026 went')
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'true'),
+    ).toBe(true)
+  })
+
+  it('leaves the charts still when the revalidation payload is identical', async () => {
+    setSnapshot('spending', { matrix: matrixFixture(), yearly: YEARLY })
+    const { container } = renderPage()
+    const grid = () => container.querySelector('.loading-dim') as HTMLElement
+    expect(grid().classList.contains('is-loading')).toBe(true) // revalidating under the dim
+    // The dim lifting is the revalidation landing — .finally runs on every resolution.
+    await waitFor(() => expect(grid().classList.contains('is-loading')).toBe(false))
+    // Same bytes back: setFromCache(false) is skipped, so nothing re-dances.
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
   })
 })
 

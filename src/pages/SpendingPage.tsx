@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import EChart from '../components/EChart'
 import type { EChartEventParams, EChartsInstance } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
@@ -62,13 +63,37 @@ function moverCell(delta: number | null) {
   )
 }
 
+const SNAPSHOT_KEY = 'spending'
+
+interface SpendingSnapshot {
+  matrix: SpendingMatrix
+  yearly: SpendingYearly
+}
+
+// Default trend pick — the single biggest all-time category, slot 1. Extracted from
+// load()'s .then so a cache-seeded mount derives the same default (spec §1).
+function defaultTrend(m: SpendingMatrix): { categoryId: number; slot: number }[] {
+  if (m.categories.length === 0) return []
+  const totals = m.series.map((s) => ({
+    id: s.category_id,
+    total: s.values.reduce((acc, v) => acc + (v === null ? 0 : Number(v)), 0),
+  }))
+  totals.sort((a, b) => b.total - a.total)
+  return [{ categoryId: totals[0].id, slot: 0 }]
+}
+
 export default function SpendingPage() {
   const navigate = useNavigate()
-  const [matrix, setMatrix] = useState<SpendingMatrix | null>(null)
-  const [yearly, setYearly] = useState<SpendingYearly | null>(null)
+  const cached = getSnapshot<SpendingSnapshot>(SNAPSHOT_KEY)
+  const [matrix, setMatrix] = useState<SpendingMatrix | null>(cached?.matrix ?? null)
+  const [yearly, setYearly] = useState<SpendingYearly | null>(cached?.yearly ?? null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [trend, setTrend] = useState<{ categoryId: number; slot: number }[]>([])
+  const [trend, setTrend] = useState<{ categoryId: number; slot: number }[]>(() =>
+    cached ? defaultTrend(cached.matrix) : [],
+  )
+  // false once a revalidation actually CHANGES the data — charts may animate again.
+  const [fromCache, setFromCache] = useState(cached !== undefined)
   // Month drill-in: the ISO month whose breakdown pie replaces the bars chart — READ
   // from the URL (?month=YYYY-MM-01, the wizard's own param grammar) so a drill is
   // shareable and Overview can link straight into it (2026-08-25 spec §2d). Month
@@ -119,19 +144,19 @@ export default function SpendingPage() {
   const load = useCallback(() => {
     Promise.all([fetchMatrix(), fetchYearly()])
       .then(([m, y]) => {
+        const snapshot: SpendingSnapshot = { matrix: m, yearly: y }
+        const previous = getSnapshot<SpendingSnapshot>(SNAPSHOT_KEY)
+        setSnapshot(SNAPSHOT_KEY, snapshot)
+        setError(null)
+        // Identical payload: nothing re-renders, the charts stay still (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+          return
+        setFromCache(false)
         setMatrix(m)
         setYearly(y)
-        setError(null)
-        setTrend((current) => {
-          if (current.length > 0 || m.categories.length === 0) return current
-          // Default: the single biggest all-time category, slot 1.
-          const totals = m.series.map((s) => ({
-            id: s.category_id,
-            total: s.values.reduce((acc, v) => acc + (v === null ? 0 : Number(v)), 0),
-          }))
-          totals.sort((a, b) => b.total - a.total)
-          return [{ categoryId: totals[0].id, slot: 0 }]
-        })
+        setTrend((current) =>
+          current.length > 0 || m.categories.length === 0 ? current : defaultTrend(m),
+        )
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Failed to load spending data')
@@ -646,6 +671,7 @@ export default function SpendingPage() {
                   height={340}
                   onClick={handleSpendChartClick}
                   instanceRef={barsChartRef}
+                  animateEntrance={!fromCache}
                 />
               ) : (
                 <div className="empty-note">No spending recorded for {detailLabel}.</div>
@@ -662,6 +688,7 @@ export default function SpendingPage() {
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
                 exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
+                animateEntrance={!fromCache}
               />
               <ChartZoomHint />
             </>
@@ -737,6 +764,7 @@ export default function SpendingPage() {
                   option={flowOption}
                   height={320}
                   ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
+                  animateEntrance={!fromCache}
                 />
                 <p className="drill-hint">
                   Hover a node to trace its flows; drill a month on the top chart and this
@@ -771,6 +799,7 @@ export default function SpendingPage() {
               ariaLabel="Heatmap of spend per category per month — darker is more"
               onHover={handleHeatmapHover}
               onHoverEnd={handleHeatmapHoverEnd}
+              animateEntrance={!fromCache}
             />
           )}
         </div>
@@ -782,7 +811,12 @@ export default function SpendingPage() {
           </h2>
           {savingsOption && (
             <>
-              <EChart option={savingsOption} height={260} onDataZoom={onZoomWindow} />
+              <EChart
+                option={savingsOption}
+                height={260}
+                onDataZoom={onZoomWindow}
+                animateEntrance={!fromCache}
+              />
               <ChartZoomHint />
             </>
           )}
@@ -823,6 +857,7 @@ export default function SpendingPage() {
                 height={220}
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                animateEntrance={!fromCache}
               />
               <ChartZoomHint />
             </>
