@@ -5,6 +5,7 @@ import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import type { OwnerScope } from '../api/netWorth'
 import { fetchHousehold } from '../api/household'
 import { ApiError } from '../api/client'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartZoomHint from '../components/ChartZoomHint'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
@@ -59,6 +60,31 @@ function pctChange(curr: string | null, prev: string | null): number | null {
   return (Number(curr) - Number(prev)) / Math.abs(Number(prev))
 }
 
+// Keyed by the fetch parameters: flipping granularity or owner is a DIFFERENT snapshot.
+function netWorthKey(granularity: 'monthly' | 'quarterly', owner: OwnerScope): string {
+  return `net-worth:${granularity}:${owner ?? 'all'}`
+}
+
+interface NetWorthSnapshot {
+  ts: NetWorthTimeseries
+  summary: NetWorthSummary
+}
+
+// Default drill pick — the single biggest account by latest balance (signed, so
+// liabilities never win; components skipped — their aggregate represents them).
+// Extracted from load()'s .then so a cache-seeded mount derives the same default.
+function defaultDrill(ts: NetWorthTimeseries): { accountId: number; slot: number }[] {
+  if (ts.months.length === 0) return []
+  const last = ts.months.length - 1
+  const valueById = new Map(ts.series.map((s) => [s.account_id, s.values[last]]))
+  const best = ts.accounts
+    .filter((a) => !a.is_component)
+    .map((a) => ({ id: a.id, value: Number(valueById.get(a.id) ?? 0) }))
+    .filter((c) => Number.isFinite(c.value))
+    .sort((a, b) => b.value - a.value)[0]
+  return best ? [{ accountId: best.id, slot: 0 }] : []
+}
+
 export default function NetWorthPage() {
   const navigate = useNavigate()
   const [granularity, setGranularity] = useState<'monthly' | 'quarterly'>('monthly')
@@ -74,19 +100,26 @@ export default function NetWorthPage() {
   // Group stacking stays the default (spec §6): "how is it invested" is the question this
   // chart has always answered; "whose is it" is the new second reading of the same total.
   const [stackBy, setStackBy] = useState<'group' | 'owner'>('group')
-  const [data, setData] = useState<NetWorthTimeseries | null>(null)
-  const [summary, setSummary] = useState<NetWorthSummary | null>(null)
+  // The initial fetch parameters are monthly + the whole household, so the mount seed
+  // reads exactly the key that mount's load() will write.
+  const cached = getSnapshot<NetWorthSnapshot>(netWorthKey('monthly', null))
+  const [data, setData] = useState<NetWorthTimeseries | null>(cached?.ts ?? null)
+  const [summary, setSummary] = useState<NetWorthSummary | null>(cached?.summary ?? null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // false once a revalidation actually CHANGES the data — charts may animate again.
+  const [fromCache, setFromCache] = useState(cached !== undefined)
   // Drill-down: selection order assigns the lowest free palette slot; removing one
   // never repaints the survivors (dataviz: color follows the entity, not its rank).
-  const [drill, setDrill] = useState<{ accountId: number; slot: number }[]>([])
+  const [drill, setDrill] = useState<{ accountId: number; slot: number }[]>(() =>
+    cached ? defaultDrill(cached.ts) : [],
+  )
   // Seed the drill-down once per visit so the card is never an empty box by default;
   // a deliberate clear-all afterwards must stay cleared across refetches.
-  const seededDrillRef = useRef(false)
+  const seededDrillRef = useRef(cached !== undefined && cached.ts.months.length > 0)
   // Ribbon coverage is captured ONLY from monthly responses — the quarterly fetch
   // filters months server-side and must not make covered months read as missing.
-  const [coverageMonths, setCoverageMonths] = useState<string[]>([])
+  const [coverageMonths, setCoverageMonths] = useState<string[]>(cached ? cached.ts.months : [])
   // The page's time window, applied to BOTH time charts (they share one month axis, and
   // two range controls answering one question would drift). An OBJECT, not a bare preset:
   // re-clicking the active chip hands the memos a fresh identity, which is what snaps a
@@ -114,25 +147,23 @@ export default function NetWorthPage() {
   const load = useCallback(() => {
     Promise.all([fetchTimeseries(granularity, owner), fetchSummary(owner)])
       .then(([ts, sum]) => {
+        const key = netWorthKey(granularity, owner)
+        const snapshot: NetWorthSnapshot = { ts, summary: sum }
+        const previous = getSnapshot<NetWorthSnapshot>(key)
+        setSnapshot(key, snapshot)
+        setError(null)
+        // Identical payload: nothing re-renders, the charts stay still (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+          return
+        setFromCache(false)
         setData(ts)
         setSummary(sum)
-        setError(null)
         if (granularity === 'monthly') setCoverageMonths(ts.months)
         if (!seededDrillRef.current && ts.months.length > 0) {
           seededDrillRef.current = true
-          // Default: the single biggest account by latest balance (signed, so
-          // liabilities never win; components skipped — their aggregate represents them).
-          const last = ts.months.length - 1
-          const valueById = new Map(ts.series.map((s) => [s.account_id, s.values[last]]))
-          const best = ts.accounts
-            .filter((a) => !a.is_component)
-            .map((a) => ({ id: a.id, value: Number(valueById.get(a.id) ?? 0) }))
-            .filter((c) => Number.isFinite(c.value))
-            .sort((a, b) => b.value - a.value)[0]
-          if (best) {
-            setDrill((current) =>
-              current.length > 0 ? current : [{ accountId: best.id, slot: 0 }],
-            )
+          const seed = defaultDrill(ts)
+          if (seed.length > 0) {
+            setDrill((current) => (current.length > 0 ? current : seed))
           }
         }
       })
@@ -517,6 +548,7 @@ export default function NetWorthPage() {
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
                 exportConfig={{ name: 'net-worth', csv: () => netWorthCsv(data) }}
+                animateEntrance={!fromCache}
               />
               <ChartZoomHint />
             </>
@@ -564,6 +596,7 @@ export default function NetWorthPage() {
                 height={280}
                 onLegendChange={onLegendChange}
                 onDataZoom={onZoomWindow}
+                animateEntrance={!fromCache}
               />
               <ChartZoomHint />
             </>
