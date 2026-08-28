@@ -63,7 +63,11 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
                   aria-label={`${item.label} annualized vs limit`}
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-valuenow={Math.round(Number(item.ratio) * 100)}
+                  // Clamped like the fill: a valuenow of 108 against a valuemax of 100 is an
+                  // out-of-range meter, and a screen reader is entitled to say anything at all
+                  // about that. The TRUE over-ness rides aria-valuetext (the dollars) and the
+                  // verdict text beside it — neither of which the clamp touches.
+                  aria-valuenow={Math.min(Math.round(Number(item.ratio) * 100), 100)}
                   aria-valuetext={`${formatCurrency(item.annualized)} of ${formatCurrency(item.limit)}`}
                 >
                   <div
@@ -76,9 +80,13 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
                   {`${formatCurrency(item.annualized)} / ${formatCurrency(item.limit)}`}
                 </span>
                 {/* The tone in WORDS as well as colour — the meter's own aria-valuetext
-                    carries the dollars, and this carries the verdict. */}
+                    carries the dollars, and this carries the verdict. The percentage prints to
+                    2dp because the tone is judged on the server's 4dp HALF_UP ratio: at one
+                    decimal a 0.9499 ratio prints "95.0%" beside "on pace" and a 1.0004 one
+                    prints "100.0%" beside "over" — the number contradicting the verdict at
+                    exactly the boundaries the verdict is about. */}
                 <span className={`pace-verdict tone-${item.tone}`}>
-                  {`${(Number(item.ratio) * 100).toFixed(1)}%`}
+                  {`${(Number(item.ratio) * 100).toFixed(2)}%`}
                   <span className="pace-verdict-word">{TONE_WORD[item.tone]}</span>
                 </span>
               </>

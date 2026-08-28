@@ -70,7 +70,22 @@ it('clamps the fill at the track end and still reports the true percentage', () 
   // The component writes "100.00%"; CSSOM canonicalizes the trailing zeros away on
   // read-back. What matters is the CLAMP — 108 % of a track is a layout bug, not data.
   expect((meter.querySelector('.pace-fill') as HTMLElement).style.width).toBe('100%')
-  expect(screen.getByText('108.0%')).toBeTruthy()
+  // valuenow is clamped to valuemax for the same reason the fill is: an out-of-range meter
+  // is undefined to assistive tech. The true over-ness survives in valuetext and in print.
+  expect(meter.getAttribute('aria-valuenow')).toBe('100')
+  expect(meter.getAttribute('aria-valuetext')).toBe('$27,000.00 of $25,000.00')
+  expect(screen.getByText('108.00%')).toBeTruthy()
+})
+
+it('prints a percentage that cannot contradict the tone beside it', () => {
+  // 0.9499 is the last ratio the server still calls "ok" — one decimal would print it as
+  // "95.0%", a number the warn threshold owns, next to the word "on pace".
+  renderPanel([{ ...OK, ratio: '0.9499', annualized: '23264.00', tone: 'ok' }])
+
+  expect(screen.queryByText('95.00%')).toBeNull()
+  expect(screen.getByText('94.99%')).toBeTruthy()
+  expect(screen.getByText('on pace')).toBeTruthy()
+  expect((screen.getByText('94.99%') as HTMLElement).className).toBe('pace-verdict tone-ok')
 })
 
 it('renders a call to action instead of a meter when the limit is missing', () => {

@@ -131,12 +131,17 @@ export default function LimitsCard() {
         <InfoHint text="Your own per-year caps. The dashboard ships none of its own — enter the year's published figures and the Paycheck page grades your contributions against them. A blank box means 'not entered', which the pace strip says out loud." />
       </h2>
       <div className="segmented" role="group" aria-label="Limit year">
+        {/* Frozen while a write is in flight, exactly like the two buttons below. `save` and
+            `clone` re-seed from their response with no sequence guard of their own, so a
+            chip pressed mid-flight would land the OLD year's echo under the new year's
+            heading — the failure the load-error path above refuses to allow. */}
         {[currentYear - 1, currentYear, currentYear + 1].map((option) => (
           <button
             key={option}
             type="button"
             className={option === year ? 'active' : ''}
             aria-pressed={option === year}
+            disabled={busy}
             onClick={() => pickYear(option)}
           >
             {option}

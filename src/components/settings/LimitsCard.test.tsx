@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { LimitsOut } from '../../types/api'
@@ -13,6 +13,19 @@ vi.mock('../../api/limits', () => ({
 import { cloneLimits, fetchLimits, putLimits } from '../../api/limits'
 
 const YEAR = new Date().getFullYear()
+
+// A promise this file settles by hand — the only way to look at the card while a write is
+// still in flight (TaxesPage.test.tsx's helper).
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
+const chip = (year: number) =>
+  screen.getByRole('button', { name: String(year) }) as HTMLButtonElement
 
 function payload(year: number, values: Record<string, string | null> = {}): LimitsOut {
   return {
@@ -84,6 +97,10 @@ it('saves every box in one PUT, with blanks as explicit nulls', async () => {
 })
 
 it('re-seeds the boxes from the PUT response, not from what was typed', async () => {
+  // The response deliberately holds a DIFFERENT figure from the typed one. A server echo
+  // of "24000.00" against a typed "24000" renders identically through AmountInput, so an
+  // assertion on that number would pass just as happily on a card that never re-seeded.
+  vi.mocked(putLimits).mockResolvedValue(payload(YEAR, { limit_401k_elective: '24111.00' }))
   render(<LimitsCard />)
   await screen.findByLabelText('401(k) elective deferral')
 
@@ -94,10 +111,34 @@ it('re-seeds the boxes from the PUT response, not from what was typed', async ()
 
   await waitFor(() =>
     expect((screen.getByLabelText('401(k) elective deferral') as HTMLInputElement).value).toBe(
-      '$24,000.00',
+      '$24,111.00',
     ),
   )
   expect(screen.getByText('Saved.')).toBeTruthy()
+})
+
+it('freezes the year chips while a save is in flight', async () => {
+  const put = deferred<LimitsOut>()
+  vi.mocked(putLimits).mockReturnValue(put.promise)
+  render(<LimitsCard />)
+  await screen.findByLabelText('401(k) elective deferral')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save limits' }))
+
+  // A chip pressed here would refetch the new year AND then let the in-flight PUT's echo
+  // re-seed on top of it — this year's numbers standing under next year's heading.
+  await waitFor(() => expect(chip(YEAR + 1).disabled).toBe(true))
+  expect(chip(YEAR - 1).disabled).toBe(true)
+  expect(chip(YEAR).disabled).toBe(true)
+
+  await act(async () => {
+    put.resolve(payload(YEAR, { limit_401k_elective: '24000.00' }))
+  })
+
+  await waitFor(() => expect(chip(YEAR + 1).disabled).toBe(false))
+  expect(chip(YEAR - 1).disabled).toBe(false)
+  expect(chip(YEAR).disabled).toBe(false)
+  expect(vi.mocked(fetchLimits)).toHaveBeenCalledTimes(1)
 })
 
 it('clones from the prior year and shows the cloned values', async () => {
