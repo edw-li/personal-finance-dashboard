@@ -105,6 +105,12 @@ export default function NetWorthPage() {
   const cached = getSnapshot<NetWorthSnapshot>(netWorthKey('monthly', null))
   const [data, setData] = useState<NetWorthTimeseries | null>(cached?.ts ?? null)
   const [summary, setSummary] = useState<NetWorthSummary | null>(cached?.summary ?? null)
+  // What the charts are actually SHOWING. The revalidation skip in load() is judged
+  // against this, never against the snapshot cache: render and cache diverge across
+  // owner/granularity switches (the previous scope's charts are still up while the next
+  // scope's key is warm), and skipping on the cache stranded the page on the previous
+  // scope forever (2026-08-28 bug).
+  const shown = useRef<NetWorthSnapshot | null>(cached ?? null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // false once a revalidation actually CHANGES the data — charts may animate again.
@@ -149,12 +155,13 @@ export default function NetWorthPage() {
       .then(([ts, sum]) => {
         const key = netWorthKey(granularity, owner)
         const snapshot: NetWorthSnapshot = { ts, summary: sum }
-        const previous = getSnapshot<NetWorthSnapshot>(key)
         setSnapshot(key, snapshot)
         setError(null)
-        // Identical payload: nothing re-renders, the charts stay still (spec §1).
-        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+        // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
+        // against the RENDERED snapshot, never the cache (see `shown`).
+        if (shown.current !== null && JSON.stringify(shown.current) === JSON.stringify(snapshot))
           return
+        shown.current = snapshot
         setFromCache(false)
         setData(ts)
         setSummary(sum)
@@ -220,6 +227,21 @@ export default function NetWorthPage() {
     // and let the seed pick this scope's biggest account instead of leaving empty series.
     setDrill([])
     seededDrillRef.current = false
+    // Already-seen scope: paint it instantly and revalidate underneath (Overview's
+    // showFlowYear seed). The peek also re-seeds the drill, because load()'s own seed
+    // only runs when the payload CHANGES — identical revalidations skip it.
+    const peeked = getSnapshot<NetWorthSnapshot>(netWorthKey(granularity, next))
+    if (peeked !== undefined) {
+      shown.current = peeked
+      setFromCache(true)
+      setData(peeked.ts)
+      setSummary(peeked.summary)
+      if (granularity === 'monthly') setCoverageMonths(peeked.ts.months)
+      if (peeked.ts.months.length > 0) {
+        seededDrillRef.current = true
+        setDrill(defaultDrill(peeked.ts))
+      }
+    }
     setOwner(next)
   }
 
@@ -544,6 +566,16 @@ export default function NetWorthPage() {
                     onClick={() => {
                       if (g === granularity) return
                       beginLoad()
+                      // Same handler-side seed as selectOwner: a warm granularity paints
+                      // instantly, and the rendered-state guard in load() stays truthful.
+                      const peeked = getSnapshot<NetWorthSnapshot>(netWorthKey(g, owner))
+                      if (peeked !== undefined) {
+                        shown.current = peeked
+                        setFromCache(true)
+                        setData(peeked.ts)
+                        setSummary(peeked.summary)
+                        if (g === 'monthly') setCoverageMonths(peeked.ts.months)
+                      }
                       setGranularity(g)
                     }}
                   >

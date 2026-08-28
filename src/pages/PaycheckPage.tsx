@@ -694,6 +694,12 @@ export default function PaycheckPage() {
   const [breakdown, setBreakdown] = useState<PaycheckBreakdownOut | null>(
     cachedBreakdown ?? null,
   )
+  // The check the page is actually SHOWING. The revalidation skip below is judged against
+  // this, never against the snapshot cache: render and cache diverge across person
+  // switches (a partner 404 nulls the render while the cache stays warm; a warm partner
+  // key belongs to a different person than the one on screen), and skipping on the cache
+  // stranded the page there (2026-08-28 bug).
+  const shownBreakdown = useRef<PaycheckBreakdownOut | null>(cachedBreakdown ?? null)
   // false once a revalidation actually CHANGES the data — the flow may animate again.
   const [fromCache, setFromCache] = useState(cachedBreakdown !== undefined)
   const [breakdownError, setBreakdownError] = useState<string | null>(null)
@@ -821,12 +827,17 @@ export default function PaycheckPage() {
       .then((data) => {
         if (seq !== breakdownSeq.current) return
         const key = breakdownKey(selection.profileId, selection.personId)
-        const previous = getSnapshot<PaycheckBreakdownOut>(key)
         setSnapshot(key, data)
         setBreakdownError(null)
         setBreakdownMissing(false)
-        // Identical payload: nothing re-renders, the flow stays still (spec §1).
-        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
+        // Identical payload: nothing re-renders, the flow stays still (spec §1) — judged
+        // against the RENDERED check, never the snapshot cache (see shownBreakdown).
+        if (
+          shownBreakdown.current !== null &&
+          JSON.stringify(shownBreakdown.current) === JSON.stringify(data)
+        )
+          return
+        shownBreakdown.current = data
         setFromCache(false)
         setBreakdown(data)
       })
@@ -837,7 +848,10 @@ export default function PaycheckPage() {
         // (or there never was one), so there is nothing left for the waterfall to be about.
         // Anything else keeps it — the panel names its own profile, so a stale waterfall
         // under the cue below still says whose it is.
-        if (missing) setBreakdown(null)
+        if (missing) {
+          shownBreakdown.current = null
+          setBreakdown(null)
+        }
         setBreakdownMissing(missing)
         setBreakdownError(message(err, 'Failed to load the paycheck breakdown'))
       })
@@ -904,6 +918,15 @@ export default function PaycheckPage() {
     setBreakdownBusy(true)
     setBreakdownError(null)
     setBreakdownMissing(false)
+    // Already-seen person: paint their in-force check instantly and revalidate underneath
+    // (the sibling pages' handler-side seed — Overview's showFlowYear, Calendar's
+    // showMonth). A cold key keeps the old check dimmed under the busy flag, as before.
+    const peeked = getSnapshot<PaycheckBreakdownOut>(breakdownKey(null, personId))
+    if (peeked !== undefined) {
+      shownBreakdown.current = peeked
+      setFromCache(true)
+      setBreakdown(peeked)
+    }
     setSelection({ profileId: null, personId })
   }
 
@@ -1020,7 +1043,10 @@ export default function PaycheckPage() {
               "paycheck profile not found" is a pinned row that has since been deleted, and
               telling THAT user to add a profile would be answering the wrong question. */}
           <p className="empty-note">
-            {profiles !== null && profiles.length > 0
+            {/* Judged on the FILTERED list: the person on screen may have no rows while
+                another person does, and "choose a profile below" beside an empty table
+                answers the wrong question (2026-08-28 bug report). */}
+            {shownProfiles.length > 0
               ? `${breakdownError} — choose a profile below.`
               : `${breakdownError} — add one below to see the waterfall.`}
           </p>

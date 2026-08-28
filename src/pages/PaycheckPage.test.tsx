@@ -1131,3 +1131,44 @@ it('renders the pace strip under the waterfall', async () => {
   expect(await screen.findByRole('region', { name: 'Contribution pace' })).toBeTruthy()
   expect(screen.getByRole('meter')).toBeTruthy()
 })
+
+// ── Person-switch stranding regressions (2026-08-28 bug report) ─────────────────────────
+// The identical-payload revalidation skip compared the response against the SNAPSHOT
+// CACHE instead of the rendered check. Any path that leaves the render diverged from the
+// destination key's warm snapshot then stranded the page: a partner 404 nulled the
+// waterfall forever, and a warm partner key kept the PREVIOUS person's check on screen.
+
+describe('person switching keeps the rendered check truthful', () => {
+  it('recovers the waterfall after visiting a person with no profile', async () => {
+    twoEarners(new ApiError('no paycheck profiles', 404))
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('Per-check breakdown — effective Jan 1, 2026')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+    // The missing card: there is genuinely nothing to draw for Sam yet.
+    await screen.findByText(/no paycheck profiles/)
+    expect(screen.queryByText('Per-check breakdown — effective Jan 1, 2026')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Me' }))
+    // The revalidation answers with a payload identical to the warm snapshot — the page
+    // must still restore the waterfall it nulled for the 404.
+    expect(await screen.findByText('Per-check breakdown — effective Jan 1, 2026')).toBeTruthy()
+    // The flow card returns with it (the pace strip stays out only because this fixture's
+    // `pace` is empty — PacePanel renders nothing for zero rows by design).
+    expect(screen.getByText('Where each check goes')).toBeTruthy()
+  })
+
+  it('never leaves the previous person’s check rendered under a warm snapshot', async () => {
+    twoEarners()
+    // Sam’s key is already warm (an earlier visit), and the revalidation will answer with
+    // a payload identical to it.
+    setSnapshot('paycheck:breakdown:current:person:2', samBreakdown)
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('Per-check breakdown — effective Jan 1, 2026')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+    // Sam’s check, never Me’s under Sam’s chip.
+    expect(await screen.findByText('Per-check breakdown — effective Mar 1, 2026')).toBeTruthy()
+    expect(screen.queryByText('Per-check breakdown — effective Jan 1, 2026')).toBeNull()
+  })
+})

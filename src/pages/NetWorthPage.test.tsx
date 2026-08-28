@@ -263,3 +263,52 @@ describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
     await waitFor(() => expect(stacked().getAttribute('data-animate')).toBe('true'))
   })
 })
+
+// ── Owner-switch stranding regression (2026-08-28 bug report) ────────────────────────────
+// The identical-payload revalidation skip compared the response against the SNAPSHOT CACHE
+// instead of the rendered charts, so returning to a warm scope after an empty owner view
+// left the empty payload on screen forever.
+it('restores the household view after visiting an owner with no data', async () => {
+  const emptyTs = timeseriesOut({
+    accounts: [],
+    series: [],
+    group_totals: {
+      cash: ['0.00', '0.00'], pre_tax: ['0.00', '0.00'], post_tax: ['0.00', '0.00'],
+      taxable: ['0.00', '0.00'], equity: ['0.00', '0.00'], other: ['0.00', '0.00'],
+      liability: ['0.00', '0.00'],
+    },
+    net_worth: ['0.00', '0.00'],
+    mom_pct: [null, null],
+    owner_series: [],
+  })
+  const emptySummary = summaryOut({
+    net_worth: '0.00',
+    mom_delta: '0.00',
+    mom_pct: null,
+    owner_totals: [],
+  })
+  vi.mocked(fetchTimeseries).mockImplementation((_g, owner) =>
+    Promise.resolve(owner === SAM.id ? emptyTs : timeseriesOut()),
+  )
+  vi.mocked(fetchSummary).mockImplementation((owner) =>
+    Promise.resolve(owner === SAM.id ? emptySummary : summaryOut()),
+  )
+  renderPage()
+  // findAll: the account renders in the table AND as a drill chip once seeded.
+  await screen.findAllByText('My Checking')
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
+  // Sam owns nothing yet: the table genuinely empties.
+  await waitFor(() => expect(screen.queryByText('My Checking')).toBeNull())
+
+  // Scoped to the Owner group: the range chips carry an "All" too.
+  const ownerChips = screen.getByRole('group', { name: 'Owner' })
+  const allChip = [...ownerChips.querySelectorAll('button')].find(
+    (b) => b.textContent === 'All',
+  )
+  expect(allChip).toBeTruthy()
+  fireEvent.click(allChip as HTMLButtonElement)
+  // The revalidation answers with a payload identical to the warm household snapshot —
+  // the page must still swap the empty view back out.
+  expect((await screen.findAllByText('My Checking')).length).toBeGreaterThan(0)
+})
