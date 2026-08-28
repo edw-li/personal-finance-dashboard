@@ -46,5 +46,7 @@ def downgrade() -> None:
     # Non-single rows would violate the narrower key, and they only exist because this
     # migration ran — drop them rather than leaving the constraint uncreatable.
     op.execute("DELETE FROM tax_brackets WHERE filing_status <> 'single'")
-    op.create_unique_constraint(CONSTRAINT, "tax_brackets", ["year", "jurisdiction", "bracket_index"])
+    op.create_unique_constraint(
+        CONSTRAINT, "tax_brackets", ["year", "jurisdiction", "bracket_index"]
+    )
     op.drop_column("tax_brackets", "filing_status")
