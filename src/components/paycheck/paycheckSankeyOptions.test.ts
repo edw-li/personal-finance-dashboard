@@ -40,6 +40,8 @@ function breakdown(over: Partial<PaycheckBreakdownOut> = {}): PaycheckBreakdownO
     net_pay: '3384.16',
     monthly_net: '6768.33',
     warnings: [],
+    // The sankey reads none of it — the pace strip is a sibling card, not a flow node.
+    pace: [],
     ...over,
   }
 }

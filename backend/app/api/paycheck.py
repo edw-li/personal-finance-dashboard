@@ -11,8 +11,9 @@ The read side never rejects stored data OVER ITS SCALE: `paycheck_calc` returns
 full-precision Decimals and `half_up2` is a plain quantize, never a bounded one. Its one
 refusal is the divide-by-zero itself — a hand-written 0 periods 422s rather than 500s,
 because there is no number the breakdown could show. `date.today()` is read HERE and
-only here — the calc module takes no clock — and it decides one thing: which profile is
-current when no `profile_id` is given.
+only here — the calc module takes no clock — and it decides two things off that single
+read: which profile is current when no `profile_id` is given, and which year's
+contribution limits the pace rows are measured against.
 """
 
 from datetime import date
@@ -25,8 +26,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import PaycheckProfile, Person
-from app.schemas.paycheck import BreakdownOut, ProfileIn, ProfileOut, ProfileUpdate
+from app.models import ContributionLimit, PaycheckProfile, Person
+from app.schemas.paycheck import BreakdownOut, PaceItemOut, ProfileIn, ProfileOut, ProfileUpdate
+from app.services.limit_check import paycheck_pace
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     _quantize_bounded,
@@ -341,17 +343,18 @@ async def get_breakdown(
     person_id: IdQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> BreakdownOut:
+    # The ONLY clock read in this module, and it now decides TWO things: which profile is
+    # in force, and which year's contribution limits the pace rows are measured against.
+    # One read, so a request that straddles midnight on 31 December cannot pair January's
+    # profile with December's caps.
+    today = date.today()
     if profile_id is not None:
         # An explicit row wins outright: `person_id` only names WHOSE profile in force to
         # pick, and there is nothing to pick when the row itself is named.
         profile = await _get_profile(db, profile_id)
     else:
         owner = await _resolve_person_id(db, person_id)  # absent = the primary person
-        profile = (
-            None
-            if owner is None
-            else await _default_profile(db, owner, date.today())  # the ONLY clock read here
-        )
+        profile = None if owner is None else await _default_profile(db, owner, today)
         if profile is None:
             # Also the roster-less answer: person_id is NOT NULL, so a database with no
             # people has no profiles either — the legacy 404, word for word.
@@ -375,4 +378,18 @@ async def get_breakdown(
     # it: a -1e-9 net renders as 0.00 and says nothing.
     if lines["net_pay"] < 0:
         warnings.append(NEGATIVE_NET_WARNING)
-    return BreakdownOut(profile=ProfileOut.model_validate(profile), warnings=warnings, **lines)
+    limits = {
+        row.key: row.value
+        for row in (
+            await db.execute(select(ContributionLimit).where(ContributionLimit.year == today.year))
+        ).scalars()
+    }
+    # No limits entered yet is the NORMAL first-run state, not an error: paycheck_pace
+    # answers with null caps and the page offers a link to Settings.
+    pace = [
+        PaceItemOut.model_validate(item)
+        for item in paycheck_pace(profile, limits, profile.hsa_coverage)
+    ]
+    return BreakdownOut(
+        profile=ProfileOut.model_validate(profile), warnings=warnings, pace=pace, **lines
+    )

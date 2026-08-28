@@ -13,6 +13,7 @@ import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { SkeletonCard } from '../components/PageSkeleton'
+import PacePanel from '../components/paycheck/PacePanel'
 import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptions'
 import StatTile from '../components/StatTile'
 import type {
@@ -53,7 +54,7 @@ function message(err: unknown, fallback: string): string {
  * side of the wire (global rule 9).
  */
 const WATERFALL: {
-  key: Exclude<keyof PaycheckBreakdownOut, 'profile' | 'warnings' | 'monthly_net'>
+  key: Exclude<keyof PaycheckBreakdownOut, 'profile' | 'warnings' | 'monthly_net' | 'pace'>
   label: string
 }[] = [
   { key: 'gross', label: 'Gross' },
@@ -1029,10 +1030,10 @@ export default function PaycheckPage() {
       ) : (
         <div className={`loading-dim${breakdownBusy ? ' is-loading' : ''}`}>
           <BreakdownPanel data={breakdown} still={fromCache} />
-          {/* PLAN 4 MOUNT POINT — the contribution-pace strip goes HERE, under the
-              waterfall (spec §5). It renders from `breakdown.pace`, which is this div's own
-              payload for whichever person the chips already picked, so it needs no chip
-              wiring of its own: mount it and nothing above this line changes. */}
+          {/* Pace strip (2026-08-27 spec §5): the SAME payload as the waterfall above, so
+              the rows can never describe a different profile than the check they sit
+              under — including whichever person the chips picked. */}
+          <PacePanel items={breakdown.pace} />
           {/* Same payload, same busy dim: the flow can never show a different check than
               the table above it. */}
           <FlowPanel data={breakdown} still={fromCache} />

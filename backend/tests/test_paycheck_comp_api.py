@@ -1084,3 +1084,83 @@ async def test_comp_endpoints_require_auth(client):
     assert (await client.post(EVENTS, json=event_payload())).status_code == 401
     assert (await client.patch(f"{EVENTS}/1", json={"current_base": "1"})).status_code == 401
     assert (await client.delete(f"{EVENTS}/1")).status_code == 401
+
+
+async def test_breakdown_embeds_pace_for_the_current_year(auth_client, db, me):
+    """The strip's rows ride the breakdown the page already fetches — one request, and
+    the pace can never describe a different profile than the waterfall above it."""
+    from app.models import ContributionLimit
+
+    db.add(
+        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+    )
+    await db.commit()
+    created = await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2020-01-01",
+            "annual_salary": "100000",
+            "pay_periods_per_year": 24,
+            "trad_401k_pct": "0.1",
+            "espp_pct": "0",
+            "hsa_per_check": "0",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    resp = await auth_client.get(BREAKDOWN)
+    assert resp.status_code == 200, resp.text
+    pace = resp.json()["pace"]
+    rows = {row["key"]: row for row in pace}
+    assert rows["limit_401k_elective"]["annualized"] == "10000.00"
+    assert rows["limit_401k_elective"]["limit"] == "24500.00"
+    assert rows["limit_401k_elective"]["ratio"] == "0.4082"
+    assert rows["limit_401k_elective"]["tone"] == "ok"
+    # No cap entered for 415(c): null limit, null ratio, and a label that owns the caveat.
+    assert rows["limit_415c_total"]["limit"] is None
+    assert rows["limit_415c_total"]["ratio"] is None
+    assert "excludes employer match" in rows["limit_415c_total"]["label"]
+
+
+async def test_breakdown_pace_is_empty_of_optional_rows_without_them(auth_client, me):
+    created = await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2020-02-01",
+            "annual_salary": "100000",
+            "pay_periods_per_year": 24,
+            "espp_pct": "0",
+            "hsa_per_check": "150",
+        },
+    )
+    assert created.status_code == 201, created.text
+    resp = await auth_client.get(BREAKDOWN)
+    keys = [row["key"] for row in resp.json()["pace"]]
+    # hsa_coverage defaults to 'self' (Plan 1), so the HSA row is present; ESPP is not.
+    assert "limit_hsa_self" in keys
+    assert "limit_espp_423" not in keys
+
+
+async def test_breakdown_pace_measures_this_year_not_a_stored_year(auth_client, db, me):
+    """The limits year comes from the SAME date.today() that picks the profile in force —
+    entering next year's caps early must not change today's strip."""
+    from app.models import ContributionLimit
+
+    db.add(
+        ContributionLimit(
+            year=date.today().year + 1, key="limit_401k_elective", value=D("25000.00")
+        )
+    )
+    await db.commit()
+    await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2020-03-01",
+            "annual_salary": "100000",
+            "pay_periods_per_year": 24,
+            "trad_401k_pct": "0.1",
+        },
+    )
+    resp = await auth_client.get(BREAKDOWN)
+    rows = {row["key"]: row for row in resp.json()["pace"]}
+    assert rows["limit_401k_elective"]["limit"] is None

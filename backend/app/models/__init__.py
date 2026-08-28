@@ -17,6 +17,7 @@ from app.models.credit_cards import (
     RewardRate,
 )
 from app.models.household import Person
+from app.models.limits import ContributionLimit
 from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.models.portfolio import (
     DIVIDEND_SOURCES,
@@ -43,6 +44,7 @@ __all__ = [
     "CardCredit",
     "CategoryBudget",
     "CompEvent",
+    "ContributionLimit",
     "CreditCard",
     "CreditLimitEvent",
     "CustomEvent",

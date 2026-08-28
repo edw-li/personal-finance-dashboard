@@ -8,6 +8,7 @@ import AccountsCard from '../components/settings/AccountsCard'
 import CategoriesCard from '../components/settings/CategoriesCard'
 import HouseholdCard from '../components/settings/HouseholdCard'
 import ImportReportView from '../components/settings/ImportReportView'
+import LimitsCard from '../components/settings/LimitsCard'
 import SystemCard from '../components/settings/SystemCard'
 import type { AppSettingsOut, ImportReport, PersonOut } from '../types/api'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
@@ -480,6 +481,10 @@ export default function SettingsPage() {
           <HouseholdCard onPeopleChange={setPeople} />
           <CategoriesCard />
           <AccountsCard people={people} />
+
+          {/* Contribution limits (2026-08-27 spec §5): its own fetch and error state, the
+              same loadedOnce gate as the cards above it. */}
+          <LimitsCard />
 
           {/* Read-only status, its own fetch/error (SystemCard) — it shares the forms'
               loadedOnce gate like the import card: a settings GET that failed means the

@@ -84,6 +84,26 @@ class ProfileOut(BaseModel):
     notes: str | None
 
 
+class PaceItemOut(BaseModel):
+    """One contribution line annualized from the profile in force, against the cap the
+    user entered for the current year (2026-08-27 spec §4.5).
+
+    `limit` and `ratio` are null together and mean "nothing entered for this key this
+    year" — the page renders a call-to-action, never a fabricated cap. `ratio` is a 4 dp
+    fraction and `tone` was judged on exactly that value, so the badge and the percentage
+    can never disagree.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    label: str
+    annualized: Decimal
+    limit: Decimal | None
+    ratio: Decimal | None
+    tone: str
+
+
 class BreakdownOut(BaseModel):
     """One check, in the sheet's waterfall order, plus the monthly roll-up.
 
@@ -105,3 +125,7 @@ class BreakdownOut(BaseModel):
     net_pay: Decimal
     monthly_net: Decimal
     warnings: list[str]
+    # The contribution-pace rows for THIS profile against the current year's entered
+    # limits. Empty only if the profile somehow yields no rows at all — the two 401(k)
+    # rows are unconditional.
+    pace: list[PaceItemOut]
