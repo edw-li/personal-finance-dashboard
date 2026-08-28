@@ -6,6 +6,7 @@ import CommandPalette from './CommandPalette'
 import './Layout.css'
 import { NAV_SECTIONS } from './navItems'
 import RouteBoundary from './RouteBoundary'
+import { prefetchRoute, warmAllRoutes } from './routeChunks'
 import { usePageTitle } from './usePageTitle'
 
 export default function Layout() {
@@ -26,6 +27,13 @@ export default function Layout() {
     window.scrollTo(0, 0)
   }, [pathname])
 
+  // Warm every route chunk during idle time so in-app navigation never waits on the
+  // network for JS. Hover/focus prefetch below covers the pre-idle window. import()
+  // memoizes, so re-mounts re-warm for free (no-ops).
+  useEffect(() => {
+    warmAllRoutes()
+  }, [])
+
   return (
     <div className="layout">
       {/* The app's first tabbable: a keyboard user clears the 12-link sidebar in one Tab. */}
@@ -41,7 +49,14 @@ export default function Layout() {
                 <div className="nav-heading">{section.heading}</div>
               )}
               {section.items.map(({ to, label, icon: Icon }) => (
-                <NavLink key={to} to={to} end={to === '/'} className="nav-link">
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === '/'}
+                  className="nav-link"
+                  onMouseEnter={() => prefetchRoute(to)}
+                  onFocus={() => prefetchRoute(to)}
+                >
                   <Icon size={16} />
                   <span>{label}</span>
                 </NavLink>

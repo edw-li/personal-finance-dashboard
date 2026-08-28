@@ -2,26 +2,29 @@ import { lazy } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
+import { ROUTE_CHUNKS } from './components/routeChunks'
 import ToastProvider from './components/ToastProvider'
 import { AuthProvider } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 
 // Route-level splitting (Plans 3-5 deferred it here): echarts + each page leave the entry
-// chunk; Login and the 404 stay eager (first paint must not wait on a chunk).
-const OverviewPage = lazy(() => import('./pages/OverviewPage'))
-const MonthlyUpdatePage = lazy(() => import('./pages/MonthlyUpdatePage'))
-const NetWorthPage = lazy(() => import('./pages/NetWorthPage'))
-const SpendingPage = lazy(() => import('./pages/SpendingPage'))
-const PortfolioPage = lazy(() => import('./pages/PortfolioPage'))
-const CreditCardsPage = lazy(() => import('./pages/CreditCardsPage'))
-const TaxesPage = lazy(() => import('./pages/TaxesPage'))
-const EsppPage = lazy(() => import('./pages/EsppPage'))
-const PaycheckPage = lazy(() => import('./pages/PaycheckPage'))
-const CompPage = lazy(() => import('./pages/CompPage'))
-const CalendarPage = lazy(() => import('./pages/CalendarPage'))
-const ProjectionPage = lazy(() => import('./pages/ProjectionPage'))
-const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+// chunk; Login and the 404 stay eager (first paint must not wait on a chunk). The import
+// thunks live in routeChunks.ts so hover/idle prefetch (Layout) resolves the SAME modules
+// lazy() mounts.
+const OverviewPage = lazy(ROUTE_CHUNKS['/'])
+const MonthlyUpdatePage = lazy(ROUTE_CHUNKS['/update'])
+const NetWorthPage = lazy(ROUTE_CHUNKS['/net-worth'])
+const SpendingPage = lazy(ROUTE_CHUNKS['/spending'])
+const PortfolioPage = lazy(ROUTE_CHUNKS['/portfolio'])
+const CreditCardsPage = lazy(ROUTE_CHUNKS['/credit-cards'])
+const TaxesPage = lazy(ROUTE_CHUNKS['/taxes'])
+const EsppPage = lazy(ROUTE_CHUNKS['/espp'])
+const PaycheckPage = lazy(ROUTE_CHUNKS['/paycheck'])
+const CompPage = lazy(ROUTE_CHUNKS['/comp'])
+const CalendarPage = lazy(ROUTE_CHUNKS['/calendar'])
+const ProjectionPage = lazy(ROUTE_CHUNKS['/projection'])
+const SettingsPage = lazy(ROUTE_CHUNKS['/settings'])
 
 export default function App() {
   return (
