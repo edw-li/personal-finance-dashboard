@@ -1,6 +1,6 @@
 import { LogOut } from 'lucide-react'
 import { Suspense, useEffect, useRef } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigationType } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import CommandPalette from './CommandPalette'
 import './Layout.css'
@@ -11,9 +11,49 @@ import { usePageTitle } from './usePageTitle'
 
 export default function Layout() {
   const { logout } = useAuth()
-  const { pathname } = useLocation()
+  const { pathname, key: locationKey } = useLocation()
+  const navigationType = useNavigationType()
   usePageTitle()
   const mainRef = useRef<HTMLElement>(null)
+
+  // The nav-reset effect below is deliberately keyed on pathname ONLY: search-param
+  // navigations (drill state on Spending/CreditCards/Taxes, useArrivalParam) change
+  // location.key but must not yank focus or scroll. The POP branch still needs the
+  // CURRENT key and type at fire time, so both ride refs kept fresh each render.
+  const navigationTypeRef = useRef(navigationType)
+  const locationKeyRef = useRef(locationKey)
+  useEffect(() => {
+    navigationTypeRef.current = navigationType
+    locationKeyRef.current = locationKey
+  })
+
+  // Record scroll depth per history entry (rAF-throttled, passive). sessionStorage, not
+  // memory: the map must survive a reload for Back to keep working afterwards. We own
+  // POP restoration ourselves because the browser's own restore fires before React has
+  // rendered the target page and lands at a stale height.
+  useEffect(() => {
+    // Unguarded assignment: supported in every browser this app runs in, and platform
+    // objects are extensible, so an ancient one just gets an inert own property.
+    history.scrollRestoration = 'manual'
+    let frame = 0
+    const record = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        try {
+          sessionStorage.setItem(`scroll:${locationKeyRef.current}`, String(window.scrollY))
+        } catch {
+          // Storage full or blocked — losing restoration is acceptable.
+        }
+      })
+    }
+    window.addEventListener('scroll', record, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', record)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [])
+
   // First render is the browser's own arrival (its focus and scroll are already right);
   // every LATER pathname change is an in-app navigation, where focus would otherwise
   // strand on the unmounted page's trigger and scroll would keep the old page's depth.
@@ -21,6 +61,14 @@ export default function Layout() {
   useEffect(() => {
     if (!arrivedRef.current) {
       arrivedRef.current = true
+      return
+    }
+    if (navigationTypeRef.current === 'POP') {
+      // Back/forward: put the reader where they left off (top for an entry we never
+      // saw scroll). preventScroll — the focus hand-off must not fight the restore.
+      mainRef.current?.focus({ preventScroll: true })
+      const saved = Number(sessionStorage.getItem(`scroll:${locationKeyRef.current}`) ?? 0)
+      window.scrollTo(0, Number.isFinite(saved) ? saved : 0)
       return
     }
     mainRef.current?.focus()
