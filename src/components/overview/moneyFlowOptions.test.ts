@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
+import {
+  MUTED,
+  NEGATIVE,
+  OTHER_SERIES_COLOR,
+  PALETTE,
+  POSITIVE,
+  SEQUENTIAL_BLUE,
+} from '../../charts/theme'
 import type { MoneyFlowOut } from '../../types/api'
 import { moneyFlowOption } from './moneyFlowOptions'
 
@@ -21,6 +28,7 @@ function flowOut(over: Partial<MoneyFlowOut> = {}): MoneyFlowOut {
       espp: '4000.00',
       investment_income: '2500.00',
       other_income: '1000.00',
+      salary_people: [],
     },
     gross_income: '307500.00',
     taxes: {
@@ -169,6 +177,7 @@ describe('moneyFlowOption — the four pinned columns', () => {
             espp: '0.00',
             investment_income: '2500.00',
             other_income: '5000.00',
+            salary_people: [],
           },
         }),
       )!,
@@ -290,5 +299,93 @@ describe('moneyFlowOption — the four pinned columns', () => {
     expect(
       format({ dataType: 'edge', data: { source: 'Take-home cash', target: 'Saved' } }),
     ).toContain('$76,000.00')
+  })
+  it('splits the salary node per earner, sharing the salary hue family', () => {
+    const series = sankeyOf(
+      moneyFlowOption(
+        flowOut({
+          sources: {
+            salary_and_bonus: '220000.00',
+            rsu_vests: '80000.00',
+            espp: '4000.00',
+            investment_income: '2500.00',
+            other_income: '1000.00',
+            salary_people: [
+              { name: 'Me', amount: '132000.00' },
+              { name: 'Sam', amount: '88000.00' },
+            ],
+          },
+        }),
+      )!,
+    )
+    const names = series.data?.map((n) => n.name)
+    expect(names?.slice(0, 6)).toEqual([
+      'Salary — Me',
+      'Salary — Sam',
+      'RSU vests',
+      'ESPP',
+      'Investment income',
+      'Other income',
+    ])
+    expect(names).not.toContain('Salary & bonus')
+    const byName = new Map(series.data?.map((n) => [n.name, n.itemStyle?.color]))
+    // The primary keeps the card's own salary color; the partner takes a lightness step
+    // of the theme's validated blue ramp (index 6 of which IS PALETTE[0]).
+    expect(byName.get('Salary — Me')).toBe(PALETTE[0])
+    expect(byName.get('Salary — Sam')).toBe(SEQUENTIAL_BLUE[9])
+    // The neighbours keep their fixed ENTITY slots — a split never reshuffles hues.
+    expect(byName.get('RSU vests')).toBe(PALETTE[1])
+    expect(byName.get('Other income')).toBe(PALETTE[4])
+    // Both nodes feed Gross at their own figure; the column still sums to 307500.
+    expect(series.links?.slice(0, 2)).toEqual([
+      { source: 'Salary — Me', target: 'Gross income', value: 132000 },
+      { source: 'Salary — Sam', target: 'Gross income', value: 88000 },
+    ])
+  })
+
+  it('claims the split node names so a same-named category cannot duplicate one', () => {
+    // The 2026-08-25 Overview crash, one door further in: echarts keys nodes on NAME, and
+    // a spending category spelled exactly like a salary node would drop it and then throw
+    // inside setOption.
+    const series = sankeyOf(
+      moneyFlowOption(
+        flowOut({
+          sources: {
+            salary_and_bonus: '220000.00',
+            rsu_vests: '80000.00',
+            espp: '4000.00',
+            investment_income: '2500.00',
+            other_income: '1000.00',
+            salary_people: [
+              { name: 'Me', amount: '132000.00' },
+              { name: 'Sam', amount: '88000.00' },
+            ],
+          },
+          categories: [
+            { name: 'Salary — Sam', amount: '24000.00' },
+            { name: 'Food', amount: '6000.00' },
+          ],
+          other_spend: null,
+          total_spend: '30000.00',
+          saved: '90000.00',
+        }),
+      )!,
+    )
+    const names = series.data?.map((n) => n.name) ?? []
+    expect(names).toContain('Salary — Sam')
+    expect(names).toContain('Salary — Sam (spending)')
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('draws ONE salary node when the split is empty', () => {
+    // The byte-identity pin — the default fixture already asserts the full node list, and
+    // this restates the contract at the seam that could break it.
+    const series = sankeyOf(moneyFlowOption(flowOut())!)
+    expect(series.data?.[0]).toMatchObject({
+      name: 'Salary & bonus',
+      value: 220000,
+      depth: 0,
+      itemStyle: { color: PALETTE[0] },
+    })
   })
 })

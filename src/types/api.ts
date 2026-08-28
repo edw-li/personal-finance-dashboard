@@ -1353,6 +1353,12 @@ export type AppSettingsUpdate = AppSettingsOut
 // take_home_cash + retained_equity == gross_income (retained_equity is the residual) —
 // at 2dp the paycheck sankey's ±$0.01 reconciliation drift is tolerated.
 
+/** One earner's slice of the salary source node. */
+export interface MoneyFlowPersonSalary {
+  name: string
+  amount: string
+}
+
 export interface MoneyFlowSources {
   salary_and_bonus: string
   rsu_vests: string
@@ -1361,6 +1367,9 @@ export interface MoneyFlowSources {
   /** BALANCING node: engine gross minus the four named sources (1099 income, employer
    * HSA, w2_other, stored-total drift). A negative here made renderable false. */
   other_income: string
+  /** EMPTY = today's single `Salary & bonus` node. Two or more entries (primary first)
+   *  split it per earner and sum to `salary_and_bonus`, which stays the household total. */
+  salary_people: MoneyFlowPersonSalary[]
 }
 
 export interface MoneyFlowTaxes {

@@ -24,6 +24,7 @@ function flowOut(over: Partial<MoneyFlowOut> = {}): MoneyFlowOut {
       espp: '4000.00',
       investment_income: '2500.00',
       other_income: '1000.00',
+      salary_people: [],
     },
     gross_income: '307500.00',
     taxes: {
