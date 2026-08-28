@@ -80,3 +80,30 @@
       color var(--t-fast) ease;
   }
 }
+
+/* Entrance and exit (2026-08-27 spec §5). The REMOVAL is a timer in ToastProvider
+   (LEAVE_MS), never animationend — under reduced motion the toast simply lingers
+   unanimated for that window before it goes, which is invisible and harmless. */
+@media (prefers-reduced-motion: no-preference) {
+  .toast {
+    animation: toast-in 160ms ease-out;
+  }
+
+  .toast.toast-leaving {
+    animation: toast-out 140ms ease-in forwards;
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+
+  @keyframes toast-out {
+    to {
+      opacity: 0;
+      transform: translateY(4px) scale(0.98);
+    }
+  }
+}

@@ -31,6 +31,11 @@ function renderHost(onUndo?: () => void) {
 
 const region = () => document.querySelector('.toast-region') as HTMLElement
 
+// ToastProvider's LEAVE_MS plus a hair. Every dismissal — manual, auto or via an action —
+// now spends this window in the DOM wearing .toast-leaving before the entry is dropped,
+// so any assertion that a toast is GONE has to spend it too.
+const EXIT_WINDOW_MS = 200
+
 beforeEach(() => {
   vi.useFakeTimers()
 })
@@ -58,7 +63,7 @@ describe('ToastProvider', () => {
     })
     expect(screen.getByText('Deleted the NVDA buy')).toBeTruthy()
     act(() => {
-      vi.advanceTimersByTime(1)
+      vi.advanceTimersByTime(1 + EXIT_WINDOW_MS)
     })
     expect(screen.queryByText('Deleted the NVDA buy')).toBeNull()
   })
@@ -77,7 +82,7 @@ describe('ToastProvider', () => {
     expect(screen.getByText('Deleted the NVDA buy')).toBeTruthy()
     fireEvent.mouseOut(region())
     act(() => {
-      vi.advanceTimersByTime(6000)
+      vi.advanceTimersByTime(6000 + EXIT_WINDOW_MS)
     })
     expect(screen.queryByText('Deleted the NVDA buy')).toBeNull()
   })
@@ -92,7 +97,7 @@ describe('ToastProvider', () => {
     expect(screen.getByText('Deleted the NVDA buy')).toBeTruthy()
     fireEvent.mouseOut(region())
     act(() => {
-      vi.advanceTimersByTime(6000)
+      vi.advanceTimersByTime(6000 + EXIT_WINDOW_MS)
     })
     expect(screen.queryByText('Deleted the NVDA buy')).toBeNull()
   })
@@ -103,6 +108,9 @@ describe('ToastProvider', () => {
     fireEvent.click(screen.getByText('fire success'))
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
     expect(onUndo).toHaveBeenCalledTimes(1)
+    act(() => {
+      vi.advanceTimersByTime(EXIT_WINDOW_MS)
+    })
     expect(screen.queryByText('Deleted the NVDA buy')).toBeNull()
   })
 
@@ -118,10 +126,16 @@ describe('ToastProvider', () => {
     expect(region().contains(document.activeElement)).toBe(true)
     fireEvent.click(undo)
     expect(onUndo).toHaveBeenCalledTimes(1)
+    // The button now outlives its click by the exit window (it is still focusable, and
+    // still focused, while the toast is leaving) — the removal is what strands focus on
+    // <body>, so the latch releases one exit window later, not synchronously.
+    act(() => {
+      vi.advanceTimersByTime(EXIT_WINDOW_MS)
+    })
 
     fireEvent.click(screen.getByText('fire error'))
     act(() => {
-      vi.advanceTimersByTime(6000)
+      vi.advanceTimersByTime(6000 + EXIT_WINDOW_MS)
     })
     expect(screen.queryByText('Save failed')).toBeNull()
   })
@@ -144,6 +158,9 @@ describe('ToastProvider', () => {
     fireEvent.click(screen.getByText('fire error'))
     expect(document.querySelector('.toast-error')).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss notification' }))
+    act(() => {
+      vi.advanceTimersByTime(EXIT_WINDOW_MS)
+    })
     expect(screen.queryByText('Save failed')).toBeNull()
   })
 
@@ -151,5 +168,73 @@ describe('ToastProvider', () => {
     render(<Host />)
     fireEvent.click(screen.getByText('fire success'))
     expect(document.querySelector('.toast')).toBeNull()
+  })
+})
+
+// Spec §5: the exit is CSS, but the REMOVAL is a timer — the entry lingers in a `leaving`
+// phase so the animation has something to animate. Everything that re-arms survivors has
+// to step over those entries, or a toast on its way out gets a second clock.
+describe('toast exit animation', () => {
+  const toastEl = () => document.querySelector('.toast') as HTMLElement | null
+
+  it('dismiss marks the toast leaving, then removes it after the exit window', () => {
+    renderHost()
+    fireEvent.click(screen.getByText('fire success'))
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss notification' }))
+    const toast = toastEl()
+    expect(toast).not.toBeNull()
+    expect((toast as HTMLElement).className).toContain('toast-leaving')
+    act(() => {
+      vi.advanceTimersByTime(EXIT_WINDOW_MS)
+    })
+    expect(toastEl()).toBeNull()
+  })
+
+  it('auto-dismiss also runs the leaving phase', () => {
+    renderHost()
+    fireEvent.click(screen.getByText('fire success'))
+    act(() => {
+      vi.advanceTimersByTime(6000)
+    })
+    expect(toastEl()?.className).toContain('toast-leaving')
+    act(() => {
+      vi.advanceTimersByTime(EXIT_WINDOW_MS)
+    })
+    expect(toastEl()).toBeNull()
+  })
+
+  it('a second dismiss on a leaving toast is a no-op (no double timers, no crash)', () => {
+    renderHost()
+    fireEvent.click(screen.getByText('fire success'))
+    const close = screen.getByRole('button', { name: 'Dismiss notification' })
+    fireEvent.click(close)
+    // The button is still mounted (the toast is only leaving) — a second press must not
+    // queue a second removal.
+    fireEvent.click(close)
+    expect(toastEl()?.className).toContain('toast-leaving')
+    act(() => {
+      vi.advanceTimersByTime(EXIT_WINDOW_MS)
+    })
+    expect(toastEl()).toBeNull()
+    // And nothing is left ticking that could fire into an empty region.
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(region().textContent).toBe('')
+  })
+
+  it('hovering the region does not resurrect a leaving toast', () => {
+    renderHost()
+    fireEvent.click(screen.getByText('fire success'))
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss notification' }))
+    // hold + release while it dies: releaseTimers re-arms survivors, and a dying toast
+    // is not one — a fresh 6 s window here would put it back on screen.
+    fireEvent.mouseOver(region())
+    fireEvent.mouseOut(region())
+    expect(toastEl()?.className).toContain('toast-leaving')
+    act(() => {
+      vi.advanceTimersByTime(EXIT_WINDOW_MS)
+    })
+    expect(toastEl()).toBeNull()
   })
 })
