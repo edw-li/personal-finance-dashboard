@@ -29,8 +29,14 @@ def acct(label: str | None, *, person_id: int | None = None) -> PortfolioAccount
     if row is None:
         row = PortfolioAccount(label=label, person_id=person_id)
         _ACCOUNTS[label] = row
-    elif person_id is not None:
-        row.person_id = person_id
+    elif person_id is not None and person_id != row.person_id:
+        # Production's resolve_portfolio_account NEVER re-owns an existing label; a test
+        # that silently did would pin the opposite semantics. Own a label on its FIRST
+        # acct() call, or PATCH through the API like a user would.
+        raise AssertionError(
+            f"acct({label!r}) already exists with person_id={row.person_id!r}; "
+            "re-owning through the factory is forbidden — use the PATCH endpoint"
+        )
     return row
 
 

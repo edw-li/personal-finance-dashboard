@@ -49,7 +49,9 @@ class DividendIngestResult:
     skipped_manual_overlap: int = 0  # whole events skipped because a manual row overlaps
 
 
-def shares_on(txns: list[PositionTransaction], as_of: date) -> dict[tuple[int, int], Decimal]:
+def shares_on(
+    txns: list[PositionTransaction], as_of: date
+) -> dict[tuple[int, int | None], Decimal]:
     """Folded shares per (security_id, portfolio_account_id) counting only transactions
     effective by `as_of` — dateless rows always, dated rows when txn_date <= as_of. Fold
     warnings are ignored here: only the share counts matter. The FK, not the label, is the
