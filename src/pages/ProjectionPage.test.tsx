@@ -7,6 +7,7 @@ import {
   PROJECTION_SERIES,
 } from '../components/projection/projectionChartOptions'
 import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ProjectionPage from './ProjectionPage'
 
 vi.mock('../api/projection', async (importOriginal) => ({
@@ -20,12 +21,16 @@ vi.mock('../components/EChart', async () => {
   return {
     default: ({
       option,
+      animateEntrance = true,
     }: {
       option: { xAxis?: { data?: unknown[] }; series?: { name?: string }[] }
+      animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
         'data-categories': (option.xAxis?.data ?? []).join(','),
+        // A cached paint must render still (2026-08-27 spec §1).
+        'data-animate': String(animateEntrance),
         // Series names are the option capture: WHICH curves a payload puts on the chart
         // is the page's business (their geometry is pinned in the builder's own test).
         'data-series': (option.series ?? []).map((s) => s.name ?? '').join(','),
@@ -141,6 +146,7 @@ const deltaOf = (tile: HTMLElement) => tile.querySelector('.stat-delta')?.textCo
 const seriesOf = (chart: Element) => (chart.getAttribute('data-series') ?? '').split(',')
 
 beforeEach(() => {
+  clearSnapshots()
   vi.mocked(fetchProjection).mockResolvedValue(projectionOut())
   vi.mocked(fetchTimeseries).mockResolvedValue(timeseries())
 })
@@ -491,5 +497,65 @@ describe('ProjectionPage', () => {
     expect(
       screen.getByText('Projected investable balance').querySelector('button.info-hint'),
     ).toBeTruthy()
+  })
+})
+
+describe('ProjectionPage — snapshot cache (2026-08-27 spec §1)', () => {
+  it('paints tiles, both charts AND the seeded knobs before any fetch resolves', () => {
+    setSnapshot('projection:default', projectionOut())
+    setSnapshot('projection:history', timeseries())
+    // Never-resolving fetches: whatever is on screen came from the seeds alone.
+    vi.mocked(fetchProjection).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchTimeseries).mockReturnValue(new Promise(() => {}))
+    renderPage()
+    expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00')
+    // Both cards are up: the trend chart needs the history seed, the projection the other.
+    expect(screen.getAllByTestId('echart')).toHaveLength(2)
+    expect(screen.queryByText('Loading net-worth history…')).toBeNull()
+    // The knob boxes carry the echo of the CACHED run, not blanks.
+    expect(box(/annual return/i).value).toBe('5')
+    expect(box(/volatility/i).value).toBe('15')
+    expect(box('Horizon (years)').value).toBe('30')
+    // A cached paint renders both charts still, and the revalidation still went out.
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
+    expect(vi.mocked(fetchProjection)).toHaveBeenCalledTimes(1)
+  })
+
+  it('a changed revalidation payload updates the tiles and re-arms the charts', async () => {
+    setSnapshot('projection:default', projectionOut())
+    setSnapshot('projection:history', timeseries())
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_target: '2000000.00' }))
+    renderPage()
+    expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00')
+    await waitFor(() => expect(valueOf(tileFor('FI target'))).toBe('$2,000,000.00'))
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'true'),
+    ).toBe(true)
+  })
+
+  it('leaves the charts still when the revalidation payload is identical', async () => {
+    setSnapshot('projection:default', projectionOut())
+    setSnapshot('projection:history', timeseries())
+    renderPage()
+    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledTimes(1))
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
+  })
+
+  it('never caches a knob-driven recalculate under the default key', async () => {
+    renderPage()
+    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    const cachedDefault = getSnapshot<ProjectionOut>('projection:default')
+    expect(cachedDefault).toEqual(projectionOut())
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_target: '9000000.00' }))
+    fireEvent.change(box(/annual return/i), { target: { value: '7' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Recalculate$/ }))
+    await waitFor(() => expect(valueOf(tileFor('FI target'))).toBe('$9,000,000.00'))
+    // The default key still holds the MOUNT run — a knob run is user-parameterized.
+    expect(getSnapshot<ProjectionOut>('projection:default')).toEqual(cachedDefault)
   })
 })
