@@ -340,10 +340,10 @@ export default function OverviewPage() {
           <PageSkeleton
             tiles={4}
             cards={[
-              { span: 6, height: 220 },
-              { span: 6, height: 280 },
-              { span: 6, height: 240 },
-              { span: 6, height: 200 },
+              { span: 12, height: 220 },
+              { span: 12, height: 280 },
+              { span: 12, height: 240 },
+              { span: 12, height: 200 },
             ]}
           />
         )

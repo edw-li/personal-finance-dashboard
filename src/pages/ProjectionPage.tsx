@@ -596,7 +596,7 @@ export default function ProjectionPage() {
         )
       )}
       {data === null && !missing && busy && (
-        <PageSkeleton tiles={3} cards={[{ span: 12, height: 340 }]} />
+        <PageSkeleton tiles={5} cards={[{ span: 12, height: 340 }]} />
       )}
     </div>
   )
