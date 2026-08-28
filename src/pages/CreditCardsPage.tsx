@@ -7,6 +7,7 @@ import {
   fetchRewardRates,
   putRewardRates,
 } from '../api/creditCards'
+import { fetchHousehold } from '../api/household'
 import { fetchAccounts } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
@@ -31,6 +32,7 @@ import type {
   AccountOut,
   CategoryOut,
   CreditCardOut,
+  PersonOut,
   RewardCategoryOut,
   RewardRateOut,
   RewardRatePut,
@@ -72,6 +74,21 @@ export default function CreditCardsPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [fromCache, setFromCache] = useState(cached !== undefined)
+
+  // The roster rides its OWN fetch, outside the six-call snapshot: it changes once a year,
+  // and folding it into the snapshot would invalidate every cached cards payload
+  // (NetWorthPage's fetchHousehold pattern). A failure degrades to no roster — the owner
+  // select then offers Joint alone and the chips do not render.
+  const [people, setPeople] = useState<PersonOut[]>([])
+  useEffect(() => {
+    fetchHousehold()
+      .then((data) => setPeople(data.people))
+      .catch(() => setPeople([]))
+  }, [])
+  const orderedPeople = useMemo(
+    () => [...people].sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id),
+    [people],
+  )
 
   // Drill-in: ?card=<slug> — the SpendingPage ?month= grammar (replace, not push).
   const [searchParams, setSearchParams] = useSearchParams()
@@ -301,7 +318,14 @@ export default function CreditCardsPage() {
           )}
 
           <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
-            {cards !== null && <CardsPanel cards={cards} accounts={accounts} onChanged={load} />}
+            {cards !== null && (
+              <CardsPanel
+                cards={cards}
+                accounts={accounts}
+                people={orderedPeople}
+                onChanged={load}
+              />
+            )}
 
             {categories !== null && (
               <CategoriesPanel

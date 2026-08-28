@@ -10,7 +10,13 @@ import {
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import { useToast } from '../ToastProvider'
-import type { AccountOut, CreditCardIn, CreditCardOut, RewardsCurrency } from '../../types/api'
+import type {
+  AccountOut,
+  CreditCardIn,
+  CreditCardOut,
+  PersonOut,
+  RewardsCurrency,
+} from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate } from '../../utils/format'
 import './roster.css'
@@ -21,17 +27,23 @@ interface CardFormState {
   name: string
   annual_fee: string
   rewards_currency: RewardsCurrency
+  /** '' = Joint; OWNER_UNSET = untouched, so a fresh form FOLLOWS the primary person. */
+  person_id: string
   point_value_cents: string
-  primary_holder: string
   authorized_users: string
   opened_on: string
   account_id: string // '' = none; select values are strings
   notes: string
 }
 
+// A fresh form's owner box has not been chosen yet and must default to the primary person
+// once /household lands — but '' is a REAL value here (Joint), so "not chosen" needs its
+// own token. Without it a slow roster fetch would silently make every new card joint.
+const OWNER_UNSET = 'unset'
+
 const EMPTY_CARD: CardFormState = {
-  name: '', annual_fee: '', rewards_currency: 'cash', point_value_cents: '',
-  primary_holder: '', authorized_users: '', opened_on: '', account_id: '', notes: '',
+  name: '', annual_fee: '', rewards_currency: 'cash', person_id: OWNER_UNSET,
+  point_value_cents: '', authorized_users: '', opened_on: '', account_id: '', notes: '',
 }
 
 function message(err: unknown, fallback: string): string {
@@ -47,10 +59,13 @@ function message(err: unknown, fallback: string): string {
 export default function CardsPanel({
   cards,
   accounts,
+  people,
   onChanged,
 }: {
   cards: CreditCardOut[]
   accounts: AccountOut[]
+  /** Primary first, then by id — the page's ordering, so the select reads like the chips. */
+  people: PersonOut[]
   onChanged: () => void
 }) {
   const [form, setForm] = useState<CardFormState>(EMPTY_CARD)
@@ -66,6 +81,16 @@ export default function CardsPanel({
   // Every account, not just the liability ones: an archived or regrouped account is still
   // the name the stored account_id points at, and the table must not blank it out.
   const accountName = new Map(accounts.map((a) => [a.id, a.name]))
+  const ownerName = new Map(people.map((p) => [p.id, p.name]))
+  // The migration backfilled every existing card to the primary person, so that is what a
+  // new one means too until the user says otherwise.
+  const defaultOwner = people.find((p) => p.is_primary)
+  const ownerValue =
+    form.person_id === OWNER_UNSET
+      ? defaultOwner === undefined
+        ? ''
+        : String(defaultOwner.id)
+      : form.person_id
 
   const set = (field: keyof CardFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
@@ -78,8 +103,8 @@ export default function CardsPanel({
       name: card.name,
       annual_fee: card.annual_fee,
       rewards_currency: card.rewards_currency,
+      person_id: card.person_id === null ? '' : String(card.person_id),
       point_value_cents: card.point_value_cents,
-      primary_holder: card.primary_holder ?? '',
       authorized_users: card.authorized_users ?? '',
       opened_on: card.opened_on ?? '',
       account_id: card.account_id === null ? '' : String(card.account_id),
@@ -126,7 +151,11 @@ export default function CardsPanel({
       // only default that leaves a plain cashback card's math unchanged.
       point_value_cents:
         pointValue === '' ? '1' : canonicalAmount(pointValue, { expressions: false }),
-      primary_holder: form.primary_holder.trim() || null,
+      person_id: ownerValue === '' ? null : Number(ownerValue),
+      // The embossed name is INFORMATIONAL and this form no longer edits it (person_id is
+      // the ownership vocabulary now) — so it comes from the STORED row, exactly like
+      // is_active and sort_order, and a new card simply has none yet.
+      primary_holder: stored?.primary_holder ?? null,
       authorized_users: form.authorized_users.trim() || null,
       opened_on: form.opened_on || null,
       // The two columns this form has no box for. On a full-replace PATCH an omitted or
@@ -180,6 +209,10 @@ export default function CardsPanel({
       annual_fee: card.annual_fee,
       rewards_currency: card.rewards_currency,
       point_value_cents: card.point_value_cents,
+      // VERBATIM REBUILD 1 of 2. Every nullable column must be listed: this is a
+      // full-replace PATCH, so a column omitted here is CLEARED, and a cleared person_id
+      // silently turns the card joint (2026-08-26 audit §3.6).
+      person_id: card.person_id,
       primary_holder: card.primary_holder,
       authorized_users: card.authorized_users,
       opened_on: card.opened_on,
@@ -219,6 +252,8 @@ export default function CardsPanel({
                 annual_fee: card.annual_fee,
                 rewards_currency: card.rewards_currency,
                 point_value_cents: card.point_value_cents,
+                // VERBATIM REBUILD 2 of 2 — same hazard as toggleArchive's.
+                person_id: card.person_id,
                 primary_holder: card.primary_holder,
                 authorized_users: card.authorized_users,
                 opened_on: card.opened_on,
@@ -321,12 +356,19 @@ export default function CardsPanel({
           />
         </label>
         <label>
-          Primary holder
-          <input
+          Owner
+          <select
             className="field-input"
-            value={form.primary_holder}
-            onChange={(e) => set('primary_holder')(e.target.value)}
-          />
+            value={ownerValue}
+            onChange={(e) => set('person_id')(e.target.value)}
+          >
+            <option value="">Joint</option>
+            {people.map((person) => (
+              <option key={person.id} value={String(person.id)}>
+                {person.name}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Authorized users
@@ -395,6 +437,7 @@ export default function CardsPanel({
           <thead>
             <tr>
               <th>Card</th>
+              <th>Owner</th>
               <th>Holder</th>
               <th>Auth. users</th>
               <th>Opened</th>
@@ -415,6 +458,12 @@ export default function CardsPanel({
                     {formatCurrency(card.annual_fee)} · {card.rewards_currency}
                     {Number(card.point_value_cents) !== 1 && ` ${Number(card.point_value_cents)}¢`}
                   </span>
+                </td>
+                {/* NULL is JOINT, never "unknown": the migration backfilled every
+                    pre-existing card to the primary person. `Holder` beside it is the
+                    embossed name — informational, and no longer editable here. */}
+                <td>
+                  {card.person_id === null ? 'Joint' : (ownerName.get(card.person_id) ?? '—')}
                 </td>
                 <td>{card.primary_holder ?? '—'}</td>
                 <td>{card.authorized_users ?? '—'}</td>
