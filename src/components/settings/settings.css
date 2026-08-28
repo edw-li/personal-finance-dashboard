@@ -209,3 +209,14 @@
 .settings-page .card [role='group'][aria-label='Limit year'] {
   margin-bottom: 0.75rem;
 }
+
+/* The Accounts card's SECOND table (2026-08-28 spec §5). Its heading needs the top gap the
+   single-table layout never had, and the owner select needs a floor width or the longest
+   name reflows the column on every retag. */
+.portfolio-accounts-heading {
+  margin-top: 1.25rem;
+}
+
+.portfolio-accounts-table select.field-input {
+  min-width: 9rem;
+}

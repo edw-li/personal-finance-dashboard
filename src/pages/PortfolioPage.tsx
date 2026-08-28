@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ApiError } from '../api/client'
+import { fetchHousehold } from '../api/household'
 import {
   fetchAllocation,
   fetchDividends,
@@ -11,6 +12,7 @@ import {
   fetchTransactions,
   updateSecurity,
 } from '../api/portfolio'
+import type { OwnerScope } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartZoomHint from '../components/ChartZoomHint'
@@ -39,6 +41,7 @@ import type {
   AllocationResponse,
   DividendOut,
   HoldingsResponse,
+  HouseholdOut,
   PortfolioHistory,
   RealizedResponse,
   RefreshResult,
@@ -72,13 +75,15 @@ const NO_NOTE: RefreshNote = { text: '', detail: '', failed: 0 }
 
 function describeRefresh(result: RefreshResult): RefreshNote {
   const failed = Object.entries(result.failed)
-  const shown = failed.slice(0, MAX_FAILED_SHOWN).map(([ticker]) => ticker)
-  const more = failed.length - shown.length
+  // `listed`, not `shown`: the page's `shown` ref (below) is the rendered snapshot, and
+  // two different meanings under one name is how a future edit picks the wrong one.
+  const listed = failed.slice(0, MAX_FAILED_SHOWN).map(([ticker]) => ticker)
+  const more = failed.length - listed.length
   return {
     text:
       `${result.updated.length} updated` +
       (failed.length > 0
-        ? `, ${failed.length} failed (${shown.join(', ')}${more > 0 ? `, +${more} more` : ''})`
+        ? `, ${failed.length} failed (${listed.join(', ')}${more > 0 ? `, +${more} more` : ''})`
         : '') +
       (result.skipped_manual.length > 0
         ? `, ${result.skipped_manual.length} manual skipped`
@@ -96,7 +101,12 @@ function describeRefresh(result: RefreshResult): RefreshNote {
   }
 }
 
-const SNAPSHOT_KEY = 'portfolio'
+// Keyed by the fetch parameters, exactly like NetWorthPage's netWorthKey: an owner switch
+// is a DIFFERENT snapshot. 'all' spells the household view so the key can never collide
+// with a person id.
+function portfolioKey(owner: OwnerScope): string {
+  return `portfolio:${owner ?? 'all'}`
+}
 
 interface PortfolioSnapshot {
   holdings: HoldingsResponse
@@ -113,7 +123,9 @@ interface PortfolioSnapshot {
 }
 
 export default function PortfolioPage() {
-  const cached = getSnapshot<PortfolioSnapshot>(SNAPSHOT_KEY)
+  // The initial fetch scope is the whole household, so the mount seed reads exactly the
+  // key that mount's load() will write.
+  const cached = getSnapshot<PortfolioSnapshot>(portfolioKey(null))
   const [holdings, setHoldings] = useState<HoldingsResponse | null>(cached?.holdings ?? null)
   const [securities, setSecurities] = useState<SecurityOut[]>(cached?.securities ?? [])
   const [transactions, setTransactions] = useState<TransactionOut[]>(cached?.transactions ?? [])
@@ -158,6 +170,15 @@ export default function PortfolioPage() {
   // that resorts the table cannot mis-target, and a ticker that vanished simply finds no
   // holding and the panel folds away: SpendingPage's detailMonth posture).
   const [detailTicker, setDetailTicker] = useState<string | null>(null)
+  // The page's ownership scope: null = the whole household (and NO owner param at all, so
+  // the requests stay byte-identical to the pre-ownership ones). It scopes the tiles, the
+  // holdings table, the allocation charts and the three record tabs — which is why the
+  // chips sit under the page header rather than inside one card.
+  const [owner, setOwner] = useState<OwnerScope>(null)
+  // Fetched on its own, never inside the page's Promise.all: the chips are an affordance,
+  // and a household hiccup must not blank the portfolio (NetWorthPage's isolated-fetch
+  // posture). null covers both "not loaded yet" and "failed".
+  const [household, setHousehold] = useState<HouseholdOut | null>(null)
   // Seeded off the cache: the `loading ?` render branch must not swallow a seeded paint.
   const [loading, setLoading] = useState(cached === undefined)
   // false once a revalidation actually CHANGES the data — charts may animate again.
@@ -172,24 +193,53 @@ export default function PortfolioPage() {
   // Four things trigger a load (mount, refresh, three panels' onChanged) and the eleven
   // requests are not ordered — a slow earlier load must never overwrite a later one.
   const seqRef = useRef(0)
+  // What the page is actually SHOWING. The revalidation skip in load() is judged against
+  // this, never against the snapshot cache: render and cache diverge across an owner
+  // switch (the previous scope's panels are still up while the next scope's key is warm),
+  // and skipping on the cache stranded the page on the previous scope forever (the
+  // 2026-08-28 bug NetWorthPage fixed @9e20d15 — no cache-compared skips, house rule).
+  const shown = useRef<PortfolioSnapshot | null>(cached ?? null)
+
+  // The ONLY place a snapshot reaches the page — load()'s apply and selectOwner's peek both come through here; add new PortfolioSnapshot slots HERE.
+  // useCallback with an empty dep list: useState setters and the ref are identity-stable,
+  // so this stays stable and `load` below keeps changing identity ONLY with the scope (a
+  // fresh identity per render would re-fire the mount effect on every render).
+  const applySnapshot = useCallback((snap: PortfolioSnapshot, fromCache: boolean) => {
+    shown.current = snap
+    setFromCache(fromCache)
+    setHoldings(snap.holdings)
+    setSecurities(snap.securities)
+    setTransactions(snap.transactions)
+    setDividends(snap.dividends)
+    setIndustry(snap.industry)
+    setByType(snap.byType)
+    setByAccount(snap.byAccount)
+    setSparklines(snap.sparklines)
+    setHistory(snap.history)
+    setRealized(snap.realized)
+    setRefreshStatus(snap.refreshStatus)
+  }, [])
 
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
   // law (see NetWorthPage). One load() refetches EVERYTHING: eleven cheap local queries,
   // and every mutation path (panels' onChanged, refresh) converges through it. Returns
   // the chain so callers can keep their own busy flag up until the data is on screen.
-  const load = () => {
+  // useCallback over [owner] because the mount effect keys on it: flipping the scope IS
+  // what re-runs the effect, and exhaustive-deps requires the dependency now that load
+  // reads a reactive value.
+  const load = useCallback(() => {
     const seq = ++seqRef.current
     return Promise.all([
-      fetchHoldings(),
+      fetchHoldings(owner),
       fetchSecurities(),
-      fetchTransactions(),
-      fetchDividends(),
-      fetchAllocation('industry'),
-      fetchAllocation('type'),
-      fetchAllocation('account'),
+      fetchTransactions(owner),
+      fetchDividends(owner),
+      fetchAllocation('industry', owner),
+      fetchAllocation('type', owner),
+      fetchAllocation('account', owner),
       fetchSparklines(),
       fetchHistory(),
-      fetchRealized(),
+      fetchRealized(owner),
       fetchRefreshStatus(),
     ])
       .then(([h, secs, txns, divs, ind, typ, acct, spark, hist, real, status]) => {
@@ -207,24 +257,13 @@ export default function PortfolioPage() {
           realized: real,
           refreshStatus: status,
         }
-        const previous = getSnapshot<PortfolioSnapshot>(SNAPSHOT_KEY)
-        setSnapshot(SNAPSHOT_KEY, snapshot)
+        setSnapshot(portfolioKey(owner), snapshot)
         setError(null)
-        // Identical payload: nothing re-renders, the charts stay still (spec §1).
-        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+        // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
+        // against the RENDERED snapshot, never the cache (see `shown`).
+        if (shown.current !== null && JSON.stringify(shown.current) === JSON.stringify(snapshot))
           return
-        setFromCache(false)
-        setHoldings(h)
-        setSecurities(secs)
-        setTransactions(txns)
-        setDividends(divs)
-        setIndustry(ind)
-        setByType(typ)
-        setByAccount(acct)
-        setSparklines(spark)
-        setHistory(hist)
-        setRealized(real)
-        setRefreshStatus(status)
+        applySnapshot(snapshot, false)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
@@ -233,7 +272,7 @@ export default function PortfolioPage() {
       .finally(() => {
         if (seq === seqRef.current) setLoading(false)
       })
-  }
+  }, [owner, applySnapshot])
 
   // Panel mutations refetch WITHOUT unmounting the panels (a spinner swap would throw
   // away the form the user is typing in) — the body dims instead.
@@ -242,14 +281,37 @@ export default function PortfolioPage() {
     load().finally(() => setReloading(false))
   }
 
-  // Mount-only fetch. react-hooks 7 reports nothing here (load is re-created per render
-  // but reads no reactive value beyond the setters), so an exhaustive-deps suppression
-  // would be an unused directive — which ESLint 9 flat config warns about by default.
+  // Scope switches dim the body rather than swapping in the skeleton: a chip must not
+  // unmount the panels (and the tab the user is reading) under them.
+  const selectOwner = (next: OwnerScope) => {
+    if (next === owner) return
+    setReloading(true)
+    setError(null)
+    // The open drill-in holds a TICKER the next scope may not own — close it rather than
+    // leave a detail panel resolving to null.
+    setDetailTicker(null)
+    // Already-seen scope: paint it instantly and revalidate underneath (NetWorthPage's
+    // selectOwner). Seeding `shown` here is what keeps load()'s equality skip truthful —
+    // the guard is about what is RENDERED, and the destination payload is about to be it.
+    const peeked = getSnapshot<PortfolioSnapshot>(portfolioKey(next))
+    if (peeked !== undefined) applySnapshot(peeked, true)
+    setOwner(next)
+  }
+
+  // Mount AND every owner switch: `load` changes identity with the scope, which is what
+  // re-runs this effect. A cache hit revalidates under the reload dim (raised by
+  // `reloading`'s initializer on mount, by selectOwner on a switch); the trailing release
+  // is a no-op on a cold mount, where `reloading` never went up.
   useEffect(() => {
-    // A cache hit revalidates under the reload dim (raised by `reloading`'s initializer,
-    // above); a cold mount takes the loading path. The trailing release is a no-op on a
-    // cold mount, where `reloading` never went up.
     load().finally(() => setReloading(false))
+  }, [load])
+
+  // Once per visit, and deliberately not part of `load`: setState lives in the promise
+  // continuations, never in the effect body (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    fetchHousehold()
+      .then(setHousehold)
+      .catch(() => setHousehold(null))
   }, [])
 
   const onRefresh = () => {
@@ -268,6 +330,27 @@ export default function PortfolioPage() {
       })
       .finally(() => setRefreshing(false))
   }
+
+  // Primary first, then everyone else by id — the same order the server uses, so these
+  // chips read left-to-right like the net-worth ones. The `?? []` lives INSIDE the memo: a
+  // fresh literal in the dep list would re-sort on every render, which is the memo doing
+  // nothing.
+  const orderedPeople = useMemo(
+    () =>
+      [...(household?.people ?? [])].sort(
+        (a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id,
+      ),
+    [household],
+  )
+  // One person means there is nothing to choose between: no chips at all.
+  const ownerScopes: { scope: OwnerScope; label: string }[] =
+    orderedPeople.length > 1
+      ? [
+          { scope: null, label: 'All' },
+          ...orderedPeople.map((p) => ({ scope: p.id as OwnerScope, label: p.name })),
+          { scope: 'joint' as OwnerScope, label: 'Joint' },
+        ]
+      : []
 
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
@@ -347,6 +430,25 @@ export default function PortfolioPage() {
           </button>
         </div>
       </header>
+      {ownerScopes.length > 0 && (
+        <div className="portfolio-owner-row">
+          <span className="eyebrow">Whose money</span>
+          <div className="segmented" role="group" aria-label="Owner">
+            {ownerScopes.map(({ scope, label }) => (
+              <button
+                key={label}
+                type="button"
+                className={owner === scope ? 'active' : ''}
+                aria-pressed={owner === scope}
+                onClick={() => selectOwner(scope)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <InfoHint text="A person's view is their own portfolio accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts. Performance, sparklines and price refresh always cover the whole household." />
+        </div>
+      )}
       {/* One element, always mounted: a live region added at announce-time is not read.
           Partial failures are an alert, not a status — they need the user's attention. */}
       <div
@@ -459,6 +561,16 @@ export default function PortfolioPage() {
               </h2>
               {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
             </div>
+            {/* Outside the ternary on purpose: the caveat is true whether or not there is
+                a history to draw, and it only appears once a chip has actually narrowed
+                the rest of the page (spec §5 — on All it would be noise). */}
+            {owner !== null && (
+              <p className="hint">
+                Performance, sparklines and price refresh always cover the whole household —
+                the owner chips scope holdings, allocation, dividends, transactions and
+                realized gains.
+              </p>
+            )}
             {performanceOption && history ? (
               <>
                 <EChart

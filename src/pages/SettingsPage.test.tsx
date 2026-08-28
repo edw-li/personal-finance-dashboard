@@ -53,10 +53,18 @@ vi.mock('../api/spending', async (importOriginal) => ({
   updateCategory: vi.fn(),
   deleteCategory: vi.fn(),
 }))
+// AccountsCard's Portfolio-accounts table owns a fetch of its own; unmocked it would make
+// a real network call from every test in this file (and banner its failure).
+vi.mock('../api/portfolio', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/portfolio')>()),
+  fetchPortfolioAccounts: vi.fn(),
+  patchPortfolioAccount: vi.fn(),
+}))
 import { changePassword } from '../api/auth'
 import { fetchHousehold } from '../api/household'
 import { importXlsx } from '../api/importer'
 import { fetchAccounts } from '../api/netWorth'
+import { fetchPortfolioAccounts } from '../api/portfolio'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import { fetchCategories } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
@@ -212,6 +220,7 @@ beforeEach(() => {
   vi.mocked(fetchSystemStatus).mockResolvedValue(SYSTEM)
   vi.mocked(fetchHousehold).mockResolvedValue({ people: [ME], marriage_date: null })
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING])
+  vi.mocked(fetchPortfolioAccounts).mockResolvedValue([])
   vi.mocked(fetchCategories).mockResolvedValue([])
   confirmSpy.mockReturnValue(true)
 })
