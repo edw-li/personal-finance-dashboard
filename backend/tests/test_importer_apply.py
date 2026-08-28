@@ -33,6 +33,7 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    PortfolioAccount,
     PortfolioValueHistory,
     PositionTransaction,
     RewardCategory,
@@ -41,6 +42,7 @@ from app.models import (
     Security,
     SpendingCategory,
 )
+from tests.portfolio_factories import acct
 from tests.workbook_builder import (
     build_workbook,
     default_portfolio_rows,
@@ -164,7 +166,7 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
     db.add(  # stale importer-owned row (as if its sheet row was deleted)
         PositionTransaction(
             security_id=acme_id,
-            account="Old",
+            portfolio_account=acct("Old"),
             type="buy",
             shares=Decimal("1"),
             price=Decimal("1"),
@@ -175,7 +177,7 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
     db.add(  # UI-owned row: source 'ui' keeps it out of the sync's view entirely
         PositionTransaction(
             security_id=acme_id,
-            account="Manual",
+            portfolio_account=acct("Manual"),
             type="buy",
             shares=Decimal("2"),
             price=Decimal("2"),
@@ -189,7 +191,18 @@ async def test_apply_positions_deletes_importer_strays_keeps_ui_rows(db):
     await apply_positions(db, parse_positions(wb2["Positions"]), by_name2, report2)
     await db.commit()
     assert report2.entities["position_transactions"].deletes == 1
-    remaining = (await db.execute(select(PositionTransaction.account))).scalars().all()
+    remaining = (
+        (
+            await db.execute(
+                select(PortfolioAccount.label).join(
+                    PositionTransaction,
+                    PositionTransaction.portfolio_account_id == PortfolioAccount.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert "Manual" in remaining and "Old" not in remaining
 
 
@@ -203,7 +216,7 @@ async def test_apply_positions_preserves_ui_rows_any_sort_index(db):
     db.add(
         PositionTransaction(
             security_id=acme_id,
-            account="UI Acct",
+            portfolio_account=acct("UI Acct"),
             type="buy",
             shares=Decimal("1"),
             price=Decimal("5"),
@@ -245,7 +258,7 @@ async def test_apply_positions_sort_index_collision_leaves_ui_row_alone(db):
     db.add(
         PositionTransaction(
             security_id=acme_id,
-            account="UI Acct",
+            portfolio_account=acct("UI Acct"),
             type="sell",
             shares=Decimal("3"),
             price=Decimal("7"),
@@ -1126,10 +1139,15 @@ async def test_importer_never_writes_dividends(db):
     await db.commit()
 
     sec = (await db.execute(select(Security).order_by(Security.id))).scalars().first()
+    # The row apply_positions already minted for the sheet's label — NOT the acct() factory,
+    # which would mint a second row and collide on the unique label (its docstring's rule).
+    rh_taxable = (
+        await db.execute(select(PortfolioAccount).where(PortfolioAccount.label == "RH Taxable"))
+    ).scalar_one()
     manual = DividendPayment(security_id=sec.id, pay_date=date(2026, 5, 1), amount=Decimal("12.34"))
     auto = DividendPayment(
         security_id=sec.id,
-        account="RH Taxable",
+        portfolio_account=rh_taxable,
         pay_date=date(2026, 6, 19),
         amount=Decimal("8.20"),
         source="auto",

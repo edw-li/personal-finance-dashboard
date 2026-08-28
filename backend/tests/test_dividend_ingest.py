@@ -3,9 +3,10 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models import DividendPayment, PositionTransaction, Security
+from app.models import DividendPayment, PortfolioAccount, PositionTransaction, Security
 from app.services.dividend_ingest import DividendIngestResult, ingest_dividends, shares_on
 from app.services.price_provider import DailyBar
+from tests.portfolio_factories import acct
 
 TODAY = date(2026, 8, 20)
 WINDOW_START = date(2025, 8, 15)  # TODAY - 370 days (HISTORY_WINDOW_DAYS), pinned literally
@@ -38,7 +39,7 @@ def txn(
     # matters, because (sort_index, id) is the folding law.
     return PositionTransaction(
         security_id=sec_id,
-        account=account,
+        portfolio_account=acct(account),
         type=type_,
         txn_date=txn_date,
         shares=Decimal(shares),
@@ -50,14 +51,17 @@ def txn(
 
 def manual(sec_id, pay_date, amount, account=None) -> DividendPayment:
     return DividendPayment(
-        security_id=sec_id, account=account, pay_date=pay_date, amount=Decimal(amount)
+        security_id=sec_id,
+        portfolio_account=acct(account),
+        pay_date=pay_date,
+        amount=Decimal(amount),
     )
 
 
 def auto(sec_id, account, ex_date, amount) -> DividendPayment:
     return DividendPayment(
         security_id=sec_id,
-        account=account,
+        portfolio_account=acct(account),
         pay_date=ex_date,
         amount=Decimal(amount),
         source="auto",
@@ -68,14 +72,19 @@ def auto(sec_id, account, ex_date, amount) -> DividendPayment:
 
 
 async def dividend_rows(db, *, source: str | None = None) -> list[DividendPayment]:
-    """All dividend rows, (security, ex_date, account) ordered. populate_existing because
-    the ingest upserts through Core — a row already in the identity map would otherwise
-    read back its pre-write values."""
+    """All dividend rows, (security, ex_date, account LABEL) ordered — the label, not the
+    FK id, so the order stays alphabetical rather than insertion-ordered. populate_existing
+    because the ingest upserts through Core — a row already in the identity map would
+    otherwise read back its pre-write values."""
     stmt = select(DividendPayment)
     if source is not None:
         stmt = stmt.where(DividendPayment.source == source)
-    stmt = stmt.execution_options(populate_existing=True).order_by(
-        DividendPayment.security_id, DividendPayment.ex_date, DividendPayment.account
+    stmt = (
+        stmt.outerjoin(
+            PortfolioAccount, PortfolioAccount.id == DividendPayment.portfolio_account_id
+        )
+        .execution_options(populate_existing=True)
+        .order_by(DividendPayment.security_id, DividendPayment.ex_date, PortfolioAccount.label)
     )
     return list((await db.execute(stmt)).scalars())
 
@@ -305,13 +314,18 @@ def test_shares_on_dateless_counts_always():
         txn(1, "RH Taxable", "3", txn_date=date(2026, 7, 1), sort_index=2),
         txn(2, "Fidelity", "4", sort_index=3),
     ]
+    # shares_on keys on (security_id, portfolio_account_id) since 2026-08-28, and these rows
+    # were never flushed, so their FK id is None (Position's documented case). The DATE
+    # cutoff is what this test pins; the per-account grain is pinned by the DB-backed
+    # test_ingests_per_account_rows_with_exact_amounts / test_self_heal_scope_is_keyed_by_
+    # the_account_row below.
     assert shares_on(txns, date(2026, 5, 1)) == {
-        (1, "RH Taxable"): Decimal("10.000000"),
-        (2, "Fidelity"): Decimal("4.000000"),
+        (1, None): Decimal("10.000000"),
+        (2, None): Decimal("4.000000"),
     }
-    assert shares_on(txns, date(2026, 6, 1))[(1, "RH Taxable")] == Decimal("15")  # inclusive
-    assert shares_on(txns, date(2026, 6, 19))[(1, "RH Taxable")] == Decimal("15")
-    assert shares_on(txns, date(2026, 7, 10))[(1, "RH Taxable")] == Decimal("18")
+    assert shares_on(txns, date(2026, 6, 1))[(1, None)] == Decimal("15")  # inclusive
+    assert shares_on(txns, date(2026, 6, 19))[(1, None)] == Decimal("15")
+    assert shares_on(txns, date(2026, 7, 10))[(1, None)] == Decimal("18")
 
 
 async def test_self_heal_covers_securities_with_bars_but_no_events(db):

@@ -39,6 +39,7 @@ from app.services.money import (
     quantize_shares,
     require_reasonable_date,
 )
+from app.services.portfolio_accounts import resolve_portfolio_account
 from app.services.portfolio_calc import (
     allocation,
     build_holdings,
@@ -266,11 +267,15 @@ async def create_transaction(
     max_index = (
         await db.execute(select(func.coalesce(func.max(PositionTransaction.sort_index), 0)))
     ).scalar_one()
+    # Resolve only after every 422 above: get-or-create flushes, and a label minted for a
+    # request that then fails validation would be a row nobody asked for.
+    account = await resolve_portfolio_account(db, _validated_account(body.account))
     # UI rows fold chronologically LAST (locked decision). A later sheet import may mint
     # the same sort_index for a new row — folding tie-breaks on id; accepted.
     txn = PositionTransaction(
         security_id=body.security_id,
-        account=_validated_account(body.account),
+        # The ROW, not the id: the response serializes `account` off this relationship.
+        portfolio_account=account,
         type=body.type,
         txn_date=body.txn_date,
         sort_index=max_index + 10,
@@ -312,10 +317,15 @@ async def update_transaction(
         provided["account"] = _validated_account(provided["account"])
     if "txn_date" in provided and provided["txn_date"] is not None:
         require_reasonable_date(provided["txn_date"], "txn_date")
+    # Resolve after the last raise and before the first mutation: get-or-create flushes,
+    # and a flush of a half-mutated row is exactly what the rule below forbids.
+    new_account = (
+        await resolve_portfolio_account(db, provided["account"]) if "account" in provided else None
+    )
     # Every raise is behind us — mutate only now, or a 422 halfway through a multi-field
     # PATCH would leave part of the row dirty for the next autoflush.
-    if "account" in provided:
-        txn.account = provided["account"]
+    if new_account is not None:
+        txn.portfolio_account = new_account
     if "txn_date" in provided:
         txn.txn_date = provided["txn_date"]
     if "notes" in provided:
@@ -365,13 +375,16 @@ async def create_dividend(
     if await db.get(Security, body.security_id) is None:
         raise HTTPException(status_code=422, detail=f"unknown security_id: {body.security_id}")
     require_reasonable_date(body.pay_date, "pay_date")
+    amount = _validated_dividend_amount(body.amount)
+    # Blank/whitespace collapse to None — never persist '' as a second spelling of "no
+    # account" (Task 9 review I1), and never mint a portfolio_accounts row for it.
+    label = (body.account or "").strip() or None
+    account = None if label is None else await resolve_portfolio_account(db, label)
     dividend = DividendPayment(
         security_id=body.security_id,
-        # Blank/whitespace collapse to None — never persist '' as a second spelling
-        # of "no account" (Task 9 review I1).
-        account=(body.account or "").strip() or None,
+        portfolio_account=account,
         pay_date=body.pay_date,
-        amount=_validated_dividend_amount(body.amount),
+        amount=amount,
         notes=body.notes,
     )
     db.add(dividend)
@@ -402,10 +415,17 @@ async def update_dividend(
         validated["amount"] = _validated_dividend_amount(provided["amount"])
     if "pay_date" in provided:
         validated["pay_date"] = require_reasonable_date(provided["pay_date"], "pay_date")
+    account_change = False
+    new_account = None
     if "account" in provided:
-        validated["account"] = (provided["account"] or "").strip() or None
+        validated.pop("account")  # not a column any more — it is the relationship below
+        account_change = True
+        label = (provided["account"] or "").strip() or None
+        new_account = None if label is None else await resolve_portfolio_account(db, label)
     for field_name, value in validated.items():
         setattr(dividend, field_name, value)
+    if account_change:
+        dividend.portfolio_account = new_account
     await db.commit()
     return dividend
 

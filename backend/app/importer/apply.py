@@ -45,6 +45,7 @@ from app.models import (
 )
 from app.seed import seed_tax_definitions
 from app.services.people import load_people, primary_person
+from app.services.portfolio_accounts import resolve_portfolio_account
 from app.tax_keys import PER_PERSON_KEYS, SINGLE
 
 
@@ -167,12 +168,22 @@ async def apply_positions(
             )
         ).scalars()
     }
+    # One get-or-create per DISTINCT sheet label, not per row: a re-import of ~200 position
+    # rows touches a handful of platforms. New labels land owned by the primary person;
+    # a label the user re-tagged in Settings keeps its owner (resolve_portfolio_account).
+    accounts = {
+        label: await resolve_portfolio_account(db, label)
+        for label in sorted({txn.account for txn in parsed.transactions})
+    }
     incoming_indexes: set[int] = set()
     for txn in parsed.transactions:
         incoming_indexes.add(txn.sort_index)
         fields = {
             "security_id": lookup[txn.name].id,
-            "account": txn.account,
+            # The relationship, not the id: _diff_update's sample prints the row's
+            # __repr__ (the label), and assigning it keeps the loaded attribute in step
+            # with the FK it writes.
+            "portfolio_account": accounts[txn.account],
             "type": txn.type,
             "txn_date": txn.txn_date,
             "shares": txn.shares,

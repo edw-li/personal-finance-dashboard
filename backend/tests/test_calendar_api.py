@@ -15,6 +15,7 @@ from app.models import (
     RsuGrant,
     Security,
 )
+from tests.portfolio_factories import acct
 
 CALENDAR = "/api/v1/calendar"
 TODAY = date(2026, 8, 24)  # a Monday; the router's clock is product_today()
@@ -130,7 +131,7 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     db.add(
         PositionTransaction(
             security_id=nvda.id,
-            account="RH Taxable",
+            portfolio_account=acct("RH Taxable"),
             type="buy",
             shares=Decimal("10"),
             price=Decimal("100"),
@@ -140,7 +141,7 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     db.add(
         PositionTransaction(
             security_id=gone.id,
-            account="RH Taxable",
+            portfolio_account=acct("RH Taxable"),
             type="buy",
             shares=Decimal("5"),
             price=Decimal("100"),
@@ -150,7 +151,7 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     db.add(
         PositionTransaction(
             security_id=gone.id,
-            account="RH Taxable",
+            portfolio_account=acct("RH Taxable"),
             type="sell",
             shares=Decimal("5"),
             price=Decimal("110"),

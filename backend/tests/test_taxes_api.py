@@ -30,6 +30,7 @@ from app.models import (
 from app.seed import seed_tax_definitions
 from app.services.tax_service import JURISDICTION_WARN_MISSING, SUGGESTION_KEYS
 from app.tax_keys import JURISDICTIONS, SECTIONS, TAX_INPUT_DEFINITIONS
+from tests.portfolio_factories import acct
 from tests.test_tax_service import YEAR_BRACKETS, YEAR_INPUTS
 
 YEARS = "/api/v1/taxes/years"
@@ -684,7 +685,7 @@ async def seed_holding(db, *, held: str = "100.000000", quote: str | None = "62.
     db.add(
         PositionTransaction(
             security_id=security.id,
-            account="Taxable",
+            portfolio_account=acct("Taxable"),
             type="buy",
             txn_date=None,  # the dateless book: the term default has to warn
             shares=Decimal(held),

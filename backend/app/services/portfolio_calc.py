@@ -27,13 +27,20 @@ MONEY_Q = Decimal("0.01")
 SHARE_Q = Decimal("0.000001")
 PRICE_Q = Decimal("0.0001")
 
-PositionKey = tuple[int, str]  # (security_id, account)
+PositionKey = tuple[int, str]  # (security_id, portfolio account LABEL)
+# The label, not the FK id: portfolio_accounts.label is UNIQUE NOT NULL and immutable
+# (2026-08-28 spec §4.1), so folding by label IS folding by account identity — and the
+# label is what allocation-by-account and Holding.accounts render. If labels ever become
+# editable, this key must move to portfolio_account_id first.
 
 
 @dataclass
 class Position:
     security_id: int
     account: str
+    # Carried for the dividend ingest, which keys its rows by the FK (identical semantics
+    # to the old account-keyed writes). None on hand-built, never-flushed rows.
+    portfolio_account_id: int | None = None
     shares: Decimal = ZERO
     cost_basis: Decimal = ZERO
     realized_gl: Decimal = ZERO
@@ -48,7 +55,14 @@ def fold_transactions(txns: list[PositionTransaction]) -> dict[PositionKey, Posi
     positions: dict[PositionKey, Position] = {}
     for txn in sorted(txns, key=lambda t: (t.sort_index, t.id)):
         key = (txn.security_id, txn.account)
-        pos = positions.setdefault(key, Position(security_id=txn.security_id, account=txn.account))
+        pos = positions.setdefault(
+            key,
+            Position(
+                security_id=txn.security_id,
+                account=txn.account,
+                portfolio_account_id=txn.portfolio_account_id,
+            ),
+        )
         if txn.type == "split":
             if txn.split_factor is None or txn.split_factor <= 0:
                 pos.warnings.append(f"txn {txn.id}: split without a positive factor — skipped")

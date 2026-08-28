@@ -6,11 +6,13 @@ from sqlalchemy import select
 from app.models import (
     DividendPayment,
     LatestPrice,
+    PortfolioAccount,
     PortfolioValueHistory,
     PositionTransaction,
     PriceHistory,
     Security,
 )
+from tests.portfolio_factories import acct
 
 SECURITIES = "/api/v1/portfolio/securities"
 TRANSACTIONS = "/api/v1/portfolio/transactions"
@@ -288,7 +290,7 @@ async def test_delete_security_guarded_when_referenced(auth_client, db):
     db.add(
         PositionTransaction(
             security_id=held["id"],
-            account="RH Taxable",
+            portfolio_account=acct("RH Taxable"),
             type="buy",
             shares=Decimal("10.000000"),
             price=Decimal("100.0000"),
@@ -356,6 +358,15 @@ async def test_securities_require_auth(client):
 # --- transactions ---
 
 
+async def _account_row(db, label: str) -> PortfolioAccount:
+    """The portfolio_accounts row the API already minted for `label`. Hand-built rows in a
+    test that ALSO posts that label must reuse it — the acct() factory's memo is per-test
+    and knows nothing about the router's row, so it would collide on the unique label."""
+    return (
+        await db.execute(select(PortfolioAccount).where(PortfolioAccount.label == label))
+    ).scalar_one()
+
+
 def _buy(security_id: int, **overrides) -> dict:
     """Minimal valid buy payload; overrides (or a `del`) shape each validation case."""
     return {
@@ -378,7 +389,7 @@ async def test_create_buy_assigns_source_ui_and_max_plus_10_sort_index(auth_clie
     db.add(
         PositionTransaction(
             security_id=security["id"],
-            account="Fidelity Taxable",
+            portfolio_account=await _account_row(db, "Fidelity Taxable"),
             type="buy",
             shares=Decimal("1"),
             price=Decimal("1"),
@@ -563,7 +574,7 @@ async def test_patch_transaction_never_touches_source_or_sort_index(auth_client,
     security = await _create_security(auth_client)
     imported = PositionTransaction(
         security_id=security["id"],
-        account="Fidelity Taxable",
+        portfolio_account=acct("Fidelity Taxable"),
         type="buy",
         shares=Decimal("2.000000"),
         price=Decimal("50.0000"),
@@ -592,7 +603,7 @@ async def test_delete_transaction_hard_deletes(auth_client, db):
     ui_row = (await auth_client.post(TRANSACTIONS, json=_buy(security["id"]))).json()
     import_row = PositionTransaction(
         security_id=security["id"],
-        account="Fidelity Taxable",
+        portfolio_account=await _account_row(db, "Fidelity Taxable"),
         type="buy",
         shares=Decimal("1.000000"),
         price=Decimal("1.0000"),
@@ -617,7 +628,7 @@ async def test_list_transactions_filters_and_orders(auth_client, db):
     rows = [
         PositionTransaction(
             security_id=voo["id"],
-            account="Fidelity Taxable",
+            portfolio_account=acct("Fidelity Taxable"),
             type="buy",
             shares=Decimal("1"),
             price=Decimal("1"),
@@ -625,7 +636,7 @@ async def test_list_transactions_filters_and_orders(auth_client, db):
         ),
         PositionTransaction(
             security_id=voo["id"],
-            account="Fidelity Taxable",
+            portfolio_account=acct("Fidelity Taxable"),
             type="buy",
             shares=Decimal("2"),
             price=Decimal("2"),
@@ -633,7 +644,7 @@ async def test_list_transactions_filters_and_orders(auth_client, db):
         ),
         PositionTransaction(
             security_id=nvda["id"],
-            account="Fidelity Taxable",
+            portfolio_account=acct("Fidelity Taxable"),
             type="buy",
             shares=Decimal("3"),
             price=Decimal("3"),
