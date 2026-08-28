@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
-import type { AccountOut, PersonOut } from '../../types/api'
+import type { AccountOut, PersonOut, PortfolioAccountOut } from '../../types/api'
 import ToastProvider from '../ToastProvider'
 import AccountsCard from './AccountsCard'
 
@@ -13,6 +13,12 @@ vi.mock('../../api/netWorth', async (importOriginal) => ({
   deleteAccount: vi.fn(),
 }))
 import { createAccount, deleteAccount, fetchAccounts, updateAccount } from '../../api/netWorth'
+vi.mock('../../api/portfolio', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/portfolio')>()),
+  fetchPortfolioAccounts: vi.fn(),
+  patchPortfolioAccount: vi.fn(),
+}))
+import { fetchPortfolioAccounts, patchPortfolioAccount } from '../../api/portfolio'
 
 const ME: PersonOut = { id: 1, name: 'Me', is_primary: true }
 const PARTNER: PersonOut = { id: 2, name: 'Partner', is_primary: false }
@@ -39,12 +45,16 @@ const HSA: AccountOut = {
   parent_account_id: null,
   person_id: 1,
 }
+const BROKERAGE: PortfolioAccountOut = { id: 30, label: 'Fidelity Brokerage', person_id: 1 }
+const JOINT_ROTH: PortfolioAccountOut = { id: 31, label: 'Joint Roth', person_id: null }
 
 beforeEach(() => {
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING, HSA])
   vi.mocked(createAccount).mockResolvedValue(CHECKING)
   vi.mocked(updateAccount).mockResolvedValue(HSA)
   vi.mocked(deleteAccount).mockResolvedValue(undefined)
+  vi.mocked(fetchPortfolioAccounts).mockResolvedValue([BROKERAGE, JOINT_ROTH])
+  vi.mocked(patchPortfolioAccount).mockResolvedValue({ ...BROKERAGE, person_id: 2 })
 })
 
 afterEach(() => {
@@ -52,13 +62,14 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-// Every roster assertion is scoped to the TABLE: account names are also options in the
-// parent select, and owner names are also options in the owner select.
-const roster = () => within(screen.getByRole('table'))
+// Every roster assertion is scoped to the NET-WORTH table: account names are also options
+// in the parent select, owner names are also options in both owner selects, and the card
+// now carries a second table (Portfolio accounts).
+const roster = () => within(screen.getByRole('table', { name: 'Net-worth accounts' }))
 
 it('renders the roster with owner names, joint spelled out', async () => {
   render(<AccountsCard people={[ME, PARTNER]} />)
-  const table = within(await screen.findByRole('table'))
+  const table = within(await screen.findByRole('table', { name: 'Net-worth accounts' }))
 
   expect(table.getByText('Joint Checking')).toBeTruthy()
   // A NULL owner is JOINT, never a blank cell: the migration backfilled every
@@ -70,7 +81,7 @@ it('renders the roster with owner names, joint spelled out', async () => {
 
 it('creates an account with owner, parent and the component flag', async () => {
   render(<AccountsCard people={[ME, PARTNER]} />)
-  await screen.findByRole('table')
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'Partner 401(k)' } })
   fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'pre_tax' } })
@@ -94,7 +105,7 @@ it('creates an account with owner, parent and the component flag', async () => {
 
 it('retags an account to joint with an EXPLICIT null', async () => {
   render(<AccountsCard people={[ME, PARTNER]} />)
-  await screen.findByRole('table')
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   fireEvent.click(screen.getByRole('button', { name: 'Edit Fidelity HSA' }))
   expect((screen.getByLabelText('Account name') as HTMLInputElement).value).toBe('Fidelity HSA')
@@ -114,7 +125,7 @@ it('retags an account to joint with an EXPLICIT null', async () => {
 
 it('retires an account without touching its other columns', async () => {
   render(<AccountsCard people={[ME]} />)
-  await screen.findByRole('table')
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   fireEvent.click(screen.getByRole('button', { name: 'Retire Fidelity HSA' }))
 
@@ -127,7 +138,7 @@ it('retires an account without touching its other columns', async () => {
 
 it('deletes a balance-free account', async () => {
   render(<AccountsCard people={[ME]} />)
-  await screen.findByRole('table')
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   fireEvent.click(screen.getByRole('button', { name: 'Delete Joint Checking' }))
 
@@ -144,7 +155,7 @@ it('surfaces the delete 409 as a toast and keeps the row', async () => {
       <AccountsCard people={[ME]} />
     </ToastProvider>,
   )
-  await screen.findByRole('table')
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   fireEvent.click(screen.getByRole('button', { name: 'Delete Fidelity HSA' }))
 
@@ -162,10 +173,86 @@ it('renders a rejected save verbatim in the card error slot', async () => {
     new ApiError("account 'joint-checking' already exists", 409),
   )
   render(<AccountsCard people={[ME]} />)
-  await screen.findByRole('table')
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'Joint Checking' } })
   fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
 
   expect(await screen.findByText("account 'joint-checking' already exists")).toBeTruthy()
+})
+
+const portfolioTable = () =>
+  within(screen.getByRole('table', { name: 'Portfolio accounts' }))
+
+it('lists the portfolio labels with their owner, joint spelled out', async () => {
+  render(<AccountsCard people={[ME, PARTNER]} />)
+  await screen.findByRole('table', { name: 'Portfolio accounts' })
+
+  expect(portfolioTable().getByText('Fidelity Brokerage')).toBeTruthy()
+  expect(portfolioTable().getByText('Joint Roth')).toBeTruthy()
+  // The label is read-only TEXT this batch — it is the positions' identity, and the
+  // server refuses to rename it.
+  expect(portfolioTable().queryByRole('textbox')).toBeNull()
+  // A NULL owner selects the Joint option, never a blank one.
+  expect((screen.getByLabelText('Owner for Fidelity Brokerage') as HTMLSelectElement).value).toBe('1')
+  expect((screen.getByLabelText('Owner for Joint Roth') as HTMLSelectElement).value).toBe('')
+})
+
+it('retags a portfolio account ON CHANGE with person_id alone', async () => {
+  render(<AccountsCard people={[ME, PARTNER]} />)
+  await screen.findByRole('table', { name: 'Portfolio accounts' })
+
+  fireEvent.change(screen.getByLabelText('Owner for Fidelity Brokerage'), {
+    target: { value: '2' },
+  })
+
+  await waitFor(() => expect(vi.mocked(patchPortfolioAccount)).toHaveBeenCalledTimes(1))
+  expect(vi.mocked(patchPortfolioAccount).mock.calls[0]).toEqual([30, { person_id: 2 }])
+  // The round trip re-reads the roster rather than trusting the local select.
+  await waitFor(() => expect(vi.mocked(fetchPortfolioAccounts)).toHaveBeenCalledTimes(2))
+  // ONLY person_id on the wire: labels are immutable and sending them back would let a
+  // stale render overwrite a concurrent edit (the card's toggleActive rule).
+  expect(Object.keys(vi.mocked(patchPortfolioAccount).mock.calls[0][1])).toEqual(['person_id'])
+})
+
+it('retags a portfolio account to joint with an EXPLICIT null', async () => {
+  render(<AccountsCard people={[ME, PARTNER]} />)
+  await screen.findByRole('table', { name: 'Portfolio accounts' })
+
+  fireEvent.change(screen.getByLabelText('Owner for Fidelity Brokerage'), {
+    target: { value: '' },
+  })
+
+  await waitFor(() => expect(vi.mocked(patchPortfolioAccount)).toHaveBeenCalledTimes(1))
+  const body = vi.mocked(patchPortfolioAccount).mock.calls[0][1]
+  // The key must SURVIVE: an omitted person_id means "leave the owner alone" server-side.
+  expect(Object.keys(body)).toContain('person_id')
+  expect(body.person_id).toBeNull()
+})
+
+it('names the default owner for labels typed on a transaction', async () => {
+  render(<AccountsCard people={[ME, PARTNER]} />)
+  await screen.findByRole('table', { name: 'Portfolio accounts' })
+
+  // The one honesty note the spec requires (§6): a new label is created silently, owned by
+  // the primary person, and this table is where it is re-tagged.
+  expect(
+    screen.getByText(
+      'A new account label typed on a transaction or dividend is created owned by Me — ' +
+        're-tag it here. The labels themselves are fixed: they identify the positions.',
+    ),
+  ).toBeTruthy()
+})
+
+it('keeps the net-worth roster alive when the portfolio labels fail to load', async () => {
+  vi.mocked(fetchPortfolioAccounts).mockRejectedValue(
+    new ApiError('portfolio accounts unavailable', 503),
+  )
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  // Two tables from two routers: one being down must not empty the other.
+  expect(await screen.findByText('portfolio accounts unavailable')).toBeTruthy()
+  expect(roster().getByText('Fidelity HSA')).toBeTruthy()
+  expect(screen.queryByRole('table', { name: 'Portfolio accounts' })).toBeNull()
 })
