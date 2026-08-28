@@ -388,3 +388,106 @@ def test_single_earner_defaults_leave_the_estimate_byte_identical():
     assert base.partner_withheld_total == D("0.00")
     assert base.additional_medicare_gap == D("0.00")
     assert base.warnings == []
+
+
+# --- the SIMULATED partner leg (2026-08-27 spec §4.2) ---
+
+PARTNER_EARLY = "partner checks before their first profile's effective date use that profile"
+PARTNER_TRACKER_IGNORED = (
+    "partner withholding simulated from their paycheck profile — the entered "
+    "w2_fed_withholding / w2_state_withholding rows are ignored"
+)
+
+
+def partner_profile(effective=date(2025, 1, 1)):
+    """The partner's check, chosen to be hand-derivable next to the primary's: 150000 / 24
+    = 6250 gross, NOTHING pre-tax, 20% all-in -> 1250.00 withheld a check."""
+    return Profile(
+        effective,
+        D("150000"),
+        withholding=D("0.20"),
+        trad=D("0"),
+        dv=D("0"),
+        hsa=D("0"),
+    )
+
+
+def test_partner_profile_simulates_their_leg_exactly_like_the_primarys():
+    result = run(
+        medicare=MEDICARE_MFJ,
+        primary_wages=D("240000"),
+        partner_wages=D("150000"),
+        partner_profiles=[partner_profile()],
+    )
+    assert result.partner_source == "simulated"
+    # 11 of 24 checks have landed on 2026-07-01 (the salary-leg tests' own grid).
+    assert result.partner_checks_elapsed == 11
+    assert result.partner_checks_total == 24
+    assert result.partner_salary_ytd == D("13750.00")  # 11 x 1250
+    assert result.partner_salary_projected == D("30000.00")  # 24 x 1250
+    # The primary's leg does not move: two legs, one grid rule, no interference.
+    assert result.salary_ytd == D("30855.00")
+    assert result.salary_projected == D("67320.00")
+    # The gap reads WAGES, never the simulation — 240k + 150k against the 250k MFJ tier.
+    assert result.additional_medicare_gap == D("900.00")
+    assert result.warnings == []
+
+
+def test_a_partner_profile_silences_the_not_entered_nag():
+    # The nag exists to say "we counted zero because you told us nothing". With a profile
+    # there IS an answer, so the sentence would be a lie.
+    result = run(
+        medicare=MEDICARE_MFJ,
+        primary_wages=D("240000"),
+        partner_wages=D("150000"),
+        partner_profiles=[partner_profile()],
+    )
+    assert PARTNER_MISSING not in result.warnings
+
+
+def test_a_partner_profile_ignores_their_entered_tracker_rows_with_a_note():
+    # ONE source of truth at a time (spec §4.2): no blending, and the note says so rather
+    # than letting 24000 quietly vanish from a total the user has been watching.
+    result = run(
+        medicare=MEDICARE_MFJ,
+        primary_wages=D("240000"),
+        partner_wages=D("150000"),
+        partner_withheld_fed=D("18000"),
+        partner_withheld_state=D("6000"),
+        partner_profiles=[partner_profile()],
+    )
+    assert result.partner_source == "simulated"
+    assert result.partner_withheld_total == D("0.00")
+    assert result.partner_salary_projected == D("30000.00")
+    assert result.warnings == [PARTNER_TRACKER_IGNORED]
+
+
+def test_a_partner_profile_effective_mid_year_warns_about_their_early_checks():
+    # The primary's own EARLY_CHECKS posture, worded for the other person: the whole year
+    # is still priced off that profile, and the sentence names the approximation.
+    result = run(
+        medicare=MEDICARE_MFJ,
+        primary_wages=D("240000"),
+        partner_wages=D("150000"),
+        partner_profiles=[partner_profile(date(2026, 3, 1))],
+    )
+    assert result.warnings == [PARTNER_EARLY]
+    assert result.partner_salary_projected == D("30000.00")
+
+
+def test_no_partner_profile_leaves_the_entered_fallback_exactly_as_it_was():
+    # THE pin: absent a profile, every partner field reads as it did before this plan.
+    result = run(
+        medicare=MEDICARE_MFJ,
+        primary_wages=D("240000"),
+        partner_wages=D("150000"),
+        partner_withheld_fed=D("18000"),
+        partner_withheld_state=D("6000"),
+    )
+    assert result.partner_source == "entered"
+    assert result.partner_withheld_total == D("24000.00")
+    assert result.partner_salary_ytd == D("0.00")
+    assert result.partner_salary_projected == D("0.00")
+    assert result.partner_checks_elapsed == 0
+    assert result.partner_checks_total == 0
+    assert result.warnings == []

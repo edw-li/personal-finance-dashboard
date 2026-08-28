@@ -5,10 +5,12 @@ the DB. The salary leg reuses paycheck_calc.breakdown so the % applies to the TA
 rates plus MARGINAL FICA computed with the tax engine's own bracket walk, so the SS wage-base
 cap (a terminal 0-rate bracket) and additional Medicare interact with salary+vest totals for
 free. Salary-side FICA is NOT added anywhere: the user's all-in withholding_pct already
-carries it (user decision, 2026-08-21). The partner leg (2026-08-26 spec §5.6) is the
-deliberate opposite: no profile, no simulation — their W-2 wages and their two withholding
-figures are read straight from the year's per-person tax inputs, and the module's only
-arithmetic on them is the sum and the additional-Medicare gap below.
+carries it (user decision, 2026-08-21). The partner leg has TWO modes (2026-08-27 spec
+§4.2): with `partner_profiles` it is simulated by the very same `_salary_leg` walk the
+primary's uses (no vest or ESPP legs — lean scope); without one it falls back to the
+2026-08-26 behavior, where their W-2 wages and their two withholding figures are read
+straight from the year's per-person tax inputs and the module's only arithmetic on them is
+the sum and the additional-Medicare gap below. The two never mix.
 
 The marginal FICA split is an APPROXIMATION, and a deliberate one: vest income is stacked ON
 TOP of the salary gross as of `today` rather than interleaved with the checks by date, so when
@@ -53,6 +55,20 @@ EARLY_CHECKS_WARNING = "checks before the first profile's effective date use tha
 PARTNER_WITHHOLDING_MISSING_WARNING = (
     "partner withholding not entered — their W-2 withholding counts as 0 until you enter it"
 )
+# The partner's own two sentences (2026-08-27 spec §4.2). Separate constants rather than a
+# shared one with a name in it: these are wire strings the panel renders verbatim, and the
+# primary's copy must not move when the partner's does.
+PARTNER_EARLY_CHECKS_WARNING = (
+    "partner checks before their first profile's effective date use that profile"
+)
+PARTNER_TRACKER_IGNORED_NOTE = (
+    "partner withholding simulated from their paycheck profile — the entered "
+    "w2_fed_withholding / w2_state_withholding rows are ignored"
+)
+# The two spellings of `partner_source`. A profile wins over the tracker keys ALWAYS — one
+# source of truth at a time, never a blend of a simulation and a running snapshot.
+PARTNER_ENTERED = "entered"
+PARTNER_SIMULATED = "simulated"
 
 # (vest date, shares, price) — past vests carry the vest-date FMV, future ones a quote.
 VestTuple = tuple[date, int, Decimal]
@@ -76,6 +92,15 @@ class WithholdingEstimate:
     # what a single-earner call produces, so the existing card is unmoved.
     partner_withheld_total: Decimal = ZERO
     additional_medicare_gap: Decimal = ZERO
+    # --- the SIMULATED partner leg (2026-08-27 spec §4.2). "entered" is the default, so a
+    # single-earner call — and the whole P2 fallback — is unmoved. In "simulated" mode
+    # `partner_withheld_total` is ZERO and these carry the money; in "entered" mode the
+    # reverse. The two are never both non-zero, which is what lets the router add both.
+    partner_source: str = PARTNER_ENTERED
+    partner_salary_ytd: Decimal = ZERO
+    partner_salary_projected: Decimal = ZERO
+    partner_checks_elapsed: int = 0
+    partner_checks_total: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -144,11 +169,67 @@ def _additional_medicare_gap(
     return owed - withheld
 
 
+@dataclass
+class _SalaryLeg:
+    """One person's salary withholding over the year's check grid — the arithmetic only.
+
+    The WARNINGS are the caller's: "no usable profile" and "checks before the first one"
+    read differently depending on whose leg they describe, and this helper deliberately
+    does not know whose it is computing.
+    """
+
+    checks_elapsed: int
+    checks_total: int
+    withheld_ytd: Decimal
+    withheld_projected: Decimal
+    gross_ytd: Decimal
+    gross_projected: Decimal
+    # The grid's FIRST check predates the earliest profile, so those checks are priced with
+    # a profile that was not yet in force.
+    early_checks: bool = False
+
+
+def _salary_leg(year: int, today: date, profiles: list) -> _SalaryLeg:
+    """The check-grid walk, per person: cadence from the profile in force TODAY, then one
+    `breakdown` per check against the profile in force on THAT day.
+
+    Preconditions are the module's (see the header): every profile's
+    `pay_periods_per_year` >= 1, fenced at the API boundary. An empty list is not an
+    error here — it returns a zeroed leg, which is exactly what a partner without a
+    profile contributes and what the no-profiles primary path has always computed.
+    """
+    ordered = sorted(profiles, key=lambda p: p.effective_date)
+    if not ordered:
+        return _SalaryLeg(0, 0, ZERO, ZERO, ZERO, ZERO)
+    current = [p for p in ordered if p.effective_date <= today] or [ordered[0]]
+    grid = check_dates(year, current[-1].pay_periods_per_year)
+    withheld_ytd = withheld_projected = gross_ytd = gross_projected = ZERO
+    elapsed = 0
+    for check_day in grid:
+        in_force = [p for p in ordered if p.effective_date <= check_day] or [ordered[0]]
+        lines = breakdown(in_force[-1])
+        withheld_projected += lines["withholding"]
+        gross_projected += lines["gross"]
+        if check_day <= today:
+            elapsed += 1
+            withheld_ytd += lines["withholding"]
+            gross_ytd += lines["gross"]
+    return _SalaryLeg(
+        checks_elapsed=elapsed,
+        checks_total=len(grid),
+        withheld_ytd=withheld_ytd,
+        withheld_projected=withheld_projected,
+        gross_ytd=gross_ytd,
+        gross_projected=gross_projected,
+        early_checks=ordered[0].effective_date > grid[0],
+    )
+
+
 def estimate(
     *,
     year: int,
     today: date,
-    profiles: list,  # paycheck_profiles rows, any order
+    profiles: list,  # the PRIMARY's paycheck_profiles rows, any order
     past_vests: list[VestTuple],
     future_vests: list[VestTuple],
     medicare: list[Bracket],
@@ -157,36 +238,23 @@ def estimate(
     # The two-earner block (2026-08-26 spec §5.6). Wages are the year's stored W-2 figures
     # PER PERSON — the same numbers the liability is computed on — not the paycheck
     # simulation, because the additional-Medicare split is about what each EMPLOYER saw.
-    # Withholding is entered, never simulated: the partner has no paycheck profile in this
-    # batch. None means "no row stored" (which warns); Decimal("0") means "entered as zero".
     primary_wages: Decimal = ZERO,
     partner_wages: Decimal = ZERO,
+    # The ENTERED fallback (P2): None means "no row stored" (which warns); Decimal("0")
+    # means "entered as zero". Ignored entirely once `partner_profiles` is non-empty.
     partner_withheld_fed: Decimal | None = None,
     partner_withheld_state: Decimal | None = None,
+    # The partner's own profiles (2026-08-27 spec §4.2). NON-EMPTY is the whole switch:
+    # their leg is then simulated exactly like the primary's salary leg — no vest or ESPP
+    # legs, which is the lean scope, not an oversight.
+    partner_profiles: list | None = None,
 ) -> WithholdingEstimate:
     warnings: list[str] = []
-    ordered = sorted(profiles, key=lambda p: p.effective_date)
-    if not ordered:
+    leg = _salary_leg(year, today, profiles)
+    if not profiles:
         warnings.append(NO_PROFILES_WARNING)
-        salary_ytd = salary_projected = gross_ytd = gross_projected = ZERO
-        elapsed = total = 0
-    else:
-        current = [p for p in ordered if p.effective_date <= today] or [ordered[0]]
-        grid = check_dates(year, current[-1].pay_periods_per_year)
-        total = len(grid)
-        if ordered[0].effective_date > grid[0]:
-            warnings.append(EARLY_CHECKS_WARNING)
-        salary_ytd = salary_projected = gross_ytd = gross_projected = ZERO
-        elapsed = 0
-        for check_day in grid:
-            in_force = [p for p in ordered if p.effective_date <= check_day] or [ordered[0]]
-            lines = breakdown(in_force[-1])
-            salary_projected += lines["withholding"]
-            gross_projected += lines["gross"]
-            if check_day <= today:
-                elapsed += 1
-                salary_ytd += lines["withholding"]
-                gross_ytd += lines["gross"]
+    elif leg.early_checks:
+        warnings.append(EARLY_CHECKS_WARNING)
 
     def fica(wages: Decimal) -> Decimal:
         return walk(medicare, wages) + walk(social_security, wages) + walk(disability, wages)
@@ -194,22 +262,36 @@ def estimate(
     income_ytd = sum((Decimal(s) * price for _, s, price in past_vests), ZERO)
     income_projected = income_ytd + sum((Decimal(s) * price for _, s, price in future_vests), ZERO)
     supplemental = FED_SUPPLEMENTAL + CA_SUPPLEMENTAL
-    fica_ytd = fica(gross_ytd + income_ytd) - fica(gross_ytd)
-    fica_projected = fica(gross_projected + income_projected) - fica(gross_projected)
+    # Vest FICA stacks on the PRIMARY's gross alone: the vests are the primary's grants,
+    # and the partner's checks are a separate employer's wage base whose own FICA their
+    # all-in withholding_pct already carries.
+    fica_ytd = fica(leg.gross_ytd + income_ytd) - fica(leg.gross_ytd)
+    fica_projected = fica(leg.gross_projected + income_projected) - fica(leg.gross_projected)
 
-    partner_withheld_total = (partner_withheld_fed or ZERO) + (partner_withheld_state or ZERO)
-    if partner_wages > 0 and partner_withheld_fed is None and partner_withheld_state is None:
-        # Only BOTH being unset is "not entered": an entered 0 is a real answer (a state with
-        # no income tax, or a W-4 that zeroed it) and must not be nagged about.
-        warnings.append(PARTNER_WITHHOLDING_MISSING_WARNING)
+    simulated = bool(partner_profiles)
+    partner_leg = _salary_leg(year, today, partner_profiles or [])
+    if simulated:
+        # SIMULATED: the tracker keys are not blended in, not halved, not preferred when
+        # larger — they are ignored, and said to be.
+        partner_withheld_total = ZERO
+        if partner_leg.early_checks:
+            warnings.append(PARTNER_EARLY_CHECKS_WARNING)
+        if partner_withheld_fed is not None or partner_withheld_state is not None:
+            warnings.append(PARTNER_TRACKER_IGNORED_NOTE)
+    else:
+        partner_withheld_total = (partner_withheld_fed or ZERO) + (partner_withheld_state or ZERO)
+        if partner_wages > 0 and partner_withheld_fed is None and partner_withheld_state is None:
+            # Only BOTH being unset is "not entered": an entered 0 is a real answer (a state
+            # with no income tax, or a W-4 that zeroed it) and must not be nagged about.
+            warnings.append(PARTNER_WITHHOLDING_MISSING_WARNING)
     gap = _additional_medicare_gap(medicare, primary_wages, partner_wages)
     return WithholdingEstimate(
-        checks_elapsed=elapsed,
-        checks_total=total,
-        salary_ytd=_cents(salary_ytd),
-        salary_projected=_cents(salary_projected),
-        salary_gross_ytd=_cents(gross_ytd),
-        salary_gross_projected=_cents(gross_projected),
+        checks_elapsed=leg.checks_elapsed,
+        checks_total=leg.checks_total,
+        salary_ytd=_cents(leg.withheld_ytd),
+        salary_projected=_cents(leg.withheld_projected),
+        salary_gross_ytd=_cents(leg.gross_ytd),
+        salary_gross_projected=_cents(leg.gross_projected),
         vest_income_ytd=_cents(income_ytd),
         vest_income_projected=_cents(income_projected),
         vest_supplemental_ytd=_cents(income_ytd * supplemental),
@@ -218,5 +300,10 @@ def estimate(
         vest_fica_projected=_cents(fica_projected),
         partner_withheld_total=_cents(partner_withheld_total),
         additional_medicare_gap=_cents(gap),
+        partner_source=PARTNER_SIMULATED if simulated else PARTNER_ENTERED,
+        partner_salary_ytd=_cents(partner_leg.withheld_ytd if simulated else ZERO),
+        partner_salary_projected=_cents(partner_leg.withheld_projected if simulated else ZERO),
+        partner_checks_elapsed=partner_leg.checks_elapsed if simulated else 0,
+        partner_checks_total=partner_leg.checks_total if simulated else 0,
         warnings=warnings,
     )
