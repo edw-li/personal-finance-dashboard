@@ -12,6 +12,7 @@ import {
   updateSecurity,
 } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartZoomHint from '../components/ChartZoomHint'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
@@ -94,18 +95,39 @@ function describeRefresh(result: RefreshResult): RefreshNote {
   }
 }
 
+const SNAPSHOT_KEY = 'portfolio'
+
+interface PortfolioSnapshot {
+  holdings: HoldingsResponse
+  securities: SecurityOut[]
+  transactions: TransactionOut[]
+  dividends: DividendOut[]
+  industry: AllocationResponse
+  byType: AllocationResponse
+  byAccount: AllocationResponse
+  sparklines: SparklinesResponse
+  history: PortfolioHistory
+  realized: RealizedResponse
+  refreshStatus: RefreshStatus
+}
+
 export default function PortfolioPage() {
-  const [holdings, setHoldings] = useState<HoldingsResponse | null>(null)
-  const [securities, setSecurities] = useState<SecurityOut[]>([])
-  const [transactions, setTransactions] = useState<TransactionOut[]>([])
-  const [dividends, setDividends] = useState<DividendOut[]>([])
-  const [industry, setIndustry] = useState<AllocationResponse | null>(null)
-  const [byType, setByType] = useState<AllocationResponse | null>(null)
-  const [byAccount, setByAccount] = useState<AllocationResponse | null>(null)
-  const [sparklines, setSparklines] = useState<SparklinesResponse>({})
-  const [history, setHistory] = useState<PortfolioHistory | null>(null)
-  const [realized, setRealized] = useState<RealizedResponse | null>(null)
-  const [refreshStatus, setRefreshStatus] = useState<RefreshStatus | null>(null)
+  const cached = getSnapshot<PortfolioSnapshot>(SNAPSHOT_KEY)
+  const [holdings, setHoldings] = useState<HoldingsResponse | null>(cached?.holdings ?? null)
+  const [securities, setSecurities] = useState<SecurityOut[]>(cached?.securities ?? [])
+  const [transactions, setTransactions] = useState<TransactionOut[]>(cached?.transactions ?? [])
+  const [dividends, setDividends] = useState<DividendOut[]>(cached?.dividends ?? [])
+  const [industry, setIndustry] = useState<AllocationResponse | null>(cached?.industry ?? null)
+  const [byType, setByType] = useState<AllocationResponse | null>(cached?.byType ?? null)
+  const [byAccount, setByAccount] = useState<AllocationResponse | null>(
+    cached?.byAccount ?? null,
+  )
+  const [sparklines, setSparklines] = useState<SparklinesResponse>(cached?.sparklines ?? {})
+  const [history, setHistory] = useState<PortfolioHistory | null>(cached?.history ?? null)
+  const [realized, setRealized] = useState<RealizedResponse | null>(cached?.realized ?? null)
+  const [refreshStatus, setRefreshStatus] = useState<RefreshStatus | null>(
+    cached?.refreshStatus ?? null,
+  )
   // Ticker being deactivated from the failed-refresh row (the old manual-psql ritual for
   // a delisted symbol, one click now); single-flight like the panels' busy flags.
   const [deactivating, setDeactivating] = useState<string | null>(null)
@@ -135,8 +157,14 @@ export default function PortfolioPage() {
   // that resorts the table cannot mis-target, and a ticker that vanished simply finds no
   // holding and the panel folds away: SpendingPage's detailMonth posture).
   const [detailTicker, setDetailTicker] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [reloading, setReloading] = useState(false)
+  // Seeded off the cache: the `loading ?` render branch must not swallow a seeded paint.
+  const [loading, setLoading] = useState(cached === undefined)
+  // false once a revalidation actually CHANGES the data — charts may animate again.
+  const [fromCache, setFromCache] = useState(cached !== undefined)
+  // Seeded off the cache like `loading`: a cache hit paints full and revalidates under the
+  // reload dim. Seeded rather than flipped by the mount effect because reload()'s
+  // setReloading(true) would be a synchronous setState in an effect body (react-hooks v7).
+  const [reloading, setReloading] = useState(cached !== undefined)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshNote, setRefreshNote] = useState<RefreshNote>(NO_NOTE)
   const [error, setError] = useState<string | null>(null)
@@ -165,6 +193,26 @@ export default function PortfolioPage() {
     ])
       .then(([h, secs, txns, divs, ind, typ, acct, spark, hist, real, status]) => {
         if (seq !== seqRef.current) return
+        const snapshot: PortfolioSnapshot = {
+          holdings: h,
+          securities: secs,
+          transactions: txns,
+          dividends: divs,
+          industry: ind,
+          byType: typ,
+          byAccount: acct,
+          sparklines: spark,
+          history: hist,
+          realized: real,
+          refreshStatus: status,
+        }
+        const previous = getSnapshot<PortfolioSnapshot>(SNAPSHOT_KEY)
+        setSnapshot(SNAPSHOT_KEY, snapshot)
+        setError(null)
+        // Identical payload: nothing re-renders, the charts stay still (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+          return
+        setFromCache(false)
         setHoldings(h)
         setSecurities(secs)
         setTransactions(txns)
@@ -176,7 +224,6 @@ export default function PortfolioPage() {
         setHistory(hist)
         setRealized(real)
         setRefreshStatus(status)
-        setError(null)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
@@ -198,7 +245,10 @@ export default function PortfolioPage() {
   // but reads no reactive value beyond the setters), so an exhaustive-deps suppression
   // would be an unused directive — which ESLint 9 flat config warns about by default.
   useEffect(() => {
-    load()
+    // A cache hit revalidates under the reload dim (raised by `reloading`'s initializer,
+    // above); a cold mount takes the loading path. The trailing release is a no-op on a
+    // cold mount, where `reloading` never went up.
+    load().finally(() => setReloading(false))
   }, [])
 
   const onRefresh = () => {
@@ -396,6 +446,7 @@ export default function PortfolioPage() {
                     name: 'portfolio-performance',
                     csv: () => portfolioHistoryCsv(history),
                   }}
+                  animateEntrance={!fromCache}
                 />
                 <ChartZoomHint />
                 {/* Two benchmark legs, one distinction: the baseline invests only the
