@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
+import { fetchHousehold } from '../api/household'
 import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 import type { ProjectionParams } from '../api/projection'
@@ -16,7 +17,7 @@ import {
 } from '../components/projection/projectionChartOptions'
 import StatTile from '../components/StatTile'
 import PageSkeleton from '../components/PageSkeleton'
-import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
+import type { HouseholdOut, NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
@@ -68,6 +69,12 @@ const GROWTH_MAX_PCT = 25
 const YEARS_MIN = 1
 const YEARS_MAX = 60
 
+// The BOX's own fence, refused here rather than spending a request on the 422 (the
+// PaycheckPage posture): type="month" gives a browser this shape for free, but a paste —
+// and jsdom — do not. Everything the box CANNOT see (is this person real, do they have a
+// profile, is the month inside the horizon) stays the server's answer, rendered verbatim.
+const RETIRE_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
+
 // The echo IS the seed, for all eight knobs alike (see load()'s comment). Extracted so a
 // cache-seeded mount derives the same boxes without waiting for the revalidation.
 function knobsFromEcho(res: ProjectionOut): Knobs {
@@ -113,6 +120,14 @@ export default function ProjectionPage() {
   )
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [trendYears, setTrendYears] = useState<TrendSpan>(10)
+  // Fetched on its own, never inside a Promise.all: the knobs are an affordance, and a
+  // household hiccup must not blank the projection (NetWorthPage's isolated-fetch
+  // posture). null covers both "not loaded yet" and "failed".
+  const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  // Person id -> "YYYY-MM". Deliberately NOT seeded from the echo, unlike the eight knobs
+  // above: blank here does not mean "the server derives one", it means "nobody retires",
+  // so there is nothing an echo could seed the box WITH beyond what was typed.
+  const [retireMonths, setRetireMonths] = useState<Record<number, string>>({})
   // Two recalculates in a row are two runs in flight; only the newest may land.
   const seqRef = useRef(0)
   // Seeded once, ever: a later echo must not overwrite knobs mid-typing. (This page keeps
@@ -210,8 +225,23 @@ export default function ProjectionPage() {
       )
   }, [])
 
+  useEffect(() => {
+    // Once per visit. Its own failure: no knobs, and the rest of the page never notices.
+    fetchHousehold()
+      .then(setHousehold)
+      .catch(() => setHousehold(null))
+  }, [])
+
   const setKnob = (field: keyof Knobs) => (value: string) => {
     setKnobs((current) => ({ ...current, [field]: value }))
+    setFormError(null) // the sentence described the values that WERE in the boxes
+  }
+
+  // Server order: primary first, then by id — the same order every owner control uses.
+  const people = household?.people ?? []
+
+  const setRetireMonth = (personId: number) => (value: string) => {
+    setRetireMonths((current) => ({ ...current, [personId]: value }))
     setFormError(null) // the sentence described the values that WERE in the boxes
   }
 
@@ -294,6 +324,16 @@ export default function ProjectionPage() {
         return
       }
     }
+    const retirements: { personId: number; month: string }[] = []
+    for (const person of people) {
+      const month = (retireMonths[person.id] ?? '').trim()
+      if (month === '') continue // blank = this person works for the whole horizon
+      if (!RETIRE_MONTH_RE.test(month)) {
+        setFormError(`${person.name}'s retirement month must look like YYYY-MM`)
+        return
+      }
+      retirements.push({ personId: person.id, month })
+    }
     setBusy(true)
     setError(null)
     setMissing(false)
@@ -307,6 +347,7 @@ export default function ProjectionPage() {
       inflation: inflation === '' ? '' : shiftPoint(inflation, -2),
       contributionGrowth: growth === '' ? '' : shiftPoint(growth, -2),
       years,
+      retirements,
     })
   }
 
@@ -580,12 +621,33 @@ export default function ProjectionPage() {
                     onChange={(e) => setKnob('years')(e.target.value)}
                   />
                 </label>
+                {people.map((person) => (
+                  <label key={person.id}>
+                    Retires — {person.name}
+                    <input
+                      type="month"
+                      className="field-input"
+                      value={retireMonths[person.id] ?? ''}
+                      onChange={(e) => setRetireMonth(person.id)(e.target.value)}
+                    />
+                  </label>
+                ))}
                 <div className="projection-actions">
                   <button type="submit" className="button button-primary" disabled={busy}>
                     {busy ? 'Projecting…' : 'Recalculate'}
                   </button>
                 </div>
               </form>
+              {people.length > 0 && (
+                <p className="drill-hint">
+                  A retirement month drops that person&apos;s CURRENT monthly take-home —
+                  the paycheck profile in force today, not a projection of it — out of the
+                  contribution stream from that month on; whatever is left keeps escalating
+                  at the contribution-growth rate. Spending stays a household figure, so
+                  the FI target does not move. Blank means that person works for the whole
+                  horizon.
+                </p>
+              )}
               {formError && (
                 <div className="error-banner" role="alert">
                   {formError}
