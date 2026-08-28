@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.models import (
     DividendPayment,
     LatestPrice,
+    Person,
     PortfolioAccount,
     PortfolioValueHistory,
     PositionTransaction,
@@ -1391,3 +1392,204 @@ async def test_history_carries_the_contribution_benchmark(auth_client, db):
     # on the wire, aligned index-for-index with dates.
     assert body["benchmark"] == ["1000.00", "1300.00"]
     assert len(body["benchmark"]) == len(body["dates"])
+
+
+# --- ownership views (2026-08-28 household-portfolio spec §4.1) ---------------------------
+
+
+async def _seed_owned_portfolio(auth_client, db):
+    """One security at 100.00, three accounts, hand-checkable everywhere:
+
+    Mine   buy 10 @ 50           -> 10 sh, cost 500, MV 1000
+    Theirs buy 5 @ 60, sell 2@100 ->  3 sh, cost 180, MV 300, realized 80
+    Ours   buy 2 @ 40            ->  2 sh, cost  80, MV 200
+    Dividends: Mine 10.00, Ours 2.00, and 99.00 with NO account (household-only).
+    """
+    me, sam = Person(name="Me", is_primary=True), Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.flush()
+    security = await _create_security(auth_client)
+    mine = PortfolioAccount(label="Mine", person_id=me.id)
+    theirs = PortfolioAccount(label="Theirs", person_id=sam.id)
+    ours = PortfolioAccount(label="Ours", person_id=None)
+    db.add_all([mine, theirs, ours])
+    await db.flush()
+    db.add_all(
+        [
+            PositionTransaction(
+                security_id=security["id"],
+                portfolio_account=mine,
+                type="buy",
+                shares=Decimal("10"),
+                price=Decimal("50"),
+                sort_index=10,
+            ),
+            PositionTransaction(
+                security_id=security["id"],
+                portfolio_account=theirs,
+                type="buy",
+                shares=Decimal("5"),
+                price=Decimal("60"),
+                sort_index=20,
+            ),
+            PositionTransaction(
+                security_id=security["id"],
+                portfolio_account=theirs,
+                type="sell",
+                shares=Decimal("2"),
+                price=Decimal("100"),
+                sort_index=30,
+            ),
+            PositionTransaction(
+                security_id=security["id"],
+                portfolio_account=ours,
+                type="buy",
+                shares=Decimal("2"),
+                price=Decimal("40"),
+                sort_index=40,
+            ),
+            DividendPayment(
+                security_id=security["id"],
+                portfolio_account=mine,
+                pay_date=date(2026, 6, 30),
+                amount=Decimal("10.00"),
+            ),
+            DividendPayment(
+                security_id=security["id"],
+                portfolio_account=ours,
+                pay_date=date(2026, 6, 30),
+                amount=Decimal("2.00"),
+            ),
+            DividendPayment(
+                security_id=security["id"],
+                pay_date=date(2026, 6, 30),
+                amount=Decimal("99.00"),
+            ),
+            LatestPrice(
+                security_id=security["id"],
+                price=Decimal("100.0000"),
+                quoted_at=datetime(2026, 8, 14, tzinfo=UTC),
+                source="yfinance",
+            ),
+        ]
+    )
+    await db.commit()
+    return me, sam
+
+
+async def test_holdings_owner_scope_is_consistent_end_to_end(auth_client, db):
+    me, sam = await _seed_owned_portfolio(auth_client, db)
+
+    household = (await auth_client.get(HOLDINGS)).json()
+    assert household["totals"]["market_value"] == "1500.00"  # 15 shares x 100
+    assert household["totals"]["cost_basis"] == "760.00"  # 500 + 180 + 80
+    assert household["totals"]["realized_gl"] == "80.00"
+    assert household["totals"]["dividends_collected"] == "111.00"
+    assert household["holdings"][0]["accounts"] == ["Mine", "Ours", "Theirs"]
+
+    scoped = (await auth_client.get(f"{HOLDINGS}?owner={me.id}")).json()
+    row = scoped["holdings"][0]
+    assert row["shares"] == "12.000000"  # mine 10 + ours 2, never theirs
+    assert row["accounts"] == ["Mine", "Ours"]
+    assert row["weight_pct"] == "1.000000"  # the only row -> weights re-normalize
+    assert scoped["totals"]["market_value"] == "1200.00"
+    assert scoped["totals"]["cost_basis"] == "580.00"
+    assert scoped["totals"]["unrealized_gl"] == "620.00"
+    assert scoped["totals"]["realized_gl"] == "0.00"  # the sale was Sam's
+    assert scoped["totals"]["dividends_collected"] == "12.00"  # the 99 has no account
+    assert Decimal(scoped["totals"]["market_value"]) == sum(
+        Decimal(h["market_value"]) for h in scoped["holdings"]
+    )
+
+    theirs = (await auth_client.get(f"{HOLDINGS}?owner={sam.id}")).json()
+    assert theirs["totals"]["market_value"] == "500.00"  # theirs 300 + ours 200
+    assert theirs["totals"]["realized_gl"] == "80.00"
+
+    joint = (await auth_client.get(f"{HOLDINGS}?owner=joint")).json()
+    assert joint["totals"]["market_value"] == "200.00"
+    assert joint["holdings"][0]["accounts"] == ["Ours"]
+
+
+async def test_allocation_realized_transactions_and_dividends_take_the_same_scope(auth_client, db):
+    me, sam = await _seed_owned_portfolio(auth_client, db)
+
+    allocation = (await auth_client.get(f"{ALLOCATION}?by=account&owner={me.id}")).json()
+    assert allocation["total_market_value"] == "1200.00"
+    assert [(s["key"], s["market_value"], s["weight_pct"]) for s in allocation["slices"]] == [
+        ("Mine", "1000.00", "0.833333"),
+        ("Ours", "200.00", "0.166667"),  # re-normalized over the filtered set
+    ]
+
+    assert (await auth_client.get(f"{REALIZED}?owner={me.id}")).json() == {
+        "total": "0.00",
+        "rows": [],
+    }
+    sam_realized = (await auth_client.get(f"{REALIZED}?owner={sam.id}")).json()
+    assert sam_realized["total"] == "80.00"
+    assert [r["realized_gl"] for r in sam_realized["rows"]] == ["80.00"]
+
+    txns = (await auth_client.get(f"{TRANSACTIONS}?owner=joint")).json()
+    assert [t["account"] for t in txns] == ["Ours"]
+
+    dividends = (await auth_client.get(f"{DIVIDENDS}?owner={me.id}")).json()
+    # The list's own (pay_date DESC, id DESC) order is untouched by scoping — all three
+    # share a pay_date, so newest-inserted first: Ours, then Mine.
+    assert [(d["account"], d["amount"]) for d in dividends] == [
+        ("Ours", "2.00"),
+        ("Mine", "10.00"),
+    ]  # the account-less 99.00 is household-only
+    assert len((await auth_client.get(DIVIDENDS)).json()) == 3
+
+
+async def test_owner_scoping_moves_the_xirr_gate_with_the_scope(auth_client, db):
+    """A dateless row in ANOTHER person's account vetoes the household XIRR (any-account
+    dateless-ness gates the security) but must not veto a scope that excludes it."""
+    me, _sam = await _seed_owned_portfolio(auth_client, db)
+    security = (await auth_client.get(SECURITIES)).json()[0]
+    rows = (
+        (await db.execute(select(PositionTransaction).order_by(PositionTransaction.id)))
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        if row.account in ("Mine", "Ours"):
+            row.txn_date = date(2025, 8, 14)  # every scoped flow is dated ...
+    await db.commit()  # ... while Sam's rows stay dateless
+
+    household = (await auth_client.get(HOLDINGS)).json()
+    assert household["holdings"][0]["xirr_pct"] is None
+    scoped = (await auth_client.get(f"{HOLDINGS}?owner={me.id}")).json()
+    assert scoped["holdings"][0]["xirr_pct"] is not None
+    assert security["id"] == scoped["holdings"][0]["security_id"]
+
+
+async def test_owner_of_the_primary_is_byte_identical_to_the_household_after_backfill(
+    auth_client, db
+):
+    """The post-migration state: every label is the primary person's, so their view IS the
+    household view — the promise that today's numbers do not move."""
+    me = Person(name="Me", is_primary=True)
+    db.add(me)
+    await db.commit()
+    security = await _create_security(auth_client)
+    for account, shares in (("Fidelity Taxable", "5"), ("RH Taxable", "3")):
+        created = await auth_client.post(
+            TRANSACTIONS, json=_buy(security["id"], account=account, shares=shares)
+        )
+        assert created.status_code == 201, created.text
+    db.add(_latest(security["id"], "100.0000", day=14))
+    await db.commit()
+
+    for url in (HOLDINGS, f"{ALLOCATION}?by=account", REALIZED, TRANSACTIONS, DIVIDENDS):
+        joiner = "&" if "?" in url else "?"
+        household = (await auth_client.get(url)).json()
+        scoped = (await auth_client.get(f"{url}{joiner}owner={me.id}")).json()
+        assert scoped == household, url
+
+
+async def test_owner_param_rejects_garbage_on_every_portfolio_endpoint(auth_client, db):
+    await _seed_owned_portfolio(auth_client, db)
+    for url in (HOLDINGS, ALLOCATION, REALIZED, TRANSACTIONS, DIVIDENDS):
+        for bad in ("nobody", "-1", "0", "1.5", "99999999999"):
+            resp = await auth_client.get(f"{url}?owner={bad}")
+            assert resp.status_code == 422, f"{url} {bad}"

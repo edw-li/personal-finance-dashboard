@@ -1,15 +1,21 @@
 import re
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import DividendPayment, PortfolioValueHistory, PositionTransaction, Security
+from app.models import (
+    DividendPayment,
+    PortfolioAccount,
+    PortfolioValueHistory,
+    PositionTransaction,
+    Security,
+)
 from app.schemas.portfolio import (
     AllocationOut,
     AllocationSlice,
@@ -39,7 +45,7 @@ from app.services.money import (
     quantize_shares,
     require_reasonable_date,
 )
-from app.services.portfolio_accounts import resolve_portfolio_account
+from app.services.portfolio_accounts import portfolio_owner_clause, resolve_portfolio_account
 from app.services.portfolio_calc import (
     allocation,
     build_holdings,
@@ -81,6 +87,24 @@ def _validated_account(raw: str) -> str:
     if not account:
         raise HTTPException(status_code=422, detail="account must not be blank")
     return account
+
+
+# A bounded string, not an int: the value is either a person id or the literal "joint", and
+# a length cap keeps a garbage query out of the parser. Same shape as net_worth.py's
+# OwnerQuery — the SEMANTICS are shared in services/ownership.parse_owner.
+OwnerQuery = Annotated[str | None, Query(max_length=32)]
+
+
+def _owner_filter(owner: str | None) -> ColumnElement[bool] | None:
+    """HTTP contract only — portfolio_owner_clause owns the SEMANTICS. Absent means the
+    whole household, and the endpoint's answer is then byte-identical to the
+    pre-ownership one."""
+    if owner is None:
+        return None
+    try:
+        return portfolio_owner_clause(owner)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _validated_annual_dividend(value: Decimal) -> Decimal:
@@ -245,13 +269,20 @@ def _validated_txn_fields(
 
 @router.get("/transactions", response_model=list[TransactionOut])
 async def list_transactions(
-    security_id: int | None = None, db: AsyncSession = Depends(get_db)
+    security_id: int | None = None,
+    owner: OwnerQuery = None,
+    db: AsyncSession = Depends(get_db),
 ) -> list[PositionTransaction]:
     query = select(PositionTransaction).order_by(
         PositionTransaction.sort_index, PositionTransaction.id
     )
     if security_id is not None:
         query = query.where(PositionTransaction.security_id == security_id)
+    owner_filter = _owner_filter(owner)
+    if owner_filter is not None:
+        query = query.join(
+            PortfolioAccount, PortfolioAccount.id == PositionTransaction.portfolio_account_id
+        ).where(owner_filter)
     return list((await db.execute(query)).scalars())
 
 
@@ -351,13 +382,22 @@ async def delete_transaction(txn_id: int, db: AsyncSession = Depends(get_db)) ->
 
 @router.get("/dividends", response_model=list[DividendOut])
 async def list_dividends(
-    security_id: int | None = None, db: AsyncSession = Depends(get_db)
+    security_id: int | None = None,
+    owner: OwnerQuery = None,
+    db: AsyncSession = Depends(get_db),
 ) -> list[DividendPayment]:
     query = select(DividendPayment).order_by(
         DividendPayment.pay_date.desc(), DividendPayment.id.desc()
     )
     if security_id is not None:
         query = query.where(DividendPayment.security_id == security_id)
+    owner_filter = _owner_filter(owner)
+    if owner_filter is not None:
+        # Inner join: a dividend with no portfolio account is unattributed and stays
+        # household-only (load_portfolio's rule, so the list and the analytics agree).
+        query = query.join(
+            PortfolioAccount, PortfolioAccount.id == DividendPayment.portfolio_account_id
+        ).where(owner_filter)
     return list((await db.execute(query)).scalars())
 
 
@@ -439,8 +479,10 @@ async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) 
 
 
 @router.get("/holdings", response_model=HoldingsOut)
-async def holdings(db: AsyncSession = Depends(get_db)) -> HoldingsOut:
-    securities, txns, latest, history, dividends = await load_portfolio(db)
+async def holdings(owner: OwnerQuery = None, db: AsyncSession = Depends(get_db)) -> HoldingsOut:
+    securities, txns, latest, history, dividends = await load_portfolio(
+        db, owner_filter=_owner_filter(owner)
+    )
     positions = fold_transactions(txns)
     rows = build_holdings(positions, securities, latest, history, dividends, today=date.today())
 
@@ -531,10 +573,11 @@ async def holdings(db: AsyncSession = Depends(get_db)) -> HoldingsOut:
 @router.get("/allocation", response_model=AllocationOut)
 async def allocation_view(
     by: Literal["industry", "type", "account"] = "industry",
+    owner: OwnerQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> AllocationOut:
     securities, txns, latest, _history, _dividends = await load_portfolio(
-        db, with_history=False, with_dividends=False
+        db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
     )
     positions = fold_transactions(txns)
     buckets = allocation(positions, securities, latest, by)
@@ -584,9 +627,9 @@ async def value_history(db: AsyncSession = Depends(get_db)) -> PortfolioHistoryO
 
 
 @router.get("/realized", response_model=RealizedOut)
-async def realized(db: AsyncSession = Depends(get_db)) -> RealizedOut:
+async def realized(owner: OwnerQuery = None, db: AsyncSession = Depends(get_db)) -> RealizedOut:
     securities, txns, _latest, _history, _dividends = await load_portfolio(
-        db, with_history=False, with_dividends=False
+        db, with_history=False, with_dividends=False, owner_filter=_owner_filter(owner)
     )
     positions = fold_transactions(txns)
     per_security: dict[int, Decimal] = {}
