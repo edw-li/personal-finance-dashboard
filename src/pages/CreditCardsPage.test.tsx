@@ -565,7 +565,7 @@ describe('CreditCardsPage — card ownership', () => {
 })
 
 describe('CreditCardsPage — owner chips and the household advantage', () => {
-  it('scopes the roster, the matrix, the KPIs and the credit line to the chosen owner', async () => {
+  it('scopes the matrix, the KPIs and the credit line to the chosen owner — never the roster', async () => {
     renderPage()
     await screen.findByText('Rewards matrix — best card per category')
     // All: three cards in the matrix header, and the KPI count agrees.

@@ -352,7 +352,7 @@ export default function CreditCardsPage() {
                   </button>
                 ))}
               </div>
-              <InfoHint text="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The roster, the matrix, the tiles and the credit-line chart all follow this." />
+              <InfoHint text="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The matrix, the tiles and the credit-line chart follow this; the roster below always lists every card, since it is where ownership is edited." />
             </div>
           )}
 

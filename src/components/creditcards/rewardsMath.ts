@@ -290,9 +290,9 @@ export function householdAdvantage(
     netOf(wallet, totalOf(computeVerdicts(wallet, categories, rates)))
   const household = netFor(actives)
   const best = Math.max(
-    ...owners.map((owner) =>
-      netFor(actives.filter((c) => c.ownerId === owner || c.ownerId === null)),
-    ),
+    // ownerMatches is the single owner-of-record rule the sibling test pins: a person's
+    // wallet is their cards plus joint.
+    ...owners.map((owner) => netFor(actives.filter((c) => ownerMatches(c.ownerId, owner)))),
   )
   const delta = household - best
   // TIE_EPSILON, not > 0: float dust from three independent sums must not render as
