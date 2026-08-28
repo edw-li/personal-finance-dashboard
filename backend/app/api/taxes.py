@@ -84,6 +84,7 @@ from app.schemas.taxes import (
     WhatIfOut,
     WithholdingLegOut,
     WithholdingOut,
+    WithholdingPartnerLegOut,
     WithholdingVestOut,
 )
 from app.services import rsu_vesting, withholding_calc
@@ -1119,6 +1120,27 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
             continue
         profiles.append(profile)
 
+    # Whose paycheck is whose (2026-08-27 spec §4.2). Before the person migration every
+    # profile was the primary's and this route fed them all to one leg; with per-person
+    # profiles that would price the primary's checks off the partner's salary.
+    #
+    # THREE ways, not a subtraction (the wage bases above can subtract because
+    # `_assemble_inputs` has already dropped off-return people; nothing has filtered these
+    # rows): a partner on this return simulates, the primary — including the NULL
+    # person_id that is the pre-household spelling of "the primary", and everything when
+    # the roster has no primary at all — feeds the existing leg, and a person this year's
+    # return does NOT cover (the MFS spouse) is dropped in the same silence their W-2 rows
+    # are.
+    primary = primary_person(people)
+    primary_profiles: list[PaycheckProfile] = []
+    partner_profiles: list[PaycheckProfile] = []
+    for profile in profiles:
+        owner = getattr(profile, "person_id", None)
+        if owner is not None and owner in partner_ids:
+            partner_profiles.append(profile)
+        elif owner is None or primary is None or owner == primary.id:
+            primary_profiles.append(profile)
+
     # Vests: past ones are worth what the stock was worth THEN (the newest stored close on or
     # before the vest), future ones ride the latest quote — comp.py's vest calendar makes the
     # same two calls, and shares the helpers so the two pages cannot price a vest differently.
@@ -1176,7 +1198,7 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
     estimated = withholding_calc.estimate(
         year=year,
         today=today,  # the SAME day the split above used — the service takes it on faith
-        profiles=profiles,
+        profiles=primary_profiles,
         past_vests=past_vests,
         future_vests=future_vests,
         medicare=tables.get("medicare", []),
@@ -1186,6 +1208,9 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         partner_wages=partner_wage_base if has_partner else ZERO,
         partner_withheld_fed=partner_fed,
         partner_withheld_state=partner_state,
+        # Non-empty flips the partner's leg from ENTERED to SIMULATED, and the service
+        # words the ignoring of the tracker rows above.
+        partner_profiles=partner_profiles,
     )
     warnings.extend(estimated.warnings)
 
@@ -1195,17 +1220,23 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
     # purpose — their withholding inputs are a running snapshot of the same kind as their W-2
     # wage inputs, which is what the liability above is computed on, so both legs describe the
     # same household. The three partner_* fields below are what make that visible.
+    #
+    # The two partner terms are MUTUALLY EXCLUSIVE by construction — the service zeroes
+    # whichever mode did not win — so both are added unconditionally rather than branched
+    # on `partner_source`. A branch here and a branch there is how the two drift.
     total_ytd = _money(
         estimated.salary_ytd
         + estimated.vest_supplemental_ytd
         + estimated.vest_fica_ytd
         + estimated.partner_withheld_total
+        + estimated.partner_salary_ytd
     )
     total_projected = _money(
         estimated.salary_projected
         + estimated.vest_supplemental_projected
         + estimated.vest_fica_projected
         + estimated.partner_withheld_total
+        + estimated.partner_salary_projected
     )
     liability_total = None if liability is None else _money(liability.totals.total_tax)
 
@@ -1278,6 +1309,17 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         partner_wages=_money(partner_wage_base) if has_partner else None,
         partner_withheld_fed=None if partner_fed is None else _money(partner_fed),
         partner_withheld_state=None if partner_state is None else _money(partner_state),
+        partner_source=estimated.partner_source,
+        partner_salary=(
+            None
+            if estimated.partner_source != withholding_calc.PARTNER_SIMULATED
+            else WithholdingPartnerLegOut(
+                ytd=_money(estimated.partner_salary_ytd),
+                projected=_money(estimated.partner_salary_projected),
+                checks_elapsed=estimated.partner_checks_elapsed,
+                checks_total=estimated.partner_checks_total,
+            )
+        ),
         additional_medicare_gap=_money(estimated.additional_medicare_gap),
         safe_harbor=safe_harbor,
         warnings=warnings,
