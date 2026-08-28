@@ -1071,6 +1071,7 @@ export interface PaycheckBreakdownOut {
   net_pay: string
   monthly_net: string
   warnings: string[]
+  pace: PaceItem[]
 }
 
 // --- comp ---
@@ -1558,4 +1559,38 @@ export interface HouseholdOut {
 
 export interface MarriageDateOut {
   marriage_date: string | null
+}
+
+// --- contribution limits ---
+
+// The five DEFINITIONS always ride back, in the server's display order; `value` is null
+// until the user enters that year's figure. The app ships no IRS numbers of its own
+// (2026-08-27 spec §2), so null here means "not entered", never "zero".
+export interface LimitItemOut {
+  key: string
+  label: string
+  value: string | null
+}
+
+export interface LimitsOut {
+  year: number
+  items: LimitItemOut[]
+}
+
+// A PARTIAL map: an omitted key is left alone, an explicit null DELETES the year's row
+// (back to "not entered") — the category-budgets tri-state.
+export interface LimitsUpdate {
+  values: Record<string, string | null>
+}
+
+// One contribution line annualized from the profile in force, against the year's entered
+// cap. `limit`/`ratio` are null together when nothing has been entered for that key —
+// the strip then links to Settings rather than drawing a fabricated 100 %.
+export interface PaceItem {
+  key: string
+  label: string
+  annualized: string
+  limit: string | null
+  ratio: string | null // 4dp fraction, e.g. "0.9500" — the tone was judged on THIS value
+  tone: 'ok' | 'warn' | 'over'
 }
