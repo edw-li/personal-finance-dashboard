@@ -170,3 +170,20 @@
 .paycheck-current {
   margin-top: 0.6rem;
 }
+
+/* ── The person switcher ───────────────────────────────────────────── */
+
+/* NetWorthPage's owner-row shape, restated rather than imported: that stylesheet travels
+   with its own page, and this file must not depend on it happening to be in the bundle
+   (this file's opening note). */
+.paycheck-person-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.paycheck-person-row .eyebrow {
+  margin: 0;
+}
