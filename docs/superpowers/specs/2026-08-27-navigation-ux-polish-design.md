@@ -251,4 +251,59 @@ toasts/palette animate, and the whole app under OS reduced-motion shows no new m
   transitions.
 - Mobile/PWA work and the other audit-backlog items (export/backup, TWR, session
   resilience, …).
-- Chart-internal animation retuning beyond entrance suppression on cached paints.
+- Chart-internal animation retuning beyond entrance suppression on cached paints
+  *(superseded for zoom/update animation by Addendum §A2)*.
+
+---
+
+# Addendum — 2026-08-27 evening (user visual pass)
+
+Two user-reported items after the six-plan batch landed. **Status: Approved.**
+
+| Decision | Choice |
+|---|---|
+| Scrollbar layout shift | **`scrollbar-gutter: stable` on `html`** — one global rule; the wizard's unmount-while-loading stays (form-correctness choice). Fixes the whole class (skeleton phases on short pages too). Rejected: `overflow-y: scroll` (heavier visual), keeping the wizard body mounted (stale-month form hazard). |
+| Range-toggle animation mechanism | **Dispatch, not rebuild:** when a new option differs from the last applied option ONLY in its `dataZoom` window, `EChart` applies it via `dispatchAction({ type: 'dataZoom', … })` on the live instance — echarts morphs the series (~300 ms update animation) instead of the notMerge snap. Detection = stripped-JSON compare inside the wrapper; pages supply the resolved target window (they own the axis length). Opt-in per chart. |
+| Entrance suppression narrowed | `animateEntrance={false}` now merges **`animationDuration: 0`** (entrance only) instead of `animation: false`, so UPDATE animations (zoom morphs, Projection's 10Y/40Y trend-span data morphs) stay alive on cached paints. Retires the "fromCache suppresses ALL chart animation" morning-list item. Reduced motion is untouched: full `animation: false` + ripple quiescing, and the dispatch fast-path is skipped entirely (snap, exactly as today). |
+
+## A1. Scrollbar-stable gutter
+
+**Problem.** Clicking between months on `/update` unmounts the wizard body while the month
+loads (`!loading &&` gates — deliberate); the page briefly drops under viewport height, the
+document scrollbar vanishes, and the ~15 px width change shifts everything sideways until
+data lands.
+
+**Change.** `src/index.css`: `html { scrollbar-gutter: stable; }` with a comment naming the
+wizard case. No page changes. Verified in the browser smoke by asserting
+`document.documentElement.clientWidth` is identical before and during a month switch.
+
+## A2. Animated zoom windows + live update animation
+
+**Problem.** The All/1Y/YTD chips bake a new `dataZoom` into the option; the wrapper's
+`notMerge` rebuild snaps. Projection's 10Y/40Y span chips rebuild series data and snap for
+the same reason on cached paints (update animation was force-killed by `animation: false`).
+
+**Change.**
+- `src/charts/timeZoom.ts` gains `resolvedWindow(dates, range): ZoomWindow` — the preset's
+  `startValue` with `endValue` resolved to the last axis index (presets omit it in options
+  by design; the dispatch action needs it explicit).
+- `EChart` gains optional `zoomWindow?: ZoomWindow`. The option effect keeps a
+  stripped-JSON fingerprint (option minus `dataZoom`) of the last applied option; when the
+  fingerprint is unchanged, `zoomWindow` is present, and motion is allowed, it dispatches
+  `{ type: 'dataZoom', startValue, endValue }` instead of `setOption` — with an equality
+  guard against the chart's current resolved window so the ctrl+wheel mirror
+  (`onDataZoom` → page state → option rebuild → same window) settles as a no-op instead of
+  looping. Any other difference (data, legend) takes the existing `notMerge` path.
+- Entrance suppression: `!animateEntrance` merges `{ animationDuration: 0 }`;
+  `REDUCED_MOTION` keeps `{ animation: false }` and never enters the dispatch path.
+- Wired (`zoomWindow` + existing `onDataZoom`) on the six zoomable charts: NetWorth
+  stacked + drill, Spending bars + savings + trend, Portfolio performance. Projection needs
+  no wiring — its span toggle is a data change that the revived update animation morphs.
+
+**Tests.** `EChart.test.tsx`: the `animateEntrance` assertion updates to
+`animationDuration: 0` (behavior revision, deliberate); new cases — zoom-only change
+dispatches (one `setOption` total), equal-window change neither dispatches nor re-applies,
+non-zoom change takes `setOption`. `timeZoom.test.ts` (new or existing): `resolvedWindow`
+end-index resolution incl. the manual-window and empty-axis cases. Motion itself is
+browser-smoke territory (chip clicks on /net-worth: no console errors, screenshot; month
+switch on /update: constant `clientWidth`).
