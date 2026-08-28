@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type { HouseholdOut, PaycheckBreakdownOut, PaycheckProfileOut } from '../types/api'
-import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import PaycheckPage from './PaycheckPage'
 
 // Every request is stubbed.
@@ -1078,5 +1078,31 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     // stale household figure is wrong money on screen, which is worse than no figure.
     await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(3))
     expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id])
+  })
+
+  it('renders byte-identically for a one-person household', async () => {
+    // The default arrangement IS the one-person one, which is the point of this file: every
+    // test above is the pre-batch page, unedited. This one states the invariant outright so
+    // a future change to the chips cannot leak into the single-earner page unnoticed.
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+    await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
+
+    // 1. No switcher, no household tile — nothing to switch between, and one person's net
+    //    is not a household sum.
+    expect(screen.queryByRole('group', { name: 'Person' })).toBeNull()
+    expect(screen.queryByText('Household take-home')).toBeNull()
+    // 2. ONE breakdown request, with NEITHER param: the partner legs never fire, so the
+    //    page costs exactly what it cost before this batch.
+    expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchBreakdown).mock.calls[0]).toEqual([undefined, undefined])
+    // 3. The ORIGINAL snapshot key. A person suffix here would cold-start every first
+    //    paint on this page for the household this app has had until now (spec §1); the
+    //    suffix exists only for an explicitly-picked partner.
+    expect(getSnapshot<PaycheckBreakdownOut>('paycheck:breakdown:current')).toBeTruthy()
+    // 4. The history is unfiltered and the form is the carry-forward one, as before.
+    expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
+    expect(screen.getByText('Jan 1, 2025')).toBeTruthy()
+    expect(field('Annual salary').value).toBe('$188,930.00')
   })
 })
