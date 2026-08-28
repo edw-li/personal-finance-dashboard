@@ -4,6 +4,7 @@ import { ApiError } from '../api/client'
 import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 import type { ProjectionParams } from '../api/projection'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import EChart from '../components/EChart'
 import ChartZoomHint from '../components/ChartZoomHint'
 import InfoHint from '../components/InfoHint'
@@ -66,6 +67,22 @@ const GROWTH_MAX_PCT = 25
 const YEARS_MIN = 1
 const YEARS_MAX = 60
 
+// The echo IS the seed, for all eight knobs alike (see load()'s comment). Extracted so a
+// cache-seeded mount derives the same boxes without waiting for the revalidation.
+function knobsFromEcho(res: ProjectionOut): Knobs {
+  return {
+    annualReturn: shiftPoint(res.annual_return, 2),
+    monthlyContribution: res.monthly_contribution,
+    annualSpend: res.annual_spend ?? '',
+    swr: shiftPoint(res.swr_pct, 2),
+    years: String(res.years),
+    volatility: res.volatility != null ? shiftPoint(res.volatility, 2) : '',
+    inflation: res.inflation != null ? shiftPoint(res.inflation, 2) : '',
+    contributionGrowth:
+      res.contribution_growth != null ? shiftPoint(res.contribution_growth, 2) : '',
+  }
+}
+
 // The trend chart's own forward spans — deliberately DECOUPLED from the Horizon knob:
 // the trend chart's axis carries the whole history before it even starts projecting, so
 // the knob's "years into the future from now" made the two charts' axes disagree while
@@ -74,7 +91,10 @@ const TREND_SPANS = [1, 5, 10, 40] as const
 type TrendSpan = (typeof TREND_SPANS)[number]
 
 export default function ProjectionPage() {
-  const [data, setData] = useState<ProjectionOut | null>(null)
+  const cachedProjection = getSnapshot<ProjectionOut>('projection:default')
+  const [data, setData] = useState<ProjectionOut | null>(cachedProjection ?? null)
+  // false once a revalidation actually CHANGES the data — charts may animate again.
+  const [fromCache, setFromCache] = useState(cachedProjection !== undefined)
   const [error, setError] = useState<string | null>(null)
   // The 404 branch is not a failure to recover from — it is "there is nothing to project
   // from yet", so it gets its own flag rather than the error banner: with no snapshots
@@ -82,10 +102,14 @@ export default function ProjectionPage() {
   const [missing, setMissing] = useState(false)
   const [busy, setBusy] = useState(true)
   const [formError, setFormError] = useState<string | null>(null)
-  const [knobs, setKnobs] = useState<Knobs>(EMPTY_KNOBS)
+  const [knobs, setKnobs] = useState<Knobs>(() =>
+    cachedProjection ? knobsFromEcho(cachedProjection) : EMPTY_KNOBS,
+  )
   // The history behind the new chart — its OWN state and failure: the card degrades to a
   // note while the tiles, the investable chart and the form keep running.
-  const [history, setHistory] = useState<NetWorthTimeseries | null>(null)
+  const [history, setHistory] = useState<NetWorthTimeseries | null>(
+    () => getSnapshot<NetWorthTimeseries>('projection:history') ?? null,
+  )
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [trendYears, setTrendYears] = useState<TrendSpan>(10)
   // Two recalculates in a row are two runs in flight; only the newest may land.
@@ -93,50 +117,63 @@ export default function ProjectionPage() {
   // Seeded once, ever: a later echo must not overwrite knobs mid-typing. (This page keeps
   // echo-seeding because blank knobs here mean "derived defaults" the user should SEE to
   // adjust; the ESPP modeler retired its seed in favour of blank-means-smart-default.)
-  const knobsSeeded = useRef(false)
+  const knobsSeeded = useRef(cachedProjection !== undefined)
 
   // Promise callbacks only — no setState in an effect's synchronous body (react-hooks 7).
   // The mount fetch is covered by the initial busy value; the handlers below flip it.
-  const load = (params: ProjectionParams = {}) => {
+  // `cacheKey` is passed for the MOUNT's default run only: knob-driven recalculates are
+  // user-parameterized and must not collide with the default in the snapshot cache.
+  const load = (params: ProjectionParams = {}, cacheKey?: string) => {
     const seq = ++seqRef.current
+    // The echo IS the seed, for all eight knobs alike: the server answers with the values
+    // it actually used (derived or defaulted), shifted into the boxes' percent vocabulary.
+    // Per-field, because the boxes are on screen throughout this first load (EsppPage's
+    // rule). The three assumption knobs seeded like the rest (2026-08-20 user revision —
+    // the earlier placeholder treatment is retired); their null-echo guards live in
+    // knobsFromEcho and leave those boxes blank. Declared INSIDE load so load keeps
+    // reading no reactive value — the mount effect's dep array stays empty and clean.
+    const seedKnobs = (res: ProjectionOut) => {
+      const seed = knobsFromEcho(res)
+      setKnobs((current) => ({
+        annualReturn: current.annualReturn === '' ? seed.annualReturn : current.annualReturn,
+        monthlyContribution:
+          current.monthlyContribution === ''
+            ? seed.monthlyContribution
+            : current.monthlyContribution,
+        annualSpend: current.annualSpend === '' ? seed.annualSpend : current.annualSpend,
+        swr: current.swr === '' ? seed.swr : current.swr,
+        years: current.years === '' ? seed.years : current.years,
+        volatility: current.volatility === '' ? seed.volatility : current.volatility,
+        inflation: current.inflation === '' ? seed.inflation : current.inflation,
+        contributionGrowth:
+          current.contributionGrowth === '' ? seed.contributionGrowth : current.contributionGrowth,
+      }))
+    }
     fetchProjection(params)
       .then((res) => {
         if (seq !== seqRef.current) return
+        if (cacheKey !== undefined) {
+          const previous = getSnapshot<ProjectionOut>(cacheKey)
+          setSnapshot(cacheKey, res)
+          setError(null)
+          setMissing(false)
+          // Identical payload: nothing re-renders, the charts stay still (spec §1).
+          if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(res)) {
+            if (!knobsSeeded.current) {
+              knobsSeeded.current = true
+              seedKnobs(res)
+            }
+            return
+          }
+          setFromCache(false)
+        } else {
+          setError(null)
+          setMissing(false)
+        }
         setData(res)
-        setError(null)
-        setMissing(false)
         if (!knobsSeeded.current) {
           knobsSeeded.current = true
-          // The echo IS the seed, for all eight knobs alike: the server answers with the
-          // values it actually used (derived or defaulted), shifted into the boxes'
-          // percent vocabulary. Per-field, because the boxes are on screen throughout this
-          // first load (EsppPage's rule). The three assumption knobs seeded like the rest
-          // (2026-08-20 user revision — the earlier placeholder treatment is retired);
-          // their null-echo guards are stale-backend armor, leaving those boxes blank.
-          setKnobs((current) => ({
-            ...current,
-            annualReturn:
-              current.annualReturn === '' ? shiftPoint(res.annual_return, 2) : current.annualReturn,
-            monthlyContribution:
-              current.monthlyContribution === ''
-                ? res.monthly_contribution
-                : current.monthlyContribution,
-            annualSpend: current.annualSpend === '' ? (res.annual_spend ?? '') : current.annualSpend,
-            swr: current.swr === '' ? shiftPoint(res.swr_pct, 2) : current.swr,
-            years: current.years === '' ? String(res.years) : current.years,
-            volatility:
-              current.volatility === '' && res.volatility != null
-                ? shiftPoint(res.volatility, 2)
-                : current.volatility,
-            inflation:
-              current.inflation === '' && res.inflation != null
-                ? shiftPoint(res.inflation, 2)
-                : current.inflation,
-            contributionGrowth:
-              current.contributionGrowth === '' && res.contribution_growth != null
-                ? shiftPoint(res.contribution_growth, 2)
-                : current.contributionGrowth,
-          }))
+          seedKnobs(res)
         }
       })
       .catch((err: unknown) => {
@@ -153,7 +190,7 @@ export default function ProjectionPage() {
   }
 
   useEffect(() => {
-    load()
+    load({}, 'projection:default')
     // mount-only: load is a plain function over stable setters (house idiom)
   }, [])
 
@@ -161,7 +198,12 @@ export default function ProjectionPage() {
     // Mount-only, never on Recalculate: the history doesn't change with the knobs — the
     // horizon reaches the chart through the projection echo instead.
     fetchTimeseries()
-      .then((res) => setHistory(res))
+      .then((res) => {
+        const previous = getSnapshot<NetWorthTimeseries>('projection:history')
+        setSnapshot('projection:history', res)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(res)) return
+        setHistory(res)
+      })
       .catch((err: unknown) =>
         setHistoryError(message(err, 'Failed to load net-worth history')),
       )
@@ -403,6 +445,7 @@ export default function ProjectionPage() {
                     option={nwChart}
                     height={340}
                     ariaLabel={`Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`}
+                    animateEntrance={!fromCache}
                   />
                   <ChartZoomHint />
                   <p className="drill-hint">
@@ -426,6 +469,7 @@ export default function ProjectionPage() {
                     height={340}
                     ariaLabel={`Projected investable balance over the next ${data.years} years`}
                     exportConfig={{ name: 'projection', csv: () => projectionCsv(data) }}
+                    animateEntrance={!fromCache}
                   />
                   <ChartZoomHint />
                 </>

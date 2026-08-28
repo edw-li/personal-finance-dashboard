@@ -7,6 +7,7 @@ import {
   fetchProfiles,
   updateProfile,
 } from '../api/paycheck'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
@@ -121,7 +122,7 @@ function BreakdownPanel({ data }: { data: PaycheckBreakdownOut }) {
  * check) — the table is the always-correct surface, so this card steps aside with a
  * sentence instead of drawing a lie.
  */
-function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
+function FlowPanel({ data, still }: { data: PaycheckBreakdownOut; still: boolean }) {
   const option = useMemo(() => paycheckSankeyOption(data), [data])
   return (
     <section className="card">
@@ -131,7 +132,12 @@ function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
       </h2>
       {option !== null ? (
         <>
-          <EChart option={option} height={320} ariaLabel="Sankey flow of one paycheck from gross to net" />
+          <EChart
+            option={option}
+            height={320}
+            ariaLabel="Sankey flow of one paycheck from gross to net"
+            animateEntrance={!still}
+          />
           <p className="drill-hint">
             Gray nodes restate money in transit; colored nodes are where it lands; green
             is what you keep. Hover a node to trace its flows.
@@ -601,12 +607,24 @@ function ProfilesPanel({
 
 // ── Page ────────────────────────────────────────────────────────────────────────────────
 
+// Per-profile snapshot key; null = whichever profile the server picks for today.
+function breakdownKey(profileId: number | null): string {
+  return `paycheck:breakdown:${profileId ?? 'current'}`
+}
+
 export default function PaycheckPage() {
-  const [profiles, setProfiles] = useState<PaycheckProfileOut[] | null>(null)
+  const [profiles, setProfiles] = useState<PaycheckProfileOut[] | null>(
+    () => getSnapshot<PaycheckProfileOut[]>('paycheck:profiles') ?? null,
+  )
   const [profilesError, setProfilesError] = useState<string | null>(null)
   const [profilesBusy, setProfilesBusy] = useState(true)
 
-  const [breakdown, setBreakdown] = useState<PaycheckBreakdownOut | null>(null)
+  const cachedBreakdown = getSnapshot<PaycheckBreakdownOut>(breakdownKey(null))
+  const [breakdown, setBreakdown] = useState<PaycheckBreakdownOut | null>(
+    cachedBreakdown ?? null,
+  )
+  // false once a revalidation actually CHANGES the data — the flow may animate again.
+  const [fromCache, setFromCache] = useState(cachedBreakdown !== undefined)
   const [breakdownError, setBreakdownError] = useState<string | null>(null)
   // The 404 branch is not a failure to recover from — it is "there is nothing to model
   // yet", so it gets its own flag rather than the error banner: an empty seed has no
@@ -630,8 +648,11 @@ export default function PaycheckPage() {
     fetchProfiles()
       .then((data) => {
         if (seq !== profilesSeq.current) return
-        setProfiles(data)
+        const previous = getSnapshot<PaycheckProfileOut[]>('paycheck:profiles')
+        setSnapshot('paycheck:profiles', data)
         setProfilesError(null)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
+        setProfiles(data)
       })
       .catch((err: unknown) => {
         if (seq !== profilesSeq.current) return
@@ -658,9 +679,15 @@ export default function PaycheckPage() {
     fetchBreakdown(selection.profileId ?? undefined)
       .then((data) => {
         if (seq !== breakdownSeq.current) return
-        setBreakdown(data)
+        const key = breakdownKey(selection.profileId)
+        const previous = getSnapshot<PaycheckBreakdownOut>(key)
+        setSnapshot(key, data)
         setBreakdownError(null)
         setBreakdownMissing(false)
+        // Identical payload: nothing re-renders, the flow stays still (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
+        setFromCache(false)
+        setBreakdown(data)
       })
       .catch((err: unknown) => {
         if (seq !== breakdownSeq.current) return
@@ -771,7 +798,7 @@ export default function PaycheckPage() {
           <BreakdownPanel data={breakdown} />
           {/* Same payload, same busy dim: the flow can never show a different check than
               the table above it. */}
-          <FlowPanel data={breakdown} />
+          <FlowPanel data={breakdown} still={fromCache} />
         </div>
       )}
 

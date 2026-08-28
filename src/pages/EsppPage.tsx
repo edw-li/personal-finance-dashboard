@@ -17,6 +17,7 @@ import {
 } from '../api/espp'
 import type { ModelerParams } from '../api/espp'
 import { fetchPriceHistory } from '../api/prices'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import type {
@@ -1188,17 +1189,23 @@ function ModelerCard({
 // ── Page ────────────────────────────────────────────────────────────────────────────────
 
 export default function EsppPage() {
-  const [lots, setLots] = useState<EsppLotsResponse | null>(null)
+  const [lots, setLots] = useState<EsppLotsResponse | null>(
+    () => getSnapshot<EsppLotsResponse>('espp:lots') ?? null,
+  )
   const [lotsError, setLotsError] = useState<string | null>(null)
   const [lotsBusy, setLotsBusy] = useState(true)
 
-  const [offerings, setOfferings] = useState<EsppOfferingOut[] | null>(null)
+  const [offerings, setOfferings] = useState<EsppOfferingOut[] | null>(
+    () => getSnapshot<EsppOfferingOut[]>('espp:offerings') ?? null,
+  )
   const [offeringsError, setOfferingsError] = useState<string | null>(null)
   const [offeringsBusy, setOfferingsBusy] = useState(true)
   // Employer closes for the "use close" chip — best-effort: a miss just hides the chip.
   const [bars, setBars] = useState<PricePoint[]>([])
 
-  const [modeler, setModeler] = useState<EsppModelerOut | null>(null)
+  const [modeler, setModeler] = useState<EsppModelerOut | null>(
+    () => getSnapshot<EsppModelerOut>('espp:modeler:default') ?? null,
+  )
   const [modelerError, setModelerError] = useState<string | null>(null)
   const [modelerBusy, setModelerBusy] = useState(true)
   // Knobs are NEVER seeded from the echo (spec §6.2): blank means the smart default —
@@ -1221,15 +1228,20 @@ export default function EsppPage() {
     fetchLots()
       .then((data) => {
         if (seq !== lotsSeq.current) return
-        setLots(data)
-        setLotsError(null)
         // Lazy, once: the chip's bars need the employer ticker, which this payload names.
+        // BEFORE the equality skip — the bars are uncached and must arm on any resolution.
         if (!barsFetched.current && data.espp_ticker !== null) {
           barsFetched.current = true
           fetchPriceHistory(data.espp_ticker, 3650)
             .then((history) => setBars(history.points))
             .catch(() => setBars([]))
         }
+        const previous = getSnapshot<EsppLotsResponse>('espp:lots')
+        setSnapshot('espp:lots', data)
+        setLotsError(null)
+        // Identical payload: nothing re-renders (spec §1).
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
+        setLots(data)
       })
       .catch((err: unknown) => {
         if (seq !== lotsSeq.current) return
@@ -1247,8 +1259,11 @@ export default function EsppPage() {
     fetchOfferings()
       .then((data) => {
         if (seq !== offeringsSeq.current) return
-        setOfferings(data)
+        const previous = getSnapshot<EsppOfferingOut[]>('espp:offerings')
+        setSnapshot('espp:offerings', data)
         setOfferingsError(null)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
+        setOfferings(data)
       })
       .catch((err: unknown) => {
         if (seq !== offeringsSeq.current) return
@@ -1259,13 +1274,23 @@ export default function EsppPage() {
       })
   }
 
-  const loadModeler = (params: ModelerParams = {}) => {
+  // `cacheKey` is passed for the MOUNT's default run only: knob-driven runs are
+  // user-parameterized and must not collide with the default in the snapshot cache.
+  const loadModeler = (params: ModelerParams = {}, cacheKey?: string) => {
     const seq = ++modelerSeq.current
     fetchModeler(params)
       .then((data) => {
         if (seq !== modelerSeq.current) return
+        if (cacheKey !== undefined) {
+          const previous = getSnapshot<EsppModelerOut>(cacheKey)
+          setSnapshot(cacheKey, data)
+          setModelerError(null)
+          if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data))
+            return
+        } else {
+          setModelerError(null)
+        }
         setModeler(data)
-        setModelerError(null)
       })
       .catch((err: unknown) => {
         if (seq !== modelerSeq.current) return
@@ -1282,7 +1307,7 @@ export default function EsppPage() {
   useEffect(() => {
     loadLots()
     loadOfferings()
-    loadModeler()
+    loadModeler({}, 'espp:modeler:default')
   }, [])
 
   // "We are fetching" flips live in the handlers that cause a fetch, never in the effect.

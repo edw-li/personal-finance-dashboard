@@ -1,7 +1,8 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AuthProvider, useAuth } from './AuthContext'
 import * as authApi from '../api/auth'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 
 vi.mock('../api/auth', () => ({
   fetchMe: vi.fn(),
@@ -10,12 +11,20 @@ vi.mock('../api/auth', () => ({
 }))
 
 function Probe() {
-  const { isAuthenticated, isLoading } = useAuth()
-  return <div data-testid="probe">{`${isAuthenticated}|${isLoading}`}</div>
+  const { isAuthenticated, isLoading, logout } = useAuth()
+  return (
+    <>
+      <div data-testid="probe">{`${isAuthenticated}|${isLoading}`}</div>
+      <button type="button" onClick={logout}>
+        Log out
+      </button>
+    </>
+  )
 }
 
 beforeEach(() => {
   localStorage.clear()
+  clearSnapshots()
 })
 
 afterEach(() => {
@@ -50,4 +59,17 @@ it('fetches the session exactly once when a token exists', async () => {
     expect(screen.getByTestId('probe').textContent).toBe('true|false')
   })
   expect(vi.mocked(authApi.fetchMe)).toHaveBeenCalledTimes(1)
+})
+
+it('logout wipes the page-snapshot cache', () => {
+  // Snapshots are session data: the next user through this tab must never see them.
+  setSnapshot('overview', { stale: true })
+  render(
+    <AuthProvider>
+      <Probe />
+    </AuthProvider>
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  expect(vi.mocked(authApi.logout)).toHaveBeenCalledTimes(1)
+  expect(getSnapshot('overview')).toBeUndefined()
 })

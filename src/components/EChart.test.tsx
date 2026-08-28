@@ -174,3 +174,23 @@ describe('EChart event mirrors', () => {
     expect(second).toHaveBeenCalledWith({ A: false })
   })
 })
+
+// jsdom's matchMedia reports matches: false, so the REDUCED_MOTION path is idle here and
+// the only thing that can force `animation: false` is the new prop.
+describe('EChart animateEntrance (2026-08-27 spec §1)', () => {
+  it('animateEntrance={false} forces animation off in the option', () => {
+    render(<EChart option={{ series: [] } as EChartsOption} animateEntrance={false} />)
+    const chart = lastChart()
+    expect(chart.setOption).toHaveBeenCalledWith(
+      expect.objectContaining({ animation: false }),
+      { notMerge: true },
+    )
+  })
+
+  it('animateEntrance defaults on (no forced animation flag)', () => {
+    render(<EChart option={{ series: [] } as EChartsOption} />)
+    const chart = lastChart()
+    const [option] = chart.setOption.mock.calls[0] as [Record<string, unknown>]
+    expect('animation' in option).toBe(false)
+  })
+})

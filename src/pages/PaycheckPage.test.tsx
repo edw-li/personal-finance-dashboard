@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type { PaycheckBreakdownOut, PaycheckProfileOut } from '../types/api'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import PaycheckPage from './PaycheckPage'
 
 // Every request is stubbed.
@@ -22,14 +23,18 @@ vi.mock('../components/EChart', async () => {
     default: ({
       option,
       ariaLabel,
+      animateEntrance = true,
     }: {
       option: { series?: { data?: { name?: string }[] }[] }
       ariaLabel?: string
+      animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
         'aria-label': ariaLabel,
         'data-nodes': (option.series?.[0]?.data ?? []).map((n) => n.name ?? '').join(','),
+        // A cached paint must render still (2026-08-27 spec §1).
+        'data-animate': String(animateEntrance),
       }),
   }
 })
@@ -150,6 +155,7 @@ function line(label: string): string {
 const confirmSpy = vi.spyOn(window, 'confirm')
 
 beforeEach(() => {
+  clearSnapshots()
   vi.mocked(fetchProfiles).mockResolvedValue(PROFILES)
   vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026))
   vi.mocked(createProfile).mockResolvedValue(profile2026)
@@ -764,5 +770,46 @@ describe('PaycheckPage — the flow card', () => {
     expect(
       document.querySelector('[aria-label="Sankey flow of one paycheck from gross to net"]'),
     ).not.toBeNull()
+  })
+})
+
+describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
+  it('paints the waterfall instantly from a seeded breakdown and still revalidates', () => {
+    setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
+    // Never-resolving fetch: whatever is on screen came from the seed alone.
+    vi.mocked(fetchBreakdown).mockReturnValue(new Promise(() => {}))
+    render(<PaycheckPage />)
+    expect(line('Gross')).toBe('$7,872.08')
+    expect(screen.queryByText('Loading the breakdown…')).toBeNull()
+    // The flow card rides the same payload and renders still on a cached paint.
+    expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')
+    expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(1)
+  })
+
+  it('seeds the profile table from its own key', () => {
+    setSnapshot('paycheck:profiles', PROFILES)
+    vi.mocked(fetchProfiles).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchBreakdown).mockReturnValue(new Promise(() => {}))
+    render(<PaycheckPage />)
+    // Both effective dates are on screen before either request answers.
+    expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
+    expect(screen.getByText('Jan 1, 2025')).toBeTruthy()
+  })
+
+  it('a changed revalidation payload updates the waterfall and re-arms the flow', async () => {
+    setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
+    vi.mocked(fetchBreakdown).mockResolvedValue(breakdown2025)
+    render(<PaycheckPage />)
+    expect(line('Gross')).toBe('$7,872.08')
+    await waitFor(() => expect(line('Gross')).toBe('$6,750.00'))
+    expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('true')
+  })
+
+  it('leaves the flow still when the revalidation payload is identical', async () => {
+    setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
+    render(<PaycheckPage />)
+    await waitFor(() => expect(fetchBreakdown).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')
   })
 })

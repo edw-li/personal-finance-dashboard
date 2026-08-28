@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import type { ReactNode } from 'react'
 import * as authApi from '../api/auth'
 import { getToken } from '../api/client'
+import { clearSnapshots } from '../api/snapshotCache'
 
 interface AuthState {
   email: string | null
@@ -39,6 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     authApi.logout()
+    clearSnapshots() // snapshots are session data — they must not outlive the session
     setEmail(null)
   }, [])
 

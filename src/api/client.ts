@@ -1,3 +1,5 @@
+import { clearSnapshots } from './snapshotCache'
+
 const TOKEN_KEY = 'finance_token'
 
 // 15s: generous for a self-hosted API; without it a hung backend left token-bearing
@@ -26,6 +28,17 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const method = (options.method ?? 'GET').toUpperCase()
+  try {
+    return await request<T>(path, options)
+  } finally {
+    // Coarse invalidation (2026-08-27 spec §1): ANY non-GET — success or failure, a 500
+    // may still have written — drops every page snapshot. Correct beats clever here.
+    if (method !== 'GET') clearSnapshots()
+  }
+}
+
+async function request<T>(path: string, options: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     // FormData bodies must NOT get a manual Content-Type: the browser writes
     // multipart/form-data with its boundary; a hand-set value breaks the upload.
@@ -51,6 +64,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
   if (res.status === 401 && !path.startsWith('/auth/login')) {
     clearToken()
+    clearSnapshots() // snapshots are session data — they must not outlive the token
     window.location.assign('/login')
     throw new ApiError('Session expired', 401)
   }

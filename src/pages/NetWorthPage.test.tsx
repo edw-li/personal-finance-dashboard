@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { HouseholdOut, NetWorthSummary, NetWorthTimeseries } from '../types/api'
 import NetWorthPage from './NetWorthPage'
 
@@ -14,6 +15,7 @@ vi.mock('../components/EChart', async () => {
   return {
     default: ({
       option,
+      animateEntrance = true,
     }: {
       option: {
         series?: {
@@ -22,6 +24,7 @@ vi.mock('../components/EChart', async () => {
           markLine?: { data?: { xAxis?: string }[] }
         }[]
       }
+      animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
@@ -31,6 +34,8 @@ vi.mock('../components/EChart', async () => {
           .flatMap((s) => s.markLine?.data ?? [])
           .map((d) => d.xAxis ?? '')
           .join('|'),
+        // A cached paint must render still (2026-08-27 spec §1).
+        'data-animate': String(animateEntrance),
       }),
   }
 })
@@ -94,6 +99,7 @@ function household(over: Partial<HouseholdOut> = {}): HouseholdOut {
 }
 
 beforeEach(() => {
+  clearSnapshots()
   vi.mocked(fetchTimeseries).mockResolvedValue(timeseriesOut())
   vi.mocked(fetchSummary).mockResolvedValue(summaryOut())
   vi.mocked(fetchHousehold).mockResolvedValue(household())
@@ -190,4 +196,70 @@ it('draws no marriage rule when the household has no date yet', async () => {
   renderPage()
   await screen.findByRole('group', { name: 'Owner' })
   expect(stacked().getAttribute('data-marriage')).toBe('')
+})
+
+describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
+  it('paints instantly from a seeded snapshot and still revalidates', () => {
+    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    // Never-resolving fetches: whatever is on screen came from the seed alone.
+    vi.mocked(fetchTimeseries).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
+    const { container } = renderPage()
+    expect(stacked().getAttribute('data-series')).toBe(
+      'Cash|Pre-tax|Post-tax|Taxable|Equity|Other|Liabilities|Net worth',
+    )
+    expect(screen.queryByText(/Loading/)).toBeNull()
+    // Revalidating under the house dim, and the request really went out.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    expect(vi.mocked(fetchTimeseries)).toHaveBeenCalledTimes(1)
+    // A cached paint renders its charts still.
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
+  })
+
+  it('derives the drill default from the seed — the drill chart is up before any fetch', () => {
+    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    vi.mocked(fetchTimeseries).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
+    renderPage()
+    // My Checking (150) beats Joint Savings (80) at the latest month — slot 1.
+    expect(screen.getAllByTestId('echart')[1].getAttribute('data-series')).toBe('My Checking')
+    expect(screen.queryByText('No accounts selected.')).toBeNull()
+  })
+
+  it('a changed revalidation payload updates the page and re-arms the charts', async () => {
+    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    vi.mocked(fetchTimeseries).mockResolvedValue(
+      timeseriesOut({
+        owner_series: [{ person_id: 1, name: 'Renamed', values: ['100.00', '150.00'] }],
+      }),
+    )
+    const { container } = renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'By owner' }))
+    await waitFor(() => expect(stacked().getAttribute('data-series')).toBe('Renamed|Net worth'))
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+    expect(stacked().getAttribute('data-animate')).toBe('true')
+  })
+
+  it('leaves the charts still when the revalidation payload is identical', async () => {
+    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    const { container } = renderPage()
+    // The dim lifting is the revalidation landing — .finally runs on every resolution.
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
+  })
+
+  it('keys the snapshot by granularity — a quarterly flip is a cache MISS', async () => {
+    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    renderPage()
+    await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', null))
+    vi.mocked(fetchTimeseries).mockResolvedValue(timeseriesOut({ months: ['2026-07-01'] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+    await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('quarterly', null))
+    // Different key, so the monthly payload can never satisfy the quarterly equality skip.
+    await waitFor(() => expect(stacked().getAttribute('data-animate')).toBe('true'))
+  })
 })

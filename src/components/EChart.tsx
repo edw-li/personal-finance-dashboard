@@ -31,6 +31,7 @@ export default function EChart({
   onLegendChange,
   onDataZoom,
   exportConfig,
+  animateEntrance = true,
 }: {
   option: EChartsOption
   height?: number
@@ -53,6 +54,10 @@ export default function EChart({
   onDataZoom?: (window: { startValue: number; endValue: number }) => void
   /** Mounts the house ⤓ export menu above the canvas (2026-08-25 spec §2a). */
   exportConfig?: ExportConfig
+  /** false = paint the option already-drawn (cached revisits must not replay the
+   *  entrance dance — 2026-08-27 spec §1). Default true. Merged after the page's
+   *  option, exactly like the reduced-motion force. */
+  animateEntrance?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<EChartsInstance | null>(null)
@@ -117,12 +122,16 @@ export default function EChart({
     // Reduced-motion is forced AFTER the spread — a page option must never re-enable
     // animation against the user's OS preference (Global rules a11y promise). The flag
     // alone is not enough: ripple animators ignore it, so quiesceRipples covers the gap.
+    // animateEntrance rides the same override slot: a cached paint is already-seen data.
     const base = REDUCED_MOTION ? quiesceRipples(option) : option
     chartRef.current?.setOption(
-      { ...base, ...(REDUCED_MOTION ? { animation: false } : {}) },
+      {
+        ...base,
+        ...(REDUCED_MOTION || !animateEntrance ? { animation: false } : {}),
+      },
       { notMerge: true },
     )
-  }, [option])
+  }, [option, animateEntrance])
 
   return (
     <>

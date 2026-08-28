@@ -9,6 +9,7 @@ import {
 } from '../api/creditCards'
 import { fetchAccounts } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
+import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import StatTile from '../components/StatTile'
@@ -40,16 +41,37 @@ import { currentMonthIso } from '../utils/months'
 import '../components/panels.css'
 import './CreditCardsPage.css'
 
+const SNAPSHOT_KEY = 'credit-cards'
+
+interface CreditCardsSnapshot {
+  cards: CreditCardOut[]
+  categories: RewardCategoryOut[]
+  rates: RewardRateOut[]
+  spendingCategories: CategoryOut[]
+  matrix: SpendingMatrix
+  accounts: AccountOut[]
+}
+
 export default function CreditCardsPage() {
-  const [cards, setCards] = useState<CreditCardOut[] | null>(null)
-  const [categories, setCategories] = useState<RewardCategoryOut[] | null>(null)
-  const [rates, setRates] = useState<RewardRateOut[] | null>(null)
-  const [spendingCategories, setSpendingCategories] = useState<CategoryOut[]>([])
-  const [matrix, setMatrix] = useState<SpendingMatrix | null>(null)
-  const [accounts, setAccounts] = useState<AccountOut[]>([])
+  const cached = getSnapshot<CreditCardsSnapshot>(SNAPSHOT_KEY)
+  const [cards, setCards] = useState<CreditCardOut[] | null>(cached?.cards ?? null)
+  const [categories, setCategories] = useState<RewardCategoryOut[] | null>(
+    cached?.categories ?? null,
+  )
+  const [rates, setRates] = useState<RewardRateOut[] | null>(cached?.rates ?? null)
+  const [spendingCategories, setSpendingCategories] = useState<CategoryOut[]>(
+    cached?.spendingCategories ?? [],
+  )
+  const [matrix, setMatrix] = useState<SpendingMatrix | null>(cached?.matrix ?? null)
+  const [accounts, setAccounts] = useState<AccountOut[]>(cached?.accounts ?? [])
+  // `loading` starts true on purpose: a seeded grid renders full and dims under
+  // `loading-dim is-loading` until the mount revalidation resolves — the house
+  // revalidation cue. The `!loading &&` empty-notes cannot flash during that window
+  // because each one only renders when its data half is absent, and the seed fills them.
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [fromCache, setFromCache] = useState(cached !== undefined)
 
   // Drill-in: ?card=<slug> — the SpendingPage ?month= grammar (replace, not push).
   const [searchParams, setSearchParams] = useSearchParams()
@@ -76,13 +98,26 @@ export default function CreditCardsPage() {
       fetchAccounts(),
     ])
       .then(([cardsData, categoriesData, ratesData, spendingData, matrixData, accountsData]) => {
+        const snapshot: CreditCardsSnapshot = {
+          cards: cardsData,
+          categories: categoriesData,
+          rates: ratesData,
+          spendingCategories: spendingData,
+          matrix: matrixData,
+          accounts: accountsData,
+        }
+        const previous = getSnapshot<CreditCardsSnapshot>(SNAPSHOT_KEY)
+        setSnapshot(SNAPSHOT_KEY, snapshot)
+        setError(null)
+        if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+          return
+        setFromCache(false)
         setCards(cardsData)
         setCategories(categoriesData)
         setRates(ratesData)
         setSpendingCategories(spendingData)
         setMatrix(matrixData)
         setAccounts(accountsData)
-        setError(null)
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Failed to load credit cards')
@@ -316,6 +351,7 @@ export default function CreditCardsPage() {
                   option={valueOption}
                   height={Math.max(140, valueRows.length * 34 + 70)}
                   ariaLabel="Horizontal bars of each card's estimated net annual value"
+                  animateEntrance={!fromCache}
                 />
                 {droppable.length > 0 && (
                   <p className="drill-hint">
@@ -336,6 +372,7 @@ export default function CreditCardsPage() {
                   option={lineOption}
                   height={300}
                   ariaLabel="Step chart of credit limits over time per card, with the total"
+                  animateEntrance={!fromCache}
                 />
               ) : (
                 !loading && (

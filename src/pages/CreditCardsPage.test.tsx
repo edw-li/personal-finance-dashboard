@@ -7,6 +7,7 @@ import type {
   RewardRateOut,
   SpendingMatrix,
 } from '../types/api'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import CreditCardsPage from './CreditCardsPage'
 
 vi.mock('../api/creditCards', () => ({
@@ -40,14 +41,18 @@ vi.mock('../components/EChart', async () => {
     default: ({
       option,
       ariaLabel,
+      animateEntrance = true,
     }: {
       option: { series?: { name?: string }[] }
       ariaLabel?: string
+      animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
         'aria-label': ariaLabel,
         'data-series-names': (option.series ?? []).map((s) => s.name ?? '').join('|'),
+        // A cached paint must render still (2026-08-27 spec §1).
+        'data-animate': String(animateEntrance),
       }),
   }
 })
@@ -162,8 +167,21 @@ function matrixRow(name: string): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  clearSnapshots()
   seedHappyPath()
 })
+
+/** The six-fetch payload the page stores under its snapshot key. */
+function snapshotFixture(cards: CreditCardOut[] = [vx(), SAVOR, RH]) {
+  return {
+    cards,
+    categories: CATEGORIES,
+    rates: RATES,
+    spendingCategories: [],
+    matrix: EMPTY_MATRIX,
+    accounts: [],
+  }
+}
 afterEach(cleanup)
 
 describe('CreditCardsPage', () => {
@@ -419,5 +437,54 @@ describe('CreditCardsPage', () => {
     await screen.findByRole('alert')
     expect(screen.getByText('Failed to load credit cards')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+  })
+})
+
+describe('CreditCardsPage — snapshot cache (2026-08-27 spec §1)', () => {
+  it('paints instantly from a seeded snapshot and still revalidates', () => {
+    setSnapshot('credit-cards', snapshotFixture())
+    // Never-resolving fetches: whatever is on screen came from the seed alone.
+    vi.mocked(fetchCreditCards).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchRewardCategories).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchRewardRates).mockReturnValue(new Promise(() => {}))
+    const { container } = renderPage()
+    expect(screen.getByText('Rewards matrix — best card per category')).toBeTruthy()
+    expect(matrixRow('Groceries')).toBeTruthy()
+    expect(screen.queryByText(/Loading/)).toBeNull()
+    // Revalidating under the house dim, and the request really went out.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    expect(vi.mocked(fetchCreditCards)).toHaveBeenCalledTimes(1)
+    // A cached paint renders its charts still.
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
+  })
+
+  it('a changed revalidation payload updates the page and re-arms the charts', async () => {
+    setSnapshot('credit-cards', snapshotFixture())
+    vi.mocked(fetchCreditCards).mockResolvedValue([
+      vx({ name: 'Venture X (renamed)' }),
+      SAVOR,
+      RH,
+    ])
+    const { container } = renderPage()
+    expect(screen.getAllByText('Venture X').length).toBeGreaterThan(0)
+    expect(await screen.findAllByText('Venture X (renamed)')).toBeTruthy()
+    await waitFor(() =>
+      expect(container.querySelector('.loading-dim.is-loading')).toBeNull(),
+    )
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'true'),
+    ).toBe(true)
+  })
+
+  it('leaves the charts still when the revalidation payload is identical', async () => {
+    setSnapshot('credit-cards', snapshotFixture())
+    const { container } = renderPage()
+    // The dim lifting is the revalidation landing — .finally runs on every resolution.
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+    expect(
+      screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
+    ).toBe(true)
   })
 })

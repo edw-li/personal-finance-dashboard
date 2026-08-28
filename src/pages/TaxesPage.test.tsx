@@ -12,6 +12,7 @@ import type {
   TaxYearUpdate,
   WithholdingOut,
 } from '../types/api'
+import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import TaxesPage from './TaxesPage'
 
 // JURISDICTIONS (render order) stays real; every request is stubbed — including the
@@ -323,6 +324,7 @@ const renderPage = (entry = '/taxes') =>
   )
 
 beforeEach(() => {
+  clearSnapshots()
   vi.mocked(fetchTaxYears).mockResolvedValue([year2023, year2024])
   vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => inputsFor(year))
   vi.mocked(fetchTaxBrackets).mockImplementation(async (year: number) => bracketsFor(year))
@@ -1417,5 +1419,79 @@ describe('filing status (2026-08-26 design §6)', () => {
       await screen.findByText(/every year with stored inputs is missing bracket tables/i),
     ).toBeTruthy()
     expect(screen.queryByText(/no years with stored inputs/i)).toBeNull()
+  })
+})
+
+describe('TaxesPage — snapshot cache (2026-08-27 spec §1)', () => {
+  /** The detail payload for one year, shaped exactly as the page stores it. */
+  function detailFor(year: number, totalTax: string) {
+    const summary = summaryFor(year)
+    summary.totals.total_tax = totalTax
+    return { inputs: inputsFor(year), brackets: bracketsFor(year), summary }
+  }
+
+  /** The year list and the latest year's detail, keyed exactly as the page keys them. */
+  function seedBoth(): void {
+    setSnapshot('taxes:years', [year2023, year2024])
+    setSnapshot('taxes:detail:2024:single', detailFor(2024, '77777.77'))
+  }
+
+  /** Holds all four year-scoped requests pending: what is on screen came from the seeds. */
+  function pendAll(): void {
+    const pending = () => new Promise<never>(() => {})
+    vi.mocked(fetchTaxYears).mockImplementation(pending)
+    vi.mocked(fetchTaxInputs).mockImplementation(pending)
+    vi.mocked(fetchTaxBrackets).mockImplementation(pending)
+    vi.mocked(fetchTaxSummary).mockImplementation(pending)
+  }
+
+  it('paints the year chips AND the detail panel before any fetch resolves', () => {
+    seedBoth()
+    pendAll()
+    renderPage()
+    // Both chips are up from the list seed...
+    expect(screen.getByRole('button', { name: '2024' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '2023' })).toBeTruthy()
+    // ...and the latest year's editors and totals from the detail seed.
+    expect(salary().value).toBe('$200,000.00')
+    expect(screen.getByText('$77,777.77')).toBeTruthy()
+    // The new-year box is seeded off the cached latest year, not left blank.
+    expect((screen.getByLabelText('New year') as HTMLInputElement).value).toBe('2025')
+    // Both revalidations still went out.
+    expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024)
+  })
+
+  it('a changed revalidation summary updates the totals', async () => {
+    seedBoth()
+    const fresher = summaryFor(2024)
+    fresher.totals.total_tax = '88888.88'
+    vi.mocked(fetchTaxSummary).mockResolvedValue(fresher)
+    renderPage()
+    expect(screen.getByText('$77,777.77')).toBeTruthy()
+    expect(await screen.findByText('$88,888.88')).toBeTruthy()
+  })
+
+  it('flips to a seeded second year and paints its detail before its fetch resolves', async () => {
+    seedBoth()
+    setSnapshot('taxes:detail:2023:single', detailFor(2023, '11111.11'))
+    renderPage()
+    await waitFor(() => expect(fetchTaxSummary).toHaveBeenCalledWith(2024))
+    // The 2023 requests never answer, so only the seed can put its number on screen.
+    pendAll()
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    expect(screen.getByText('$11,111.11')).toBeTruthy()
+  })
+
+  it('settles a byte-identical EMPTY year list instead of waiting forever', async () => {
+    setSnapshot('taxes:years', [])
+    vi.mocked(fetchTaxYears).mockResolvedValue([])
+    renderPage()
+    await waitFor(() => expect(fetchTaxYears).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    // Nothing to select and nothing to load — the new-year form IS the page, and the
+    // equality skip still has to release the detail flag (no year fetch will).
+    expect(screen.getByText('No tax years yet — create one to start.')).toBeTruthy()
+    expect(screen.queryByText('Loading…')).toBeNull()
   })
 })
