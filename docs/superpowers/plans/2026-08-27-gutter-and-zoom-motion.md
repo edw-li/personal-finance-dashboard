@@ -328,13 +328,21 @@ Add `zoomWindow={zoomWindow}` to BOTH `<EChart` elements that already carry `onD
 
 Add `zoomWindow={zoomWindow}` to the three `<EChart` elements whose options bake `rangeZoom` (`barsOption`, `savingsOption`, `trendOption` — each already carries `onDataZoom`). The month-detail, flow, and heatmap charts have no dataZoom and gain nothing.
 
-- [ ] **Step 3: PortfolioPage.** Same import extension; add:
+- [ ] **Step 3: PortfolioPage.** Same import extension.
+
+> **Review amendment (applied):** this step as originally written clipped the live-ping
+> category — `portfolioHistoryOption` appends one axis category PAST `history.dates` when
+> a fresh quote exists, so a dates-derived end index cut "now" off the chart and the
+> mirror latched the clipped window. The memo lives BELOW `performanceOption` and resolves
+> against the built axis, with `resolvedWindow` gaining an `axisLength` parameter
+> (default `dates.length`; NetWorth/Spending unchanged):
 
 ```tsx
-  const zoomWindow = useMemo(
-    () => (history === null ? undefined : resolvedWindow(history.dates, range)),
-    [history, range],
-  )
+  const zoomWindow = useMemo(() => {
+    if (history === null || performanceOption === null) return undefined
+    const axis = (performanceOption.xAxis as { data?: unknown[] }).data ?? []
+    return resolvedWindow(history.dates, range, axis.length)
+  }, [history, performanceOption, range])
 ```
 
 Add `zoomWindow={zoomWindow}` to the performance `<EChart` (`option={performanceOption}`).

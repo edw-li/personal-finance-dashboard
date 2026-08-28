@@ -299,6 +299,13 @@ the same reason on cached paints (update animation was force-killed by `animatio
 - Wired (`zoomWindow` + existing `onDataZoom`) on the six zoomable charts: NetWorth
   stacked + drill, Spending bars + savings + trend, Portfolio performance. Projection needs
   no wiring — its span toggle is a data change that the revived update animation morphs.
+- *(Review amendment)* `resolvedWindow` takes an `axisLength` (default `dates.length`), and
+  **Portfolio resolves against the BUILT option's axis, not `history.dates`**: the live
+  ping appends one category past the dates, and a dates-derived end index would clip
+  "now" off the chart on every chip click and latch the clipped window via the mirror.
+  The fingerprint's JSON-blindness to function props is a documented CONTRACT on the
+  `zoomWindow` prop: formatter closures may only capture state that also surfaces in
+  serializable option parts (all six wired options verified).
 
 **Tests.** `EChart.test.tsx`: the `animateEntrance` assertion updates to
 `animationDuration: 0` (behavior revision, deliberate); new cases — zoom-only change
