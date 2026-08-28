@@ -60,6 +60,10 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   // Exit timers live apart from the auto-dismiss map: hold/release pauses reading time,
   // and a toast already leaving has no reading time left to pause.
   const removalTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
+  // One-shot actions: a leaving toast keeps its buttons mounted for LEAVE_MS after the
+  // first activation, and a habitual double-click lands inside that window — the second
+  // press must not re-fire the action (every host's Undo re-POSTs a deleted row).
+  const firedActions = useRef(new Set<number>())
   // TWO latches, ORed into "paused", never one shared flag: the pointer and the keyboard
   // hold the clock for different reasons, so a pointer leaving a region the keyboard is
   // still inside must not start the countdown under the user's hands.
@@ -72,6 +76,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
     const timer = removalTimers.current.get(id)
     if (timer !== undefined) clearTimeout(timer)
     removalTimers.current.delete(id)
+    firedActions.current.delete(id)
     setToasts((current) => current.filter((toast) => toast.id !== id))
   }, [])
 
@@ -203,6 +208,9 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
                     // Consume FIRST: an action that itself toasts (an undo that fails)
                     // must not race a dismiss aimed at the wrong entry.
                     dismiss(toast.id)
+                    // ...and exactly once: the button outlives this click by LEAVE_MS.
+                    if (firedActions.current.has(toast.id)) return
+                    firedActions.current.add(toast.id)
                     action.onAction()
                   }}
                 >

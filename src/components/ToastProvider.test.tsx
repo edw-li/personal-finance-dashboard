@@ -237,4 +237,17 @@ describe('toast exit animation', () => {
     })
     expect(toastEl()).toBeNull()
   })
+
+  it('a double-click on Undo fires the action once — the leaving button must not re-fire', () => {
+    const onUndo = vi.fn()
+    renderHost(onUndo)
+    fireEvent.click(screen.getByText('fire success'))
+    // The leaving toast keeps its buttons mounted for the exit window; before the
+    // one-shot guard, the second press of a habitual double-click re-ran the Undo
+    // re-POST and duplicated the restored row.
+    const undo = screen.getByRole('button', { name: 'Undo' })
+    fireEvent.click(undo)
+    fireEvent.click(undo)
+    expect(onUndo).toHaveBeenCalledTimes(1)
+  })
 })
