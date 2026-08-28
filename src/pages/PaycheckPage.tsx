@@ -66,7 +66,7 @@ const WATERFALL: {
   { key: 'net_pay', label: 'Net pay' },
 ]
 
-function BreakdownPanel({ data }: { data: PaycheckBreakdownOut }) {
+function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: boolean }) {
   return (
     <section className="card">
       {/* The panel names the profile it belongs to. That is what makes keeping a stale
@@ -88,6 +88,11 @@ function BreakdownPanel({ data }: { data: PaycheckBreakdownOut }) {
         <StatTile
           label="Monthly net"
           value={formatCurrency(data.monthly_net)}
+          // Fresh paints only (spec §8) — `still` is the panel's cached-paint flag, the same
+          // one FlowPanel takes. A decimal-string amount, so Number() for the ease.
+          countUp={
+            !still ? { value: Number(data.monthly_net), format: formatCurrency } : undefined
+          }
           hint="Net pay per check × checks per year ÷ 12."
           hero
         />
@@ -796,7 +801,7 @@ export default function PaycheckPage() {
         breakdownBusy && <SkeletonCard height={320} label="Loading the breakdown…" />
       ) : (
         <div className={`loading-dim${breakdownBusy ? ' is-loading' : ''}`}>
-          <BreakdownPanel data={breakdown} />
+          <BreakdownPanel data={breakdown} still={fromCache} />
           {/* Same payload, same busy dim: the flow can never show a different check than
               the table above it. */}
           <FlowPanel data={breakdown} still={fromCache} />

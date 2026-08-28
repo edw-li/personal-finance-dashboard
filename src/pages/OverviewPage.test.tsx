@@ -476,7 +476,11 @@ afterEach(() => {
 
 describe('OverviewPage tiles', () => {
   it('renders the four tiles from one snapshot', async () => {
-    serve()
+    // Seeded so the paint is a CACHED one: the hero's count-up (spec §8) runs on fresh
+    // paints only, and a settling number is not a string this test can pin. The revalidation
+    // still goes out and lands the same payload, so every figure below is the snapshot's.
+    const payload = serve()
+    setSnapshot('overview', snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -515,7 +519,9 @@ describe('OverviewPage tiles', () => {
   // whole rather than printed half-dressed. The two tiles that pair an amount with a
   // percent each get a pin, because "one field is null" is a shape the server really sends.
   it('drops the hero delta when the server sends an amount with no rate', async () => {
-    serve({ summary: summaryOut({ mom_delta: '100.00', mom_pct: null }) })
+    // Cached paint (see above): the hero VALUE is pinned here too, so the count-up stays off.
+    const payload = serve({ summary: summaryOut({ mom_delta: '100.00', mom_pct: null }) })
+    setSnapshot('overview', snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -918,7 +924,10 @@ describe('OverviewPage failures', () => {
   })
 
   it('keeps the tiles up and cues the staleness when a reload fails', async () => {
-    serve()
+    // Seeded so the first paint is cached and the hero settles nowhere (spec §8) — the
+    // successful load this test needs before the failure still happens, as the revalidation.
+    const payload = serve()
+    setSnapshot('overview', snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -940,7 +949,10 @@ describe('OverviewPage failures', () => {
 
   it('lets the newest snapshot win when two loads overlap', async () => {
     // Slow first refresh, fast second: the stale answer must not repaint the page.
-    serve()
+    // Seeded so the hero is static from the first paint (spec §8) — the two refreshes whose
+    // ordering this test is about are unchanged.
+    const payload = serve()
+    setSnapshot('overview', snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -1171,5 +1183,27 @@ describe('OverviewPage — skeleton first paint (2026-08-27 spec §3)', () => {
     expect(container.querySelector('.page-skeleton')).toBeNull()
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  })
+})
+
+describe('OverviewPage — hero count-up (2026-08-27 spec §8)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('hands the hero a count-up on a fresh paint, so it starts at the formatted zero', async () => {
+    // No frame ever fires, so what is on screen is the PAINT rather than a moment of the
+    // animation — the easing itself is StatTile's test; this one pins the call-site gate,
+    // which nothing else can see (the cached-paint half is pinned by the tests above, which
+    // would read $0.00 if the gate were inverted).
+    vi.stubGlobal('requestAnimationFrame', () => 1)
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+    expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$0.00')
+    // The non-hero tiles never settle — they are up whole on the same paint.
+    expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
   })
 })

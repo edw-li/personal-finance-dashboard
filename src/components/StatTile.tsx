@@ -75,7 +75,11 @@ export default function StatTile({
     const start = performance.now()
     let frame = 0
     const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / COUNT_UP_MS)
+      // Clamped at BOTH ends. A browser's rAF stamp shares `performance.now()`'s origin, so
+      // the low end is theory there — but jsdom's do NOT (its window's origin trails the
+      // process clock by seconds), and an unclamped negative t runs the ease backwards into
+      // a nine-figure negative dollar amount rather than merely starting late.
+      const t = Math.min(1, Math.max(0, (now - start) / COUNT_UP_MS))
       if (t >= 1) {
         // Final frame: clear the override — the caller's exact string takes over.
         setDisplay(null)

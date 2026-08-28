@@ -171,6 +171,10 @@ afterEach(() => {
 
 describe('PaycheckPage — the waterfall', () => {
   it('renders the eleven golden lines and the monthly tile, nothing re-derived', async () => {
+    // Seeded so the paint is a CACHED one: the Monthly-net hero counts up on fresh paints
+    // only (spec §8), and a settling number is not a string this test can pin. The
+    // revalidation below still goes out — and lands the identical payload.
+    setSnapshot('paycheck:breakdown:current', breakdownOf(profile2026))
     render(<PaycheckPage />)
 
     expect(await screen.findByText('$3,384.16')).toBeTruthy()

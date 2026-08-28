@@ -366,6 +366,15 @@ export default function OverviewPage() {
               hero
               label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
               value={formatCurrency(summary?.net_worth)}
+              // A FRESH-paint flourish only: a cached paint is a number the user has already
+              // seen, and re-counting it would fake newness. Money rides the wire as a decimal
+              // string, hence Number() for the easing math — the last frame drops the override
+              // and renders `value` itself, so the end state is the string above verbatim.
+              countUp={
+                !fromCache && summary?.net_worth != null
+                  ? { value: Number(summary.net_worth), format: formatCurrency }
+                  : undefined
+              }
               // Both halves or neither: a bare amount with no rate reads as a total.
               delta={
                 summary?.mom_delta != null && summary.mom_pct != null
