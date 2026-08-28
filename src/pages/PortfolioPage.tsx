@@ -75,13 +75,15 @@ const NO_NOTE: RefreshNote = { text: '', detail: '', failed: 0 }
 
 function describeRefresh(result: RefreshResult): RefreshNote {
   const failed = Object.entries(result.failed)
-  const shown = failed.slice(0, MAX_FAILED_SHOWN).map(([ticker]) => ticker)
-  const more = failed.length - shown.length
+  // `listed`, not `shown`: the page's `shown` ref (below) is the rendered snapshot, and
+  // two different meanings under one name is how a future edit picks the wrong one.
+  const listed = failed.slice(0, MAX_FAILED_SHOWN).map(([ticker]) => ticker)
+  const more = failed.length - listed.length
   return {
     text:
       `${result.updated.length} updated` +
       (failed.length > 0
-        ? `, ${failed.length} failed (${shown.join(', ')}${more > 0 ? `, +${more} more` : ''})`
+        ? `, ${failed.length} failed (${listed.join(', ')}${more > 0 ? `, +${more} more` : ''})`
         : '') +
       (result.skipped_manual.length > 0
         ? `, ${result.skipped_manual.length} manual skipped`
@@ -198,6 +200,26 @@ export default function PortfolioPage() {
   // 2026-08-28 bug NetWorthPage fixed @9e20d15 — no cache-compared skips, house rule).
   const shown = useRef<PortfolioSnapshot | null>(cached ?? null)
 
+  // The ONLY place a snapshot reaches the page — load()'s apply and selectOwner's peek both come through here; add new PortfolioSnapshot slots HERE.
+  // useCallback with an empty dep list: useState setters and the ref are identity-stable,
+  // so this stays stable and `load` below keeps changing identity ONLY with the scope (a
+  // fresh identity per render would re-fire the mount effect on every render).
+  const applySnapshot = useCallback((snap: PortfolioSnapshot, fromCache: boolean) => {
+    shown.current = snap
+    setFromCache(fromCache)
+    setHoldings(snap.holdings)
+    setSecurities(snap.securities)
+    setTransactions(snap.transactions)
+    setDividends(snap.dividends)
+    setIndustry(snap.industry)
+    setByType(snap.byType)
+    setByAccount(snap.byAccount)
+    setSparklines(snap.sparklines)
+    setHistory(snap.history)
+    setRealized(snap.realized)
+    setRefreshStatus(snap.refreshStatus)
+  }, [])
+
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
   // law (see NetWorthPage). One load() refetches EVERYTHING: eleven cheap local queries,
   // and every mutation path (panels' onChanged, refresh) converges through it. Returns
@@ -241,19 +263,7 @@ export default function PortfolioPage() {
         // against the RENDERED snapshot, never the cache (see `shown`).
         if (shown.current !== null && JSON.stringify(shown.current) === JSON.stringify(snapshot))
           return
-        shown.current = snapshot
-        setFromCache(false)
-        setHoldings(h)
-        setSecurities(secs)
-        setTransactions(txns)
-        setDividends(divs)
-        setIndustry(ind)
-        setByType(typ)
-        setByAccount(acct)
-        setSparklines(spark)
-        setHistory(hist)
-        setRealized(real)
-        setRefreshStatus(status)
+        applySnapshot(snapshot, false)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
@@ -262,7 +272,7 @@ export default function PortfolioPage() {
       .finally(() => {
         if (seq === seqRef.current) setLoading(false)
       })
-  }, [owner])
+  }, [owner, applySnapshot])
 
   // Panel mutations refetch WITHOUT unmounting the panels (a spinner swap would throw
   // away the form the user is typing in) — the body dims instead.
@@ -284,21 +294,7 @@ export default function PortfolioPage() {
     // selectOwner). Seeding `shown` here is what keeps load()'s equality skip truthful —
     // the guard is about what is RENDERED, and the destination payload is about to be it.
     const peeked = getSnapshot<PortfolioSnapshot>(portfolioKey(next))
-    if (peeked !== undefined) {
-      shown.current = peeked
-      setFromCache(true)
-      setHoldings(peeked.holdings)
-      setSecurities(peeked.securities)
-      setTransactions(peeked.transactions)
-      setDividends(peeked.dividends)
-      setIndustry(peeked.industry)
-      setByType(peeked.byType)
-      setByAccount(peeked.byAccount)
-      setSparklines(peeked.sparklines)
-      setHistory(peeked.history)
-      setRealized(peeked.realized)
-      setRefreshStatus(peeked.refreshStatus)
-    }
+    if (peeked !== undefined) applySnapshot(peeked, true)
     setOwner(next)
   }
 

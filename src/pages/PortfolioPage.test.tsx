@@ -69,7 +69,7 @@ import {
   fetchSecurities,
   fetchTransactions,
 } from '../api/portfolio'
-import { fetchRefreshStatus, fetchSparklines } from '../api/prices'
+import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 
 const ME = { id: 1, name: 'Me', is_primary: true }
 const SAM = { id: 2, name: 'Sam', is_primary: false }
@@ -464,6 +464,78 @@ it('restores the household view after visiting an owner with no positions', asyn
   // undo it or skip its way back into the empty view.
   await waitFor(() => expect(fetchHoldings).toHaveBeenLastCalledWith(null))
   await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
+})
+
+// The same 9e20d15 class from the other side, and the one the BEHAVIOURAL suite cannot
+// reach: every chip roundtrip above leaves the cache and the screen agreeing by the time
+// the revalidation lands (the peek-seed put the warm payload on screen itself), so a skip
+// judged on the cache still passes them. This pins the divergence directly — the cache
+// holds B while the screen still shows A — and only a skip judged on the RENDERED snapshot
+// lets B through. Deliberately a unit-level pin: no user gesture can force the split.
+it('applies a revalidation that matches the cache but not the screen', async () => {
+  // The hero tile is the readout, so the page starts from a SEEDED paint: a cached first
+  // paint passes no countUp, and the tile then renders its `value` string exactly. A cold
+  // mount would animate, and jsdom's rAF stamps never let that settle (StatTile.test.tsx
+  // stubs the clock to finish it) — the assertion would be about a frame, not the guard.
+  const heroValue = () => document.querySelector('.stat-tile-hero .stat-value')?.textContent
+  setSnapshot('portfolio:all', {
+    holdings: holdingsOut(),
+    securities: SECURITIES,
+    transactions: TRANSACTIONS,
+    dividends: DIVIDENDS,
+    industry: allocationOut('industry'),
+    byType: allocationOut('type'),
+    byAccount: allocationOut('account'),
+    sparklines: {},
+    history: HISTORY,
+    realized: REALIZED,
+    refreshStatus: STATUS,
+  })
+  const { container } = renderPage()
+  // Settled: payload A is on screen AND under 'portfolio:all' — `shown` and the cache agree.
+  await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+  expect(heroValue()).toBe('$4,500.00')
+
+  // Out of band, the cache ALONE advances to B. Key order matches load()'s snapshot literal
+  // exactly — a reordered object would not stringify-match, and the mutant this test exists
+  // to kill would survive.
+  const HOLDINGS_B: HoldingsResponse = {
+    ...holdingsOut(),
+    totals: { ...holdingsOut().totals, market_value: '7777.00' },
+  }
+  setSnapshot('portfolio:all', {
+    holdings: HOLDINGS_B,
+    securities: SECURITIES,
+    transactions: TRANSACTIONS,
+    dividends: DIVIDENDS,
+    industry: allocationOut('industry'),
+    byType: allocationOut('type'),
+    byAccount: allocationOut('account'),
+    sparklines: {},
+    history: HISTORY,
+    realized: REALIZED,
+    refreshStatus: STATUS,
+  })
+  // The five owner-scoped fetches now serve B. Only holdings actually moved; the other four
+  // are restated so the whole revalidated payload is B by construction.
+  vi.mocked(fetchHoldings).mockResolvedValue(HOLDINGS_B)
+  vi.mocked(fetchTransactions).mockResolvedValue(TRANSACTIONS)
+  vi.mocked(fetchDividends).mockResolvedValue(DIVIDENDS)
+  vi.mocked(fetchRealized).mockResolvedValue(REALIZED)
+  vi.mocked(fetchAllocation).mockImplementation((by) => Promise.resolve(allocationOut(by)))
+  vi.mocked(refreshPrices).mockResolvedValue({
+    updated: ['VOO'],
+    failed: {},
+    skipped_manual: [],
+    duration_ms: 1000,
+    dividends_ingested: 0,
+  })
+
+  // The page's own reload affordance — onRefresh chains straight into load().
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh prices' }))
+  // shown = A ≠ B, so the guard must NOT fire and B's hero figure must reach the tile. A
+  // cache-compared skip sees previous = B == B, early-returns, and strands the page on A.
+  await waitFor(() => expect(heroValue()).toBe('$7,777.00'))
 })
 
 // Pinned verbatim: this sentence is the page's only defence against reading the weekly
