@@ -31,6 +31,10 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 OLD_CONSTRAINT = "uq_paycheck_profiles_effective_date"
+# Named after the FIRST column only — this must equal the name database.py's naming
+# convention derives for the model's UniqueConstraint, or create_all (tests) and this
+# migration (deploys) produce differently-named schemas. Do not "fix" it to mention
+# effective_date.
 NEW_CONSTRAINT = "uq_paycheck_profiles_person_id"
 FOREIGN_KEY = "fk_paycheck_profiles_person_id_people"
 
