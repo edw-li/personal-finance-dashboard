@@ -170,3 +170,37 @@
 .paycheck-current {
   margin-top: 0.6rem;
 }
+
+/* ── The person switcher ───────────────────────────────────────────── */
+
+/* NetWorthPage's owner-row shape, restated rather than imported: that stylesheet travels
+   with its own page, and this file must not depend on it happening to be in the bundle
+   (this file's opening note). */
+.paycheck-person-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.paycheck-person-row .eyebrow {
+  margin: 0;
+}
+
+/* The household figure is a sibling of the switcher, not part of the per-person card below
+   it. The page's 320px .kpi-row fence already stops a single tile from stretching. */
+.paycheck-household {
+  margin-bottom: 1rem;
+}
+
+.paycheck-household .drill-hint {
+  margin: 0.4rem 0 0;
+}
+
+/* The one non-numeric picker on this form: .field-input is right-aligned monospace for
+   figures, which reads wrong on a tier name (the Notes box takes the same override). */
+.paycheck-form select.field-input {
+  text-align: left;
+  font-family: inherit;
+}

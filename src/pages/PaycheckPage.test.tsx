@@ -1,8 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { PaycheckBreakdownOut, PaycheckProfileOut } from '../types/api'
-import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
+import type { HouseholdOut, PaycheckBreakdownOut, PaycheckProfileOut } from '../types/api'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import PaycheckPage from './PaycheckPage'
 
 // Every request is stubbed.
@@ -13,6 +13,10 @@ vi.mock('../api/paycheck', () => ({
   deleteProfile: vi.fn(),
   fetchBreakdown: vi.fn(),
 }))
+// The chips' source. Mocked because the page now fetches it on mount: unmocked, the real
+// client would reach `fetch` in jsdom and the isolated-fetch catch would swallow a network
+// error on every test in this file.
+vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — the flow
 // card's geometry is pinned in paycheckSankeyOptions.test.ts; this marker only says
 // whether the chart is up and which nodes it carries. The async factory keeps the JSX
@@ -45,6 +49,7 @@ import {
   fetchProfiles,
   updateProfile,
 } from '../api/paycheck'
+import { fetchHousehold } from '../api/household'
 
 // --- fixtures -------------------------------------------------------------------------
 // The 2026 profile and its eleven lines are the Workbook reference (plan §"Paycheck
@@ -55,6 +60,7 @@ import {
 
 const profile2026: PaycheckProfileOut = {
   id: 1,
+  person_id: 1,
   effective_date: '2026-01-01',
   annual_salary: '188930.00',
   pay_periods_per_year: 24,
@@ -65,11 +71,13 @@ const profile2026: PaycheckProfileOut = {
   withholding_pct: '0.334009167',
   dental_vision_per_check: '12.50',
   hsa_per_check: '100.00',
+  hsa_coverage: 'self',
   notes: null,
 }
 
 const profile2025: PaycheckProfileOut = {
   id: 2,
+  person_id: 1,
   effective_date: '2025-01-01',
   annual_salary: '162000.00',
   pay_periods_per_year: 24,
@@ -80,6 +88,7 @@ const profile2025: PaycheckProfileOut = {
   withholding_pct: '0.310000000',
   dental_vision_per_check: '11.00',
   hsa_per_check: '75.00',
+  hsa_coverage: 'self',
   notes: '2025 comp',
 }
 
@@ -125,6 +134,73 @@ const breakdown2025 = breakdownOf(profile2025, {
   monthly_net: '5969.82',
 })
 
+const ME = { id: 1, name: 'Me', is_primary: true }
+const SAM = { id: 2, name: 'Sam', is_primary: false }
+
+// The DEFAULT arrangement is one person: every test written before this batch is therefore
+// the pre-batch page, unchanged, and the two-earner tests opt in explicitly.
+function household(over: Partial<HouseholdOut> = {}): HouseholdOut {
+  return { people: [ME], marriage_date: null, ...over }
+}
+
+const samProfile: PaycheckProfileOut = {
+  id: 3,
+  person_id: SAM.id,
+  effective_date: '2026-03-01',
+  annual_salary: '120000.00',
+  pay_periods_per_year: 24,
+  trad_401k_pct: '0.060000000',
+  roth_401k_pct: '0.000000000',
+  after_tax_401k_pct: '0.000000000',
+  espp_pct: '0.000000000',
+  withholding_pct: '0.280000000',
+  dental_vision_per_check: '9.00',
+  hsa_per_check: '0.00',
+  hsa_coverage: 'none',
+  notes: 'Sam base',
+}
+
+// effective_date DESC across BOTH people — the one ordered list the router answers with.
+const TWO_PERSON_PROFILES = [samProfile, profile2026, profile2025]
+
+const samBreakdown = breakdownOf(samProfile, {
+  gross: '5000.00',
+  trad_401k: '300.00',
+  dental_vision: '9.00',
+  hsa: '0.00',
+  taxable: '4691.00',
+  withholding: '1400.00',
+  post_tax: '3291.00',
+  roth_401k: '0.00',
+  after_tax_401k: '0.00',
+  espp: '0.00',
+  net_pay: '2615.67',
+  monthly_net: '5231.34',
+})
+
+/**
+ * Routes each breakdown request the way the server would: the partner's id answers with
+ * Sam's check, a pinned 2025 id with the 2025 one, everything else with the primary's
+ * in-force check. `sam` may be an Error — that is the "partner has no profile in force"
+ * case the household tile has to degrade on.
+ */
+function routeBreakdowns(sam: PaycheckBreakdownOut | Error = samBreakdown) {
+  vi.mocked(fetchBreakdown).mockImplementation((profileId?: number, personId?: number) => {
+    if (personId === SAM.id) {
+      return sam instanceof Error ? Promise.reject(sam) : Promise.resolve(sam)
+    }
+    if (profileId === profile2025.id) return Promise.resolve(breakdown2025)
+    return Promise.resolve(breakdownOf(profile2026))
+  })
+}
+
+/** The two-earner arrangement: both people, both timelines, routed breakdowns. */
+function twoEarners(sam: PaycheckBreakdownOut | Error = samBreakdown) {
+  vi.mocked(fetchHousehold).mockResolvedValue(household({ people: [ME, SAM] }))
+  vi.mocked(fetchProfiles).mockResolvedValue(TWO_PERSON_PROFILES)
+  routeBreakdowns(sam)
+}
+
 // --- helpers --------------------------------------------------------------------------
 
 function deferred<T>() {
@@ -156,6 +232,7 @@ const confirmSpy = vi.spyOn(window, 'confirm')
 
 beforeEach(() => {
   clearSnapshots()
+  vi.mocked(fetchHousehold).mockResolvedValue(household())
   vi.mocked(fetchProfiles).mockResolvedValue(PROFILES)
   vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026))
   vi.mocked(createProfile).mockResolvedValue(profile2026)
@@ -383,6 +460,7 @@ describe('PaycheckPage — the profile form', () => {
       withholding_pct: '0.334009167',
       dental_vision_per_check: '12.50',
       hsa_per_check: '100.00',
+      hsa_coverage: 'self',
       notes: 'July raise',
     })
     // A new profile moves both halves of the page: the list, and which one is in force.
@@ -416,6 +494,7 @@ describe('PaycheckPage — the profile form', () => {
       withholding_pct: '0.334009167',
       dental_vision_per_check: '12.50',
       hsa_per_check: '100.00',
+      hsa_coverage: 'self',
       notes: 'Jan 2026 comp',
     })
   })
@@ -652,6 +731,30 @@ describe('PaycheckPage — the profile form', () => {
 
     expect(await screen.findByText('annual_salary must be positive')).toBeTruthy()
   })
+
+  it('carries the HSA coverage tier on a save and shows it in the history', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+
+    // Carried forward from the latest row like every other box (the comp-change ritual) —
+    // the tier changes when the plan does, not when the salary does.
+    expect(field('HSA coverage').value).toBe('self')
+
+    type('Effective date', '2026-07-01')
+    fireEvent.change(field('HSA coverage'), { target: { value: 'family' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    // The stored tier decides WHICH HSA cap applies to this person (spec §4.5), so it
+    // travels on the same full-profile body every other column does.
+    expect(vi.mocked(createProfile).mock.calls[0][0].hsa_coverage).toBe('family')
+
+    // ...and it is a column of the history, in the plan's words rather than the column's.
+    const row = screen
+      .getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' })
+      .closest('tr')
+    expect(row?.textContent).toContain('Self only')
+  })
 })
 
 describe('PaycheckPage — loading', () => {
@@ -815,5 +918,191 @@ describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
     await waitFor(() => expect(fetchBreakdown).toHaveBeenCalledTimes(1))
     await act(async () => {})
     expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')
+  })
+})
+
+describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
+  it('shows no switcher at all for a one-person household', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+    await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
+    // Nothing to switch between: a one-option control is not an affordance, it is noise.
+    expect(screen.queryByRole('group', { name: 'Person' })).toBeNull()
+  })
+
+  it('renders one chip per person, primary first, with the primary lit', async () => {
+    twoEarners()
+    render(<PaycheckPage />)
+    const chips = await screen.findByRole('group', { name: 'Person' })
+    // Primary first, then everyone else by id — the same order NetWorthPage's owner chips
+    // use, so a person sits in the same place on both pages.
+    expect([...chips.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'Me',
+      'Sam',
+    ])
+    expect(screen.getByRole('button', { name: 'Me' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Sam' }).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('switches the waterfall to the chip’s person and drops the pinned row', async () => {
+    twoEarners()
+    render(<PaycheckPage />)
+    await screen.findByRole('group', { name: 'Person' })
+
+    // Pin a row of MY history first: the switch has to abandon it, or the next request
+    // would ask for one person's profile id under another person's scope.
+    fireEvent.click(screen.getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' }))
+    await screen.findByText('$2,984.91')
+
+    vi.mocked(fetchBreakdown).mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+
+    await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(1))
+    // The household tile's own legs are keyed on the household, not on the chip, so they
+    // do not re-fire here — this one call is the page's, with the pin dropped.
+    expect(vi.mocked(fetchBreakdown).mock.calls[0]).toEqual([undefined, SAM.id])
+    expect(await screen.findByText('Per-check breakdown — effective Mar 1, 2026')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Sam' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Me' }).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('filters the history to the chip’s person and reseeds the form from THEIR latest row', async () => {
+    twoEarners()
+    render(<PaycheckPage />)
+    await screen.findByRole('group', { name: 'Person' })
+
+    // My two rows, and no sign of Sam's — one list on the wire, grouped here.
+    await waitFor(() => expect(screen.queryByText('Mar 1, 2026')).toBeNull())
+    expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
+    expect(screen.getByText('Jan 1, 2025')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+
+    await waitFor(() => expect(screen.getByText('Mar 1, 2026')).toBeTruthy())
+    expect(screen.queryByText('Jan 1, 2025')).toBeNull()
+    // The carry-forward form is Sam's now: a half-typed row of mine surviving the switch
+    // would be filed under Sam on the next save.
+    await waitFor(() => expect(field('Annual salary').value).toBe('$120,000.00'))
+    expect(field('Traditional 401(k) %').value).toBe('6%')
+  })
+
+  it('carries the picked person on a create, and nothing at all on the primary’s', async () => {
+    twoEarners()
+    render(<PaycheckPage />)
+    await screen.findByRole('group', { name: 'Person' })
+
+    type('Effective date', '2026-09-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    // The primary's create carries NO person_id: absent resolves to the primary
+    // server-side, which is what keeps the single-earner request byte-identical (§4.1).
+    expect(Object.keys(vi.mocked(createProfile).mock.calls[0][0])).not.toContain('person_id')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+    await waitFor(() => expect(field('Annual salary').value).toBe('$120,000.00'))
+    type('Effective date', '2026-09-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(createProfile).mock.calls[1][0].person_id).toBe(SAM.id)
+  })
+
+  it('keeps the whole page when the household endpoint fails', async () => {
+    vi.mocked(fetchHousehold).mockRejectedValue(new ApiError('household down', 503))
+    vi.mocked(fetchProfiles).mockResolvedValue(TWO_PERSON_PROFILES)
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+    await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
+
+    // The switcher is an affordance; losing it must cost the chips and nothing else.
+    expect(screen.queryByRole('group', { name: 'Person' })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    // The history degrades to today's WHOLE list rather than an empty table: with no
+    // household there is no person to filter by, and an empty table would be a lie.
+    expect(screen.getByText('Mar 1, 2026')).toBeTruthy()
+    expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
+  })
+
+  it('adds the two in-force nets into a household take-home tile', async () => {
+    twoEarners()
+    render(<PaycheckPage />)
+
+    expect(await screen.findByText('Household take-home')).toBeTruthy()
+    // 6768.33 + 5231.34. Each leg is the AUTHORITATIVE monthly figure of one person's
+    // in-force profile — never a sum of the display-rounded waterfall lines (rule 9).
+    expect(screen.getByText('$11,999.67')).toBeTruthy()
+    // The copy says exactly what was added, so the tile can never be read as a forecast.
+    expect(screen.getByText('Me + Sam — the profile in force for each person.')).toBeTruthy()
+    // Both legs ask for the IN-FORCE profile, so neither carries a profile_id.
+    expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id])
+    expect(
+      vi.mocked(fetchBreakdown).mock.calls.every((call) => call[0] === undefined),
+    ).toBe(true)
+  })
+
+  it('leaves the tile out when the partner has no profile in force', async () => {
+    twoEarners(new ApiError('no paycheck profiles', 404))
+    render(<PaycheckPage />)
+    await screen.findByRole('group', { name: 'Person' })
+    await waitFor(() =>
+      expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id]),
+    )
+
+    // Absent, not half-true: one person's net is not a household take-home (spec §6).
+    expect(screen.queryByText('Household take-home')).toBeNull()
+    // ...and the failure costs the TILE only — my own waterfall is untouched and no
+    // banner is raised, because nothing the page promised has failed.
+    expect(screen.getByText('$3,384.16')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('leaves the tile out for a one-person household', async () => {
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+    await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
+    expect(screen.queryByText('Household take-home')).toBeNull()
+    // The partner legs never fire, so the single-earner page costs exactly one breakdown
+    // request — what it cost before this batch.
+    expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes the household tile after a profile write', async () => {
+    twoEarners()
+    render(<PaycheckPage />)
+    await screen.findByText('$11,999.67')
+    vi.mocked(fetchBreakdown).mockClear()
+
+    type('Effective date', '2026-09-01')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+
+    // A new profile can change WHOSE profile is in force, so both legs go out again — a
+    // stale household figure is wrong money on screen, which is worse than no figure.
+    await waitFor(() => expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(3))
+    expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id])
+  })
+
+  it('renders byte-identically for a one-person household', async () => {
+    // The default arrangement IS the one-person one, which is the point of this file: every
+    // test above is the pre-batch page, unedited. This one states the invariant outright so
+    // a future change to the chips cannot leak into the single-earner page unnoticed.
+    render(<PaycheckPage />)
+    await screen.findByText('$3,384.16')
+    await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
+
+    // 1. No switcher, no household tile — nothing to switch between, and one person's net
+    //    is not a household sum.
+    expect(screen.queryByRole('group', { name: 'Person' })).toBeNull()
+    expect(screen.queryByText('Household take-home')).toBeNull()
+    // 2. ONE breakdown request, with NEITHER param: the partner legs never fire, so the
+    //    page costs exactly what it cost before this batch.
+    expect(vi.mocked(fetchBreakdown)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchBreakdown).mock.calls[0]).toEqual([undefined, undefined])
+    // 3. The ORIGINAL snapshot key. A person suffix here would cold-start every first
+    //    paint on this page for the household this app has had until now (spec §1); the
+    //    suffix exists only for an explicitly-picked partner.
+    expect(getSnapshot<PaycheckBreakdownOut>('paycheck:breakdown:current')).toBeTruthy()
+    // 4. The history is unfiltered and the form is the carry-forward one, as before.
+    expect(screen.getByText('Jan 1, 2026')).toBeTruthy()
+    expect(screen.getByText('Jan 1, 2025')).toBeTruthy()
+    expect(field('Annual salary').value).toBe('$188,930.00')
   })
 })

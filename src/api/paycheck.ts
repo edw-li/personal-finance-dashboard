@@ -34,8 +34,17 @@ export function deleteProfile(id: number): Promise<void> {
 }
 
 // No id = the profile in force today (the latest one effective now or earlier, falling
-// back to the earliest future one); 404 when there are no profiles at all.
-export function fetchBreakdown(profileId?: number): Promise<PaycheckBreakdownOut> {
-  const qs = profileId === undefined ? '' : `?profile_id=${profileId}`
+// back to the earliest future one); 404 when there are no profiles at all. `personId`
+// absent = the PRIMARY person (spec §4.1) — the params are built by presence, never as
+// empty strings, so a single-earner request carries no query string at all and stays the
+// exact request the server has always answered.
+export function fetchBreakdown(
+  profileId?: number,
+  personId?: number,
+): Promise<PaycheckBreakdownOut> {
+  const params: string[] = []
+  if (profileId !== undefined) params.push(`profile_id=${profileId}`)
+  if (personId !== undefined) params.push(`person_id=${personId}`)
+  const qs = params.length === 0 ? '' : `?${params.join('&')}`
   return api<PaycheckBreakdownOut>(`/paycheck/breakdown${qs}`)
 }

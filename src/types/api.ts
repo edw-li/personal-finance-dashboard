@@ -1002,8 +1002,18 @@ export interface EsppModelerOut {
 
 // --- paycheck ---
 
+/**
+ * HSA coverage tier (2026-08-27 spec §3.2) — decides WHICH annual HSA cap applies to this
+ * person, so it is per profile, not per household. Stored NOT NULL with server_default
+ * 'self'; the backfill gave every pre-batch row 'self'.
+ */
+export type HsaCoverage = 'none' | 'self' | 'family'
+
 export interface PaycheckProfileOut {
   id: number
+  /** Whose profile this is (spec §3.1). NOT NULL server-side; legacy rows backfilled to
+   *  the primary person, so this is always a real id, never null. */
+  person_id: number
   effective_date: string
   annual_salary: string
   pay_periods_per_year: number
@@ -1015,12 +1025,17 @@ export interface PaycheckProfileOut {
   withholding_pct: string
   dental_vision_per_check: string
   hsa_per_check: string
+  hsa_coverage: HsaCoverage
   notes: string | null
 }
 
 export interface PaycheckProfileCreate {
   effective_date: string
   annual_salary: string
+  /** ABSENT = the primary person (spec §4.1's wire back-compat). The page omits it unless
+   *  a partner chip is actually picked, which is what keeps the single-earner create
+   *  byte-identical to the pre-batch one. */
+  person_id?: number
   pay_periods_per_year?: number // the sheet's 24 (semi-monthly) is the default
   trad_401k_pct?: string
   roth_401k_pct?: string
@@ -1029,6 +1044,7 @@ export interface PaycheckProfileCreate {
   withholding_pct?: string
   dental_vision_per_check?: string
   hsa_per_check?: string
+  hsa_coverage?: HsaCoverage
   notes?: string | null
 }
 

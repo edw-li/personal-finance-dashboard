@@ -9,6 +9,7 @@ import { paycheckSankeyOption } from './paycheckSankeyOptions'
 // 3384.16 = 4486.25) — exactly the drift the tooltip rule below exists for.
 const profile: PaycheckProfileOut = {
   id: 1,
+  person_id: 1,
   effective_date: '2026-01-01',
   annual_salary: '188930.00',
   pay_periods_per_year: 24,
@@ -19,6 +20,7 @@ const profile: PaycheckProfileOut = {
   withholding_pct: '0.334009167',
   dental_vision_per_check: '12.50',
   hsa_per_check: '100.00',
+  hsa_coverage: 'self',
   notes: null,
 }
 

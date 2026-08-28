@@ -7,6 +7,7 @@ import {
   fetchProfiles,
   updateProfile,
 } from '../api/paycheck'
+import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
@@ -15,6 +16,8 @@ import { SkeletonCard } from '../components/PageSkeleton'
 import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptions'
 import StatTile from '../components/StatTile'
 import type {
+  HouseholdOut,
+  HsaCoverage,
   PaycheckBreakdownOut,
   PaycheckProfileCreate,
   PaycheckProfileOut,
@@ -169,6 +172,7 @@ interface ProfileFormState {
   withholding_pct: string
   dental_vision_per_check: string
   hsa_per_check: string
+  hsa_coverage: HsaCoverage
   notes: string
 }
 
@@ -189,10 +193,23 @@ const PCT_FIELDS: { field: PctField; label: string }[] = [
   { field: 'withholding_pct', label: 'Withholding %' },
 ]
 
+// The tier's own vocabulary, not the column's: the stored value is 'self', the box says
+// "Self only" — the same distinction the percent boxes draw between 13 and 0.13.
+const HSA_COVERAGES: { value: HsaCoverage; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'self', label: 'Self only' },
+  { value: 'family', label: 'Family' },
+]
+
+const COVERAGE_LABELS = new Map<HsaCoverage, string>(
+  HSA_COVERAGES.map((coverage) => [coverage.value, coverage.label]),
+)
+
 const EMPTY_PROFILE: ProfileFormState = {
   effective_date: '', annual_salary: '', pay_periods_per_year: DEFAULT_PAY_PERIODS,
   trad_401k_pct: '', roth_401k_pct: '', after_tax_401k_pct: '', espp_pct: '',
-  withholding_pct: '', dental_vision_per_check: '', hsa_per_check: '', notes: '',
+  withholding_pct: '', dental_vision_per_check: '', hsa_per_check: '',
+  hsa_coverage: 'self', notes: '',
 }
 
 /** Every box of one stored row: the server's own quantized strings, percents shifted. */
@@ -208,6 +225,7 @@ function formFrom(profile: PaycheckProfileOut): ProfileFormState {
     withholding_pct: shiftPoint(profile.withholding_pct, 2),
     dental_vision_per_check: profile.dental_vision_per_check,
     hsa_per_check: profile.hsa_per_check,
+    hsa_coverage: profile.hsa_coverage,
     notes: profile.notes ?? '',
   }
 }
@@ -238,6 +256,7 @@ function latestOf(profiles: PaycheckProfileOut[]): PaycheckProfileOut | undefine
  */
 function ProfilesPanel({
   profiles,
+  personId,
   shownId,
   pinnedId,
   onSelect,
@@ -245,6 +264,10 @@ function ProfilesPanel({
   onChanged,
 }: {
   profiles: PaycheckProfileOut[]
+  /** The person the CHIPS picked, or null for "the default" (the primary, or a household
+   *  with nobody to switch between). A create carries it; a PATCH never does — this form
+   *  cannot move a stored profile from one person to another. */
+  personId: number | null
   /** The profile the breakdown above is actually showing — the server's answer, not ours. */
   shownId: number | null
   /**
@@ -269,6 +292,14 @@ function ProfilesPanel({
 
   const set = (field: keyof ProfileFormState) => (value: string) =>
     setForm((f) => ({ ...f, [field]: value }))
+
+  // Its own setter rather than `set('hsa_coverage')`: this is the one box whose state is a
+  // UNION rather than free text, and the generic setter's computed key would widen it to
+  // string — a hand-fired change event could then park an unstored tier in state.
+  const setCoverage = (value: string) => {
+    const next = HSA_COVERAGES.find((coverage) => coverage.value === value)
+    if (next !== undefined) setForm((f) => ({ ...f, hsa_coverage: next.value }))
+  }
 
   const startEdit = (profile: PaycheckProfileOut) => {
     setEditingId(profile.id)
@@ -357,7 +388,16 @@ function ProfilesPanel({
       // than an empty string canonicalized to one.
       dental_vision_per_check: canonicalAmount(form.dental_vision_per_check.trim() || '0'),
       hsa_per_check: canonicalAmount(form.hsa_per_check.trim() || '0'),
+      // No belt: a select cannot hold anything outside the union (setCoverage refuses it),
+      // and the column is NOT NULL with a server default, so it travels on both verbs like
+      // every other stored column.
+      hsa_coverage: form.hsa_coverage,
       notes: form.notes.trim() || null,
+      // Create only, and only for an explicitly-picked person: an absent person_id resolves
+      // to the primary server-side (spec §4.1), so the default create is byte-identical to
+      // the pre-batch one. A PATCH omits it because the stored row already knows whose it
+      // is — sending it would let a mis-click reassign someone's comp history.
+      ...(editingId === null && personId !== null ? { person_id: personId } : {}),
     }
     const request = editingId !== null ? updateProfile(editingId, body) : createProfile(body)
     request
@@ -483,6 +523,22 @@ function ProfilesPanel({
           HSA
           <AmountInput value={form.hsa_per_check} onValueChange={set('hsa_per_check')} />
         </label>
+        <label>
+          HSA coverage
+          {/* A tier, not a figure: the three stored values are the whole domain, so this is
+              a select and there is nothing to validate at submit. */}
+          <select
+            className="field-input"
+            value={form.hsa_coverage}
+            onChange={(e) => setCoverage(e.target.value)}
+          >
+            {HSA_COVERAGES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="span-2">
           Notes
           <input
@@ -522,6 +578,7 @@ function ProfilesPanel({
                 <th className="num">Withholding</th>
                 <th className="num">Dental &amp; vision</th>
                 <th className="num">HSA</th>
+                <th>HSA coverage</th>
                 <th>Notes</th>
                 <th />
               </tr>
@@ -559,6 +616,9 @@ function ProfilesPanel({
                   </td>
                   <td className="num">{formatCurrency(profile.dental_vision_per_check)}</td>
                   <td className="num">{formatCurrency(profile.hsa_per_check)}</td>
+                  {/* The stored tier in the plan's words. The map is total over the union,
+                      so the `??` only ever answers a payload from a newer server. */}
+                  <td>{COVERAGE_LABELS.get(profile.hsa_coverage) ?? profile.hsa_coverage}</td>
                   {/* The cell ellipsises a long note (PaycheckPage.css), so the full text
                       is the hover title — `undefined`, never null, or React would render a
                       literal title="null" on every unnoted row. */}
@@ -613,9 +673,13 @@ function ProfilesPanel({
 
 // ── Page ────────────────────────────────────────────────────────────────────────────────
 
-// Per-profile snapshot key; null = whichever profile the server picks for today.
-function breakdownKey(profileId: number | null): string {
-  return `paycheck:breakdown:${profileId ?? 'current'}`
+// Per-profile, per-person snapshot key. null profile = whichever profile the server picks
+// for today; null person = the primary — and the primary's key keeps its ORIGINAL,
+// unsuffixed shape. A changed key would silently cold-start every first paint on this page
+// for the single-earner household this app has had until now (2026-08-27 spec §1).
+function breakdownKey(profileId: number | null, personId: number | null): string {
+  const base = `paycheck:breakdown:${profileId ?? 'current'}`
+  return personId === null ? base : `${base}:person:${personId}`
 }
 
 export default function PaycheckPage() {
@@ -625,7 +689,7 @@ export default function PaycheckPage() {
   const [profilesError, setProfilesError] = useState<string | null>(null)
   const [profilesBusy, setProfilesBusy] = useState(true)
 
-  const cachedBreakdown = getSnapshot<PaycheckBreakdownOut>(breakdownKey(null))
+  const cachedBreakdown = getSnapshot<PaycheckBreakdownOut>(breakdownKey(null, null))
   const [breakdown, setBreakdown] = useState<PaycheckBreakdownOut | null>(
     cachedBreakdown ?? null,
   )
@@ -638,14 +702,51 @@ export default function PaycheckPage() {
   const [breakdownMissing, setBreakdownMissing] = useState(false)
   const [breakdownBusy, setBreakdownBusy] = useState(true)
   // An OBJECT, not a bare id: a fresh identity re-runs the load effect, so a write can
-  // refetch the SAME profile's waterfall (TaxesPage's `selection`). null = let the server
-  // pick whichever profile is in force today.
-  const [selection, setSelection] = useState<{ profileId: number | null }>({ profileId: null })
+  // refetch the SAME waterfall (TaxesPage's `selection`). BOTH axes use null for "the
+  // default" — null profile = whichever profile is in force, null person = the primary,
+  // sent as no query param at all. That one convention is what keeps the single-earner
+  // request, snapshot key and create body byte-identical to the pre-batch page.
+  const [selection, setSelection] = useState<{
+    profileId: number | null
+    personId: number | null
+  }>({ profileId: null, personId: null })
+  // The chips' source. Fetched on its own, never folded into either load above: the
+  // switcher is an affordance, and a household hiccup must not cost the waterfall
+  // (NetWorthPage's isolated-fetch posture). null covers both "not loaded" and "failed".
+  const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  // One in-force breakdown per person, fetched on its OWN so a partner failure costs the
+  // tile and nothing else. Deliberately NOT derived from the waterfall above: that one
+  // follows the chips and any pinned row, while this figure is always "the profile in
+  // force for each person" (spec §5). Only people who answered are in here.
+  const [householdNets, setHouseholdNets] = useState<
+    { name: string; monthlyNet: string }[] | null
+  >(null)
+  // Bumped by a profile write — a new profile can change whose profile is in force.
+  const [householdNonce, setHouseholdNonce] = useState(0)
 
   // Two INDEPENDENT loads: a breakdown 404 must not blank the profile table, so each
   // carries its own sequence guard, its own banner and its own busy flag.
   const profilesSeq = useRef(0)
   const breakdownSeq = useRef(0)
+  const householdSeq = useRef(0)
+
+  // Primary first, then everyone else by id — the order NetWorthPage's owner chips use, so
+  // a person sits in the same place on both pages. The `?? []` lives INSIDE the memo: a
+  // fresh literal in the dep list would re-sort on every render.
+  const orderedPeople = useMemo(
+    () =>
+      [...(household?.people ?? [])].sort(
+        (a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id,
+      ),
+    [household],
+  )
+  // One earner means there is nothing to switch between: no chips, no household tile, no
+  // person param, no filtered history — the page is the pre-batch one, pinned by test.
+  const switchable = orderedPeople.length > 1
+  // The person the page is ABOUT: the chip's pick, or the primary when nothing is picked.
+  // Only ever compared against a row's person_id — the WIRE still gets selection.personId,
+  // which stays null for the primary.
+  const activePersonId = selection.personId ?? orderedPeople[0]?.id ?? null
 
   // Promise callbacks only — no setState in an effect's synchronous body (react-hooks 7).
   // The mount fetches are covered by the initial busy values; the handlers below flip them.
@@ -677,15 +778,48 @@ export default function PaycheckPage() {
     loadProfiles()
   }, [])
 
+  // Once per visit, and deliberately not part of `loadProfiles`: setState lives in the
+  // promise continuations, never in the effect's synchronous body (react-hooks 7).
+  useEffect(() => {
+    fetchHousehold()
+      .then(setHousehold)
+      .catch(() => setHousehold(null))
+  }, [])
+
+  // Two GETs on a two-person household, once per household load (and once per write), and
+  // no requests at all for one person: the price of a figure that cannot drift with a chip
+  // press. Sequence-guarded like the page's other two loads, because a save landing while
+  // these are in flight would otherwise let the older pair overwrite the newer.
+  useEffect(() => {
+    if (orderedPeople.length < 2) return
+    const seq = ++householdSeq.current
+    Promise.all(
+      orderedPeople.map((person, index) =>
+        // Index 0 is the primary, whose param is omitted — the wire's back-compat default.
+        fetchBreakdown(undefined, index === 0 ? undefined : person.id)
+          .then((data) => ({ name: person.name, monthlyNet: data.monthly_net }))
+          // A person with no profile in force 404s; a partner-side outage 5xxs. Both mean
+          // "no figure for them", which is what keeps the tile absent rather than half a
+          // household presented as a whole one (spec §6).
+          .catch(() => null),
+      ),
+    ).then((legs) => {
+      if (seq !== householdSeq.current) return
+      setHouseholdNets(
+        legs.filter((leg): leg is { name: string; monthlyNet: string } => leg !== null),
+      )
+    })
+  }, [orderedPeople, householdNonce])
+
   // The chain lives inline rather than in a useCallback: this component owns nine setters,
   // and manual memoization React Compiler cannot preserve drops the whole component out of
   // compilation (MonthlyUpdatePage's note).
   useEffect(() => {
     const seq = ++breakdownSeq.current
-    fetchBreakdown(selection.profileId ?? undefined)
+    fetchBreakdown(selection.profileId ?? undefined, selection.personId ?? undefined)
       .then((data) => {
         if (seq !== breakdownSeq.current) return
-        const key = breakdownKey(selection.profileId)
+        const key = breakdownKey(selection.profileId, selection.personId)
         const previous = getSnapshot<PaycheckBreakdownOut>(key)
         setSnapshot(key, data)
         setBreakdownError(null)
@@ -733,7 +867,13 @@ export default function PaycheckPage() {
     // `breakdownError` as prose, so leaving `missing` up with the error gone would print a
     // literal "null — add one below…" for the whole of the next load (EsppPage's note).
     setBreakdownMissing(false)
-    setSelection((current) => ({ profileId: next(current.profileId) }))
+    // The person is CARRIED, never reset: this helper re-points the profile axis only
+    // (a row press, a delete's fallback, a write's refetch), and dropping the chip's pick
+    // here would silently walk the page back to the primary after every save.
+    setSelection((current) => ({
+      profileId: next(current.profileId),
+      personId: current.personId,
+    }))
   }
 
   const reselect = (profileId: number | null) => reselectWith(() => profileId)
@@ -750,6 +890,46 @@ export default function PaycheckPage() {
     reselect(null)
   }
 
+  /**
+   * Move the whole page to a person. `null` is the primary — no param on the wire.
+   *
+   * The pinned profile is DROPPED: it belongs to the person being left, and asking for one
+   * person's profile id under another's scope is either a 404 or, worse, someone else's
+   * check under this person's name. The switch always lands on "whichever profile is in
+   * force for them", which is the same place the page opens on.
+   */
+  const selectPerson = (personId: number | null) => {
+    if (personId === selection.personId) return
+    setBreakdownBusy(true)
+    setBreakdownError(null)
+    setBreakdownMissing(false)
+    setSelection({ profileId: null, personId })
+  }
+
+  // The history table follows the chips — client-side, because the router answers with one
+  // ordered list for every person (spec §4.1), so a chip press costs the table nothing.
+  // UNFILTERED whenever there is nobody to switch between, which includes a FAILED
+  // household fetch: with no person to filter by, an empty table would be a lie, and
+  // today's whole list is the honest degradation (spec §6).
+  const shownProfiles = useMemo(
+    () =>
+      profiles === null || !switchable
+        ? (profiles ?? [])
+        : profiles.filter((p) => p.person_id === activePersonId),
+    [profiles, switchable, activePersonId],
+  )
+
+  // The ONE place this page adds money up, and only because there is no server figure for
+  // it in this batch. Legal here where the waterfall's lines are not (rule 9): each leg is
+  // an AUTHORITATIVE per-person `monthly_net`, not a display-rounded view of a longer
+  // chain. Two 2dp figures added in float and re-rounded to cents (spendingSankey's
+  // `cents` idiom), so the tile can never print a float artefact.
+  const householdTotal =
+    householdNets === null
+      ? null
+      : Math.round(householdNets.reduce((acc, leg) => acc + Number(leg.monthlyNet), 0) * 100) /
+        100
+
   // A profile write moves BOTH halves of the page: the list, and the waterfall (a deleted
   // profile takes its own breakdown with it, so the selection falls back to the server's
   // default rather than 404ing on an id that no longer exists).
@@ -761,6 +941,10 @@ export default function PaycheckPage() {
     reselectWith((current) =>
       deletedId !== undefined && deletedId === current ? null : current,
     )
+    // The tile's legs are the profiles IN FORCE, and this write may have changed which
+    // those are (a new row dated today displaces the current one). A nonce rather than a
+    // direct call: the effect above owns the sequence guard.
+    setHouseholdNonce((n) => n + 1)
   }
 
   return (
@@ -769,6 +953,49 @@ export default function PaycheckPage() {
         <h1>Paycheck</h1>
         <div className="spacer" />
       </div>
+
+      {switchable && (
+        <div className="paycheck-person-row">
+          <span className="eyebrow">Whose paycheck</span>
+          <div className="segmented" role="group" aria-label="Person">
+            {orderedPeople.map((person, index) => (
+              <button
+                key={person.id}
+                type="button"
+                className={activePersonId === person.id ? 'active' : ''}
+                aria-pressed={activePersonId === person.id}
+                // The FIRST chip is the primary and carries null — no person param on the
+                // wire, so pressing "back to me" restores the exact request this page has
+                // always made.
+                onClick={() => selectPerson(index === 0 ? null : person.id)}
+              >
+                {person.name}
+              </button>
+            ))}
+          </div>
+          <InfoHint text="Each person has their own profile timeline. The waterfall, the flow and the history below all follow this chip; the household figure below does not — it is always both of you." />
+        </div>
+      )}
+
+      {/* TWO OR MORE answers or nothing: one person's net is not a household take-home, and
+          printing it as one would be a half-truth (spec §6). It sits OUTSIDE the per-check
+          card on purpose — it is not part of any one person's waterfall, and it does not
+          follow the chips. */}
+      {householdNets !== null && householdNets.length > 1 && (
+        <section className="paycheck-household">
+          <div className="kpi-row">
+            <StatTile
+              label="Household take-home"
+              value={formatCurrency(householdTotal)}
+              hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted."
+            />
+          </div>
+          <p className="drill-hint">
+            {householdNets.map((leg) => leg.name).join(' + ')} — the profile in force for
+            each person.
+          </p>
+        </section>
+      )}
 
       {breakdownError !== null && !breakdownMissing && (
         <div className="error-banner" role="alert">
@@ -802,6 +1029,10 @@ export default function PaycheckPage() {
       ) : (
         <div className={`loading-dim${breakdownBusy ? ' is-loading' : ''}`}>
           <BreakdownPanel data={breakdown} still={fromCache} />
+          {/* PLAN 4 MOUNT POINT — the contribution-pace strip goes HERE, under the
+              waterfall (spec §5). It renders from `breakdown.pace`, which is this div's own
+              payload for whichever person the chips already picked, so it needs no chip
+              wiring of its own: mount it and nothing above this line changes. */}
           {/* Same payload, same busy dim: the flow can never show a different check than
               the table above it. */}
           <FlowPanel data={breakdown} still={fromCache} />
@@ -828,10 +1059,18 @@ export default function PaycheckPage() {
         profilesBusy && <SkeletonCard height={240} label="Loading profiles…" />
       ) : (
         <div className={`loading-dim${profilesBusy ? ' is-loading' : ''}`}>
-          {/* NOT keyed, and a sibling of the panel above: a breakdown refetch re-renders
-              this panel with the same payload, so its half-typed row survives. */}
+          {/* Keyed by the CHIP's pick and by nothing else. Switching person must re-seed
+              the carry-forward form from THAT person's latest row — a half-typed row
+              surviving the switch would be filed under the wrong person on the next save.
+              It reads `selection.personId` rather than the resolved `activePersonId` on
+              purpose: the resolved one changes from null to the primary's id when the
+              household lands mid-visit, which would remount the panel and destroy a
+              half-typed row for no reason. Constant for a one-person household, so a
+              breakdown refetch still leaves typed work alone (the pre-batch behaviour). */}
           <ProfilesPanel
-            profiles={profiles}
+            key={selection.personId ?? 'primary'}
+            profiles={shownProfiles}
+            personId={selection.personId}
             shownId={breakdown?.profile.id ?? null}
             pinnedId={selection.profileId}
             onSelect={selectProfile}
