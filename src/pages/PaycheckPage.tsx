@@ -973,7 +973,7 @@ export default function PaycheckPage() {
               </button>
             ))}
           </div>
-          <InfoHint text="Each person has their own profile timeline. The waterfall, the flow and the history below all follow this chip; the household figure above does not — it is always both of you." />
+          <InfoHint text="Each person has their own profile timeline. The waterfall, the flow and the history below all follow this chip; the household figure below does not — it is always both of you." />
         </div>
       )}
 
