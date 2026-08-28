@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Layout from './Layout'
 import { prefetchRoute, warmAllRoutes } from './routeChunks'
@@ -33,10 +33,38 @@ function renderShell(initialPath = '/') {
   )
 }
 
+// POP can't be clicked in a MemoryRouter — a probe button issues navigate(-1).
+function BackProbe() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>go back</button>
+}
+
+function renderBackShell() {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/" element={<div>home body</div>} />
+          <Route
+            path="/spending"
+            element={
+              <div>
+                spending body
+                <BackProbe />
+              </div>
+            }
+          />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
 beforeEach(() => {
   // jsdom's scrollTo is a not-implemented stub that logs to the console; the reset
   // assertion wants a spy anyway.
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  sessionStorage.clear()
   // vi.mock factories are hoisted and vi.restoreAllMocks only restores vi.spyOn spies, so
   // these vi.fn()s would otherwise accumulate call history across this file's tests.
   vi.mocked(warmAllRoutes).mockClear()
@@ -45,6 +73,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
@@ -130,5 +159,45 @@ describe('Layout — route prefetch', () => {
   it('warms all chunks once after mount', () => {
     renderShell()
     expect(warmAllRoutes).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Layout — scroll restoration', () => {
+  it('takes manual control of history scroll restoration', () => {
+    renderShell()
+    expect(history.scrollRestoration).toBe('manual')
+  })
+
+  it('restores the recorded depth on POP and still resets on PUSH', () => {
+    // Deterministic rAF: the recorder's throttle collapses to a synchronous call.
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0)
+      return 1
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    renderBackShell()
+
+    // Scroll the home page to 480 — the recorder stores it for this history entry.
+    Object.defineProperty(window, 'scrollY', { value: 480, configurable: true })
+    fireEvent.scroll(window)
+
+    // PUSH to /spending: today's behavior — focus main, top of page.
+    fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
+    expect(screen.getByText('spending body')).toBeTruthy()
+    expect(window.scrollTo).toHaveBeenLastCalledWith(0, 0)
+    expect(document.activeElement).toBe(screen.getByRole('main'))
+
+    // POP back home: the recorded 480 comes back, focus still lands on main.
+    fireEvent.click(screen.getByRole('button', { name: 'go back' }))
+    expect(screen.getByText('home body')).toBeTruthy()
+    expect(window.scrollTo).toHaveBeenLastCalledWith(0, 480)
+    expect(document.activeElement).toBe(screen.getByRole('main'))
+  })
+
+  it('defaults a POP with no recording to the top', () => {
+    renderBackShell()
+    fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
+    fireEvent.click(screen.getByRole('button', { name: 'go back' }))
+    expect(window.scrollTo).toHaveBeenLastCalledWith(0, 0)
   })
 })
