@@ -847,6 +847,78 @@ async def test_hsa_coverage_rejects_anything_else(auth_client, me):
     assert bad.json()["detail"] == "hsa_coverage must be 'none', 'self' or 'family'"
 
 
+async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(
+    auth_client, db, me
+):
+    """The legacy wire, pinned. A one-person household is what every existing deployment
+    is, and its two read endpoints must answer character for character as they did before
+    profiles had owners — the only difference being the two additive fields."""
+    await create_profile(auth_client, effective_date="2025-01-01", annual_salary="162000")
+    await create_profile(auth_client)
+
+    listed = (await auth_client.get(PROFILES)).json()
+    assert [row["effective_date"] for row in listed] == ["2026-01-01", "2025-01-01"]
+    assert {row["person_id"] for row in listed} == {me.id}
+    assert {row["hsa_coverage"] for row in listed} == {"self"}
+    # Additive ONLY: the row is the old row plus exactly two keys.
+    assert set(listed[0]) == {
+        "id",
+        "person_id",
+        "effective_date",
+        "annual_salary",
+        "pay_periods_per_year",
+        "trad_401k_pct",
+        "roth_401k_pct",
+        "after_tax_401k_pct",
+        "espp_pct",
+        "withholding_pct",
+        "dental_vision_per_check",
+        "hsa_per_check",
+        "hsa_coverage",
+        "notes",
+    }
+
+    # No params at all = the primary's profile in force, the pre-P3 call verbatim.
+    legacy = (await auth_client.get(BREAKDOWN)).json()
+    assert legacy["profile"]["effective_date"] == "2026-01-01"
+    assert legacy["gross"] == "7872.08"
+    assert legacy["net_pay"] == "3384.16"
+    assert legacy["warnings"] == []
+    # ... and naming the primary explicitly changes nothing.
+    assert (await auth_client.get(BREAKDOWN, params={"person_id": me.id})).json() == legacy
+
+
+async def test_a_partner_timeline_is_independent_end_to_end(auth_client, db, me):
+    """One household, two timelines that never touch: same dates, own 409s, own
+    profile-in-force, and a delete on one leaves the other alone."""
+    partner = Person(name="Partner")
+    db.add(partner)
+    await db.commit()
+
+    mine_old = await create_profile(auth_client, effective_date="2025-01-01")
+    theirs_old = await create_profile(
+        auth_client, person_id=partner.id, effective_date="2025-01-01", annual_salary="80000"
+    )
+    theirs_new = await create_profile(
+        auth_client, person_id=partner.id, annual_salary="96000"
+    )
+    assert mine_old["id"] != theirs_old["id"]
+
+    # One ordered list for the whole household; the UI groups it by person.
+    listed = (await auth_client.get(PROFILES)).json()
+    assert len(listed) == 3
+    assert [row["effective_date"] for row in listed] == [
+        "2026-01-01",
+        "2025-01-01",
+        "2025-01-01",
+    ]
+
+    assert (await auth_client.delete(f"{PROFILES}/{theirs_new['id']}")).status_code == 204
+    remaining = {row["id"] for row in (await auth_client.get(PROFILES)).json()}
+    assert remaining == {mine_old["id"], theirs_old["id"]}
+    assert await db.get(PaycheckProfile, mine_old["id"]) is not None
+
+
 # --- comp API ---
 
 
