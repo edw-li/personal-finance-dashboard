@@ -56,11 +56,15 @@ New card on `/paycheck`, driven by the same selected profile/breakdown the table
 | depth | nodes |
 |---|---|
 | 0 | Gross |
-| 1 | Taxable |
-| 2 | Post-tax |
-| 3 | Trad 401k, Dental/Vision, HSA, Withholding, Roth 401k, After-tax 401k, ESPP, **Net pay** |
+| 1 | Taxable, Trad 401k, Dental/Vision, HSA |
+| 2 | Post-tax, Withholding |
+| 3 | Roth 401k, After-tax 401k, ESPP, **Net pay** |
 
-All terminal sinks sit right-aligned at depth 3 (links may span columns — deliberate; the eye reads "everything ends here"). Links: Gross → {Trad 401k, Dental/Vision, HSA, Taxable}; Taxable → {Withholding, Post-tax}; Post-tax → {Roth 401k, After-tax 401k, ESPP, Net pay}.
+Every terminal sits at its **natural column** — the one right after the stage it leaves — so all links connect adjacent columns and can never cross a node (the money-flow sankey's grammar).
+
+> **Revised 2026-08-28.** The original layout right-aligned every terminal at depth 3 ("links may span columns — deliberate; the eye reads 'everything ends here'"). On real profiles that drew the Gross→401k/Dental/HSA ribbons straight across the Taxable and Post-tax bars: with `SANKEY_MARKS.layoutIterations: 0`, a column whose only node is a lone intermediate sits flush at y=0 (echarts seeds y by in-column index and skips the relaxation passes), so the spanning ribbons and the bars occupy the same band. The 2026-08-25 trade-off ratification covered label collisions, not this; the user revoked it after the overlap proved unreadable ("mangled") and the natural-depth layout was probe-verified clean (`scratchpad/paycheck-sankey-probe/`). Right-edge label alignment is kept only by the depth-3 sinks.
+
+Links (unchanged): Gross → {Trad 401k, Dental/Vision, HSA, Taxable}; Taxable → {Withholding, Post-tax}; Post-tax → {Roth 401k, After-tax 401k, ESPP, Net pay}.
 
 - **Colors:** terminal deduction/tax nodes take fixed PALETTE slots in waterfall order; intermediates (Taxable, Post-tax) are MUTED gray — they are restatements, not destinations; Net pay is POSITIVE green (§3's convention).
 - **Zero-valued branches are omitted** (e.g. `after_tax_401k = 0`), not drawn at zero width.

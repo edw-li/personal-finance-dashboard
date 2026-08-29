@@ -14,8 +14,13 @@ type FlowKey = Exclude<keyof PaycheckBreakdownOut, 'profile' | 'warnings' | 'mon
 
 // The eleven lines in the table's own order and vocabulary (PaycheckPage's WATERFALL).
 // depth pins the column: intermediates restate money in transit at 0/1/2; every terminal
-// sits right-aligned at depth 3 so the eye reads "everything ends here" (links may span
-// columns — deliberate, spec §4). Colors: intermediates MUTED (restatements, not
+// sits at its NATURAL column — the one right after the stage it leaves — so every link
+// connects adjacent columns (spec §4, revised 2026-08-28). The original "all terminals
+// right-aligned at depth 3" pin let links span columns, and with SANKEY_MARKS'
+// layoutIterations:0 each lone intermediate (Taxable, Post-tax) sits flush at y=0, so
+// the spanning Gross→401(k)/Dental/HSA ribbons drew straight across those bars —
+// probe-verified overlap, user-revoked. Adjacent-only links are the money-flow sankey's
+// grammar and can never cross a node. Colors: intermediates MUTED (restatements, not
 // destinations — Gross included); terminals on FIXED PALETTE slots in waterfall order,
 // fixed per ENTITY so an omitted zero branch never reshuffles its neighbours' hues;
 // Net pay POSITIVE green (§3's kept-money-is-green cross-chart convention).
@@ -23,10 +28,10 @@ const FLOW_NODES: { key: FlowKey; label: string; depth: 0 | 1 | 2 | 3; color: st
   { key: 'gross', label: 'Gross', depth: 0, color: MUTED },
   { key: 'taxable', label: 'Taxable', depth: 1, color: MUTED },
   { key: 'post_tax', label: 'Post-tax', depth: 2, color: MUTED },
-  { key: 'trad_401k', label: 'Traditional 401(k)', depth: 3, color: PALETTE[0] },
-  { key: 'dental_vision', label: 'Dental & vision', depth: 3, color: PALETTE[1] },
-  { key: 'hsa', label: 'HSA', depth: 3, color: PALETTE[2] },
-  { key: 'withholding', label: 'Withholding', depth: 3, color: PALETTE[3] },
+  { key: 'trad_401k', label: 'Traditional 401(k)', depth: 1, color: PALETTE[0] },
+  { key: 'dental_vision', label: 'Dental & vision', depth: 1, color: PALETTE[1] },
+  { key: 'hsa', label: 'HSA', depth: 1, color: PALETTE[2] },
+  { key: 'withholding', label: 'Withholding', depth: 2, color: PALETTE[3] },
   { key: 'roth_401k', label: 'Roth 401(k)', depth: 3, color: PALETTE[4] },
   { key: 'after_tax_401k', label: 'After-tax 401(k)', depth: 3, color: PALETTE[5] },
   { key: 'espp', label: 'ESPP', depth: 3, color: PALETTE[6] },

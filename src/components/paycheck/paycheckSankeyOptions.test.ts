@@ -90,8 +90,12 @@ describe('paycheckSankeyOption', () => {
       'ESPP',
       'Net pay',
     ])
-    // Explicit columns: intermediates 0/1/2, EVERY terminal right-aligned at depth 3.
-    expect(series.data?.map((n) => n.depth)).toEqual([0, 1, 2, 3, 3, 3, 3, 3, 3, 3])
+    // Explicit columns: intermediates 0/1/2; every terminal sits at its NATURAL column —
+    // the one right after the stage it leaves (pre-tax beside Taxable, Withholding beside
+    // Post-tax) — so no link ever spans a column (2026-08-28 revision: the old right-
+    // aligned depth-3 pin drew Gross→401(k) ribbons straight across the top-aligned
+    // Taxable/Post-tax bars).
+    expect(series.data?.map((n) => n.depth)).toEqual([0, 1, 2, 1, 1, 1, 2, 3, 3, 3])
     expect(series.links).toEqual([
       { source: 'Gross', target: 'Traditional 401(k)', value: 1023.37 },
       { source: 'Gross', target: 'Dental & vision', value: 12.5 },
