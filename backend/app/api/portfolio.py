@@ -521,8 +521,10 @@ async def list_dividend_events(db: AsyncSession = Depends(get_db)) -> list[Secur
     """The performance chart's OLDER-era ex-dividend markers — read-only, whole table,
     written only by services.dividend_events (2026-08-28 spec). These are annotations, not
     money: a marker carries a per-share amount because the imported book is dateless and
-    the shares held on an old ex-date are unknowable. In-window events live in
-    /portfolio/dividends instead, so the two never describe the same event.
+    the shares held on an old ex-date are unknowable. The ledger and the annotations never
+    describe the same event — enforced by exclusion at write time, not by window arithmetic
+    (an event dividend_payments carries with source='auto' is never annotated), so a marker
+    here and a row in /portfolio/dividends are always two different events.
 
     NO `owner` query param, deliberately: the performance surface is whole-household by
     design (the weekly value series these annotate has no owner split), and a marker is a

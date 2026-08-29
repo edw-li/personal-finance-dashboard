@@ -78,8 +78,9 @@ function trimPerShare(raw: string): string {
  * and a mixed one wears the diamond so no kind over-claims it. Provider ex-dividend
  * events (2026-08-28) carry a per-share figure only — shares held on an old ex-date are
  * unknowable from the dateless imported book, so no dollar total is ever shown — and the
- * ledger wins a collision: an event matching a dividend row's (security, ex_date) is
- * dropped. Skipped honestly: dateless imported transactions (nothing to snap to), splits
+ * ledger wins a collision: an event matching a dividend row's (security, ex_date), or
+ * landing within 14 days of a MANUAL row for that security (manual rows carry no
+ * ex_date), is dropped. Skipped honestly: dateless imported transactions (nothing to snap to), splits
  * (not one of the glyphs — spec), and events off either axis end (no bar to stand on).
  * /portfolio only by construction — OverviewPage never calls this (Decision log: it must
  * not start fetching ledgers).
@@ -112,7 +113,18 @@ export function buildEventMarkers(
   }
   // NUL-joined keys, the sankey link-key precedent: neither half can contain a NUL.
   const ledgered = new Set<string>()
+  // Manual rows never carry an ex_date (their create/update schemas have no such field),
+  // so the exact-key dedupe cannot see them; they suppress annotations by PROXIMITY
+  // instead, mirroring the ingest's own +/-14-day manual-overlap rule.
+  const MANUAL_OVERLAP_DAYS = 14
+  const manualPayDays = new Map<number, number[]>()
   for (const d of dividends) {
+    if (d.source === 'manual') {
+      const bucket = manualPayDays.get(d.security_id)
+      const day = dayNumber(d.pay_date)
+      if (bucket) bucket.push(day)
+      else manualPayDays.set(d.security_id, [day])
+    }
     if (d.ex_date !== null) ledgered.add(`${d.security_id}\u0000${d.ex_date}`)
     raw.push({
       kind: 'dividend',
@@ -124,6 +136,11 @@ export function buildEventMarkers(
   }
   for (const e of dividendEvents) {
     if (ledgered.has(`${e.security_id}\u0000${e.ex_date}`)) continue
+    const exDay = dayNumber(e.ex_date)
+    const nearManual = (manualPayDays.get(e.security_id) ?? []).some(
+      (payDay) => Math.abs(payDay - exDay) <= MANUAL_OVERLAP_DAYS,
+    )
+    if (nearManual) continue
     raw.push({
       kind: 'exdiv',
       date: e.ex_date,

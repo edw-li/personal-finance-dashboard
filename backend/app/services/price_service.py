@@ -43,13 +43,6 @@ PRICE_MAX_ABS = Decimal(10) ** 10  # == money.MONEY_MAX_ABS_14_4 (money.py is
 # request-vocabulary/422; this module records failures instead)
 DIVIDEND_MAX_ABS = Decimal(10) ** 6  # == money.MONEY_MAX_ABS_10_4
 ERROR_SNIPPET_LEN = 200
-# What the historical-events backfill reports when it did not run (it never crashes the
-# refresh). The KEYS must stay dividend_events.backfill_dividend_events' — restated here
-# rather than imported because that module imports this one, and the flat-key precedent
-# (DividendIngestResult) has the same shape of dependency. Copied at every use: a
-# module-level dict handed straight into a JSON payload is one aliasing bug away from being
-# mutated for the whole process.
-DIVIDEND_EVENT_ZERO_COUNTS = {"created": 0, "synced": 0, "failed": 0}
 
 
 @dataclass
@@ -360,9 +353,10 @@ async def record_refresh_run(
         ),
         # A nested dict, not three more flat keys: the historical-events backfill is its own
         # leg with its own vocabulary, and one key keeps the flat dividend_* family reading
-        # as the ingest's alone. LastRefreshOut takes it OPTIONAL — every blob written
-        # before 2026-08-28 lacks it and must still parse.
-        "dividend_events": dict(dividend_events or DIVIDEND_EVENT_ZERO_COUNTS),
+        # as the ingest's alone. None means the leg CRASHED and its counts are unknown —
+        # never a fabricated zero. LastRefreshOut takes it OPTIONAL either way, because every
+        # blob written before 2026-08-28 lacks the key entirely and must still parse.
+        "dividend_events": dict(dividend_events) if dividend_events is not None else None,
     }
     setting = await db.get(AppSetting, LAST_REFRESH_KEY)
     if setting is None:
@@ -428,18 +422,35 @@ async def run_refresh(
     except Exception:
         logger.exception("dividend ingest failed — the price refresh stands")
         dividends = DividendIngestResult()
-    # AFTER the ingest, so the two legs read the window the same way and the ledger's rows
-    # are already written when the annotations land. Its own savepoint, for the ingest's
+    # AFTER the ingest, and that ORDER is load-bearing: the backfill excludes exactly the
+    # (security, ex_date) pairs the ingest just wrote, so the ledger's rows must already be
+    # in the session when the annotations are chosen. Its own savepoint, for the ingest's
     # reason: a plain rollback here would destroy the still-uncommitted value snapshot
     # above, while the savepoint isolates the backfill alone. Self-extinguishing per
     # security, so on a settled database this is one indexed SELECT and out.
-    dividend_events = dict(DIVIDEND_EVENT_ZERO_COUNTS)
+    #
+    # None on failure, never zeros: a crash OUTSIDE the per-security savepoints (the floor
+    # SELECT, the marker flush) has no idea what it did or did not write, and recording
+    # {0, 0, 0} would fabricate a clean run indistinguishable from a settled book on every
+    # status surface. None is the pre-feature "unknown" every reader already handles.
+    dividend_events: dict[str, int] | None = None
     try:
         async with db.begin_nested():
-            dividend_events = await backfill_dividend_events(db, provider, today=today)
+            dividend_events = await backfill_dividend_events(
+                db,
+                provider,
+                today=today,
+                # This run's failures, so a blocked provider gets N doomed calls per refresh
+                # and not 2N — the deep fetch must not amplify pressure on the rate limiter
+                # that is most likely causing the block.
+                skip_tickers=frozenset(result.failed),
+            )
     except Exception:
-        logger.exception("dividend events backfill failed — the price refresh stands")
-        dividend_events = dict(DIVIDEND_EVENT_ZERO_COUNTS)
+        logger.exception(
+            "dividend events backfill failed — the price refresh stands; this run's marker "
+            "counts are UNKNOWN, recorded as null rather than as a clean zero"
+        )
+        dividend_events = None
     await record_refresh_run(
         db,
         result,

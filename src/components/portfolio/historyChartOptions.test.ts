@@ -361,6 +361,37 @@ describe('buildEventMarkers', () => {
     ])
   })
 
+  it('suppresses an annotation within 14 days of a MANUAL row for the same security', () => {
+    // Manual rows never carry an ex_date (the create/update schemas have no such field),
+    // so the exact-key dedupe can't see them — the ±14-day window mirrors the ingest's
+    // own manual-overlap rule instead. Different security or >14 days: annotation stays.
+    const points = buildEventMarkers(
+      history(),
+      [],
+      [div({ id: 9, pay_date: '2026-08-05' })], // manual (source default), security 2
+      TICKERS,
+      [
+        exdiv({ ex_date: '2026-08-09' }), // security 2, 4 days from the manual row: OUT
+        exdiv({ security_id: 1, ex_date: '2026-08-09', per_share: '0.010000' }), // kept
+      ],
+    )
+    const texts = points.flatMap((p) => p.events.map((e) => e.text))
+    expect(texts).toEqual([
+      'Dividend VOO — $12.00 · Aug 5, 2026',
+      'Ex-dividend NVDA — $0.01/sh · Aug 9, 2026',
+    ])
+    const farAway = buildEventMarkers(
+      history(),
+      [],
+      [div({ id: 9, pay_date: '2026-07-25' })], // 15 days before the ex-date: kept
+      TICKERS,
+      [exdiv({ ex_date: '2026-08-09' })],
+    )
+    expect(farAway.flatMap((p) => p.events.map((e) => e.text))).toContain(
+      'Ex-dividend VOO — $1.71/sh · Aug 9, 2026',
+    )
+  })
+
   it('drops an ex-dividend event the ledger already carries for that security and ex-date', () => {
     const points = buildEventMarkers(
       history(),

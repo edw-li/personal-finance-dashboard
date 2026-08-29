@@ -41,12 +41,15 @@ class Security(Base):
     # spec §3.1): a new column, not an overload, so ex_div_date's consumers (Securities
     # panel, TTM metadata) keep their semantics. The refresh clears it once it passes.
     next_ex_div_date: Mapped[date | None] = mapped_column(Date)
-    # The one-time deep dividend-history fetch's marker (services.dividend_events,
-    # 2026-08-28): the day that fetch SUCCEEDED for this security. A security that pays no
-    # dividends at all is marked too — that is the whole point, or it would be deep-fetched
-    # on every refresh forever. NULL means "never fetched", so a failed or empty answer
-    # simply leaves it NULL and the next refresh retries. Nothing else reads or writes it.
-    dividend_events_synced_on: Mapped[date | None] = mapped_column(Date)
+    # The deep dividend-history fetch's marker (services.dividend_events, 2026-08-28): the
+    # FLOOR a successful fetch ran from, i.e. min(portfolio_value_history.snapshot_date) at
+    # the time. Deliberately the floor and not a "synced on" date — a re-import that extends
+    # the weekly series BACKWARD moves the chart's left edge, and comparing against the
+    # floor is what re-arms every security whose history does not reach the new edge. A
+    # security that pays no dividends is marked too, or it would be deep-fetched forever.
+    # NULL means "never fetched": a failed or empty answer leaves it NULL and the next
+    # refresh retries. Nothing else reads or writes it.
+    dividend_events_floor: Mapped[date | None] = mapped_column(Date)
 
 
 class PortfolioAccount(Base):
@@ -206,8 +209,9 @@ class SecurityDividendEvent(Base):
     how many shares were held on a 2024 ex-date, and any dollar total here would be
     invented. A row therefore carries a PER-SHARE amount and nothing else — no account, no
     shares_held, no amount. dividend_payments remains the only place dividend MONEY lives,
-    and nothing in this feature writes it. Rows are strictly older than the ingest's
-    window, so the two never describe the same event.
+    and nothing in this feature writes it. The ledger and the annotations never describe the
+    same event — enforced by exclusion at write time, not by window arithmetic: an ex-date
+    dividend_payments already carries with source='auto' is never annotated here.
 
     ondelete CASCADE: an annotation about a security is meaningless without one.
     """

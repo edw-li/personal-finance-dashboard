@@ -1,7 +1,7 @@
 """security dividend events
 
 Display-only historical ex-dividend markers for the portfolio performance chart's older
-era (2026-08-28 spec), plus the per-security marker that makes the one-time deep fetch
+era (2026-08-28 spec), plus the per-security marker that makes the deep fetch
 self-extinguishing. Dashboard-only and importer-immune (the custom_events posture); the
 rows carry a PER-SHARE amount and never a dollar total, because the imported book is
 dateless and the shares held on an old ex-date are unknowable. Additive; downgrade drops
@@ -50,12 +50,15 @@ def upgrade() -> None:
             "security_id", "ex_date", name=op.f("uq_security_dividend_events_security_id")
         ),
     )
-    # NULL = never deep-fetched. No server_default and no backfill: every existing row
-    # SHOULD read as unfetched, which is precisely what a nullable add gives.
-    op.add_column("securities", sa.Column("dividend_events_synced_on", sa.Date(), nullable=True))
+    # The FLOOR a successful deep fetch ran from, never a "synced on" date: a re-import that
+    # extends portfolio_value_history backward moves the chart's left edge, and the service
+    # re-arms every security whose recorded floor is shallower than the current one. NULL =
+    # never deep-fetched. No server_default and no backfill: every existing row SHOULD read
+    # as unfetched, which is precisely what a nullable add gives.
+    op.add_column("securities", sa.Column("dividend_events_floor", sa.Date(), nullable=True))
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_column("securities", "dividend_events_synced_on")
+    op.drop_column("securities", "dividend_events_floor")
     op.drop_table("security_dividend_events")

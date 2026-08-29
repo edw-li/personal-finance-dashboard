@@ -172,7 +172,7 @@ async def test_dividend_event_is_unique_per_security_and_ex_date(db):
     sec = Security(ticker="DIVX", name="Div X", holding_type="stock")
     db.add(sec)
     await db.commit()
-    assert sec.dividend_events_synced_on is None  # never deep-fetched
+    assert sec.dividend_events_floor is None  # never deep-fetched
     # Held as a plain int: the rollback below expires every instance, and a later sec.id
     # would then emit lazy IO (MissingGreenlet under asyncio).
     sec_id = sec.id

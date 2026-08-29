@@ -1520,14 +1520,16 @@ async def test_importer_never_writes_dividend_events_or_clears_the_sync_marker(d
     posture): the workbook carries no dividend HISTORY, so a re-import must neither
     create, update nor delete a row. The sharper half is the marker: the import
     diff-updates the very security these rows hang off, and clearing
-    dividend_events_synced_on would re-arm the one-time deep fetch on every refresh
-    forever."""
+    dividend_events_floor would re-arm the deep fetch on every refresh forever. (The
+    import DOES legitimately re-arm it by extending portfolio_value_history backward —
+    that is the floor comparison's job, not a column write, and is pinned in
+    test_dividend_events.)"""
     from app.importer.service import run_import
 
     # A name the workbook WILL diff-update (the budgets pin's trick), so the parent row
     # provably moves while the annotations and the marker stand still.
     sec = Security(ticker="ACME", name="Stale Name", industry="ETF", holding_type="etf")
-    sec.dividend_events_synced_on = date(2026, 8, 28)
+    sec.dividend_events_floor = date(2023, 10, 23)
     db.add(sec)
     await db.flush()
     db.add_all(
@@ -1572,4 +1574,4 @@ async def test_importer_never_writes_dividend_events_or_clears_the_sync_marker(d
         )
     ).scalar_one()
     assert refreshed.name == "Acme ETF"  # the import DID move the parent row…
-    assert refreshed.dividend_events_synced_on == date(2026, 8, 28)  # …and left the marker
+    assert refreshed.dividend_events_floor == date(2023, 10, 23)  # …and left the marker

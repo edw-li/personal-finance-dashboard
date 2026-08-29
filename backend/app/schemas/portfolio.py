@@ -233,10 +233,15 @@ class RefreshOut(BaseModel):
 
 
 class DividendEventCounts(BaseModel):
-    """services.dividend_events.backfill_dividend_events' counts — the deep one-time fetch
-    of the performance chart's pre-window ex-dividend markers. `failed` covers a raising
-    provider AND an empty answer: a blocked yfinance returns zero bars rather than raising,
-    and the security stays unmarked either way (the backfill's docstring)."""
+    """services.dividend_events.backfill_dividend_events' counts — the deep fetch of the
+    performance chart's historical ex-dividend markers. `failed` covers a raising provider
+    AND an empty answer: a blocked yfinance returns zero bars rather than raising, and the
+    security's floor goes unrecorded either way (the backfill's docstring). Tickers skipped
+    because they already failed this run's price leg are not counted at all — they were not
+    attempted, and the refresh record's own `failed` map already names them.
+
+    The whole object is null when the backfill CRASHED: its counts are then unknown, and a
+    fabricated {0, 0, 0} would read as a settled book on every status surface."""
 
     created: int
     synced: int

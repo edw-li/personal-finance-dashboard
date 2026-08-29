@@ -12,7 +12,12 @@ import { INK } from './theme'
 export interface SankeyNode {
   name: string
   value: number
-  /** Explicit column (the paycheck chart pins all sinks right); omit to follow links. */
+  /** Explicit column; omit to follow links. Pin every terminal to the column right
+   * after the stage it leaves (adjacent-only links, the money-flow grammar) — NEVER
+   * right-align sinks across columns: with layoutIterations 0 below, a column whose only
+   * node is a lone intermediate sits flush at y=0, and a column-spanning ribbon draws
+   * straight across it (the paycheck chart's 2026-08-28 "mangled" report; probe in
+   * scratchpad/paycheck-sankey-probe/). */
   depth?: number
   itemStyle: { color: string }
 }
