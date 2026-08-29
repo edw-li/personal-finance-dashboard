@@ -112,6 +112,16 @@ render the savings-rate tooltip unsigned (`SpendingPage.tsx:407-409` currently p
 - Legend-toggleable, **on** by default. Plain scatter, not effectScatter (ripple stays
   reserved for the live-quote ping).
 
+> **Addendum 2026-08-28 — historical ex-dividend markers.** The ledgers only reach back
+> ~370 days (auto dividend ingest window) and the imported book is dateless, so the chart's
+> pre-2025-08 era drew no events at all. A display-only feed now fills it: a one-time deep
+> provider fetch stores each security's ex-dividend dates + per-share in
+> `security_dividend_events` (never `dividend_payments` — shares held on an old ex-date are
+> unknowable, so no dollar figure is ever derived), served by `GET
+> /portfolio/dividend-events` and merged into `buildEventMarkers` as a fourth kind
+> (● "Ex-dividend NVDA — $0.01/sh · date"). The ledger wins collisions on (security,
+> ex_date). See the 2026-08-20 rich-dividend spec's non-goals note for the boundary.
+
 ### 2d. Deep-linkable drill state + Overview click-through
 
 - `/spending?month=YYYY-MM-01` opens that month's drill-in pie (state ↔ URL, replace-style

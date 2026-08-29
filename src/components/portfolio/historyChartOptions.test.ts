@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import type { DividendOut, PortfolioHistory, TransactionOut } from '../../types/api'
+import type {
+  DividendEventOut,
+  DividendOut,
+  PortfolioHistory,
+  TransactionOut,
+} from '../../types/api'
 import { MUTED, PALETTE } from '../../charts/theme'
 import {
   buildEventMarkers,
@@ -272,6 +277,10 @@ function div(over: Partial<DividendOut> & Pick<DividendOut, 'id' | 'pay_date'>):
   }
 }
 
+function exdiv(over: Partial<DividendEventOut> = {}): DividendEventOut {
+  return { security_id: 2, ex_date: '2026-08-09', per_share: '1.710000', ...over }
+}
+
 describe('buildEventMarkers', () => {
   it('snaps each dated event to the NEAREST weekly bar, riding the value line', () => {
     const points = buildEventMarkers(
@@ -325,6 +334,43 @@ describe('buildEventMarkers', () => {
       { text: 'Buy NVDA — 10 sh · Aug 4, 2026' },
       { text: 'Dividend VOO — $12.00 · Aug 5, 2026' },
     ])
+  })
+
+  it('circles a provider ex-dividend event with a trimmed per-share text, never a total', () => {
+    const points = buildEventMarkers(
+      history(),
+      [],
+      [],
+      TICKERS,
+      // 1.710000 -> $1.71/sh, 0.104500 -> $0.1045/sh: display-trimmed, never re-scaled.
+      [exdiv(), exdiv({ security_id: 1, ex_date: '2026-07-28', per_share: '0.104500' })],
+    )
+    expect(points).toEqual([
+      {
+        value: ['Jul 27, 2026', 700000],
+        symbol: 'circle',
+        symbolRotate: 0,
+        events: [{ text: 'Ex-dividend NVDA — $0.1045/sh · Jul 28, 2026' }],
+      },
+      {
+        value: ['Aug 10, 2026', 718422.07], // 08-09 is 1 day to 08-10 vs 6 to 08-03
+        symbol: 'circle',
+        symbolRotate: 0,
+        events: [{ text: 'Ex-dividend VOO — $1.71/sh · Aug 9, 2026' }],
+      },
+    ])
+  })
+
+  it('drops an ex-dividend event the ledger already carries for that security and ex-date', () => {
+    const points = buildEventMarkers(
+      history(),
+      [],
+      [div({ id: 9, pay_date: '2026-08-09', ex_date: '2026-08-09', source: 'auto' })],
+      TICKERS,
+      [exdiv({ ex_date: '2026-08-09' })], // same security 2, same ex_date -> ledger wins
+    )
+    expect(points).toHaveLength(1)
+    expect(points[0].events).toEqual([{ text: 'Dividend VOO — $12.00 · Aug 9, 2026' }])
   })
 
   it('skips dateless transactions, splits, and events off the axis ends', () => {

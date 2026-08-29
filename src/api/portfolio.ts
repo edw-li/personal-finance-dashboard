@@ -4,6 +4,7 @@ import type {
   AllocationDimension,
   AllocationResponse,
   DividendCreate,
+  DividendEventOut,
   DividendOut,
   DividendUpdate,
   HoldingsResponse,
@@ -114,6 +115,13 @@ export function fetchAllocation(
 // series would have nothing honest to say. No owner param here, ever.
 export function fetchHistory(): Promise<PortfolioHistory> {
   return api<PortfolioHistory>('/portfolio/history')
+}
+
+// Household-wide like /history, whose chart these annotate (2026-08-28): provider ex-div
+// dates + per-share for the era older than the auto-ingest window. Display-only — never a
+// money figure, never a ledger row. No owner param here, ever.
+export function fetchDividendEvents(): Promise<DividendEventOut[]> {
+  return api<DividendEventOut[]>('/portfolio/dividend-events')
 }
 
 export function fetchRealized(owner: OwnerScope = null): Promise<RealizedResponse> {
