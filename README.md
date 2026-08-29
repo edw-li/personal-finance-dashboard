@@ -605,6 +605,16 @@ spot-check **/** (Overview), **/taxes** and **/settings**.
 > setting doubles as the employer/RSU ticker — without it the schedule renders unpriced
 > and says so.
 
+> **Addendum (2026-08-28)**: historical ex-dividend markers add one more additive
+> migration — `e4a7c92b6d18` (`security_dividend_events` + a `securities` marker column),
+> chained on `d3b8e05fa726` and applied at boot like every other. The 08-20 "backfills
+> roughly a year" note above stays the LEDGER's whole story; this table is display-only
+> annotation data (ex-dates + per-share, never dollar amounts) that the first refresh
+> after deploy deep-fetches once per security so the **/portfolio** performance chart's
+> pre-window era shows its ex-dividend markers. A blocked provider marks nothing and
+> retries on every refresh until it answers; zero-payer tickers are marked done and never
+> refetched. Workbook imports never touch the table (pinned by test).
+
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the
 4.4 cache-control check once after the first deploy carrying the split route chunks.

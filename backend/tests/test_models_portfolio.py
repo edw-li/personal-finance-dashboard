@@ -13,6 +13,7 @@ from app.models import (
     PositionTransaction,
     PriceHistory,
     Security,
+    SecurityDividendEvent,
 )
 from tests.portfolio_factories import acct
 
@@ -161,3 +162,60 @@ async def test_dividend_source_defaults_manual_and_auto_key_is_unique(db):
         )
     )
     await db.commit()
+
+
+async def test_dividend_event_is_unique_per_security_and_ex_date(db):
+    """Display-only historical ex-dividend markers (2026-08-28 spec): one row per
+    (security, ex_date), carrying a PER-SHARE amount and never a dollar total. The unique
+    constraint lives in the MODEL as well as the migration, because the test database is
+    built by Base.metadata.create_all (the ux_dividend_auto_event precedent)."""
+    sec = Security(ticker="DIVX", name="Div X", holding_type="stock")
+    db.add(sec)
+    await db.commit()
+    assert sec.dividend_events_floor is None  # never deep-fetched
+    # Held as a plain int: the rollback below expires every instance, and a later sec.id
+    # would then emit lazy IO (MissingGreenlet under asyncio).
+    sec_id = sec.id
+
+    db.add(
+        SecurityDividendEvent(
+            security_id=sec_id, ex_date=date(2024, 3, 15), per_share=Decimal("1.710000")
+        )
+    )
+    await db.commit()
+    stored = (await db.execute(select(SecurityDividendEvent))).scalar_one()
+    assert stored.per_share == Decimal("1.710000") and stored.ex_date == date(2024, 3, 15)
+
+    db.add(
+        SecurityDividendEvent(
+            security_id=sec_id, ex_date=date(2024, 3, 15), per_share=Decimal("9.990000")
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()  # shared-session contract (conftest): unpoison after IntegrityError
+
+    other = Security(ticker="BBBX", name="B B", holding_type="stock")
+    db.add(other)
+    await db.commit()
+    # Another date on the same security, and the same date on another security, both legal.
+    db.add_all(
+        [
+            SecurityDividendEvent(
+                security_id=sec_id, ex_date=date(2024, 6, 14), per_share=Decimal("1.750000")
+            ),
+            SecurityDividendEvent(
+                security_id=other.id, ex_date=date(2024, 3, 15), per_share=Decimal("0.250000")
+            ),
+        ]
+    )
+    await db.commit()
+    assert len((await db.execute(select(SecurityDividendEvent))).scalars().all()) == 3
+
+    # ondelete CASCADE: an annotation about a security is meaningless without one.
+    await db.delete(other)
+    await db.commit()
+    assert [r.security_id for r in (await db.execute(select(SecurityDividendEvent))).scalars()] == [
+        sec_id,
+        sec_id,
+    ]

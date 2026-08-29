@@ -21,6 +21,7 @@ import PortfolioPage from './PortfolioPage'
 vi.mock('../api/portfolio', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/portfolio')>()),
   fetchAllocation: vi.fn(),
+  fetchDividendEvents: vi.fn(),
   fetchDividends: vi.fn(),
   fetchHistory: vi.fn(),
   fetchHoldings: vi.fn(),
@@ -62,6 +63,7 @@ vi.mock('../components/EChart', async () => {
 import { fetchHousehold } from '../api/household'
 import {
   fetchAllocation,
+  fetchDividendEvents,
   fetchDividends,
   fetchHistory,
   fetchHoldings,
@@ -226,6 +228,7 @@ beforeEach(() => {
   vi.mocked(fetchSecurities).mockResolvedValue(SECURITIES)
   vi.mocked(fetchTransactions).mockResolvedValue(TRANSACTIONS)
   vi.mocked(fetchDividends).mockResolvedValue(DIVIDENDS)
+  vi.mocked(fetchDividendEvents).mockResolvedValue([])
   vi.mocked(fetchAllocation).mockImplementation((by) => Promise.resolve(allocationOut(by)))
   vi.mocked(fetchSparklines).mockResolvedValue({})
   vi.mocked(fetchHistory).mockResolvedValue(HISTORY)
@@ -262,11 +265,12 @@ it('hides the owner chips for a one-person household', async () => {
   await waitFor(() => expect(fetchHousehold).toHaveBeenCalled())
   // Nothing to choose between: one person makes the chips one-option UI.
   expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
-  // The four household-wide fetches never take an argument, before or after this batch.
+  // The five household-wide fetches never take an argument, before or after this batch.
   expect(fetchSecurities).toHaveBeenCalledWith()
   expect(fetchHistory).toHaveBeenCalledWith()
   expect(fetchSparklines).toHaveBeenCalledWith()
   expect(fetchRefreshStatus).toHaveBeenCalledWith()
+  expect(fetchDividendEvents).toHaveBeenCalledWith()
   // (The single-person BYTE-IDENTITY pin on the five scoped fetches lands in Task 3,
   // where the scope is actually wired into load().)
 })
@@ -310,13 +314,15 @@ it('scopes the five owner-filterable fetches to the picked chip, and back on All
   expect(fetchAllocation).toHaveBeenCalledWith('account', SAM.id)
   expect(chip('Sam').getAttribute('aria-pressed')).toBe('true')
   expect(chip('All').getAttribute('aria-pressed')).toBe('false')
-  // The household-wide four ride the SAME load() but never gain a scope: the weekly
-  // series is one row per Monday by design (spec §2 decision log).
+  // The household-wide five ride the SAME load() but never gain a scope: the weekly
+  // series is one row per Monday by design (spec §2 decision log), and the ex-dividend
+  // annotations ride that household-wide chart.
   expect(vi.mocked(fetchHistory).mock.calls.length).toBeGreaterThan(historyCallsBefore)
   expect(fetchHistory).toHaveBeenLastCalledWith()
   expect(fetchSecurities).toHaveBeenLastCalledWith()
   expect(fetchSparklines).toHaveBeenLastCalledWith()
   expect(fetchRefreshStatus).toHaveBeenLastCalledWith()
+  expect(fetchDividendEvents).toHaveBeenLastCalledWith()
 
   fireEvent.click(chip('Joint'))
   await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith('joint'))
@@ -345,6 +351,7 @@ it('paints instantly from a seeded snapshot under the household key and revalida
     securities: SECURITIES,
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
+    dividendEvents: [],
     industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
@@ -373,6 +380,7 @@ it('leaves the charts still when the revalidation payload is identical', async (
     securities: SECURITIES,
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
+    dividendEvents: [],
     industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
@@ -413,6 +421,7 @@ it('keys the snapshot by owner — a chip flip is a cache MISS that re-arms the 
     securities: SECURITIES,
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
+    dividendEvents: [],
     industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
@@ -483,6 +492,7 @@ it('applies a revalidation that matches the cache but not the screen', async () 
     securities: SECURITIES,
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
+    dividendEvents: [],
     industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
@@ -508,6 +518,7 @@ it('applies a revalidation that matches the cache but not the screen', async () 
     securities: SECURITIES,
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
+    dividendEvents: [],
     industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),

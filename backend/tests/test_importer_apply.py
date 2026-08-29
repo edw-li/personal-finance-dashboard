@@ -41,6 +41,7 @@ from app.models import (
     RewardRate,
     RsuGrant,
     Security,
+    SecurityDividendEvent,
     SpendingCategory,
 )
 from tests.portfolio_factories import acct
@@ -1506,3 +1507,71 @@ async def test_importer_never_writes_contribution_limits(db):
     }
     assert after == before
     assert all("contribution_limits" not in sheet.entities for sheet in report.sheets.values())
+
+
+def dividend_event_row(row: SecurityDividendEvent) -> tuple:
+    """EVERY stored column, as grant_row above — a column added later is covered by the
+    pin below without anyone editing it."""
+    return tuple(getattr(row, column.key) for column in SecurityDividendEvent.__table__.columns)
+
+
+async def test_importer_never_writes_dividend_events_or_clears_the_sync_marker(db):
+    """security_dividend_events is dashboard-only (2026-08-28 spec, the custom_events
+    posture): the workbook carries no dividend HISTORY, so a re-import must neither
+    create, update nor delete a row. The sharper half is the marker: the import
+    diff-updates the very security these rows hang off, and clearing
+    dividend_events_floor would re-arm the deep fetch on every refresh forever. (The
+    import DOES legitimately re-arm it by extending portfolio_value_history backward —
+    that is the floor comparison's job, not a column write, and is pinned in
+    test_dividend_events.)"""
+    from app.importer.service import run_import
+
+    # A name the workbook WILL diff-update (the budgets pin's trick), so the parent row
+    # provably moves while the annotations and the marker stand still.
+    sec = Security(ticker="ACME", name="Stale Name", industry="ETF", holding_type="etf")
+    sec.dividend_events_floor = date(2023, 10, 23)
+    db.add(sec)
+    await db.flush()
+    db.add_all(
+        [
+            SecurityDividendEvent(
+                security_id=sec.id, ex_date=date(2024, 3, 15), per_share=Decimal("1.710000")
+            ),
+            SecurityDividendEvent(
+                security_id=sec.id, ex_date=date(2024, 6, 14), per_share=Decimal("1.750000")
+            ),
+        ]
+    )
+    await db.commit()
+    before = {
+        row.id: dividend_event_row(row)
+        for row in (await db.execute(select(SecurityDividendEvent))).scalars()
+    }
+    assert len(before) == 2  # a pin over nothing pins nothing
+
+    for _ in range(2):
+        report = await run_import(build_workbook(), db, dry_run=False)
+        assert report.applied is True  # a blocked import would pin nothing
+
+    # populate_existing, or the identity map would hand back the pre-import objects and
+    # this would pass even if the import had rewritten every column (the dividends pin's
+    # note).
+    after = {
+        row.id: dividend_event_row(row)
+        for row in (
+            await db.execute(
+                select(SecurityDividendEvent).execution_options(populate_existing=True)
+            )
+        ).scalars()
+    }
+    assert after == before
+    assert all("security_dividend_events" not in sheet.entities for sheet in report.sheets.values())
+    refreshed = (
+        await db.execute(
+            select(Security)
+            .where(Security.ticker == "ACME")
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert refreshed.name == "Acme ETF"  # the import DID move the parent row…
+    assert refreshed.dividend_events_floor == date(2023, 10, 23)  # …and left the marker

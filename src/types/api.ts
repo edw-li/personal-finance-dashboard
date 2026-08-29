@@ -364,6 +364,17 @@ export interface PortfolioHistory {
   benchmark: (string | null)[]
 }
 
+// GET /portfolio/dividend-events — display-only historical ex-dividend feed (2026-08-28):
+// provider-known dates and per-share amounts from BEFORE the auto-ingest's 370-day window
+// (the ledger owns everything inside it). Deliberately NO dollar amount: shares held on an
+// old ex-date are unknowable from the dateless imported book, so these annotate the
+// performance chart and never join dividend_payments or any money figure.
+export interface DividendEventOut {
+  security_id: number
+  ex_date: string
+  per_share: string
+}
+
 export interface RealizedRow {
   security_id: number
   ticker: string

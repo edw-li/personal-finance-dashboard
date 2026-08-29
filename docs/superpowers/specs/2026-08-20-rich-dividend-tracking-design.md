@@ -158,3 +158,9 @@ async def ingest_dividends(db, events_by_security: dict[int, list[DailyBar]],
   vocabulary; its inputs remain hand-fed or sandbox-fed).
 - No FX and no DRIP modeling (a reinvestment is a buy transaction the user records).
 - No backfill beyond the 370-day refresh window — older history stays manual.
+  > **Amended 2026-08-28:** still true for the LEDGER (`dividend_payments` amounts stay
+  > manual before the window — shares held on old ex-dates are unknowable from the dateless
+  > imported book). But the performance chart now gets display-only historical ex-dividend
+  > MARKERS from a one-time deep provider fetch (`security_dividend_events` table, per-share
+  > only, never a dollar amount, never a ledger row) — see the 2026-08-25 five-feature spec
+  > §2c addendum.

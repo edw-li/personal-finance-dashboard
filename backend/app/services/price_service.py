@@ -333,6 +333,7 @@ async def record_refresh_run(
     history_appended: bool,
     at: datetime,
     dividends: "DividendIngestResult | None" = None,
+    dividend_events: dict[str, int] | None = None,
 ) -> None:
     """Persist the run's outcome under app_settings[LAST_REFRESH_KEY], envelope
     {"value": ...} (the readers' convention). Caller commits."""
@@ -350,6 +351,12 @@ async def record_refresh_run(
         "dividends_skipped_overlap": (
             dividends.skipped_manual_overlap if dividends is not None else 0
         ),
+        # A nested dict, not three more flat keys: the historical-events backfill is its own
+        # leg with its own vocabulary, and one key keeps the flat dividend_* family reading
+        # as the ingest's alone. None means the leg CRASHED and its counts are unknown —
+        # never a fabricated zero. LastRefreshOut takes it OPTIONAL either way, because every
+        # blob written before 2026-08-28 lacks the key entirely and must still parse.
+        "dividend_events": dict(dividend_events) if dividend_events is not None else None,
     }
     setting = await db.get(AppSetting, LAST_REFRESH_KEY)
     if setting is None:
@@ -373,9 +380,10 @@ async def run_refresh(
 ) -> tuple[RefreshResult, bool, "DividendIngestResult"]:
     """The whole refresh ritual, shared by the manual endpoint and the scheduled job so
     the two can never drift: refresh prices (commits itself), backfill and extend the
-    weekly value series, ingest dividend events, record the outcome, commit the
-    bookkeeping. Snapshot and ingest failures each degrade alone — the price refresh
-    always stands."""
+    weekly value series, ingest dividend events, backfill the chart's pre-window historical
+    ex-dividend markers, record the outcome, commit the bookkeeping. Snapshot, ingest and
+    marker failures each degrade alone — the price refresh always stands."""
+    from app.services.dividend_events import backfill_dividend_events
     from app.services.dividend_ingest import DividendIngestResult, ingest_dividends
     from app.services.value_history import append_value_snapshot, backfill_missed_snapshots
 
@@ -414,6 +422,35 @@ async def run_refresh(
     except Exception:
         logger.exception("dividend ingest failed — the price refresh stands")
         dividends = DividendIngestResult()
+    # AFTER the ingest, and that ORDER is load-bearing: the backfill excludes exactly the
+    # (security, ex_date) pairs the ingest just wrote, so the ledger's rows must already be
+    # in the session when the annotations are chosen. Its own savepoint, for the ingest's
+    # reason: a plain rollback here would destroy the still-uncommitted value snapshot
+    # above, while the savepoint isolates the backfill alone. Self-extinguishing per
+    # security, so on a settled database this is one indexed SELECT and out.
+    #
+    # None on failure, never zeros: a crash OUTSIDE the per-security savepoints (the floor
+    # SELECT, the marker flush) has no idea what it did or did not write, and recording
+    # {0, 0, 0} would fabricate a clean run indistinguishable from a settled book on every
+    # status surface. None is the pre-feature "unknown" every reader already handles.
+    dividend_events: dict[str, int] | None = None
+    try:
+        async with db.begin_nested():
+            dividend_events = await backfill_dividend_events(
+                db,
+                provider,
+                today=today,
+                # This run's failures, so a blocked provider gets N doomed calls per refresh
+                # and not 2N — the deep fetch must not amplify pressure on the rate limiter
+                # that is most likely causing the block.
+                skip_tickers=frozenset(result.failed),
+            )
+    except Exception:
+        logger.exception(
+            "dividend events backfill failed — the price refresh stands; this run's marker "
+            "counts are UNKNOWN, recorded as null rather than as a clean zero"
+        )
+        dividend_events = None
     await record_refresh_run(
         db,
         result,
@@ -421,6 +458,7 @@ async def run_refresh(
         history_appended=appended,
         at=datetime.now(UTC),
         dividends=dividends,
+        dividend_events=dividend_events,
     )
     await db.commit()
     return result, appended, dividends

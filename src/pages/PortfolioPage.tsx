@@ -4,6 +4,7 @@ import { ApiError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import {
   fetchAllocation,
+  fetchDividendEvents,
   fetchDividends,
   fetchHistory,
   fetchHoldings,
@@ -39,6 +40,7 @@ import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type {
   AllocationResponse,
+  DividendEventOut,
   DividendOut,
   HoldingsResponse,
   HouseholdOut,
@@ -113,6 +115,7 @@ interface PortfolioSnapshot {
   securities: SecurityOut[]
   transactions: TransactionOut[]
   dividends: DividendOut[]
+  dividendEvents: DividendEventOut[]
   industry: AllocationResponse
   byType: AllocationResponse
   byAccount: AllocationResponse
@@ -130,6 +133,9 @@ export default function PortfolioPage() {
   const [securities, setSecurities] = useState<SecurityOut[]>(cached?.securities ?? [])
   const [transactions, setTransactions] = useState<TransactionOut[]>(cached?.transactions ?? [])
   const [dividends, setDividends] = useState<DividendOut[]>(cached?.dividends ?? [])
+  const [dividendEvents, setDividendEvents] = useState<DividendEventOut[]>(
+    cached?.dividendEvents ?? [],
+  )
   const [industry, setIndustry] = useState<AllocationResponse | null>(cached?.industry ?? null)
   const [byType, setByType] = useState<AllocationResponse | null>(cached?.byType ?? null)
   const [byAccount, setByAccount] = useState<AllocationResponse | null>(
@@ -190,7 +196,7 @@ export default function PortfolioPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshNote, setRefreshNote] = useState<RefreshNote>(NO_NOTE)
   const [error, setError] = useState<string | null>(null)
-  // Four things trigger a load (mount, refresh, three panels' onChanged) and the eleven
+  // Four things trigger a load (mount, refresh, three panels' onChanged) and the twelve
   // requests are not ordered — a slow earlier load must never overwrite a later one.
   const seqRef = useRef(0)
   // What the page is actually SHOWING. The revalidation skip in load() is judged against
@@ -211,6 +217,7 @@ export default function PortfolioPage() {
     setSecurities(snap.securities)
     setTransactions(snap.transactions)
     setDividends(snap.dividends)
+    setDividendEvents(snap.dividendEvents)
     setIndustry(snap.industry)
     setByType(snap.byType)
     setByAccount(snap.byAccount)
@@ -221,7 +228,7 @@ export default function PortfolioPage() {
   }, [])
 
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
-  // law (see NetWorthPage). One load() refetches EVERYTHING: eleven cheap local queries,
+  // law (see NetWorthPage). One load() refetches EVERYTHING: twelve cheap local queries,
   // and every mutation path (panels' onChanged, refresh) converges through it. Returns
   // the chain so callers can keep their own busy flag up until the data is on screen.
   // useCallback over [owner] because the mount effect keys on it: flipping the scope IS
@@ -241,14 +248,16 @@ export default function PortfolioPage() {
       fetchHistory(),
       fetchRealized(owner),
       fetchRefreshStatus(),
+      fetchDividendEvents(),
     ])
-      .then(([h, secs, txns, divs, ind, typ, acct, spark, hist, real, status]) => {
+      .then(([h, secs, txns, divs, ind, typ, acct, spark, hist, real, status, divEvents]) => {
         if (seq !== seqRef.current) return
         const snapshot: PortfolioSnapshot = {
           holdings: h,
           securities: secs,
           transactions: txns,
           dividends: divs,
+          dividendEvents: divEvents,
           industry: ind,
           byType: typ,
           byAccount: acct,
@@ -381,7 +390,7 @@ export default function PortfolioPage() {
     // Markers come from the ledgers this page ALREADY fetches in the same Promise.all —
     // Overview keeps the two-arg call and never starts fetching them (spec Decision log).
     const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
-    const events = buildEventMarkers(history, transactions, dividends, tickerById)
+    const events = buildEventMarkers(history, transactions, dividends, tickerById, dividendEvents)
     const base = portfolioHistoryOption(history, liveFromHoldings(holdings), events)
     return base === null
       ? null
@@ -394,7 +403,7 @@ export default function PortfolioPage() {
           // END, so the indices are unshifted and the window runs out to the ping.
           dataZoom: rangeZoom(history.dates, range),
         }
-  }, [history, holdings, securities, transactions, dividends, range, legendSelected])
+  }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected])
 
   // Resolved target for EChart's animated zoom path — memoized so the wrapper's
   // fingerprint compare runs only when the window can actually have moved. Reads the
@@ -557,7 +566,7 @@ export default function PortfolioPage() {
             <div className="panel-title-row">
               <h2 className="panel-title">
                 Performance
-                <InfoHint text="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg." />
+                <InfoHint text="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)." />
               </h2>
               {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
             </div>

@@ -4,7 +4,13 @@
 // are parsed once and never handed back to the API (format.ts's rule).
 import type { EChartsOption } from '../../charts/echarts'
 import { INK, MUTED, PALETTE } from '../../charts/theme'
-import type { DividendOut, HoldingsTotals, PortfolioHistory, TransactionOut } from '../../types/api'
+import type {
+  DividendEventOut,
+  DividendOut,
+  HoldingsTotals,
+  PortfolioHistory,
+  TransactionOut,
+} from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import {
   escapeHtml,
@@ -54,28 +60,43 @@ function dayNumber(iso: string): number {
   return Date.UTC(y, m - 1, d) / 86_400_000
 }
 
+// Display trim for a Numeric(10,6) per-share string: "1.710000" → "1.71". Display-only
+// (this file's Number() rule) — the wire string itself is never re-scaled or re-parsed
+// into money math.
+function trimPerShare(raw: string): string {
+  if (!raw.includes('.')) return raw
+  const trimmed = raw.replace(/0+$/, '').replace(/\.$/, '')
+  return trimmed === '' ? '0' : trimmed
+}
+
 /**
  * The /portfolio ledgers as chart annotations (2026-08-25 spec §2c): every DATED buy,
  * sell and dividend snapped to the NEAREST weekly bar (the axis is categorical — a
  * true-date x would lie between bars), one marker per bar. Same-bar events cluster into
  * one marker whose tooltip lists each with its true date; a single-kind cluster wears
- * its kind's glyph (▲ buy, the same triangle rotated for sell, ● dividend) and a mixed
- * one wears the diamond so no kind over-claims it. Skipped honestly: dateless imported
- * transactions (nothing to snap to), splits (not one of the three glyphs — spec), and
- * events off either axis end (no bar to stand on). /portfolio only by construction —
- * OverviewPage never calls this (Decision log: it must not start fetching ledgers).
+ * its kind's glyph (▲ buy, the same triangle rotated for sell, ● dividend/ex-dividend)
+ * and a mixed one wears the diamond so no kind over-claims it. Provider ex-dividend
+ * events (2026-08-28) carry a per-share figure only — shares held on an old ex-date are
+ * unknowable from the dateless imported book, so no dollar total is ever shown — and the
+ * ledger wins a collision: an event matching a dividend row's (security, ex_date), or
+ * landing within 14 days of a MANUAL row for that security (manual rows carry no
+ * ex_date), is dropped. Skipped honestly: dateless imported transactions (nothing to snap to), splits
+ * (not one of the glyphs — spec), and events off either axis end (no bar to stand on).
+ * /portfolio only by construction — OverviewPage never calls this (Decision log: it must
+ * not start fetching ledgers).
  */
 export function buildEventMarkers(
   history: Pick<PortfolioHistory, 'dates' | 'market_value'>,
   transactions: TransactionOut[],
   dividends: DividendOut[],
   tickers: Map<number, string>,
+  dividendEvents: DividendEventOut[] = [],
 ): ChartEventPoint[] {
   if (history.dates.length === 0) return []
   const days = history.dates.map(dayNumber)
   const ticker = (id: number) => tickers.get(id) ?? `#${id}`
   interface RawEvent {
-    kind: 'buy' | 'sell' | 'dividend'
+    kind: 'buy' | 'sell' | 'dividend' | 'exdiv'
     date: string
     text: string
   }
@@ -90,12 +111,41 @@ export function buildEventMarkers(
       )} sh · ${formatDate(t.txn_date)}`,
     })
   }
+  // NUL-joined keys, the sankey link-key precedent: neither half can contain a NUL.
+  const ledgered = new Set<string>()
+  // Manual rows never carry an ex_date (their create/update schemas have no such field),
+  // so the exact-key dedupe cannot see them; they suppress annotations by PROXIMITY
+  // instead, mirroring the ingest's own +/-14-day manual-overlap rule.
+  const MANUAL_OVERLAP_DAYS = 14
+  const manualPayDays = new Map<number, number[]>()
   for (const d of dividends) {
+    if (d.source === 'manual') {
+      const bucket = manualPayDays.get(d.security_id)
+      const day = dayNumber(d.pay_date)
+      if (bucket) bucket.push(day)
+      else manualPayDays.set(d.security_id, [day])
+    }
+    if (d.ex_date !== null) ledgered.add(`${d.security_id}\u0000${d.ex_date}`)
     raw.push({
       kind: 'dividend',
       date: d.pay_date,
       text: `Dividend ${ticker(d.security_id)} — ${formatCurrency(d.amount)} · ${formatDate(
         d.pay_date,
+      )}`,
+    })
+  }
+  for (const e of dividendEvents) {
+    if (ledgered.has(`${e.security_id}\u0000${e.ex_date}`)) continue
+    const exDay = dayNumber(e.ex_date)
+    const nearManual = (manualPayDays.get(e.security_id) ?? []).some(
+      (payDay) => Math.abs(payDay - exDay) <= MANUAL_OVERLAP_DAYS,
+    )
+    if (nearManual) continue
+    raw.push({
+      kind: 'exdiv',
+      date: e.ex_date,
+      text: `Ex-dividend ${ticker(e.security_id)} — $${trimPerShare(e.per_share)}/sh · ${formatDate(
+        e.ex_date,
       )}`,
     })
   }
@@ -112,7 +162,7 @@ export function buildEventMarkers(
     if (bucket) bucket.push(event)
     else byIndex.set(index, [event])
   }
-  const SYMBOLS = { buy: 'triangle', sell: 'triangle', dividend: 'circle' } as const
+  const SYMBOLS = { buy: 'triangle', sell: 'triangle', dividend: 'circle', exdiv: 'circle' } as const
   return [...byIndex.entries()]
     .sort(([a], [b]) => a - b)
     .map(([index, events]) => {

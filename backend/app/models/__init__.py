@@ -32,6 +32,7 @@ from app.models.portfolio import (
     PositionTransaction,
     PriceHistory,
     Security,
+    SecurityDividendEvent,
 )
 from app.models.spending import CategoryBudget, MonthlyCashflow, MonthlySpending, SpendingCategory
 from app.models.taxes import TaxBracket, TaxInput, TaxInputDefinition, TaxYear
@@ -71,6 +72,7 @@ __all__ = [
     "RewardRate",
     "RsuGrant",
     "Security",
+    "SecurityDividendEvent",
     "SpendingCategory",
     "TRANSACTION_SOURCES",
     "TRANSACTION_TYPES",

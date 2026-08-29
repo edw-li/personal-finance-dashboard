@@ -112,6 +112,19 @@ class DividendOut(BaseModel):
     notes: str | None
 
 
+class DividendEventOut(BaseModel):
+    """A display-only historical ex-dividend marker (2026-08-28 spec). Deliberately three
+    fields: per_share and NO dollar amount, because the imported book is dateless and the
+    shares held on an old ex-date are unknowable — see models.SecurityDividendEvent. The
+    decimal crosses the wire as a string, like every other Numeric in this module."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    security_id: int
+    ex_date: date
+    per_share: Decimal
+
+
 class HoldingOut(BaseModel):
     security_id: int
     ticker: str
@@ -219,6 +232,22 @@ class RefreshOut(BaseModel):
     dividends_ingested: int
 
 
+class DividendEventCounts(BaseModel):
+    """services.dividend_events.backfill_dividend_events' counts — the deep fetch of the
+    performance chart's historical ex-dividend markers. `failed` covers a raising provider
+    AND an empty answer: a blocked yfinance returns zero bars rather than raising, and the
+    security's floor goes unrecorded either way (the backfill's docstring). Tickers skipped
+    because they already failed this run's price leg are not counted at all — they were not
+    attempted, and the refresh record's own `failed` map already names them.
+
+    The whole object is null when the backfill CRASHED: its counts are then unknown, and a
+    fabricated {0, 0, 0} would read as a settled book on every status surface."""
+
+    created: int
+    synced: int
+    failed: int
+
+
 class LastRefreshOut(BaseModel):
     """The persisted outcome of the most recent refresh run, manual or scheduled —
     price_service.record_refresh_run's payload, given back a shape."""
@@ -234,6 +263,9 @@ class LastRefreshOut(BaseModel):
     dividends_ingested: int | None = None
     dividends_removed: int | None = None
     dividends_skipped_overlap: int | None = None
+    # Same posture, one release later (2026-08-28): absent in every blob written before the
+    # historical-events backfill existed, so it reads as "unknown", never as zero.
+    dividend_events: DividendEventCounts | None = None
 
 
 class RefreshStatusOut(BaseModel):

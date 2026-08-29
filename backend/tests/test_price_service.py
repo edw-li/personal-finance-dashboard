@@ -13,6 +13,7 @@ from app.models import (
     PriceHistory,
     RsuGrant,
     Security,
+    SecurityDividendEvent,
 )
 from app.services.dividend_ingest import DividendIngestResult
 from app.services.price_provider import DailyBar
@@ -443,6 +444,168 @@ async def test_mid_ingest_db_failure_rolls_back_to_the_savepoint(db, engine, mon
         assert (await other.execute(select(DividendPayment))).scalars().all() == []
     payload = await read_last_refresh(db)
     assert payload["history_appended"] is True and payload["dividends_ingested"] == 0
+
+
+# MONDAY - 370 days (HISTORY_WINDOW_DAYS), pinned literally like test_dividend_ingest's
+# WINDOW_START. It bounds what the INGEST reaches, which is what decides which events end up
+# ledgered — the backfill itself no longer knows about a window, it excludes the ledgered
+# pairs (see test_dividend_events for that rule on its own).
+EVENTS_WINDOW_START = date(2025, 8, 12)
+CHART_FLOOR = date(2023, 10, 23)  # the workbook's first weekly snapshot: the fetch floor
+# The series' newest row. Seeded alongside the floor so backfill_missed_snapshots anchors
+# HERE and has exactly nothing to fill — without it the anchor would be CHART_FLOOR and the
+# run would fill ~150 Mondays, drowning what these tests are actually about.
+PRIOR_MONDAY = date(2026, 8, 10)
+
+
+def value_row(snapshot_date, market_value="1000.00"):
+    return PortfolioValueHistory(
+        snapshot_date=snapshot_date,
+        market_value=D(market_value),
+        cost_basis=D("900.00"),
+        sp500_value=D("950.00"),
+    )
+
+
+async def test_run_refresh_backfills_and_records_dividend_event_counts(db):
+    """The deep historical backfill rides the same ritual as the ingest, and its counts
+    land in the persisted payload under the additive `dividend_events` key. The split is
+    the assertion that matters, and this is where the ORDER inside run_refresh earns its
+    keep: the ingest writes its auto rows first, and the backfill then annotates every
+    event EXCEPT those (security, ex_date) pairs. Nothing appears in both tables."""
+    sec = await seed_security(db, "DIVX")
+    db.add(buy(sec.id))
+    db.add_all([value_row(CHART_FLOOR), value_row(PRIOR_MONDAY)])
+    await db.commit()
+    provider = FakeProvider(
+        {
+            "DIVX": [
+                bar(date(2024, 3, 15), "100", "1.7100"),  # out of the ingest's reach
+                bar(EVENTS_WINDOW_START - timedelta(days=1), "105", "1.7500"),  # ditto
+                bar(EVENTS_WINDOW_START, "106", "1.8000"),  # in-window: the ingest owns it
+                bar(date(2026, 6, 19), "110", "0.8200"),  # in-window: the ingest owns it
+                bar(MONDAY, "120"),
+            ]
+        }
+    )
+
+    result, appended, dividends = await run_refresh(db, provider, trigger="manual", today=MONDAY)
+
+    assert result.updated == ["DIVX"] and appended is True
+    assert dividends.ingested == 2  # the two in-window events, priced against 10 shares
+    payload = await read_last_refresh(db)
+    assert payload["dividend_events"] == {"created": 2, "synced": 1, "failed": 0}
+
+    events = (
+        (await db.execute(select(SecurityDividendEvent).order_by(SecurityDividendEvent.ex_date)))
+        .scalars()
+        .all()
+    )
+    assert [(e.security_id, e.ex_date, e.per_share) for e in events] == [
+        (sec.id, date(2024, 3, 15), D("1.710000")),
+        (sec.id, EVENTS_WINDOW_START - timedelta(days=1), D("1.750000")),
+    ]
+    auto_dates = (
+        (
+            await db.execute(
+                select(DividendPayment.ex_date)
+                .where(DividendPayment.source == "auto")
+                .order_by(DividendPayment.ex_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Disjoint by construction: every ledgered ex_date is absent from the annotations above.
+    assert auto_dates == [EVENTS_WINDOW_START, date(2026, 6, 19)]
+    assert not {e.ex_date for e in events} & set(auto_dates)
+
+    # Self-extinguishing: the floor is recorded, so the second run does not fetch it again.
+    second_provider = FakeProvider({"DIVX": provider.data["DIVX"]})
+    await run_refresh(db, second_provider, trigger="scheduled", today=MONDAY)
+    second_payload = await read_last_refresh(db)
+    assert second_payload["dividend_events"] == {"created": 0, "synced": 0, "failed": 0}
+    # One call, not two: the refresh's own price fetch. The deep backfill made none.
+    assert second_provider.calls == [("DIVX", MONDAY - timedelta(days=370))]
+
+
+async def test_run_refresh_does_not_refetch_tickers_that_just_failed(db):
+    """The wiring for the amplification fix: run_refresh must hand THIS run's failed-ticker
+    set to the backfill. Without it a blocked provider gets 2N doomed calls per refresh
+    instead of N — the service-level pin lives in test_dividend_events."""
+    blocked = await seed_security(db, "BAD")
+    good = await seed_security(db, "DIVX")
+    db.add(buy(good.id))
+    db.add_all([value_row(CHART_FLOOR), value_row(PRIOR_MONDAY)])
+    await db.commit()
+    provider = FakeProvider(
+        {"DIVX": [bar(date(2024, 3, 15), "100", "1.7100"), bar(MONDAY, "120")]},
+        errors={"BAD": RuntimeError("rate limited")},
+    )
+
+    result, _appended, _dividends = await run_refresh(db, provider, trigger="manual", today=MONDAY)
+
+    assert list(result.failed) == ["BAD"]
+    # BAD once (the price leg, which failed); DIVX twice (price leg + deep backfill).
+    assert [ticker for ticker, _start in provider.calls] == ["BAD", "DIVX", "DIVX"]
+    payload = await read_last_refresh(db)
+    assert payload["dividend_events"] == {"created": 1, "synced": 1, "failed": 0}
+    stored = (await db.execute(select(SecurityDividendEvent))).scalars().all()
+    assert [(e.security_id, e.ex_date) for e in stored] == [(good.id, date(2024, 3, 15))]
+    unarmed = (
+        await db.execute(select(Security.dividend_events_floor).where(Security.id == blocked.id))
+    ).scalar_one()
+    assert unarmed is None  # retried on the next run, not silently marked
+
+
+async def test_dividend_events_failure_degrades_and_preserves_the_snapshot(db, engine, monkeypatch):
+    """The ingest's savepoint posture, applied to the backfill: a FAILED STATEMENT (not a
+    bare raise) so the savepoint itself is load-bearing — without it the poisoned
+    transaction would take the uncommitted value snapshot and the run record down with
+    it (the sibling test_mid_ingest_db_failure test's argument).
+
+    The counts on this path are UNKNOWN, not zero (review 2026-08-28). A crash outside the
+    per-security savepoints — the floor SELECT, the marker flush — recorded as
+    {created: 0, synced: 0, failed: 0} would be a fabricated clean run, indistinguishable
+    on every status surface from a settled book with nothing left to fetch. Null is the
+    pre-feature "unknown" the readers already understand."""
+    from sqlalchemy import text
+
+    sec = await seed_security(db, "DIVX")
+    db.add(buy(sec.id))
+    db.add_all([value_row(CHART_FLOOR), value_row(PRIOR_MONDAY)])
+    await db.commit()
+
+    async def failing_statement(session, *args, **kwargs):
+        # NOT NULL violation raises at execute time, mid-"backfill", inside the savepoint.
+        await session.execute(
+            text("INSERT INTO security_dividend_events (security_id, ex_date) VALUES (NULL, NULL)")
+        )
+
+    # run_refresh imports the backfill lazily, INSIDE the function (the circular-import
+    # dodge dividend_ingest already needs) — so the patch belongs on the source module.
+    monkeypatch.setattr("app.services.dividend_events.backfill_dividend_events", failing_statement)
+    provider = FakeProvider({"DIVX": [bar(date(2024, 3, 15), "100", "1.7100"), bar(MONDAY, "120")]})
+
+    result, appended, _dividends = await run_refresh(db, provider, trigger="manual", today=MONDAY)
+
+    assert result.updated == ["DIVX"]
+    assert appended is True  # the savepoint rolled back the backfill ALONE
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as other:
+        assert (await other.get(LatestPrice, sec.id)).price == D("120.0000")
+        snapshots = (
+            await other.execute(
+                select(PortfolioValueHistory).order_by(PortfolioValueHistory.snapshot_date)
+            )
+        ).scalars()
+        assert [s.snapshot_date for s in snapshots] == [CHART_FLOOR, PRIOR_MONDAY, MONDAY]
+        assert (await other.execute(select(SecurityDividendEvent))).scalars().all() == []
+    payload = await read_last_refresh(db)
+    # The rest of the record persists in full; only the backfill's own counts read unknown.
+    assert payload["history_appended"] is True
+    assert payload["updated"] == 1 and payload["trigger"] == "manual"
+    assert payload["dividend_events"] is None
 
 
 async def test_value_snapshot_rides_only_the_monday_refresh(db):

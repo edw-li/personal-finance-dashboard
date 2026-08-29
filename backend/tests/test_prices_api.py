@@ -152,6 +152,9 @@ async def test_refresh_endpoint_ingests_dividends_and_echoes_the_counts(
     assert status["last"]["dividends_ingested"] == 1
     assert status["last"]["dividends_removed"] == 0
     assert status["last"]["dividends_skipped_overlap"] == 0
+    # No weekly value series in this test, so the deep historical backfill has no chart to
+    # annotate and no floor to fetch from — zeros, and nothing marked.
+    assert status["last"]["dividend_events"] == {"created": 0, "synced": 0, "failed": 0}
 
 
 async def test_refresh_requires_auth(client):
@@ -198,6 +201,9 @@ async def test_refresh_status_tolerates_pre_feature_payloads(auth_client, db):
     assert last["dividends_ingested"] is None
     assert last["dividends_removed"] is None
     assert last["dividends_skipped_overlap"] is None
+    # Same posture for the historical-events backfill added 2026-08-28: a blob written
+    # before it exists must still parse, and its counts read as "unknown", not as zero.
+    assert last["dividend_events"] is None
 
 
 async def test_refresh_status_drops_failures_that_left_the_refresh_population(
