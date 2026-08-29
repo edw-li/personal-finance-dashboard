@@ -112,6 +112,19 @@ class DividendOut(BaseModel):
     notes: str | None
 
 
+class DividendEventOut(BaseModel):
+    """A display-only historical ex-dividend marker (2026-08-28 spec). Deliberately three
+    fields: per_share and NO dollar amount, because the imported book is dateless and the
+    shares held on an old ex-date are unknowable — see models.SecurityDividendEvent. The
+    decimal crosses the wire as a string, like every other Numeric in this module."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    security_id: int
+    ex_date: date
+    per_share: Decimal
+
+
 class HoldingOut(BaseModel):
     security_id: int
     ticker: str
@@ -219,6 +232,17 @@ class RefreshOut(BaseModel):
     dividends_ingested: int
 
 
+class DividendEventCounts(BaseModel):
+    """services.dividend_events.backfill_dividend_events' counts — the deep one-time fetch
+    of the performance chart's pre-window ex-dividend markers. `failed` covers a raising
+    provider AND an empty answer: a blocked yfinance returns zero bars rather than raising,
+    and the security stays unmarked either way (the backfill's docstring)."""
+
+    created: int
+    synced: int
+    failed: int
+
+
 class LastRefreshOut(BaseModel):
     """The persisted outcome of the most recent refresh run, manual or scheduled —
     price_service.record_refresh_run's payload, given back a shape."""
@@ -234,6 +258,9 @@ class LastRefreshOut(BaseModel):
     dividends_ingested: int | None = None
     dividends_removed: int | None = None
     dividends_skipped_overlap: int | None = None
+    # Same posture, one release later (2026-08-28): absent in every blob written before the
+    # historical-events backfill existed, so it reads as "unknown", never as zero.
+    dividend_events: DividendEventCounts | None = None
 
 
 class RefreshStatusOut(BaseModel):

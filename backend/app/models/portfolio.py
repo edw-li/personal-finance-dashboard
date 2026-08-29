@@ -41,6 +41,12 @@ class Security(Base):
     # spec §3.1): a new column, not an overload, so ex_div_date's consumers (Securities
     # panel, TTM metadata) keep their semantics. The refresh clears it once it passes.
     next_ex_div_date: Mapped[date | None] = mapped_column(Date)
+    # The one-time deep dividend-history fetch's marker (services.dividend_events,
+    # 2026-08-28): the day that fetch SUCCEEDED for this security. A security that pays no
+    # dividends at all is marked too — that is the whole point, or it would be deep-fetched
+    # on every refresh forever. NULL means "never fetched", so a failed or empty answer
+    # simply leaves it NULL and the next refresh retries. Nothing else reads or writes it.
+    dividend_events_synced_on: Mapped[date | None] = mapped_column(Date)
 
 
 class PortfolioAccount(Base):
@@ -185,6 +191,43 @@ class PriceHistory(Base):
     # leave the column non-nullable. Verified hazard; do not rename back.
     price_date: Mapped[date] = mapped_column(Date)
     close: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+
+
+class SecurityDividendEvent(Base):
+    """Historical ex-dividend markers for the performance chart's OLDER era (2026-08-28).
+
+    The refresh's dividend ingest only reaches back HISTORY_WINDOW_DAYS, so the chart's
+    pre-window years — back to the workbook's first weekly snapshot — carry no event
+    markers at all. services.dividend_events fetches each security's full dividend-date
+    history once and stores it here.
+
+    DISPLAY-ONLY, and that is a money decision, not a scoping one: the imported book is
+    dateless by construction (PositionTransaction.sort_index), so the ledger cannot know
+    how many shares were held on a 2024 ex-date, and any dollar total here would be
+    invented. A row therefore carries a PER-SHARE amount and nothing else — no account, no
+    shares_held, no amount. dividend_payments remains the only place dividend MONEY lives,
+    and nothing in this feature writes it. Rows are strictly older than the ingest's
+    window, so the two never describe the same event.
+
+    ondelete CASCADE: an annotation about a security is meaningless without one.
+    """
+
+    __tablename__ = "security_dividend_events"
+    __table_args__ = (
+        # The idempotency key: one marker per (security, event date). Named EXPLICITLY to
+        # the value NAMING_CONVENTION would derive, and declared HERE and not only in the
+        # migration, because the test database is built by Base.metadata.create_all (the
+        # ux_dividend_auto_event precedent above).
+        UniqueConstraint("security_id", "ex_date", name="uq_security_dividend_events_security_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"))
+    # ex_date, NOT date: an attribute named `date` shadows datetime.date inside its own
+    # annotation — the hazard PriceHistory.price_date documents above. Do not rename.
+    ex_date: Mapped[date] = mapped_column(Date)
+    # Same scale as DividendPayment.per_share, so the two describe an event identically.
+    per_share: Mapped[Decimal] = mapped_column(Numeric(10, 6))
 
 
 class PortfolioValueHistory(Base):

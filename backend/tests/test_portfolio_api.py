@@ -12,12 +12,14 @@ from app.models import (
     PositionTransaction,
     PriceHistory,
     Security,
+    SecurityDividendEvent,
 )
 from tests.portfolio_factories import acct
 
 SECURITIES = "/api/v1/portfolio/securities"
 TRANSACTIONS = "/api/v1/portfolio/transactions"
 DIVIDENDS = "/api/v1/portfolio/dividends"
+DIVIDEND_EVENTS = "/api/v1/portfolio/dividend-events"
 HOLDINGS = "/api/v1/portfolio/holdings"
 ALLOCATION = "/api/v1/portfolio/allocation"
 REALIZED = "/api/v1/portfolio/realized"
@@ -1308,8 +1310,69 @@ async def test_day_pct_none_when_prior_values_cancel(auth_client, db):
 
 
 async def test_computed_views_require_auth(client):
-    for url in (HOLDINGS, ALLOCATION, REALIZED, HISTORY):
+    for url in (HOLDINGS, ALLOCATION, REALIZED, HISTORY, DIVIDEND_EVENTS):
         assert (await client.get(url)).status_code == 401, url
+
+
+async def test_dividend_events_wire_shape_and_order(auth_client, db):
+    """The performance chart's older-era markers (2026-08-28 spec). The wire shape is
+    frozen: security_id, ex_date, and a per-share decimal STRING — never a dollar total,
+    because the imported book is dateless and the shares held on a 2024 ex-date are
+    unknowable. Ordered (ex_date asc, security_id asc)."""
+    voo = Security(ticker="VOO", name="Vanguard S&P 500 ETF", holding_type="etf")
+    schd = Security(ticker="SCHD", name="Schwab Dividend ETF", holding_type="etf")
+    db.add_all([voo, schd])
+    await db.flush()
+    db.add_all(
+        [
+            SecurityDividendEvent(
+                security_id=schd.id, ex_date=date(2024, 6, 14), per_share=Decimal("0.750000")
+            ),
+            SecurityDividendEvent(
+                security_id=voo.id, ex_date=date(2024, 6, 14), per_share=Decimal("1.750000")
+            ),
+            SecurityDividendEvent(
+                security_id=voo.id, ex_date=date(2024, 3, 15), per_share=Decimal("1.710000")
+            ),
+        ]
+    )
+    await db.commit()
+
+    resp = await auth_client.get(DIVIDEND_EVENTS)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == [
+        {"security_id": voo.id, "ex_date": "2024-03-15", "per_share": "1.710000"},
+        {"security_id": min(voo.id, schd.id), "ex_date": "2024-06-14", "per_share": "1.750000"},
+        {"security_id": max(voo.id, schd.id), "ex_date": "2024-06-14", "per_share": "0.750000"},
+    ]
+
+
+async def test_dividend_events_empty_is_an_empty_list(auth_client):
+    resp = await auth_client.get(DIVIDEND_EVENTS)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+async def test_dividend_events_ignores_an_owner_param(auth_client, db):
+    """Deliberately whole-household: the performance surface has no owner split (the
+    weekly value series it annotates is household-wide), so an `owner` query param is not
+    a filter — it is an unknown parameter FastAPI ignores. Pinned so nobody 'fixes' the
+    endpoint into a half-owned one."""
+    sec = Security(ticker="VOO", name="Vanguard S&P 500 ETF", holding_type="etf")
+    db.add(sec)
+    await db.flush()
+    db.add(
+        SecurityDividendEvent(
+            security_id=sec.id, ex_date=date(2024, 3, 15), per_share=Decimal("1.710000")
+        )
+    )
+    await db.commit()
+
+    resp = await auth_client.get(f"{DIVIDEND_EVENTS}?owner=joint")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == [
+        {"security_id": sec.id, "ex_date": "2024-03-15", "per_share": "1.710000"}
+    ]
 
 
 async def test_history_empty_is_empty_arrays_not_404(auth_client):

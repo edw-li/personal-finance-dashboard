@@ -16,11 +16,13 @@ from app.models import (
     PortfolioValueHistory,
     PositionTransaction,
     Security,
+    SecurityDividendEvent,
 )
 from app.schemas.portfolio import (
     AllocationOut,
     AllocationSlice,
     DividendCreate,
+    DividendEventOut,
     DividendOut,
     DividendUpdate,
     HoldingOut,
@@ -512,6 +514,29 @@ async def delete_dividend(dividend_id: int, db: AsyncSession = Depends(get_db)) 
     await db.delete(dividend)
     await db.commit()
     return Response(status_code=204)
+
+
+@router.get("/dividend-events", response_model=list[DividendEventOut])
+async def list_dividend_events(db: AsyncSession = Depends(get_db)) -> list[SecurityDividendEvent]:
+    """The performance chart's OLDER-era ex-dividend markers — read-only, whole table,
+    written only by services.dividend_events (2026-08-28 spec). These are annotations, not
+    money: a marker carries a per-share amount because the imported book is dateless and
+    the shares held on an old ex-date are unknowable. In-window events live in
+    /portfolio/dividends instead, so the two never describe the same event.
+
+    NO `owner` query param, deliberately: the performance surface is whole-household by
+    design (the weekly value series these annotate has no owner split), and a marker is a
+    fact about a SECURITY, not about anyone's account. Ordered (ex_date, security_id) so
+    the chart can walk it without sorting."""
+    return list(
+        (
+            await db.execute(
+                select(SecurityDividendEvent).order_by(
+                    SecurityDividendEvent.ex_date, SecurityDividendEvent.security_id
+                )
+            )
+        ).scalars()
+    )
 
 
 @router.get("/holdings", response_model=HoldingsOut)

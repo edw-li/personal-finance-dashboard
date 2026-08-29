@@ -43,6 +43,13 @@ PRICE_MAX_ABS = Decimal(10) ** 10  # == money.MONEY_MAX_ABS_14_4 (money.py is
 # request-vocabulary/422; this module records failures instead)
 DIVIDEND_MAX_ABS = Decimal(10) ** 6  # == money.MONEY_MAX_ABS_10_4
 ERROR_SNIPPET_LEN = 200
+# What the historical-events backfill reports when it did not run (it never crashes the
+# refresh). The KEYS must stay dividend_events.backfill_dividend_events' — restated here
+# rather than imported because that module imports this one, and the flat-key precedent
+# (DividendIngestResult) has the same shape of dependency. Copied at every use: a
+# module-level dict handed straight into a JSON payload is one aliasing bug away from being
+# mutated for the whole process.
+DIVIDEND_EVENT_ZERO_COUNTS = {"created": 0, "synced": 0, "failed": 0}
 
 
 @dataclass
@@ -333,6 +340,7 @@ async def record_refresh_run(
     history_appended: bool,
     at: datetime,
     dividends: "DividendIngestResult | None" = None,
+    dividend_events: dict[str, int] | None = None,
 ) -> None:
     """Persist the run's outcome under app_settings[LAST_REFRESH_KEY], envelope
     {"value": ...} (the readers' convention). Caller commits."""
@@ -350,6 +358,11 @@ async def record_refresh_run(
         "dividends_skipped_overlap": (
             dividends.skipped_manual_overlap if dividends is not None else 0
         ),
+        # A nested dict, not three more flat keys: the historical-events backfill is its own
+        # leg with its own vocabulary, and one key keeps the flat dividend_* family reading
+        # as the ingest's alone. LastRefreshOut takes it OPTIONAL — every blob written
+        # before 2026-08-28 lacks it and must still parse.
+        "dividend_events": dict(dividend_events or DIVIDEND_EVENT_ZERO_COUNTS),
     }
     setting = await db.get(AppSetting, LAST_REFRESH_KEY)
     if setting is None:
@@ -373,9 +386,10 @@ async def run_refresh(
 ) -> tuple[RefreshResult, bool, "DividendIngestResult"]:
     """The whole refresh ritual, shared by the manual endpoint and the scheduled job so
     the two can never drift: refresh prices (commits itself), backfill and extend the
-    weekly value series, ingest dividend events, record the outcome, commit the
-    bookkeeping. Snapshot and ingest failures each degrade alone — the price refresh
-    always stands."""
+    weekly value series, ingest dividend events, backfill the chart's pre-window historical
+    ex-dividend markers, record the outcome, commit the bookkeeping. Snapshot, ingest and
+    marker failures each degrade alone — the price refresh always stands."""
+    from app.services.dividend_events import backfill_dividend_events
     from app.services.dividend_ingest import DividendIngestResult, ingest_dividends
     from app.services.value_history import append_value_snapshot, backfill_missed_snapshots
 
@@ -414,6 +428,18 @@ async def run_refresh(
     except Exception:
         logger.exception("dividend ingest failed — the price refresh stands")
         dividends = DividendIngestResult()
+    # AFTER the ingest, so the two legs read the window the same way and the ledger's rows
+    # are already written when the annotations land. Its own savepoint, for the ingest's
+    # reason: a plain rollback here would destroy the still-uncommitted value snapshot
+    # above, while the savepoint isolates the backfill alone. Self-extinguishing per
+    # security, so on a settled database this is one indexed SELECT and out.
+    dividend_events = dict(DIVIDEND_EVENT_ZERO_COUNTS)
+    try:
+        async with db.begin_nested():
+            dividend_events = await backfill_dividend_events(db, provider, today=today)
+    except Exception:
+        logger.exception("dividend events backfill failed — the price refresh stands")
+        dividend_events = dict(DIVIDEND_EVENT_ZERO_COUNTS)
     await record_refresh_run(
         db,
         result,
@@ -421,6 +447,7 @@ async def run_refresh(
         history_appended=appended,
         at=datetime.now(UTC),
         dividends=dividends,
+        dividend_events=dividend_events,
     )
     await db.commit()
     return result, appended, dividends
