@@ -19,8 +19,9 @@ import type { TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
 
-// The six jurisdictions in the order the engine reports them — one order shared by the
-// waterfall's steps, the trend's stack and both legends.
+// The seven tax lines in the order the engine reports them — one order shared by the
+// waterfall's steps, the trend's stack and both legends. NIIT is LAST on purpose: it is
+// the one additive line, so the builders can include it conditionally by slicing.
 export const TAX_LABELS = [
   'Federal',
   'State',
@@ -28,9 +29,10 @@ export const TAX_LABELS = [
   'Soc. Sec.',
   'SDI',
   'Cap. gains',
+  'NIIT',
 ] as const
 
-// Six ordered slots of ONE hue family: six identity hues would break the ≤3-hue law, so
+// Seven ordered slots of ONE hue family: seven identity hues would break the ≤3-hue law, so
 // the sequential ramp is the compliant form (AllocationPanel's convention). The ramp
 // encodes POSITION in the fixed order above — not magnitude — which is why the two charts
 // can share it: a waterfall step and a stack segment for the same tax wear one color.
@@ -40,15 +42,17 @@ export const TAX_LABELS = [
 export const TAX_COLORS = [
   SEQUENTIAL_BLUE[4],
   SEQUENTIAL_BLUE[5],
-  SEQUENTIAL_BLUE[7],
+  SEQUENTIAL_BLUE[6],
   SEQUENTIAL_BLUE[8],
+  SEQUENTIAL_BLUE[9],
   SEQUENTIAL_BLUE[10],
   SEQUENTIAL_BLUE[11],
 ] as const
 
+// full vocabulary — the builder skips the NIIT step when the year has none
 export const WATERFALL_CATEGORIES = ['Gross', ...TAX_LABELS, 'Take-home'] as const
 
-// Stable ids shared by the trend's six stacks and the drill-in pie: universalTransition
+// Stable ids shared by the trend's seven stacks and the drill-in pie: universalTransition
 // keys on id across notMerge setOption calls, so the year's segments morph into slices
 // and back out (SpendingPage's `cat-${id}` idiom). Index in TAX_LABELS is the identity.
 export const TAX_SERIES_IDS = TAX_LABELS.map((_, i) => `tax-${i}`)
@@ -65,7 +69,7 @@ function roundTo(value: number, places: number): number {
   return Math.round(value * factor) / factor
 }
 
-// The six tax figures of one year, in TAX_LABELS order.
+// The seven tax figures of one year, in TAX_LABELS order.
 function taxAmounts(summary: TaxSummaryOut): number[] {
   return [
     Number(summary.federal.tax),
@@ -74,6 +78,8 @@ function taxAmounts(summary: TaxSummaryOut): number[] {
     Number(summary.social_security.tax),
     Number(summary.disability.tax),
     Number(summary.capital_gains.tax),
+    // Optional on the wire (fixtures and stored payloads predate the line): absent is 0.
+    Number(summary.niit?.tax ?? 0),
   ]
 }
 
@@ -108,11 +114,17 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
   const steps: WaterfallStep[] = [
     { label: 'Gross', amount: gross, base: 0, height: gross, color: OTHER_SERIES_COLOR, remaining: null },
   ]
+  const taxSteps = taxes
+    .map((tax, i) => ({ label: TAX_LABELS[i], tax, color: TAX_COLORS[i] }))
+    // NIIT is the one ADDITIVE line (2026-08-31): a year it does not touch keeps its
+    // eight familiar bars instead of gaining a $0 step. The six sheet jurisdictions
+    // always draw, zero or not — their absence would read as missing data.
+    .filter((step) => step.label !== 'NIIT' || step.tax !== 0)
   let remainder = gross
-  taxes.forEach((tax, i) => {
+  taxSteps.forEach(({ label, tax, color }) => {
     const after = roundTo(remainder - tax, 2)
     steps.push({
-      label: TAX_LABELS[i],
+      label,
       amount: tax,
       // State tax can come out NEGATIVE (exemption credits exceed the walk), which steps
       // the remainder back UP: the segment then spans [before, after] instead. Taking the
@@ -120,7 +132,7 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
       // and reduces to "floor = the remainder after" for every non-negative tax.
       base: Math.min(remainder, after),
       height: Math.abs(roundTo(tax, 2)),
-      color: TAX_COLORS[i],
+      color,
       remaining: after,
     })
     remainder = after
@@ -152,7 +164,7 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
     xAxis: {
       type: 'category',
       data: steps.map((s) => s.label),
-      // Eight steps: every one of them is labelled or the walk cannot be read.
+      // Eight or nine steps: every one of them is labelled or the walk cannot be read.
       axisLabel: { interval: 0 },
     },
     yAxis: {
@@ -199,7 +211,7 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
 }
 
 /**
- * Multi-year composition: one stacked bar per year of the six tax figures, with the
+ * Multi-year composition: one stacked bar per year of the tax figures, with the
  * overall effective rate as a line on a secondary percent axis (the rate is a ratio, so it
  * cannot share the money axis). Returns null when the feed carries no years at all — the
  * caller renders an empty note.
@@ -213,6 +225,13 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
   const rates = ordered.map((y) =>
     y.totals.effective_rate === null ? null : roundTo(Number(y.totals.effective_rate) * 100, 4),
   )
+  const niitIndex = TAX_LABELS.indexOf('NIIT')
+  // NIIT stacks only when some year carries it: an all-zero series would add a legend
+  // entry and a $0.00 tooltip row to every pre-NIIT year. One nonzero year brings the
+  // series for EVERY year — a stack that comes and goes across one chart would lie.
+  const stacked = amounts.some((a) => a[niitIndex] !== 0)
+    ? [...TAX_LABELS]
+    : TAX_LABELS.slice(0, niitIndex)
 
   return {
     grid: { left: 70, right: 56, top: 40, bottom: 28 },
@@ -237,7 +256,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
         }
         // The stacks, then the year's total (vestingChartOptions' Total row,
         // jurisdiction-flavoured — 2026-08-25 spec §2b), then the rate line: the rate is
-        // a ratio, not a seventh addend, so it stays out of the sum and under it.
+        // a ratio, not another addend, so it stays out of the sum and under it.
         const taxRows = list.filter((p) => p.seriesName !== RATE_SERIES_NAME)
         const rateRows = list.filter((p) => p.seriesName === RATE_SERIES_NAME)
         const total = taxRows.reduce(
@@ -275,7 +294,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
       },
     ],
     series: [
-      ...TAX_LABELS.map((label, i) => ({
+      ...stacked.map((label, i) => ({
         id: TAX_SERIES_IDS[i],
         name: label,
         type: 'bar' as const,
@@ -304,7 +323,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
 }
 
 /**
- * One year's tax burden as a donut of the six jurisdictions — the trend chart's drill-in
+ * One year's tax burden as a donut of the tax lines — the trend chart's drill-in
  * (SpendingPage's month pie, jurisdiction-flavoured). A pie can only draw positive slices,
  * so zero and negative figures (a credit-driven negative state tax) are EXCLUDED here
  * while the stacked bar nets them into the year's column; the totals line beside the
@@ -359,7 +378,11 @@ export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
     headers: ['Year', ...TAX_LABELS, 'Total tax'],
     rows: ordered.map((y) => [
       y.year, y.federal.tax, y.state.tax, y.medicare.tax, y.social_security.tax,
-      y.disability.tax, y.capital_gains.tax, y.totals.total_tax,
+      y.disability.tax, y.capital_gains.tax,
+      // absent (pre-NIIT payload) exports as zero — a blank would misalign the fixed
+      // header row
+      y.niit?.tax ?? '0.00',
+      y.totals.total_tax,
     ]),
   }
 }

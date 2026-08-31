@@ -277,17 +277,17 @@ function withholdingFor(year: number): WithholdingOut {
   }
 }
 
-// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 21 of
+// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 22 of
 // them, in ONE line (backend/app/services/tax_service.py MISSING_INPUTS_WARNING). It is
 // rendered verbatim — the list IS the message.
-const MISSING_21 =
+const MISSING_22 =
   'missing inputs defaulted to 0: latest_w2_income, other_w2_income, stcg_total, ' +
   'stcg_standard, unqualified_dividends, unq_div_us_treasuries_etf, ' +
   'unq_div_state_exempt_pct, interest_total, other_income_1099, trad_401k_contributions, ' +
-  'hsa_contributions, hsa_contributions_employer, other_pretax_deductions, ' +
-  'standard_deduction, itemized_deduction, state_standard_deduction, ' +
-  'state_exemption_credits, ltcg_total, ltcg_brokerage, qualified_dividends, ' +
-  'other_capital_gains'
+  'hsa_contributions, hsa_contributions_employer, capital_loss_deductions, ' +
+  'other_pretax_deductions, standard_deduction, itemized_deduction, ' +
+  'state_standard_deduction, state_exemption_credits, ltcg_total, ltcg_brokerage, ' +
+  'qualified_dividends, other_capital_gains'
 
 // The tax inputs and the bracket cells are AmountInputs now, so a BLURRED box reads its
 // formatted echo, not its raw state (spec §3.3): "999" shows as "$999.00", and a percent
@@ -771,14 +771,14 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(2))
   })
 
-  it('renders every engine warning verbatim, including the 21-key sparse-year line', async () => {
+  it('renders every engine warning verbatim, including the 22-key sparse-year line', async () => {
     const sparse = summaryFor(2024)
-    sparse.warnings = [MISSING_21, 'no state brackets for 2024: state tax computed as 0']
+    sparse.warnings = [MISSING_22, 'no state brackets for 2024: state tax computed as 0']
     vi.mocked(fetchTaxSummary).mockResolvedValue(sparse)
     renderPage()
 
     // One text node, wrapped by CSS — not truncated, not summarised, not re-worded.
-    expect(await screen.findByText(MISSING_21)).toBeTruthy()
+    expect(await screen.findByText(MISSING_22)).toBeTruthy()
     expect(screen.getByText('no state brackets for 2024: state tax computed as 0')).toBeTruthy()
   })
 

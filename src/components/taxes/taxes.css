@@ -44,7 +44,7 @@
   font-size: 0.78rem;
   line-height: 1.45;
   color: var(--muted);
-  /* A freshly created year's "missing inputs defaulted to 0: …" names all 21 keys in one
+  /* A freshly created year's "missing inputs defaulted to 0: …" names all 22 keys in one
      sentence: it WRAPS, including inside the comma-separated list, rather than clipping or
      forcing the card to scroll sideways. */
   overflow-wrap: anywhere;

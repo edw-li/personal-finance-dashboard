@@ -694,6 +694,11 @@ export interface TaxSummaryOut {
   social_security: WageTaxOut
   disability: WageTaxOut
   capital_gains: CapitalGainsTaxOut
+  // NIIT (2026-08-31): capital_gains' wire shape — gains_amount is net investment
+  // income, taxable_income the surcharged base. OPTIONAL for brackets_missing_for_status's
+  // reason above: pinned fixtures predate the section, and an absent section reads as
+  // zero everywhere it is charted.
+  niit?: CapitalGainsTaxOut
   totals: TaxTotalsOut
   warnings: string[]
 }
@@ -1466,6 +1471,8 @@ export interface MoneyFlowTaxes {
   social_security: string
   disability: string
   capital_gains: string
+  // Optional for the same fixture reason; the server always sends it.
+  niit?: string
 }
 
 export interface MoneyFlowCategory {

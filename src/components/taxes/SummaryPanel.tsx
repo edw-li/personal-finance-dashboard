@@ -164,7 +164,7 @@ export default function SummaryPanel({
           <StatTile
             label="Total tax"
             value={formatCurrency(totals?.total_tax)}
-            hint="All six jurisdictions summed: federal, state, Medicare, Social Security, SDI, and capital gains."
+            hint="Every tax line summed: federal, state, Medicare, Social Security, SDI, capital gains — and NIIT when it applies."
           />
           {/* Same size as its three siblings: the hero treatment belongs to pages with ONE
               headline figure, and here it just made take-home shout over the row. */}
@@ -182,7 +182,7 @@ export default function SummaryPanel({
 
         {summary.warnings.length > 0 && (
           // React text nodes, so the engine's sentences are escaped by construction. A
-          // sparse year's "missing inputs defaulted to 0: …" names all 21 keys in one
+          // sparse year's "missing inputs defaulted to 0: …" names all 22 keys in one
           // line — it wraps (see taxes.css) rather than being clipped or summarised: the
           // list IS the message.
           <div className="tax-warnings">
