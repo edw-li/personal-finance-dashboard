@@ -391,7 +391,16 @@ export default function PortfolioPage() {
     // Overview keeps the two-arg call and never starts fetching them (spec Decision log).
     const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
     const events = buildEventMarkers(history, transactions, dividends, tickerById, dividendEvents)
-    const base = portfolioHistoryOption(history, liveFromHoldings(holdings), events)
+    // A3 (2026-08-31 tier-1): the ping is derived from the OWNER-FILTERED holdings, but
+    // /portfolio/history is household-wide by design — plotting a person's total at the
+    // end of the household series drew a fake cliff. Only the All view bridges to "now";
+    // null also suppresses the dashed connector and the "Live" legend entry (both live
+    // inside the builder's livePt branch).
+    const base = portfolioHistoryOption(
+      history,
+      owner === null ? liveFromHoldings(holdings) : null,
+      events,
+    )
     return base === null
       ? null
       : {
@@ -403,7 +412,7 @@ export default function PortfolioPage() {
           // END, so the indices are unshifted and the window runs out to the ping.
           dataZoom: rangeZoom(history.dates, range),
         }
-  }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected])
+  }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected, owner])
 
   // Resolved target for EChart's animated zoom path — memoized so the wrapper's
   // fingerprint compare runs only when the window can actually have moved. Reads the
@@ -577,7 +586,8 @@ export default function PortfolioPage() {
               <p className="hint">
                 Performance, sparklines and price refresh always cover the whole household —
                 the owner chips scope holdings, allocation, dividends, transactions and
-                realized gains.
+                realized gains. Person views omit the live price dot because the history is
+                household-wide.
               </p>
             )}
             {performanceOption && history ? (

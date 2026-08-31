@@ -550,10 +550,12 @@ it('applies a revalidation that matches the cache but not the screen', async () 
 })
 
 // Pinned verbatim: this sentence is the page's only defence against reading the weekly
-// performance line as one person's (spec §5).
+// performance line as one person's (spec §5) — and, since A3, against wondering where the
+// live dot went on a person view.
 const HOUSEHOLD_HINT =
   'Performance, sparklines and price refresh always cover the whole household — the owner ' +
-  'chips scope holdings, allocation, dividends, transactions and realized gains.'
+  'chips scope holdings, allocation, dividends, transactions and realized gains. Person ' +
+  'views omit the live price dot because the history is household-wide.'
 
 it('says the performance card is household-wide only while a scope is active', async () => {
   renderPage()
@@ -590,4 +592,34 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
   // And the performance chart is still up: it is household-wide, and the hint says so.
   expect(screen.getByText(HOUSEHOLD_HINT)).toBeTruthy()
   expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)
+})
+
+// ── Live ping owner scope (2026-08-31 tier-1 A3) ──────────────────────────────────────────
+// /portfolio/history is household-wide by design (no owner param), but the ping is derived
+// from the OWNER-FILTERED holdings — plotting a person's total at the end of the household
+// series drew a fake cliff. The ping (and its dashed connector, which rides the Live
+// series' markLine) renders only on the All view.
+it('renders the live ping only on the All view', async () => {
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  const performance = () => screen.getAllByTestId('echart')[0]
+  // holdingsOut()'s latest_quote_at (2026-08-27) is past HISTORY's last bar (2026-08-24),
+  // so the household view bridges the series to a live ping. (Both ledger fixtures date
+  // before the history window, so no Events series muddies the name list.)
+  await waitFor(() =>
+    expect(performance().getAttribute('data-series')).toBe(
+      'Portfolio value|Cost basis|S&P 500 baseline|VOO (your contributions)|Live',
+    ),
+  )
+
+  fireEvent.click(chip('Sam'))
+  // The scoped holdings still carry a quote — the OWNER is what retires the ping.
+  await waitFor(() =>
+    expect(performance().getAttribute('data-series')).toBe(
+      'Portfolio value|Cost basis|S&P 500 baseline|VOO (your contributions)',
+    ),
+  )
+
+  fireEvent.click(chip('All'))
+  await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Live'))
 })
