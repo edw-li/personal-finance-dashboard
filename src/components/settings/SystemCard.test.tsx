@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { LastRefresh, SystemStatus } from '../../types/api'
@@ -8,8 +8,9 @@ import SystemCard from './SystemCard'
 vi.mock('../../api/system', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/system')>()),
   fetchSystemStatus: vi.fn(),
+  downloadSnapshot: vi.fn(),
 }))
-import { fetchSystemStatus } from '../../api/system'
+import { downloadSnapshot, fetchSystemStatus } from '../../api/system'
 
 const LAST_RUN: LastRefresh = {
   at: '2026-08-24T20:11:00+00:00',
@@ -50,6 +51,7 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
 
 beforeEach(() => {
   vi.mocked(fetchSystemStatus).mockResolvedValue(systemOut())
+  vi.mocked(downloadSnapshot).mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -132,4 +134,35 @@ it('shows the load failure verbatim and retries into the rows', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
   await screen.findByText('Running')
   expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('downloads the snapshot with a busy state on the button', async () => {
+  let release: () => void = () => {}
+  vi.mocked(downloadSnapshot).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve
+      }),
+  )
+  render(<SystemCard />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Download snapshot (.zip)' }))
+  expect(downloadSnapshot).toHaveBeenCalledTimes(1)
+  const busy = screen.getByRole('button', { name: 'Preparing…' }) as HTMLButtonElement
+  expect(busy.disabled).toBe(true)
+  await act(async () => {
+    release()
+  })
+  const idle = screen.getByRole('button', { name: 'Download snapshot (.zip)' }) as HTMLButtonElement
+  expect(idle.disabled).toBe(false)
+})
+
+it('surfaces a failed export without hiding the facts', async () => {
+  vi.mocked(downloadSnapshot).mockRejectedValue(new ApiError('export blew up', 500))
+  render(<SystemCard />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Download snapshot (.zip)' }))
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('export blew up')
+  // The facts stay on screen — the download error is its own surface, never the card's
+  // load-error state (which unmounts SystemFacts).
+  expect(screen.getByText('Running')).toBeDefined()
 })

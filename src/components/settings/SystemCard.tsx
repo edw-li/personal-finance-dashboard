@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
-import { fetchSystemStatus } from '../../api/system'
+import { downloadSnapshot, fetchSystemStatus } from '../../api/system'
 import type { SystemStatus } from '../../types/api'
 import { formatBytes, formatDateTime } from '../../utils/format'
 import { backupAge } from '../../utils/staleness'
@@ -36,7 +36,15 @@ function backupLine(status: SystemStatus): { text: string; className: string } {
   return { text: stamp, className: age === 'stale' ? 'system-stale' : '' }
 }
 
-function SystemFacts({ status }: { status: SystemStatus }) {
+function SystemFacts({
+  status,
+  downloading,
+  onDownload,
+}: {
+  status: SystemStatus
+  downloading: boolean
+  onDownload: () => void
+}) {
   const backup = backupLine(status)
   return (
     <dl className="system-facts">
@@ -56,7 +64,14 @@ function SystemFacts({ status }: { status: SystemStatus }) {
       </div>
       <div className="system-fact">
         <dt>Last backup</dt>
-        <dd className={backup.className}>{backup.text}</dd>
+        <dd>
+          <span className={backup.className}>{backup.text}</span>{' '}
+          {/* The on-demand door beside the nightly marker (spec §B1): the snapshot ZIP
+              is the app's own backup, so it lives on the backup row. */}
+          <button type="button" className="button" onClick={onDownload} disabled={downloading}>
+            {downloading ? 'Preparing…' : 'Download snapshot (.zip)'}
+          </button>
+        </dd>
       </div>
       <div className="system-fact">
         <dt>Database size</dt>
@@ -85,6 +100,21 @@ export default function SystemCard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const seqRef = useRef(0)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+
+  // Its OWN error state, never the card's `error`: that one unmounts SystemFacts (the
+  // render below is `!error && <SystemFacts/>`), and a failed download must not blank
+  // rows that loaded fine.
+  const download = () => {
+    setDownloading(true)
+    setDownloadError(null)
+    downloadSnapshot()
+      .catch((err: unknown) => {
+        setDownloadError(err instanceof ApiError ? err.message : 'Export failed.')
+      })
+      .finally(() => setDownloading(false))
+  }
 
   const load = () => {
     const seq = ++seqRef.current
@@ -128,9 +158,16 @@ export default function SystemCard() {
           </button>
         </div>
       )}
+      {downloadError && (
+        <div className="error-banner" role="alert">
+          {downloadError}
+        </div>
+      )}
       {status === null
         ? loading && <p className="empty-note">Loading…</p>
-        : !error && <SystemFacts status={status} />}
+        : !error && (
+            <SystemFacts status={status} downloading={downloading} onDownload={download} />
+          )}
     </section>
   )
 }
