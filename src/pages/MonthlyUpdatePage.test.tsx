@@ -2,14 +2,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MonthlyUpdatePage from './MonthlyUpdatePage'
+import ToastProvider from '../components/ToastProvider'
+import { ApiError } from '../api/client'
 
 vi.mock('../api/netWorth', () => ({
+  deleteMonthBalances: vi.fn(),
   fetchAccounts: vi.fn(),
   fetchMonthBalances: vi.fn(),
   fetchTimeseries: vi.fn(),
   putMonthBalances: vi.fn(),
 }))
 vi.mock('../api/spending', () => ({
+  deleteSpendingMonth: vi.fn(),
   fetchCategories: vi.fn(),
   fetchMatrix: vi.fn(),
   fetchSpendingMonth: vi.fn(),
@@ -1027,4 +1031,67 @@ it('drops the stale saved card the moment a new save attempt begins', async () =
 
   await screen.findByRole('alert')
   expect(screen.queryByText(/month saved/i)).toBeNull()
+})
+
+// --- delete month (2026-08-31 spec §B2) ----------------------------------------------------
+// A second render helper rather than a change to renderWizard(): the delete arm needs a
+// CONTROLLABLE entry month (the existing one hardcodes 2026-08) and the toast provider that
+// every pre-existing direct render deliberately does without.
+
+function renderWizardAt(entry: string) {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <ToastProvider>
+        <MonthlyUpdatePage />
+      </ToastProvider>
+    </MemoryRouter>,
+  )
+}
+
+it('offers no delete on a month the server has never seen', async () => {
+  renderWizardAt('/update?month=2026-08-01&step=review')
+  await screen.findByRole('button', { name: 'Save month' })
+  expect(screen.queryByRole('button', { name: 'Delete this month' })).toBeNull()
+})
+
+it('arms on the typed month, fires both deletes tolerating a 404, clears the draft', async () => {
+  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue(undefined)
+  // The spending leg 404s (balances-only month) — the delete still fully succeeds.
+  vi.mocked(spendingApi.deleteSpendingMonth).mockRejectedValue(
+    new ApiError('no spending or net pay recorded for this month', 404),
+  )
+  sessionStorage.setItem('finance-update-draft:2026-07-01', '{"balances":{"1":"9.00"}}')
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  const button = (await screen.findByRole('button', {
+    name: 'Delete this month',
+  })) as HTMLButtonElement
+  expect(button.disabled).toBe(true)
+  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), {
+    target: { value: '2026-07' },
+  })
+  expect(button.disabled).toBe(false)
+  fireEvent.click(button)
+  await waitFor(() => expect(netWorthApi.deleteMonthBalances).toHaveBeenCalledWith('2026-07-01'))
+  expect(spendingApi.deleteSpendingMonth).toHaveBeenCalledWith('2026-07-01')
+  await screen.findByText(`Deleted ${formatMonth('2026-07-01')} — balances and spending removed.`)
+  expect(sessionStorage.getItem('finance-update-draft:2026-07-01')).toBeNull()
+  // Landed on the CURRENT month's wizard.
+  await waitFor(() =>
+    expect(
+      screen.getByText(`Monthly update — ${formatMonth(currentMonthIso())}`),
+    ).toBeDefined(),
+  )
+})
+
+it('surfaces a non-404 delete failure, stops before the second leg, stays on the month', async () => {
+  vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('db exploded', 500))
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  fireEvent.change(await screen.findByLabelText('Type 2026-07 to confirm'), {
+    target: { value: '2026-07' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('db exploded')
+  expect(spendingApi.deleteSpendingMonth).not.toHaveBeenCalled()
+  expect(screen.getByText(`Monthly update — ${formatMonth('2026-07-01')}`)).toBeDefined()
 })

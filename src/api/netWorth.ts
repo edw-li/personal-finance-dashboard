@@ -71,3 +71,8 @@ export function putMonthBalances(
     body: JSON.stringify(body),
   })
 }
+
+// 404 when the month has no snapshot — the wizard delete treats that as "already gone".
+export function deleteMonthBalances(month: string): Promise<void> {
+  return api<void>(`/net-worth/months/${month}`, { method: 'DELETE' })
+}

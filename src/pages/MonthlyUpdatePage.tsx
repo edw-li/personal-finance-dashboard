@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarCheck, CalendarPlus } from 'lucide-react'
 import { ApiError } from '../api/client'
 import {
+  deleteMonthBalances,
   fetchAccounts,
   fetchMonthBalances,
   fetchTimeseries,
@@ -11,6 +12,7 @@ import {
 } from '../api/netWorth'
 import { fetchHousehold } from '../api/household'
 import {
+  deleteSpendingMonth,
   fetchCategories,
   fetchMatrix,
   fetchSpendingMonth,
@@ -19,6 +21,7 @@ import {
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
+import { useToast } from '../components/ToastProvider'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
 import type {
   AccountOut,
@@ -159,6 +162,13 @@ export default function MonthlyUpdatePage() {
   const [baseline, setBaseline] = useState<{ month: string; data: string } | null>(null)
   // A draft was restored over the seed this load — the banner's flag.
   const [restored, setRestored] = useState(false)
+  // Delete-month arm-and-confirm (2026-08-31 spec §B2): the typed YYYY-MM arms the red
+  // button. loadNonce forces the load effect when the deleted month IS the month on
+  // screen — the [month] dep alone would never re-run.
+  const [deleteArm, setDeleteArm] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [loadNonce, setLoadNonce] = useState(0)
+  const toast = useToast()
   // What the last paste did, narrated for everyone (spec §4.1) — one line, replaced by the
   // next paste and dropped on any step or month change. The flashed ids are the cells it
   // wrote (input ids, e.g. 'bal-3'), so one Set serves both tables.
@@ -190,6 +200,9 @@ export default function MonthlyUpdatePage() {
   // CHANGE live in the ribbon's onSelect handler; the mount fetch is covered by the
   // initial state values.
   useEffect(() => {
+    // loadNonce has no data role: the wizard delete bumps it to force this chain when
+    // the deleted month is the month already on screen.
+    void loadNonce
     Promise.all([
       fetchAccounts(),
       fetchCategories(),
@@ -309,7 +322,7 @@ export default function MonthlyUpdatePage() {
         setError(err instanceof ApiError ? err.message : 'Failed to load month data')
       })
       .finally(() => setLoading(false))
-  }, [month])
+  }, [month, loadNonce])
 
   // Persist typed-but-unsaved work continuously: the draft is written on every edit and
   // deleted the moment the boxes match the seed again, so storage always mirrors "what
@@ -486,6 +499,48 @@ export default function MonthlyUpdatePage() {
     }
   }
 
+  // Each leg tolerates ITS OWN 404 — a balances-only month must still fully clear, and
+  // the mirror case too — but any other failure surfaces and stops the sequence (a retry
+  // re-runs both; the leg that already succeeded then 404s and is tolerated).
+  const tolerate404 = async (call: Promise<void>) => {
+    try {
+      await call
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return
+      throw err
+    }
+  }
+
+  const deleteMonth = async () => {
+    setDeleting(true)
+    setError(null)
+    try {
+      await tolerate404(deleteMonthBalances(month))
+      await tolerate404(deleteSpendingMonth(month))
+      sessionStorage.removeItem(draftKey(month))
+      toast.success(`Deleted ${formatMonth(month)} — balances and spending removed.`)
+      setDeleteArm('')
+      setSaved(null)
+      // A8 adaptation: a remembered half-landed save describes rows that no longer exist —
+      // leaving it would keep the primary reading "Retry spending" for a deleted month.
+      setBalancesLeg(null)
+      setRestored(false)
+      setLoading(true)
+      // Land on the CURRENT month's wizard; the nonce covers the deleted-month ===
+      // current-month case, where the month param does not change.
+      setLoadNonce((n) => n + 1)
+      setParams(() => new URLSearchParams({ month: currentMonthIso(), step: 'balances' }))
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? `Delete failed: ${err.message} — retry`
+          : 'Delete failed — retry',
+      )
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const stepIndex = STEPS.indexOf(step)
 
   // Month change refetches via the [month] dep — flip the fetch state here, in the
@@ -502,6 +557,7 @@ export default function MonthlyUpdatePage() {
     setRestored(false)
     // Same reason the step change clears them: the note counts the OLD month's rows.
     setPasteNote(null)
+    setDeleteArm('')
     setFlashIds(new Set())
     setParams(() => new URLSearchParams({ month: m, step: 'balances' }))
   }
@@ -1099,6 +1155,34 @@ export default function MonthlyUpdatePage() {
             Server-side rounding (2 decimals, half-up) is authoritative; the preview is
             client math. {stepIndex === 2 && !balancesValid ? 'Fix balance entries first.' : ''}
           </p>
+          {monthExisted && (
+            <div className="danger-zone">
+              <h3 className="eyebrow">Danger</h3>
+              <p className="drill-hint">
+                Delete this month everywhere: its balances snapshot, spending rows and
+                take-home. This cannot be undone.
+              </p>
+              <div className="danger-row">
+                <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
+                <input
+                  id="delete-arm"
+                  type="text"
+                  className="field-input"
+                  value={deleteArm}
+                  onChange={(e) => setDeleteArm(e.target.value)}
+                  placeholder={month.slice(0, 7)}
+                />
+                <button
+                  type="button"
+                  className="button danger-button"
+                  disabled={deleting || deleteArm.trim() !== month.slice(0, 7)}
+                  onClick={() => void deleteMonth()}
+                >
+                  {deleting ? 'Deleting…' : 'Delete this month'}
+                </button>
+              </div>
+            </div>
+          )}
           <div className="wizard-footer">
             <button className="button" onClick={() => setStep('spending')}>
               Back

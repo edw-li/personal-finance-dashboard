@@ -220,3 +220,21 @@
   font-size: 0.7rem;
   color: var(--warn);
 }
+
+/* ── Danger zone (delete month) — the Review step's arm-and-confirm ─────────── */
+.danger-zone {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.danger-zone .danger-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+.danger-button:not(:disabled) {
+  border-color: var(--negative);
+  color: var(--negative);
+}
