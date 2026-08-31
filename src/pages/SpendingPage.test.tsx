@@ -450,3 +450,22 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
     expect(savings?.getAttribute('data-y-ceiling')).toBe('0.6')
   })
 })
+
+describe('SpendingPage — section order (2026-08-31 audit)', () => {
+  it('long-run half reads summary-first: budgets, savings+trends, heatmap, yearly', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const budgets = screen.getByRole('heading', { name: /Budgets — / })
+    const savings = screen.getByRole('heading', { name: /Savings rate \(actual\)/ })
+    const trends = screen.getByRole('heading', { name: /Category trends/ })
+    const heatmap = screen.getByRole('heading', { name: /Month × category heatmap/ })
+    const yearly = screen.getByRole('heading', { name: /Yearly rollups/ })
+    // The windowed pair sits with the other windowed charts; the never-windowed
+    // full-history pair (heatmap, yearly) closes the page.
+    const following = Node.DOCUMENT_POSITION_FOLLOWING
+    expect(budgets.compareDocumentPosition(savings) & following).toBeTruthy()
+    expect(savings.compareDocumentPosition(trends) & following).toBeTruthy()
+    expect(trends.compareDocumentPosition(heatmap) & following).toBeTruthy()
+    expect(heatmap.compareDocumentPosition(yearly) & following).toBeTruthy()
+  })
+})
