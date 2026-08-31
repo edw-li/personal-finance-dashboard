@@ -29,3 +29,24 @@
 .networth-owner-row .eyebrow {
   margin: 0;
 }
+
+/* D5: the per-owner split of the latest snapshot, under the KPI row. Typography borrowed
+   from the withholding card's facts list — the house shape for a few labelled figures. */
+.networth-owner-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0 0 1rem;
+}
+
+.networth-owner-strip dt {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.networth-owner-strip dd {
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}

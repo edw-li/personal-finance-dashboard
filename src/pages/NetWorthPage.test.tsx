@@ -144,6 +144,31 @@ it('renders All / each person / Joint once a partner exists', async () => {
   ).toEqual(['All', 'Me', 'Sam', 'Joint'])
 })
 
+it('renders the per-owner strip in chip order, skipping owners the payload lacks', async () => {
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  const strip = document.querySelector('.networth-owner-strip')
+  expect(strip).not.toBeNull()
+  // Me then Joint — the fixture's owner_totals has no SAM row, and a missing owner is
+  // SKIPPED, never rendered as $0.00. Order comes from the chips, so the two agree.
+  expect([...strip!.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual([
+    'Me',
+    'Joint',
+  ])
+  expect([...strip!.querySelectorAll('dd')].map((dd) => dd.textContent)).toEqual([
+    '$150.00',
+    '$80.00',
+  ])
+})
+
+it('hides the strip for a one-person household', async () => {
+  vi.mocked(fetchHousehold).mockResolvedValue(household({ people: [ME] }))
+  renderPage()
+  await screen.findByText('Net worth')
+  await waitFor(() => expect(fetchHousehold).toHaveBeenCalled())
+  expect(document.querySelector('.networth-owner-strip')).toBeNull()
+})
+
 it('scopes BOTH fetches to the picked owner, and back to the household on All', async () => {
   renderPage()
   const chips = await screen.findByRole('group', { name: 'Owner' })

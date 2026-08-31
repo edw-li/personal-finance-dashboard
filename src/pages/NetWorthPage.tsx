@@ -535,6 +535,31 @@ export default function NetWorthPage() {
         </div>
       )}
 
+      {/* D5 (2026-08-31): the latest snapshot split by owner — the same money the chips
+          above scope, read straight off the already-fetched summary. Ordered BY the chips
+          (primary, others, Joint) so the strip and the control can never disagree; an
+          owner with no owner_totals row is SKIPPED, never a fabricated $0.00. Under a
+          person scope the server narrows owner_totals to that person + Joint, and the
+          strip honestly narrows with it. */}
+      {ownerScopes.length > 0 && summary && summary.month && summary.owner_totals.length > 0 && (
+        <dl className="networth-owner-strip">
+          {ownerScopes
+            .filter(({ scope }) => scope !== null)
+            .map(({ scope, label }) => {
+              const entry = summary.owner_totals.find((total) =>
+                scope === 'joint' ? total.person_id === null : total.person_id === scope,
+              )
+              if (entry === undefined) return null
+              return (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{formatCurrency(entry.total)}</dd>
+                </div>
+              )
+            })}
+        </dl>
+      )}
+
       <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
         <div className="card span-12">
           <div className="networth-chart-header">
