@@ -573,7 +573,10 @@ that makes them vanish has introduced a bug, not removed one.
   rates (18.8/23.8) and never tested the income side; the app stores base CG rates —
   migration `f7d3b2a91c40` rewrote the exact folded pair, the importer translates it on
   every re-import, and a warning flags any leftover — and computes
-  NIIT = 3.8% × min(net investment income, MAGI − threshold) as its own line. At the
+  NIIT = 3.8% × min(net investment income, MAGI − threshold) as its own line.
+  One nuance inside NII: the per-component clamps mean a short-term loss never offsets
+  a long-term gain inside NII (the statute nets them first) — deliberate and
+  formula-faithful, covered by the same do-not-fix rule. At the
   stored inputs: 2024 +75.59 NIIT / −6.81 CG (net **+68.79** total tax vs the sheet,
   total 72,824.61); 2025 +418.88 / −48.15 (net **+370.73**, total 90,421.49); 2023 sits
   under the threshold and 2026 has no investment income — both unchanged.

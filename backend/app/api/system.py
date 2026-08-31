@@ -28,6 +28,8 @@ router = APIRouter(prefix="/system", tags=["system"], dependencies=[Depends(get_
 
 BACKUP_STATUS_KEY = "backup_status"
 BACKUP_RUNS_KEY = "backup_runs"
+# Keep-10 agrees in THREE places: this reader, price_service.REFRESH_RUNS_KEEP, and the
+# jsonpath literal '$[0 to 9]' inside backup_db.sh's upsert — bump all three together.
 RUNS_LIMIT = 10
 
 

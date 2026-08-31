@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # still no migration, history capped at write time.
 LAST_REFRESH_KEY = "last_refresh"
 REFRESH_RUNS_KEY = "refresh_runs"
-REFRESH_RUNS_KEEP = 10
+REFRESH_RUNS_KEEP = 10  # agrees with system.RUNS_LIMIT and backup_db.sh's '$[0 to 9]'
 
 HISTORY_WINDOW_DAYS = 370
 TTM_DAYS = 365

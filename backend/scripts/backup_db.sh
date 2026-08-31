@@ -56,7 +56,8 @@ EXPIRED_KEY_GPG="backups/${DB_NAME}_${EXPIRED}.sql.gz.gpg"
 # newest first, trimmed to 10 in the upsert itself — the {"value": ...} envelope is a
 # Python readers' convention and this writer is a shell script, exactly like
 # backup_status below. The `\$` keeps bash's ancient $[...] arithmetic out of the
-# jsonpath literal. Every interpolated value is machine-generated (date -u, the
+# jsonpath literal; the keep-10 window agrees with system.RUNS_LIMIT and
+# price_service.REFRESH_RUNS_KEEP — bump all three together. Every interpolated value is machine-generated (date -u, the
 # OBJECT_KEY template), so the single-quoted SQL literal cannot be broken by user text.
 append_backup_run() {
   local run_json="$1"
