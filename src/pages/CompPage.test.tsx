@@ -801,6 +801,15 @@ describe('CompPage — vesting schedule', () => {
     expect(within(tile('Vested this year')).queryByText('—')).toBeNull()
   })
 
+  it('surfaces the vest tiles at the page top, above the focal history (2026-08-31 audit)', async () => {
+    vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
+    render(<CompPage />)
+    const nextVest = await screen.findByText('Next vest')
+    const focal = screen.getByText('Focal history')
+    const following = Node.DOCUMENT_POSITION_FOLLOWING
+    expect(nextVest.compareDocumentPosition(focal) & following).toBeTruthy()
+  })
+
   it('draws the vesting calendar beside the trajectory, on the vest dates', async () => {
     render(<CompPage />)
     await screen.findByText('Vesting schedule')
@@ -909,6 +918,9 @@ describe('CompPage — vesting schedule', () => {
       screen.getByText('FY24 new hire: stored grant cannot be scheduled — cliff_pct out of range'),
     ).toBeTruthy()
     // No tiles and no calendar with nothing to put in them — the trajectory alone is left.
+    // The page-top strip is gated on the same zero grants (2026-08-31 audit): the panel's
+    // empty state carries the message, so nothing renders above it.
+    expect(document.querySelector('.kpi-row')).toBeNull()
     expect(screen.getAllByTestId('echart')).toHaveLength(1)
   })
 

@@ -13,7 +13,7 @@ import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { SkeletonCard } from '../components/PageSkeleton'
 import RsuGrantsPanel from '../components/comp/RsuGrantsPanel'
-import VestingSchedulePanel from '../components/comp/VestingSchedulePanel'
+import VestingSchedulePanel, { VestingTiles } from '../components/comp/VestingSchedulePanel'
 import {
   TC_CHART_LABEL,
   tcTrajectoryOption,
@@ -565,6 +565,16 @@ export default function CompPage() {
         <h1>Comp</h1>
         <div className="spacer" />
       </div>
+
+      {/* The schedule's headline tiles at the page top (2026-08-31 audit). The pinned card
+          order below is untouched; with no grants the panel's empty state carries the
+          message, so the strip renders nothing. Dimmed by the schedule feed's own flag,
+          like the cards it summarizes. */}
+      {schedule !== null && schedule.grants.length > 0 && (
+        <div className={`loading-dim${scheduleBusy ? ' is-loading' : ''}`}>
+          <VestingTiles schedule={schedule} />
+        </div>
+      )}
 
       {error && (
         <div className="error-banner" role="alert">
