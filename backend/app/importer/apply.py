@@ -46,6 +46,7 @@ from app.models import (
 from app.seed import seed_tax_definitions
 from app.services.people import load_people, primary_person
 from app.services.portfolio_accounts import resolve_portfolio_account
+from app.services.tax_service import FOLDED_TO_BASE_CG
 from app.tax_keys import PER_PERSON_KEYS, SINGLE
 
 
@@ -585,7 +586,20 @@ async def apply_taxes(db: AsyncSession, parsed: ParsedTaxes, report: SheetReport
         key = (item.year, item.jurisdiction, item.bracket_index)
         incoming_bracket_keys.add(key)
         row = existing_brackets.get(key)
-        fields = {"rate": item.rate, "threshold": item.threshold}
+        rate = item.rate
+        # The sheet folds the 3.8% NIIT into its two upper CG rates; the engine computes
+        # NIIT as its own line (2026-08-31 spec C2), so the exact folded pair translates
+        # to base rates on EVERY apply — the same two values migration f7d3b2a91c40
+        # rewrote — or a re-import would quietly reintroduce the double-charge.
+        if item.jurisdiction == "capital_gains" and rate in FOLDED_TO_BASE_CG:
+            base = FOLDED_TO_BASE_CG[rate]
+            report.warnings.append(
+                f"tax_brackets[{item.year}/capital_gains/{item.bracket_index}]: sheet "
+                f"rate {rate.normalize()} folds NIIT in — imported as {base.normalize()} "
+                "(the app computes NIIT separately)"
+            )
+            rate = base
+        fields = {"rate": rate, "threshold": item.threshold}
         if row is None:
             db.add(
                 TaxBracket(
