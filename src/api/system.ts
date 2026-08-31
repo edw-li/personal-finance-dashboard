@@ -48,5 +48,7 @@ export async function downloadSnapshot(): Promise<void> {
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
-  URL.revokeObjectURL(url)
+  // Deferred revoke: Safari can cancel a download whose blob URL is revoked before
+  // the save begins; a tick's delay is the conventional armor (final review, minor 2).
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }

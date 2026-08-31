@@ -57,6 +57,12 @@ function safeHarborSentence(harbor: NonNullable<WithholdingOut['safe_harbor']>):
   }
   // One leg missing: the survivor's own figure IS the effective threshold, so it is
   // named once. (Both missing never reaches here — the server sends null instead.)
+  if (prior === null && current === null) {
+    // The contract sends null instead of a both-legs-missing object — armor for a
+    // violated contract: name the figure without a leg rather than interpolating the
+    // word "null" into user-facing copy (final review, minor 1).
+    return `Safe harbor (approx.): ${effective} — ${met}`
+  }
   return `Safe harbor (approx.): ${prior ?? current} is ${effective} — ${met}`
 }
 
