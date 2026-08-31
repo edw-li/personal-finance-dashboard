@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 vi.mock('../api/spending', () => ({ fetchMatrix: vi.fn(), fetchYearly: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each
@@ -448,5 +449,20 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
     // (Math.min(−1, Math.floor(−1.8))); the ceiling keeps hugging the data under +100%.
     expect(savings?.getAttribute('data-y-floor')).toBe('-2')
     expect(savings?.getAttribute('data-y-ceiling')).toBe('0.6')
+  })
+})
+
+describe('SpendingPage — section order (2026-08-31 audit)', () => {
+  it('long-run half reads summary-first: budgets, savings+trends, heatmap, yearly', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const budgets = screen.getByRole('heading', { name: /Budgets — / })
+    const savings = screen.getByRole('heading', { name: /Savings rate \(actual\)/ })
+    const trends = screen.getByRole('heading', { name: /Category trends/ })
+    const heatmap = screen.getByRole('heading', { name: /Month × category heatmap/ })
+    const yearly = screen.getByRole('heading', { name: /Yearly rollups/ })
+    // The windowed pair sits with the other windowed charts; the never-windowed
+    // full-history pair (heatmap, yearly) closes the page.
+    expectInDocumentOrder(budgets, savings, trends, heatmap, yearly)
   })
 })

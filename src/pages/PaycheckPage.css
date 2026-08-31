@@ -19,11 +19,8 @@
   max-width: 78ch;
 }
 
-/* One tile, so the auto-fit grid is fenced: left alone it would stretch a single card the
-   full width of the panel. */
-.paycheck-page .kpi-row {
-  max-width: 320px;
-}
+/* Both of this page's kpi-rows hold one tile and wear the shared .kpi-row-lone fence
+   (panels.css) — the page-scoped 320px copy retired in the 2026-08-31 review round. */
 
 /* ── The waterfall ─────────────────────────────────────────────────── */
 
@@ -189,7 +186,7 @@
 }
 
 /* The household figure is a sibling of the switcher, not part of the per-person card below
-   it. The page's 320px .kpi-row fence already stops a single tile from stretching. */
+   it. The shared .kpi-row-lone fence already stops its single tile from stretching. */
 .paycheck-household {
   margin-bottom: 1rem;
 }

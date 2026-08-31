@@ -9,6 +9,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import CreditCardsPage from './CreditCardsPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 vi.mock('../api/creditCards', () => ({
   fetchCreditCards: vi.fn(),
@@ -640,5 +641,18 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
     // a wallet whose $395 fee eats its lead. So the merge is worth 475 − 390 = $85.00/yr.
     expect(tile.querySelector('.stat-value')?.textContent).toBe('$85.00/yr')
     expect(tile.textContent).toContain('beats the best single wallet')
+  })
+})
+
+describe('CreditCardsPage — section order (2026-08-31 audit)', () => {
+  it('consult before manage: matrix, worth-keeping, line history, then the CRUD panels', async () => {
+    seedHappyPath()
+    renderPage()
+    const matrix = await screen.findByRole('heading', { name: /Rewards matrix/ })
+    const value = screen.getByRole('heading', { name: /worth keeping/i })
+    const line = screen.getByRole('heading', { name: /Credit line history/ })
+    const roster = screen.getByRole('heading', { name: /Card roster/ })
+    const categories = screen.getByRole('heading', { name: /Categories & weights/ })
+    expectInDocumentOrder(matrix, value, line, roster, categories)
   })
 })

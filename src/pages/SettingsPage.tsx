@@ -337,6 +337,12 @@ export default function SettingsPage() {
             )}
           </section>
 
+          {/* Data-out beside data-in (2026-08-31 audit): the snapshot download and backup
+              trail live on this card, so it sits with the import rather than closing the
+              page as pure status. Own fetch/error (SystemCard), same loadedOnce gate as
+              everything here: a settings GET that failed means the API is unreachable. */}
+          <SystemCard />
+
           <section className="card span-6">
             <h2 className="eyebrow">
               App settings
@@ -485,11 +491,6 @@ export default function SettingsPage() {
           {/* Contribution limits (2026-08-27 spec §5): its own fetch and error state, the
               same loadedOnce gate as the cards above it. */}
           <LimitsCard />
-
-          {/* Read-only status, its own fetch/error (SystemCard) — it shares the forms'
-              loadedOnce gate like the import card: a settings GET that failed means the
-              API is unreachable, and this card could only echo that. */}
-          <SystemCard />
         </div>
       )}
     </div>

@@ -17,6 +17,7 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import InfoHint from '../components/InfoHint'
 import PageSkeleton from '../components/PageSkeleton'
 import BracketsEditor from '../components/taxes/BracketsEditor'
+import CompositionPanel from '../components/taxes/CompositionPanel'
 import InputsForm from '../components/taxes/InputsForm'
 import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
@@ -114,7 +115,7 @@ export default function TaxesPage() {
   // The deep links' seeds — /taxes?whatif=TICKER from the holdings drill-in, ?whatif-lot={id}
   // from the ESPP lots table. A plain read per render (it is a hook, not a fetch), and the
   // params are deliberately NOT cleared: this page itself owns no history writes (the
-  // ?year drill param is SummaryPanel's, written replace-style beside these), and a
+  // ?year drill param is CompositionPanel's, written replace-style beside these), and a
   // reload re-seeding the same leg is the honest reading of the URL the user is sitting on.
   const [searchParams] = useSearchParams()
   const whatIfTicker = searchParams.get('whatif')
@@ -160,9 +161,9 @@ export default function TaxesPage() {
   // every path that reloads asks first.
   const [inputsDirty, setInputsDirty] = useState(false)
   const [bracketsDirty, setBracketsDirty] = useState(false)
-  // A save moves the engine's answer for one year, which moves that year's column in the
-  // panel's ALL-years trend too. The panel owns that feed, so the page just counts the
-  // saves whose totals actually landed and lets the panel refetch on the new value —
+  // A save (or a filing-status flip) moves the engine's answer for one year, which moves
+  // that year's column in the panel's ALL-years trend too. The panel owns that feed, so
+  // the page just counts the changes and lets the panel refetch on the new value —
   // cheaper than hoisting a second load chain into this component's eleven setters.
   const [trendRefresh, setTrendRefresh] = useState(0)
   // D4: bumped when an inputs write lands from OUTSIDE the form (the withholding card's
@@ -330,6 +331,10 @@ export default function TaxesPage() {
         // even if no list reload ever happens.
         setYears((current) => current.map((y) => (y.year === row.year ? row : y)))
         loadYear(year)
+        // The flip moves the engine's answer for this year (possibly to a refusal), which
+        // moves the year's column in the all-years trend — a status change is a save as far
+        // as CompositionPanel's feed is concerned (2026-08-31 review round).
+        setTrendRefresh((n) => n + 1)
       })
       .catch((err: unknown) => {
         // A 422 (an unknown status) or a 404 (the year went away) lands here verbatim. The
@@ -691,24 +696,15 @@ export default function TaxesPage() {
 
       {detail !== null && (
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          {/* Deliberately NOT keyed by year: the panel's own feed is the all-years trend,
-              which a year switch does not move — remounting it would spend a request to
-              redraw the same chart. Its per-year half is a prop, so it follows the year
-              anyway. */}
-          <SummaryPanel
-            summary={detail.summary}
-            filingStatus={filingStatus}
-            refreshKey={trendRefresh}
-          />
-          {/* D3 (2026-08-31): client-side ladder over the SAME two payloads the panels
-              around it read — the summary and the year's own status' tables. Not keyed:
-              both props are per-year payloads the load effect already replaces whole. */}
-          <MarginalPanel summary={detail.summary} brackets={detail.brackets} />
+          {/* Year-scoped answers read contiguously (2026-08-31 audit): totals, then the
+              withholding outlook, the marginal ladder and the sandbox; the all-years
+              composition trend closes the answers half below, and entry comes last. */}
+          <SummaryPanel summary={detail.summary} filingStatus={filingStatus} />
           {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
               be stored and summarizable, and this card still cannot be drawn for it) — asked
-              here rather than spending a request on the refusal. Keyed by year like the card
-              below, so a switch INTO this year mounts it fresh rather than leaving another
-              year's estimate under this heading. */}
+              here rather than spending a request on the refusal. Keyed by year like the
+              what-if card, so a switch INTO this year mounts it fresh rather than leaving
+              another year's estimate under this heading. */}
           {detail.summary.year === new Date().getFullYear() && (
             <WithholdingPanel
               key={`withholding-${detail.summary.year}`}
@@ -718,6 +714,10 @@ export default function TaxesPage() {
               onVestApplied={onVestApplied}
             />
           )}
+          {/* D3 (2026-08-31): client-side ladder over the SAME two payloads the panels
+              around it read — the summary and the year's own status' tables. Not keyed:
+              both props are per-year payloads the load effect already replaces whole. */}
+          <MarginalPanel summary={detail.summary} brackets={detail.brackets} />
           {/* Keyed by year for the editors' own reason: a real switch remounts it, so the
               typed legs and any scenario on screen go with the year they were run against
               (a stale scenario under a new year's heading would lie), while a same-year
@@ -734,6 +734,10 @@ export default function TaxesPage() {
             initialLotId={whatIfLotId}
             definitions={overrideDefinitions(detail.inputs)}
           />
+          {/* Deliberately NOT keyed: this panel's feed is the all-years trend, which a
+              year switch does not move — remounting it would spend a request to redraw
+              the same chart. It closes the answers half; entry follows. */}
+          <CompositionPanel refreshKey={trendRefresh} />
           {/* Keyed by the payloads' own identity (see inputsKey/bracketsKey), not by load:
               a real year or status switch remounts the editors — 2023's typed rows must not
               carry into 2024, and a one-column year's cell ids are not a two-column year's —

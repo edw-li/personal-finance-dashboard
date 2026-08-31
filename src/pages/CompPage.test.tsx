@@ -10,6 +10,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import CompPage from './CompPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 import ToastProvider from '../components/ToastProvider'
 
 vi.mock('../api/comp', () => ({
@@ -801,6 +802,13 @@ describe('CompPage — vesting schedule', () => {
     expect(within(tile('Vested this year')).queryByText('—')).toBeNull()
   })
 
+  it('surfaces the vest tiles at the page top, above the focal history (2026-08-31 audit)', async () => {
+    vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
+    render(<CompPage />)
+    const nextVest = await screen.findByText('Next vest')
+    expectInDocumentOrder(nextVest, screen.getByText('Focal history'))
+  })
+
   it('draws the vesting calendar beside the trajectory, on the vest dates', async () => {
     render(<CompPage />)
     await screen.findByText('Vesting schedule')
@@ -909,6 +917,9 @@ describe('CompPage — vesting schedule', () => {
       screen.getByText('FY24 new hire: stored grant cannot be scheduled — cliff_pct out of range'),
     ).toBeTruthy()
     // No tiles and no calendar with nothing to put in them — the trajectory alone is left.
+    // The page-top strip is gated on the same zero grants (2026-08-31 audit): the panel's
+    // empty state carries the message, so nothing renders above it.
+    expect(document.querySelector('.kpi-row')).toBeNull()
     expect(screen.getAllByTestId('echart')).toHaveLength(1)
   })
 
@@ -1222,6 +1233,12 @@ describe('CompPage — the two feeds are independent', () => {
     ).toBeTruthy()
     expect(within(tile('Unvested')).getByText('1,230 sh')).toBeTruthy()
     expect(field('Label').value).toBe('half-typed grant')
+    // The stale cue leads the page's most prominent figures (2026-08-31 review round):
+    // the banner sits ABOVE the hoisted tiles it disclaims, not below the fold.
+    expectInDocumentOrder(
+      screen.getByText('vesting unavailable — the schedule may be showing earlier data.'),
+      screen.getByText('Next vest'),
+    )
   })
 
   it('reloads BOTH feeds after a comp event write', async () => {

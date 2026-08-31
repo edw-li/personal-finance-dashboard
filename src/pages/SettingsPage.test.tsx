@@ -10,6 +10,7 @@ import type {
   SystemStatus,
 } from '../types/api'
 import SettingsPage from './SettingsPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 // Four api modules, all stubbed. No EChart mock here: this page draws nothing, so the
 // house's never-render-echarts-in-jsdom rule has nothing to catch.
@@ -772,6 +773,15 @@ describe('SettingsPage — system card', () => {
     render(<SettingsPage />)
     await screen.findByText('No refresh recorded yet')
     expect(screen.getByText('No backup recorded')).toBeDefined()
+  })
+
+  it('pairs data-out with data-in: System follows Import and precedes the forms (2026-08-31 audit)', async () => {
+    render(<SettingsPage />)
+    await screen.findByText('No refresh recorded yet')
+    const importH = screen.getByRole('heading', { name: /Import workbook/ })
+    const system = screen.getByRole('heading', { name: /System/ })
+    const appSettings = screen.getByRole('heading', { name: /App settings/ })
+    expectInDocumentOrder(importH, system, appSettings)
   })
 })
 

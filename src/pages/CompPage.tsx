@@ -13,7 +13,7 @@ import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { SkeletonCard } from '../components/PageSkeleton'
 import RsuGrantsPanel from '../components/comp/RsuGrantsPanel'
-import VestingSchedulePanel from '../components/comp/VestingSchedulePanel'
+import VestingSchedulePanel, { VestingTiles } from '../components/comp/VestingSchedulePanel'
 import {
   TC_CHART_LABEL,
   tcTrajectoryOption,
@@ -566,6 +566,34 @@ export default function CompPage() {
         <div className="spacer" />
       </div>
 
+      {/* The schedule feed's banner leads its OWN tiles (2026-08-31 review round): after a
+          failed reload the strip below is the page's most prominent stale surface, and the
+          "may be showing earlier data" cue has to sit beside it, not below the fold with
+          the schedule card. */}
+      {scheduleError && (
+        <div className="error-banner" role="alert">
+          {schedule === null
+            ? scheduleError
+            : `${scheduleError} — the schedule may be showing earlier data.`}{' '}
+          <button
+            className="button"
+            aria-label="Retry loading the vesting schedule"
+            onClick={reloadSchedule}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {/* The schedule's headline tiles at the page top (2026-08-31 audit). The pinned card
+          order below is untouched; the no-grants branch is VestingTiles' own (it renders
+          nothing — the panel's empty state carries the message). Dimmed by the schedule
+          feed's own flag, like the cards it summarizes. */}
+      {schedule !== null && (
+        <div className={`loading-dim${scheduleBusy ? ' is-loading' : ''}`}>
+          <VestingTiles schedule={schedule} />
+        </div>
+      )}
+
       {error && (
         <div className="error-banner" role="alert">
           {/* The stale cue only when there IS something stale: a reload failure leaves the
@@ -612,20 +640,6 @@ export default function CompPage() {
         </section>
       </div>
 
-      {scheduleError && (
-        <div className="error-banner" role="alert">
-          {schedule === null
-            ? scheduleError
-            : `${scheduleError} — the schedule may be showing earlier data.`}{' '}
-          <button
-            className="button"
-            aria-label="Retry loading the vesting schedule"
-            onClick={reloadSchedule}
-          >
-            Retry
-          </button>
-        </div>
-      )}
       {schedule === null ? (
         scheduleBusy && <SkeletonCard height={280} label="Loading the vesting schedule…" />
       ) : (

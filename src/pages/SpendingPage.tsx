@@ -814,23 +814,9 @@ export default function SpendingPage() {
           <BudgetPanel matrix={matrix} monthIndex={focusIndex} onBudgetsChanged={load} />
         )}
 
-        <div className="card span-12">
-          <h2 className="eyebrow">
-            Month × category heatmap
-            <InfoHint text="Spend per category per month on one shared scale — darker is more. Rows are ordered by all-time total." />
-          </h2>
-          {heatmapOption && (
-            <EChart
-              option={heatmapOption}
-              height={Math.max(332, (matrix?.categories.length ?? 0) * 24 + 142)}
-              ariaLabel="Heatmap of spend per category per month — darker is more"
-              onHover={handleHeatmapHover}
-              onHoverEnd={handleHeatmapHoverEnd}
-              animateEntrance={!fromCache}
-            />
-          )}
-        </div>
-
+        {/* Long-run half, summary before detail (2026-08-31 audit): the range-windowed
+            pair reads right after the budgets that feed the trends chart's step lines;
+            the never-windowed full-history pair (heatmap, yearly) closes the page. */}
         <div className="card span-6">
           <h2 className="eyebrow">
             Savings rate (actual)
@@ -892,6 +878,23 @@ export default function SpendingPage() {
             </>
           ) : (
             <div className="empty-note">Pick up to {MAX_TREND} categories.</div>
+          )}
+        </div>
+
+        <div className="card span-12">
+          <h2 className="eyebrow">
+            Month × category heatmap
+            <InfoHint text="Spend per category per month on one shared scale — darker is more. Rows are ordered by all-time total." />
+          </h2>
+          {heatmapOption && (
+            <EChart
+              option={heatmapOption}
+              height={Math.max(332, (matrix?.categories.length ?? 0) * 24 + 142)}
+              ariaLabel="Heatmap of spend per category per month — darker is more"
+              onHover={handleHeatmapHover}
+              onHoverEnd={handleHeatmapHoverEnd}
+              animateEntrance={!fromCache}
+            />
           )}
         </div>
 

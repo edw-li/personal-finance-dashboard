@@ -12,6 +12,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import EsppPage from './EsppPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 // Every request is stubbed; there is no chart on this page (the 25k gauge is a div), so
 // no EChart mock is needed.
@@ -650,9 +651,7 @@ describe('EsppPage — offerings', () => {
     const modeler = screen.getByRole('heading', { name: /Purchase modeler/ })
 
     // Offerings sit BETWEEN the lots and the modeler they price (spec §5).
-    const following = Node.DOCUMENT_POSITION_FOLLOWING
-    expect(lots.compareDocumentPosition(offerings) & following).toBeTruthy()
-    expect(offerings.compareDocumentPosition(modeler) & following).toBeTruthy()
+    expectInDocumentOrder(lots, offerings, modeler)
   })
 
   it('lists each offering with its coverage window', async () => {
@@ -808,6 +807,19 @@ describe('EsppPage — offerings', () => {
 })
 
 describe('EsppPage — modeler', () => {
+  it('surfaces the $25k figure at the page top, above the lots (2026-08-31 audit)', async () => {
+    renderPage()
+    const tile = await screen.findByText(/\$25k limit used — 2024/)
+    expectInDocumentOrder(tile, screen.getByRole('heading', { name: /Lots/ }))
+
+    // The modeler payload's own figures, verbatim — used and remaining. Scoped to the
+    // strip's own tile: the gauge in the card below says "$6,082.87 left" too, and the
+    // whole point is that the two never disagree.
+    const strip = within(tile.closest('.stat-tile') as HTMLElement)
+    expect(strip.getByText('$18,917.13')).toBeTruthy()
+    expect(strip.getByText('$6,082.87 left')).toBeTruthy()
+  })
+
   it('renders the chain, the provenance line and the $25k gauge', async () => {
     renderPage()
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledWith({}))
@@ -836,7 +848,9 @@ describe('EsppPage — modeler', () => {
     const fill = meter.querySelector('.gauge-fill') as HTMLElement
     expect(fill.style.width).toBe('75.67%')
     expect(screen.getByText('$18,917.13 used')).toBeTruthy()
-    expect(screen.getByText('$6,082.87 left')).toBeTruthy()
+    // Scoped to the card: the page-top strip's delta is the same "$6,082.87 left" string
+    // (2026-08-31 audit) — deliberately, since both draw the one payload.
+    expect(within(modelerCard()).getByText('$6,082.87 left')).toBeTruthy()
   })
 
   it('does not seed the knob boxes from the modeler echo', async () => {
@@ -916,12 +930,22 @@ describe('EsppPage — modeler', () => {
         '1 period has unsaved edits — the chain below is stale until you save & recalculate.',
       ),
     ).toBeTruthy()
+    // The page-top tile carries its own stale cue (2026-08-31 review round): the headline
+    // must never keep asserting a figure the card below is disclaiming.
+    expect(
+      screen.getByText(
+        'Unsaved period edits below — this figure is stale until you save & recalculate.',
+      ),
+    ).toBeTruthy()
     // The chain columns are NOT recomputed behind the note — they stay the server's.
     expect(screen.getByText('$8,370.22')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Save & recalculate' }))
     await waitFor(() => expect(vi.mocked(updatePeriod)).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(screen.queryByText(/unsaved edits/)).toBeNull())
+    // The strip's cue leaves with the card's — both read the same derived dirty list. Its
+    // own waitFor: the flag crosses ModelerCard's onDirtyChange effect, one commit later.
+    await waitFor(() => expect(screen.queryByText(/Unsaved period edits below/)).toBeNull())
   })
 
   it('leaves an untouched table alone and just re-runs the chain', async () => {

@@ -94,12 +94,69 @@ function DayRows({
   )
 }
 
+// One wording for one quote: the strip's tile hints and the schedule card's own hint
+// describe the same figure, so both read this instead of keeping two copies in sync.
+function quoteSourceOf(ticker: string | null): string {
+  return ticker === null ? 'the latest employer quote' : `the latest ${ticker} quote`
+}
+
 /**
- * The computed half of the Comp page: three tiles, the vesting calendar, and the vest table
- * grouped one row per date (2026-08-21 revision), each date expandable into its per-grant
- * tranches. Pure display — it writes nothing and derives nothing, because the whole payload
- * is recomputed server-side on each read against the SERVER's day (the vested split moves on
- * its own between reads, so a figure re-derived here would disagree with the one beside it).
+ * The schedule's three headline tiles, hoisted to the page top (2026-08-31 audit: the
+ * next-vest figures sat below the fold). Same payload, same figures, rendered once — the
+ * panel below keeps the quote line, the calendar and the table.
+ */
+export function VestingTiles({ schedule }: { schedule: VestingScheduleOut }) {
+  const { tiles, ticker } = schedule
+  // The no-grants branch lives HERE, beside the panel's own empty state that renders the
+  // message (2026-08-31 review round): one owner for one condition, so the page gate and
+  // the panel's empty branch can never drift apart.
+  if (schedule.grants.length === 0) return null
+  const quoteSource = quoteSourceOf(ticker)
+  const nextVest = tiles.next_vest
+  return (
+    <div className="kpi-row">
+      <StatTile
+        label="Next vest"
+        // formatDate's own null branch renders the em dash, so a schedule with nothing
+        // ahead of it says so rather than showing a blank tile.
+        value={formatDate(nextVest?.vest_date)}
+        delta={
+          nextVest === null
+            ? undefined
+            : `${formatShares(nextVest.shares)} sh · ${formatCurrency(nextVest.est_value)}`
+        }
+        hint={`The next vest date across every grant, all of its tranches summed and valued at ${quoteSource} — the same row the table badges.`}
+      />
+      <StatTile
+        label="Unvested"
+        value={`${formatShares(tiles.unvested_shares)} sh`}
+        delta={formatCurrency(tiles.unvested_value)}
+        hint={`Every share not yet vested, valued at ${quoteSource}.`}
+      />
+      <StatTile
+        label="Vested this year"
+        value={`${formatShares(tiles.vested_this_year_shares)} sh`}
+        // No delta at all when nothing this year could be priced: an em dash under a
+        // real share count would read as "worth nothing" rather than "not known".
+        delta={
+          tiles.vested_this_year_income === null
+            ? undefined
+            : formatCurrency(tiles.vested_this_year_income)
+        }
+        hint="This year's vests, each valued at its own vest-date close — the priced subset only."
+      />
+    </div>
+  )
+}
+
+/**
+ * The computed half of the Comp page: the vesting calendar and the vest table grouped one row
+ * per date (2026-08-21 revision), each date expandable into its per-grant tranches. Its three
+ * headline tiles moved to the page-top strip (`VestingTiles`, 2026-08-31 audit) — the card
+ * order around this one is untouched. Pure display — it writes nothing and derives nothing,
+ * because the whole payload is recomputed server-side on each read against the SERVER's day
+ * (the vested split moves on its own between reads, so a figure re-derived here would disagree
+ * with the one beside it).
  */
 export default function VestingSchedulePanel({ schedule }: { schedule: VestingScheduleOut }) {
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every render
@@ -109,12 +166,11 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
     [schedule],
   )
 
-  const { tiles, ticker, latest_price: latestPrice } = schedule
-  // Named once, so all three tiles' hints say the same thing about the same quote.
-  const quoteSource = ticker === null ? 'the latest employer quote' : `the latest ${ticker} quote`
-  const nextVest = tiles.next_vest
+  const { ticker, latest_price: latestPrice } = schedule
+  // The heading's hint says what the strip's tiles say — quoteSourceOf is the one wording.
+  const quoteSource = quoteSourceOf(ticker)
   // The first DATE still ahead — the row the "next" badge belongs on. The feed is
-  // chronological, so this is the day the tile's tranche lands on.
+  // chronological, so this is the day the strip's Next vest tile lands on.
   const nextDayIndex = schedule.vest_days.findIndex((day) => !day.is_past)
 
   // The expanded date (2026-08-21 revision, the user's own design): one date's tranches open
@@ -176,38 +232,6 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
         </>
       ) : (
         <>
-          <div className="kpi-row">
-            <StatTile
-              label="Next vest"
-              // formatDate's own null branch renders the em dash, so a schedule with nothing
-              // ahead of it says so rather than showing a blank tile.
-              value={formatDate(nextVest?.vest_date)}
-              delta={
-                nextVest === null
-                  ? undefined
-                  : `${formatShares(nextVest.shares)} sh · ${formatCurrency(nextVest.est_value)}`
-              }
-              hint={`The next vest date across every grant, all of its tranches summed and valued at ${quoteSource} — the same row the table badges.`}
-            />
-            <StatTile
-              label="Unvested"
-              value={`${formatShares(tiles.unvested_shares)} sh`}
-              delta={formatCurrency(tiles.unvested_value)}
-              hint={`Every share not yet vested, valued at ${quoteSource}.`}
-            />
-            <StatTile
-              label="Vested this year"
-              value={`${formatShares(tiles.vested_this_year_shares)} sh`}
-              // No delta at all when nothing this year could be priced: an em dash under a
-              // real share count would read as "worth nothing" rather than "not known".
-              delta={
-                tiles.vested_this_year_income === null
-                  ? undefined
-                  : formatCurrency(tiles.vested_this_year_income)
-              }
-              hint="This year's vests, each valued at its own vest-date close — the priced subset only."
-            />
-          </div>
           {calendar && <EChart option={calendar} height={260} />}
           {warningNotes}
           <p className="drill-hint">

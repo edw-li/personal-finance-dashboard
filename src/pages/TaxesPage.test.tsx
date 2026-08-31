@@ -14,6 +14,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import TaxesPage from './TaxesPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 // JURISDICTIONS (render order) stays real; every request is stubbed — including the
 // withholding card's own, which the page mounts (unmocked, unlike the what-if one) whenever
@@ -303,9 +304,16 @@ const deleteYearButton = () =>
 // The one question the delete door asks — worded for a row of tables nobody can get back.
 const DELETE_2024_CONFIRM =
   'Delete tax year 2024 and all of its inputs and brackets? This cannot be undone.'
-// The trend is the SECOND chart on the page — the selected year's own waterfall is the
-// first — and its x-axis categories are the years of whichever feed drew it.
-const trendCategories = () => screen.getAllByTestId('echart')[1]?.getAttribute('data-categories')
+// The trend chart is found through its own card, never by chart index: the marginal
+// ladder mounts a marker too, and the 2026-08-31 reorder moved the card — position is
+// not identity. The heading swaps to "Tax breakdown — YYYY" while a year is drilled, so
+// the matcher accepts both faces of the same card.
+const trendCard = () =>
+  screen
+    .getByText(/Tax composition and effective rate by year|Tax breakdown — /)
+    .closest('.card') as HTMLElement
+const trendChart = () => within(trendCard()).getByTestId('echart')
+const trendCategories = () => trendChart().getAttribute('data-categories')
 
 // The per-jurisdiction table's OWN scope. Several cards on this page render a node that
 // reads exactly like one of its row labels — InputsForm heads a section "Capital gains"
@@ -934,7 +942,7 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
 
     // The mock forwards the first category: 2023.
-    fireEvent.click(screen.getAllByTestId('echart')[1])
+    fireEvent.click(trendChart())
     expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
     // Same mount, now a pie — no x axis — and the way back is written beside it, with
     // the SERVER's totals for the year (the pie itself only draws positive slices).
@@ -943,7 +951,7 @@ describe('TaxesPage', () => {
     expect(screen.getByRole('button', { name: 'All years' })).toBeTruthy()
 
     // Any click in detail mode returns to all years.
-    fireEvent.click(screen.getAllByTestId('echart')[1])
+    fireEvent.click(trendChart())
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     expect(screen.queryByText('Tax breakdown — 2023')).toBeNull()
     expect(screen.queryByRole('button', { name: 'All years' })).toBeNull()
@@ -956,7 +964,7 @@ describe('TaxesPage', () => {
     renderPage()
     await waitFor(() => expect(trendCategories()).toBe('2023'))
 
-    fireEvent.click(screen.getAllByTestId('echart')[1])
+    fireEvent.click(trendChart())
     expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
     expect(screen.getByText('No tax computed for 2023.')).toBeTruthy()
 
@@ -1263,10 +1271,10 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
     renderPage('/taxes?whatif=VTI')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
-    fireEvent.click(screen.getAllByTestId('echart')[1]) // the trend; the mock clicks 2023
+    fireEvent.click(trendChart()) // the trend; the mock clicks 2023
     await screen.findByText('Tax breakdown — 2023')
     expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI&year=2023')
-    fireEvent.click(screen.getAllByTestId('echart')[1]) // any click in detail mode returns
+    fireEvent.click(trendChart()) // any click in detail mode returns
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
   })
@@ -1330,6 +1338,19 @@ describe('filing status (2026-08-26 design §6)', () => {
     await waitFor(() =>
       expect(statusButton('Married filing jointly').getAttribute('aria-pressed')).toBe('true'),
     )
+  })
+
+  it('a status flip refetches the all-years trend — the composition follows the new status', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+    await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(statusButton('Married filing jointly'))
+
+    // The flip moves the engine's answer for the year (possibly to a refusal), which moves
+    // that year's column in the all-years trend too — CompositionPanel must refetch
+    // (2026-08-31 review round; the bug predated the split).
+    await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(2))
   })
 
   it('neither asks nor sends when the pressed status is already the year’s', async () => {
@@ -1616,5 +1637,23 @@ describe('TaxesPage — snapshot cache (2026-08-27 spec §1)', () => {
     // equality skip still has to release the detail flag (no year fetch will).
     expect(screen.getByText('No tax years yet — create one to start.')).toBeTruthy()
     expect(screen.queryByText('Loading…')).toBeNull()
+  })
+})
+
+describe('TaxesPage — section order (2026-08-31 audit)', () => {
+  it('year-scoped answers read contiguously; the all-years trend closes the answers half', async () => {
+    const thisYear = new Date().getFullYear()
+    vi.mocked(fetchTaxYears).mockResolvedValue([
+      { year: thisYear, notes: null, input_count: 21, bracket_count: 42, filing_status: 'single' },
+    ])
+    renderPage()
+    const willIOwe = await screen.findByText(`Will I owe? — ${thisYear}`)
+    const totals = screen.getByText(`Totals — ${thisYear}`)
+    const marginal = screen.getByText(`Marginal rates — ${thisYear}`)
+    const whatIf = screen.getByTestId('whatif-panel')
+    const trend = screen.getByText('Tax composition and effective rate by year')
+    const inputs = screen.getByText(`Tax inputs — ${thisYear}`)
+    const brackets = screen.getByText(`Bracket tables — ${thisYear}`)
+    expectInDocumentOrder(totals, willIOwe, marginal, whatIf, trend, inputs, brackets)
   })
 })
