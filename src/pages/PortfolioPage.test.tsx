@@ -72,6 +72,7 @@ import {
   fetchTransactions,
 } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
+import { formatDate } from '../utils/format'
 
 const ME = { id: 1, name: 'Me', is_primary: true }
 const SAM = { id: 2, name: 'Sam', is_primary: false }
@@ -622,4 +623,45 @@ it('renders the live ping only on the All view', async () => {
 
   fireEvent.click(chip('All'))
   await waitFor(() => expect(performance().getAttribute('data-series')).toContain('|Live'))
+})
+
+// ── Header staleness (2026-08-31 tier-1 A4, frontend-only) ────────────────────────────────
+// as_of is the OLDEST quote across holdings, so one manual-priced straggler pins the header
+// to an ancient date. Display-only fix: the same stale treatment Overview uses (amber via
+// isStaleQuote) + a tooltip naming the clock the header is NOT showing — which the payload
+// already carries as latest_quote_at (no new field; orchestrator amendment 2026-08-31).
+const isoDaysAgo = (daysAgo: number) => {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - daysAgo)
+  return `${d.toISOString().slice(0, 10)}T20:00:00Z`
+}
+
+it('tones the header amber when the oldest quote is stale and names both clocks', async () => {
+  vi.mocked(fetchHoldings).mockResolvedValue({
+    ...holdingsOut(),
+    as_of: isoDaysAgo(9),
+    latest_quote_at: isoDaysAgo(1),
+  })
+  renderPage()
+  await screen.findByText('Portfolio value')
+  const header = screen.getByText(/^prices as of /)
+  expect(header.className).toBe('as-of stale')
+  expect(header.getAttribute('title')).toBe(
+    `oldest quote across holdings — newest ${formatDate(isoDaysAgo(1))}`,
+  )
+})
+
+it('leaves a fresh header untoned and still names the newest clock', async () => {
+  vi.mocked(fetchHoldings).mockResolvedValue({
+    ...holdingsOut(),
+    as_of: isoDaysAgo(1),
+    latest_quote_at: isoDaysAgo(0),
+  })
+  renderPage()
+  await screen.findByText('Portfolio value')
+  const header = screen.getByText(/^prices as of /)
+  expect(header.className).toBe('as-of')
+  expect(header.getAttribute('title')).toBe(
+    `oldest quote across holdings — newest ${formatDate(isoDaysAgo(0))}`,
+  )
 })

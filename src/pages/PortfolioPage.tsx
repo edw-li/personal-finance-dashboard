@@ -53,6 +53,7 @@ import type {
   TransactionOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatDateTime, formatPct } from '../utils/format'
+import { isStaleQuote } from '../utils/staleness'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import '../components/portfolio/portfolio.css'
@@ -363,6 +364,10 @@ export default function PortfolioPage() {
 
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
+  // A4: the tooltip's second clock. latest_quote_at IS "the newest quote across holdings"
+  // (one definition, two consumers — it also dates the live ping); the spec's original
+  // as_of_newest twin was amended away 2026-08-31 once the audit surfaced this field.
+  const newestQuote = holdings?.latest_quote_at ?? null
 
   // The SERVER already scopes `failed` to tickers a future refresh would still attempt
   // (active, auto-priced) — one rule on one side of the wire, so a deactivation clears
@@ -438,7 +443,22 @@ export default function PortfolioPage() {
         <h1>Portfolio</h1>
         <div className="header-actions">
           {asOf ? (
-            <span className="as-of">prices as of {formatDate(asOf)}</span>
+            // A4 (2026-08-31 tier-1): as_of is the OLDEST quote — one manual-priced
+            // straggler pins it — so the header wears the same stale treatment Overview's
+            // freshness cue uses (isStaleQuote → --warn amber) and the tooltip names the
+            // clock it is NOT showing. Display-only: as_of itself is unchanged. The
+            // no-newest fallback is stale-tab armor only — server-side both clocks derive
+            // from one quote list, so they are null (or set) together.
+            <span
+              className={isStaleQuote(asOf) ? 'as-of stale' : 'as-of'}
+              title={
+                newestQuote
+                  ? `oldest quote across holdings — newest ${formatDate(newestQuote)}`
+                  : 'oldest quote across holdings'
+              }
+            >
+              prices as of {formatDate(asOf)}
+            </span>
           ) : (
             <span className="as-of">prices never refreshed</span>
           )}
