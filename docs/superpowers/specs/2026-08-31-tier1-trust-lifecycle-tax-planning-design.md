@@ -56,8 +56,10 @@ is the OLDEST quote across holdings (`backend/app/api/portfolio.py:629`), so one
 manual-priced security pins the header to an ancient date with no cue. Fix (display-only):
 apply the same stale treatment Overview uses (`isStaleQuote` from `src/utils/staleness.ts`)
 — amber text when stale — and a `title` tooltip: "oldest quote across holdings — newest
-{newest date}". Backend: extend the holdings summary payload with `as_of_newest` alongside
-`as_of` (additive, nullable). No behavior change to `as_of` itself.
+{newest date}". The newest clock is the payload's EXISTING `latest_quote_at` field
+(portfolio.py:630 — "the NEWEST quote"); no backend change (amended 2026-08-31: the
+original "additive as_of_newest" instruction predated discovering `latest_quote_at`, and
+the repo's one-definition-two-consumers law says reuse it). No behavior change to `as_of`.
 Test: stale oldest quote → amber class + title carries both dates.
 
 ### A5. Budget effective-date trap
