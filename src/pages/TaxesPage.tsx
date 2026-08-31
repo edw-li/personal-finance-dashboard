@@ -17,6 +17,7 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import InfoHint from '../components/InfoHint'
 import PageSkeleton from '../components/PageSkeleton'
 import BracketsEditor from '../components/taxes/BracketsEditor'
+import CompositionPanel from '../components/taxes/CompositionPanel'
 import InputsForm from '../components/taxes/InputsForm'
 import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
@@ -691,24 +692,15 @@ export default function TaxesPage() {
 
       {detail !== null && (
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          {/* Deliberately NOT keyed by year: the panel's own feed is the all-years trend,
-              which a year switch does not move — remounting it would spend a request to
-              redraw the same chart. Its per-year half is a prop, so it follows the year
-              anyway. */}
-          <SummaryPanel
-            summary={detail.summary}
-            filingStatus={filingStatus}
-            refreshKey={trendRefresh}
-          />
-          {/* D3 (2026-08-31): client-side ladder over the SAME two payloads the panels
-              around it read — the summary and the year's own status' tables. Not keyed:
-              both props are per-year payloads the load effect already replaces whole. */}
-          <MarginalPanel summary={detail.summary} brackets={detail.brackets} />
+          {/* Year-scoped answers read contiguously (2026-08-31 audit): totals, then the
+              withholding outlook, the marginal ladder and the sandbox; the all-years
+              composition trend closes the answers half below, and entry comes last. */}
+          <SummaryPanel summary={detail.summary} filingStatus={filingStatus} />
           {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
               be stored and summarizable, and this card still cannot be drawn for it) — asked
-              here rather than spending a request on the refusal. Keyed by year like the card
-              below, so a switch INTO this year mounts it fresh rather than leaving another
-              year's estimate under this heading. */}
+              here rather than spending a request on the refusal. Keyed by year like the
+              what-if card, so a switch INTO this year mounts it fresh rather than leaving
+              another year's estimate under this heading. */}
           {detail.summary.year === new Date().getFullYear() && (
             <WithholdingPanel
               key={`withholding-${detail.summary.year}`}
@@ -718,6 +710,10 @@ export default function TaxesPage() {
               onVestApplied={onVestApplied}
             />
           )}
+          {/* D3 (2026-08-31): client-side ladder over the SAME two payloads the panels
+              around it read — the summary and the year's own status' tables. Not keyed:
+              both props are per-year payloads the load effect already replaces whole. */}
+          <MarginalPanel summary={detail.summary} brackets={detail.brackets} />
           {/* Keyed by year for the editors' own reason: a real switch remounts it, so the
               typed legs and any scenario on screen go with the year they were run against
               (a stale scenario under a new year's heading would lie), while a same-year
@@ -734,6 +730,10 @@ export default function TaxesPage() {
             initialLotId={whatIfLotId}
             definitions={overrideDefinitions(detail.inputs)}
           />
+          {/* Deliberately NOT keyed: this panel's feed is the all-years trend, which a
+              year switch does not move — remounting it would spend a request to redraw
+              the same chart. It closes the answers half; entry follows. */}
+          <CompositionPanel refreshKey={trendRefresh} />
           {/* Keyed by the payloads' own identity (see inputsKey/bracketsKey), not by load:
               a real year or status switch remounts the editors — 2023's typed rows must not
               carry into 2024, and a one-column year's cell ids are not a two-column year's —
