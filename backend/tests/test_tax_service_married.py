@@ -18,7 +18,6 @@ from app.services.tax_service import (
     compute_breakdown,
     derive_suggestions,
     earner_from_inputs,
-    niit_advisory,
     salt_cap,
 )
 from app.tax_keys import MARRIED_JOINT, MARRIED_SEPARATE, SINGLE
@@ -88,7 +87,8 @@ MFJ_BRACKETS: dict[str, list[tuple[Decimal, Decimal]]] = {
     "medicare": [(D("0.0145"), D("0")), (D("0.0235"), D("250000"))],
     "social_security": [(D("0.062"), D("0")), (D("0"), D("180000"))],
     "disability": [(D("0.01"), D("0")), (D("0"), D("200000"))],
-    "capital_gains": [(D("0"), D("0")), (D("0.188"), D("100000")), (D("0.238"), D("600000"))],
+    # base rates: the folded pair is the advisory's business, not a fixture's
+    "capital_gains": [(D("0"), D("0")), (D("0.15"), D("100000")), (D("0.20"), D("600000"))],
 }
 
 # Household-level lines (one row each in the DB, person_id NULL).
@@ -166,8 +166,15 @@ def test_mfj_reference_year_to_the_cent():
 
     # Capital gains: LTCG 40000 is a gain, so everything nets -> 40000 + 5000 + 0.
     assert breakdown.capital_gains.gains_amount == D("45000")
-    # Stacked on TI 236500 -> [236500, 281500], entirely inside the 18.8% tier.
-    assert cents(breakdown.capital_gains.tax) == D("8460.00")
+    # Stacked on TI 236500 -> [236500, 281500], entirely inside the 15% tier.
+    assert cents(breakdown.capital_gains.tax) == D("6750.00")
+
+    # NIIT: NII = interest 2000 + unq div 1000 + max(stcg 0, 0) + max(cg 45000, 0)
+    # = 48000; MAGI = 266500 + 45000 = 311500 -> excess 61500 over MFJ's 250000; NII
+    # binds: 0.038 x 48000 = 1824.
+    assert breakdown.niit.gains_amount == D("48000")
+    assert breakdown.niit.taxable_income == D("48000")
+    assert cents(breakdown.niit.tax) == D("1824.00")
 
     # State: AGI = 266500 - 0 (no treasury slice) + 5000 + 1000 (HSA addbacks) + 45000
     # (the CA capital-gains fold) = 317500. TI = 306500.
@@ -194,8 +201,9 @@ def test_mfj_reference_year_to_the_cent():
 
     # Totals: gross sums the COMPONENTS (250000 + 50000 + 1000 + 2000 + 40000 + 5000).
     assert breakdown.totals.gross_income == D("348000")
-    assert cents(breakdown.totals.total_tax) == D("93829.85")
-    assert cents(breakdown.totals.take_home) == D("254170.15")
+    # 93829.85 - 8460 folded CG + 6750 base CG + 1824 NIIT
+    assert cents(breakdown.totals.total_tax) == D("93943.85")
+    assert cents(breakdown.totals.take_home) == D("254056.15")
 
 
 def test_one_shared_wage_base_would_understate_social_security():
@@ -275,36 +283,30 @@ def test_sdi_subtracts_dental_and_vision_but_not_hsa_per_earner():
 
 
 # --------------------------------------------------------------------------------------
-# NIIT advisory thresholds by status
+# NIIT thresholds by status
 # --------------------------------------------------------------------------------------
 
-BASE_CG = [(D("0"), D("0")), (D("0.15"), D("100000")), (D("0.20"), D("600000"))]
 
-
-def test_niit_threshold_follows_the_filing_status():
-    # 220000 is above single's 200000 but at or below MFJ's 250000.
-    assert niit_advisory(D("220000"), BASE_CG, SINGLE) is not None
-    assert niit_advisory(D("220000"), BASE_CG, MARRIED_JOINT) is None
-    # 150000 is below single's threshold but above MFS's 125000.
-    assert niit_advisory(D("150000"), BASE_CG, SINGLE) is None
-    assert niit_advisory(D("150000"), BASE_CG, MARRIED_SEPARATE) is not None
-    # The message names the threshold that was actually applied.
-    assert "250000" in niit_advisory(D("300000"), BASE_CG, MARRIED_JOINT)
-    assert "125000" in niit_advisory(D("150000"), BASE_CG, MARRIED_SEPARATE)
-    # An unknown status degrades to single's constant rather than raising: the engine is a
-    # pure function over stored data and never rejects it.
-    assert niit_advisory(D("220000"), BASE_CG, "nonsense") is not None
-
-
-def test_niit_status_reaches_the_breakdown_warnings():
-    tables = dict(MFJ_BRACKETS) | {"capital_gains": BASE_CG}
-    joint = compute_breakdown(
-        MFJ_YEAR, MFJ_INPUTS, tables, filing_status=MARRIED_JOINT, earners=MFJ_EARNERS
-    )
-    # AGI 266500 > 250000, so the stored 0.15/0.20 pair contradicts the NIIT rule.
-    flagged = [w for w in joint.warnings if w.startswith("capital-gains rates 0.15/0.2 contradict")]
-    assert len(flagged) == 1
-    assert "250000" in flagged[0]
+@pytest.mark.parametrize(
+    ("w2", "status", "base", "tax"),
+    [
+        ("140000", SINGLE, "0", "0"),  # MAGI 150000 <= 200000
+        ("140000", MARRIED_JOINT, "0", "0"),  # <= 250000
+        ("140000", MARRIED_SEPARATE, "10000", "380"),  # excess 25000; NII 10000 binds
+        ("210000", SINGLE, "10000", "380"),  # MAGI 220000 -> excess 20000; NII binds
+        ("210000", MARRIED_JOINT, "0", "0"),  # 220000 <= 250000
+        ("240000", MARRIED_JOINT, "0", "0"),  # MAGI exactly 250000: excess is 0
+        ("140000", "head_of_household", "0", "0"),  # unknown status reads single's 200000
+    ],
+)
+def test_niit_threshold_follows_the_filing_status(w2, status, base, tax):
+    """The engine's own NIIT line selects the status threshold (the map the old advisory
+    read); an unknown status degrades to single's constant — a pure read over stored
+    data must never raise on it."""
+    inputs = {"latest_w2_income": D(w2), "interest_total": D("10000")}
+    breakdown = compute_breakdown(2025, inputs, YEAR_BRACKETS[2025], filing_status=status)
+    assert breakdown.niit.taxable_income == D(base)
+    assert breakdown.niit.tax == D(tax)
 
 
 # --------------------------------------------------------------------------------------

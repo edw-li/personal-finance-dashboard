@@ -522,10 +522,11 @@ async def test_clone_brackets_from_a_partial_source(auth_client, definitions):
 
 
 async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client, definitions):
-    """The 2024 wire golden. Sheet-exact everywhere but the state chain, which carries the
-    deliberate CA capital-gains divergence (2026-08-25 spec §1) — the engine-level
-    sheet-vs-canonical deltas are pinned in test_tax_service.py; this test pins the
-    quantized strings the client actually renders."""
+    """The 2024 wire golden. Sheet-exact everywhere but the state chain and the CG/NIIT
+    split, which carry the deliberate CA capital-gains divergence (2026-08-25 spec §1) and
+    the unfolded NIIT surcharge (2026-08-31 spec C2) — the engine-level sheet-vs-canonical
+    deltas are pinned in test_tax_service.py; this test pins the quantized strings the
+    client actually renders."""
     await put_inputs(auth_client, 2024, inputs_payload(2024))
     await put_brackets(auth_client, 2024, brackets_payload(2024)["jurisdictions"])
 
@@ -558,18 +559,22 @@ async def test_summary_2024_matches_the_sheet_except_the_state_chain(auth_client
         "tax": "1950.00",
         "effective_rate": "0.008272",
     }
+    # CG unfolded to the 15% base + the explicit NIIT line: derivations in
+    # test_tax_service.py's _CANONICAL_TABLE.
     assert body["capital_gains"] == {
         "taxable_income": "197176.20",
         "gains_amount": "179.13",
-        "tax": "33.68",
-        "effective_rate": "0.188000",
+        "tax": "26.87",
+        "effective_rate": "0.150000",
     }
+    # CG unfolded to the 15% base + the explicit NIIT line: derivations in
+    # test_tax_service.py's _CANONICAL_TABLE.
     assert body["totals"] == {
         "gross_income": "237973.17",
         "total_income": "211776.20",
-        "total_tax": "72755.83",
-        "take_home": "165217.34",
-        "effective_rate": "0.305731",
+        "total_tax": "72824.61",
+        "take_home": "165148.56",
+        "effective_rate": "0.306020",
     }
 
 
@@ -617,7 +622,7 @@ async def test_all_years_summary_skips_input_less_years(auth_client, definitions
 
     body = (await auth_client.get(ALL_SUMMARY)).json()
     assert [year["year"] for year in body["years"]] == [2024, 2025]  # 2023 has no inputs
-    assert body["years"][0]["totals"]["total_tax"] == "72755.83"
+    assert body["years"][0]["totals"]["total_tax"] == "72824.61"
 
     sparse = body["years"][1]
     assert sparse["totals"]["total_tax"] == "0.00"
@@ -655,8 +660,6 @@ async def test_summary_guards_absurd_but_legal_inputs(auth_client, definitions):
     assert body["state"]["effective_rate"] == "0.123000"  # in range: still served
     assert body["totals"]["effective_rate"] is None  # ~10^23: nulled, not 500
     assert "totals effective rate out of range" in body["warnings"]
-    # Stored rates render normalized in the NIIT advisory despite Numeric(7,4) scale.
-    assert any(w.startswith("capital-gains rates 0.188/0.238 contradict") for w in body["warnings"])
 
 
 # --- what-if ---
@@ -1119,7 +1122,7 @@ async def test_single_summary_shape_is_unchanged(auth_client, definitions):
     body = (await auth_client.get(f"{YEARS}/2024/summary")).json()
     assert body["filing_status"] == "single"
     assert body["brackets_missing_for_status"] == []
-    assert body["totals"]["total_tax"] == "72755.83"
+    assert body["totals"]["total_tax"] == "72824.61"
 
 
 async def test_single_year_with_no_brackets_still_computes(auth_client, definitions):

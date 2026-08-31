@@ -41,14 +41,18 @@ JURISDICTION_WARN_MISSING = "no {j} brackets for {year}: {j} tax computed as 0"
 MISSING_INPUTS_WARNING = "missing inputs defaulted to 0: {keys}"
 NEGATIVE_STATE_TAX_WARNING = "state tax negative after exemption credits"
 NIIT_WARNING = (
-    "capital-gains rates {stored}/{stored_top} contradict the sheet's NIIT rule for this "
-    "AGI ({side} {threshold} implies {expected}/{expected_top})"
+    "stored capital-gains rate(s) {rates} appear to fold the NIIT surcharge in — "
+    "NIIT is computed as its own line; store the base rates 0.15/0.2"
 )
 
-# The sheet models CG bracket rates 2/3 as IF(agi > 200000, 18.8%, 15%) / IF(..., 23.8%,
-# 20%) — the NIIT surcharge folded into the rate. The DB imported the cached values, so a
-# year whose AGI later crosses the threshold silently keeps the wrong pair; we advise
-# rather than override, because the stored brackets are the user's to edit.
+# NIIT (2026-08-31 spec C2): 3.8% of the smaller of net investment income and the MAGI
+# excess over the status threshold — an explicit line since this batch. The sheet instead
+# folded the surcharge into CG bracket rates 2/3 (15 -> 18.8, 20 -> 23.8, cached from an
+# IF(agi > 200000, ...)); migration f7d3b2a91c40 rewrote the exact folded pair back to
+# base rates, the importer translates them on every apply, and `niit_advisory` flags any
+# leftover — three guards over the ONE pair below, so a folded table can never silently
+# double-charge.
+NIIT_RATE = Decimal("0.038")
 NIIT_AGI_THRESHOLD = Decimal("200000")
 # Statutory and non-indexed (audit §5), so constants rather than data: MFJ is 250000 and
 # MFS 125000, neither of which is "2x single". An unknown status reads single's figure —
@@ -58,8 +62,10 @@ NIIT_AGI_THRESHOLDS: dict[str, Decimal] = {
     MARRIED_JOINT: Decimal("250000"),
     MARRIED_SEPARATE: Decimal("125000"),
 }
-NIIT_RATES = (Decimal("0.188"), Decimal("0.238"))
+FOLDED_CG_RATES = (Decimal("0.188"), Decimal("0.238"))
 BASE_CG_RATES = (Decimal("0.15"), Decimal("0.20"))
+# Decimal hashes by VALUE, so a Numeric(7,4)-scaled 0.1880 hits the 0.188 key.
+FOLDED_TO_BASE_CG = dict(zip(FOLDED_CG_RATES, BASE_CG_RATES, strict=True))
 
 # Suggestions land in tax_inputs, Numeric(14,4).
 SUGGESTION_QUANTUM = Decimal("0.0001")
@@ -296,7 +302,8 @@ class JurisdictionResult:
 
     Income taxes carry agi/taxable_income, wage taxes carry w2_income/taxable_wages, and
     capital gains carry taxable_income (the ordinary income the gains stack on top of)
-    plus gains_amount.
+    plus gains_amount. The NIIT line borrows the capital-gains shape: gains_amount is net
+    investment income and taxable_income the surcharged base min(NII, MAGI excess).
     """
 
     tax: Decimal
@@ -326,6 +333,7 @@ class TaxBreakdown:
     social_security: JurisdictionResult
     disability: JurisdictionResult
     capital_gains: JurisdictionResult
+    niit: JurisdictionResult
     totals: TaxTotals
     warnings: list[str] = field(default_factory=list)
 
@@ -341,37 +349,21 @@ def _rate(tax: Decimal, base: Decimal) -> Decimal | None:
     return (tax / base) + ZERO
 
 
-def niit_advisory(
-    fed_agi: Decimal, cg_brackets: list[Bracket], filing_status: str = SINGLE
-) -> str | None:
-    """Flag stored CG rates that contradict the sheet's AGI-driven NIIT rule.
+def niit_advisory(cg_brackets: list[Bracket]) -> str | None:
+    """Flag stored CG rates that still fold the NIIT surcharge in (18.8 / 23.8).
 
-    Returns None when the table is too short to carry both rates (nothing to compare) or
-    when the stored pair already matches. Never edits the brackets: the engine walks what
-    is stored, verbatim. The threshold is the filing status's (200k / 250k / 125k) — an
-    unknown status reads single's, because a GET must never fail on stored data.
+    The engine computes NIIT as its own line, so a folded table charges the surcharge
+    twice. Exact value-matches only — the same two rates migration f7d3b2a91c40 and the
+    importer translation rewrite — and never edits the brackets: the engine walks what is
+    stored, verbatim. Stored rates arrive at Numeric(7,4) scale, so the rendering
+    normalizes (0.1880 and a hand-typed 0.188 must produce the same sentence).
     """
-    if len(cg_brackets) < 3:
-        return None
-    threshold = NIIT_AGI_THRESHOLDS.get(filing_status, NIIT_AGI_THRESHOLD)
-    ordered = sorted(cg_brackets, key=lambda bracket: bracket[1])
-    stored = (ordered[1][0], ordered[2][0])
-    above = fed_agi > threshold
-    expected = NIIT_RATES if above else BASE_CG_RATES
-    if stored == expected:
-        return None
-    # Stored rates arrive at the column's Numeric(7,4) scale, so normalize before rendering:
-    # 0.1500 and a hand-typed 0.15 are the same rate and must produce the same message. The
-    # EXPECTED pair is normalized identically — otherwise the constants' own scale leaks
-    # into the text and the message reads "0.15/0.2 ... implies 0.15/0.20".
-    return NIIT_WARNING.format(
-        stored=stored[0].normalize(),
-        stored_top=stored[1].normalize(),
-        side="above" if above else "at or below",
-        threshold=threshold,
-        expected=expected[0].normalize(),
-        expected_top=expected[1].normalize(),
+    folded = sorted(
+        {rate.normalize() for rate, _threshold in cg_brackets if rate in FOLDED_CG_RATES}
     )
+    if not folded:
+        return None
+    return NIIT_WARNING.format(rates="/".join(str(rate) for rate in folded))
 
 
 def compute_breakdown(
@@ -389,7 +381,7 @@ def compute_breakdown(
     bracket list — yields 0 tax plus a warning. Effective rates are full-precision ratios,
     None when the denominator is 0; the schema layer quantizes.
 
-    `filing_status` selects nothing here but the NIIT advisory's threshold: every OTHER
+    `filing_status` selects nothing here but the NIIT line's MAGI threshold: every OTHER
     status-dependent number lives in the bracket TABLES the caller selected, which is why
     a wrong-status table is refused upstream rather than compensated for down here.
 
@@ -495,6 +487,23 @@ def compute_breakdown(
     # shares it; the gains stack on top of federal taxable income.
     cg_tax = stack(tables["capital_gains"], fed_ti, cg_amount)
 
+    # NIIT (2026-08-31 spec C2) — its own line, never a folded bracket rate: 3.8% of the
+    # smaller of net investment income and the MAGI excess over the status threshold.
+    # MAGI is `_magi`'s definition (fed AGI + cg_amount, capital_loss_deductions inside
+    # via _federal_agi). The clamps guard stored-negative edges: a short-term or netted
+    # CG loss reduces AGI, never investment income, and a net-negative NII must never
+    # surface as a negative surcharge.
+    nii = (
+        values["interest_total"]
+        + values["unqualified_dividends"]
+        + max(values["stcg_total"], ZERO)
+        + max(cg_amount, ZERO)
+    )
+    magi = _magi(values.__getitem__)
+    niit_threshold = NIIT_AGI_THRESHOLDS.get(filing_status, NIIT_AGI_THRESHOLD)
+    niit_base = max(ZERO, min(nii, magi - niit_threshold))
+    niit_tax = NIIT_RATE * niit_base
+
     # Totals (rows 121-125). Gross income sums the *_standard / *_brokerage COMPONENTS,
     # not the netted totals, so a netted-away loss still shows up in the top line; total
     # income repeats the clean AGI formula.
@@ -509,9 +518,9 @@ def compute_breakdown(
         + values["qualified_dividends"]
         + values["other_capital_gains"]
     )
-    total_tax = fed_tax + state_tax + medicare_tax + ss_tax + sdi_tax + cg_tax
+    total_tax = fed_tax + state_tax + medicare_tax + ss_tax + sdi_tax + cg_tax + niit_tax
 
-    advisory = niit_advisory(fed_agi, tables["capital_gains"], filing_status)
+    advisory = niit_advisory(tables["capital_gains"])
     if advisory is not None:
         warnings.append(advisory)
 
@@ -552,6 +561,12 @@ def compute_breakdown(
             effective_rate=_rate(cg_tax, cg_amount),
             taxable_income=fed_ti,
             gains_amount=cg_amount,
+        ),
+        niit=JurisdictionResult(
+            tax=niit_tax,
+            effective_rate=_rate(niit_tax, nii),
+            taxable_income=niit_base,
+            gains_amount=nii,
         ),
         totals=TaxTotals(
             gross_income=gross_income,
