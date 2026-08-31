@@ -519,7 +519,7 @@ it('keeps sending the clear on the retry after a failed save', async () => {
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByRole('alert')
 
-  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+  fireEvent.click(screen.getByRole('button', { name: /retry spending/i }))
   await waitFor(() => {
     expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(2)
   })
@@ -929,4 +929,72 @@ it('renders the cue for a server-seeded positive liability and Flip marks the dr
   // Flip is an edit like any other: the draft machinery files it immediately.
   expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).not.toBeNull()
   expect((screen.getByLabelText('Visa') as HTMLInputElement).value).toBe('-$500.00')
+})
+
+// --- split-save truth (2026-08-31 tier-1 A8) -----------------------------------------------
+
+it('names the half-landed save and retries only the spending leg', async () => {
+  vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+
+  // The balances PUT COMMITTED before the failure — "nothing was lost" would be a lie in
+  // both directions, so the banner names the split.
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('Balances saved. Spending failed — Retry saves only spending.')
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(1)
+
+  // The primary is now the honest retry: only the failed leg goes out again.
+  fireEvent.click(screen.getByRole('button', { name: /retry spending/i }))
+  await screen.findByText(/month saved/i)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(1) // never re-sent
+  expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(2)
+})
+
+it('keeps the accurate old message when the balances leg itself fails', async () => {
+  vi.mocked(netWorthApi.putMonthBalances).mockRejectedValueOnce(new Error('db down'))
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('Saving failed — nothing was lost, retry')
+  // Nothing committed: the spending PUT was never attempted, the primary stays a full save.
+  expect(spendingApi.putSpendingMonth).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(2)
+  expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(1)
+})
+
+it('re-sends balances on retry when they were edited after the partial failure', async () => {
+  vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByRole('alert')
+
+  // Back to balances, change a figure: the remembered leg no longer describes the boxes,
+  // so a "retry" that skipped balances would silently drop this edit under a green banner.
+  fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1700.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /retry spending/i }))
+  await screen.findByText(/month saved/i)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(2)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls[1][1]).toEqual(
+    expect.objectContaining({ balances: [{ account_id: 1, balance: '1700.00' }] }),
+  )
 })

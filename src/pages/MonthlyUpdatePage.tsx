@@ -20,7 +20,13 @@ import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
-import type { AccountOut, CategoryOut, HouseholdOut, SpendingMatrix } from '../types/api'
+import type {
+  AccountOut,
+  CategoryOut,
+  HouseholdOut,
+  MonthUpsertResult,
+  SpendingMatrix,
+} from '../types/api'
 import { nestComponents } from '../utils/accounts'
 import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
@@ -136,6 +142,17 @@ export default function MonthlyUpdatePage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
+  // A8 (2026-08-31 tier-1): the balances leg that already COMMITTED while its spending
+  // sibling failed — the month, the exact canonical payload it shipped, and the server's
+  // counts. A retry whose payload still matches skips the balances PUT (retry-only-the-
+  // failed-leg, no new endpoint); an edit in between changes the payload string and
+  // honestly re-sends balances instead of dropping the edit under a "saved" banner.
+  // Cleared on month load and on a full save.
+  const [balancesLeg, setBalancesLeg] = useState<{
+    month: string
+    payload: string
+    result: MonthUpsertResult
+  } | null>(null)
   // What the server seeded for the month on screen, serialized — the draft machinery's
   // reference point. Carries its OWN month so a mid-switch render can never write the old
   // month's values under the new month's key.
@@ -201,6 +218,7 @@ export default function MonthlyUpdatePage() {
       ]) => {
         setError(null)
         setSaved(null)
+        setBalancesLeg(null)
         // Nested order: component inputs sit right after their aggregate's input
         // (the group filter below preserves it — components share the parent's group).
         const activeAccounts = nestComponents(accountList.filter((a) => a.is_active))
@@ -382,13 +400,32 @@ export default function MonthlyUpdatePage() {
       categories.map((c) => [c.id, canonicalAmount(amounts[c.id] ?? '')]),
     )
     const canonNetPay = netPay.trim() === '' ? '' : canonicalAmount(netPay)
+    // A8: everything the balances PUT would ship, serialized — the "is this a PURE retry?"
+    // comparison. Numeric keys serialize in ascending order (snapshotOf's law), so equal
+    // values always compare equal.
+    const balancesPayload = JSON.stringify({ balances: canonBalances, recordedOn, notes })
+    // Which PUT is in flight — the catch words the banner by the leg that actually failed.
+    let leg: 'balances' | 'spending' = 'balances'
     try {
-      const balanceResult = await putMonthBalances(month, {
-        recorded_on: recordedOn === '' ? undefined : recordedOn,
-        // null (not undefined): blanking the field must CLEAR a previously saved note.
-        notes: notes.trim() === '' ? null : notes,
-        balances: accounts.map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
-      })
+      let balanceResult: MonthUpsertResult
+      if (
+        balancesLeg !== null &&
+        balancesLeg.month === month &&
+        balancesLeg.payload === balancesPayload
+      ) {
+        // The balances PUT already landed for exactly this payload — skip it and reuse
+        // its counts (they describe the PUT that actually ran).
+        balanceResult = balancesLeg.result
+      } else {
+        balanceResult = await putMonthBalances(month, {
+          recorded_on: recordedOn === '' ? undefined : recordedOn,
+          // null (not undefined): blanking the field must CLEAR a previously saved note.
+          notes: notes.trim() === '' ? null : notes,
+          balances: accounts.map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
+        })
+        setBalancesLeg({ month, payload: balancesPayload, result: balanceResult })
+      }
+      leg = 'spending'
       const body: {
         net_pay?: string | null
         amounts: { category_id: number; amount: string }[]
@@ -403,6 +440,7 @@ export default function MonthlyUpdatePage() {
         body.net_pay = null
       }
       const spendResult = await putSpendingMonth(month, body)
+      setBalancesLeg(null)
       setSaved(
         `Balances: ${balanceResult.created} added, ${balanceResult.updated} changed, ` +
           `${balanceResult.unchanged} unchanged. Spending: ${spendResult.created} added, ` +
@@ -431,7 +469,14 @@ export default function MonthlyUpdatePage() {
       })
       setRestored(false)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Saving failed — nothing was lost, retry')
+      if (leg === 'spending') {
+        // Truth-telling (A8): the balances PUT COMMITTED before this failure — the old
+        // "nothing was lost" banner lied in both directions. State remembers the landed
+        // leg, so the primary (now "Retry spending") re-attempts only what failed.
+        setError('Balances saved. Spending failed — Retry saves only spending.')
+      } else {
+        setError(err instanceof ApiError ? err.message : 'Saving failed — nothing was lost, retry')
+      }
     } finally {
       setSaving(false)
     }
@@ -1064,7 +1109,10 @@ export default function MonthlyUpdatePage() {
               }
               onClick={() => void save()}
             >
-              {saving ? 'Saving…' : 'Save month'}
+              {/* A8: while a committed balances leg is remembered, the primary IS the
+                  retry the banner promised. (After an in-between balance edit the click
+                  re-sends balances too — save() compares the payload, not the label.) */}
+              {saving ? 'Saving…' : balancesLeg !== null ? 'Retry spending' : 'Save month'}
             </button>
           </div>
         </div>
