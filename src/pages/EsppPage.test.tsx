@@ -808,6 +808,21 @@ describe('EsppPage — offerings', () => {
 })
 
 describe('EsppPage — modeler', () => {
+  it('surfaces the $25k figure at the page top, above the lots (2026-08-31 audit)', async () => {
+    renderPage()
+    const tile = await screen.findByText(/\$25k limit used — 2024/)
+    const lots = screen.getByRole('heading', { name: /Lots/ })
+    const following = Node.DOCUMENT_POSITION_FOLLOWING
+    expect(tile.compareDocumentPosition(lots) & following).toBeTruthy()
+
+    // The modeler payload's own figures, verbatim — used and remaining. Scoped to the
+    // strip's own tile: the gauge in the card below says "$6,082.87 left" too, and the
+    // whole point is that the two never disagree.
+    const strip = within(tile.closest('.stat-tile') as HTMLElement)
+    expect(strip.getByText('$18,917.13')).toBeTruthy()
+    expect(strip.getByText('$6,082.87 left')).toBeTruthy()
+  })
+
   it('renders the chain, the provenance line and the $25k gauge', async () => {
     renderPage()
     await waitFor(() => expect(vi.mocked(fetchModeler)).toHaveBeenCalledWith({}))
@@ -836,7 +851,9 @@ describe('EsppPage — modeler', () => {
     const fill = meter.querySelector('.gauge-fill') as HTMLElement
     expect(fill.style.width).toBe('75.67%')
     expect(screen.getByText('$18,917.13 used')).toBeTruthy()
-    expect(screen.getByText('$6,082.87 left')).toBeTruthy()
+    // Scoped to the card: the page-top strip's delta is the same "$6,082.87 left" string
+    // (2026-08-31 audit) — deliberately, since both draw the one payload.
+    expect(within(modelerCard()).getByText('$6,082.87 left')).toBeTruthy()
   })
 
   it('does not seed the knob boxes from the modeler echo', async () => {

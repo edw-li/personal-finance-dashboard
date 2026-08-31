@@ -21,6 +21,7 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
 import { SkeletonCard } from '../components/PageSkeleton'
+import StatTile from '../components/StatTile'
 import type {
   EsppLotCreate,
   EsppLotOut,
@@ -1355,6 +1356,26 @@ export default function EsppPage() {
         <h1>ESPP</h1>
         <div className="spacer" />
       </div>
+
+      {/* The modeler's $25k figure at the page top (2026-08-31 audit: the gauge sat below
+          the fold). The MODELER's chain — its year and knobs — so it can never disagree
+          with the card below; absent until that feed answers, exactly like the card. */}
+      {modeler !== null && (
+        <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
+          {/* espp-limit-row: the lone tile must not stretch the full grid width — the
+              PaycheckPage household-tile fence, but class-scoped because the modeler
+              card's own two-tile kpi-row below must keep its natural width. */}
+          <div className="kpi-row espp-limit-row">
+            <StatTile
+              label={`$25k limit used — ${modeler.year}`}
+              value={formatCurrency(modeler.totals.total_25k_value)}
+              delta={`${formatCurrency(modeler.totals.remaining_25k)} left`}
+              tone="neutral"
+              hint="The Purchase modeler's chained total against the IRS §423 ceiling, at its current year and knobs — the gauge in that card draws the same figure long."
+            />
+          </div>
+        </div>
+      )}
 
       {lotsError && (
         <div className="error-banner" role="alert">
