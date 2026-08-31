@@ -94,6 +94,12 @@ function DayRows({
   )
 }
 
+// One wording for one quote: the strip's tile hints and the schedule card's own hint
+// describe the same figure, so both read this instead of keeping two copies in sync.
+function quoteSourceOf(ticker: string | null): string {
+  return ticker === null ? 'the latest employer quote' : `the latest ${ticker} quote`
+}
+
 /**
  * The schedule's three headline tiles, hoisted to the page top (2026-08-31 audit: the
  * next-vest figures sat below the fold). Same payload, same figures, rendered once — the
@@ -101,8 +107,11 @@ function DayRows({
  */
 export function VestingTiles({ schedule }: { schedule: VestingScheduleOut }) {
   const { tiles, ticker } = schedule
-  // Named once, so all three tiles' hints say the same thing about the same quote.
-  const quoteSource = ticker === null ? 'the latest employer quote' : `the latest ${ticker} quote`
+  // The no-grants branch lives HERE, beside the panel's own empty state that renders the
+  // message (2026-08-31 review round): one owner for one condition, so the page gate and
+  // the panel's empty branch can never drift apart.
+  if (schedule.grants.length === 0) return null
+  const quoteSource = quoteSourceOf(ticker)
   const nextVest = tiles.next_vest
   return (
     <div className="kpi-row">
@@ -158,9 +167,8 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
   )
 
   const { ticker, latest_price: latestPrice } = schedule
-  // Still named here for the heading's hint, which says what the strip's tiles say: one
-  // wording for one quote.
-  const quoteSource = ticker === null ? 'the latest employer quote' : `the latest ${ticker} quote`
+  // The heading's hint says what the strip's tiles say — quoteSourceOf is the one wording.
+  const quoteSource = quoteSourceOf(ticker)
   // The first DATE still ahead — the row the "next" badge belongs on. The feed is
   // chronological, so this is the day the strip's Next vest tile lands on.
   const nextDayIndex = schedule.vest_days.findIndex((day) => !day.is_past)

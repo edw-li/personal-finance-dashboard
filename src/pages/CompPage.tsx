@@ -566,11 +566,29 @@ export default function CompPage() {
         <div className="spacer" />
       </div>
 
+      {/* The schedule feed's banner leads its OWN tiles (2026-08-31 review round): after a
+          failed reload the strip below is the page's most prominent stale surface, and the
+          "may be showing earlier data" cue has to sit beside it, not below the fold with
+          the schedule card. */}
+      {scheduleError && (
+        <div className="error-banner" role="alert">
+          {schedule === null
+            ? scheduleError
+            : `${scheduleError} — the schedule may be showing earlier data.`}{' '}
+          <button
+            className="button"
+            aria-label="Retry loading the vesting schedule"
+            onClick={reloadSchedule}
+          >
+            Retry
+          </button>
+        </div>
+      )}
       {/* The schedule's headline tiles at the page top (2026-08-31 audit). The pinned card
-          order below is untouched; with no grants the panel's empty state carries the
-          message, so the strip renders nothing. Dimmed by the schedule feed's own flag,
-          like the cards it summarizes. */}
-      {schedule !== null && schedule.grants.length > 0 && (
+          order below is untouched; the no-grants branch is VestingTiles' own (it renders
+          nothing — the panel's empty state carries the message). Dimmed by the schedule
+          feed's own flag, like the cards it summarizes. */}
+      {schedule !== null && (
         <div className={`loading-dim${scheduleBusy ? ' is-loading' : ''}`}>
           <VestingTiles schedule={schedule} />
         </div>
@@ -622,20 +640,6 @@ export default function CompPage() {
         </section>
       </div>
 
-      {scheduleError && (
-        <div className="error-banner" role="alert">
-          {schedule === null
-            ? scheduleError
-            : `${scheduleError} — the schedule may be showing earlier data.`}{' '}
-          <button
-            className="button"
-            aria-label="Retry loading the vesting schedule"
-            onClick={reloadSchedule}
-          >
-            Retry
-          </button>
-        </div>
-      )}
       {schedule === null ? (
         scheduleBusy && <SkeletonCard height={280} label="Loading the vesting schedule…" />
       ) : (

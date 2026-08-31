@@ -88,7 +88,7 @@ function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: bo
       {/* The one figure the list below does NOT carry: net pay is per check, this is what
           lands in a month. Deliberately the only tile — a second one showing `net_pay`
           would print the same number twice on one card. */}
-      <div className="kpi-row">
+      <div className="kpi-row kpi-row-lone">
         <StatTile
           label="Monthly net"
           value={formatCurrency(data.monthly_net)}
@@ -1007,7 +1007,7 @@ export default function PaycheckPage() {
           follow the chips. */}
       {householdNets !== null && householdNets.length > 1 && (
         <section className="paycheck-household">
-          <div className="kpi-row">
+          <div className="kpi-row kpi-row-lone">
             <StatTile
               label="Household take-home"
               value={formatCurrency(householdTotal)}

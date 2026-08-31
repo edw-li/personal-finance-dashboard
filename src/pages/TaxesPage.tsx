@@ -115,7 +115,7 @@ export default function TaxesPage() {
   // The deep links' seeds — /taxes?whatif=TICKER from the holdings drill-in, ?whatif-lot={id}
   // from the ESPP lots table. A plain read per render (it is a hook, not a fetch), and the
   // params are deliberately NOT cleared: this page itself owns no history writes (the
-  // ?year drill param is SummaryPanel's, written replace-style beside these), and a
+  // ?year drill param is CompositionPanel's, written replace-style beside these), and a
   // reload re-seeding the same leg is the honest reading of the URL the user is sitting on.
   const [searchParams] = useSearchParams()
   const whatIfTicker = searchParams.get('whatif')
@@ -161,9 +161,9 @@ export default function TaxesPage() {
   // every path that reloads asks first.
   const [inputsDirty, setInputsDirty] = useState(false)
   const [bracketsDirty, setBracketsDirty] = useState(false)
-  // A save moves the engine's answer for one year, which moves that year's column in the
-  // panel's ALL-years trend too. The panel owns that feed, so the page just counts the
-  // saves whose totals actually landed and lets the panel refetch on the new value —
+  // A save (or a filing-status flip) moves the engine's answer for one year, which moves
+  // that year's column in the panel's ALL-years trend too. The panel owns that feed, so
+  // the page just counts the changes and lets the panel refetch on the new value —
   // cheaper than hoisting a second load chain into this component's eleven setters.
   const [trendRefresh, setTrendRefresh] = useState(0)
   // D4: bumped when an inputs write lands from OUTSIDE the form (the withholding card's
@@ -331,6 +331,10 @@ export default function TaxesPage() {
         // even if no list reload ever happens.
         setYears((current) => current.map((y) => (y.year === row.year ? row : y)))
         loadYear(year)
+        // The flip moves the engine's answer for this year (possibly to a refusal), which
+        // moves the year's column in the all-years trend — a status change is a save as far
+        // as CompositionPanel's feed is concerned (2026-08-31 review round).
+        setTrendRefresh((n) => n + 1)
       })
       .catch((err: unknown) => {
         // A 422 (an unknown status) or a 404 (the year went away) lands here verbatim. The

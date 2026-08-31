@@ -10,6 +10,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import CompPage from './CompPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 import ToastProvider from '../components/ToastProvider'
 
 vi.mock('../api/comp', () => ({
@@ -805,9 +806,7 @@ describe('CompPage — vesting schedule', () => {
     vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
     render(<CompPage />)
     const nextVest = await screen.findByText('Next vest')
-    const focal = screen.getByText('Focal history')
-    const following = Node.DOCUMENT_POSITION_FOLLOWING
-    expect(nextVest.compareDocumentPosition(focal) & following).toBeTruthy()
+    expectInDocumentOrder(nextVest, screen.getByText('Focal history'))
   })
 
   it('draws the vesting calendar beside the trajectory, on the vest dates', async () => {
@@ -1234,6 +1233,12 @@ describe('CompPage — the two feeds are independent', () => {
     ).toBeTruthy()
     expect(within(tile('Unvested')).getByText('1,230 sh')).toBeTruthy()
     expect(field('Label').value).toBe('half-typed grant')
+    // The stale cue leads the page's most prominent figures (2026-08-31 review round):
+    // the banner sits ABOVE the hoisted tiles it disclaims, not below the fold.
+    expectInDocumentOrder(
+      screen.getByText('vesting unavailable — the schedule may be showing earlier data.'),
+      screen.getByText('Next vest'),
+    )
   })
 
   it('reloads BOTH feeds after a comp event write', async () => {

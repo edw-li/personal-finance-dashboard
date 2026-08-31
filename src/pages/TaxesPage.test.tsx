@@ -14,6 +14,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import TaxesPage from './TaxesPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 // JURISDICTIONS (render order) stays real; every request is stubbed — including the
 // withholding card's own, which the page mounts (unmocked, unlike the what-if one) whenever
@@ -1339,6 +1340,19 @@ describe('filing status (2026-08-26 design §6)', () => {
     )
   })
 
+  it('a status flip refetches the all-years trend — the composition follows the new status', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+    await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(statusButton('Married filing jointly'))
+
+    // The flip moves the engine's answer for the year (possibly to a refusal), which moves
+    // that year's column in the all-years trend too — CompositionPanel must refetch
+    // (2026-08-31 review round; the bug predated the split).
+    await waitFor(() => expect(vi.mocked(fetchAllTaxSummaries)).toHaveBeenCalledTimes(2))
+  })
+
   it('neither asks nor sends when the pressed status is already the year’s', async () => {
     renderPage()
     await screen.findByLabelText('Annual Salary')
@@ -1640,12 +1654,6 @@ describe('TaxesPage — section order (2026-08-31 audit)', () => {
     const trend = screen.getByText('Tax composition and effective rate by year')
     const inputs = screen.getByText(`Tax inputs — ${thisYear}`)
     const brackets = screen.getByText(`Bracket tables — ${thisYear}`)
-    const following = Node.DOCUMENT_POSITION_FOLLOWING
-    expect(totals.compareDocumentPosition(willIOwe) & following).toBeTruthy()
-    expect(willIOwe.compareDocumentPosition(marginal) & following).toBeTruthy()
-    expect(marginal.compareDocumentPosition(whatIf) & following).toBeTruthy()
-    expect(whatIf.compareDocumentPosition(trend) & following).toBeTruthy()
-    expect(trend.compareDocumentPosition(inputs) & following).toBeTruthy()
-    expect(inputs.compareDocumentPosition(brackets) & following).toBeTruthy()
+    expectInDocumentOrder(totals, willIOwe, marginal, whatIf, trend, inputs, brackets)
   })
 })

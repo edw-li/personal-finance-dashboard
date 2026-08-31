@@ -152,10 +152,3 @@
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-
-/* The page-top $25k strip holds ONE tile; unfenced, auto-fit would stretch it across the
-   whole content column (PaycheckPage.css's 320px fence, scoped to the strip alone so the
-   modeler card's inner two-tile row keeps its natural width). */
-.espp-limit-row {
-  max-width: 320px;
-}

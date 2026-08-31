@@ -18,7 +18,8 @@ import './taxes.css'
  * year-scoped answer cards can sit contiguously and this card can close the answers half.
  *
  * The feed is this panel's own: it is all-years, so a year switch does not move it, and
- * it reloads only when the page says a save landed — `refreshKey`.
+ * it reloads only when the page says the engine's answer moved — a save or a
+ * filing-status flip — via `refreshKey`.
  */
 export default function CompositionPanel({
   refreshKey = 0,

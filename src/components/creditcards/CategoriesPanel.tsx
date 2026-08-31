@@ -365,7 +365,8 @@ export default function CategoriesPanel({
       </form>
       {categories.length > 0 && (
         // Capped + scrollable past ~10 rows (sticky header): the row list grows with
-        // every niche MCC category, and the matrix below must stay reachable.
+        // every niche MCC category, and the rest of the page must stay reachable
+        // (wherever this panel sits — the 2026-08-31 reorder moved it below the matrix).
         <div className="categories-scroll">
           <table className="data-table categories-table">
             <thead>

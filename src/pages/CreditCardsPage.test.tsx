@@ -9,6 +9,7 @@ import type {
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import CreditCardsPage from './CreditCardsPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 vi.mock('../api/creditCards', () => ({
   fetchCreditCards: vi.fn(),
@@ -652,10 +653,6 @@ describe('CreditCardsPage — section order (2026-08-31 audit)', () => {
     const line = screen.getByRole('heading', { name: /Credit line history/ })
     const roster = screen.getByRole('heading', { name: /Card roster/ })
     const categories = screen.getByRole('heading', { name: /Categories & weights/ })
-    const following = Node.DOCUMENT_POSITION_FOLLOWING
-    expect(matrix.compareDocumentPosition(value) & following).toBeTruthy()
-    expect(value.compareDocumentPosition(line) & following).toBeTruthy()
-    expect(line.compareDocumentPosition(roster) & following).toBeTruthy()
-    expect(roster.compareDocumentPosition(categories) & following).toBeTruthy()
+    expectInDocumentOrder(matrix, value, line, roster, categories)
   })
 })

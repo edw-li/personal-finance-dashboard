@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
 import SpendingPage from './SpendingPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 vi.mock('../api/spending', () => ({ fetchMatrix: vi.fn(), fetchYearly: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each
@@ -462,10 +463,6 @@ describe('SpendingPage — section order (2026-08-31 audit)', () => {
     const yearly = screen.getByRole('heading', { name: /Yearly rollups/ })
     // The windowed pair sits with the other windowed charts; the never-windowed
     // full-history pair (heatmap, yearly) closes the page.
-    const following = Node.DOCUMENT_POSITION_FOLLOWING
-    expect(budgets.compareDocumentPosition(savings) & following).toBeTruthy()
-    expect(savings.compareDocumentPosition(trends) & following).toBeTruthy()
-    expect(trends.compareDocumentPosition(heatmap) & following).toBeTruthy()
-    expect(heatmap.compareDocumentPosition(yearly) & following).toBeTruthy()
+    expectInDocumentOrder(budgets, savings, trends, heatmap, yearly)
   })
 })

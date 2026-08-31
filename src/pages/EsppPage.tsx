@@ -812,6 +812,7 @@ function ModelerCard({
   onRun,
   onYearSelect,
   onRowsSaved,
+  onDirtyChange,
   busy,
 }: {
   data: EsppModelerOut | null
@@ -820,6 +821,8 @@ function ModelerCard({
   onRun: () => void
   onYearSelect: (year: number) => void
   onRowsSaved: () => void
+  /** The page-top $25k tile must not assert a figure this card is disclaiming. */
+  onDirtyChange?: (dirty: boolean) => void
   busy: boolean
 }) {
   const [edits, setEdits] = useState<RowEdits>({})
@@ -858,6 +861,14 @@ function ModelerCard({
   }
 
   const dirtyRows = (data?.periods ?? []).filter(rowIsDirty)
+
+  // Reported from an effect rather than from every handler: an edit, a save's cleared
+  // edits and a year switch's replaced periods all land on the same derived list
+  // (InputsForm's onDirtyChange idiom; 2026-08-31 review round).
+  const dirty = dirtyRows.length > 0
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
 
   const saveAndRecalculate = () => {
     if (data === null || dirtyRows.length === 0) {
@@ -1210,6 +1221,10 @@ export default function EsppPage() {
   )
   const [modelerError, setModelerError] = useState<string | null>(null)
   const [modelerBusy, setModelerBusy] = useState(true)
+  // Mirrors the modeler card's derived dirty-rows flag (its onDirtyChange): the page-top
+  // $25k tile wears the SAME stale cue the card raises, or the headline would keep
+  // asserting a figure the card below disclaims (2026-08-31 review round).
+  const [modelerDirty, setModelerDirty] = useState(false)
   // Knobs are NEVER seeded from the echo (spec §6.2): blank means the smart default —
   // subscription from offerings, FMV from the latest quote — and the provenance line
   // says what blank resolved to. They live here so a failed recalculate keeps them.
@@ -1362,10 +1377,9 @@ export default function EsppPage() {
           with the card below; absent until that feed answers, exactly like the card. */}
       {modeler !== null && (
         <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
-          {/* espp-limit-row: the lone tile must not stretch the full grid width — the
-              PaycheckPage household-tile fence, but class-scoped because the modeler
-              card's own two-tile kpi-row below must keep its natural width. */}
-          <div className="kpi-row espp-limit-row">
+          {/* kpi-row-lone: the lone tile must not stretch the full grid width; the modeler
+              card's own two-tile kpi-row below keeps its natural width. */}
+          <div className="kpi-row kpi-row-lone">
             <StatTile
               label={`$25k limit used — ${modeler.year}`}
               value={formatCurrency(modeler.totals.total_25k_value)}
@@ -1374,6 +1388,14 @@ export default function EsppPage() {
               hint="The Purchase modeler's chained total against the IRS §423 ceiling, at its current year and knobs — the gauge in that card draws the same figure long."
             />
           </div>
+          {/* The card's own dirty note, echoed beside the headline it disclaims — the tile
+              and the gauge must never disagree silently (2026-08-31 review round). */}
+          {modelerDirty && (
+            <p className="hint">
+              Unsaved period edits below — this figure is stale until you save &amp;
+              recalculate.
+            </p>
+          )}
         </div>
       )}
 
@@ -1438,6 +1460,7 @@ export default function EsppPage() {
           onRun={runModeler}
           onYearSelect={selectYear}
           onRowsSaved={() => runModeler()}
+          onDirtyChange={setModelerDirty}
           busy={modelerBusy}
         />
       </div>

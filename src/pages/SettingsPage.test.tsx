@@ -10,6 +10,7 @@ import type {
   SystemStatus,
 } from '../types/api'
 import SettingsPage from './SettingsPage'
+import { expectInDocumentOrder } from '../testing/domOrder'
 
 // Four api modules, all stubbed. No EChart mock here: this page draws nothing, so the
 // house's never-render-echarts-in-jsdom rule has nothing to catch.
@@ -780,9 +781,7 @@ describe('SettingsPage — system card', () => {
     const importH = screen.getByRole('heading', { name: /Import workbook/ })
     const system = screen.getByRole('heading', { name: /System/ })
     const appSettings = screen.getByRole('heading', { name: /App settings/ })
-    const following = Node.DOCUMENT_POSITION_FOLLOWING
-    expect(importH.compareDocumentPosition(system) & following).toBeTruthy()
-    expect(system.compareDocumentPosition(appSettings) & following).toBeTruthy()
+    expectInDocumentOrder(importH, system, appSettings)
   })
 })
 
