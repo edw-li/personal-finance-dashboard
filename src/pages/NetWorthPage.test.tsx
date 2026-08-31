@@ -9,21 +9,26 @@ vi.mock('../api/netWorth', () => ({ fetchTimeseries: vi.fn(), fetchSummary: vi.f
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each chart
 // DRAWS is pinned in netWorthChartOptions.test.ts; this marker exposes only the option
-// slices this page owns: series names, their stack ids, and any markLine anchor.
+// slices this page owns: series names, their stack ids, any markLine anchor, and (A2) the
+// legend.selected map THIS chart was fed. mouseEnter stands in for a legendselectchanged
+// on this chart, since jsdom cannot raise echarts events.
 vi.mock('../components/EChart', async () => {
   const { createElement } = await import('react')
   return {
     default: ({
       option,
+      onLegendChange,
       animateEntrance = true,
     }: {
       option: {
+        legend?: { selected?: Record<string, boolean> }
         series?: {
           name?: string
           stack?: string
           markLine?: { data?: { xAxis?: string }[] }
         }[]
       }
+      onLegendChange?: (selected: Record<string, boolean>) => void
       animateEntrance?: boolean
     }) =>
       createElement('div', {
@@ -34,8 +39,11 @@ vi.mock('../components/EChart', async () => {
           .flatMap((s) => s.markLine?.data ?? [])
           .map((d) => d.xAxis ?? '')
           .join('|'),
+        'data-legend-selected': JSON.stringify(option.legend?.selected ?? null),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
+        // An account literally named "Cash" toggled off — the A2 collision case.
+        onMouseEnter: () => onLegendChange?.({ Cash: false }),
       }),
   }
 })
@@ -311,4 +319,39 @@ it('restores the household view after visiting an owner with no data', async () 
   // The revalidation answers with a payload identical to the warm household snapshot —
   // the page must still swap the empty view back out.
   expect((await screen.findAllByText('My Checking')).length).toBeGreaterThan(0)
+})
+
+// ── Legend collision (2026-08-31 tier-1 A2) ───────────────────────────────────────────────
+// One merged legend map let an account literally named "Cash" toggle the stacked chart's
+// Cash GROUP off from the drill chart — silently hiding the group and shrinking the
+// tooltip's Assets subtotal. The two charts now hold separate maps.
+it('keeps a drill toggle on an account named "Cash" out of the stacked chart', async () => {
+  vi.mocked(fetchTimeseries).mockResolvedValue(
+    timeseriesOut({
+      accounts: [
+        {
+          id: 1, name: 'Cash', slug: 'cash-account', group: 'cash', sort_order: 1,
+          is_active: true, is_component: false, parent_account_id: null, person_id: 1,
+        },
+      ],
+      series: [{ account_id: 1, values: ['100.00', '150.00'] }],
+    }),
+  )
+  renderPage()
+  await screen.findByRole('group', { name: 'Owner' })
+  // The drill seeds to the biggest account — the one wearing the colliding name.
+  await waitFor(() =>
+    expect(screen.getAllByTestId('echart')[1].getAttribute('data-series')).toBe('Cash'),
+  )
+
+  fireEvent.mouseEnter(screen.getAllByTestId('echart')[1]) // drill legend: { Cash: false }
+
+  expect(
+    JSON.parse(screen.getAllByTestId('echart')[1].getAttribute('data-legend-selected') ?? '{}'),
+  ).toEqual({ Cash: false })
+  // The stacked chart's own map never saw the toggle — its Cash GROUP series (and the
+  // Assets subtotal the tooltip builds over it) stay untouched.
+  expect(
+    JSON.parse(screen.getAllByTestId('echart')[0].getAttribute('data-legend-selected') ?? '{}'),
+  ).toEqual({})
 })
