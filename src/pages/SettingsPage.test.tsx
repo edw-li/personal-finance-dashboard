@@ -773,6 +773,17 @@ describe('SettingsPage — system card', () => {
     await screen.findByText('No refresh recorded yet')
     expect(screen.getByText('No backup recorded')).toBeDefined()
   })
+
+  it('pairs data-out with data-in: System follows Import and precedes the forms (2026-08-31 audit)', async () => {
+    render(<SettingsPage />)
+    await screen.findByText('No refresh recorded yet')
+    const importH = screen.getByRole('heading', { name: /Import workbook/ })
+    const system = screen.getByRole('heading', { name: /System/ })
+    const appSettings = screen.getByRole('heading', { name: /App settings/ })
+    const following = Node.DOCUMENT_POSITION_FOLLOWING
+    expect(importH.compareDocumentPosition(system) & following).toBeTruthy()
+    expect(system.compareDocumentPosition(appSettings) & following).toBeTruthy()
+  })
 })
 
 describe('SettingsPage — household, accounts and categories cards', () => {
