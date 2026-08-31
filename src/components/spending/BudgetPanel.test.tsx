@@ -9,7 +9,6 @@ vi.mock('../../api/spending', () => ({
 
 import { deleteCategoryBudget, putCategoryBudget } from '../../api/spending'
 import type { SpendingMatrix } from '../../types/api'
-import { addMonths, currentMonthIso } from '../../utils/months'
 
 const matrix: SpendingMatrix = {
   months: ['2026-01-01', '2026-02-01'],
@@ -82,11 +81,13 @@ it('lists unbudgeted ACTIVE categories collapsed, without meters or inactive one
   expect(screen.queryByRole('meter', { name: 'Rent spend vs budget' })).toBeNull()
 })
 
-it('saves through the PUT (editor defaults to next month) and renders the returned history', async () => {
+it('saves through the PUT (editor defaults to the FOCUSED month) and renders the returned history', async () => {
   renderPanel(0)
-  const expectedDefault = addMonths(currentMonthIso(), 1).slice(0, 7)
+  // A5: the default is the month the meters read — matrix.months[monthIndex] — so a first
+  // budget saved with the default visibly lands on the meters. (Fixture-dated, so this
+  // test no longer depends on the day the suite runs.)
   const monthBox = screen.getByLabelText('Food budget effective from') as HTMLInputElement
-  expect(monthBox.value).toBe(expectedDefault)
+  expect(monthBox.value).toBe('2026-01')
   // The amount box prefills with the month's resolved budget.
   const amountBox = screen.getByLabelText('Food budget amount') as HTMLInputElement
   expect(amountBox.value).toBe('$400.00') // AmountInput's blurred echo of '400.00'
@@ -95,15 +96,24 @@ it('saves through the PUT (editor defaults to next month) and renders the return
   await waitFor(() =>
     expect(putCategoryBudget).toHaveBeenCalledWith(1, {
       amount: '425.00',
-      effective_month: `${expectedDefault}-01`,
+      effective_month: '2026-01-01',
     }),
   )
   // The response's history renders, null amount reading as the end marker.
   expect(await screen.findByText('Mar 2026 — $425.00')).toBeDefined()
   expect(screen.getByText('Sep 2026 — budget ends')).toBeDefined()
   expect(onBudgetsChanged).toHaveBeenCalled()
-  // The re-dating hint is the editor's contract with history (spec §4.2).
+  // The re-dating hint is the editor's contract with history (spec §4.2) — since A5 it
+  // rides IN the editor's control row, one line, naming the new default.
   expect(screen.getAllByText(/re-writes what that era/).length).toBeGreaterThan(0)
+  expect(screen.getAllByText(/Defaults to Jan 2026/).length).toBeGreaterThan(0)
+})
+
+it('follows the focused month when the page drills elsewhere', () => {
+  renderPanel(1)
+  const monthBox = screen.getByLabelText('Food budget effective from') as HTMLInputElement
+  expect(monthBox.value).toBe('2026-02')
+  expect(screen.getAllByText(/Defaults to Feb 2026/).length).toBeGreaterThan(0)
 })
 
 it('a blank amount saves the null end-marker', async () => {

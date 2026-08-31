@@ -97,6 +97,13 @@
   width: 150px;
 }
 
+/* A5: the past-dating warning rides IN the editor row, wrapping onto its own full-width
+   line directly under the controls it warns about. */
+.budget-editor-form .budget-editor-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .budget-history {
   list-style: none;
   margin: 0.25rem 0 0;
