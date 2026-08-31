@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
-import { fetchWithholding } from '../../api/taxes'
+import { fetchWithholding, putTaxInputs } from '../../api/taxes'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
-import type { WithholdingOut } from '../../types/api'
+import type { TaxInputsOut, WithholdingOut } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
 import type { Tone } from '../../utils/tone'
 // This component's own sheet, like its siblings: the app-wide vocabulary
@@ -25,7 +25,64 @@ import './taxes.css'
  * display-only sign/abs on `balance_projected` that picks the balance tile's words, colour and
  * glyph (utils/format.ts's Number() rule).
  */
-export default function WithholdingPanel({ year }: { year: number }) {
+// The statutory harbor is the LESSER of two legs; either can be missing (a first year
+// has no prior return, a refused engine year has no liability — the server sends null
+// only when BOTH are). The server judged `met` on effective_threshold; this sentence
+// only narrates which leg that figure came from, so it can never contradict the badge.
+// The 90% literal matches the server's SAFE_HARBOR_CURRENT_MULTIPLIER (the
+// supplemental-rates sentence below sets the precedent for statutory literals in copy).
+function safeHarborSentence(harbor: NonNullable<WithholdingOut['safe_harbor']>): string {
+  const prior =
+    harbor.prior_year === null || harbor.multiplier === null || harbor.threshold === null
+      ? null
+      : `${formatPct(harbor.multiplier, { signed: false, decimals: 0 })} of ` +
+        `${harbor.prior_year}'s total tax`
+  const current =
+    harbor.current_year_threshold === null ? null : "90% of this year's projected liability"
+  const met = harbor.met
+    ? 'covered by projected withholding'
+    : 'NOT covered by projected withholding'
+  const effective = formatCurrency(harbor.effective_threshold)
+  if (prior !== null && current !== null) {
+    // Ties mark the current-year leg — the two figures are equal, so the label is moot.
+    const binding =
+      harbor.effective_threshold === harbor.current_year_threshold
+        ? 'current-year'
+        : 'prior-year'
+    return (
+      `Safe harbor (approx.): the lesser of ${prior} (${formatCurrency(harbor.threshold)}) ` +
+      `and ${current} (${formatCurrency(harbor.current_year_threshold)}) is ${effective} — ` +
+      `the ${binding} leg binds; ${met}`
+    )
+  }
+  // One leg missing: the survivor's own figure IS the effective threshold, so it is
+  // named once. (Both missing never reaches here — the server sends null instead.)
+  if (prior === null && current === null) {
+    // The contract sends null instead of a both-legs-missing object — armor for a
+    // violated contract: name the figure without a leg rather than interpolating the
+    // word "null" into user-facing copy (final review, minor 1).
+    return `Safe harbor (approx.): ${effective} — ${met}`
+  }
+  return `Safe harbor (approx.): ${prior ?? current} is ${effective} — ${met}`
+}
+
+export default function WithholdingPanel({
+  year,
+  storedVestW2 = null,
+  inputsDirty = false,
+  onVestApplied,
+}: {
+  year: number
+  /** The PRIMARY person's stored w2_stock_rsus_sold (the 4dp echo), null when unset —
+   *  what the Apply chip's already-applied check compares against. */
+  storedVestW2?: string | null
+  /** The inputs form below holds unsaved edits: Apply asks before the page remounts it. */
+  inputsDirty?: boolean
+  /** The page's reload door: adopts the PUT echo, remounts the inputs form on it and
+   *  refreshes the totals. The chip renders ONLY when the page provides this — an Apply
+   *  that could not complete that loop would leave a stale form under a fresh number. */
+  onVestApplied?: (echo: TaxInputsOut) => void
+}) {
   // null = the feed has not answered yet (never a zeroed payload — "not loaded" and "nothing
   // withheld" say very different things under this heading).
   const [withholding, setWithholding] = useState<WithholdingOut | null>(null)
@@ -34,6 +91,10 @@ export default function WithholdingPanel({ year }: { year: number }) {
   // An OBJECT, not a counter: Retry re-asserts the SAME year, and only a fresh identity
   // re-runs the effect below (HoldingDetailPanel's `span`, TaxesPage's `selection`).
   const [reload, setReload] = useState({})
+  // D4's write, single-flight and with a failure surface of its own: an inputs PUT that
+  // failed says nothing about the estimate already on screen, so it never touches `error`.
+  const [applying, setApplying] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
   // Two loads in flight — a year change over an open request — must land in order: only the
   // newest may write the card or complain about it.
   const seqRef = useRef(0)
@@ -67,9 +128,10 @@ export default function WithholdingPanel({ year }: { year: number }) {
     setReload({})
   }
 
-  // The ONE piece of client math on this card, and display-only: the SIGN of the server's own
-  // balance picks the words, the colour and the glyph, and the figure beside them is that same
-  // server string formatted — never a number this file computed (global rule 9).
+  // Client math on this card is display-only (utils/format.ts's Number() rule): the sign/abs
+  // below, and D4's per-check split further down. The SIGN of the server's own balance picks
+  // the words, the colour and the glyph, and the figure beside them is that same server
+  // string formatted — never a number this file computed (global rule 9).
   //
   // NULL is its own state, and the reason this is not a bare Number(): the server sends null
   // for the liability AND the balance when it REFUSED to price the year (a married year with
@@ -95,6 +157,49 @@ export default function WithholdingPanel({ year }: { year: number }) {
         : balance < 0
           ? 'refund expected'
           : 'dead even'
+
+  // D4 remedy: a positive balance split evenly over the checks still to come. Rides the
+  // same null rule as the tile — no liability, no remedy — and says nothing once the
+  // year's checks are spent (there is no paycheck left to put it on).
+  const remainingChecks =
+    withholding === null ? 0 : withholding.checks_total - withholding.checks_elapsed
+  const perCheck =
+    balance !== null && balance > 0 && remainingChecks > 0 ? balance / remainingChecks : null
+
+  // D4 Apply: income_projected ALONE is the full-year vest base — the backend sums past
+  // vests INTO it (withholding_calc.py: income_projected = income_ytd + future), so the
+  // spec's "ytd + projected" spelling would double-count every past vest (ratified
+  // deviation, plan 2026-08-31-tier1-d). It is also exactly the figure the prose names.
+  const vestFigure = withholding === null ? null : withholding.vest.income_projected
+  // Numeric compare across quanta: the stored echo is 4dp ("48000.0000"), the estimate
+  // 2dp ("48000.00") — string equality would re-offer an Apply that changes nothing.
+  const vestApplied =
+    vestFigure !== null && storedVestW2 !== null && Number(storedVestW2) === Number(vestFigure)
+
+  const applyVestIncome = () => {
+    if (vestFigure === null || onVestApplied === undefined || applying || vestApplied) return
+    if (
+      inputsDirty &&
+      !window.confirm(
+        'Applying writes the W-2 vest input and reloads the inputs form below, discarding its unsaved edits. Continue?',
+      )
+    )
+      return
+    setApplying(true)
+    setApplyError(null)
+    // The `values` shorthand IS the primary-person write: a per-person key with no owner
+    // resolves to the primary column server-side (TaxInputsUpdate's contract).
+    putTaxInputs(year, { values: { w2_stock_rsus_sold: vestFigure } })
+      .then((echo) => {
+        onVestApplied(echo)
+        // This card's own liability just moved with the input it wrote.
+        setReload({})
+      })
+      .catch((err: unknown) => {
+        setApplyError(err instanceof ApiError ? err.message : 'Failed to apply the vest income')
+      })
+      .finally(() => setApplying(false))
+  }
 
   // Which partner story this card is telling. The SOURCE picks the words (it is the
   // server's own decision, and the only field that can say "a profile exists"); the LEG
@@ -165,6 +270,14 @@ export default function WithholdingPanel({ year }: { year: number }) {
               withholding.vest.income_ytd,
             )}`}
           </p>
+
+          {/* The one actionable line on the card: the shortfall as a per-check number, which
+              is the shape W-4 line 4(c) actually takes. */}
+          {perCheck !== null && (
+            <p className="hint withholding-remedy">
+              {`Add ${formatCurrency(perCheck)} per remaining paycheck (W-4 line 4c) to close the gap.`}
+            </p>
+          )}
 
           {/* The partner mini-section: read-only on purpose. The inputs form BELOW this card
               already edits all three rows (they are seeded per-person definitions, so it
@@ -258,33 +371,26 @@ export default function WithholdingPanel({ year }: { year: number }) {
             </p>
           )}
 
-          {/* Nothing at all when the server sent none: a missing prior year is the normal
-              first-year case and arrives with no warning of its own, so there is no absence
-              here to explain. (A prior year that exists but computes to zero DOES warn, and
-              that sentence lands with the rest of them below.) The multiplier is the SERVER'S
-              — 110% only above the IRC 6654(d)(1)(C) prior-year AGI gate, 100% at or below it
-              — never a literal here, or a low-AGI year reads as an arithmetic error next to a
-              threshold that equals the figure beside it. */}
+          {/* Nothing at all when NEITHER statutory leg exists: a missing prior year is the
+              normal first-year case and arrives with no warning of its own, so there is no
+              absence here to explain. (A prior year that exists but computes to zero DOES
+              warn, and that sentence lands with the rest of them below.) The multiplier is
+              the SERVER'S — 110% only above the IRC 6654(d)(1)(C) prior-year AGI gate, 100%
+              at or below it — never a literal here, or a low-AGI year reads as an arithmetic
+              error next to a threshold that equals the figure beside it. */}
           {withholding.safe_harbor !== null && (
             <p className="hint">
-              {`Safe harbor (approx.): ${formatPct(withholding.safe_harbor.multiplier, {
-                signed: false,
-                decimals: 0,
-              })} of ${withholding.safe_harbor.prior_year}'s total tax is ${formatCurrency(
-                withholding.safe_harbor.threshold,
-              )} — ${
-                withholding.safe_harbor.met
-                  ? 'covered by projected withholding'
-                  : 'NOT covered by projected withholding'
-              }`}
-              <InfoHint text="Real safe harbor is per-jurisdiction; this compares all-in totals — approximate by construction." />
+              {safeHarborSentence(withholding.safe_harbor)}
+              <InfoHint text="Real safe harbor is per-jurisdiction; this compares all-in totals — approximate by construction. The statutory harbor is the LESSER of last year's 100/110% figure and 90% of this year's liability." />
             </p>
           )}
 
           {/* The wedding-year note: the reference return is last year's, so on the first
               married year it was filed under another status. The number is still the legal
-              safe harbor — a labelling matter, never a math one. */}
+              safe harbor — a labelling matter, never a math one. Skipped entirely when the
+              prior leg is missing — there is no reference return to label. */}
           {withholding.safe_harbor !== null &&
+            withholding.safe_harbor.prior_filing_status !== null &&
             withholding.safe_harbor.prior_filing_status !== withholding.filing_status && (
               <p className="hint">
                 {`That reference return was filed as ${withholding.safe_harbor.prior_filing_status.replaceAll(
@@ -302,7 +408,35 @@ export default function WithholdingPanel({ year }: { year: number }) {
               {`This year's vests imply ≈${formatCurrency(
                 withholding.vest.income_projected,
               )} of W-2 income at vest prices — make sure your W-2 inputs below include it.`}
+              {/* The chip closes the loop the sentence opens, but ONLY when the page can
+                  complete it (onVestApplied remounts the form under a fresh number). */}
+              {onVestApplied !== undefined && (
+                <button
+                  type="button"
+                  className="chip"
+                  disabled={applying || vestApplied}
+                  aria-label="Apply vest income to W-2 inputs"
+                  title={
+                    vestApplied
+                      ? 'Stored W-2 vest input already equals this figure'
+                      : `Set W2: Stock/RSUs Sold to ${formatCurrency(
+                          withholding.vest.income_projected,
+                        )} for the primary person`
+                  }
+                  onClick={applyVestIncome}
+                >
+                  {applying ? 'Applying…' : 'Apply'}
+                </button>
+              )}
             </p>
+          )}
+
+          {/* The write's OWN failure line: the estimate above it came back and is still
+              true, so this never becomes the card's error banner. */}
+          {applyError !== null && (
+            <div className="error-banner" role="alert">
+              {applyError}
+            </div>
           )}
 
           {/* What the estimate ASSUMED, in the order it bites: the check grid, the FICA

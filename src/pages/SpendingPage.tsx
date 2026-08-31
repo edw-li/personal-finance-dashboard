@@ -211,12 +211,17 @@ export default function SpendingPage() {
     if (!matrix || matrix.months.length === 0) return null
     const topSet = new Set(topIds)
     const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+    // A6 (2026-08-31 tier-1): absent ≠ zero. Nulls flow THROUGH to the series — echarts
+    // gaps the bar — so a month with no spending entered draws nothing instead of a $0
+    // stack whose tooltip lists every category at $0.00. Other sums the folded rows'
+    // non-null values and is itself null when none exist that month.
     const otherPerMonth = matrix.months.map((_, i) =>
-      matrix.series.reduce((acc, s) => {
+      matrix.series.reduce<number | null>((acc, s) => {
         if (topSet.has(s.category_id)) return acc
         const v = s.values[i]
-        return acc + (v === null ? 0 : Number(v))
-      }, 0),
+        if (v === null) return acc
+        return (acc ?? 0) + Number(v)
+      }, null),
     )
     return {
       dataZoom: rangeZoom(matrix.months, range),
@@ -255,7 +260,8 @@ export default function SpendingPage() {
           itemStyle: { borderColor: SURFACE, borderWidth: 1 },
           emphasis: { itemStyle: { borderColor: INK } },
           universalTransition: true,
-          data: (valuesById.get(id) ?? []).map((v) => (v === null ? 0 : Number(v))),
+          // A6: null passes through — a gap, never a fabricated $0 segment.
+          data: (valuesById.get(id) ?? []).map((v) => (v === null ? null : Number(v))),
         })),
         {
           id: 'other',
@@ -483,9 +489,11 @@ export default function SpendingPage() {
       xAxis: { type: 'category', data: monthLabels, boundaryGap: false },
       yAxis: {
         type: 'value',
-        // Clamp the frame to ±100%; early months have wild negatives that would
-        // squash the whole series otherwise.
-        min: (extent: { min: number }) => Math.max(extent.min, -1),
+        // A7 (2026-08-31 tier-1): the ceiling stays +100% (rates above 1 are impossible),
+        // but the FLOOR expands to the data — a −180% month must render inside the frame,
+        // not silently leave it. floor() lands the min on a whole −100% gridline step; the
+        // Math.min(-1, …) keeps at least the −100% floor when the data never goes there.
+        min: (extent: { min: number }) => Math.min(-1, Math.floor(extent.min)),
         max: (extent: { max: number }) => Math.min(Math.max(extent.max, 0.1), 1),
         axisLabel: { formatter: (value: number) => formatPct(value, { signed: false }) },
       },
@@ -564,8 +572,19 @@ export default function SpendingPage() {
   const kpis = useMemo(() => {
     if (!matrix || matrix.months.length === 0) return null
     const last = matrix.months.length - 1
-    const window = matrix.totals.slice(-12).map(Number)
-    const average = window.reduce((a, b) => a + b, 0) / window.length
+    // A6: a month no category reported (cashflow-only) is ABSENT, not a $0 month — it
+    // must not dilute the average. totals[] itself carries "0.00" for such months (the
+    // server sums over an empty set), so enteredness is judged on the SERIES — the same
+    // rule filledMonths uses for the ribbon below.
+    const entered = matrix.months.map((_, i) => matrix.series.some((s) => s.values[i] !== null))
+    const window = matrix.totals
+      .map((total, i) => ({ total: Number(total), entered: entered[i] }))
+      .slice(-12)
+      .filter((cell) => cell.entered)
+    const average =
+      window.length === 0
+        ? null
+        : window.reduce((acc, cell) => acc + cell.total, 0) / window.length
     return {
       month: matrix.months[last],
       total: matrix.totals[last],

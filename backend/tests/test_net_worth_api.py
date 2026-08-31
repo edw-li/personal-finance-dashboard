@@ -1,6 +1,8 @@
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import func, select
+
 from app.models import Account, AccountBalance, NetWorthSnapshot, Person
 
 
@@ -379,6 +381,30 @@ async def test_put_month_refuses_empty_create_but_allows_meta_update(auth_client
     read = (await auth_client.get(put)).json()
     assert read["notes"] == "meta only"
     assert len(read["balances"]) == 1
+
+
+async def test_delete_month_removes_snapshot_and_cascades_balances(auth_client, db):
+    await _seed_timeseries(db)
+    resp = await auth_client.delete("/api/v1/net-worth/months/2026-01-01")
+    assert resp.status_code == 204
+    # Gone from every read: the timeseries loses the month...
+    body = (await auth_client.get("/api/v1/net-worth/timeseries")).json()
+    assert body["months"] == ["2025-12-01", "2026-03-01"]
+    read = (await auth_client.get("/api/v1/net-worth/months/2026-01-01")).json()
+    assert read["exists"] is False
+    assert read["balances"] == []
+    # ...and the FK's ON DELETE CASCADE took the month's 3 balance rows (8 seeded - 3).
+    remaining = (await db.execute(select(func.count()).select_from(AccountBalance))).scalar_one()
+    assert remaining == 5
+
+
+async def test_delete_month_404_when_absent_and_422_on_a_mid_month_date(auth_client, db):
+    await _seed_timeseries(db)
+    assert (await auth_client.delete("/api/v1/net-worth/months/2026-02-01")).status_code == 404
+    assert (await auth_client.delete("/api/v1/net-worth/months/2026-02-02")).status_code == 422
+    # Neither rejection deleted anything.
+    body = (await auth_client.get("/api/v1/net-worth/timeseries")).json()
+    assert body["months"] == ["2025-12-01", "2026-01-01", "2026-03-01"]
 
 
 async def test_suggestions_endpoint_is_gone(auth_client):

@@ -454,11 +454,30 @@ export interface BackupStatus {
   size: string
 }
 
+export interface BackupRun {
+  at: string
+  ok: boolean
+  /** The uploaded object key — absent on failed runs. */
+  object?: string | null
+  error?: string | null
+}
+
+export interface RefreshRun {
+  at: string
+  trigger: string
+  updated: number
+  failed_count: number
+}
+
 export interface SystemStatus {
   prices: SystemPricesStatus
   database: SystemDatabaseStatus
   /** null until backup_db.sh records its first marker (or while the row is malformed). */
   backup: BackupStatus | null
+  /** Last-10 run trails, newest first. Optional, not required: a stale deploy's payload
+   *  lacks them and must still parse (the LastRefresh armor); consumers `?? []`. */
+  backup_runs?: BackupRun[]
+  refresh_runs?: RefreshRun[]
   /** settings.environment verbatim — 'dev' | 'prod' in practice; never a reason to reject. */
   environment: string
 }
@@ -675,6 +694,11 @@ export interface TaxSummaryOut {
   social_security: WageTaxOut
   disability: WageTaxOut
   capital_gains: CapitalGainsTaxOut
+  // NIIT (2026-08-31): capital_gains' wire shape — gains_amount is net investment
+  // income, taxable_income the surcharged base. OPTIONAL for brackets_missing_for_status's
+  // reason above: pinned fixtures predate the section, and an absent section reads as
+  // zero everywhere it is charted.
+  niit?: CapitalGainsTaxOut
   totals: TaxTotalsOut
   warnings: string[]
 }
@@ -850,20 +874,19 @@ export interface WithholdingOut {
   // Jurisdictions with no bracket table for THIS filing status — a call to action, never a
   // silent zero. Non-empty is exactly the state in which the two fields above are null.
   brackets_missing_for_status: string[]
-  // Null in two different silences. A MISSING prior year says nothing at all — a first year
-  // on the app has no comparison to make and no warning to raise. A prior year that EXISTS
-  // but computes a total tax <= 0 does warn, because a threshold anything clears would make
-  // a met=true badge a false all-clear.
+  // Null only when NEITHER statutory leg exists (no computable prior year AND the engine
+  // refused this year). The prior-leg fields are null together when that leg is missing
+  // (first year, refused prior year, or a prior total <= 0 — the last two warn).
   safe_harbor: {
-    prior_year: number
-    prior_total_tax: string
-    prior_agi: string // the AGI the statutory gate was tested against
-    multiplier: string // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at or below it
-    threshold: string // prior_total_tax x multiplier
-    // The status the REFERENCE return was filed under, which is not this year's on a
-    // wedding year — a labelling matter, never a math one.
-    prior_filing_status: string
-    met: boolean // total.projected >= threshold
+    prior_year: number | null
+    prior_total_tax: string | null
+    prior_agi: string | null // the AGI the statutory gate was tested against
+    multiplier: string | null // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at/below
+    threshold: string | null // prior_total_tax x multiplier
+    prior_filing_status: string | null
+    current_year_threshold: string | null // 90% of this year's liability; null on refusal
+    effective_threshold: string // min of the legs that exist — `met` is judged on it
+    met: boolean // total.projected >= effective_threshold
   } | null
   warnings: string[]
 }
@@ -1447,6 +1470,8 @@ export interface MoneyFlowTaxes {
   social_security: string
   disability: string
   capital_gains: string
+  // Optional for the same fixture reason; the server always sends it.
+  niit?: string
 }
 
 export interface MoneyFlowCategory {

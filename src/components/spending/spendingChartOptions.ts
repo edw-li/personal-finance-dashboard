@@ -31,10 +31,10 @@ export function spendingBarsTooltipFormatter(
   const categories = new Set(categoryNames)
   return (params: unknown) => {
     const list = (Array.isArray(params) ? params : [params]) as AxisTooltipParam[]
+    if (list.length === 0) return ''
     const finite = list.flatMap((p) =>
       typeof p.value === 'number' && Number.isFinite(p.value) ? [{ p, value: p.value }] : [],
     )
-    if (finite.length === 0) return ''
     const catRows = finite.filter(({ p }) => categories.has(p.seriesName ?? ''))
     const refRows = finite.filter(({ p }) => !categories.has(p.seriesName ?? ''))
     const total = catRows.reduce((sum, { value }) => sum + value, 0)
@@ -44,9 +44,17 @@ export function spendingBarsTooltipFormatter(
       return `${p.marker ?? ''}${escapeHtml(p.seriesName ?? '')}: ${formatCurrency(value)}${pct}`
     }
     return [
-      `<strong>${finite[0].p.axisValueLabel ?? ''}</strong>`,
-      ...catRows.map((row) => line(row, true)),
-      ...(catRows.length > 0 ? [`<strong>Total: ${formatCurrency(total)}</strong>`] : []),
+      `<strong>${list.find((p) => p.axisValueLabel)?.axisValueLabel ?? ''}</strong>`,
+      // A6: with the series passing nulls through, an absent month has NO finite category
+      // rows — say so instead of fabricating $0.00 rows, and close real rows (only) with
+      // the Total. (A month with every category legend-hidden reads the same line; that
+      // is a deliberate user act, and the reference rows still print below.)
+      ...(catRows.length > 0
+        ? [
+            ...catRows.map((row) => line(row, true)),
+            `<strong>Total: ${formatCurrency(total)}</strong>`,
+          ]
+        : ['no spending entered']),
       ...refRows.map((row) => line(row, false)),
     ].join('<br/>')
   }

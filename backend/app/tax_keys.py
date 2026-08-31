@@ -23,8 +23,9 @@ TAX_INPUT_DEFINITIONS: list[tuple[str, str, str, int, bool]] = [
     ("w2_employer_hsa", "W2: Employer HSA Contribution", ORDINARY_INCOME, 100, False),
     ("w2_other", "W2: Other", ORDINARY_INCOME, 110, False),
     # Tracker-only (2026-08-26 spec §5.6): the withholding card's partner side reads these
-    # two, the engine never does. Stored inputs outside ENGINE_INPUT_KEYS, exactly like
-    # capital_loss_deductions — real values the user enters, zero effect on any liability.
+    # two, the engine never does. Stored inputs outside ENGINE_INPUT_KEYS — real values
+    # the user enters, zero effect on any liability. (capital_loss_deductions used to be
+    # the precedent here; it joined the engine's keys on 2026-08-31, spec C3.)
     ("w2_fed_withholding", "W2: Federal Withholding", ORDINARY_INCOME, 112, False),
     ("w2_state_withholding", "W2: State Withholding", ORDINARY_INCOME, 114, False),
     ("stcg_total", "Short Term Capital Gain/Loss", ORDINARY_INCOME, 120, True),

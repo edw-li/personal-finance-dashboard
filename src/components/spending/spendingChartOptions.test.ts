@@ -33,16 +33,24 @@ describe('spendingBarsTooltipFormatter', () => {
     expect(html).not.toContain('%')
   })
 
-  it('lists reference lines without a Total when no category row is under the pointer', () => {
+  it('says "no spending entered" on a cashflow-only month, reference lines after it', () => {
+    // A6: a month whose category rows are all null is ABSENT — the tooltip must say so
+    // instead of listing every category at $0.00; net pay still lists (it is real).
     const html = format([
-      { seriesName: 'Net pay', marker: '', axisValueLabel: 'Jun 2026', value: 6000 },
+      { seriesName: 'Rent', marker: '', axisValueLabel: 'Jun 2026', value: null },
+      { seriesName: 'Net pay', marker: '[n]', value: 6000 },
     ])
-    expect(html).toContain('Net pay: $6,000.00')
+    expect(html).toBe(
+      '<strong>Jun 2026</strong><br/>no spending entered<br/>[n]Net pay: $6,000.00',
+    )
     expect(html).not.toContain('Total:')
   })
 
-  it('returns an empty string when nothing under the pointer is finite', () => {
-    expect(format([{ seriesName: 'Net pay', value: null }])).toBe('')
+  it('names a fully-absent month instead of going silent', () => {
+    expect(format([{ seriesName: 'Rent', axisValueLabel: 'Aug 2026', value: null }])).toBe(
+      '<strong>Aug 2026</strong><br/>no spending entered',
+    )
+    // No params at all: still nothing to say.
     expect(format([])).toBe('')
   })
 })
@@ -66,5 +74,20 @@ describe('spendingCsv', () => {
         ['2026-07-01', '2000.00', '0.00', '2000.00', ''],
       ],
     })
+  })
+
+  it('keeps an absent month byte-identical — CSV output is deliberately unchanged by A6', () => {
+    const matrix = {
+      months: ['2026-08-01'],
+      series: [
+        { category_id: 1, values: [null], budgets: [null] },
+        { category_id: 2, values: [null], budgets: [null] },
+      ],
+      totals: ['0.00'],
+      net_pay: ['6000.00'],
+    }
+    expect(spendingCsv(matrix, [1], new Map([[1, 'Rent']])).rows).toEqual([
+      ['2026-08-01', '', '0.00', '0.00', '6000.00'],
+    ])
   })
 })

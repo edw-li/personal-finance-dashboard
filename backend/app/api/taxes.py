@@ -912,6 +912,13 @@ def _summary_out(breakdown: TaxBreakdown, feed: EngineFeed | None = None) -> Tax
         tax=_money(gains.tax),
         effective_rate=_effective_rate(gains.effective_rate, "capital_gains", warnings),
     )
+    niit_line = breakdown.niit
+    niit = CapitalGainsTaxOut(
+        taxable_income=_money(niit_line.taxable_income),
+        gains_amount=_money(niit_line.gains_amount),
+        tax=_money(niit_line.tax),
+        effective_rate=_effective_rate(niit_line.effective_rate, "niit", warnings),
+    )
     totals = TaxTotalsOut(
         gross_income=_money(breakdown.totals.gross_income),
         total_income=_money(breakdown.totals.total_income),
@@ -928,6 +935,7 @@ def _summary_out(breakdown: TaxBreakdown, feed: EngineFeed | None = None) -> Tax
         social_security=social_security,
         disability=disability,
         capital_gains=capital_gains,
+        niit=niit,
         totals=totals,
         warnings=warnings,
     )
@@ -1011,9 +1019,15 @@ SAFE_HARBOR_MULTIPLIER = Decimal("1.10")
 SAFE_HARBOR_BASE_MULTIPLIER = Decimal("1.00")
 SAFE_HARBOR_AGI_GATE = Decimal("150000")
 SAFE_HARBOR_AGI_GATE_MFS = Decimal("75000")
-SAFE_HARBOR_UNAVAILABLE = "prior year {year} has no computed tax — safe harbor unavailable"
+# The OTHER statutory leg (6654(d)(1)(B)(i)): 90% of the CURRENT year's liability. The
+# harbor is the LESSER of the two legs; either stands alone when its sibling is missing.
+SAFE_HARBOR_CURRENT_MULTIPLIER = Decimal("0.90")
+SAFE_HARBOR_UNAVAILABLE = (
+    "prior year {year} has no computed tax — the prior-year safe-harbor leg is unavailable"
+)
 SAFE_HARBOR_NOT_COMPUTABLE = (
-    "prior year {year} cannot be computed under its filing status — safe harbor unavailable"
+    "prior year {year} cannot be computed under its filing status — the prior-year "
+    "safe-harbor leg is unavailable"
 )
 # The three tables the marginal-FICA walks read. Named separately from the engine's own
 # jurisdiction sweep because an empty one is silent HERE: the summary would show a 0 medicare
@@ -1021,8 +1035,7 @@ SAFE_HARBOR_NOT_COMPUTABLE = (
 FICA_JURISDICTIONS = ("medicare", "social_security", "disability")
 # The two W-2 keys that make up an earner's wage base (`earner_from_inputs`'s own pair), and
 # the two tracker-only keys the partner's withholding is entered under (2026-08-26 spec §5.6
-# — real inputs, deliberately never in the engine's key set, exactly like
-# capital_loss_deductions).
+# — real inputs, deliberately never in the engine's key set).
 WAGE_KEYS = ("latest_w2_income", "other_w2_income")
 PARTNER_FED_WITHHOLDING_KEY = "w2_fed_withholding"
 PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
@@ -1240,7 +1253,17 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
     )
     liability_total = None if liability is None else _money(liability.totals.total_tax)
 
-    safe_harbor = None
+    # --- safe harbor (2026-08-31 spec C4): the LESSER of the two statutory legs. The
+    # prior-year leg needs a computable prior return with a positive displayed total;
+    # the current-year leg is 90% of THIS year's liability and stands alone when the
+    # prior leg is unavailable (which is why the two warnings above name "the prior-year
+    # leg", not the harbor). Neither leg -> no harbor at all.
+    current_threshold = (
+        None
+        if liability_total is None
+        else _money(liability_total * SAFE_HARBOR_CURRENT_MULTIPLIER)
+    )
+    prior_leg: dict | None = None
     if await db.get(TaxYear, year - 1) is not None:
         prior_feed = await _engine_feed(db, year - 1)
         if not prior_feed.computable:
@@ -1249,13 +1272,14 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
             prior = _breakdown_for(prior_feed)
             # Quantize FIRST, then multiply: the threshold has to be the multiplier times
             # the number rendered beside it, not times a full-precision figure nobody can
-            # see. The AGI gate is judged on the displayed figure for the same reason.
+            # see. The AGI gate is judged on the displayed figure for the same reason —
+            # and so is the current leg above (liability_total is already the card's).
             prior_total = _money(prior.totals.total_tax)
             prior_agi = _money(prior.federal.agi)
             if prior_total <= ZERO:
                 # A bare tax_years row (or one whose credits swallowed the tax) makes the
-                # whole comparison vacuous: any withholding at all clears a zero-or-negative
-                # threshold, so a met=True badge would be a false all-clear. Say why instead.
+                # prior comparison vacuous: any withholding clears a zero-or-negative
+                # threshold, so this leg is dropped and named rather than met-by-default.
                 warnings.append(SAFE_HARBOR_UNAVAILABLE.format(year=year - 1))
             else:
                 gate = (
@@ -1268,18 +1292,29 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
                 multiplier = (
                     SAFE_HARBOR_MULTIPLIER if prior_agi > gate else SAFE_HARBOR_BASE_MULTIPLIER
                 )
-                threshold = _money(prior_total * multiplier)
-                safe_harbor = SafeHarborOut(
-                    prior_year=year - 1,
-                    prior_total_tax=prior_total,
-                    prior_agi=prior_agi,
-                    multiplier=multiplier,
-                    prior_filing_status=prior_feed.filing_status,
-                    threshold=threshold,
-                    # Judged on the DISPLAYED figures (paycheck.py's negative-net posture),
-                    # so the badge can never contradict the two numbers rendered next to it.
-                    met=total_projected >= threshold,
-                )
+                prior_leg = {
+                    "prior_year": year - 1,
+                    "prior_total_tax": prior_total,
+                    "prior_agi": prior_agi,
+                    "multiplier": multiplier,
+                    "threshold": _money(prior_total * multiplier),
+                    "prior_filing_status": prior_feed.filing_status,
+                }
+
+    legs = [
+        leg for leg in ((prior_leg or {}).get("threshold"), current_threshold) if leg is not None
+    ]
+    safe_harbor = None
+    if legs:
+        effective = min(legs)
+        safe_harbor = SafeHarborOut(
+            **(prior_leg or {}),
+            current_year_threshold=current_threshold,
+            effective_threshold=effective,
+            # Judged on the DISPLAYED figures (paycheck.py's negative-net posture), so
+            # the badge can never contradict the numbers rendered next to it.
+            met=total_projected >= effective,
+        )
 
     return WithholdingOut(
         year=year,

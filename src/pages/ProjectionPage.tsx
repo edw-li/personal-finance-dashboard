@@ -431,16 +431,22 @@ export default function ProjectionPage() {
                     : formatPct(data.fi_probability, { signed: false })
                 }
                 delta={
+                  // The gate stays p50 (the fan's presence); p10/p90 append around it —
+                  // a stale backend that predates either simply names fewer percentiles.
                   data.fi_month_p50 === null
                     ? undefined
-                    : `p50 ${formatMonth(data.fi_month_p50)}${
+                    : `${
+                        data.fi_month_p10 === null
+                          ? ''
+                          : `p10 ${formatMonth(data.fi_month_p10)} · `
+                      }p50 ${formatMonth(data.fi_month_p50)}${
                         data.fi_month_p90 === null
                           ? ''
                           : ` · p90 ${formatMonth(data.fi_month_p90)}`
                       }`
                 }
                 tone="neutral"
-                hint="Share of 500 simulated paths reaching the target within the horizon, with median (p50) and pessimistic (p90) dates."
+                hint="Share of 500 simulated paths reaching the target within the horizon, with optimistic (p10), median (p50) and pessimistic (p90) dates."
               />
             </div>
 

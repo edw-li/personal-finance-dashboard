@@ -4,13 +4,15 @@ import { ApiError } from '../../api/client'
 import type { WithholdingOut } from '../../types/api'
 import WithholdingPanel from './WithholdingPanel'
 
-// The one request this card makes. JURISDICTIONS and the other taxes helpers stay real —
-// nothing here touches them, but the page-level module is shared (TaxesPage.test.tsx's mock).
+// The two calls this card makes: its own feed, and (D4) the inputs PUT the Apply chip fires.
+// JURISDICTIONS and the other taxes helpers stay real — nothing here touches them, but the
+// page-level module is shared (TaxesPage.test.tsx's mock).
 vi.mock('../../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/taxes')>()),
   fetchWithholding: vi.fn(),
+  putTaxInputs: vi.fn(),
 }))
-import { fetchWithholding } from '../../api/taxes'
+import { fetchWithholding, putTaxInputs } from '../../api/taxes'
 
 // A promise this file settles by hand — the only way to hold two loads in flight at once and
 // choose which one answers first (TaxesPage.test.tsx's).
@@ -28,8 +30,10 @@ function deferred<T>() {
  * The wire payload of GET /taxes/years/{year}/withholding, and an internally CONSISTENT one:
  * salary 88,000.00 + vest supplemental 15,470.40 (48,000 x 0.3223) + vest FICA 1,116.18 is the
  * 104,586.58 projected total, and 123,456.78 of liability less that total is the 18,870.20
- * balance. The safe-harbor threshold is 110% of the prior year's 110,000.00, which the
- * projection does not reach — so `met` is false, exactly as the server would compute it.
+ * balance. The safe harbor is the LESSER of its two statutory legs — 110% of the prior
+ * year's 110,000.00 is 121,000.00, 90% of this year's 123,456.78 is 111,111.10, so the
+ * current-year leg binds — and the projection does not reach it, so `met` is false, exactly
+ * as the server would compute it.
  */
 function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
   return {
@@ -63,6 +67,8 @@ function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
       multiplier: '1.10',
       threshold: '121000.00',
       prior_filing_status: 'single',
+      current_year_threshold: '111111.10',
+      effective_threshold: '111111.10',
       met: false,
     },
     warnings: [],
@@ -184,7 +190,7 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     expect(
       await screen.findByText(
-        "Safe harbor (approx.): 110% of 2025's total tax is $121,000.00 — NOT covered by projected withholding",
+        "Safe harbor (approx.): the lesser of 110% of 2025's total tax ($121,000.00) and 90% of this year's projected liability ($111,111.10) is $111,111.10 — the current-year leg binds; NOT covered by projected withholding",
       ),
     ).toBeTruthy()
   })
@@ -199,6 +205,8 @@ describe('WithholdingPanel', () => {
           multiplier: '1.10',
           threshold: '99000.00',
           prior_filing_status: 'single',
+          current_year_threshold: '111111.10',
+          effective_threshold: '99000.00',
           met: true,
         },
       }),
@@ -206,7 +214,59 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     expect(
       await screen.findByText(
-        "Safe harbor (approx.): 110% of 2025's total tax is $99,000.00 — covered by projected withholding",
+        "Safe harbor (approx.): the lesser of 110% of 2025's total tax ($99,000.00) and 90% of this year's projected liability ($111,111.10) is $99,000.00 — the prior-year leg binds; covered by projected withholding",
+      ),
+    ).toBeTruthy()
+  })
+
+  it('renders the current-year leg alone when there is no prior return', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      fixture({
+        safe_harbor: {
+          prior_year: null,
+          prior_total_tax: null,
+          prior_agi: null,
+          multiplier: null,
+          threshold: null,
+          prior_filing_status: null,
+          current_year_threshold: '111111.10',
+          effective_threshold: '111111.10',
+          met: false,
+        },
+      }),
+    )
+    render(<WithholdingPanel year={2026} />)
+    expect(
+      await screen.findByText(
+        "Safe harbor (approx.): 90% of this year's projected liability is $111,111.10 — NOT covered by projected withholding",
+      ),
+    ).toBeTruthy()
+    // No prior return -> no wedding-year note either.
+    expect(screen.queryByText(/still the legal safe harbor/)).toBeNull()
+  })
+
+  it('renders the prior-year leg alone when the engine refused this year', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      fixture({
+        liability_total: null,
+        balance_projected: null,
+        safe_harbor: {
+          prior_year: 2025,
+          prior_total_tax: '110000.00',
+          prior_agi: '400000.00',
+          multiplier: '1.10',
+          threshold: '121000.00',
+          prior_filing_status: 'single',
+          current_year_threshold: null,
+          effective_threshold: '121000.00',
+          met: false,
+        },
+      }),
+    )
+    render(<WithholdingPanel year={2026} />)
+    expect(
+      await screen.findByText(
+        "Safe harbor (approx.): 110% of 2025's total tax is $121,000.00 — NOT covered by projected withholding",
       ),
     ).toBeTruthy()
   })
@@ -465,6 +525,8 @@ describe('WithholdingPanel', () => {
           multiplier: '1.00',
           threshold: '110000.00',
           prior_filing_status: 'single',
+          current_year_threshold: '111111.10',
+          effective_threshold: '110000.00',
           met: false,
         },
       }),
@@ -472,7 +534,7 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     expect(
       await screen.findByText(
-        "Safe harbor (approx.): 100% of 2025's total tax is $110,000.00 — NOT covered by projected withholding",
+        "Safe harbor (approx.): the lesser of 100% of 2025's total tax ($110,000.00) and 90% of this year's projected liability ($111,111.10) is $110,000.00 — the prior-year leg binds; NOT covered by projected withholding",
       ),
     ).toBeTruthy()
   })
@@ -556,5 +618,102 @@ describe('WithholdingPanel', () => {
     expect(screen.getByText('State withheld')).toBeTruthy()
     expect(screen.queryByText('Withheld so far')).toBeNull()
     expect(screen.queryByText(/Simulated from their paycheck profile/)).toBeNull()
+  })
+
+  // --- D4: per-check remedy + vest→W2 Apply (design 2026-08-31) --------------------------
+
+  // Derived from fixture() itself: balance_projected 18,870.20 over the 24 − 16 = 8 checks
+  // still to come is 2,358.775, which formatCurrency rounds half-away-from-zero to 2,358.78.
+  const REMEDY = 'Add $2,358.78 per remaining paycheck (W-4 line 4c) to close the gap.'
+  const applyChip = () =>
+    screen.getByRole('button', { name: 'Apply vest income to W-2 inputs' }) as HTMLButtonElement
+  const inputsEcho = { year: 2026, filing_status: 'single' as const, people: [], sections: [] }
+
+  it("computes the per-check remedy from the payload's own fields", async () => {
+    // 18,870.20 over the 8 checks still to come (24 − 16) = 2,358.775 → $2,358.78.
+    render(<WithholdingPanel year={2026} />)
+    expect(await screen.findByText(REMEDY)).toBeTruthy()
+  })
+
+  it('stays quiet about a remedy on a refund, and with no checks left', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(fixture({ balance_projected: '-2450.75' }))
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('$123,456.78')
+    expect(screen.queryByText(/per remaining paycheck/)).toBeNull()
+    cleanup()
+
+    // Still owing, but the year's checks are spent: there is no paycheck to put it on.
+    vi.mocked(fetchWithholding).mockResolvedValue(fixture({ checks_elapsed: 24 }))
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('$123,456.78')
+    expect(screen.queryByText(/per remaining paycheck/)).toBeNull()
+  })
+
+  it("applies the FULL-year vest figure to the primary's W-2 input and reloads", async () => {
+    vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
+    const onApplied = vi.fn()
+    render(
+      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={false} onVestApplied={onApplied} />,
+    )
+    await screen.findByText('$123,456.78')
+    fireEvent.click(applyChip())
+
+    // income_projected ALONE: the backend already sums past vests into it
+    // (withholding_calc income_projected = income_ytd + future) — ytd + projected would
+    // double-count every past vest. The values shorthand IS the primary-person write.
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2026, {
+        values: { w2_stock_rsus_sold: '48000.00' },
+      }),
+    )
+    expect(onApplied).toHaveBeenCalledWith(inputsEcho)
+    // The liability this card compares against just moved with the input it wrote.
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
+  })
+
+  it('disables Apply with a title when the stored value already equals the figure', async () => {
+    // 4dp stored echo vs the estimate's 2dp: the comparison is numeric, not string.
+    render(
+      <WithholdingPanel
+        year={2026}
+        storedVestW2={'48000.0000'}
+        inputsDirty={false}
+        onVestApplied={vi.fn()}
+      />,
+    )
+    await screen.findByText('$123,456.78')
+    expect(applyChip().disabled).toBe(true)
+    expect(applyChip().title).toBe('Stored W-2 vest input already equals this figure')
+  })
+
+  it('asks before clobbering unsaved input edits below, and respects a no', async () => {
+    vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(
+      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={true} onVestApplied={vi.fn()} />,
+    )
+    await screen.findByText('$123,456.78')
+    fireEvent.click(applyChip())
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+
+    confirmSpy.mockReturnValue(true)
+    fireEvent.click(applyChip())
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+    confirmSpy.mockRestore()
+  })
+
+  it('lands an Apply failure on its own error line, figures kept', async () => {
+    vi.mocked(putTaxInputs).mockRejectedValue(new ApiError('inputs unavailable', 503))
+    render(
+      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={false} onVestApplied={vi.fn()} />,
+    )
+    await screen.findByText('$123,456.78')
+    fireEvent.click(applyChip())
+
+    expect(await screen.findByText('inputs unavailable')).toBeTruthy()
+    // The estimate on screen is still true — and no reload was spent on a write that failed.
+    expect(screen.getByText('$123,456.78')).toBeTruthy()
+    expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
   })
 })

@@ -6,9 +6,9 @@ import type { EsppSaleIn, SaleLegIn, WhatIfOut } from '../types/api'
 // plus their delta — so a run is safe to repeat and a failure leaves the year untouched.
 //
 // `overrides` mirrors WhatIfIn's third field (absolute replacements applied after the sale
-// deltas; a null value zeroes the key). The panel has no UI for it in v1 — the inputs form
-// already edits stored values — so it stays optional here rather than being invented on the
-// wire.
+// deltas; a null value zeroes the key). The overrides editor (D1, 2026-08-31) serializes
+// rows into it; a null value clears the key in the scenario (computes as 0). It stays
+// optional here: with no rows the panel omits the key entirely.
 export interface WhatIfBody {
   year: number
   sales: SaleLegIn[]

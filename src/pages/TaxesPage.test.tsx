@@ -60,7 +60,7 @@ vi.mock('../components/EChart', async () => {
 })
 // The what-if card owns two feeds and a whole test file of its own (WhatIfPanel.test.tsx
 // pins the seeding end of the deep links, and its own year-keyed remount). Here it is a
-// marker reporting the three props the page hands it — which IS this page's whole contract
+// marker reporting the four props the page hands it — which IS this page's whole contract
 // with it, and keeps a card the page never opens from spending requests in these tests.
 vi.mock('../components/taxes/WhatIfPanel', async () => {
   const { createElement } = await import('react')
@@ -69,16 +69,19 @@ vi.mock('../components/taxes/WhatIfPanel', async () => {
       year,
       initialTicker,
       initialLotId,
+      definitions,
     }: {
       year: number
       initialTicker?: string | null
       initialLotId?: number | null
+      definitions?: { key: string; label: string }[]
     }) =>
       createElement('div', {
         'data-testid': 'whatif-panel',
         'data-year': String(year),
         'data-ticker': initialTicker ?? '',
         'data-lot': initialLotId == null ? '' : String(initialLotId),
+        'data-defs': (definitions ?? []).map((d) => d.key).join(','),
       }),
   }
 })
@@ -277,17 +280,17 @@ function withholdingFor(year: number): WithholdingOut {
   }
 }
 
-// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 21 of
+// The engine's own sparse-year sentence: ENGINE_INPUT_KEYS in definition order, all 22 of
 // them, in ONE line (backend/app/services/tax_service.py MISSING_INPUTS_WARNING). It is
 // rendered verbatim — the list IS the message.
-const MISSING_21 =
+const MISSING_22 =
   'missing inputs defaulted to 0: latest_w2_income, other_w2_income, stcg_total, ' +
   'stcg_standard, unqualified_dividends, unq_div_us_treasuries_etf, ' +
   'unq_div_state_exempt_pct, interest_total, other_income_1099, trad_401k_contributions, ' +
-  'hsa_contributions, hsa_contributions_employer, other_pretax_deductions, ' +
-  'standard_deduction, itemized_deduction, state_standard_deduction, ' +
-  'state_exemption_credits, ltcg_total, ltcg_brokerage, qualified_dividends, ' +
-  'other_capital_gains'
+  'hsa_contributions, hsa_contributions_employer, capital_loss_deductions, ' +
+  'other_pretax_deductions, standard_deduction, itemized_deduction, ' +
+  'state_standard_deduction, state_exemption_credits, ltcg_total, ltcg_brokerage, ' +
+  'qualified_dividends, other_capital_gains'
 
 // The tax inputs and the bracket cells are AmountInputs now, so a BLURRED box reads its
 // formatted echo, not its raw state (spec §3.3): "999" shows as "$999.00", and a percent
@@ -303,6 +306,15 @@ const DELETE_2024_CONFIRM =
 // The trend is the SECOND chart on the page — the selected year's own waterfall is the
 // first — and its x-axis categories are the years of whichever feed drew it.
 const trendCategories = () => screen.getAllByTestId('echart')[1]?.getAttribute('data-categories')
+
+// The per-jurisdiction table's OWN scope. Several cards on this page render a node that
+// reads exactly like one of its row labels — InputsForm heads a section "Capital gains"
+// (SECTION_LABELS), and BracketsEditor heads its tables "Federal brackets" — so a bare
+// screen.getByText('Capital gains').closest('tr') is one fixture field away from resolving
+// against somebody else's heading and asserting on the wrong row (or on none). Scoping to
+// the table makes the pins say what they mean.
+const jurisdictionTable = () =>
+  within(screen.getByText('By jurisdiction').closest('.tax-jurisdiction-detail') as HTMLElement)
 
 // The unsaved-work guard is a window.confirm; "yes" is the default so only the tests that
 // are ABOUT the guard have to think about it.
@@ -771,14 +783,78 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(2))
   })
 
-  it('renders every engine warning verbatim, including the 21-key sparse-year line', async () => {
+  it('renders the per-jurisdiction detail table straight from the summary payload', async () => {
+    const detailed = summaryFor(2024)
+    detailed.federal = {
+      agi: '250000.00', taxable_income: '181305.00', tax: '40782.88', effective_rate: '0.163132',
+    }
+    detailed.medicare = {
+      w2_income: '260000.00', taxable_wages: '250000.00', tax: '4325.00', effective_rate: '0.017300',
+    }
+    detailed.capital_gains = {
+      taxable_income: '181305.00', gains_amount: '20000.00', tax: '3000.00', effective_rate: '0.150000',
+    }
+    detailed.niit = {
+      taxable_income: '10000.00', gains_amount: '25000.00', tax: '380.00', effective_rate: '0.015200',
+    }
+    vi.mocked(fetchTaxSummary).mockResolvedValue(detailed)
+    renderPage()
+
+    await screen.findByText('By jurisdiction')
+    // Every cell is the payload's own figure formatted — Base, Taxable, Tax, Eff. rate.
+    const federal = jurisdictionTable().getByText('Federal').closest('tr')!
+    expect(federal.textContent).toContain('$250,000.00')
+    expect(federal.textContent).toContain('$181,305.00')
+    expect(federal.textContent).toContain('$40,782.88')
+    expect(federal.textContent).toContain('16.3%')
+    // NIIT: Base is net investment income, Taxable the surcharged base.
+    const niit = jurisdictionTable().getByText('NIIT').closest('tr')!
+    expect(niit.textContent).toContain('$25,000.00')
+    expect(niit.textContent).toContain('$10,000.00')
+    expect(niit.textContent).toContain('$380.00')
+    expect(niit.textContent).toContain('1.5%')
+    // Capital gains: Base is the gains, Taxable the ordinary income they stack on.
+    const cg = jurisdictionTable().getByText('Capital gains').closest('tr')!
+    expect(cg.textContent).toContain('$20,000.00')
+    expect(cg.textContent).toContain('$181,305.00')
+  })
+
+  it('renders the NIIT row as em-dashes against a pre-C payload', async () => {
+    // A payload with NO niit key at all — what a stored summary from before workstream C
+    // looks like. Built explicitly (delete, not "trust the fixture") so this pin survives
+    // whatever Plan C did to the shared summaryFor. Absence is em-dash, never $0.00.
+    const preC = { ...summaryFor(2024) }
+    delete preC.niit
+    vi.mocked(fetchTaxSummary).mockResolvedValue(preC)
+    renderPage()
+    await screen.findByText('By jurisdiction')
+    const niit = jurisdictionTable().getByText('NIIT').closest('tr')!
+    expect(niit.textContent?.match(/—/g)).toHaveLength(4)
+    expect(niit.textContent).not.toContain('$0.00')
+  })
+
+  it('mounts the marginal card from the year’s own summary and tables', async () => {
+    renderPage()
+    // bracketsFor carries one federal bracket (10% at $0) and no state table, and the
+    // fixture year's taxable income is 0: the sentence prices the bottom bracket while the
+    // ladder itself is undrawable. The default beforeEach leaves the trend feed EMPTY, so
+    // the page's only chart is the waterfall — the count must stay 1, proving the card
+    // added no chart here.
+    expect(await screen.findByText('Marginal rates — 2024')).toBeTruthy()
+    expect(
+      screen.getByText('Your next $1,000 of ordinary income costs $100.00 federal.'),
+    ).toBeTruthy()
+    await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(1))
+  })
+
+  it('renders every engine warning verbatim, including the 22-key sparse-year line', async () => {
     const sparse = summaryFor(2024)
-    sparse.warnings = [MISSING_21, 'no state brackets for 2024: state tax computed as 0']
+    sparse.warnings = [MISSING_22, 'no state brackets for 2024: state tax computed as 0']
     vi.mocked(fetchTaxSummary).mockResolvedValue(sparse)
     renderPage()
 
     // One text node, wrapped by CSS — not truncated, not summarised, not re-worded.
-    expect(await screen.findByText(MISSING_21)).toBeTruthy()
+    expect(await screen.findByText(MISSING_22)).toBeTruthy()
     expect(screen.getByText('no state brackets for 2024: state tax computed as 0')).toBeTruthy()
   })
 
@@ -1071,6 +1147,15 @@ describe('TaxesPage', () => {
     expect(screen.getByTestId('whatif-panel').getAttribute('data-ticker')).toBe('VTI')
   })
 
+  it('hands the year’s input definitions to the what-if card, deduped by key', async () => {
+    // A married payload repeats annual_salary once per person column; the override list
+    // must carry the KEY once — overrides are household-level.
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
+    renderPage()
+    const panel = await screen.findByTestId('whatif-panel')
+    await waitFor(() => expect(panel.getAttribute('data-defs')).toBe('annual_salary'))
+  })
+
   // --- the withholding card (Task 9) ----------------------------------------------------
   // Clock-relative years throughout, never a pinned 2026: the card is the CURRENT year's or
   // nothing at all, and a hard-coded fixture year would rot on a New Year's Day.
@@ -1113,6 +1198,40 @@ describe('TaxesPage', () => {
     // Gone with the year it belonged to, and no second request was spent on the way out.
     await waitFor(() => expect(screen.queryByText(/will i owe/i)).toBeNull())
     expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
+  })
+
+  it('vest Apply writes through the page: PUT, remounted form, fresh totals', async () => {
+    const thisYear = new Date().getFullYear()
+    vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear)])
+    vi.mocked(fetchWithholding).mockImplementation(async (year: number) => ({
+      ...withholdingFor(year),
+      vest: {
+        ...withholdingFor(year).vest,
+        income_ytd: '31500.00',
+        income_projected: '48000.00',
+      },
+    }))
+    // The PUT echo carries a moved salary too — the remount is what puts it on screen,
+    // because InputsForm ignores prop replacement by design.
+    const echo = inputsFor(thisYear)
+    echo.sections[0].items[0].value = '333000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValue(echo)
+    renderPage()
+    await screen.findByText(`Will I owe? — ${thisYear}`)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Apply vest income to W-2 inputs' }),
+    )
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(thisYear, {
+        values: { w2_stock_rsus_sold: '48000.00' },
+      }),
+    )
+    // Remounted from the echo (a blurred AmountInput reads its formatted echo).
+    await waitFor(() => expect(salary().value).toBe('$333,000.00'))
+    // The page's save chain ran: totals refetched, and this card reloaded its own feed.
+    await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
   })
 })
 
@@ -1372,10 +1491,12 @@ describe('filing status (2026-08-26 design §6)', () => {
     // The waterfall is what goes — and the trend feed is empty in this fixture, so no chart
     // is left on the page at all.
     await waitFor(() => expect(screen.queryAllByTestId('echart')).toHaveLength(0))
+    expect(screen.queryByText(/Marginal rates —/)).toBeNull()
     // The tiles stay, reading em-dashes: the engine sent no figures, and inventing zeros
     // would be exactly the confidently-wrong answer it refused to compute.
     expect(screen.getByText('Total tax')).toBeTruthy()
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4)
+    expect(screen.queryByText('By jurisdiction')).toBeNull()
   })
 
   it('draws the waterfall as usual when the flag list came back empty', async () => {

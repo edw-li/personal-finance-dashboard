@@ -39,6 +39,7 @@ function flowOut(over: Partial<MoneyFlowOut> = {}): MoneyFlowOut {
       social_security: '18581.40',
       disability: '3344.00',
       capital_gains: '0.00',
+      niit: '123.45',
     },
     pre_tax_savings: '27300.00',
     take_home_cash: '120000.00',
@@ -284,7 +285,7 @@ describe('moneyFlowOption — the four pinned columns', () => {
     expect(names).toContain('Other (spending)')
   })
 
-  it('lists the six jurisdictions on the Taxes node and delegates everything else', () => {
+  it('lists the seven jurisdictions on the Taxes node and delegates everything else', () => {
     const format = tooltipOf(moneyFlowOption(flowOut())!)
     const taxes = format({ dataType: 'node', name: 'Taxes' })
     expect(taxes).toContain('<strong>$67,016.05</strong>')
@@ -294,11 +295,37 @@ describe('moneyFlowOption — the four pinned columns', () => {
     expect(taxes).toContain('Social Security $18,581.40')
     expect(taxes).toContain('Disability $3,344.00')
     expect(taxes).toContain('Capital gains $0.00')
+    // The NIIT split (2026-08-31): without its own line the enumeration under-sums the
+    // total it sits beneath on every year the surcharge applies.
+    expect(taxes).toContain('NIIT $123.45')
     // Every other node/edge reads the shared factory's server-figure echo.
     expect(format({ dataType: 'node', name: 'Rent' })).toContain('$24,000.00')
     expect(
       format({ dataType: 'edge', data: { source: 'Take-home cash', target: 'Saved' } }),
     ).toContain('$76,000.00')
+  })
+
+  it('stays silent about NIIT on a payload that predates the field', () => {
+    // Stored/older payloads carry six keys. An absent value must not draw "NIIT $NaN" or
+    // an empty row — the line is simply not there.
+    const format = tooltipOf(
+      moneyFlowOption(
+        flowOut({
+          taxes: {
+            total: '66892.60',
+            federal: '26520.00',
+            state: '14225.00',
+            medicare: '4345.65',
+            social_security: '18581.40',
+            disability: '3344.00',
+            capital_gains: '0.00',
+          },
+        }),
+      )!,
+    )
+    const taxes = format({ dataType: 'node', name: 'Taxes' })
+    expect(taxes).toContain('Capital gains $0.00')
+    expect(taxes).not.toContain('NIIT')
   })
   it('splits the salary node per earner, sharing the salary hue family', () => {
     const series = sankeyOf(

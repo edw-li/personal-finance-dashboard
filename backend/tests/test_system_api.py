@@ -135,3 +135,62 @@ async def test_system_environment_passes_through_prod(auth_client, monkeypatch):
 async def test_system_scheduler_flag_reads_the_live_handle(auth_client, monkeypatch):
     monkeypatch.setattr("app.api.system.is_scheduler_running", lambda: True)
     assert (await auth_client.get(STATUS)).json()["prices"]["scheduler_running"] is True
+
+
+async def test_system_runs_lists_round_trip(auth_client, db):
+    # backup_runs is a FLAT array (shell writer — backup_status's no-envelope rule);
+    # refresh_runs is enveloped (Python writer — record_refresh_run's convention).
+    db.add(
+        AppSetting(
+            key="backup_runs",
+            value=[
+                {
+                    "at": "2026-08-30T03:00:00Z",
+                    "ok": True,
+                    "object": "backups/finance_2026-08-30.sql.gz.gpg",
+                },
+                {"at": "2026-08-29T03:00:00Z", "ok": False, "error": "pg_dump: connection refused"},
+            ],
+        )
+    )
+    db.add(
+        AppSetting(
+            key="refresh_runs",
+            value={
+                "value": [
+                    {
+                        "at": "2026-08-30T20:10:00+00:00",
+                        "trigger": "scheduled",
+                        "updated": 36,
+                        "failed_count": 2,
+                    }
+                ]
+            },
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get(STATUS)).json()
+    assert [run["ok"] for run in body["backup_runs"]] == [True, False]
+    assert body["backup_runs"][0]["object"] == "backups/finance_2026-08-30.sql.gz.gpg"
+    assert body["backup_runs"][1]["error"] == "pg_dump: connection refused"
+    assert body["backup_runs"][1]["object"] is None
+    # Instants, not strings: pydantic may re-spell the zone ('Z' vs '+00:00').
+    assert datetime.fromisoformat(body["backup_runs"][0]["at"]) == datetime(
+        2026, 8, 30, 3, 0, 0, tzinfo=UTC
+    )
+    run = body["refresh_runs"][0]
+    assert (run["trigger"], run["updated"], run["failed_count"]) == ("scheduled", 36, 2)
+    assert datetime.fromisoformat(run["at"]) == datetime(2026, 8, 30, 20, 10, tzinfo=UTC)
+
+
+async def test_system_runs_default_empty_and_degrade_on_garbage(auth_client, db):
+    body = (await auth_client.get(STATUS)).json()
+    assert body["backup_runs"] == []
+    assert body["refresh_runs"] == []
+    # Wrong container shape, wrong item shape: each reads as "no history", never a 500.
+    db.add(AppSetting(key="backup_runs", value={"not": "a list"}))
+    db.add(AppSetting(key="refresh_runs", value={"value": [{"at": "yesterday-ish"}]}))
+    await db.commit()
+    body = (await auth_client.get(STATUS)).json()
+    assert body["backup_runs"] == []
+    assert body["refresh_runs"] == []

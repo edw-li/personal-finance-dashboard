@@ -3,11 +3,15 @@
 Fixtures are the pinned workbook values (== the dev DB's imported `tax_inputs` /
 `tax_brackets`, 4dp-quantized). Three families of assertion:
 
-* **canonical goldens** — the clean model the engine ships, one test per year;
+* **canonical goldens** — the clean model the engine ships, one test per year (NIIT and
+  the base-rate CG stack included since 2026-08-31 — the fixtures model the
+  post-f7d3b2a91c40 database);
 * **sheet equality for 2024** — 2024 is the drift-free column, so its canonical values ARE
   the sheet's cached values everywhere but the state chain, which sits exactly one CA
-  capital-gains divergence above them (2026-08-25 spec §1; pinned as sheet value + delta,
-  the cached cells being 10-significant-figure float renderings compared within 1e-4);
+  capital-gains divergence above them (2026-08-25 spec §1), and the CG/NIIT split, which
+  sits exactly one NIIT unfold apart (2026-08-31 spec C2); both are pinned as sheet value
+  + delta, the cached cells being 10-significant-figure float renderings compared within
+  1e-4;
 * **drift pins** — the sheet's per-year hand-edit drift (D1-D3) reproduced to the cent by
   feeding the engine's own walkers the drifted intermediate, proving every delta is
   understood rather than papered over.
@@ -135,12 +139,16 @@ _SDI_THRESHOLDS = {
     2026: ("0", "300000"),
 }
 
-# Bracket-2/3 rates fold NIIT in from 2024 (the sheet's IF(agi > 200000, ...) cached values).
+# Base rates in every year: the sheet folded NIIT into brackets 2/3 from 2024
+# (IF(agi > 200000, 18.8%, 15%) cached values), and migration f7d3b2a91c40 rewrote the
+# exact folded pair back to 15/20 — the engine computes NIIT as its own line, so these
+# fixtures are the post-migration database. The folded pair survives only in the
+# advisory/importer tests, which exist to catch it.
 _CG_RATES = {
     2023: ("0", "0.15", "0.20"),
-    2024: ("0", "0.188", "0.238"),
-    2025: ("0", "0.188", "0.238"),
-    2026: ("0", "0.188", "0.238"),
+    2024: ("0", "0.15", "0.20"),
+    2025: ("0", "0.15", "0.20"),
+    2026: ("0", "0.15", "0.20"),
 }
 _CG_THRESHOLDS = {
     2023: ("0", "44625", "492300"),
@@ -174,10 +182,22 @@ _CANONICAL_TABLE: dict[str, tuple[str, str, str, str]] = {
     "ss_tax": ("6374.99", "10453.20", "10918.20", "10918.20"),
     "sdi_tax": ("944.90", "1950.00", "2700.00", "3000.00"),
     "cg_amount": ("129.00", "179.13", "1267.19", "0.00"),
-    "cg_tax": ("19.35", "33.68", "238.23", "0.00"),
+    "cg_tax": ("19.35", "26.87", "190.08", "0.00"),
+    # NIIT = 0.038 x min(NII, max(0, MAGI - 200000)); NII = interest + unq divs
+    # + max(stcg, 0) + max(cg_amount, 0); MAGI = fed AGI + cg_amount.
+    #   2023: MAGI 117855.64 <= 200000 -> 0 (NII 21250.15 never consulted).
+    #   2024: NII 24.76+833.46+951.93+179.13 = 1989.28; excess 11955.33; NII binds ->
+    #         0.038 x 1989.28 = 75.59264.
+    #   2025: NII 62.87+1653.14+8040.08+1267.19 = 11023.28; excess 60643.24; NII binds ->
+    #         0.038 x 11023.28 = 418.88464.
+    #   2026: NII 0 -> 0.
+    "niit": ("0.00", "75.59", "418.88", "0.00"),
     "gross_income": ("126321.23", "237973.17", "287209.06", "306694.03"),
-    "total_tax": ("34319.05", "72755.83", "90050.76", "98584.56"),
-    "take_home": ("92002.18", "165217.34", "197158.30", "208109.47"),
+    # 2024: 72755.83 - (33.68 - 26.87 cg unfold, exactly 179.13 x 0.038 = 6.80694 at full
+    # precision) + 75.59264 NIIT = 72824.61; take_home moves opposite. 2025: 90050.76
+    # - 1267.19 x 0.038 (48.15322) + 418.88464 = 90421.49. 2023/2026: unchanged controls.
+    "total_tax": ("34319.05", "72824.61", "90421.49", "98584.56"),
+    "take_home": ("92002.18", "165148.56", "196787.57", "208109.47"),
 }
 
 CANONICAL: dict[int, dict[str, Decimal]] = {
@@ -206,6 +226,7 @@ def actuals(breakdown) -> dict[str, Decimal]:
         "sdi_tax": breakdown.disability.tax,
         "cg_amount": breakdown.capital_gains.gains_amount,
         "cg_tax": breakdown.capital_gains.tax,
+        "niit": breakdown.niit.tax,
         "gross_income": breakdown.totals.gross_income,
         "total_tax": breakdown.totals.total_tax,
         "take_home": breakdown.totals.take_home,
@@ -279,7 +300,9 @@ def test_stack_within_single_bracket():
     # 2025 CG pin — deliberately the SHEET's taxable income (D2 drift), which lands in the
     # same CG bracket (48351..533400) as the canonical TI, so the pin holds either way.
     gains = stack(YEAR_BRACKETS[2025]["capital_gains"], Decimal("233429.958"), Decimal("1267.19"))
-    assert gains == Decimal("238.23172")
+    # 1267.19 x 0.15 at the post-migration base rate; the drift-TI base still lands in the
+    # same 48351..533400 tier.
+    assert gains == Decimal("190.07850")
 
 
 def test_stack_spans_brackets():
@@ -318,7 +341,7 @@ def test_golden_2023():
 
 def test_golden_2024():
     breakdown = assert_canonical(2024)
-    assert breakdown.capital_gains.effective_rate == Decimal("0.188")
+    assert breakdown.capital_gains.effective_rate == Decimal("0.15")
     assert breakdown.medicare.w2_income == Decimal("235724.46")
     assert breakdown.medicare.taxable_wages == Decimal("231274.46")
     assert breakdown.social_security.taxable_wages == Decimal("168600")
@@ -327,12 +350,14 @@ def test_golden_2024():
 
 
 def test_golden_2024_equals_sheet_cached_values():
-    """2024 is the drift-free column, so canonical == sheet — EXCEPT the state chain.
+    """2024 is the drift-free column, so canonical == sheet — EXCEPT the state chain and
+    the CG/NIIT split.
 
     The five state-chain quantities diverge by exactly the CA capital-gains fix
-    (2026-08-25 spec §1: state AGI carries cg_amount; the sheet's never did), so they are
-    pinned as the sheet's cached value PLUS the fix's delta — the divergence itself stays
-    exact. Everything else is the cached cell: bit-exact where no product is involved,
+    (2026-08-25 spec §1: state AGI carries cg_amount; the sheet's never did), and the CG
+    line diverges by exactly the NIIT unfold (2026-08-31 spec C2), so they are pinned as
+    the sheet's cached value PLUS the fix's delta — the divergence itself stays exact.
+    Everything else is the cached cell: bit-exact where no product is involved,
     within 1e-4 where one is (cached cells are 10-significant-figure float renderings).
     """
     breakdown = breakdown_for(2024)
@@ -345,7 +370,6 @@ def test_golden_2024_equals_sheet_cached_values():
         "ss_tax": "10453.2",
         "sdi_tax": "1950",
         "cg_amount": "179.13",
-        "cg_tax": "33.67644",
         "gross_income": "237973.17",
     }
     for quantity, cached in exact.items():
@@ -363,12 +387,21 @@ def test_golden_2024_equals_sheet_cached_values():
         YEAR_BRACKETS[2024]["state"], produced["state_ti"] - cg
     )
     assert state_delta == cg * Decimal("0.093")  # no bracket boundary crossed
+    # The CG/NIIT split vs the sheet (2026-08-31 spec C2): the sheet folded the 3.8%
+    # surcharge into its 18.8% CG rate; the app stores the base 15% and charges NIIT as
+    # its own line. cg_tax = sheet's 33.67644 minus the folded 179.13 x 0.038; the NIIT
+    # line is 0.038 x min(NII 1989.28, MAGI excess 11955.33) = 75.59264 — MORE than the
+    # unfold, because NIIT reaches interest/dividends/STCG the CG bracket never taxed.
+    unfold = cg * Decimal("0.038")  # 6.80694
+    niit = Decimal("75.59264")
+    assert produced["cg_tax"] == Decimal("33.67644") - unfold
+    assert produced["niit"] == niit
     sheet = {
         "state_agi": (Decimal("215122.0164"), cg),
         "state_ti": (Decimal("209582.0164"), cg),
         "state_tax": (Decimal("15884.45652"), state_delta),
-        "total_tax": (Decimal("72739.16677"), state_delta),
-        "take_home": (Decimal("165234.0032"), -state_delta),
+        "total_tax": (Decimal("72739.16677"), state_delta - unfold + niit),
+        "take_home": (Decimal("165234.0032"), -(state_delta - unfold + niit)),
     }
     for quantity, (cached, delta) in sheet.items():
         assert abs(produced[quantity] - (cached + delta)) < Decimal("0.0001"), quantity
@@ -423,6 +456,8 @@ def test_effective_rate_never_serializes_negative_zero():
     assert breakdown.disability.effective_rate is None
     assert breakdown.totals.gross_income == Decimal("0")
     assert breakdown.totals.effective_rate is None
+    assert breakdown.niit.gains_amount == Decimal("0")
+    assert breakdown.niit.effective_rate is None  # NII of 0 is the sheet's #DIV/0!
 
 
 def test_effective_rate_over_a_negative_base_is_computed_not_none():
@@ -438,13 +473,49 @@ def test_effective_rate_over_a_negative_base_is_computed_not_none():
     assert breakdown.state.effective_rate == Decimal("0.05")
 
 
-def test_capital_loss_deductions_never_reach_agi():
-    """r27 is a modelled line the sheet never wires into any output formula."""
+def test_capital_loss_deductions_reach_agi_and_the_state_chain():
+    """r27 joined AGI on 2026-08-31 (spec C3): the sheet modelled the line and read it
+    nowhere; the app reads it. Stored -3000 lowers federal AGI by exactly 3000 and the
+    state chain inherits it through fed_agi (CA conforms to the $3k rule)."""
     inputs = dict(YEAR_INPUTS[2024]) | {"capital_loss_deductions": Decimal("-3000")}
-    assert (
-        breakdown_for(2024).federal.agi
-        == compute_breakdown(2024, inputs, YEAR_BRACKETS[2024]).federal.agi
-    )
+    base = breakdown_for(2024)
+    lossy = compute_breakdown(2024, inputs, YEAR_BRACKETS[2024])
+    assert lossy.warnings == []  # negative and inside the cap: clean
+    assert base.federal.agi - lossy.federal.agi == Decimal("3000")
+    assert base.state.agi - lossy.state.agi == Decimal("3000")
+    # A deduction, not income: gross income and NII are untouched...
+    assert lossy.totals.gross_income == base.totals.gross_income
+    assert lossy.niit.gains_amount == base.niit.gains_amount
+    # ...and MAGI inherits the loss via fed AGI: 211955.33 - 3000 = 208955.33, whose
+    # excess 8955.33 still exceeds NII 1989.28, so the NIIT line happens not to move here
+    # (the visible MAGI shift is pinned in the next test).
+    assert lossy.niit.tax == base.niit.tax
+
+
+def test_capital_loss_pulls_magi_under_the_niit_threshold():
+    """The C3->C2 interaction, stated: MAGI = _federal_agi + cg_amount and _federal_agi
+    now carries the loss — statutorily correct (the §1211 deduction is inside AGI) — so a
+    large enough loss zeroes the NIIT line. -13000 is over the cap ON PURPOSE: stored
+    data is used verbatim and only warned about (GET never rejects stored data)."""
+    inputs = dict(YEAR_INPUTS[2024]) | {"capital_loss_deductions": Decimal("-13000")}
+    breakdown = compute_breakdown(2024, inputs, YEAR_BRACKETS[2024])
+    # MAGI 211955.33 - 13000 = 198955.33 < 200000 -> excess 0.
+    assert breakdown.niit.taxable_income == Decimal("0")
+    assert breakdown.niit.tax == Decimal("0")
+    assert breakdown.warnings == [
+        "capital_loss_deductions (-13000) exceeds the statutory cap (-3000); used verbatim"
+    ]
+
+
+def test_capital_loss_stored_positive_warns_and_is_used_verbatim():
+    inputs = dict(YEAR_INPUTS[2024]) | {"capital_loss_deductions": Decimal("500")}
+    breakdown = compute_breakdown(2024, inputs, YEAR_BRACKETS[2024])
+    assert breakdown.warnings == [
+        "capital_loss_deductions is stored positive (500) — the deductible capital loss "
+        "is entered negative; used verbatim"
+    ]
+    # Verbatim means ADDED: a positive value RAISES AGI rather than being rejected.
+    assert breakdown.federal.agi == breakdown_for(2024).federal.agi + Decimal("500")
 
 
 @pytest.mark.parametrize(
@@ -523,6 +594,65 @@ def test_state_tax_walks_the_capital_gains_increment():
     )
     assert expected > 0
     assert after.state.tax - before.state.tax == expected
+
+
+def test_niit_line_2024_hand_derivation():
+    """NII = interest 24.76 + unq div 833.46 + max(stcg 951.93, 0) + max(cg 179.13, 0)
+    = 1989.28; MAGI = 211776.20 + 179.13 = 211955.33 -> 11955.33 over the single 200000
+    threshold; NII binds: 0.038 x 1989.28 = 75.59264, at an exact 3.8% over NII."""
+    breakdown = breakdown_for(2024)
+    assert breakdown.niit.gains_amount == Decimal("1989.28")  # NII rides gains_amount
+    assert breakdown.niit.taxable_income == Decimal("1989.28")  # the surcharged base
+    assert breakdown.niit.tax == Decimal("75.59264")
+    assert breakdown.niit.effective_rate == Decimal("0.038")
+    # The seventh line really is inside both totals.
+    assert breakdown.totals.total_tax == (
+        breakdown.federal.tax
+        + breakdown.state.tax
+        + breakdown.medicare.tax
+        + breakdown.social_security.tax
+        + breakdown.disability.tax
+        + breakdown.capital_gains.tax
+        + breakdown.niit.tax
+    )
+    assert breakdown.totals.take_home == breakdown.totals.gross_income - breakdown.totals.total_tax
+
+
+def test_niit_excess_binds_when_magi_barely_crosses():
+    """195000 wages + 60000 interest: MAGI 255000, NII 60000, excess 55000 — the excess
+    leg binds, so the effective rate over NII drops under 0.038."""
+    inputs = {"latest_w2_income": Decimal("195000"), "interest_total": Decimal("60000")}
+    breakdown = compute_breakdown(2025, inputs, YEAR_BRACKETS[2025])
+    assert breakdown.niit.gains_amount == Decimal("60000")
+    assert breakdown.niit.taxable_income == Decimal("55000")
+    assert breakdown.niit.tax == Decimal("2090")  # 0.038 x 55000
+    assert breakdown.niit.effective_rate == breakdown.niit.tax / Decimal("60000")
+
+
+def test_niit_clamps_negative_components_out_of_nii():
+    """Spec C2's clamps: a short-term LOSS and a negative netted CG line reduce AGI,
+    never NII — and a pathological net-negative NII never surfaces as a negative tax."""
+    inputs = {
+        "latest_w2_income": Decimal("300000"),
+        "stcg_total": Decimal("-5000"),
+        "other_capital_gains": Decimal("-400"),
+        "interest_total": Decimal("1000"),
+    }
+    breakdown = compute_breakdown(2025, inputs, YEAR_BRACKETS[2025])
+    # ltcg 0 -> else branch nets qualified 0 + other -400: cg_amount is -400. It joins
+    # MAGI (295600 = 296000 fed AGI - 400) but is clamped out of NII, like the STCG loss.
+    assert breakdown.capital_gains.gains_amount == Decimal("-400")
+    assert breakdown.niit.gains_amount == Decimal("1000")  # interest alone
+    assert breakdown.niit.tax == Decimal("38.000")  # excess 95600 dwarfs NII 1000
+
+    negative_nii = compute_breakdown(
+        2025,
+        {"latest_w2_income": Decimal("300000"), "interest_total": Decimal("-9000")},
+        YEAR_BRACKETS[2025],
+    )
+    assert negative_nii.niit.gains_amount == Decimal("-9000")  # reported as stored
+    assert negative_nii.niit.taxable_income == Decimal("0")  # the max(0, .) belt
+    assert negative_nii.niit.tax == Decimal("0")
 
 
 # --------------------------------------------------------------------------------------
@@ -760,41 +890,40 @@ def test_negative_state_tax_warning():
     assert breakdown.state.tax < 0
 
 
-def test_niit_advisory_flags_mismatch():
-    base_rates = YEAR_BRACKETS[2023]["capital_gains"]  # .15/.20
-    niit_rates = YEAR_BRACKETS[2024]["capital_gains"]  # .188/.238
-    # The DB stores rates at Numeric(7,4), so the SAME table also arrives as 0.1500/0.2000;
-    # the advisory normalizes, so scale must never change a word of the message.
-    stored_scale = _table(("0.0000", "0.1500", "0.2000"), _CG_THRESHOLDS[2023])
-
+def test_niit_advisory_flags_folded_rates():
+    """The advisory's ONE job since 2026-08-31 (spec C2): a stored 18.8/23.8 rate is the
+    sheet's folded NIIT next to an engine that now charges the surcharge separately —
+    i.e. a double-charge. Exact matches only (the migration/importer rewrite the same two
+    values), any bracket count, normalized rendering at Numeric(7,4) scale."""
+    folded = _table(("0", "0.188", "0.238"), _CG_THRESHOLDS[2024])
+    stored_scale = _table(("0.0000", "0.1880", "0.2380"), _CG_THRESHOLDS[2024])
     flagged = (
-        "capital-gains rates 0.15/0.2 contradict the sheet's NIIT rule for this AGI "
-        "(above 200000 implies 0.188/0.238)"
+        "stored capital-gains rate(s) 0.188/0.238 appear to fold the NIIT surcharge in — "
+        "NIIT is computed as its own line; store the base rates 0.15/0.2"
     )
-    assert niit_advisory(Decimal("250000"), base_rates) == flagged
-    assert niit_advisory(Decimal("250000"), stored_scale) == flagged
-    assert niit_advisory(Decimal("150000"), base_rates) is None
-    assert niit_advisory(Decimal("150000"), stored_scale) is None
-    assert niit_advisory(Decimal("250000"), niit_rates) is None
-    # Both sides normalize, so the 0.20 constant renders as 0.2 exactly like a stored 0.2000.
-    assert niit_advisory(Decimal("150000"), niit_rates) == (
-        "capital-gains rates 0.188/0.238 contradict the sheet's NIIT rule for this AGI "
-        "(at or below 200000 implies 0.15/0.2)"
+    assert niit_advisory(folded) == flagged
+    assert niit_advisory(stored_scale) == flagged  # scale never changes a word
+    assert niit_advisory(YEAR_BRACKETS[2024]["capital_gains"]) is None  # base rates
+    assert niit_advisory([]) is None
+    # One folded rate alone still flags; a near-miss is the user's own number.
+    assert niit_advisory(_table(("0", "0.188"), ("0", "47026"))) == (
+        "stored capital-gains rate(s) 0.188 appear to fold the NIIT surcharge in — "
+        "NIIT is computed as its own line; store the base rates 0.15/0.2"
     )
-    assert niit_advisory(Decimal("200000"), base_rates) is None  # the rule is strictly >
-
-
-def test_niit_advisory_tolerates_short_tables():
-    assert niit_advisory(Decimal("250000"), []) is None
-    assert niit_advisory(Decimal("250000"), YEAR_BRACKETS[2023]["capital_gains"][:2]) is None
+    assert niit_advisory(_table(("0", "0.1881", "0.239"), _CG_THRESHOLDS[2024])) is None
 
 
 def test_niit_advisory_reaches_the_breakdown_warnings():
-    mismatched = dict(YEAR_BRACKETS[2024]) | {"capital_gains": YEAR_BRACKETS[2023]["capital_gains"]}
-    breakdown = compute_breakdown(2024, YEAR_INPUTS[2024], mismatched)
+    folded = dict(YEAR_BRACKETS[2024]) | {
+        "capital_gains": _table(("0", "0.188", "0.238"), _CG_THRESHOLDS[2024])
+    }
+    breakdown = compute_breakdown(2024, YEAR_INPUTS[2024], folded)
     assert breakdown.warnings == [
-        "capital-gains rates 0.15/0.2 contradict the sheet's NIIT rule for this AGI "
-        "(above 200000 implies 0.188/0.238)"
+        "stored capital-gains rate(s) 0.188/0.238 appear to fold the NIIT surcharge in — "
+        "NIIT is computed as its own line; store the base rates 0.15/0.2"
     ]
-    # The engine still walks the STORED rates verbatim — the advisory never edits them.
-    assert breakdown.capital_gains.tax == Decimal("179.13") * Decimal("0.15")
+    # The engine still walks the STORED rates verbatim — the advisory never edits them —
+    # so a folded table really does double-charge: 179.13 x 0.188 on the CG line PLUS
+    # 75.59264 on the NIIT line. That state is what migration f7d3b2a91c40 ends.
+    assert breakdown.capital_gains.tax == Decimal("179.13") * Decimal("0.188")
+    assert breakdown.niit.tax == Decimal("75.59264")

@@ -178,6 +178,11 @@ class TaxSummaryOut(BaseModel):
     social_security: WageTaxOut | None = None
     disability: WageTaxOut | None = None
     capital_gains: CapitalGainsTaxOut | None = None
+    # NIIT (2026-08-31 spec C2), on capital_gains' wire shape so payloads and frontend
+    # types extend compatibly: gains_amount carries net investment income,
+    # taxable_income the surcharged base min(NII, MAGI excess), effective_rate the tax
+    # over NII. Additive + defaulted: stored fixtures and older clients parse unchanged.
+    niit: CapitalGainsTaxOut | None = None
     totals: TaxTotalsOut | None = None
     warnings: list[str]
 
@@ -302,19 +307,30 @@ class WithholdingPartnerLegOut(BaseModel):
 
 
 class SafeHarborOut(BaseModel):
-    prior_year: int
-    prior_total_tax: Decimal
+    """The statutory harbor is the LESSER of two legs (2026-08-31 spec C4); either can
+    be missing — a first year has no prior return, a refused engine year has no current
+    liability — and the surviving leg stands alone. `met` is judged on
+    `effective_threshold`, always."""
+
+    # The PRIOR-YEAR leg: 100/110% of last year's total tax. All six fields are None
+    # together — a prior year that is missing, not computable under its status, or
+    # computed to <= 0 has no leg (each of the last two states warns).
+    prior_year: int | None = None
+    prior_total_tax: Decimal | None = None
     # The AGI the statutory gate is tested against, and the multiplier it selected. Both
     # are rendered: a threshold that is not 1.10x the number beside it would otherwise
     # read as a bug.
-    prior_agi: Decimal
-    multiplier: Decimal  # 1.10 above the gate, 1.00 at or below it
-    threshold: Decimal  # prior_total_tax x multiplier
-    # The status the REFERENCE return was filed under, which is also the status whose gate
-    # was applied. Different from this year's on a wedding year — a labelling matter, never
-    # a math one, and the card says so rather than leaving the reader to wonder.
-    prior_filing_status: str = SINGLE
-    met: bool  # projected total withholding >= threshold
+    prior_agi: Decimal | None = None
+    multiplier: Decimal | None = None  # 1.10 above the gate, 1.00 at or below it
+    threshold: Decimal | None = None  # prior_total_tax x multiplier
+    # The status the REFERENCE return was filed under — different from this year's on a
+    # wedding year, a labelling matter the card names rather than leaving to wonder.
+    prior_filing_status: str | None = None
+    # The CURRENT-YEAR leg: 90% of this year's projected liability. None exactly when
+    # the engine refused the year (liability_total is null on the card).
+    current_year_threshold: Decimal | None = None
+    effective_threshold: Decimal  # min of the legs that exist
+    met: bool  # projected total withholding >= effective_threshold
 
 
 class WithholdingOut(BaseModel):

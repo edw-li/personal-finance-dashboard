@@ -44,7 +44,7 @@
   font-size: 0.78rem;
   line-height: 1.45;
   color: var(--muted);
-  /* A freshly created year's "missing inputs defaulted to 0: …" names all 21 keys in one
+  /* A freshly created year's "missing inputs defaulted to 0: …" names all 22 keys in one
      sentence: it WRAPS, including inside the comma-separated list, rather than clipping or
      forcing the card to scroll sideways. */
   overflow-wrap: anywhere;
@@ -337,13 +337,19 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* The trap callout and the missing-brackets call to action are `.hint` sentences with a
-   rule down the side — loud enough to read as a finding, quiet enough not to be an error
-   banner (the card's warnings posture). */
+/* The trap callout, the missing-brackets call to action and the per-check remedy are
+   `.hint` sentences with a rule down the side — loud enough to read as a finding, quiet
+   enough not to be an error banner (the card's warnings posture). */
 .withholding-panel .withholding-trap,
-.withholding-panel .withholding-cta {
+.withholding-panel .withholding-cta,
+.withholding-panel .withholding-remedy {
   border-left: 3px solid var(--accent, currentColor);
   padding-left: 10px;
+}
+
+/* The Apply chip rides inside the vest sentence — one gap, not a new layout. */
+.withholding-panel .hint .chip {
+  margin-left: 0.5rem;
 }
 
 /* The tab row sits between the card's hint and the first table: the .segmented treatment is
@@ -393,4 +399,18 @@
 
 .tax-brackets-missing-list {
   color: var(--text);
+}
+
+/* --- marginal panel --- */
+
+/* The headline answer, not a caveat: body ink above the ladder it summarizes. */
+.marginal-sentence {
+  margin: 0.2rem 0 0.9rem;
+  font-size: 0.9rem;
+}
+
+/* D2: the per-jurisdiction table sits between the tiles and the warnings — it needs the
+   top gap .tax-section does not carry (that class only spaces downward). */
+.tax-jurisdiction-detail {
+  margin-top: 1.1rem;
 }

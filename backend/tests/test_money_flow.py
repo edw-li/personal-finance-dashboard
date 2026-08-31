@@ -109,6 +109,7 @@ def test_named_sources_balancing_node_and_engine_figures():
     assert flow.taxes.social_security == breakdown.social_security.tax
     assert flow.taxes.disability == breakdown.disability.tax
     assert flow.taxes.capital_gains == breakdown.capital_gains.tax
+    assert flow.taxes.niit == breakdown.niit.tax
     assert flow.pre_tax_savings == D("27300")  # 23000 + 4000 + 300
     assert flow.take_home_cash == D("120000.00")
     assert flow.renderable is True

@@ -77,3 +77,8 @@ export function deleteCategoryBudget(categoryId: number, effectiveMonth: string)
     method: 'DELETE',
   })
 }
+
+// 404 when the month has neither spending rows nor a cashflow row — "already gone".
+export function deleteSpendingMonth(month: string): Promise<void> {
+  return api<void>(`/spending/months/${month}`, { method: 'DELETE' })
+}

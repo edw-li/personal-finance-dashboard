@@ -309,17 +309,11 @@ variable `proxy_pass` in `nginx.conf`) — if API calls ever 502 after a redeplo
 
 ### 4.2 Scheduler & settings
 
-`price_refresh_cron` is read **once, at backend boot**. Saving a new value in **/settings**
-stores it but reschedules nothing — the running scheduler keeps the old expression until the
-backend restarts:
-
-```bash
-docker compose -f docker-compose.prod.yml restart backend
-```
-
-(A full 4.1 deploy restarts it too; the settings form says the same thing beside the field.)
-The other two settings, `swr_pct` and `espp_ticker`, are read per request and take effect on
-the next page load.
+All three settings in **/settings** take effect without a restart. `price_refresh_cron`
+is **hot-applied**: saving a new value stores it and reschedules the live scheduler job in
+the same request (`backend/app/api/app_settings.py`); boot re-reads the stored value
+anyway, so a later restart loses nothing. The other two, `swr_pct` and `espp_ticker`, are
+read per request and take effect on the next page load.
 
 ### 4.3 Migration history: never re-chain a deployed revision
 
@@ -379,6 +373,16 @@ created in** (the console's region picker at the top showed it in 5.1, e.g.
 `us-sanjose-1`). The endpoint is regional and the request signature embeds this value,
 so it must match the bucket's region exactly.
 
+Optionally add `BACKUP_PASSPHRASE` to the same `.env` to encrypt every dump before upload
+(`gpg --symmetric --cipher-algo AES256`; objects land as `.sql.gz.gpg`). Generate one with
+`openssl rand -base64 32` and keep a copy somewhere **off this server** — without the
+passphrase an encrypted backup is unrecoverable. The encrypted path needs `gnupg` on the
+server (`sudo apt-get install -y gnupg` — Ubuntu 24.04 ships it, but verify with
+`gpg --version`). Leaving it unset keeps plaintext dumps and prints a one-line warning per
+run. The encrypted path is exercised here, on the server, the first time you run the
+script after setting it — the dev box has no OCI credentials, so this check happens at
+deploy time by design.
+
 ```bash
 sudo apt-get install -y python3-boto3
 chmod +x backend/scripts/backup_db.sh
@@ -386,8 +390,10 @@ chmod +x backend/scripts/backup_db.sh
 ```
 
 Expected output ends with `Backup complete.`; the object
-`backups/finance_<date>.sql.gz` appears in the bucket. The script keeps 30 days of
-backups (each run deletes the dump from 30 days prior).
+`backups/finance_<date>.sql.gz` (`.sql.gz.gpg` when `BACKUP_PASSPHRASE` is set) appears
+in the bucket. The script keeps 30 days of backups — each run deletes both flavors of the
+dump from 30 days prior — and records the run for the Settings System card (the
+`Last backup` marker plus a last-10 trail).
 
 ### 5.4 Schedule
 
@@ -403,7 +409,11 @@ crontab -e
 
 ```bash
 # Download a backup: bucket → object → Download (or scp it to the server)
+# Plaintext backups:
 gunzip finance_<date>.sql.gz
+# Encrypted backups (.sql.gz.gpg) — gpg prompts for BACKUP_PASSPHRASE, or pipe straight
+# into the restore: gpg --decrypt finance_<date>.sql.gz.gpg | gunzip | psql ...
+gpg --decrypt finance_<date>.sql.gz.gpg | gunzip > finance_<date>.sql
 
 # Restore into a scratch database and spot-check
 sudo -u postgres createdb -O finance finance_restore
@@ -540,7 +550,7 @@ on the first successful refresh.
 | Check | Where | Expected |
 |---|---|---|
 | Net worth identity | /net-worth totals vs the sheet's NET WORTH row | equal with the five component flags set (7.3), less the After-Tax component by design |
-| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent except the state chain** (the deliberate CA capital-gains divergence, below); 2023 / 2025 / 2026 differ by the known sheet drifts (below), plus the CA divergence where the year carries gains |
+| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent except the state chain and the CG/NIIT split** (both deliberate, below); 2023 / 2025 / 2026 differ by the known sheet drifts (below), plus the CA divergence and the NIIT line where the year carries gains/investment income |
 | Holdings | cost basis, per row | within ~$0.10 of the sheet (6dp shares × 4dp prices folding) |
 | Scheduler | /settings → price refresh cron | day **names** (`10 13 * * mon-fri`), never numbers |
 
@@ -556,6 +566,29 @@ the sheet, because D2's CG-in-AGI drift had pushed the gains into its state chai
 accident (its +117.85 state half now reads sheet-vs-its-own-formula, not sheet-vs-app);
 2026 carries no gains and is unchanged. **Do not "fix" any of these** — a reconciliation
 that makes them vanish has introduced a bug, not removed one.
+
+**Three more deliberate divergences (2026-08-31, tax-engine completeness):**
+
+- **NIIT as an explicit line.** The sheet folded the 3.8% surcharge into its CG bracket
+  rates (18.8/23.8) and never tested the income side; the app stores base CG rates —
+  migration `f7d3b2a91c40` rewrote the exact folded pair, the importer translates it on
+  every re-import, and a warning flags any leftover — and computes
+  NIIT = 3.8% × min(net investment income, MAGI − threshold) as its own line.
+  One nuance inside NII: the per-component clamps mean a short-term loss never offsets
+  a long-term gain inside NII (the statute nets them first) — deliberate and
+  formula-faithful, covered by the same do-not-fix rule. At the
+  stored inputs: 2024 +75.59 NIIT / −6.81 CG (net **+68.79** total tax vs the sheet,
+  total 72,824.61); 2025 +418.88 / −48.15 (net **+370.73**, total 90,421.49); 2023 sits
+  under the threshold and 2026 has no investment income — both unchanged.
+- **Capital-loss deduction reaches AGI.** The sheet modelled `capital_loss_deductions`
+  (r27) and read it in no output formula; the app subtracts it in federal AGI, the state
+  chain and MAGI (CA conforms to the $3k rule). Stored years all carry 0, so no
+  historical total moved — future loss years will differ from the sheet by design.
+- **SALT phase-down on true MAGI.** The >500k phase-down of the raised cap now tests
+  AGI + netted capital gains, so a CG-heavy year's itemized *suggestion* can shrink
+  toward the $10k floor where the old code (plain AGI) would not.
+
+**Do not "fix" any of these** — the same rule as the five above.
 
 **On the cron**: a legacy numeric day-of-week (`10 13 * * 1-5`) is misread by the scheduler
 (APScheduler counts `0` as Monday, so the whole range slips a day) *and* makes the settings
@@ -614,6 +647,15 @@ spot-check **/** (Overview), **/taxes** and **/settings**.
 > pre-window era shows its ex-dividend markers. A blocked provider marks nothing and
 > retries on every refresh until it answers; zero-payer tickers are marked done and never
 > refetched. Workbook imports never touch the table (pinned by test).
+
+> **Addendum (2026-08-31)**: the tier-1 tax-completeness batch adds one **guarded data
+> migration** — `f7d3b2a91c40`, chained on `e4a7c92b6d18` — rewriting exact folded
+> capital-gains rates (`0.1880 → 0.1500`, `0.2380 → 0.2000`, all years and statuses) now
+> that NIIT is computed as its own line. It runs at boot like every other; the downgrade
+> restores the folded pair under the same exact-match guard (documented asymmetry: a
+> genuinely-base-rate year re-folds on downgrade, which the old engine's advisory then
+> names). After deploy, /taxes totals for investment-income years shift by the NIIT
+> entries in §7.5 — expected, not a regression.
 
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the
@@ -711,5 +753,6 @@ and re-copy both values.
   to a first-time browser (trust-on-first-use) — import it into your trust store, or use
   domain mode (Part 6), to close that gap.
 - The whole app sits behind JWT auth; only `/login` and `/api/v1/health` are public.
-- Backups live in a private bucket under scoped S3 credentials. (Optional hardening:
-  pipe the dump through `gpg --symmetric` before upload.)
+- Backups live in a private bucket under scoped S3 credentials, optionally encrypted
+  before upload with `gpg --symmetric` — set `BACKUP_PASSPHRASE` in `.env` (see 5.3);
+  plaintext dumps print a warning per run.

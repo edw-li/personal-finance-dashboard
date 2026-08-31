@@ -2,14 +2,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MonthlyUpdatePage from './MonthlyUpdatePage'
+import ToastProvider from '../components/ToastProvider'
+import { ApiError } from '../api/client'
 
 vi.mock('../api/netWorth', () => ({
+  deleteMonthBalances: vi.fn(),
   fetchAccounts: vi.fn(),
   fetchMonthBalances: vi.fn(),
   fetchTimeseries: vi.fn(),
   putMonthBalances: vi.fn(),
 }))
 vi.mock('../api/spending', () => ({
+  deleteSpendingMonth: vi.fn(),
   fetchCategories: vi.fn(),
   fetchMatrix: vi.fn(),
   fetchSpendingMonth: vi.fn(),
@@ -46,6 +50,11 @@ const jointSavings = {
   id: 4, name: 'Joint Savings', slug: 'joint-savings', group: 'cash' as const,
   sort_order: 4, is_active: true, is_component: false, parent_account_id: null,
   person_id: null,
+}
+const creditCard = {
+  id: 5, name: 'Visa', slug: 'visa', group: 'liability' as const,
+  sort_order: 5, is_active: true, is_component: false, parent_account_id: null,
+  person_id: 1,
 }
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 
@@ -514,7 +523,7 @@ it('keeps sending the clear on the retry after a failed save', async () => {
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByRole('alert')
 
-  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+  fireEvent.click(screen.getByRole('button', { name: /retry spending/i }))
   await waitFor(() => {
     expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(2)
   })
@@ -858,4 +867,231 @@ it('names the pay box as a HOUSEHOLD figure — one stream, two earners', async 
   expect(await screen.findByLabelText('Household take-home')).toBeTruthy()
   expect(screen.queryByLabelText('Net pay (take-home)')).toBeNull()
   expect(screen.getByRole('heading', { name: /spending & take-home/i })).toBeTruthy()
+})
+
+// --- liability sign cue (2026-08-31 tier-1 A1) --------------------------------------------
+
+it('cues a positive liability inline and Flip sign negates it in place', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, creditCard])
+  renderWizard()
+  const visa = (await screen.findByLabelText('Visa')) as HTMLInputElement
+  // Seeded 0.00 (no prior row for Visa): no cue — zero is not a positive balance.
+  expect(screen.queryByText(/liabilities are entered negative/i)).toBeNull()
+
+  fireEvent.change(visa, { target: { value: '500' } })
+  expect(screen.getByText(/liabilities are entered negative/i)).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Flip sign on Visa' }))
+  // The blurred cell echoes the negated committed value; the cue folds away.
+  expect(visa.value).toBe('-$500.00')
+  expect(screen.queryByText(/liabilities are entered negative/i)).toBeNull()
+})
+
+it('a positive liability is advisory only — Next and Save stay enabled and the value ships', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, creditCard])
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Visa'), { target: { value: '500' } })
+  // Ratified: a card can legitimately go positive after a refund — never a gate.
+  const next = screen.getByRole('button', { name: /next: spending/i }) as HTMLButtonElement
+  expect(next.disabled).toBe(false)
+  fireEvent.click(next)
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() => {
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 5, balance: '500' },
+        ],
+      }),
+    )
+  })
+})
+
+it('renders the cue for a server-seeded positive liability and Flip marks the draft dirty', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, creditCard])
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-07-01',
+    recorded_on: null,
+    notes: null,
+    balances:
+      month === '2026-07-01'
+        ? [
+            { account_id: 1, balance: '1500.00' },
+            { account_id: 5, balance: '500.00' }, // mis-signed on the server already
+          ]
+        : [],
+  }))
+  renderWizard()
+  await screen.findByLabelText('Visa')
+  expect(screen.getByText(/liabilities are entered negative/i)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Flip sign on Visa' }))
+  // Flip is an edit like any other: the draft machinery files it immediately.
+  expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).not.toBeNull()
+  expect((screen.getByLabelText('Visa') as HTMLInputElement).value).toBe('-$500.00')
+})
+
+// --- split-save truth (2026-08-31 tier-1 A8) -----------------------------------------------
+
+it('names the half-landed save and retries only the spending leg', async () => {
+  vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+
+  // The balances PUT COMMITTED before the failure — "nothing was lost" would be a lie in
+  // both directions, so the banner names the split.
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('Balances saved. Spending failed — Retry saves only spending.')
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(1)
+
+  // The primary is now the honest retry: only the failed leg goes out again.
+  fireEvent.click(screen.getByRole('button', { name: /retry spending/i }))
+  await screen.findByText(/month saved/i)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(1) // never re-sent
+  expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(2)
+})
+
+it('keeps the accurate old message when the balances leg itself fails', async () => {
+  vi.mocked(netWorthApi.putMonthBalances).mockRejectedValueOnce(new Error('db down'))
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('Saving failed — nothing was lost, retry')
+  // Nothing committed: the spending PUT was never attempted, the primary stays a full save.
+  expect(spendingApi.putSpendingMonth).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(2)
+  expect(vi.mocked(spendingApi.putSpendingMonth).mock.calls.length).toBe(1)
+})
+
+it('re-sends balances on retry when they were edited after the partial failure', async () => {
+  vi.mocked(spendingApi.putSpendingMonth).mockRejectedValueOnce(new Error('boom'))
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByRole('alert')
+
+  // Back to balances, change a figure: the remembered leg no longer describes the boxes,
+  // so a "retry" that skipped balances would silently drop this edit under a green banner.
+  fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1700.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /retry spending/i }))
+  await screen.findByText(/month saved/i)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(2)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls[1][1]).toEqual(
+    expect.objectContaining({ balances: [{ account_id: 1, balance: '1700.00' }] }),
+  )
+})
+
+it('drops the stale saved card the moment a new save attempt begins', async () => {
+  // Succeeds, then fails. The green card carries the FIRST attempt's counts, so leaving it
+  // standing beside the red split-save alert would put two contradicting verdicts on screen
+  // for one month — the exact lie A8 exists to stop.
+  vi.mocked(spendingApi.putSpendingMonth)
+    .mockResolvedValueOnce({
+      month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
+      net_pay_set: true, net_pay_cleared: false,
+    })
+    .mockRejectedValueOnce(new Error('boom'))
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+
+  // Back for one more edit, then save again — this attempt's spending leg fails.
+  fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+
+  await screen.findByRole('alert')
+  expect(screen.queryByText(/month saved/i)).toBeNull()
+})
+
+// --- delete month (2026-08-31 spec §B2) ----------------------------------------------------
+// A second render helper rather than a change to renderWizard(): the delete arm needs a
+// CONTROLLABLE entry month (the existing one hardcodes 2026-08) and the toast provider that
+// every pre-existing direct render deliberately does without.
+
+function renderWizardAt(entry: string) {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <ToastProvider>
+        <MonthlyUpdatePage />
+      </ToastProvider>
+    </MemoryRouter>,
+  )
+}
+
+it('offers no delete on a month the server has never seen', async () => {
+  renderWizardAt('/update?month=2026-08-01&step=review')
+  await screen.findByRole('button', { name: 'Save month' })
+  expect(screen.queryByRole('button', { name: 'Delete this month' })).toBeNull()
+})
+
+it('arms on the typed month, fires both deletes tolerating a 404, clears the draft', async () => {
+  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue(undefined)
+  // The spending leg 404s (balances-only month) — the delete still fully succeeds.
+  vi.mocked(spendingApi.deleteSpendingMonth).mockRejectedValue(
+    new ApiError('no spending or net pay recorded for this month', 404),
+  )
+  sessionStorage.setItem('finance-update-draft:2026-07-01', '{"balances":{"1":"9.00"}}')
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  const button = (await screen.findByRole('button', {
+    name: 'Delete this month',
+  })) as HTMLButtonElement
+  expect(button.disabled).toBe(true)
+  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), {
+    target: { value: '2026-07' },
+  })
+  expect(button.disabled).toBe(false)
+  fireEvent.click(button)
+  await waitFor(() => expect(netWorthApi.deleteMonthBalances).toHaveBeenCalledWith('2026-07-01'))
+  expect(spendingApi.deleteSpendingMonth).toHaveBeenCalledWith('2026-07-01')
+  await screen.findByText(`Deleted ${formatMonth('2026-07-01')} — balances and spending removed.`)
+  expect(sessionStorage.getItem('finance-update-draft:2026-07-01')).toBeNull()
+  // Landed on the CURRENT month's wizard.
+  await waitFor(() =>
+    expect(
+      screen.getByText(`Monthly update — ${formatMonth(currentMonthIso())}`),
+    ).toBeDefined(),
+  )
+})
+
+it('surfaces a non-404 delete failure, stops before the second leg, stays on the month', async () => {
+  vi.mocked(netWorthApi.deleteMonthBalances).mockRejectedValue(new ApiError('db exploded', 500))
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  fireEvent.change(await screen.findByLabelText('Type 2026-07 to confirm'), {
+    target: { value: '2026-07' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('db exploded')
+  expect(spendingApi.deleteSpendingMonth).not.toHaveBeenCalled()
+  expect(screen.getByText(`Monthly update — ${formatMonth('2026-07-01')}`)).toBeDefined()
 })

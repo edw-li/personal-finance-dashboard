@@ -461,10 +461,25 @@ async def test_withholding_names_the_fica_tables_it_had_to_walk_empty(
 # --- safe harbor ---
 
 
-async def test_withholding_safe_harbor_is_null_without_a_prior_year(
+async def test_withholding_safe_harbor_stands_on_the_current_year_leg_alone(
     auth_client, world, frozen_today
 ):
-    assert (await get_withholding(auth_client))["safe_harbor"] is None
+    """C4: 90% of the CURRENT year's liability is a statutory leg of its own, so a first
+    year on the app — no prior return at all — still gets a harbor. No prior-year
+    warning either: a missing prior year is the normal first-year case."""
+    body = await get_withholding(auth_client)
+    assert body["safe_harbor"] == {
+        "prior_year": None,
+        "prior_total_tax": None,
+        "prior_agi": None,
+        "multiplier": None,
+        "threshold": None,
+        "prior_filing_status": None,
+        "current_year_threshold": "104177.88",  # 115753.20 x 0.90
+        "effective_threshold": "104177.88",
+        "met": False,  # projected 96883.00 < 104177.88
+    }
+    assert body["warnings"] == []
 
 
 async def test_withholding_safe_harbor_is_110_pct_of_the_prior_year(
@@ -484,6 +499,8 @@ async def test_withholding_safe_harbor_is_110_pct_of_the_prior_year(
         "multiplier": "1.10",
         "threshold": "88718.52",  # 80653.20 x 1.10, at cents
         "prior_filing_status": "single",
+        "current_year_threshold": "104177.88",
+        "effective_threshold": "88718.52",
         "met": True,  # projected withholding 96883.00 clears it
     }
     # 110% of the DISPLAYED prior figure, not of a full-precision one nobody can see: the two
@@ -499,13 +516,17 @@ async def test_withholding_safe_harbor_is_unavailable_when_the_prior_year_comput
     # A bare tax_years row — the shape `_ensure_year` leaves behind, or a year created and
     # never filled in. 110% of nothing is nothing, and ANY withholding clears a zero
     # threshold, so a met=True badge here would be a false all-clear rather than a result.
+    # The zero-threshold guard now silences only the PRIOR leg — the current-year leg
+    # still stands.
     db.add(TaxYear(year=YEAR - 1))
     await db.commit()
     body = await get_withholding(auth_client)
 
-    assert body["safe_harbor"] is None
+    assert body["safe_harbor"]["current_year_threshold"] == "104177.88"
+    assert body["safe_harbor"]["prior_year"] is None
+    assert body["safe_harbor"]["met"] is False
     assert body["warnings"] == [
-        f"prior year {YEAR - 1} has no computed tax — safe harbor unavailable"
+        f"prior year {YEAR - 1} has no computed tax — the prior-year safe-harbor leg is unavailable"
     ]
     # The rest of the card is unaffected — this is one missing comparison, not a degradation.
     assert body["liability_total"] == "115753.20"
@@ -522,6 +543,10 @@ async def test_withholding_safe_harbor_not_met_when_the_prior_year_was_bigger(
     assert body["safe_harbor"]["threshold"] == "127328.52"  # 115753.20 x 1.10
     assert body["safe_harbor"]["met"] is False
     assert Decimal(body["total"]["projected"]) < Decimal(body["safe_harbor"]["threshold"])
+    # Both legs exist and the CURRENT one is smaller: 104177.88 < 127328.52 — the
+    # statutory lesser-of binds on it, and met is judged there.
+    assert body["safe_harbor"]["current_year_threshold"] == "104177.88"
+    assert body["safe_harbor"]["effective_threshold"] == "104177.88"
 
 
 async def test_withholding_safe_harbor_drops_to_100_pct_under_the_agi_gate(
@@ -540,6 +565,8 @@ async def test_withholding_safe_harbor_drops_to_100_pct_under_the_agi_gate(
         "multiplier": "1.00",
         "threshold": "23750.00",
         "prior_filing_status": "single",
+        "current_year_threshold": "104177.88",
+        "effective_threshold": "23750.00",
         "met": True,
     }
 
@@ -570,6 +597,7 @@ async def test_withholding_safe_harbor_gate_halves_for_married_filing_separately
     body = await get_withholding(auth_client)
     assert body["safe_harbor"]["multiplier"] == "1.10"
     assert body["safe_harbor"]["threshold"] == "26125.00"  # 23750 x 1.10
+    assert body["safe_harbor"]["effective_threshold"] == "26125.00"
 
 
 async def test_withholding_refuses_a_liability_it_cannot_compute(

@@ -528,4 +528,116 @@ describe('WhatIfPanel', () => {
     expect(screen.queryByLabelText('ESPP lot')).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
   })
+
+  // --- input overrides (D1, design 2026-08-31) -------------------------------------------
+
+  const DEFS = [
+    { key: 'annual_salary', label: 'Annual Salary' },
+    { key: 'itemized_deduction', label: 'Itemized Deduction' },
+  ]
+  const addOverride = () =>
+    screen.getByRole('button', { name: 'Add override' }) as HTMLButtonElement
+
+  it('adds an override row on the first unused key and posts canonical values', async () => {
+    render(<WhatIfPanel year={2024} definitions={DEFS} />)
+    await openPanel()
+    fireEvent.click(addOverride())
+
+    // Label + key, from the definitions the page handed down.
+    const select = screen.getByLabelText('Override') as HTMLSelectElement
+    expect(select.value).toBe('annual_salary')
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Annual Salary (annual_salary)',
+      'Itemized Deduction (itemized_deduction)',
+    ])
+
+    // Run is open with ONLY an override leg — a scenario needs no sale to mean something.
+    expect(runButton().disabled).toBe(false)
+    fireEvent.change(field('Override 1 value'), { target: { value: '$210,000' } })
+    fireEvent.click(runButton())
+
+    // Canonical at the wire (the InputsForm boundary), and the two sale lists stay [].
+    await waitFor(() =>
+      expect(vi.mocked(runWhatIf)).toHaveBeenCalledWith({
+        year: 2024,
+        sales: [],
+        espp_sales: [],
+        overrides: { annual_salary: '210000' },
+      }),
+    )
+  })
+
+  it('sends null for a blank value — the clear-this-input case', async () => {
+    render(<WhatIfPanel year={2024} definitions={DEFS} />)
+    await openPanel()
+    fireEvent.click(addOverride())
+    fireEvent.click(runButton())
+
+    await waitFor(() =>
+      expect(vi.mocked(runWhatIf)).toHaveBeenCalledWith({
+        year: 2024,
+        sales: [],
+        espp_sales: [],
+        overrides: { annual_salary: null },
+      }),
+    )
+  })
+
+  it('omits the overrides key entirely when no override rows exist', async () => {
+    render(<WhatIfPanel year={2024} definitions={DEFS} />)
+    await openPanel()
+    fireEvent.click(addSale())
+    fireEvent.click(runButton())
+
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    // The pre-override wire, byte-identical — the exact-body pins above depend on it.
+    expect('overrides' in vi.mocked(runWhatIf).mock.calls[0][0]).toBe(false)
+  })
+
+  it('refuses a duplicated key in the box’s own vocabulary, before spending a request', async () => {
+    render(<WhatIfPanel year={2024} definitions={DEFS} />)
+    await openPanel()
+    fireEvent.click(addOverride()) // annual_salary
+    fireEvent.click(addOverride()) // itemized_deduction
+    // Point the second row at the first row's key.
+    fireEvent.change(screen.getAllByLabelText('Override')[1], {
+      target: { value: 'annual_salary' },
+    })
+    fireEvent.click(runButton())
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Annual Salary is overridden twice — one row per key',
+    )
+    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
+  })
+
+  it('refuses a garbled value and names the row by its label', async () => {
+    render(<WhatIfPanel year={2024} definitions={DEFS} />)
+    await openPanel()
+    fireEvent.click(addOverride())
+    fireEvent.change(field('Override 1 value'), { target: { value: '12..3' } })
+    fireEvent.click(runButton())
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Annual Salary: enter a number, or leave the value blank to clear it',
+    )
+    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
+  })
+
+  it('keeps Add override shut once every key is taken, and with no definitions at all', async () => {
+    render(<WhatIfPanel year={2024} definitions={DEFS} />)
+    await openPanel()
+    fireEvent.click(addOverride())
+    fireEvent.click(addOverride())
+    expect(addOverride().disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove override 2' }))
+    expect(addOverride().disabled).toBe(false)
+    cleanup()
+
+    vi.mocked(fetchHoldings).mockResolvedValue(holdingsFixture())
+    vi.mocked(fetchLots).mockResolvedValue(lotsFixture())
+    render(<WhatIfPanel year={2024} />)
+    await openPanel()
+    expect(addOverride().disabled).toBe(true)
+  })
 })

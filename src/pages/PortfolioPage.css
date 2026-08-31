@@ -6,6 +6,9 @@
 .portfolio-page .page-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .portfolio-page .header-actions { display: flex; align-items: center; gap: 12px; }
 .portfolio-page .as-of { color: var(--muted); font-size: 12px; }
+/* A4: the stale variant of the header clock — the shared amber advisory token (--warn,
+   PALETTE[3]) every other stale cue already wears; the title attribute carries the words. */
+.portfolio-page .as-of.stale { color: var(--warn); }
 .tiles-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 16px; }
 
 /* The refresh note keeps ONE element mounted so a live region exists before the first

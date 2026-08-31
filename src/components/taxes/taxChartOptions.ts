@@ -18,9 +18,11 @@ import {
 import type { TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
+import type { LadderSegment } from './marginal'
 
-// The six jurisdictions in the order the engine reports them — one order shared by the
-// waterfall's steps, the trend's stack and both legends.
+// The seven tax lines in the order the engine reports them — one order shared by the
+// waterfall's steps, the trend's stack and both legends. NIIT is LAST on purpose: it is
+// the one additive line, so the builders can include it conditionally by slicing.
 export const TAX_LABELS = [
   'Federal',
   'State',
@@ -28,9 +30,10 @@ export const TAX_LABELS = [
   'Soc. Sec.',
   'SDI',
   'Cap. gains',
+  'NIIT',
 ] as const
 
-// Six ordered slots of ONE hue family: six identity hues would break the ≤3-hue law, so
+// Seven ordered slots of ONE hue family: seven identity hues would break the ≤3-hue law, so
 // the sequential ramp is the compliant form (AllocationPanel's convention). The ramp
 // encodes POSITION in the fixed order above — not magnitude — which is why the two charts
 // can share it: a waterfall step and a stack segment for the same tax wear one color.
@@ -40,15 +43,17 @@ export const TAX_LABELS = [
 export const TAX_COLORS = [
   SEQUENTIAL_BLUE[4],
   SEQUENTIAL_BLUE[5],
-  SEQUENTIAL_BLUE[7],
+  SEQUENTIAL_BLUE[6],
   SEQUENTIAL_BLUE[8],
+  SEQUENTIAL_BLUE[9],
   SEQUENTIAL_BLUE[10],
   SEQUENTIAL_BLUE[11],
 ] as const
 
+// full vocabulary — the builder skips the NIIT step when the year has none
 export const WATERFALL_CATEGORIES = ['Gross', ...TAX_LABELS, 'Take-home'] as const
 
-// Stable ids shared by the trend's six stacks and the drill-in pie: universalTransition
+// Stable ids shared by the trend's seven stacks and the drill-in pie: universalTransition
 // keys on id across notMerge setOption calls, so the year's segments morph into slices
 // and back out (SpendingPage's `cat-${id}` idiom). Index in TAX_LABELS is the identity.
 export const TAX_SERIES_IDS = TAX_LABELS.map((_, i) => `tax-${i}`)
@@ -65,7 +70,7 @@ function roundTo(value: number, places: number): number {
   return Math.round(value * factor) / factor
 }
 
-// The six tax figures of one year, in TAX_LABELS order.
+// The seven tax figures of one year, in TAX_LABELS order.
 function taxAmounts(summary: TaxSummaryOut): number[] {
   return [
     Number(summary.federal.tax),
@@ -74,6 +79,8 @@ function taxAmounts(summary: TaxSummaryOut): number[] {
     Number(summary.social_security.tax),
     Number(summary.disability.tax),
     Number(summary.capital_gains.tax),
+    // Optional on the wire (fixtures and stored payloads predate the line): absent is 0.
+    Number(summary.niit?.tax ?? 0),
   ]
 }
 
@@ -108,11 +115,17 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
   const steps: WaterfallStep[] = [
     { label: 'Gross', amount: gross, base: 0, height: gross, color: OTHER_SERIES_COLOR, remaining: null },
   ]
+  const taxSteps = taxes
+    .map((tax, i) => ({ label: TAX_LABELS[i], tax, color: TAX_COLORS[i] }))
+    // NIIT is the one ADDITIVE line (2026-08-31): a year it does not touch keeps its
+    // eight familiar bars instead of gaining a $0 step. The six sheet jurisdictions
+    // always draw, zero or not — their absence would read as missing data.
+    .filter((step) => step.label !== 'NIIT' || step.tax !== 0)
   let remainder = gross
-  taxes.forEach((tax, i) => {
+  taxSteps.forEach(({ label, tax, color }) => {
     const after = roundTo(remainder - tax, 2)
     steps.push({
-      label: TAX_LABELS[i],
+      label,
       amount: tax,
       // State tax can come out NEGATIVE (exemption credits exceed the walk), which steps
       // the remainder back UP: the segment then spans [before, after] instead. Taking the
@@ -120,7 +133,7 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
       // and reduces to "floor = the remainder after" for every non-negative tax.
       base: Math.min(remainder, after),
       height: Math.abs(roundTo(tax, 2)),
-      color: TAX_COLORS[i],
+      color,
       remaining: after,
     })
     remainder = after
@@ -152,7 +165,7 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
     xAxis: {
       type: 'category',
       data: steps.map((s) => s.label),
-      // Eight steps: every one of them is labelled or the walk cannot be read.
+      // Eight or nine steps: every one of them is labelled or the walk cannot be read.
       axisLabel: { interval: 0 },
     },
     yAxis: {
@@ -199,7 +212,7 @@ export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
 }
 
 /**
- * Multi-year composition: one stacked bar per year of the six tax figures, with the
+ * Multi-year composition: one stacked bar per year of the tax figures, with the
  * overall effective rate as a line on a secondary percent axis (the rate is a ratio, so it
  * cannot share the money axis). Returns null when the feed carries no years at all — the
  * caller renders an empty note.
@@ -213,6 +226,13 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
   const rates = ordered.map((y) =>
     y.totals.effective_rate === null ? null : roundTo(Number(y.totals.effective_rate) * 100, 4),
   )
+  const niitIndex = TAX_LABELS.indexOf('NIIT')
+  // NIIT stacks only when some year carries it: an all-zero series would add a legend
+  // entry and a $0.00 tooltip row to every pre-NIIT year. One nonzero year brings the
+  // series for EVERY year — a stack that comes and goes across one chart would lie.
+  const stacked = amounts.some((a) => a[niitIndex] !== 0)
+    ? [...TAX_LABELS]
+    : TAX_LABELS.slice(0, niitIndex)
 
   return {
     grid: { left: 70, right: 56, top: 40, bottom: 28 },
@@ -237,7 +257,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
         }
         // The stacks, then the year's total (vestingChartOptions' Total row,
         // jurisdiction-flavoured — 2026-08-25 spec §2b), then the rate line: the rate is
-        // a ratio, not a seventh addend, so it stays out of the sum and under it.
+        // a ratio, not another addend, so it stays out of the sum and under it.
         const taxRows = list.filter((p) => p.seriesName !== RATE_SERIES_NAME)
         const rateRows = list.filter((p) => p.seriesName === RATE_SERIES_NAME)
         const total = taxRows.reduce(
@@ -275,7 +295,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
       },
     ],
     series: [
-      ...TAX_LABELS.map((label, i) => ({
+      ...stacked.map((label, i) => ({
         id: TAX_SERIES_IDS[i],
         name: label,
         type: 'bar' as const,
@@ -304,7 +324,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
 }
 
 /**
- * One year's tax burden as a donut of the six jurisdictions — the trend chart's drill-in
+ * One year's tax burden as a donut of the tax lines — the trend chart's drill-in
  * (SpendingPage's month pie, jurisdiction-flavoured). A pie can only draw positive slices,
  * so zero and negative figures (a credit-driven negative state tax) are EXCLUDED here
  * while the stacked bar nets them into the year's column; the totals line beside the
@@ -359,7 +379,124 @@ export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
     headers: ['Year', ...TAX_LABELS, 'Total tax'],
     rows: ordered.map((y) => [
       y.year, y.federal.tax, y.state.tax, y.medicare.tax, y.social_security.tax,
-      y.disability.tax, y.capital_gains.tax, y.totals.total_tax,
+      y.disability.tax, y.capital_gains.tax,
+      // absent (pre-NIIT payload) exports as zero — a blank would misalign the fixed
+      // header row
+      y.niit?.tax ?? '0.00',
+      y.totals.total_tax,
     ]),
+  }
+}
+
+// --- D3: the marginal-rate ladder (design 2026-08-31 §D3) ------------------------------
+
+export interface LadderRow {
+  label: string
+  segments: LadderSegment[]
+  /** Number(summary.<jurisdiction>.taxable_income) — the ◆ marker's x position. */
+  taxableIncome: number
+}
+
+// Three slots of the ONE hue family (the ≤3-hue law): adjacent segments alternate the two
+// mid tones so their seam reads at a glance, and the bracket the income sits in takes the
+// bright slot. All three sit at/above SEQUENTIAL_BLUE[4], the ramp's documented 3:1 floor.
+const LADDER_BASE_A = SEQUENTIAL_BLUE[5]
+const LADDER_BASE_B = SEQUENTIAL_BLUE[7]
+const LADDER_CURRENT = SEQUENTIAL_BLUE[10]
+
+/** Drawn ceiling of a lane's unbounded top bracket: 15% past the larger of the income and
+ *  the top floor — headroom enough to read "and up" without dwarfing the lower spans. */
+function ladderCap(row: LadderRow): number {
+  const top = row.segments[row.segments.length - 1]
+  return roundTo(Math.max(row.taxableIncome, top.floor) * 1.15, 2)
+}
+
+/**
+ * Horizontal bracket ladder: one category lane per jurisdiction, one stacked-bar series
+ * per bracket slot (a lane with fewer brackets holds null in the extra slots), and a
+ * scatter diamond marking each lane's own taxable income — the two lanes have DIFFERENT
+ * taxable incomes (state deductions differ), which is why a single markLine cannot do it.
+ * Returns null when no lane is drawable — the caller renders its empty note.
+ */
+export function marginalLadderOption(rows: LadderRow[]): EChartsOption | null {
+  const drawable = rows.filter((row) => row.segments.length > 0 && ladderCap(row) > 0)
+  if (drawable.length === 0) return null
+
+  interface Cell {
+    span: number
+    color: string
+    rate: number
+    floor: number
+    ceiling: number | null
+  }
+  // cells[laneIndex][slotIndex] — the tooltip reads the same table the series are built of.
+  const cells: Cell[][] = drawable.map((row) => {
+    const cap = ladderCap(row)
+    return row.segments.map((segment, i) => ({
+      span: roundTo((segment.ceiling ?? cap) - segment.floor, 2),
+      color: segment.current ? LADDER_CURRENT : i % 2 === 0 ? LADDER_BASE_A : LADDER_BASE_B,
+      rate: segment.rate,
+      floor: segment.floor,
+      ceiling: segment.ceiling,
+    }))
+  })
+  const maxSegments = Math.max(...cells.map((lane) => lane.length))
+
+  return {
+    grid: { left: 70, right: 24, top: 12, bottom: 28 },
+    tooltip: {
+      // Item trigger: an axis tooltip would announce every segment of the lane at once.
+      // Own constants and formatted numbers only — no user text reaches this HTML.
+      formatter: (params) => {
+        const p = Array.isArray(params) ? params[0] : params
+        const cell = cells[p.dataIndex ?? 0]?.[p.seriesIndex ?? 0]
+        if (!cell) return ''
+        const lane = drawable[p.dataIndex ?? 0]
+        const range =
+          cell.ceiling === null
+            ? `${formatCurrency(cell.floor)} and up`
+            : `${formatCurrency(cell.floor)} – ${formatCurrency(cell.ceiling)}`
+        return `${lane.label} — <strong>${formatPct(cell.rate, { signed: false })}</strong> bracket<br/>${range}`
+      },
+    },
+    xAxis: {
+      type: 'value',
+      axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
+    },
+    // inverse, so the first lane (Federal) reads on TOP the way the sentence orders them.
+    yAxis: { type: 'category', data: drawable.map((row) => row.label), inverse: true },
+    series: [
+      ...Array.from({ length: maxSegments }, (_, i) => ({
+        name: `Bracket ${i + 1}`,
+        type: 'bar' as const,
+        stack: 'ladder',
+        barMaxWidth: 26,
+        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
+        emphasis: { itemStyle: { borderColor: INK } },
+        data: cells.map((lane) =>
+          lane[i] === undefined
+            ? null
+            : { value: lane[i].span, itemStyle: { color: lane[i].color } },
+        ),
+      })),
+      {
+        name: 'Taxable income',
+        type: 'scatter' as const,
+        symbol: 'diamond',
+        symbolSize: 11,
+        itemStyle: { color: INK },
+        z: 10,
+        data: drawable.map((row) => [row.taxableIncome, row.label]),
+        tooltip: {
+          formatter: (params) => {
+            const p = Array.isArray(params) ? params[0] : params
+            const lane = drawable[p.dataIndex ?? 0]
+            return lane === undefined
+              ? ''
+              : `${lane.label} taxable income<br/><strong>${formatCurrency(lane.taxableIncome)}</strong>`
+          },
+        },
+      },
+    ],
   }
 }

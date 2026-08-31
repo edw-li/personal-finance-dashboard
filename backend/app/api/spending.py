@@ -479,3 +479,27 @@ async def put_month(
         net_pay_set=net_pay_provided,
         net_pay_cleared=net_pay_cleared,
     )
+
+
+@router.delete("/months/{month}", status_code=204)
+async def delete_month(month: date, db: AsyncSession = Depends(get_db)) -> Response:
+    """Remove a month's spending wholesale (2026-08-31 spec §B2): every monthly_spending
+    row AND the monthly_cashflow row. 404 only when NEITHER exists — a cashflow-only
+    month (net pay entered, no categories) still deletes cleanly, and vice versa."""
+    require_first_of_month(month)
+    rows = (
+        (await db.execute(select(MonthlySpending).where(MonthlySpending.month == month)))
+        .scalars()
+        .all()
+    )
+    cashflow = await db.get(MonthlyCashflow, month)
+    if not rows and cashflow is None:
+        raise HTTPException(
+            status_code=404, detail="no spending or net pay recorded for this month"
+        )
+    for row in rows:
+        await db.delete(row)
+    if cashflow is not None:
+        await db.delete(cashflow)
+    await db.commit()
+    return Response(status_code=204)

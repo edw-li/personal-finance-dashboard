@@ -101,6 +101,7 @@ def _money_flow_out(flow: MoneyFlow) -> MoneyFlowOut:
             social_security=_money(flow.taxes.social_security),
             disability=_money(flow.taxes.disability),
             capital_gains=_money(flow.taxes.capital_gains),
+            niit=_money(flow.taxes.niit),
         ),
         pre_tax_savings=_money(flow.pre_tax_savings),
         take_home_cash=_money(flow.take_home_cash),

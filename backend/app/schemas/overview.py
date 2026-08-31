@@ -30,6 +30,7 @@ class MoneyFlowTaxesOut(BaseModel):
     social_security: Decimal
     disability: Decimal
     capital_gains: Decimal
+    niit: Decimal
 
 
 class MoneyFlowCategoryOut(BaseModel):

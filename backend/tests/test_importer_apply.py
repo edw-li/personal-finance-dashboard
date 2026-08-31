@@ -498,6 +498,58 @@ async def test_apply_taxes_years_inputs_brackets(db):
     assert report2.entities["tax_brackets"].skips == 14
 
 
+async def test_apply_taxes_translates_folded_niit_cg_rates(db):
+    """The migration's importer companion (2026-08-31 spec C2): a re-import must not
+    reintroduce folded 18.8/23.8 CG rates the engine would double-charge next to its
+    explicit NIIT line. Exact matches only — the 2023 column below stores the GENUINE
+    base pair and must land verbatim."""
+    from app.importer.apply import apply_taxes
+    from app.importer.parsers import parse_taxes
+    from app.models import TaxBracket
+    from tests.workbook_builder import default_taxes_rows
+
+    rows = default_taxes_rows()
+    cg = next(i for i, row in enumerate(rows) if row[0] == "CAPITAL GAINS TAX INFO")
+    # Columns are (2023, 2024): base rates in 2023, the sheet's folded cache in 2024.
+    rows[cg + 2 : cg + 2] = [
+        [None, "Bracket 2 Rate", 0.15, 0.188, None],
+        [None, "Bracket 2 Threshold", 44625.0, 47026.0, None],
+        [None, "Bracket 3 Rate", 0.20, 0.238, None],
+        [None, "Bracket 3 Threshold", 492300.0, 518900.0, None],
+    ]
+    report = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets(taxes=rows)["Taxes"]), report)
+    await db.commit()
+
+    stored = {
+        (b.year, b.bracket_index): b.rate
+        for b in (
+            await db.execute(select(TaxBracket).where(TaxBracket.jurisdiction == "capital_gains"))
+        )
+        .scalars()
+        .all()
+    }
+    assert stored[(2023, 2)] == Decimal("0.15")  # genuine base rate: untouched
+    assert stored[(2023, 3)] == Decimal("0.20")
+    assert stored[(2024, 2)] == Decimal("0.15")  # folded 0.188: translated
+    assert stored[(2024, 3)] == Decimal("0.20")  # folded 0.238: translated
+    assert [w for w in report.warnings if "folds NIIT in" in w] == [
+        "tax_brackets[2024/capital_gains/2]: sheet rate 0.188 folds NIIT in — imported "
+        "as 0.15 (the app computes NIIT separately)",
+        "tax_brackets[2024/capital_gains/3]: sheet rate 0.238 folds NIIT in — imported "
+        "as 0.2 (the app computes NIIT separately)",
+    ]
+
+    # Re-import: the sheet still folds, so the translation (and its warning) repeats,
+    # while the stored rows diff as SKIPS — never an update ping-pong.
+    report2 = SheetReport()
+    await apply_taxes(db, parse_taxes(sheets(taxes=rows)["Taxes"]), report2)
+    await db.commit()
+    assert report2.entities["tax_brackets"].creates == 0
+    assert report2.entities["tax_brackets"].updates == 0
+    assert len([w for w in report2.warnings if "folds NIIT in" in w]) == 2
+
+
 async def test_apply_taxes_syncs_brackets_and_inputs_within_imported_years(db):
     from app.importer.apply import apply_taxes
     from app.importer.parsers import parse_taxes

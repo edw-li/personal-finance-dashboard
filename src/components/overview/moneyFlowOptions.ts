@@ -96,7 +96,8 @@ function salaryNodes(flow: MoneyFlowOut): { label: string; value: number; color:
   }))
 }
 
-// The Taxes tooltip's six jurisdiction lines, in the engine's own order (tax_keys).
+// The Taxes tooltip's per-jurisdiction lines (seven since the NIIT split), in the engine's
+// own order (tax_keys).
 const JURISDICTION_LINES: { key: keyof MoneyFlowOut['taxes']; label: string }[] = [
   { key: 'federal', label: 'Federal' },
   { key: 'state', label: 'State' },
@@ -104,6 +105,7 @@ const JURISDICTION_LINES: { key: keyof MoneyFlowOut['taxes']; label: string }[] 
   { key: 'social_security', label: 'Social Security' },
   { key: 'disability', label: 'Disability' },
   { key: 'capital_gains', label: 'Capital gains' },
+  { key: 'niit', label: 'NIIT' },
 ]
 
 // Cent arithmetic on display floats (the spending sankey's constants): float dust must
@@ -249,14 +251,15 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
     links.push({ source: TAKE_HOME, target: SAVED, value: saved })
   }
 
-  // The Taxes node alone gets an extended tooltip (spec §5: the six jurisdictions,
-  // server figures verbatim); everything else delegates to the shared factory so node
-  // values can never drift from the page's figures. Labels here are fixed constants —
-  // no user text, nothing to escape.
+  // The Taxes node alone gets an extended tooltip (spec §5: the jurisdictions, server
+  // figures verbatim); everything else delegates to the shared factory so node values can
+  // never drift from the page's figures. Labels here are fixed constants — no user text,
+  // nothing to escape. `niit` is optional on the wire, so an older payload simply drops
+  // its row rather than printing an empty (or NaN) one.
   const base = makeSankeyTooltipFormatter(nodes, links)
-  const taxLines = JURISDICTION_LINES.map(
-    (line) => `${line.label} ${formatCurrency(flow.taxes[line.key])}`,
-  ).join('<br/>')
+  const taxLines = JURISDICTION_LINES.filter((line) => flow.taxes[line.key] !== undefined)
+    .map((line) => `${line.label} ${formatCurrency(flow.taxes[line.key])}`)
+    .join('<br/>')
   const formatter = (params: unknown): string => {
     const p = (Array.isArray(params) ? params[0] : params) as {
       dataType?: string

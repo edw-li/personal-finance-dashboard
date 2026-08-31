@@ -53,6 +53,7 @@ import type {
   TransactionOut,
 } from '../types/api'
 import { formatCurrency, formatDate, formatDateTime, formatPct } from '../utils/format'
+import { isStaleQuote } from '../utils/staleness'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import '../components/portfolio/portfolio.css'
@@ -363,6 +364,10 @@ export default function PortfolioPage() {
 
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
+  // A4: the tooltip's second clock. latest_quote_at IS "the newest quote across holdings"
+  // (one definition, two consumers — it also dates the live ping); the spec's original
+  // as_of_newest twin was amended away 2026-08-31 once the audit surfaced this field.
+  const newestQuote = holdings?.latest_quote_at ?? null
 
   // The SERVER already scopes `failed` to tickers a future refresh would still attempt
   // (active, auto-priced) — one rule on one side of the wire, so a deactivation clears
@@ -391,7 +396,16 @@ export default function PortfolioPage() {
     // Overview keeps the two-arg call and never starts fetching them (spec Decision log).
     const tickerById = new Map(securities.map((s) => [s.id, s.ticker]))
     const events = buildEventMarkers(history, transactions, dividends, tickerById, dividendEvents)
-    const base = portfolioHistoryOption(history, liveFromHoldings(holdings), events)
+    // A3 (2026-08-31 tier-1): the ping is derived from the OWNER-FILTERED holdings, but
+    // /portfolio/history is household-wide by design — plotting a person's total at the
+    // end of the household series drew a fake cliff. Only the All view bridges to "now";
+    // null also suppresses the dashed connector and the "Live" legend entry (both live
+    // inside the builder's livePt branch).
+    const base = portfolioHistoryOption(
+      history,
+      owner === null ? liveFromHoldings(holdings) : null,
+      events,
+    )
     return base === null
       ? null
       : {
@@ -403,7 +417,7 @@ export default function PortfolioPage() {
           // END, so the indices are unshifted and the window runs out to the ping.
           dataZoom: rangeZoom(history.dates, range),
         }
-  }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected])
+  }, [history, holdings, securities, transactions, dividends, dividendEvents, range, legendSelected, owner])
 
   // Resolved target for EChart's animated zoom path — memoized so the wrapper's
   // fingerprint compare runs only when the window can actually have moved. Reads the
@@ -429,7 +443,22 @@ export default function PortfolioPage() {
         <h1>Portfolio</h1>
         <div className="header-actions">
           {asOf ? (
-            <span className="as-of">prices as of {formatDate(asOf)}</span>
+            // A4 (2026-08-31 tier-1): as_of is the OLDEST quote — one manual-priced
+            // straggler pins it — so the header wears the same stale treatment Overview's
+            // freshness cue uses (isStaleQuote → --warn amber) and the tooltip names the
+            // clock it is NOT showing. Display-only: as_of itself is unchanged. The
+            // no-newest fallback is stale-tab armor only — server-side both clocks derive
+            // from one quote list, so they are null (or set) together.
+            <span
+              className={isStaleQuote(asOf) ? 'as-of stale' : 'as-of'}
+              title={
+                newestQuote
+                  ? `oldest quote across holdings — newest ${formatDate(newestQuote)}`
+                  : 'oldest quote across holdings'
+              }
+            >
+              prices as of {formatDate(asOf)}
+            </span>
           ) : (
             <span className="as-of">prices never refreshed</span>
           )}
@@ -577,7 +606,8 @@ export default function PortfolioPage() {
               <p className="hint">
                 Performance, sparklines and price refresh always cover the whole household —
                 the owner chips scope holdings, allocation, dividends, transactions and
-                realized gains.
+                realized gains. Person views omit the live price dot because the history is
+                household-wide.
               </p>
             )}
             {performanceOption && history ? (

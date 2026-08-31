@@ -132,17 +132,21 @@ export default function NetWorthPage() {
   // ctrl+wheel wander back to the preset (RangeChips' contract) — and it now carries any
   // manual window mirrored back from a chart's datazoom event (2026-08-25 spec §2e).
   const [range, setRange] = useState<RangeState>({ preset: 'all' })
-  // Mirrors of the charts' own events (2026-08-25 spec §2e): legend picks and a manual
-  // ctrl+wheel window become page state, fed back through the memoized options, so a
-  // granularity refetch or notMerge rebuild no longer resets them — and both charts
-  // share one window, like they share the chips.
-  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
-  // MERGED, never replaced: echarts hands over the FIRING chart's whole name→shown map,
-  // and the stacked chart's groups are not the drill chart's accounts — replacing would
-  // let a toggle on one resurrect a series hidden on the other. A stale key is inert in
-  // legend.selected (echarts ignores names no series claims), so merging is the safe way.
-  const onLegendChange = (selected: Record<string, boolean>) =>
-    setLegendSelected((current) => ({ ...current, ...selected }))
+  // Mirrors of the charts' own events (2026-08-25 spec §2e), fed back through the
+  // memoized options so a granularity refetch or notMerge rebuild no longer resets them.
+  // The ZOOM window stays shared — both charts ride one month axis and one set of chips.
+  // Legend picks are one map PER CHART (2026-08-31 tier-1 A2): an account literally named
+  // "Cash"/"Other"/"Taxable"/"Net worth" collides with a group series' name, and one
+  // merged map let a drill toggle silently hide the same-named GROUP in the stacked chart
+  // (and shrink the tooltip's Assets subtotal). Each chart feeds and reads only its own.
+  // Still MERGED within a chart: echarts hands over the firing chart's whole name→shown
+  // map, and a stale key is inert in legend.selected (echarts ignores unclaimed names).
+  const [stackedLegend, setStackedLegend] = useState<Record<string, boolean>>({})
+  const [drillLegend, setDrillLegend] = useState<Record<string, boolean>>({})
+  const onStackedLegendChange = (selected: Record<string, boolean>) =>
+    setStackedLegend((current) => ({ ...current, ...selected }))
+  const onDrillLegendChange = (selected: Record<string, boolean>) =>
+    setDrillLegend((current) => ({ ...current, ...selected }))
   const onZoomWindow = (nextWindow: ZoomWindow) =>
     setRange((current) => ({ preset: current.preset, window: nextWindow }))
 
@@ -279,7 +283,7 @@ export default function NetWorthPage() {
       // mode) so a zoomed-in year is read at its own scale.
       dataZoom: rangeZoom(data.months, range),
       grid: { left: 70, right: 84, top: 40, bottom: 28 },
-      legend: { top: 0, selected: legendSelected },
+      legend: { top: 0, selected: stackedLegend },
       tooltip: {
         trigger: 'axis',
         // Asset rows + their subtotal, then liabilities/net worth/notes — the formatter
@@ -387,7 +391,7 @@ export default function NetWorthPage() {
           : []),
       ],
     }
-  }, [data, range, legendSelected, stackBy, household, orderedPeople])
+  }, [data, range, stackedLegend, stackBy, household, orderedPeople])
 
   const drillOption = useMemo<EChartsOption | null>(() => {
     if (!data || drill.length === 0) return null
@@ -396,7 +400,7 @@ export default function NetWorthPage() {
     return {
       dataZoom: rangeZoom(data.months, range), // the page's one window (see `range`)
       grid: { left: 70, right: 24, top: 40, bottom: 28 },
-      legend: { top: 0, selected: legendSelected },
+      legend: { top: 0, selected: drillLegend },
       tooltip: {
         trigger: 'axis',
         valueFormatter: (value) =>
@@ -419,7 +423,7 @@ export default function NetWorthPage() {
         data: (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v))),
       })),
     }
-  }, [data, drill, range, legendSelected])
+  }, [data, drill, range, drillLegend])
 
   const toggleDrill = (accountId: number) => {
     setDrill((current) => {
@@ -531,6 +535,31 @@ export default function NetWorthPage() {
         </div>
       )}
 
+      {/* D5 (2026-08-31): the latest snapshot split by owner — the same money the chips
+          above scope, read straight off the already-fetched summary. Ordered BY the chips
+          (primary, others, Joint) so the strip and the control can never disagree; an
+          owner with no owner_totals row is SKIPPED, never a fabricated $0.00. Under a
+          person scope the server narrows owner_totals to that person + Joint, and the
+          strip honestly narrows with it. */}
+      {ownerScopes.length > 0 && summary && summary.month && summary.owner_totals.length > 0 && (
+        <dl className="networth-owner-strip">
+          {ownerScopes
+            .filter(({ scope }) => scope !== null)
+            .map(({ scope, label }) => {
+              const entry = summary.owner_totals.find((total) =>
+                scope === 'joint' ? total.person_id === null : total.person_id === scope,
+              )
+              if (entry === undefined) return null
+              return (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{formatCurrency(entry.total)}</dd>
+                </div>
+              )
+            })}
+        </dl>
+      )}
+
       <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
         <div className="card span-12">
           <div className="networth-chart-header">
@@ -590,7 +619,7 @@ export default function NetWorthPage() {
               <EChart
                 option={stackedOption}
                 height={360}
-                onLegendChange={onLegendChange}
+                onLegendChange={onStackedLegendChange}
                 onDataZoom={onZoomWindow}
                 zoomWindow={zoomWindow}
                 exportConfig={{ name: 'net-worth', csv: () => netWorthCsv(data) }}
@@ -640,7 +669,7 @@ export default function NetWorthPage() {
               <EChart
                 option={drillOption}
                 height={280}
-                onLegendChange={onLegendChange}
+                onLegendChange={onDrillLegendChange}
                 onDataZoom={onZoomWindow}
                 zoomWindow={zoomWindow}
                 animateEntrance={!fromCache}

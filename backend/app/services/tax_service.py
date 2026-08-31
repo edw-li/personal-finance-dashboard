@@ -9,8 +9,12 @@ year (2024's whole column follows it), plus one deliberate correction the sheet 
 year: state AGI carries `cg_amount`, because California taxes capital gains and all
 dividends as ordinary income and the sheet's state chain silently dropped them (2026-08-25
 spec §1 — for a CG year the app's state tax is >= the sheet's, on purpose, in every year
-unconditionally). The other three year-columns also carry hand-edit drift (a stray
-literal, capital gains folded into AGI, a stale hardcoded deduction);
+unconditionally). The 2026-08-31 completeness batch (spec C1–C3) adds three more
+deliberate corrections the sheet never made: NIIT computed as an explicit line over base
+CG rates (the sheet folded 3.8% into brackets 2/3), capital_loss_deductions wired into
+AGI (the sheet modelled the line and read it nowhere), and the SALT phase-down tested on
+true MAGI. The other three year-columns also carry hand-edit drift (a stray literal,
+capital gains folded into AGI, a stale hardcoded deduction);
 `backend/tests/test_tax_service.py` pins the canonical outputs AND reproduces each
 drifted/divergent sheet value to the cent, so no difference is accidental. Precedent:
 Plan 3's savings-rate line and Plan 4's Unrealized column shipped the principled formula
@@ -40,15 +44,29 @@ Bracket = tuple[Decimal, Decimal]
 JURISDICTION_WARN_MISSING = "no {j} brackets for {year}: {j} tax computed as 0"
 MISSING_INPUTS_WARNING = "missing inputs defaulted to 0: {keys}"
 NEGATIVE_STATE_TAX_WARNING = "state tax negative after exemption credits"
+# Both are ADVISORY: a GET never rejects stored data, so the value is used verbatim
+# either way. `{value}`/`{cap}` arrive pre-formatted via `f"{d.normalize():f}"` — plain
+# .normalize() alone would render -13000 as "-1.3E+4".
+CAPITAL_LOSS_POSITIVE_WARNING = (
+    "capital_loss_deductions is stored positive ({value}) — the deductible capital loss "
+    "is entered negative; used verbatim"
+)
+CAPITAL_LOSS_LIMIT_WARNING = (
+    "capital_loss_deductions ({value}) exceeds the statutory cap ({cap}); used verbatim"
+)
 NIIT_WARNING = (
-    "capital-gains rates {stored}/{stored_top} contradict the sheet's NIIT rule for this "
-    "AGI ({side} {threshold} implies {expected}/{expected_top})"
+    "stored capital-gains rate(s) {rates} appear to fold the NIIT surcharge in — "
+    "NIIT is computed as its own line; store the base rates 0.15/0.2"
 )
 
-# The sheet models CG bracket rates 2/3 as IF(agi > 200000, 18.8%, 15%) / IF(..., 23.8%,
-# 20%) — the NIIT surcharge folded into the rate. The DB imported the cached values, so a
-# year whose AGI later crosses the threshold silently keeps the wrong pair; we advise
-# rather than override, because the stored brackets are the user's to edit.
+# NIIT (2026-08-31 spec C2): 3.8% of the smaller of net investment income and the MAGI
+# excess over the status threshold — an explicit line since this batch. The sheet instead
+# folded the surcharge into CG bracket rates 2/3 (15 -> 18.8, 20 -> 23.8, cached from an
+# IF(agi > 200000, ...)); migration f7d3b2a91c40 rewrote the exact folded pair back to
+# base rates, the importer translates them on every apply, and `niit_advisory` flags any
+# leftover — three guards over the ONE pair below, so a folded table can never silently
+# double-charge.
+NIIT_RATE = Decimal("0.038")
 NIIT_AGI_THRESHOLD = Decimal("200000")
 # Statutory and non-indexed (audit §5), so constants rather than data: MFJ is 250000 and
 # MFS 125000, neither of which is "2x single". An unknown status reads single's figure —
@@ -58,8 +76,10 @@ NIIT_AGI_THRESHOLDS: dict[str, Decimal] = {
     MARRIED_JOINT: Decimal("250000"),
     MARRIED_SEPARATE: Decimal("125000"),
 }
-NIIT_RATES = (Decimal("0.188"), Decimal("0.238"))
+FOLDED_CG_RATES = (Decimal("0.188"), Decimal("0.238"))
 BASE_CG_RATES = (Decimal("0.15"), Decimal("0.20"))
+# Decimal hashes by VALUE, so a Numeric(7,4)-scaled 0.1880 hits the 0.188 key.
+FOLDED_TO_BASE_CG = dict(zip(FOLDED_CG_RATES, BASE_CG_RATES, strict=True))
 
 # Suggestions land in tax_inputs, Numeric(14,4).
 SUGGESTION_QUANTUM = Decimal("0.0001")
@@ -75,9 +95,9 @@ SALT_CAP_FROM = Decimal("40000")
 SALT_PHASEDOWN_MAGI = Decimal("500000")
 SALT_PHASEDOWN_RATE = Decimal("0.30")
 SALT_PHASEDOWN_FLOOR = Decimal("10000")
-# The deductible capital LOSS per return. This clamps the SUGGESTION only: the engine's
-# AGI math never reads capital_loss_deductions (it is deliberately absent from
-# ENGINE_INPUT_KEYS), so the goldens' breakdowns cannot move.
+# The deductible capital LOSS per return (halved filing separately). TWO consumers, one
+# constant: derive_suggestions clamps its SUGGESTION to it, and compute_breakdown warns
+# (never clamps) when a stored value exceeds it — the engine walks stored data verbatim.
 CAPITAL_LOSS_LIMIT = Decimal("3000")
 # Married-filing-separately halves the per-return statutory figures.
 MFS_HALF = Decimal("2")
@@ -97,6 +117,7 @@ ENGINE_INPUT_KEYS: tuple[str, ...] = (
     "trad_401k_contributions",
     "hsa_contributions",
     "hsa_contributions_employer",
+    "capital_loss_deductions",
     "other_pretax_deductions",
     "standard_deduction",
     "itemized_deduction",
@@ -166,26 +187,62 @@ def stack(brackets: list[Bracket], base: Decimal, amount: Decimal) -> Decimal:
 
 
 def _federal_agi(value: Callable[[str], Decimal]) -> Decimal:
-    """Federal AGI, the sheet's clean model (rows 96-99).
+    """Federal AGI, the sheet's clean model (rows 96-99) plus one correction.
 
-    ONE definition with two consumers: `compute_breakdown`'s income chain and the SALT
-    phase-down's MAGI in `derive_suggestions`. Term order is the canonical formula's, so
-    the goldens pin it to the cent. capital_loss_deductions is deliberately absent — the
-    sheet models it as a line but no output formula ever reads it.
+    ONE definition with two direct consumers — `compute_breakdown`'s income chain and
+    `_magi` — and through them the state chain, the NIIT threshold test and the SALT
+    phase-down. Term order is the canonical formula's, so the goldens pin it to the cent.
+    capital_loss_deductions joined AGI on 2026-08-31 (spec C3): the sheet modelled the
+    line but no output formula ever read it — a modelled deduction the workbook silently
+    dropped. Stored <= 0 by the suggestion's convention and used verbatim either way
+    (compute_breakdown warns on a positive or over-cap value, never rejects it); the state
+    chain inherits it here, matching CA's conformity on the $3k rule, and MAGI inherits it
+    through `_magi`.
     """
     return (
-        value("latest_w2_income")
-        + value("other_w2_income")
-        + value("stcg_total")
-        + value("unqualified_dividends")
-        + value("interest_total")
-        + value("other_income_1099")
-    ) - (
-        value("trad_401k_contributions")
-        + value("hsa_contributions")
-        + value("hsa_contributions_employer")
-        + value("other_pretax_deductions")
+        (
+            value("latest_w2_income")
+            + value("other_w2_income")
+            + value("stcg_total")
+            + value("unqualified_dividends")
+            + value("interest_total")
+            + value("other_income_1099")
+        )
+        - (
+            value("trad_401k_contributions")
+            + value("hsa_contributions")
+            + value("hsa_contributions_employer")
+            + value("other_pretax_deductions")
+        )
+        + value("capital_loss_deductions")
     )
+
+
+def _cg_amount(value: Callable[[str], Decimal]) -> Decimal:
+    """The netted capital-gains amount (sheet rows 118-120) — ONE definition for its four
+    consumers: the federal CG stack, state AGI, the NIIT base and `_magi`'s MAGI.
+
+    A long-term LOSS nets against qualified dividends + other gains only while the net
+    stays positive; otherwise the sheet drops it here (the deductible remainder is the
+    capital_loss_deductions line, which reaches AGI via `_federal_agi`).
+    """
+    ltcg = value("ltcg_total")
+    netted = ltcg + value("qualified_dividends") + value("other_capital_gains")
+    if ltcg > 0:
+        return netted
+    if ltcg < 0 and netted > 0:
+        return netted
+    return value("qualified_dividends") + value("other_capital_gains")
+
+
+def _magi(value: Callable[[str], Decimal]) -> Decimal:
+    """Modified AGI: federal AGI plus the netted gains — the base the NIIT threshold test
+    and the SALT phase-down are statutorily judged on (2026-08-31 spec C1). One
+    definition, two consumers. It inherits capital_loss_deductions through `_federal_agi`
+    (spec C3): the §1211 deduction is inside AGI, so MAGI carries it — correct for both
+    consumers, and pinned by the capital-loss NIIT test.
+    """
+    return _federal_agi(value) + _cg_amount(value)
 
 
 @dataclass(frozen=True)
@@ -269,7 +326,8 @@ class JurisdictionResult:
 
     Income taxes carry agi/taxable_income, wage taxes carry w2_income/taxable_wages, and
     capital gains carry taxable_income (the ordinary income the gains stack on top of)
-    plus gains_amount.
+    plus gains_amount. The NIIT line borrows the capital-gains shape: gains_amount is net
+    investment income and taxable_income the surcharged base min(NII, MAGI excess).
     """
 
     tax: Decimal
@@ -299,6 +357,7 @@ class TaxBreakdown:
     social_security: JurisdictionResult
     disability: JurisdictionResult
     capital_gains: JurisdictionResult
+    niit: JurisdictionResult
     totals: TaxTotals
     warnings: list[str] = field(default_factory=list)
 
@@ -314,37 +373,21 @@ def _rate(tax: Decimal, base: Decimal) -> Decimal | None:
     return (tax / base) + ZERO
 
 
-def niit_advisory(
-    fed_agi: Decimal, cg_brackets: list[Bracket], filing_status: str = SINGLE
-) -> str | None:
-    """Flag stored CG rates that contradict the sheet's AGI-driven NIIT rule.
+def niit_advisory(cg_brackets: list[Bracket]) -> str | None:
+    """Flag stored CG rates that still fold the NIIT surcharge in (18.8 / 23.8).
 
-    Returns None when the table is too short to carry both rates (nothing to compare) or
-    when the stored pair already matches. Never edits the brackets: the engine walks what
-    is stored, verbatim. The threshold is the filing status's (200k / 250k / 125k) — an
-    unknown status reads single's, because a GET must never fail on stored data.
+    The engine computes NIIT as its own line, so a folded table charges the surcharge
+    twice. Exact value-matches only — the same two rates migration f7d3b2a91c40 and the
+    importer translation rewrite — and never edits the brackets: the engine walks what is
+    stored, verbatim. Stored rates arrive at Numeric(7,4) scale, so the rendering
+    normalizes (0.1880 and a hand-typed 0.188 must produce the same sentence).
     """
-    if len(cg_brackets) < 3:
-        return None
-    threshold = NIIT_AGI_THRESHOLDS.get(filing_status, NIIT_AGI_THRESHOLD)
-    ordered = sorted(cg_brackets, key=lambda bracket: bracket[1])
-    stored = (ordered[1][0], ordered[2][0])
-    above = fed_agi > threshold
-    expected = NIIT_RATES if above else BASE_CG_RATES
-    if stored == expected:
-        return None
-    # Stored rates arrive at the column's Numeric(7,4) scale, so normalize before rendering:
-    # 0.1500 and a hand-typed 0.15 are the same rate and must produce the same message. The
-    # EXPECTED pair is normalized identically — otherwise the constants' own scale leaks
-    # into the text and the message reads "0.15/0.2 ... implies 0.15/0.20".
-    return NIIT_WARNING.format(
-        stored=stored[0].normalize(),
-        stored_top=stored[1].normalize(),
-        side="above" if above else "at or below",
-        threshold=threshold,
-        expected=expected[0].normalize(),
-        expected_top=expected[1].normalize(),
+    folded = sorted(
+        {rate.normalize() for rate, _threshold in cg_brackets if rate in FOLDED_CG_RATES}
     )
+    if not folded:
+        return None
+    return NIIT_WARNING.format(rates="/".join(str(rate) for rate in folded))
 
 
 def compute_breakdown(
@@ -362,7 +405,7 @@ def compute_breakdown(
     bracket list — yields 0 tax plus a warning. Effective rates are full-precision ratios,
     None when the denominator is 0; the schema layer quantizes.
 
-    `filing_status` selects nothing here but the NIIT advisory's threshold: every OTHER
+    `filing_status` selects nothing here but the NIIT line's MAGI threshold: every OTHER
     status-dependent number lives in the bracket TABLES the caller selected, which is why
     a wrong-status table is refused upstream rather than compensated for down here.
 
@@ -393,25 +436,33 @@ def compute_breakdown(
             warnings.append(JURISDICTION_WARN_MISSING.format(j=name, year=year))
         tables[name] = list(table)
 
-    # Federal (sheet rows 96-99). capital_loss_deductions (r27) is modelled as a line but
-    # no output formula ever reads it — ported faithfully, so it does NOT reach AGI.
+    # Federal (sheet rows 96-99 + the C3 capital-loss correction — see _federal_agi).
+    # The two capital-loss warnings are advisory hygiene over a value that is about to be
+    # used verbatim: sign convention first, then the per-return statutory cap (halved
+    # filing separately) that derive_suggestions' clamp also reads.
+    capital_loss = values["capital_loss_deductions"]
+    if capital_loss > 0:
+        warnings.append(CAPITAL_LOSS_POSITIVE_WARNING.format(value=f"{capital_loss.normalize():f}"))
+    else:
+        loss_limit = CAPITAL_LOSS_LIMIT
+        if filing_status == MARRIED_SEPARATE:
+            loss_limit /= MFS_HALF
+        if capital_loss < -loss_limit:
+            warnings.append(
+                CAPITAL_LOSS_LIMIT_WARNING.format(
+                    value=f"{capital_loss.normalize():f}",
+                    cap=f"{(-loss_limit).normalize():f}",
+                )
+            )
     fed_agi = _federal_agi(values.__getitem__)
     fed_deduction = max(values["standard_deduction"], values["itemized_deduction"])
     fed_ti = fed_agi - fed_deduction
     fed_tax = walk(tables["federal"], fed_ti)
 
-    # Capital gains (rows 118-120): a long-term LOSS nets against gains only while the net
-    # stays positive; otherwise the sheet drops it (its deduction line never reaches AGI).
-    # Netted here, above the state section, because state AGI consumes cg_amount too; the
-    # federal CG stack itself is applied after FICA, where the sheet computes it.
-    ltcg = values["ltcg_total"]
-    netted = ltcg + values["qualified_dividends"] + values["other_capital_gains"]
-    if ltcg > 0:
-        cg_amount = netted
-    elif ltcg < 0 and netted > 0:
-        cg_amount = netted
-    else:
-        cg_amount = values["qualified_dividends"] + values["other_capital_gains"]
+    # Capital gains (rows 118-120): netted in `_cg_amount`, computed here — above the
+    # state section — because state AGI consumes cg_amount too; the federal CG stack
+    # itself is applied after FICA, where the sheet computes it.
+    cg_amount = _cg_amount(values.__getitem__)
 
     # State (rows 100-103): CA exempts the treasury slice of unqualified dividends and
     # does NOT recognise the HSA deduction, so both are added back — and, deliberately
@@ -476,6 +527,23 @@ def compute_breakdown(
     # shares it; the gains stack on top of federal taxable income.
     cg_tax = stack(tables["capital_gains"], fed_ti, cg_amount)
 
+    # NIIT (2026-08-31 spec C2) — its own line, never a folded bracket rate: 3.8% of the
+    # smaller of net investment income and the MAGI excess over the status threshold.
+    # MAGI is `_magi`'s definition (fed AGI + cg_amount, capital_loss_deductions inside
+    # via _federal_agi). The clamps guard stored-negative edges: a short-term or netted
+    # CG loss reduces AGI, never investment income, and a net-negative NII must never
+    # surface as a negative surcharge.
+    nii = (
+        values["interest_total"]
+        + values["unqualified_dividends"]
+        + max(values["stcg_total"], ZERO)
+        + max(cg_amount, ZERO)
+    )
+    magi = _magi(values.__getitem__)
+    niit_threshold = NIIT_AGI_THRESHOLDS.get(filing_status, NIIT_AGI_THRESHOLD)
+    niit_base = max(ZERO, min(nii, magi - niit_threshold))
+    niit_tax = NIIT_RATE * niit_base
+
     # Totals (rows 121-125). Gross income sums the *_standard / *_brokerage COMPONENTS,
     # not the netted totals, so a netted-away loss still shows up in the top line; total
     # income repeats the clean AGI formula.
@@ -490,9 +558,9 @@ def compute_breakdown(
         + values["qualified_dividends"]
         + values["other_capital_gains"]
     )
-    total_tax = fed_tax + state_tax + medicare_tax + ss_tax + sdi_tax + cg_tax
+    total_tax = fed_tax + state_tax + medicare_tax + ss_tax + sdi_tax + cg_tax + niit_tax
 
-    advisory = niit_advisory(fed_agi, tables["capital_gains"], filing_status)
+    advisory = niit_advisory(tables["capital_gains"])
     if advisory is not None:
         warnings.append(advisory)
 
@@ -533,6 +601,12 @@ def compute_breakdown(
             effective_rate=_rate(cg_tax, cg_amount),
             taxable_income=fed_ti,
             gains_amount=cg_amount,
+        ),
+        niit=JurisdictionResult(
+            tax=niit_tax,
+            effective_rate=_rate(niit_tax, nii),
+            taxable_income=niit_base,
+            gains_amount=nii,
         ),
         totals=TaxTotals(
             gross_income=gross_income,
@@ -580,7 +654,9 @@ def derive_suggestions(
     the capital-loss line, which the statute caps per RETURN at 3000 (1500 filing
     separately) however large the netted loss is. Both are SUGGESTIONS — the engine's own
     arithmetic is status-neutral and unchanged, so a status flip never silently rewrites a
-    stored number.
+    stored number. The SALT slice's phase-down tests true MAGI (`_magi`), so a CG-heavy
+    year's itemized suggestion may shrink toward the floor — approved and documented
+    (spec C1).
 
     The derived-W2 chain (gross_paycheck / latest_w2_income / other_w2_income) is one
     PERSON's, so the caller feeds one person's rows at a time (api/taxes.py builds a
@@ -614,9 +690,10 @@ def derive_suggestions(
         capital_loss = ZERO
 
     # The SALT cap is hardcoded per column in the sheet (10000 through 2024, 40000 after);
-    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is the engine's
-    # own federal AGI — the same definition compute_breakdown walks.
-    cap = salt_cap(year, filing_status, _federal_agi(value))
+    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is `_magi` —
+    # fed AGI plus the engine's own netted cg_amount (2026-08-31 spec C1; the sheet's
+    # formula never had the phase-down at all, so there is no sheet reading to preserve).
+    cap = salt_cap(year, filing_status, _magi(value))
     salt = value("itemized_salt")
     itemized = (salt if salt < cap else cap) + (
         value("itemized_donations")

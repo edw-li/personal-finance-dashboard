@@ -335,6 +335,41 @@ async def test_put_spending_month_net_pay_null_rides_along_with_amounts(auth_cli
     assert {a["category_id"]: a["amount"] for a in got["amounts"]} == {food.id: "250.00"}
 
 
+async def test_delete_month_removes_spending_and_cashflow(auth_client, db):
+    await _seed_spending(db)
+    resp = await auth_client.delete("/api/v1/spending/months/2025-12-01")
+    assert resp.status_code == 204
+    read = (await auth_client.get("/api/v1/spending/months/2025-12-01")).json()
+    assert read["exists"] is False
+    assert read["amounts"] == []
+    assert read["net_pay"] is None
+    # The deleted month disappears from the matrix (spec §B2's read-side check).
+    body = (await auth_client.get("/api/v1/spending/matrix")).json()
+    assert body["months"] == ["2026-01-01", "2026-02-01"]
+    assert await db.get(MonthlyCashflow, date(2025, 12, 1)) is None
+
+
+async def test_delete_month_handles_each_half_alone(auth_client, db):
+    await _seed_spending(db)
+    # Spending-only month (2026-01 has no cashflow row): still deletes.
+    assert (await auth_client.delete("/api/v1/spending/months/2026-01-01")).status_code == 204
+    assert (await auth_client.get("/api/v1/spending/months/2026-01-01")).json()["exists"] is False
+    # Cashflow-only month: seed one, delete it.
+    db.add(MonthlyCashflow(month=date(2026, 4, 1), net_pay=Decimal("5000.00")))
+    await db.commit()
+    assert (await auth_client.delete("/api/v1/spending/months/2026-04-01")).status_code == 204
+    assert await db.get(MonthlyCashflow, date(2026, 4, 1)) is None
+
+
+async def test_delete_month_404_when_nothing_exists_and_422_on_a_mid_month_date(auth_client, db):
+    await _seed_spending(db)
+    assert (await auth_client.delete("/api/v1/spending/months/2030-01-01")).status_code == 404
+    assert (await auth_client.delete("/api/v1/spending/months/2030-01-02")).status_code == 422
+    # Neither rejection deleted anything.
+    body = (await auth_client.get("/api/v1/spending/matrix")).json()
+    assert body["months"] == ["2025-12-01", "2026-01-01", "2026-02-01"]
+
+
 async def test_budget_put_upserts_and_returns_full_history(auth_client, db):
     food, _rent = await _seed_spending(db)
     url = f"/api/v1/spending/categories/{food.id}/budget"

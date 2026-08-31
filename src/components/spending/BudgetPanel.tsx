@@ -4,7 +4,6 @@ import { deleteCategoryBudget, putCategoryBudget } from '../../api/spending'
 import type { CategoryBudgetEntry, CategoryOut, SpendingMatrix } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatMonth } from '../../utils/format'
-import { addMonths, currentMonthIso } from '../../utils/months'
 import { budgetProgress } from '../../utils/spending'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
@@ -43,9 +42,11 @@ export default function BudgetPanel({
   const [busy, setBusy] = useState(false)
 
   const month = matrix.months[monthIndex]
-  // Next calendar month: the forward-looking default — changing a budget mid-month
-  // usually means "from now on", and past months' verdicts stay frozen.
-  const defaultEffectiveFrom = addMonths(currentMonthIso(), 1).slice(0, 7)
+  // A5 (2026-08-31 tier-1): default to the FOCUSED month — the month the meters read.
+  // The old next-calendar-month default made a first budget save successfully and
+  // visibly do nothing (the meters were reading a month the budget hadn't reached).
+  // months entries are YYYY-MM-01 (or YYYY-MM in old fixtures); the input wants YYYY-MM.
+  const defaultEffectiveFrom = month.slice(0, 7)
 
   const seriesById = new Map(matrix.series.map((s) => [s.category_id, s]))
   const rows = matrix.categories
@@ -152,11 +153,14 @@ export default function BudgetPanel({
           >
             Save
           </button>
+          {/* A5: promoted into the control row (was parked between the form and the
+              history list) — the past-dating warning must be read at the moment the date
+              is chosen, one short line. */}
+          <p className="drill-hint budget-editor-hint">
+            Defaults to {formatMonth(month)} — the month the meters read. Dating it in the
+            past re-writes what that era&apos;s budget was.
+          </p>
         </div>
-        <p className="drill-hint">
-          Defaults to next month. Dating it in the past deliberately re-writes what that
-          era&apos;s budget was — past months&apos; meters will re-judge against it.
-        </p>
         {history !== undefined && (
           <ul className="budget-history">
             {history.map((entry) => (

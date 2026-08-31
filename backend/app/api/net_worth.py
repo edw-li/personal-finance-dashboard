@@ -364,9 +364,10 @@ async def put_month(
     snapshot_created = snapshot is None
     if snapshot is None:
         if not body.balances:
-            # An empty month would poison the summary KPI and the coverage ribbon,
-            # and no DELETE /months exists to undo it. Meta-only PUTs remain legal
-            # on months that already exist.
+            # An empty month would poison the summary KPI and the coverage ribbon.
+            # DELETE /months/{month} exists now (2026-08-31 spec §B2), but the refusal
+            # stays: an accidental empty create should not need an undo. Meta-only
+            # PUTs remain legal on months that already exist.
             raise HTTPException(
                 status_code=422,
                 detail="refusing to create an empty month — include at least one balance",
@@ -412,3 +413,20 @@ async def put_month(
         updated=updated,
         unchanged=unchanged,
     )
+
+
+@router.delete("/months/{month}", status_code=204)
+async def delete_month(month: date, db: AsyncSession = Depends(get_db)) -> Response:
+    """Remove a month wholesale (2026-08-31 spec §B2): the snapshot row goes and the FK's
+    ON DELETE CASCADE takes every account_balances row with it (declared on the model, so
+    create_all schemas carry it too). 404 when no snapshot exists — the wizard's paired
+    spending delete tolerates that, so a spending-only month still clears fully."""
+    require_first_of_month(month)
+    snapshot = (
+        await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == month))
+    ).scalar_one_or_none()
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="no snapshot exists for this month")
+    await db.delete(snapshot)
+    await db.commit()
+    return Response(status_code=204)
