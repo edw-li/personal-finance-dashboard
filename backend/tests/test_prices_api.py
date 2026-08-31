@@ -134,7 +134,11 @@ async def test_refresh_endpoint_ingests_dividends_and_echoes_the_counts(
         )
     )
     await db.commit()
-    today = date.today()
+    # Frozen to a TUESDAY: on a real Monday the refresh's own value-snapshot leg would
+    # seed portfolio_value_history, arming the dividend-events backfill and flipping the
+    # pinned {"synced": 0} below — the calendar must not decide this test's answer.
+    today = date(2026, 8, 25)
+    freeze_service_today(monkeypatch, today)
     ex_date = today - timedelta(days=30)
     provider = FakeProvider({"DIVX": [bar(ex_date, "100", "0.8200"), bar(today, "120")]})
     monkeypatch.setattr("app.api.prices.get_provider", lambda: provider)
