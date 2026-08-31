@@ -21,6 +21,10 @@ import InputsForm from '../components/taxes/InputsForm'
 import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
+// TYPE-only, and deliberately its own statement: the page test mocks this module's RUNTIME
+// with a default-only factory, so a value import of anything else would crash there. An
+// `import type` is erased before the mock ever sees it.
+import type { OverrideDefinition } from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
 import type {
   FilingStatus,
@@ -64,6 +68,21 @@ function inputsKey(inputs: TaxInputsOut): string {
 
 function bracketsKey(brackets: TaxBracketsOut): string {
   return `brackets-${brackets.year}-${brackets.filing_status}`
+}
+
+// D1: the override select's option list — every definition ONCE, payload order, label from
+// the definition table. Per-person keys repeat once per column in the payload; overrides
+// address the HOUSEHOLD key map, so the dedupe is the semantics, not a display nicety.
+function overrideDefinitions(inputs: TaxInputsOut): OverrideDefinition[] {
+  const seen = new Set<string>()
+  const definitions: OverrideDefinition[] = []
+  for (const section of inputs.sections)
+    for (const item of section.items) {
+      if (seen.has(item.key)) continue
+      seen.add(item.key)
+      definitions.push({ key: item.key, label: item.label })
+    }
+  return definitions
 }
 
 function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
@@ -684,6 +703,7 @@ export default function TaxesPage() {
             year={detail.summary.year}
             initialTicker={whatIfTicker}
             initialLotId={whatIfLotId}
+            definitions={overrideDefinitions(detail.inputs)}
           />
           {/* Keyed by the payloads' own identity (see inputsKey/bracketsKey), not by load:
               a real year or status switch remounts the editors — 2023's typed rows must not

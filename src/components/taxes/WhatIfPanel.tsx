@@ -3,6 +3,7 @@ import { ApiError } from '../../api/client'
 import { fetchLots } from '../../api/espp'
 import { fetchHoldings } from '../../api/portfolio'
 import { runWhatIf } from '../../api/whatif'
+import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type {
@@ -14,6 +15,7 @@ import type {
   SaleLegIn,
   WhatIfOut,
 } from '../../types/api'
+import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
 import { isPlainDecimal } from '../../utils/percent'
 import { toneOf } from '../../utils/tone'
@@ -37,6 +39,19 @@ interface SaleLegForm {
 interface EsppLegForm {
   lotId: string
   salePrice: string
+}
+
+/** One option of the override select — the definition table's own label + key. TaxesPage
+ *  dedupes per-person repeats before handing these down: overrides address the HOUSEHOLD
+ *  key map (the endpoint applies them after aggregation), so a key appears once. */
+export interface OverrideDefinition {
+  key: string
+  label: string
+}
+
+interface OverrideLegForm {
+  key: string
+  value: string
 }
 
 // The whole position at the latest quote: the common question is "what if I sold this",
@@ -83,6 +98,7 @@ export default function WhatIfPanel({
   year,
   initialTicker = null,
   initialLotId = null,
+  definitions = [],
 }: {
   year: number
   /**
@@ -93,6 +109,10 @@ export default function WhatIfPanel({
    */
   initialTicker?: string | null
   initialLotId?: number | null
+  /** The year payload's input definitions (deduped by key, payload order) — the override
+   *  rows' key select. Optional so fetch-free mounts (and the pinned older tests) need no
+   *  list; with none, Add override stays shut. */
+  definitions?: OverrideDefinition[]
 }) {
   // The deep-link seeds, pinned at MOUNT. They live in a ref because `loadFeeds` below must
   // read no reactive value beyond its setters — a prop read there would make it reactive,
@@ -109,6 +129,7 @@ export default function WhatIfPanel({
   const [feedError, setFeedError] = useState<string | null>(null)
   const [legs, setLegs] = useState<SaleLegForm[]>([])
   const [esppLegs, setEsppLegs] = useState<EsppLegForm[]>([])
+  const [overrideLegs, setOverrideLegs] = useState<OverrideLegForm[]>([])
   const [result, setResult] = useState<WhatIfOut | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -163,7 +184,11 @@ export default function WhatIfPanel({
   const unsoldLots = lots?.lots.filter((lot) => !lot.is_sold) ?? []
   const holdingFor = (securityId: string) =>
     held.find((holding) => String(holding.security_id) === securityId)
+  // Deliberately NOT counting the override rows: legCount feeds the MAX_LEGS fence, which is
+  // the server's per-LIST sales/ESPP cap — the overrides are a dict, with no such cap.
   const legCount = legs.length + esppLegs.length
+  // What "there is nothing to run" means once a scenario can be an override alone.
+  const scenarioEmpty = legCount === 0 && overrideLegs.length === 0
 
   const toggle = () => {
     const next = !open
@@ -235,6 +260,32 @@ export default function WhatIfPanel({
     setEsppLegs((current) => current.filter((_, i) => i !== index))
   }
 
+  // The first definition not already in a row — the sale legs' "one row per thing" posture,
+  // and the reason Add override shuts once every key is taken (and with no definitions).
+  const nextDefinition = () => {
+    const taken = new Set(overrideLegs.map((leg) => leg.key))
+    return definitions.find((definition) => !taken.has(definition.key))
+  }
+
+  const addOverride = () => {
+    const definition = nextDefinition()
+    if (definition === undefined) return
+    setError(null)
+    setOverrideLegs((current) => [...current, { key: definition.key, value: '' }])
+  }
+
+  const setOverrideLeg = (index: number, patch: Partial<OverrideLegForm>) => {
+    setError(null)
+    setOverrideLegs((current) =>
+      current.map((leg, i) => (i === index ? { ...leg, ...patch } : leg)),
+    )
+  }
+
+  const removeOverrideLeg = (index: number) => {
+    setError(null)
+    setOverrideLegs((current) => current.filter((_, i) => i !== index))
+  }
+
   /**
    * The router's own fences, refused here in the BOX's vocabulary rather than spending a
    * request on the 422 (ProjectionPage's posture) — and worded the way the server words
@@ -293,10 +344,43 @@ export default function WhatIfPanel({
       esppSales.push({ lot_id: lot.id, ...(price === '' ? {} : { sale_price: price }) })
     }
 
+    const overrides: Record<string, string | null> = {}
+    for (const [index, leg] of overrideLegs.entries()) {
+      const definition = definitions.find((d) => d.key === leg.key)
+      if (definition === undefined) {
+        setError(`Override ${index + 1}: choose an input key`)
+        return
+      }
+      if (leg.key in overrides) {
+        // Last-write-wins on a dict would silently drop the earlier row — refuse instead
+        // (the sale legs' same-security posture, override-flavoured).
+        setError(`${definition.label} is overridden twice — one row per key`)
+        return
+      }
+      const text = leg.value.trim()
+      if (text !== '' && !isAmount(text)) {
+        setError(`${definition.label}: enter a number, or leave the value blank to clear it`)
+        return
+      }
+      // Canonical at the wire (InputsForm's boundary): AmountInput's tolerant grammar
+      // ("$1,600", grouping) must never reach the server's Decimal column raw. A blank is
+      // an explicit null — the endpoint's "clear this input" spelling, which the scenario
+      // computes as 0 without churning the engine's missing-key warning
+      // (tax_whatif.apply_scenario).
+      overrides[leg.key] = text === '' ? null : canonicalAmount(text)
+    }
+
     const seq = ++seqRef.current
     setBusy(true)
     setError(null)
-    runWhatIf({ year, sales, espp_sales: esppSales })
+    runWhatIf({
+      year,
+      sales,
+      espp_sales: esppSales,
+      // Omitted entirely with no rows: the pre-override wire stays byte-identical, which
+      // the exact-body test pins depend on.
+      ...(overrideLegs.length === 0 ? {} : { overrides }),
+    })
       .then((res) => {
         if (seq !== seqRef.current) return
         setResult(res)
@@ -460,9 +544,57 @@ export default function WhatIfPanel({
                 ))}
               </div>
 
-              {legCount === 0 && (
+              {overrideLegs.length > 0 && (
+                <div className="tax-section whatif-overrides">
+                  <h3 className="eyebrow">
+                    Input overrides
+                    <InfoHint text="Absolute replacements applied AFTER the sale legs. An override addresses the household key map — on a married year a per-person line is replaced as one combined figure, the same aggregation the engine applies." />
+                  </h3>
+                  <p className="drill-hint">
+                    Overrides set a key&apos;s household value for this scenario only. A
+                    blank value clears the input (the scenario computes it as 0).
+                  </p>
+                  <div className="whatif-legs">
+                    {/* Position IS the identity, like the sale legs above. */}
+                    {overrideLegs.map((leg, index) => (
+                      <div key={index} className="whatif-form">
+                        <label htmlFor={`whatif-override-key-${index}`}>Override</label>
+                        <select
+                          id={`whatif-override-key-${index}`}
+                          className="field-input whatif-select"
+                          value={leg.key}
+                          onChange={(e) => setOverrideLeg(index, { key: e.target.value })}
+                        >
+                          {definitions.map((definition) => (
+                            <option key={definition.key} value={definition.key}>
+                              {definition.label} ({definition.key})
+                            </option>
+                          ))}
+                        </select>
+                        <AmountInput
+                          aria-label={`Override ${index + 1} value`}
+                          value={leg.value}
+                          onValueChange={(next) => setOverrideLeg(index, { value: next })}
+                          placeholder="blank clears"
+                        />
+                        <button
+                          type="button"
+                          className="button"
+                          aria-label={`Remove override ${index + 1}`}
+                          onClick={() => removeOverrideLeg(index)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {scenarioEmpty && (
                 <p className="empty-note">
-                  No legs yet — add a sale to model it against {year}&apos;s stored inputs.
+                  No legs yet — add a sale or an input override to model it against{' '}
+                  {year}&apos;s stored inputs.
                 </p>
               )}
 
@@ -483,6 +615,14 @@ export default function WhatIfPanel({
                 >
                   Add ESPP sale
                 </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={nextDefinition() === undefined}
+                  onClick={addOverride}
+                >
+                  Add override
+                </button>
                 {/* Shut only with nothing to run. Deliberately NOT disabled while busy, the
                     way a SAVE button is: a run stores nothing and is safe to repeat, and
                     the natural move on seeing an answer is to edit a leg and ask again —
@@ -491,7 +631,7 @@ export default function WhatIfPanel({
                 <button
                   type="button"
                   className="button button-primary"
-                  disabled={legCount === 0}
+                  disabled={scenarioEmpty}
                   onClick={run}
                 >
                   {busy ? 'Running…' : 'Run what-if'}

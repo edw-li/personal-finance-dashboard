@@ -60,7 +60,7 @@ vi.mock('../components/EChart', async () => {
 })
 // The what-if card owns two feeds and a whole test file of its own (WhatIfPanel.test.tsx
 // pins the seeding end of the deep links, and its own year-keyed remount). Here it is a
-// marker reporting the three props the page hands it — which IS this page's whole contract
+// marker reporting the four props the page hands it — which IS this page's whole contract
 // with it, and keeps a card the page never opens from spending requests in these tests.
 vi.mock('../components/taxes/WhatIfPanel', async () => {
   const { createElement } = await import('react')
@@ -69,16 +69,19 @@ vi.mock('../components/taxes/WhatIfPanel', async () => {
       year,
       initialTicker,
       initialLotId,
+      definitions,
     }: {
       year: number
       initialTicker?: string | null
       initialLotId?: number | null
+      definitions?: { key: string; label: string }[]
     }) =>
       createElement('div', {
         'data-testid': 'whatif-panel',
         'data-year': String(year),
         'data-ticker': initialTicker ?? '',
         'data-lot': initialLotId == null ? '' : String(initialLotId),
+        'data-defs': (definitions ?? []).map((d) => d.key).join(','),
       }),
   }
 })
@@ -1142,6 +1145,15 @@ describe('TaxesPage', () => {
       expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2023'),
     )
     expect(screen.getByTestId('whatif-panel').getAttribute('data-ticker')).toBe('VTI')
+  })
+
+  it('hands the year’s input definitions to the what-if card, deduped by key', async () => {
+    // A married payload repeats annual_salary once per person column; the override list
+    // must carry the KEY once — overrides are household-level.
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
+    renderPage()
+    const panel = await screen.findByTestId('whatif-panel')
+    await waitFor(() => expect(panel.getAttribute('data-defs')).toBe('annual_salary'))
   })
 
   // --- the withholding card (Task 9) ----------------------------------------------------
