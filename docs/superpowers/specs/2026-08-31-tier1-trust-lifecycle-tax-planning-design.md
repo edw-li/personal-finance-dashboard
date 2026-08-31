@@ -312,9 +312,11 @@ No backend change. Chart follows house grammar (theme tokens, no new colors).
   computed client-side from fields already in the payload.
 - The prose telling the user to include vest income in their W-2 inputs
   (`WithholdingPanel.tsx:300-306`) gains an **Apply** button: PUTs
-  `w2_stock_rsus_sold = vest.income_ytd + vest.income_projected` for the PRIMARY person's
-  column via the existing inputs PUT, then triggers the page's reload callback. Disabled
-  with a title when the stored value already equals the figure.
+  `w2_stock_rsus_sold = vest.income_projected` for the PRIMARY person's column via the
+  existing inputs PUT (amended 2026-08-31: `income_projected` is already the full-year
+  figure — `withholding_calc.py:262-263` computes it as YTD + future — so the original
+  "ytd + projected" sum double-counted past vests), then remounts/reloads the inputs
+  form. Disabled with a title when the stored value already equals the figure.
 
 ### D5. Dead-payload rendering
 - `src/pages/NetWorthPage.tsx`: when the household has >1 person, render a compact
