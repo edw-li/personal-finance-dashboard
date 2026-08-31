@@ -32,10 +32,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # app_settings key for the last refresh run's outcome — the status endpoint's and the
-# attention strip's feed. Deliberately a single JSON blob, not a runs table: "what
-# happened last" is the operational question; a log can graduate to a table if history
-# ever matters (no migration this way).
+# attention strip's feed. "What happened last" stays a single JSON blob; the last-10
+# TRAIL lives beside it under REFRESH_RUNS_KEY (2026-08-31 spec §B3) — still app_settings,
+# still no migration, history capped at write time.
 LAST_REFRESH_KEY = "last_refresh"
+REFRESH_RUNS_KEY = "refresh_runs"
+REFRESH_RUNS_KEEP = 10
 
 HISTORY_WINDOW_DAYS = 370
 TTM_DAYS = 365
@@ -336,7 +338,9 @@ async def record_refresh_run(
     dividend_events: dict[str, int] | None = None,
 ) -> None:
     """Persist the run's outcome under app_settings[LAST_REFRESH_KEY], envelope
-    {"value": ...} (the readers' convention). Caller commits."""
+    {"value": ...} (the readers' convention), and append a compact record to
+    app_settings[REFRESH_RUNS_KEY] — newest first, last REFRESH_RUNS_KEEP kept, any
+    malformed stored shape silently restarted. Caller commits."""
     payload = {
         "at": at.isoformat(),
         "trigger": trigger,
@@ -363,6 +367,26 @@ async def record_refresh_run(
         db.add(AppSetting(key=LAST_REFRESH_KEY, value={"value": payload}))
     else:
         setting.value = {"value": payload}
+
+    run_entry = {
+        "at": at.isoformat(),
+        "trigger": trigger,
+        "updated": len(result.updated),
+        "failed_count": len(result.failed),
+    }
+    runs_setting = await db.get(AppSetting, REFRESH_RUNS_KEY)
+    prior: list[dict] = []
+    if runs_setting is not None and isinstance(runs_setting.value, dict):
+        raw = runs_setting.value.get("value")
+        if isinstance(raw, list):
+            # Non-dict stragglers are dropped rather than preserved: this trail is an
+            # operational nicety, and self-healing beats faithfully re-storing garbage.
+            prior = [item for item in raw if isinstance(item, dict)]
+    runs_payload = {"value": [run_entry, *prior][:REFRESH_RUNS_KEEP]}
+    if runs_setting is None:
+        db.add(AppSetting(key=REFRESH_RUNS_KEY, value=runs_payload))
+    else:
+        runs_setting.value = runs_payload
 
 
 async def read_last_refresh(db: AsyncSession) -> dict | None:
