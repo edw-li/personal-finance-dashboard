@@ -28,8 +28,10 @@ function deferred<T>() {
  * The wire payload of GET /taxes/years/{year}/withholding, and an internally CONSISTENT one:
  * salary 88,000.00 + vest supplemental 15,470.40 (48,000 x 0.3223) + vest FICA 1,116.18 is the
  * 104,586.58 projected total, and 123,456.78 of liability less that total is the 18,870.20
- * balance. The safe-harbor threshold is 110% of the prior year's 110,000.00, which the
- * projection does not reach — so `met` is false, exactly as the server would compute it.
+ * balance. The safe harbor is the LESSER of its two statutory legs — 110% of the prior
+ * year's 110,000.00 is 121,000.00, 90% of this year's 123,456.78 is 111,111.10, so the
+ * current-year leg binds — and the projection does not reach it, so `met` is false, exactly
+ * as the server would compute it.
  */
 function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
   return {
@@ -63,6 +65,8 @@ function fixture(overrides: Partial<WithholdingOut> = {}): WithholdingOut {
       multiplier: '1.10',
       threshold: '121000.00',
       prior_filing_status: 'single',
+      current_year_threshold: '111111.10',
+      effective_threshold: '111111.10',
       met: false,
     },
     warnings: [],
@@ -184,7 +188,7 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     expect(
       await screen.findByText(
-        "Safe harbor (approx.): 110% of 2025's total tax is $121,000.00 — NOT covered by projected withholding",
+        "Safe harbor (approx.): the lesser of 110% of 2025's total tax ($121,000.00) and 90% of this year's projected liability ($111,111.10) is $111,111.10 — the current-year leg binds; NOT covered by projected withholding",
       ),
     ).toBeTruthy()
   })
@@ -199,6 +203,8 @@ describe('WithholdingPanel', () => {
           multiplier: '1.10',
           threshold: '99000.00',
           prior_filing_status: 'single',
+          current_year_threshold: '111111.10',
+          effective_threshold: '99000.00',
           met: true,
         },
       }),
@@ -206,7 +212,59 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     expect(
       await screen.findByText(
-        "Safe harbor (approx.): 110% of 2025's total tax is $99,000.00 — covered by projected withholding",
+        "Safe harbor (approx.): the lesser of 110% of 2025's total tax ($99,000.00) and 90% of this year's projected liability ($111,111.10) is $99,000.00 — the prior-year leg binds; covered by projected withholding",
+      ),
+    ).toBeTruthy()
+  })
+
+  it('renders the current-year leg alone when there is no prior return', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      fixture({
+        safe_harbor: {
+          prior_year: null,
+          prior_total_tax: null,
+          prior_agi: null,
+          multiplier: null,
+          threshold: null,
+          prior_filing_status: null,
+          current_year_threshold: '111111.10',
+          effective_threshold: '111111.10',
+          met: false,
+        },
+      }),
+    )
+    render(<WithholdingPanel year={2026} />)
+    expect(
+      await screen.findByText(
+        "Safe harbor (approx.): 90% of this year's projected liability is $111,111.10 — NOT covered by projected withholding",
+      ),
+    ).toBeTruthy()
+    // No prior return -> no wedding-year note either.
+    expect(screen.queryByText(/still the legal safe harbor/)).toBeNull()
+  })
+
+  it('renders the prior-year leg alone when the engine refused this year', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(
+      fixture({
+        liability_total: null,
+        balance_projected: null,
+        safe_harbor: {
+          prior_year: 2025,
+          prior_total_tax: '110000.00',
+          prior_agi: '400000.00',
+          multiplier: '1.10',
+          threshold: '121000.00',
+          prior_filing_status: 'single',
+          current_year_threshold: null,
+          effective_threshold: '121000.00',
+          met: false,
+        },
+      }),
+    )
+    render(<WithholdingPanel year={2026} />)
+    expect(
+      await screen.findByText(
+        "Safe harbor (approx.): 110% of 2025's total tax is $121,000.00 — NOT covered by projected withholding",
       ),
     ).toBeTruthy()
   })
@@ -465,6 +523,8 @@ describe('WithholdingPanel', () => {
           multiplier: '1.00',
           threshold: '110000.00',
           prior_filing_status: 'single',
+          current_year_threshold: '111111.10',
+          effective_threshold: '110000.00',
           met: false,
         },
       }),
@@ -472,7 +532,7 @@ describe('WithholdingPanel', () => {
     render(<WithholdingPanel year={2026} />)
     expect(
       await screen.findByText(
-        "Safe harbor (approx.): 100% of 2025's total tax is $110,000.00 — NOT covered by projected withholding",
+        "Safe harbor (approx.): the lesser of 100% of 2025's total tax ($110,000.00) and 90% of this year's projected liability ($111,111.10) is $110,000.00 — the prior-year leg binds; NOT covered by projected withholding",
       ),
     ).toBeTruthy()
   })

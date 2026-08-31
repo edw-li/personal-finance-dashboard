@@ -874,20 +874,19 @@ export interface WithholdingOut {
   // Jurisdictions with no bracket table for THIS filing status — a call to action, never a
   // silent zero. Non-empty is exactly the state in which the two fields above are null.
   brackets_missing_for_status: string[]
-  // Null in two different silences. A MISSING prior year says nothing at all — a first year
-  // on the app has no comparison to make and no warning to raise. A prior year that EXISTS
-  // but computes a total tax <= 0 does warn, because a threshold anything clears would make
-  // a met=true badge a false all-clear.
+  // Null only when NEITHER statutory leg exists (no computable prior year AND the engine
+  // refused this year). The prior-leg fields are null together when that leg is missing
+  // (first year, refused prior year, or a prior total <= 0 — the last two warn).
   safe_harbor: {
-    prior_year: number
-    prior_total_tax: string
-    prior_agi: string // the AGI the statutory gate was tested against
-    multiplier: string // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at or below it
-    threshold: string // prior_total_tax x multiplier
-    // The status the REFERENCE return was filed under, which is not this year's on a
-    // wedding year — a labelling matter, never a math one.
-    prior_filing_status: string
-    met: boolean // total.projected >= threshold
+    prior_year: number | null
+    prior_total_tax: string | null
+    prior_agi: string | null // the AGI the statutory gate was tested against
+    multiplier: string | null // 1.10 above the IRC 6654(d)(1)(C) AGI gate, 1.00 at/below
+    threshold: string | null // prior_total_tax x multiplier
+    prior_filing_status: string | null
+    current_year_threshold: string | null // 90% of this year's liability; null on refusal
+    effective_threshold: string // min of the legs that exist — `met` is judged on it
+    met: boolean // total.projected >= effective_threshold
   } | null
   warnings: string[]
 }
