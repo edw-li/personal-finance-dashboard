@@ -9,8 +9,12 @@ year (2024's whole column follows it), plus one deliberate correction the sheet 
 year: state AGI carries `cg_amount`, because California taxes capital gains and all
 dividends as ordinary income and the sheet's state chain silently dropped them (2026-08-25
 spec §1 — for a CG year the app's state tax is >= the sheet's, on purpose, in every year
-unconditionally). The other three year-columns also carry hand-edit drift (a stray
-literal, capital gains folded into AGI, a stale hardcoded deduction);
+unconditionally). The 2026-08-31 completeness batch (spec C1–C3) adds three more
+deliberate corrections the sheet never made: NIIT computed as an explicit line over base
+CG rates (the sheet folded 3.8% into brackets 2/3), capital_loss_deductions wired into
+AGI (the sheet modelled the line and read it nowhere), and the SALT phase-down tested on
+true MAGI. The other three year-columns also carry hand-edit drift (a stray literal,
+capital gains folded into AGI, a stale hardcoded deduction);
 `backend/tests/test_tax_service.py` pins the canonical outputs AND reproduces each
 drifted/divergent sheet value to the cent, so no difference is accidental. Precedent:
 Plan 3's savings-rate line and Plan 4's Unrealized column shipped the principled formula

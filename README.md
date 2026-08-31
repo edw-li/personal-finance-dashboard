@@ -540,7 +540,7 @@ on the first successful refresh.
 | Check | Where | Expected |
 |---|---|---|
 | Net worth identity | /net-worth totals vs the sheet's NET WORTH row | equal with the five component flags set (7.3), less the After-Tax component by design |
-| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent except the state chain** (the deliberate CA capital-gains divergence, below); 2023 / 2025 / 2026 differ by the known sheet drifts (below), plus the CA divergence where the year carries gains |
+| Taxes | /taxes, year by year | 2024 matches the sheet **to the cent except the state chain and the CG/NIIT split** (both deliberate, below); 2023 / 2025 / 2026 differ by the known sheet drifts (below), plus the CA divergence and the NIIT line where the year carries gains/investment income |
 | Holdings | cost basis, per row | within ~$0.10 of the sheet (6dp shares × 4dp prices folding) |
 | Scheduler | /settings → price refresh cron | day **names** (`10 13 * * mon-fri`), never numbers |
 
@@ -556,6 +556,26 @@ the sheet, because D2's CG-in-AGI drift had pushed the gains into its state chai
 accident (its +117.85 state half now reads sheet-vs-its-own-formula, not sheet-vs-app);
 2026 carries no gains and is unchanged. **Do not "fix" any of these** — a reconciliation
 that makes them vanish has introduced a bug, not removed one.
+
+**Three more deliberate divergences (2026-08-31, tax-engine completeness):**
+
+- **NIIT as an explicit line.** The sheet folded the 3.8% surcharge into its CG bracket
+  rates (18.8/23.8) and never tested the income side; the app stores base CG rates —
+  migration `f7d3b2a91c40` rewrote the exact folded pair, the importer translates it on
+  every re-import, and a warning flags any leftover — and computes
+  NIIT = 3.8% × min(net investment income, MAGI − threshold) as its own line. At the
+  stored inputs: 2024 +75.59 NIIT / −6.81 CG (net **+68.79** total tax vs the sheet,
+  total 72,824.61); 2025 +418.88 / −48.15 (net **+370.73**, total 90,421.49); 2023 sits
+  under the threshold and 2026 has no investment income — both unchanged.
+- **Capital-loss deduction reaches AGI.** The sheet modelled `capital_loss_deductions`
+  (r27) and read it in no output formula; the app subtracts it in federal AGI, the state
+  chain and MAGI (CA conforms to the $3k rule). Stored years all carry 0, so no
+  historical total moved — future loss years will differ from the sheet by design.
+- **SALT phase-down on true MAGI.** The >500k phase-down of the raised cap now tests
+  AGI + netted capital gains, so a CG-heavy year's itemized *suggestion* can shrink
+  toward the $10k floor where the old code (plain AGI) would not.
+
+**Do not "fix" any of these** — the same rule as the five above.
 
 **On the cron**: a legacy numeric day-of-week (`10 13 * * 1-5`) is misread by the scheduler
 (APScheduler counts `0` as Monday, so the whole range slips a day) *and* makes the settings
@@ -614,6 +634,15 @@ spot-check **/** (Overview), **/taxes** and **/settings**.
 > pre-window era shows its ex-dividend markers. A blocked provider marks nothing and
 > retries on every refresh until it answers; zero-payer tickers are marked done and never
 > refetched. Workbook imports never touch the table (pinned by test).
+
+> **Addendum (2026-08-31)**: the tier-1 tax-completeness batch adds one **guarded data
+> migration** — `f7d3b2a91c40`, chained on `e4a7c92b6d18` — rewriting exact folded
+> capital-gains rates (`0.1880 → 0.1500`, `0.2380 → 0.2000`, all years and statuses) now
+> that NIIT is computed as its own line. It runs at boot like every other; the downgrade
+> restores the folded pair under the same exact-match guard (documented asymmetry: a
+> genuinely-base-rate year re-folds on downgrade, which the old engine's advisory then
+> names). After deploy, /taxes totals for investment-income years shift by the NIIT
+> entries in §7.5 — expected, not a regression.
 
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the

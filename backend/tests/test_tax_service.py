@@ -3,7 +3,9 @@
 Fixtures are the pinned workbook values (== the dev DB's imported `tax_inputs` /
 `tax_brackets`, 4dp-quantized). Three families of assertion:
 
-* **canonical goldens** — the clean model the engine ships, one test per year;
+* **canonical goldens** — the clean model the engine ships, one test per year (NIIT and
+  the base-rate CG stack included since 2026-08-31 — the fixtures model the
+  post-f7d3b2a91c40 database);
 * **sheet equality for 2024** — 2024 is the drift-free column, so its canonical values ARE
   the sheet's cached values everywhere but the state chain, which sits exactly one CA
   capital-gains divergence above them (2026-08-25 spec §1), and the CG/NIIT split, which
