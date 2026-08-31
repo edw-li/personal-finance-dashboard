@@ -7,11 +7,13 @@ import {
   TAX_LABELS,
   TAX_SERIES_IDS,
   WATERFALL_CATEGORIES,
+  marginalLadderOption,
   taxTrendCsv,
   trendOption,
   waterfallOption,
   yearPieOption,
 } from './taxChartOptions'
+import type { LadderRow } from './taxChartOptions'
 
 // --- the golden summaries -------------------------------------------------------------
 // Wire shape of GET /taxes/years/{y}/summary (pydantic v2 serialises Decimal as strings).
@@ -540,5 +542,80 @@ describe('taxTrendCsv', () => {
       legacy.social_security.tax, legacy.disability.tax, legacy.capital_gains.tax, '0.00',
       legacy.totals.total_tax,
     ])
+  })
+})
+
+describe('marginalLadderOption', () => {
+  const fedRow: LadderRow = {
+    label: 'Federal',
+    taxableIncome: 50000,
+    segments: [
+      { rate: 0.1, floor: 0, ceiling: 11600, current: false },
+      { rate: 0.12, floor: 11600, ceiling: 47150, current: false },
+      { rate: 0.22, floor: 47150, ceiling: 100525, current: true },
+      { rate: 0.24, floor: 100525, ceiling: null, current: false },
+    ],
+  }
+  const stateRow: LadderRow = {
+    label: 'State',
+    taxableIncome: 60000,
+    segments: [
+      { rate: 0.01, floor: 0, ceiling: 10000, current: false },
+      { rate: 0.093, floor: 10000, ceiling: null, current: true },
+    ],
+  }
+
+  it('stacks one series per bracket slot plus the income marker', () => {
+    const option = marginalLadderOption([fedRow, stateRow])!
+    const series = option.series as {
+      name: string
+      type: string
+      stack?: string
+      data: ({ value: number; itemStyle: { color: string } } | null | (number | string)[])[]
+    }[]
+    // Four bracket slots (the deeper table's count) + the marker.
+    expect(series).toHaveLength(5)
+    expect(series.slice(0, 4).every((s) => s.stack === 'ladder')).toBe(true)
+    // Spans are the bracket widths; the CURRENT bracket takes the bright slot, the rest
+    // alternate the two mid tones so adjacent segments read apart.
+    const fed0 = series[0].data[0] as { value: number; itemStyle: { color: string } }
+    const fed2 = series[2].data[0] as { value: number; itemStyle: { color: string } }
+    expect(fed0.value).toBe(11600)
+    expect(fed0.itemStyle.color).toBe(SEQUENTIAL_BLUE[5])
+    expect(fed2.value).toBe(53375) // 100525 − 47150
+    expect(fed2.itemStyle.color).toBe(SEQUENTIAL_BLUE[10])
+    // The state lane has two brackets: slots 3 and 4 hold nothing for it.
+    expect(series[2].data[1]).toBeNull()
+    expect(series[3].data[1]).toBeNull()
+    // The marker rides last, one diamond per lane at that lane's own taxable income.
+    expect(series[4].name).toBe('Taxable income')
+    expect(series[4].type).toBe('scatter')
+    expect(series[4].data).toEqual([
+      [50000, 'Federal'],
+      [60000, 'State'],
+    ])
+  })
+
+  it('caps the open top bracket 15% past the larger of income and top floor', () => {
+    const option = marginalLadderOption([fedRow, stateRow])!
+    const series = option.series as { data: ({ value: number } | null)[] }[]
+    // Federal: max(50000, 100525) × 1.15 = 115603.75 → span 15078.75.
+    expect((series[3].data[0] as { value: number }).value).toBe(15078.75)
+    // State: max(60000, 10000) × 1.15 = 69000 → span 59000.
+    expect((series[1].data[1] as { value: number }).value).toBe(59000)
+  })
+
+  it('returns null with nothing drawable', () => {
+    expect(marginalLadderOption([])).toBeNull()
+    // A one-bracket table at $0 on a zero-income year caps at 0 — an empty lane, not a bar.
+    expect(
+      marginalLadderOption([
+        {
+          label: 'Federal',
+          taxableIncome: 0,
+          segments: [{ rate: 0.1, floor: 0, ceiling: null, current: false }],
+        },
+      ]),
+    ).toBeNull()
   })
 })

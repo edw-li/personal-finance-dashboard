@@ -771,6 +771,20 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(2))
   })
 
+  it('mounts the marginal card from the year’s own summary and tables', async () => {
+    renderPage()
+    // bracketsFor carries one federal bracket (10% at $0) and no state table, and the
+    // fixture year's taxable income is 0: the sentence prices the bottom bracket while the
+    // ladder itself is undrawable. The default beforeEach leaves the trend feed EMPTY, so
+    // the page's only chart is the waterfall — the count must stay 1, proving the card
+    // added no chart here.
+    expect(await screen.findByText('Marginal rates — 2024')).toBeTruthy()
+    expect(
+      screen.getByText('Your next $1,000 of ordinary income costs $100.00 federal.'),
+    ).toBeTruthy()
+    await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(1))
+  })
+
   it('renders every engine warning verbatim, including the 22-key sparse-year line', async () => {
     const sparse = summaryFor(2024)
     sparse.warnings = [MISSING_22, 'no state brackets for 2024: state tax computed as 0']
@@ -1372,6 +1386,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     // The waterfall is what goes — and the trend feed is empty in this fixture, so no chart
     // is left on the page at all.
     await waitFor(() => expect(screen.queryAllByTestId('echart')).toHaveLength(0))
+    expect(screen.queryByText(/Marginal rates —/)).toBeNull()
     // The tiles stay, reading em-dashes: the engine sent no figures, and inventing zeros
     // would be exactly the confidently-wrong answer it refused to compute.
     expect(screen.getByText('Total tax')).toBeTruthy()

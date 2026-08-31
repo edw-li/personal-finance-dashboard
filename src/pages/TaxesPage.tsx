@@ -18,6 +18,7 @@ import InfoHint from '../components/InfoHint'
 import PageSkeleton from '../components/PageSkeleton'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import InputsForm from '../components/taxes/InputsForm'
+import MarginalPanel from '../components/taxes/MarginalPanel'
 import SummaryPanel from '../components/taxes/SummaryPanel'
 import WhatIfPanel from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
@@ -654,6 +655,10 @@ export default function TaxesPage() {
             filingStatus={filingStatus}
             refreshKey={trendRefresh}
           />
+          {/* D3 (2026-08-31): client-side ladder over the SAME two payloads the panels
+              around it read — the summary and the year's own status' tables. Not keyed:
+              both props are per-year payloads the load effect already replaces whole. */}
+          <MarginalPanel summary={detail.summary} brackets={detail.brackets} />
           {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
               be stored and summarizable, and this card still cannot be drawn for it) — asked
               here rather than spending a request on the refusal. Keyed by year like the card

@@ -18,6 +18,7 @@ import {
 import type { TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
+import type { LadderSegment } from './marginal'
 
 // The seven tax lines in the order the engine reports them — one order shared by the
 // waterfall's steps, the trend's stack and both legends. NIIT is LAST on purpose: it is
@@ -384,5 +385,118 @@ export function taxTrendCsv(years: TaxSummaryOut[]): ExportTable {
       y.niit?.tax ?? '0.00',
       y.totals.total_tax,
     ]),
+  }
+}
+
+// --- D3: the marginal-rate ladder (design 2026-08-31 §D3) ------------------------------
+
+export interface LadderRow {
+  label: string
+  segments: LadderSegment[]
+  /** Number(summary.<jurisdiction>.taxable_income) — the ◆ marker's x position. */
+  taxableIncome: number
+}
+
+// Three slots of the ONE hue family (the ≤3-hue law): adjacent segments alternate the two
+// mid tones so their seam reads at a glance, and the bracket the income sits in takes the
+// bright slot. All three sit at/above SEQUENTIAL_BLUE[4], the ramp's documented 3:1 floor.
+const LADDER_BASE_A = SEQUENTIAL_BLUE[5]
+const LADDER_BASE_B = SEQUENTIAL_BLUE[7]
+const LADDER_CURRENT = SEQUENTIAL_BLUE[10]
+
+/** Drawn ceiling of a lane's unbounded top bracket: 15% past the larger of the income and
+ *  the top floor — headroom enough to read "and up" without dwarfing the lower spans. */
+function ladderCap(row: LadderRow): number {
+  const top = row.segments[row.segments.length - 1]
+  return roundTo(Math.max(row.taxableIncome, top.floor) * 1.15, 2)
+}
+
+/**
+ * Horizontal bracket ladder: one category lane per jurisdiction, one stacked-bar series
+ * per bracket slot (a lane with fewer brackets holds null in the extra slots), and a
+ * scatter diamond marking each lane's own taxable income — the two lanes have DIFFERENT
+ * taxable incomes (state deductions differ), which is why a single markLine cannot do it.
+ * Returns null when no lane is drawable — the caller renders its empty note.
+ */
+export function marginalLadderOption(rows: LadderRow[]): EChartsOption | null {
+  const drawable = rows.filter((row) => row.segments.length > 0 && ladderCap(row) > 0)
+  if (drawable.length === 0) return null
+
+  interface Cell {
+    span: number
+    color: string
+    rate: number
+    floor: number
+    ceiling: number | null
+  }
+  // cells[laneIndex][slotIndex] — the tooltip reads the same table the series are built of.
+  const cells: Cell[][] = drawable.map((row) => {
+    const cap = ladderCap(row)
+    return row.segments.map((segment, i) => ({
+      span: roundTo((segment.ceiling ?? cap) - segment.floor, 2),
+      color: segment.current ? LADDER_CURRENT : i % 2 === 0 ? LADDER_BASE_A : LADDER_BASE_B,
+      rate: segment.rate,
+      floor: segment.floor,
+      ceiling: segment.ceiling,
+    }))
+  })
+  const maxSegments = Math.max(...cells.map((lane) => lane.length))
+
+  return {
+    grid: { left: 70, right: 24, top: 12, bottom: 28 },
+    tooltip: {
+      // Item trigger: an axis tooltip would announce every segment of the lane at once.
+      // Own constants and formatted numbers only — no user text reaches this HTML.
+      formatter: (params) => {
+        const p = Array.isArray(params) ? params[0] : params
+        const cell = cells[p.dataIndex ?? 0]?.[p.seriesIndex ?? 0]
+        if (!cell) return ''
+        const lane = drawable[p.dataIndex ?? 0]
+        const range =
+          cell.ceiling === null
+            ? `${formatCurrency(cell.floor)} and up`
+            : `${formatCurrency(cell.floor)} – ${formatCurrency(cell.ceiling)}`
+        return `${lane.label} — <strong>${formatPct(cell.rate, { signed: false })}</strong> bracket<br/>${range}`
+      },
+    },
+    xAxis: {
+      type: 'value',
+      axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
+    },
+    // inverse, so the first lane (Federal) reads on TOP the way the sentence orders them.
+    yAxis: { type: 'category', data: drawable.map((row) => row.label), inverse: true },
+    series: [
+      ...Array.from({ length: maxSegments }, (_, i) => ({
+        name: `Bracket ${i + 1}`,
+        type: 'bar' as const,
+        stack: 'ladder',
+        barMaxWidth: 26,
+        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
+        emphasis: { itemStyle: { borderColor: INK } },
+        data: cells.map((lane) =>
+          lane[i] === undefined
+            ? null
+            : { value: lane[i].span, itemStyle: { color: lane[i].color } },
+        ),
+      })),
+      {
+        name: 'Taxable income',
+        type: 'scatter' as const,
+        symbol: 'diamond',
+        symbolSize: 11,
+        itemStyle: { color: INK },
+        z: 10,
+        data: drawable.map((row) => [row.taxableIncome, row.label]),
+        tooltip: {
+          formatter: (params) => {
+            const p = Array.isArray(params) ? params[0] : params
+            const lane = drawable[p.dataIndex ?? 0]
+            return lane === undefined
+              ? ''
+              : `${lane.label} taxable income<br/><strong>${formatCurrency(lane.taxableIncome)}</strong>`
+          },
+        },
+      },
+    ],
   }
 }

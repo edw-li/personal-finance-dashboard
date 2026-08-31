@@ -394,3 +394,11 @@
 .tax-brackets-missing-list {
   color: var(--text);
 }
+
+/* --- marginal panel --- */
+
+/* The headline answer, not a caveat: body ink above the ladder it summarizes. */
+.marginal-sentence {
+  margin: 0.2rem 0 0.9rem;
+  font-size: 0.9rem;
+}
