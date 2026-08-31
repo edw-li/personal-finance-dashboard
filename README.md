@@ -750,5 +750,6 @@ and re-copy both values.
   to a first-time browser (trust-on-first-use) — import it into your trust store, or use
   domain mode (Part 6), to close that gap.
 - The whole app sits behind JWT auth; only `/login` and `/api/v1/health` are public.
-- Backups live in a private bucket under scoped S3 credentials. (Optional hardening:
-  pipe the dump through `gpg --symmetric` before upload.)
+- Backups live in a private bucket under scoped S3 credentials, optionally encrypted
+  before upload with `gpg --symmetric` — set `BACKUP_PASSPHRASE` in `.env` (see 5.3);
+  plaintext dumps print a warning per run.
