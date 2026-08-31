@@ -40,6 +40,16 @@ Bracket = tuple[Decimal, Decimal]
 JURISDICTION_WARN_MISSING = "no {j} brackets for {year}: {j} tax computed as 0"
 MISSING_INPUTS_WARNING = "missing inputs defaulted to 0: {keys}"
 NEGATIVE_STATE_TAX_WARNING = "state tax negative after exemption credits"
+# Both are ADVISORY: a GET never rejects stored data, so the value is used verbatim
+# either way. `{value}`/`{cap}` arrive pre-formatted via `f"{d.normalize():f}"` — plain
+# .normalize() alone would render -13000 as "-1.3E+4".
+CAPITAL_LOSS_POSITIVE_WARNING = (
+    "capital_loss_deductions is stored positive ({value}) — the deductible capital loss "
+    "is entered negative; used verbatim"
+)
+CAPITAL_LOSS_LIMIT_WARNING = (
+    "capital_loss_deductions ({value}) exceeds the statutory cap ({cap}); used verbatim"
+)
 NIIT_WARNING = (
     "stored capital-gains rate(s) {rates} appear to fold the NIIT surcharge in — "
     "NIIT is computed as its own line; store the base rates 0.15/0.2"
@@ -81,9 +91,9 @@ SALT_CAP_FROM = Decimal("40000")
 SALT_PHASEDOWN_MAGI = Decimal("500000")
 SALT_PHASEDOWN_RATE = Decimal("0.30")
 SALT_PHASEDOWN_FLOOR = Decimal("10000")
-# The deductible capital LOSS per return. This clamps the SUGGESTION only: the engine's
-# AGI math never reads capital_loss_deductions (it is deliberately absent from
-# ENGINE_INPUT_KEYS), so the goldens' breakdowns cannot move.
+# The deductible capital LOSS per return (halved filing separately). TWO consumers, one
+# constant: derive_suggestions clamps its SUGGESTION to it, and compute_breakdown warns
+# (never clamps) when a stored value exceeds it — the engine walks stored data verbatim.
 CAPITAL_LOSS_LIMIT = Decimal("3000")
 # Married-filing-separately halves the per-return statutory figures.
 MFS_HALF = Decimal("2")
@@ -103,6 +113,7 @@ ENGINE_INPUT_KEYS: tuple[str, ...] = (
     "trad_401k_contributions",
     "hsa_contributions",
     "hsa_contributions_employer",
+    "capital_loss_deductions",
     "other_pretax_deductions",
     "standard_deduction",
     "itemized_deduction",
@@ -172,25 +183,33 @@ def stack(brackets: list[Bracket], base: Decimal, amount: Decimal) -> Decimal:
 
 
 def _federal_agi(value: Callable[[str], Decimal]) -> Decimal:
-    """Federal AGI, the sheet's clean model (rows 96-99).
+    """Federal AGI, the sheet's clean model (rows 96-99) plus one correction.
 
-    ONE definition with two consumers: `compute_breakdown`'s income chain and the SALT
-    phase-down's MAGI in `derive_suggestions`. Term order is the canonical formula's, so
-    the goldens pin it to the cent. capital_loss_deductions is deliberately absent — the
-    sheet models it as a line but no output formula ever reads it.
+    ONE definition with three consumers: `compute_breakdown`'s income chain, `_magi`, and
+    (through both) the state chain. Term order is the canonical formula's, so the goldens
+    pin it to the cent. capital_loss_deductions joined AGI on 2026-08-31 (spec C3): the
+    sheet modelled the line but no output formula ever read it — a modelled deduction the
+    workbook silently dropped. Stored <= 0 by the suggestion's convention and used
+    verbatim either way (compute_breakdown warns on a positive or over-cap value, never
+    rejects it); the state chain inherits it here, matching CA's conformity on the $3k
+    rule, and MAGI inherits it through `_magi`.
     """
     return (
-        value("latest_w2_income")
-        + value("other_w2_income")
-        + value("stcg_total")
-        + value("unqualified_dividends")
-        + value("interest_total")
-        + value("other_income_1099")
-    ) - (
-        value("trad_401k_contributions")
-        + value("hsa_contributions")
-        + value("hsa_contributions_employer")
-        + value("other_pretax_deductions")
+        (
+            value("latest_w2_income")
+            + value("other_w2_income")
+            + value("stcg_total")
+            + value("unqualified_dividends")
+            + value("interest_total")
+            + value("other_income_1099")
+        )
+        - (
+            value("trad_401k_contributions")
+            + value("hsa_contributions")
+            + value("hsa_contributions_employer")
+            + value("other_pretax_deductions")
+        )
+        + value("capital_loss_deductions")
     )
 
 
@@ -412,8 +431,24 @@ def compute_breakdown(
             warnings.append(JURISDICTION_WARN_MISSING.format(j=name, year=year))
         tables[name] = list(table)
 
-    # Federal (sheet rows 96-99). capital_loss_deductions (r27) is modelled as a line but
-    # no output formula ever reads it — ported faithfully, so it does NOT reach AGI.
+    # Federal (sheet rows 96-99 + the C3 capital-loss correction — see _federal_agi).
+    # The two capital-loss warnings are advisory hygiene over a value that is about to be
+    # used verbatim: sign convention first, then the per-return statutory cap (halved
+    # filing separately) that derive_suggestions' clamp also reads.
+    capital_loss = values["capital_loss_deductions"]
+    if capital_loss > 0:
+        warnings.append(CAPITAL_LOSS_POSITIVE_WARNING.format(value=f"{capital_loss.normalize():f}"))
+    else:
+        loss_limit = CAPITAL_LOSS_LIMIT
+        if filing_status == MARRIED_SEPARATE:
+            loss_limit /= MFS_HALF
+        if capital_loss < -loss_limit:
+            warnings.append(
+                CAPITAL_LOSS_LIMIT_WARNING.format(
+                    value=f"{capital_loss.normalize():f}",
+                    cap=f"{(-loss_limit).normalize():f}",
+                )
+            )
     fed_agi = _federal_agi(values.__getitem__)
     fed_deduction = max(values["standard_deduction"], values["itemized_deduction"])
     fed_ti = fed_agi - fed_deduction

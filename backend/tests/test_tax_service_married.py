@@ -95,6 +95,7 @@ MFJ_BRACKETS: dict[str, list[tuple[Decimal, Decimal]]] = {
 MFJ_HOUSEHOLD = {
     "stcg_total": D("0"),
     "stcg_standard": D("0"),
+    "capital_loss_deductions": D("0"),
     "unqualified_dividends": D("1000"),
     "unq_div_us_treasuries_etf": D("0"),
     "unq_div_state_exempt_pct": D("0"),
@@ -375,9 +376,9 @@ def test_salt_cap_never_raises_the_suggestion_above_the_entered_amount():
 
 
 def test_capital_loss_suggestion_is_clamped_by_status():
-    """The deductible loss per return: 3000, or 1500 filing separately (spec §5.3). The
-    ENGINE's AGI math is untouched — capital_loss_deductions stays out of
-    ENGINE_INPUT_KEYS, which is what keeps the goldens byte-identical."""
+    """The deductible loss per return: 3000, or 1500 filing separately (spec §5.3). This
+    is the SUGGESTION's clamp; since 2026-08-31 (spec C3) the engine reads the stored key
+    too, but it never clamps — it warns, and the two share this one statutory figure."""
     big = {"ltcg_total": D("-5000"), "stcg_standard": D("1000")}  # nets to -4000
     assert derive_suggestions(2025, big, SINGLE)["capital_loss_deductions"] == D("-3000")
     assert derive_suggestions(2025, big, MARRIED_JOINT)["capital_loss_deductions"] == D("-3000")
@@ -399,15 +400,30 @@ def test_capital_loss_suggestion_is_clamped_by_status():
     ] == D("0")
 
 
-def test_capital_loss_clamp_never_reaches_the_engine():
-    """The clamp is advisory only: feeding the UNCLAMPED loss to the engine changes
-    nothing, because the key is not an engine input."""
+def test_capital_loss_clamp_is_the_suggestions_alone():
+    """The clamp belongs to derive_suggestions; the engine never clamps (spec C3). Feeding
+    the UNCLAMPED loss to compute_breakdown lowers AGI by every cent of it and buys one
+    advisory sentence — a GET reports stored data, it does not reject it."""
     inputs = dict(MFJ_INPUTS) | {"capital_loss_deductions": D("-99999")}
+    lossy = compute_breakdown(
+        MFJ_YEAR, inputs, MFJ_BRACKETS, filing_status=MARRIED_JOINT, earners=MFJ_EARNERS
+    )
+    assert mfj_breakdown().federal.agi - lossy.federal.agi == D("99999")
+    assert lossy.warnings == [
+        "capital_loss_deductions (-99999) exceeds the statutory cap (-3000); used verbatim"
+    ]
+
+
+def test_capital_loss_cap_warning_halves_for_married_filing_separately():
+    """The engine's over-cap warning reads the same halved statutory figure the
+    suggestion clamp does: -2000 is clean on a single return, over MFS's -1500."""
+    inputs = {"capital_loss_deductions": D("-2000")}
+    single = compute_breakdown(2025, inputs, YEAR_BRACKETS[2025], filing_status=SINGLE)
+    assert not any("statutory cap" in w for w in single.warnings)
+    mfs = compute_breakdown(2025, inputs, YEAR_BRACKETS[2025], filing_status=MARRIED_SEPARATE)
     assert (
-        compute_breakdown(
-            MFJ_YEAR, inputs, MFJ_BRACKETS, filing_status=MARRIED_JOINT, earners=MFJ_EARNERS
-        ).federal.agi
-        == mfj_breakdown().federal.agi
+        "capital_loss_deductions (-2000) exceeds the statutory cap (-1500); used verbatim"
+        in mfs.warnings
     )
 
 

@@ -471,13 +471,49 @@ def test_effective_rate_over_a_negative_base_is_computed_not_none():
     assert breakdown.state.effective_rate == Decimal("0.05")
 
 
-def test_capital_loss_deductions_never_reach_agi():
-    """r27 is a modelled line the sheet never wires into any output formula."""
+def test_capital_loss_deductions_reach_agi_and_the_state_chain():
+    """r27 joined AGI on 2026-08-31 (spec C3): the sheet modelled the line and read it
+    nowhere; the app reads it. Stored -3000 lowers federal AGI by exactly 3000 and the
+    state chain inherits it through fed_agi (CA conforms to the $3k rule)."""
     inputs = dict(YEAR_INPUTS[2024]) | {"capital_loss_deductions": Decimal("-3000")}
-    assert (
-        breakdown_for(2024).federal.agi
-        == compute_breakdown(2024, inputs, YEAR_BRACKETS[2024]).federal.agi
-    )
+    base = breakdown_for(2024)
+    lossy = compute_breakdown(2024, inputs, YEAR_BRACKETS[2024])
+    assert lossy.warnings == []  # negative and inside the cap: clean
+    assert base.federal.agi - lossy.federal.agi == Decimal("3000")
+    assert base.state.agi - lossy.state.agi == Decimal("3000")
+    # A deduction, not income: gross income and NII are untouched...
+    assert lossy.totals.gross_income == base.totals.gross_income
+    assert lossy.niit.gains_amount == base.niit.gains_amount
+    # ...and MAGI inherits the loss via fed AGI: 211955.33 - 3000 = 208955.33, whose
+    # excess 8955.33 still exceeds NII 1989.28, so the NIIT line happens not to move here
+    # (the visible MAGI shift is pinned in the next test).
+    assert lossy.niit.tax == base.niit.tax
+
+
+def test_capital_loss_pulls_magi_under_the_niit_threshold():
+    """The C3->C2 interaction, stated: MAGI = _federal_agi + cg_amount and _federal_agi
+    now carries the loss — statutorily correct (the §1211 deduction is inside AGI) — so a
+    large enough loss zeroes the NIIT line. -13000 is over the cap ON PURPOSE: stored
+    data is used verbatim and only warned about (GET never rejects stored data)."""
+    inputs = dict(YEAR_INPUTS[2024]) | {"capital_loss_deductions": Decimal("-13000")}
+    breakdown = compute_breakdown(2024, inputs, YEAR_BRACKETS[2024])
+    # MAGI 211955.33 - 13000 = 198955.33 < 200000 -> excess 0.
+    assert breakdown.niit.taxable_income == Decimal("0")
+    assert breakdown.niit.tax == Decimal("0")
+    assert breakdown.warnings == [
+        "capital_loss_deductions (-13000) exceeds the statutory cap (-3000); used verbatim"
+    ]
+
+
+def test_capital_loss_stored_positive_warns_and_is_used_verbatim():
+    inputs = dict(YEAR_INPUTS[2024]) | {"capital_loss_deductions": Decimal("500")}
+    breakdown = compute_breakdown(2024, inputs, YEAR_BRACKETS[2024])
+    assert breakdown.warnings == [
+        "capital_loss_deductions is stored positive (500) — the deductible capital loss "
+        "is entered negative; used verbatim"
+    ]
+    # Verbatim means ADDED: a positive value RAISES AGI rather than being rejected.
+    assert breakdown.federal.agi == breakdown_for(2024).federal.agi + Decimal("500")
 
 
 @pytest.mark.parametrize(

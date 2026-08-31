@@ -1021,8 +1021,7 @@ SAFE_HARBOR_NOT_COMPUTABLE = (
 FICA_JURISDICTIONS = ("medicare", "social_security", "disability")
 # The two W-2 keys that make up an earner's wage base (`earner_from_inputs`'s own pair), and
 # the two tracker-only keys the partner's withholding is entered under (2026-08-26 spec §5.6
-# — real inputs, deliberately never in the engine's key set, exactly like
-# capital_loss_deductions).
+# — real inputs, deliberately never in the engine's key set).
 WAGE_KEYS = ("latest_w2_income", "other_w2_income")
 PARTNER_FED_WITHHOLDING_KEY = "w2_fed_withholding"
 PARTNER_STATE_WITHHOLDING_KEY = "w2_state_withholding"
