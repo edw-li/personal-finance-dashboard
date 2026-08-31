@@ -473,13 +473,20 @@ describe('ProjectionPage', () => {
     expect(deltaOf(tile)).toBeNull() // no percentile months to name
   })
 
-  it('states the FI probability with its p50 and p90 months', async () => {
+  it('states the FI probability with its p10, p50 and p90 months', async () => {
     renderPage()
 
     await screen.findByText('$1,500,000.00')
     const tile = tileFor('FI probability')
     expect(valueOf(tile)).toBe('62.0%')
-    expect(deltaOf(tile)).toBe('p50 Oct 2055 · p90 Mar 2061')
+    expect(deltaOf(tile)).toBe('p10 Jan 2050 · p50 Oct 2055 · p90 Mar 2061')
+  })
+
+  it('leaves p10 out when a stale backend omits it', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_month_p10: null }))
+    renderPage()
+    await screen.findByText('$1,500,000.00')
+    expect(deltaOf(tileFor('FI probability'))).toBe('p50 Oct 2055 · p90 Mar 2061')
   })
 
   it('draws the fan under the lines when the payload carries bands', async () => {
