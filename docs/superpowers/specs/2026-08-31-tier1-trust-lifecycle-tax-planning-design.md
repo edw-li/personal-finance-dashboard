@@ -231,7 +231,10 @@ construction").
 - Schema/API: `TaxSummaryOut` gains a `niit` section (same shape as capital_gains — additive,
   so stored payloads and the frontend types extend compatibly). The waterfall and donut chart
   builders (`src/components/taxes/taxChartOptions.ts`) gain the NIIT slice/bar (render only
-  when nonzero, like SDI).
+  when nonzero, like SDI). Amendment 2026-08-31: the money-flow service is an unlisted
+  consumer of `totals.total_tax` whose Taxes-node tooltip enumerates per-jurisdiction lines —
+  `MoneyFlowTaxes`/`MoneyFlowTaxesOut` gain an additive `niit` field so that tooltip still
+  sums to its node.
 - **Folded-rate normalization** (prevents double-surcharge): the sheet's model folds NIIT
   into CG bracket rates (15→18.8, 20→23.8). With an explicit NIIT line those must be base
   rates:
