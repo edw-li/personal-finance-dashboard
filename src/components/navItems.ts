@@ -41,10 +41,12 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     heading: 'Tracking',
+    // Stocks then flows, matching Overview's tile/chart order (2026-08-31 audit): the
+    // wealth pair (Net worth, Portfolio) reads before the flow pair (Spending, Credit cards).
     items: [
       { to: '/net-worth', label: 'Net worth', icon: TrendingUp },
-      { to: '/spending', label: 'Spending', icon: Wallet },
       { to: '/portfolio', label: 'Portfolio', icon: LineChart },
+      { to: '/spending', label: 'Spending', icon: Wallet },
       { to: '/credit-cards', label: 'Credit cards', icon: CreditCard },
     ],
   },
