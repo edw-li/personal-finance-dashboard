@@ -454,11 +454,30 @@ export interface BackupStatus {
   size: string
 }
 
+export interface BackupRun {
+  at: string
+  ok: boolean
+  /** The uploaded object key — absent on failed runs. */
+  object?: string | null
+  error?: string | null
+}
+
+export interface RefreshRun {
+  at: string
+  trigger: string
+  updated: number
+  failed_count: number
+}
+
 export interface SystemStatus {
   prices: SystemPricesStatus
   database: SystemDatabaseStatus
   /** null until backup_db.sh records its first marker (or while the row is malformed). */
   backup: BackupStatus | null
+  /** Last-10 run trails, newest first. Optional, not required: a stale deploy's payload
+   *  lacks them and must still parse (the LastRefresh armor); consumers `?? []`. */
+  backup_runs?: BackupRun[]
+  refresh_runs?: RefreshRun[]
   /** settings.environment verbatim — 'dev' | 'prod' in practice; never a reason to reject. */
   environment: string
 }

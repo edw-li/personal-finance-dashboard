@@ -32,10 +32,35 @@ class BackupStatusOut(BaseModel):
     size: str
 
 
+class BackupRunOut(BaseModel):
+    """One backup_db.sh run from app_settings['backup_runs'] — a FLAT jsonb array (the
+    shell writer's no-envelope rule, same as BackupStatusOut). `object` is absent on
+    failed runs; `error` on successful ones."""
+
+    at: datetime
+    ok: bool
+    object: str | None = None
+    error: str | None = None
+
+
+class RefreshRunOut(BaseModel):
+    """One refresh run from app_settings['refresh_runs'] — record_refresh_run's enveloped
+    {"value": [...]} list (the Python writers' convention)."""
+
+    at: datetime
+    trigger: str
+    updated: int
+    failed_count: int
+
+
 class SystemStatusOut(BaseModel):
     prices: PricesStatusOut
     database: DatabaseStatusOut
     backup: BackupStatusOut | None
+    # Last-10 run trails (2026-08-31 spec §B3), newest first. Always lists, never null:
+    # any malformed stored shape degrades to [] (the backup-marker posture, list-shaped).
+    backup_runs: list[BackupRunOut]
+    refresh_runs: list[RefreshRunOut]
     # settings.environment verbatim ("dev" | "prod" in practice) — a str, not a Literal:
     # an unexpected value must pass through the status endpoint, not 500 it.
     environment: str

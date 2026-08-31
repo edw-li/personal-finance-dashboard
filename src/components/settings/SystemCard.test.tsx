@@ -122,7 +122,8 @@ it('renders the quiet states: no run, no schedule, no backup, no alembic table',
   expect(screen.getByText('Not running')).toBeDefined()
   expect(screen.getByText('No backup recorded')).toBeDefined()
   expect(screen.getByText('1.0 KB')).toBeDefined()
-  expect(screen.getByText('—')).toBeDefined()
+  // Alembic head plus the two empty run trails all render the dash.
+  expect(screen.getAllByText('—')).toHaveLength(3)
   expect(screen.getByText('dev')).toBeDefined()
 })
 
@@ -165,4 +166,30 @@ it('surfaces a failed export without hiding the facts', async () => {
   // The facts stay on screen — the download error is its own surface, never the card's
   // load-error state (which unmounts SystemFacts).
   expect(screen.getByText('Running')).toBeDefined()
+})
+
+it('renders the last-5 run trails compactly', async () => {
+  vi.mocked(fetchSystemStatus).mockResolvedValue(
+    systemOut({
+      backup_runs: [
+        { at: '2026-08-30T03:00:00+00:00', ok: true, object: 'backups/finance.sql.gz.gpg' },
+        { at: '2026-08-29T03:00:00+00:00', ok: false, error: 'pg_dump: connection refused' },
+      ],
+      refresh_runs: [
+        { at: '2026-08-30T20:10:00+00:00', trigger: 'scheduled', updated: 36, failed_count: 2 },
+        { at: '2026-08-29T20:10:00+00:00', trigger: 'manual', updated: 40, failed_count: 0 },
+      ],
+    }),
+  )
+  render(<SystemCard />)
+  await screen.findByText(
+    `${formatDateTime('2026-08-30T03:00:00+00:00')} ok · ` +
+      `${formatDateTime('2026-08-29T03:00:00+00:00')} failed`,
+  )
+  expect(
+    screen.getByText(
+      `${formatDateTime('2026-08-30T20:10:00+00:00')} 36 updated, 2 failed · ` +
+        `${formatDateTime('2026-08-29T20:10:00+00:00')} 40 updated`,
+    ),
+  ).toBeDefined()
 })

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { downloadSnapshot, fetchSystemStatus } from '../../api/system'
-import type { SystemStatus } from '../../types/api'
+import type { BackupRun, RefreshRun, SystemStatus } from '../../types/api'
 import { formatBytes, formatDateTime } from '../../utils/format'
 import { backupAge } from '../../utils/staleness'
 import InfoHint from '../InfoHint'
@@ -36,6 +36,29 @@ function backupLine(status: SystemStatus): { text: string; className: string } {
   return { text: stamp, className: age === 'stale' ? 'system-stale' : '' }
 }
 
+// Compact last-5 trails (spec §B3): one line each, newest first — the server stores 10,
+// the card shows what fits on a line. '—' is the empty state, matching the alembic row.
+function backupRunsLine(runs: BackupRun[]): string {
+  if (runs.length === 0) return '—'
+  return runs
+    .slice(0, 5)
+    .map((run) => `${formatDateTime(run.at)} ${run.ok ? 'ok' : 'failed'}`)
+    .join(' · ')
+}
+
+function refreshRunsLine(runs: RefreshRun[]): string {
+  if (runs.length === 0) return '—'
+  return runs
+    .slice(0, 5)
+    .map(
+      (run) =>
+        `${formatDateTime(run.at)} ${run.updated} updated${
+          run.failed_count > 0 ? `, ${run.failed_count} failed` : ''
+        }`,
+    )
+    .join(' · ')
+}
+
 function SystemFacts({
   status,
   downloading,
@@ -63,6 +86,10 @@ function SystemFacts({
         <dd>{status.prices.scheduler_running ? 'Running' : 'Not running'}</dd>
       </div>
       <div className="system-fact">
+        <dt>Recent refreshes</dt>
+        <dd>{refreshRunsLine(status.refresh_runs ?? [])}</dd>
+      </div>
+      <div className="system-fact">
         <dt>Last backup</dt>
         <dd>
           <span className={backup.className}>{backup.text}</span>{' '}
@@ -72,6 +99,10 @@ function SystemFacts({
             {downloading ? 'Preparing…' : 'Download snapshot (.zip)'}
           </button>
         </dd>
+      </div>
+      <div className="system-fact">
+        <dt>Recent backups</dt>
+        <dd>{backupRunsLine(status.backup_runs ?? [])}</dd>
       </div>
       <div className="system-fact">
         <dt>Database size</dt>
