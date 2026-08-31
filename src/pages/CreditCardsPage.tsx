@@ -394,25 +394,9 @@ export default function CreditCardsPage() {
           )}
 
           <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
-            {cards !== null && (
-              <CardsPanel
-                cards={cards}
-                accounts={accounts}
-                people={orderedPeople}
-                onChanged={load}
-              />
-            )}
-
-            {categories !== null && (
-              <CategoriesPanel
-                categories={categories}
-                cards={cards ?? []}
-                spendingCategories={spendingCategories}
-                suggested={suggested}
-                onChanged={load}
-              />
-            )}
-
+            {/* Consult before manage (2026-08-31 audit): the matrix and the keep/drop and
+                line-history answers lead; the roster and weights that parameterize them
+                follow. The header's "+ Add card" still jumps straight to the roster form. */}
             {activeCards.length > 0 && activeCategories.length > 0 ? (
               <RewardsMatrix
                 cards={activeCards}
@@ -432,7 +416,7 @@ export default function CreditCardsPage() {
                   <h2 className="eyebrow">Rewards matrix</h2>
                   <div className="empty-note">
                     The matrix appears once there is at least one active card and one category —
-                    add a card above
+                    add a card below
                     {cards !== null && (categories ?? []).length === 0
                       ? ' and seed the categories'
                       : ''}
@@ -483,6 +467,25 @@ export default function CreditCardsPage() {
                 )
               )}
             </div>
+
+            {cards !== null && (
+              <CardsPanel
+                cards={cards}
+                accounts={accounts}
+                people={orderedPeople}
+                onChanged={load}
+              />
+            )}
+
+            {categories !== null && (
+              <CategoriesPanel
+                categories={categories}
+                cards={cards ?? []}
+                spendingCategories={spendingCategories}
+                suggested={suggested}
+                onChanged={load}
+              />
+            )}
           </div>
         </>
       )}

@@ -642,3 +642,20 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
     expect(tile.textContent).toContain('beats the best single wallet')
   })
 })
+
+describe('CreditCardsPage — section order (2026-08-31 audit)', () => {
+  it('consult before manage: matrix, worth-keeping, line history, then the CRUD panels', async () => {
+    seedHappyPath()
+    renderPage()
+    const matrix = await screen.findByRole('heading', { name: /Rewards matrix/ })
+    const value = screen.getByRole('heading', { name: /worth keeping/i })
+    const line = screen.getByRole('heading', { name: /Credit line history/ })
+    const roster = screen.getByRole('heading', { name: /Card roster/ })
+    const categories = screen.getByRole('heading', { name: /Categories & weights/ })
+    const following = Node.DOCUMENT_POSITION_FOLLOWING
+    expect(matrix.compareDocumentPosition(value) & following).toBeTruthy()
+    expect(value.compareDocumentPosition(line) & following).toBeTruthy()
+    expect(line.compareDocumentPosition(roster) & following).toBeTruthy()
+    expect(roster.compareDocumentPosition(categories) & following).toBeTruthy()
+  })
+})
