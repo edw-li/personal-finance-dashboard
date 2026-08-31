@@ -85,6 +85,20 @@ function overrideDefinitions(inputs: TaxInputsOut): OverrideDefinition[] {
   return definitions
 }
 
+// D4: the PRIMARY person's stored w2_stock_rsus_sold — the payload orders columns primary
+// first, and a roster-less year spells the primary as person_id null.
+function vestW2Stored(inputs: TaxInputsOut): string | null {
+  const primary = inputs.people[0]?.id ?? null
+  for (const section of inputs.sections)
+    for (const item of section.items)
+      if (
+        item.key === 'w2_stock_rsus_sold' &&
+        (item.person_id === primary || item.person_id === null)
+      )
+        return item.value
+  return null
+}
+
 function latestOf(years: TaxYearOut[]): TaxYearOut | undefined {
   // The router already orders by year; reducing makes the page independent of that.
   return years.length === 0 ? undefined : years.reduce((a, b) => (b.year > a.year ? b : a))
@@ -151,6 +165,11 @@ export default function TaxesPage() {
   // saves whose totals actually landed and lets the panel refetch on the new value —
   // cheaper than hoisting a second load chain into this component's eleven setters.
   const [trendRefresh, setTrendRefresh] = useState(0)
+  // D4: bumped when an inputs write lands from OUTSIDE the form (the withholding card's
+  // Apply). The form deliberately ignores prop replacement to protect typed work, so an
+  // external echo must REMOUNT it — this rides its key. The chip confirmed any discard
+  // before PUTting, so the remount never eats work silently.
+  const [inputsEpoch, setInputsEpoch] = useState(0)
   // Year chips can be clicked faster than three requests come back — a slow earlier year
   // must never overwrite a later one (PortfolioPage's guard).
   const seqRef = useRef(0)
@@ -359,6 +378,13 @@ export default function TaxesPage() {
     refreshSummary(echo.year)
     // The chips carry input/bracket counts, and this save just moved one of them.
     refreshYearCounts()
+  }
+
+  // The withholding card wrote the year's inputs from outside the form: the same landing
+  // chain a save takes, plus the remount the form's protect-typed-work rule makes necessary.
+  const onVestApplied = (echo: TaxInputsOut) => {
+    setInputsEpoch((n) => n + 1)
+    onInputsSaved(echo) // adopts the echo, refreshes the totals and the chip counts
   }
 
   const onBracketsSaved = (echo: TaxBracketsOut) => {
@@ -687,6 +713,9 @@ export default function TaxesPage() {
             <WithholdingPanel
               key={`withholding-${detail.summary.year}`}
               year={detail.summary.year}
+              storedVestW2={vestW2Stored(detail.inputs)}
+              inputsDirty={inputsDirty}
+              onVestApplied={onVestApplied}
             />
           )}
           {/* Keyed by year for the editors' own reason: a real switch remounts it, so the
@@ -710,9 +739,11 @@ export default function TaxesPage() {
               carry into 2024, and a one-column year's cell ids are not a two-column year's —
               while a same-year same-status reload (Retry, or the refresh after a save) leaves
               them mounted. Their state seeds from useState initializers, so the replaced
-              props cannot clobber typed work either. */}
+              props cannot clobber typed work either.
+              :epoch — remounts on an EXTERNAL inputs write (D4 Apply), never on the form's
+              own save. */}
           <InputsForm
-            key={inputsKey(detail.inputs)}
+            key={`${inputsKey(detail.inputs)}:${inputsEpoch}`}
             inputs={detail.inputs}
             onSaved={onInputsSaved}
             onDirtyChange={setInputsDirty}

@@ -1199,6 +1199,40 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(screen.queryByText(/will i owe/i)).toBeNull())
     expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
   })
+
+  it('vest Apply writes through the page: PUT, remounted form, fresh totals', async () => {
+    const thisYear = new Date().getFullYear()
+    vi.mocked(fetchTaxYears).mockResolvedValue([yearRow(thisYear)])
+    vi.mocked(fetchWithholding).mockImplementation(async (year: number) => ({
+      ...withholdingFor(year),
+      vest: {
+        ...withholdingFor(year).vest,
+        income_ytd: '31500.00',
+        income_projected: '48000.00',
+      },
+    }))
+    // The PUT echo carries a moved salary too — the remount is what puts it on screen,
+    // because InputsForm ignores prop replacement by design.
+    const echo = inputsFor(thisYear)
+    echo.sections[0].items[0].value = '333000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValue(echo)
+    renderPage()
+    await screen.findByText(`Will I owe? — ${thisYear}`)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Apply vest income to W-2 inputs' }),
+    )
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(thisYear, {
+        values: { w2_stock_rsus_sold: '48000.00' },
+      }),
+    )
+    // Remounted from the echo (a blurred AmountInput reads its formatted echo).
+    await waitFor(() => expect(salary().value).toBe('$333,000.00'))
+    // The page's save chain ran: totals refetched, and this card reloaded its own feed.
+    await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
+  })
 })
 
 describe('?year= deep link (2026-08-25 spec §2d)', () => {

@@ -337,13 +337,19 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* The trap callout and the missing-brackets call to action are `.hint` sentences with a
-   rule down the side — loud enough to read as a finding, quiet enough not to be an error
-   banner (the card's warnings posture). */
+/* The trap callout, the missing-brackets call to action and the per-check remedy are
+   `.hint` sentences with a rule down the side — loud enough to read as a finding, quiet
+   enough not to be an error banner (the card's warnings posture). */
 .withholding-panel .withholding-trap,
-.withholding-panel .withholding-cta {
+.withholding-panel .withholding-cta,
+.withholding-panel .withholding-remedy {
   border-left: 3px solid var(--accent, currentColor);
   padding-left: 10px;
+}
+
+/* The Apply chip rides inside the vest sentence — one gap, not a new layout. */
+.withholding-panel .hint .chip {
+  margin-left: 0.5rem;
 }
 
 /* The tab row sits between the card's hint and the first table: the .segmented treatment is

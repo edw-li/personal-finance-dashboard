@@ -4,13 +4,15 @@ import { ApiError } from '../../api/client'
 import type { WithholdingOut } from '../../types/api'
 import WithholdingPanel from './WithholdingPanel'
 
-// The one request this card makes. JURISDICTIONS and the other taxes helpers stay real —
-// nothing here touches them, but the page-level module is shared (TaxesPage.test.tsx's mock).
+// The two calls this card makes: its own feed, and (D4) the inputs PUT the Apply chip fires.
+// JURISDICTIONS and the other taxes helpers stay real — nothing here touches them, but the
+// page-level module is shared (TaxesPage.test.tsx's mock).
 vi.mock('../../api/taxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/taxes')>()),
   fetchWithholding: vi.fn(),
+  putTaxInputs: vi.fn(),
 }))
-import { fetchWithholding } from '../../api/taxes'
+import { fetchWithholding, putTaxInputs } from '../../api/taxes'
 
 // A promise this file settles by hand — the only way to hold two loads in flight at once and
 // choose which one answers first (TaxesPage.test.tsx's).
@@ -616,5 +618,102 @@ describe('WithholdingPanel', () => {
     expect(screen.getByText('State withheld')).toBeTruthy()
     expect(screen.queryByText('Withheld so far')).toBeNull()
     expect(screen.queryByText(/Simulated from their paycheck profile/)).toBeNull()
+  })
+
+  // --- D4: per-check remedy + vest→W2 Apply (design 2026-08-31) --------------------------
+
+  // Derived from fixture() itself: balance_projected 18,870.20 over the 24 − 16 = 8 checks
+  // still to come is 2,358.775, which formatCurrency rounds half-away-from-zero to 2,358.78.
+  const REMEDY = 'Add $2,358.78 per remaining paycheck (W-4 line 4c) to close the gap.'
+  const applyChip = () =>
+    screen.getByRole('button', { name: 'Apply vest income to W-2 inputs' }) as HTMLButtonElement
+  const inputsEcho = { year: 2026, filing_status: 'single' as const, people: [], sections: [] }
+
+  it("computes the per-check remedy from the payload's own fields", async () => {
+    // 18,870.20 over the 8 checks still to come (24 − 16) = 2,358.775 → $2,358.78.
+    render(<WithholdingPanel year={2026} />)
+    expect(await screen.findByText(REMEDY)).toBeTruthy()
+  })
+
+  it('stays quiet about a remedy on a refund, and with no checks left', async () => {
+    vi.mocked(fetchWithholding).mockResolvedValue(fixture({ balance_projected: '-2450.75' }))
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('$123,456.78')
+    expect(screen.queryByText(/per remaining paycheck/)).toBeNull()
+    cleanup()
+
+    // Still owing, but the year's checks are spent: there is no paycheck to put it on.
+    vi.mocked(fetchWithholding).mockResolvedValue(fixture({ checks_elapsed: 24 }))
+    render(<WithholdingPanel year={2026} />)
+    await screen.findByText('$123,456.78')
+    expect(screen.queryByText(/per remaining paycheck/)).toBeNull()
+  })
+
+  it("applies the FULL-year vest figure to the primary's W-2 input and reloads", async () => {
+    vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
+    const onApplied = vi.fn()
+    render(
+      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={false} onVestApplied={onApplied} />,
+    )
+    await screen.findByText('$123,456.78')
+    fireEvent.click(applyChip())
+
+    // income_projected ALONE: the backend already sums past vests into it
+    // (withholding_calc income_projected = income_ytd + future) — ytd + projected would
+    // double-count every past vest. The values shorthand IS the primary-person write.
+    await waitFor(() =>
+      expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2026, {
+        values: { w2_stock_rsus_sold: '48000.00' },
+      }),
+    )
+    expect(onApplied).toHaveBeenCalledWith(inputsEcho)
+    // The liability this card compares against just moved with the input it wrote.
+    await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
+  })
+
+  it('disables Apply with a title when the stored value already equals the figure', async () => {
+    // 4dp stored echo vs the estimate's 2dp: the comparison is numeric, not string.
+    render(
+      <WithholdingPanel
+        year={2026}
+        storedVestW2={'48000.0000'}
+        inputsDirty={false}
+        onVestApplied={vi.fn()}
+      />,
+    )
+    await screen.findByText('$123,456.78')
+    expect(applyChip().disabled).toBe(true)
+    expect(applyChip().title).toBe('Stored W-2 vest input already equals this figure')
+  })
+
+  it('asks before clobbering unsaved input edits below, and respects a no', async () => {
+    vi.mocked(putTaxInputs).mockResolvedValue(inputsEcho)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(
+      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={true} onVestApplied={vi.fn()} />,
+    )
+    await screen.findByText('$123,456.78')
+    fireEvent.click(applyChip())
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+
+    confirmSpy.mockReturnValue(true)
+    fireEvent.click(applyChip())
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+    confirmSpy.mockRestore()
+  })
+
+  it('lands an Apply failure on its own error line, figures kept', async () => {
+    vi.mocked(putTaxInputs).mockRejectedValue(new ApiError('inputs unavailable', 503))
+    render(
+      <WithholdingPanel year={2026} storedVestW2={null} inputsDirty={false} onVestApplied={vi.fn()} />,
+    )
+    await screen.findByText('$123,456.78')
+    fireEvent.click(applyChip())
+
+    expect(await screen.findByText('inputs unavailable')).toBeTruthy()
+    // The estimate on screen is still true — and no reload was spent on a write that failed.
+    expect(screen.getByText('$123,456.78')).toBeTruthy()
+    expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(1)
   })
 })
