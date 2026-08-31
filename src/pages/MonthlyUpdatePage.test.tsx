@@ -998,3 +998,33 @@ it('re-sends balances on retry when they were edited after the partial failure',
     expect.objectContaining({ balances: [{ account_id: 1, balance: '1700.00' }] }),
   )
 })
+
+it('drops the stale saved card the moment a new save attempt begins', async () => {
+  // Succeeds, then fails. The green card carries the FIRST attempt's counts, so leaving it
+  // standing beside the red split-save alert would put two contradicting verdicts on screen
+  // for one month — the exact lie A8 exists to stop.
+  vi.mocked(spendingApi.putSpendingMonth)
+    .mockResolvedValueOnce({
+      month: '2026-08-01', created: 1, updated: 0, unchanged: 0,
+      net_pay_set: true, net_pay_cleared: false,
+    })
+    .mockRejectedValueOnce(new Error('boom'))
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+
+  // Back for one more edit, then save again — this attempt's spending leg fails.
+  fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+
+  await screen.findByRole('alert')
+  expect(screen.queryByText(/month saved/i)).toBeNull()
+})

@@ -388,6 +388,10 @@ export default function MonthlyUpdatePage() {
   const save = async () => {
     setSaving(true)
     setError(null)
+    // The green card carries the PREVIOUS attempt's counts. Leaving it up while this attempt
+    // runs would let a failure render two contradicting verdicts for one month — a stale
+    // "Month saved" beside the split-save alert. One attempt, one banner.
+    setSaved(null)
     // canonicalAmount, not .trim(): a cell committed by blur is already canonical, but a save
     // reached without one (Ctrl+Enter, or a click in jsdom) must not ship "$1,600.00" or
     // "=200+50" to a Decimal column. Computed ONCE, then spent three ways — the wire, the
