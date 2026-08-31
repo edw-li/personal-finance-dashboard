@@ -208,3 +208,15 @@
 .entry-budget.delta-negative {
   color: var(--negative);
 }
+
+/* A1: the liability-sign cue — the app's one advisory register (--warn, PALETTE[3] amber,
+   the .draft-note family). Words + a button, never colour alone; advice, never a gate. */
+.entry-liability-cue {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  color: var(--warn);
+}

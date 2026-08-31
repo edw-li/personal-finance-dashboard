@@ -580,6 +580,16 @@ export default function MonthlyUpdatePage() {
   // Committed value of one cell for the live columns — the preview memo's rule.
   const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
 
+  // A1: negate a liability cell in place — a STRING flip on the canonical form, never
+  // float round-tripping (a re-serialized double could alter digits). Only reachable
+  // while the committed value is > 0, so the result is always the negative twin; the
+  // setBalances write marks the draft dirty exactly like typing would.
+  const flipSign = (accountId: number) =>
+    setBalances((cur) => {
+      const canon = canonicalAmount(cur[accountId] ?? '')
+      return { ...cur, [accountId]: canon.startsWith('-') ? canon.slice(1) : `-${canon}` }
+    })
+
   // Live subtotal + its prior twin for ANY row set (components excluded, exactly like net
   // worth) — one helper now serves the per-group rows and the per-owner section above them.
   // DELIBERATE scope divergence, not an oversight: prevNetWorth (and so the footer's "vs
@@ -763,6 +773,23 @@ export default function MonthlyUpdatePage() {
                                       setBalances((cur) => ({ ...cur, [account.id]: next }))
                                     }
                                   />
+                                  {/* A1 (2026-08-31 tier-1): advisory amber, NEVER a gate —
+                                      a card can legitimately go positive after a refund, so
+                                      Next/Save stay enabled and the table hint below keeps
+                                      stating the sign convention. */}
+                                  {account.group === 'liability' && committed(value) > 0 && (
+                                    <span className="entry-liability-cue" role="status">
+                                      liabilities are entered negative
+                                      <button
+                                        type="button"
+                                        className="button"
+                                        aria-label={`Flip sign on ${account.name}`}
+                                        onClick={() => flipSign(account.id)}
+                                      >
+                                        Flip sign
+                                      </button>
+                                    </span>
+                                  )}
                                 </td>
                                 <td
                                   className={`num entry-delta${

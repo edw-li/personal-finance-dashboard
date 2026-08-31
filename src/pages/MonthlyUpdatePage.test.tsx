@@ -47,6 +47,11 @@ const jointSavings = {
   sort_order: 4, is_active: true, is_component: false, parent_account_id: null,
   person_id: null,
 }
+const creditCard = {
+  id: 5, name: 'Visa', slug: 'visa', group: 'liability' as const,
+  sort_order: 5, is_active: true, is_component: false, parent_account_id: null,
+  person_id: 1,
+}
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 
 beforeEach(() => {
@@ -858,4 +863,70 @@ it('names the pay box as a HOUSEHOLD figure — one stream, two earners', async 
   expect(await screen.findByLabelText('Household take-home')).toBeTruthy()
   expect(screen.queryByLabelText('Net pay (take-home)')).toBeNull()
   expect(screen.getByRole('heading', { name: /spending & take-home/i })).toBeTruthy()
+})
+
+// --- liability sign cue (2026-08-31 tier-1 A1) --------------------------------------------
+
+it('cues a positive liability inline and Flip sign negates it in place', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, creditCard])
+  renderWizard()
+  const visa = (await screen.findByLabelText('Visa')) as HTMLInputElement
+  // Seeded 0.00 (no prior row for Visa): no cue — zero is not a positive balance.
+  expect(screen.queryByText(/liabilities are entered negative/i)).toBeNull()
+
+  fireEvent.change(visa, { target: { value: '500' } })
+  expect(screen.getByText(/liabilities are entered negative/i)).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Flip sign on Visa' }))
+  // The blurred cell echoes the negated committed value; the cue folds away.
+  expect(visa.value).toBe('-$500.00')
+  expect(screen.queryByText(/liabilities are entered negative/i)).toBeNull()
+})
+
+it('a positive liability is advisory only — Next and Save stay enabled and the value ships', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, creditCard])
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Visa'), { target: { value: '500' } })
+  // Ratified: a card can legitimately go positive after a refund — never a gate.
+  const next = screen.getByRole('button', { name: /next: spending/i }) as HTMLButtonElement
+  expect(next.disabled).toBe(false)
+  fireEvent.click(next)
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() => {
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 5, balance: '500' },
+        ],
+      }),
+    )
+  })
+})
+
+it('renders the cue for a server-seeded positive liability and Flip marks the draft dirty', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([account, creditCard])
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-07-01',
+    recorded_on: null,
+    notes: null,
+    balances:
+      month === '2026-07-01'
+        ? [
+            { account_id: 1, balance: '1500.00' },
+            { account_id: 5, balance: '500.00' }, // mis-signed on the server already
+          ]
+        : [],
+  }))
+  renderWizard()
+  await screen.findByLabelText('Visa')
+  expect(screen.getByText(/liabilities are entered negative/i)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Flip sign on Visa' }))
+  // Flip is an edit like any other: the draft machinery files it immediately.
+  expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).not.toBeNull()
+  expect((screen.getByLabelText('Visa') as HTMLInputElement).value).toBe('-$500.00')
 })
