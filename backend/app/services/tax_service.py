@@ -185,14 +185,15 @@ def stack(brackets: list[Bracket], base: Decimal, amount: Decimal) -> Decimal:
 def _federal_agi(value: Callable[[str], Decimal]) -> Decimal:
     """Federal AGI, the sheet's clean model (rows 96-99) plus one correction.
 
-    ONE definition with three consumers: `compute_breakdown`'s income chain, `_magi`, and
-    (through both) the state chain. Term order is the canonical formula's, so the goldens
-    pin it to the cent. capital_loss_deductions joined AGI on 2026-08-31 (spec C3): the
-    sheet modelled the line but no output formula ever read it — a modelled deduction the
-    workbook silently dropped. Stored <= 0 by the suggestion's convention and used
-    verbatim either way (compute_breakdown warns on a positive or over-cap value, never
-    rejects it); the state chain inherits it here, matching CA's conformity on the $3k
-    rule, and MAGI inherits it through `_magi`.
+    ONE definition with two direct consumers — `compute_breakdown`'s income chain and
+    `_magi` — and through them the state chain, the NIIT threshold test and the SALT
+    phase-down. Term order is the canonical formula's, so the goldens pin it to the cent.
+    capital_loss_deductions joined AGI on 2026-08-31 (spec C3): the sheet modelled the
+    line but no output formula ever read it — a modelled deduction the workbook silently
+    dropped. Stored <= 0 by the suggestion's convention and used verbatim either way
+    (compute_breakdown warns on a positive or over-cap value, never rejects it); the state
+    chain inherits it here, matching CA's conformity on the $3k rule, and MAGI inherits it
+    through `_magi`.
     """
     return (
         (
@@ -649,7 +650,9 @@ def derive_suggestions(
     the capital-loss line, which the statute caps per RETURN at 3000 (1500 filing
     separately) however large the netted loss is. Both are SUGGESTIONS — the engine's own
     arithmetic is status-neutral and unchanged, so a status flip never silently rewrites a
-    stored number.
+    stored number. The SALT slice's phase-down tests true MAGI (`_magi`), so a CG-heavy
+    year's itemized suggestion may shrink toward the floor — approved and documented
+    (spec C1).
 
     The derived-W2 chain (gross_paycheck / latest_w2_income / other_w2_income) is one
     PERSON's, so the caller feeds one person's rows at a time (api/taxes.py builds a
@@ -683,9 +686,10 @@ def derive_suggestions(
         capital_loss = ZERO
 
     # The SALT cap is hardcoded per column in the sheet (10000 through 2024, 40000 after);
-    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is the engine's
-    # own federal AGI — the same definition compute_breakdown walks.
-    cap = salt_cap(year, filing_status, _federal_agi(value))
+    # `salt_cap` adds the MFS halving and the >500k-MAGI phase-down. MAGI is `_magi` —
+    # fed AGI plus the engine's own netted cg_amount (2026-08-31 spec C1; the sheet's
+    # formula never had the phase-down at all, so there is no sheet reading to preserve).
+    cap = salt_cap(year, filing_status, _magi(value))
     salt = value("itemized_salt")
     itemized = (salt if salt < cap else cap) + (
         value("itemized_donations")

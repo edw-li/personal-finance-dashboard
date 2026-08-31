@@ -357,9 +357,24 @@ def test_salt_phase_down_boundaries():
     assert salt_year(2024, MARRIED_SEPARATE, D("900000")) == D("5000")
 
 
+def test_salt_phase_down_magi_includes_capital_gains():
+    """C1's third consumer: the phase-down MAGI is `_magi` (fed AGI + cg_amount), so a
+    CG-heavy year sheds cap even when ordinary AGI alone sits under 500000. Approved
+    behavior change (spec C1): CG-year SALT suggestions may shrink toward the floor."""
+    # fed AGI 450000; cg_amount 100000 (a pure LTCG gain nets whole); MAGI 550000 ->
+    # phased cap = 40000 - 0.30 x 50000 = 25000. SALT_ITEMS stores 50000 of SALT and no
+    # other itemized lines, so the suggestion IS the applied cap.
+    inputs = dict(SALT_ITEMS) | {"latest_w2_income": D("450000"), "ltcg_total": D("100000")}
+    assert derive_suggestions(2025, inputs, SINGLE)["itemized_deduction"] == D("25000")
+    # Without the gains the same wages stay under the threshold: the full 40000 cap.
+    no_cg = dict(SALT_ITEMS) | {"latest_w2_income": D("450000")}
+    assert derive_suggestions(2025, no_cg, SINGLE)["itemized_deduction"] == D("40000")
+
+
 def test_salt_cap_reads_the_engine_definition_of_agi():
-    """MAGI is the engine's own federal AGI — pre-tax deductions pull it down, so a
-    401(k) can rescue the cap. One AGI definition, two consumers."""
+    """MAGI reaches the engine's own federal AGI through `_magi` — pre-tax deductions pull
+    it down, so a 401(k) can rescue the cap. No CG key is stored here, so `_magi` equals
+    `_federal_agi` and this pins the AGI half of that sum."""
     assert salt_cap(2025, SINGLE, D("560000")) == D("22000")
     inputs = dict(SALT_ITEMS) | {
         "latest_w2_income": D("560000"),
