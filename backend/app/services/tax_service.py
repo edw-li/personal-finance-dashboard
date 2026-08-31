@@ -188,6 +188,33 @@ def _federal_agi(value: Callable[[str], Decimal]) -> Decimal:
     )
 
 
+def _cg_amount(value: Callable[[str], Decimal]) -> Decimal:
+    """The netted capital-gains amount (sheet rows 118-120) — ONE definition for its four
+    consumers: the federal CG stack, state AGI, the NIIT base and `_magi`'s MAGI.
+
+    A long-term LOSS nets against qualified dividends + other gains only while the net
+    stays positive; otherwise the sheet drops it here (the deductible remainder is the
+    capital_loss_deductions line, which reaches AGI via `_federal_agi`).
+    """
+    ltcg = value("ltcg_total")
+    netted = ltcg + value("qualified_dividends") + value("other_capital_gains")
+    if ltcg > 0:
+        return netted
+    if ltcg < 0 and netted > 0:
+        return netted
+    return value("qualified_dividends") + value("other_capital_gains")
+
+
+def _magi(value: Callable[[str], Decimal]) -> Decimal:
+    """Modified AGI: federal AGI plus the netted gains — the base the NIIT threshold test
+    and the SALT phase-down are statutorily judged on (2026-08-31 spec C1). One
+    definition, two consumers. It inherits capital_loss_deductions through `_federal_agi`
+    (spec C3): the §1211 deduction is inside AGI, so MAGI carries it — correct for both
+    consumers, and pinned by the capital-loss NIIT test.
+    """
+    return _federal_agi(value) + _cg_amount(value)
+
+
 @dataclass(frozen=True)
 class EarnerWages:
     """One person's W-2 wage bundle for the per-earner payroll walks (spec §5.3).
@@ -400,18 +427,10 @@ def compute_breakdown(
     fed_ti = fed_agi - fed_deduction
     fed_tax = walk(tables["federal"], fed_ti)
 
-    # Capital gains (rows 118-120): a long-term LOSS nets against gains only while the net
-    # stays positive; otherwise the sheet drops it (its deduction line never reaches AGI).
-    # Netted here, above the state section, because state AGI consumes cg_amount too; the
-    # federal CG stack itself is applied after FICA, where the sheet computes it.
-    ltcg = values["ltcg_total"]
-    netted = ltcg + values["qualified_dividends"] + values["other_capital_gains"]
-    if ltcg > 0:
-        cg_amount = netted
-    elif ltcg < 0 and netted > 0:
-        cg_amount = netted
-    else:
-        cg_amount = values["qualified_dividends"] + values["other_capital_gains"]
+    # Capital gains (rows 118-120): netted in `_cg_amount`, computed here — above the
+    # state section — because state AGI consumes cg_amount too; the federal CG stack
+    # itself is applied after FICA, where the sheet computes it.
+    cg_amount = _cg_amount(values.__getitem__)
 
     # State (rows 100-103): CA exempts the treasury slice of unqualified dividends and
     # does NOT recognise the HSA deduction, so both are added back — and, deliberately
