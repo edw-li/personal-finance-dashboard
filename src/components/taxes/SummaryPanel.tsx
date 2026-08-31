@@ -14,6 +14,34 @@ import { taxTrendCsv, trendOption, waterfallOption, yearPieOption } from './taxC
 // imports — and StatTile brings it along regardless.
 import './taxes.css'
 
+// D2 (2026-08-31): the summary sections rendered as FIGURES, not only as chart geometry.
+// One rule per column: Base is the jurisdiction's income context (agi / w2_income /
+// gains_amount), Taxable the field its rates are actually walked over (taxable_income /
+// taxable_wages) — so for capital gains "Taxable" is the ordinary income the gains stack
+// on top of, and for NIIT the surcharged base. `niit` is optional on the wire (stored
+// pre-C payloads): absence renders the em-dash convention, never a zero.
+interface DetailRow {
+  label: string
+  base: string | null
+  taxable: string | null
+  tax: string | null
+  rate: string | null
+}
+
+function jurisdictionRows(summary: TaxSummaryOut): DetailRow[] {
+  const { federal, state, niit, medicare, social_security, disability, capital_gains } =
+    summary
+  return [
+    { label: 'Federal', base: federal.agi, taxable: federal.taxable_income, tax: federal.tax, rate: federal.effective_rate },
+    { label: 'State', base: state.agi, taxable: state.taxable_income, tax: state.tax, rate: state.effective_rate },
+    { label: 'NIIT', base: niit?.gains_amount ?? null, taxable: niit?.taxable_income ?? null, tax: niit?.tax ?? null, rate: niit?.effective_rate ?? null },
+    { label: 'Medicare', base: medicare.w2_income, taxable: medicare.taxable_wages, tax: medicare.tax, rate: medicare.effective_rate },
+    { label: 'Social Security', base: social_security.w2_income, taxable: social_security.taxable_wages, tax: social_security.tax, rate: social_security.effective_rate },
+    { label: 'Disability', base: disability.w2_income, taxable: disability.taxable_wages, tax: disability.tax, rate: disability.effective_rate },
+    { label: 'Capital gains', base: capital_gains.gains_amount, taxable: capital_gains.taxable_income, tax: capital_gains.tax, rate: capital_gains.effective_rate },
+  ]
+}
+
 /**
  * The engine's answer for the selected year, told three ways: tiles for the headline
  * figures, a waterfall walking gross income down to take-home, and the all-years trend —
@@ -179,6 +207,42 @@ export default function SummaryPanel({
             hint="Total tax ÷ gross income."
           />
         </div>
+
+        {/* Gated with the waterfall: a refusal year carries NULL sections on the wire, and
+            the missing-tables call to action below is that state's whole answer. */}
+        {missing.length === 0 && (
+          <div className="tax-section tax-jurisdiction-detail">
+            <h3 className="eyebrow">
+              By jurisdiction
+              <InfoHint text="Base is each jurisdiction&apos;s income context — AGI for the income taxes, W-2 wages for the payroll taxes, gains or net investment income for capital gains and NIIT. Taxable is what its rates are actually walked over: for capital gains, the ordinary income the gains stack on top of; for NIIT, the surcharged base." />
+            </h3>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Jurisdiction</th>
+                  <th className="num">Base</th>
+                  <th className="num">Taxable</th>
+                  <th className="num">Tax</th>
+                  {/* "Eff. rate", NOT "Effective rate": the totals tile above already owns
+                      that exact label, and two nodes spelling it would be ambiguous to a
+                      reader and to getByText alike. */}
+                  <th className="num">Eff. rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jurisdictionRows(summary).map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    <td className="num">{formatCurrency(row.base)}</td>
+                    <td className="num">{formatCurrency(row.taxable)}</td>
+                    <td className="num">{formatCurrency(row.tax)}</td>
+                    <td className="num">{formatPct(row.rate, { signed: false })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {summary.warnings.length > 0 && (
           // React text nodes, so the engine's sentences are escaped by construction. A

@@ -402,3 +402,9 @@
   margin: 0.2rem 0 0.9rem;
   font-size: 0.9rem;
 }
+
+/* D2: the per-jurisdiction table sits between the tiles and the warnings — it needs the
+   top gap .tax-section does not carry (that class only spaces downward). */
+.tax-jurisdiction-detail {
+  margin-top: 1.1rem;
+}

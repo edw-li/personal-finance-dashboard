@@ -304,6 +304,15 @@ const DELETE_2024_CONFIRM =
 // first — and its x-axis categories are the years of whichever feed drew it.
 const trendCategories = () => screen.getAllByTestId('echart')[1]?.getAttribute('data-categories')
 
+// The per-jurisdiction table's OWN scope. Several cards on this page render a node that
+// reads exactly like one of its row labels — InputsForm heads a section "Capital gains"
+// (SECTION_LABELS), and BracketsEditor heads its tables "Federal brackets" — so a bare
+// screen.getByText('Capital gains').closest('tr') is one fixture field away from resolving
+// against somebody else's heading and asserting on the wrong row (or on none). Scoping to
+// the table makes the pins say what they mean.
+const jurisdictionTable = () =>
+  within(screen.getByText('By jurisdiction').closest('.tax-jurisdiction-detail') as HTMLElement)
+
 // The unsaved-work guard is a window.confirm; "yes" is the default so only the tests that
 // are ABOUT the guard have to think about it.
 const confirmSpy = vi.spyOn(window, 'confirm')
@@ -769,6 +778,56 @@ describe('TaxesPage', () => {
     expect(screen.getByText('24.7%')).toBeTruthy()
     // Two charts: this year's waterfall and the all-years trend.
     await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(2))
+  })
+
+  it('renders the per-jurisdiction detail table straight from the summary payload', async () => {
+    const detailed = summaryFor(2024)
+    detailed.federal = {
+      agi: '250000.00', taxable_income: '181305.00', tax: '40782.88', effective_rate: '0.163132',
+    }
+    detailed.medicare = {
+      w2_income: '260000.00', taxable_wages: '250000.00', tax: '4325.00', effective_rate: '0.017300',
+    }
+    detailed.capital_gains = {
+      taxable_income: '181305.00', gains_amount: '20000.00', tax: '3000.00', effective_rate: '0.150000',
+    }
+    detailed.niit = {
+      taxable_income: '10000.00', gains_amount: '25000.00', tax: '380.00', effective_rate: '0.015200',
+    }
+    vi.mocked(fetchTaxSummary).mockResolvedValue(detailed)
+    renderPage()
+
+    await screen.findByText('By jurisdiction')
+    // Every cell is the payload's own figure formatted — Base, Taxable, Tax, Eff. rate.
+    const federal = jurisdictionTable().getByText('Federal').closest('tr')!
+    expect(federal.textContent).toContain('$250,000.00')
+    expect(federal.textContent).toContain('$181,305.00')
+    expect(federal.textContent).toContain('$40,782.88')
+    expect(federal.textContent).toContain('16.3%')
+    // NIIT: Base is net investment income, Taxable the surcharged base.
+    const niit = jurisdictionTable().getByText('NIIT').closest('tr')!
+    expect(niit.textContent).toContain('$25,000.00')
+    expect(niit.textContent).toContain('$10,000.00')
+    expect(niit.textContent).toContain('$380.00')
+    expect(niit.textContent).toContain('1.5%')
+    // Capital gains: Base is the gains, Taxable the ordinary income they stack on.
+    const cg = jurisdictionTable().getByText('Capital gains').closest('tr')!
+    expect(cg.textContent).toContain('$20,000.00')
+    expect(cg.textContent).toContain('$181,305.00')
+  })
+
+  it('renders the NIIT row as em-dashes against a pre-C payload', async () => {
+    // A payload with NO niit key at all — what a stored summary from before workstream C
+    // looks like. Built explicitly (delete, not "trust the fixture") so this pin survives
+    // whatever Plan C did to the shared summaryFor. Absence is em-dash, never $0.00.
+    const preC = { ...summaryFor(2024) }
+    delete preC.niit
+    vi.mocked(fetchTaxSummary).mockResolvedValue(preC)
+    renderPage()
+    await screen.findByText('By jurisdiction')
+    const niit = jurisdictionTable().getByText('NIIT').closest('tr')!
+    expect(niit.textContent?.match(/—/g)).toHaveLength(4)
+    expect(niit.textContent).not.toContain('$0.00')
   })
 
   it('mounts the marginal card from the year’s own summary and tables', async () => {
@@ -1391,6 +1450,7 @@ describe('filing status (2026-08-26 design §6)', () => {
     // would be exactly the confidently-wrong answer it refused to compute.
     expect(screen.getByText('Total tax')).toBeTruthy()
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4)
+    expect(screen.queryByText('By jurisdiction')).toBeNull()
   })
 
   it('draws the waterfall as usual when the flag list came back empty', async () => {
