@@ -27,10 +27,18 @@ vi.mock('../components/EChart', async () => {
       animateEntrance = true,
     }: {
       option: {
-        series?: { links?: { source?: string; target?: string; value?: number }[] }[]
+        series?: {
+          type?: string
+          data?: unknown[]
+          links?: { source?: string; target?: string; value?: number }[]
+        }[]
         legend?: { selected?: Record<string, boolean> }
         dataZoom?: { startValue?: number; endValue?: number }[]
         tooltip?: { valueFormatter?: (value: unknown) => string }
+        yAxis?: {
+          min?: number | ((extent: { min: number; max: number }) => number)
+          max?: number | ((extent: { min: number; max: number }) => number)
+        }
       }
       onClick?: (params: { dataIndex?: number }) => void
       ariaLabel?: string
@@ -51,6 +59,19 @@ vi.mock('../components/EChart', async () => {
         'data-zoom': JSON.stringify(option.dataZoom?.[0] ?? null),
         'data-pct-sample': option.tooltip?.valueFormatter?.(0.35) ?? '',
         'data-export-name': exportConfig?.name ?? '',
+        // A6: the bar stacks' raw data arrays — the absent-month gap pin reads them.
+        'data-bar-data': JSON.stringify(
+          (option.series ?? []).filter((s) => s.type === 'bar').map((s) => s.data ?? []),
+        ),
+        // A7: the y-axis clamps, sampled at a fixed extent so the pin reads numbers.
+        'data-y-floor':
+          typeof option.yAxis?.min === 'function'
+            ? String(option.yAxis.min({ min: -1.8, max: 0.6 }))
+            : '',
+        'data-y-ceiling':
+          typeof option.yAxis?.max === 'function'
+            ? String(option.yAxis.max({ min: -1.8, max: 0.6 }))
+            : '',
         onClick: () => onClick?.({ dataIndex: 0 }),
         onMouseEnter: () => onLegendChange?.({ 'Net pay': false, '4% rule': true }),
         // A SECOND legendselectchanged shape, carrying a map disjoint from mouseEnter's:
@@ -374,5 +395,58 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
     ) as { startValue?: number; endValue?: number }
     expect(snapped.startValue).toBe(0)
     expect(snapped.endValue).toBeUndefined()
+  })
+})
+
+describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A6/A7)', () => {
+  // August is cashflow-only: net pay entered, no spending rows at all. The server's
+  // matrix sums an absent month's total to "0.00" (never null), which is exactly why the
+  // page must judge enteredness on the SERIES.
+  const withAbsentMonth = () =>
+    matrixFixture({
+      months: ['2026-06', '2026-07', '2026-08'],
+      series: [
+        { category_id: 1, values: ['2000.00', '2000.00', null], budgets: [null, null, null] },
+        { category_id: 2, values: ['600.00', '580.00', null], budgets: [null, null, null] },
+        { category_id: 3, values: ['150.00', '0.00', null], budgets: [null, null, null] },
+      ],
+      totals: ['2750.00', '2580.00', '0.00'],
+      net_pay: ['6000.00', '6000.00', '6000.00'],
+      savings_rate: ['0.541666667', '0.57', '1.000000'],
+      four_pct_rule: [null, null, null],
+      total_budget: [null, null, null],
+    })
+
+  it('gaps the bars on a net-pay-only month instead of drawing a $0 stack (A6)', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(withAbsentMonth())
+    renderPage()
+    await screen.findByText('Where Aug 2026 went')
+    const bars = screen.getAllByTestId('echart')[0]
+    const data = JSON.parse(bars.getAttribute('data-bar-data') ?? '[]') as (number | null)[][]
+    // Three categories + Other, each with a NULL (not 0) in August's slot → echarts gaps.
+    expect(data).toHaveLength(4)
+    expect(data.every((serie) => serie[2] === null)).toBe(true)
+    // Entered months keep their numbers (Rent is the biggest all-time total → series 0).
+    expect(data[0][0]).toBe(2000)
+  })
+
+  it('excludes absent months from the 12-month average (A6)', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(withAbsentMonth())
+    renderPage()
+    await screen.findByText('Where Aug 2026 went')
+    // (2750 + 2580) / 2 — the cashflow-only August no longer dilutes it to a /3.
+    expect(screen.getByText('$2,665.00')).toBeTruthy()
+  })
+
+  it('lets the savings-rate floor follow the data below −100%, ceiling capped (A7)', async () => {
+    renderPage()
+    await screen.findByText('Where Jul 2026 went')
+    const savings = screen
+      .getAllByTestId('echart')
+      .find((el) => (el.getAttribute('data-y-floor') ?? '') !== '')
+    // Sampled at extent {min: −1.8, max: 0.6}: the floor expands to the whole −200% step
+    // (Math.min(−1, Math.floor(−1.8))); the ceiling keeps hugging the data under +100%.
+    expect(savings?.getAttribute('data-y-floor')).toBe('-2')
+    expect(savings?.getAttribute('data-y-ceiling')).toBe('0.6')
   })
 })
