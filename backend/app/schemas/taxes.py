@@ -178,6 +178,11 @@ class TaxSummaryOut(BaseModel):
     social_security: WageTaxOut | None = None
     disability: WageTaxOut | None = None
     capital_gains: CapitalGainsTaxOut | None = None
+    # NIIT (2026-08-31 spec C2), on capital_gains' wire shape so payloads and frontend
+    # types extend compatibly: gains_amount carries net investment income,
+    # taxable_income the surcharged base min(NII, MAGI excess), effective_rate the tax
+    # over NII. Additive + defaulted: stored fixtures and older clients parse unchanged.
+    niit: CapitalGainsTaxOut | None = None
     totals: TaxTotalsOut | None = None
     warnings: list[str]
 

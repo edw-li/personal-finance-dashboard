@@ -912,6 +912,13 @@ def _summary_out(breakdown: TaxBreakdown, feed: EngineFeed | None = None) -> Tax
         tax=_money(gains.tax),
         effective_rate=_effective_rate(gains.effective_rate, "capital_gains", warnings),
     )
+    niit_line = breakdown.niit
+    niit = CapitalGainsTaxOut(
+        taxable_income=_money(niit_line.taxable_income),
+        gains_amount=_money(niit_line.gains_amount),
+        tax=_money(niit_line.tax),
+        effective_rate=_effective_rate(niit_line.effective_rate, "niit", warnings),
+    )
     totals = TaxTotalsOut(
         gross_income=_money(breakdown.totals.gross_income),
         total_income=_money(breakdown.totals.total_income),
@@ -928,6 +935,7 @@ def _summary_out(breakdown: TaxBreakdown, feed: EngineFeed | None = None) -> Tax
         social_security=social_security,
         disability=disability,
         capital_gains=capital_gains,
+        niit=niit,
         totals=totals,
         warnings=warnings,
     )

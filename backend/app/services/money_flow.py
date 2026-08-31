@@ -130,6 +130,7 @@ class MoneyFlowTaxes:
     social_security: Decimal
     disability: Decimal
     capital_gains: Decimal
+    niit: Decimal
 
 
 @dataclass
@@ -213,6 +214,10 @@ def compose_money_flow(
         social_security=breakdown.social_security.tax,
         disability=breakdown.disability.tax,
         capital_gains=breakdown.capital_gains.tax,
+        # The Overview Taxes node's tooltip enumerates the per-jurisdiction lines against
+        # `taxes.total`, which now carries the NIIT surcharge — a missing line would
+        # visibly not sum.
+        niit=breakdown.niit.tax,
     )
     pre_tax_savings = sum((value(key) for key in PRETAX_KEYS), ZERO)
     take_home_cash = net_pay_sum
