@@ -253,6 +253,7 @@ Fill in every value:
 | `ADMIN_EMAIL` | your login email — **keep this stable**: the seed renames the admin account to match it on every boot, so changing it later changes your login |
 | `ADMIN_PASSWORD` | your login password, 8–72 bytes (bcrypt limit) |
 | `OCI_*` | backup settings — fill in during Part 5 (values may be blank until then; they're only read by the backup script) |
+| `NVIDIA_API_KEY` | optional — powers the ✦ assistant (build.nvidia.com); blank disables it; a key saved in Settings overrides it |
 
 ### 3.3 Build and start
 
@@ -656,6 +657,14 @@ spot-check **/** (Overview), **/taxes** and **/settings**.
 > genuinely-base-rate year re-folds on downgrade, which the old engine's advisory then
 > names). After deploy, /taxes totals for investment-income years shift by the NIIT
 > entries in §7.5 — expected, not a regression.
+
+> **Addendum (2026-09-01)**: the AI assistant adds **zero migrations** — its two settings
+> ride the existing `app_settings` table — so this deploy is order-safe and the command
+> above is the whole deploy. New optional env: `NVIDIA_API_KEY` (Part 3.2). Spot-checks
+> gain one: open the ✦ drawer and ask a question; with no key configured it shows the
+> setup note instead. The export snapshot now redacts the key row (`manifest.json` lists
+> the redaction), and SSE streaming rides `X-Accel-Buffering: no` + keepalive pings, so
+> `nginx.conf` is untouched.
 
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the

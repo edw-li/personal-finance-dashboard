@@ -725,7 +725,7 @@ async def test_export_redacts_the_nvidia_api_key_row(auth_client, db):
     with zipfile.ZipFile(io.BytesIO(raw)) as zf:
         manifest = json.loads(zf.read("manifest.json"))
         assert manifest["redactions"] == ["app_settings.nvidia_api_key"]
-        csv_text = zf.read("app_settings.csv").decode()
+        csv_text = zf.read("csv/app_settings.csv").decode()
         assert "assistant_default_model" in csv_text  # its sibling row still exports
         assert "nvidia_api_key" not in csv_text
 ```
