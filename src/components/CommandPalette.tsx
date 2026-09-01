@@ -5,6 +5,7 @@ import { refreshPrices } from '../api/prices'
 import { formatMonth } from '../utils/format'
 import { fuzzyScore } from '../utils/fuzzy'
 import { currentMonthIso } from '../utils/months'
+import { requestAssistantOpen } from './assistant/viewState'
 import './CommandPalette.css'
 import { NAV_ITEMS } from './navItems'
 
@@ -102,6 +103,14 @@ export default function CommandPalette() {
       label: 'Add custom event',
       kind: 'Action' as const,
       run: () => navigate('/calendar'),
+    },
+    {
+      id: 'action:ask-assistant',
+      label: 'Ask assistant',
+      kind: 'Action' as const,
+      // The palette closes first (execute() contract), then the drawer opens and takes
+      // focus itself — the launcher button is not involved, so no focus tug-of-war.
+      run: () => requestAssistantOpen(),
     },
   ]
 

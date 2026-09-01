@@ -2,6 +2,7 @@ import { LogOut } from 'lucide-react'
 import { Suspense, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigationType } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import AssistantDrawer from './assistant/AssistantDrawer'
 import CommandPalette from './CommandPalette'
 import './Layout.css'
 import { NAV_SECTIONS } from './navItems'
@@ -139,6 +140,10 @@ export default function Layout() {
         </RouteBoundary>
       </main>
       <CommandPalette />
+      {/* Beside the palette, and last for the same reason: both are app-wide overlays that
+          outlive every route, so neither may sit inside <main> where a navigation would
+          unmount it (the drawer's transcript is per-sitting, not per-page). */}
+      <AssistantDrawer />
     </div>
   )
 }

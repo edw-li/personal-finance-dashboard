@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import * as authApi from '../api/auth'
+import { clearAssistantSession } from '../api/assistantSession'
 import { getToken } from '../api/client'
 import { clearSnapshots } from '../api/snapshotCache'
 
@@ -41,6 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     authApi.logout()
     clearSnapshots() // snapshots are session data — they must not outlive the session
+    clearAssistantSession() // and neither may a financial chat transcript
     setEmail(null)
   }, [])
 

@@ -23,6 +23,7 @@ function mockFetchFailure(status: number, body: unknown, jsonThrows = false) {
 afterEach(() => {
   vi.unstubAllGlobals()
   localStorage.clear()
+  sessionStorage.clear()
 })
 
 it('joins FastAPI 422 validation arrays into one message', async () => {
@@ -132,6 +133,10 @@ describe('api — snapshot invalidation', () => {
 
   it('a 401 wipes (snapshots are session data)', async () => {
     setSnapshot('overview', { stale: true })
+    // The assistant transcript is session data of the same kind: an expired token must
+    // not leave the next person through this tab reading the last one's questions.
+    sessionStorage.setItem('assistant:transcript', '[]')
+    sessionStorage.setItem('assistant:model', 'kimi-k3')
     // jsdom refuses real navigation, so the redirect is stubbed for this case.
     const assign = vi.fn()
     vi.stubGlobal('location', { ...window.location, assign })
@@ -139,6 +144,8 @@ describe('api — snapshot invalidation', () => {
     await expect(api('/things')).rejects.toThrow('Session expired')
     expect(assign).toHaveBeenCalledWith('/login')
     expect(getSnapshot('overview')).toBeUndefined()
+    expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
+    expect(sessionStorage.getItem('assistant:model')).toBeNull()
   })
 })
 

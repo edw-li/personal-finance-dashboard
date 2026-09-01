@@ -125,6 +125,24 @@ describe('AssistantDrawer', () => {
     expect(screen.queryByRole('textbox', { name: /ask the assistant/i })).toBeNull()
   })
 
+  // Escape rides the drawer's own onKeyDown, which only fires for events raised INSIDE it.
+  // With no composer there is nothing in there to hold focus, so without the root taking it
+  // the keypress lands on <body> and the drawer becomes uncloseable by keyboard.
+  it('unconfigured: the drawer root takes focus so Esc still closes it', async () => {
+    fetchAssistantSettings.mockResolvedValue({
+      key: { configured: false, source: null },
+      default_model: 'kimi-k3',
+    })
+    mount()
+    const launcher = screen.getByRole('button', { name: /open assistant/i })
+    await openDrawerUnconfigured()
+    const drawer = screen.getByRole('complementary', { name: 'Assistant' })
+    await waitFor(() => expect(document.activeElement).toBe(drawer))
+    fireEvent.keyDown(drawer, { key: 'Escape' })
+    expect(screen.queryByRole('complementary', { name: 'Assistant' })).toBeNull()
+    expect(document.activeElement).toBe(launcher)
+  })
+
   it('streams an answer: tokens accumulate, tool chip renders, done stamps the model', async () => {
     streamChat.mockImplementation(
       (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {

@@ -86,6 +86,7 @@ export default function AssistantDrawer() {
   const [previewSections, setPreviewSections] = useState<AssistantPreviewSection[] | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const launcherRef = useRef<HTMLButtonElement>(null)
+  const drawerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<ChatStreamHandle | null>(null)
@@ -145,9 +146,16 @@ export default function AssistantDrawer() {
       .catch(() => setModels(null))
   }, [open, settings])
 
-  // Focus hand-off: into the input on open; back to the launcher on close.
+  // Focus hand-off: into the input on open; back to the launcher on close. Without a
+  // composer to hold it — settings still loading, not configured, or the fetch failed —
+  // the drawer ROOT takes focus instead (tabIndex -1). Load-bearing: Escape rides the
+  // root's onKeyDown, which only sees events raised inside the drawer, so a keypress
+  // landing on <body> would leave the drawer uncloseable from the keyboard. Re-runs on
+  // `settings` so the composer, once it exists, still gets the focus.
   useEffect(() => {
-    if (open) inputRef.current?.focus()
+    if (!open) return
+    if (inputRef.current !== null) inputRef.current.focus()
+    else drawerRef.current?.focus()
   }, [open, settings])
 
   // Follow the newest message as tokens land — but only while the reader is still parked at
@@ -378,9 +386,13 @@ export default function AssistantDrawer() {
       </button>
       {open && (
         <div
+          ref={drawerRef}
           className="assistant-drawer"
           role="complementary"
           aria-label="Assistant"
+          // Focusable by the open effect above only — never a tab stop of its own (the
+          // #main and palette idiom).
+          tabIndex={-1}
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
               event.preventDefault()

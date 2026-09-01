@@ -137,6 +137,22 @@ describe('CommandPalette', () => {
     expect(screen.getByTestId('search').textContent).toBe('?tab=dividends')
   })
 
+  // The palette is the keyboard route into the assistant: it must not reach into the
+  // drawer directly (Layout owns the mount), only ask through the open-event bus.
+  it('runs the Ask assistant action through the open-event bus', () => {
+    const spy = vi.fn()
+    window.addEventListener('assistant:open', spy)
+    renderPalette()
+    openPalette()
+    fireEvent.change(combo(), { target: { value: 'assistant' } })
+    expect(screen.getAllByRole('option')[0].textContent).toContain('Ask assistant')
+    fireEvent.keyDown(combo(), { key: 'Enter' })
+    expect(spy).toHaveBeenCalledTimes(1)
+    // execute()'s contract: the overlay is gone before the drawer takes focus.
+    expect(document.querySelector('.palette-overlay')).toBeNull()
+    window.removeEventListener('assistant:open', spy)
+  })
+
   it('floats recently-used entries to the top of the unfiltered list, via localStorage', () => {
     renderPalette()
     openPalette()

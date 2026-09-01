@@ -1,3 +1,4 @@
+import { clearAssistantSession } from './assistantSession'
 import { clearSnapshots } from './snapshotCache'
 
 const TOKEN_KEY = 'finance_token'
@@ -75,6 +76,7 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
   if (res.status === 401 && !path.startsWith('/auth/login')) {
     clearToken()
     clearSnapshots() // snapshots are session data — they must not outlive the token
+    clearAssistantSession()
     window.location.assign('/login')
     throw new ApiError('Session expired', 401)
   }

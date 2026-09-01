@@ -24,6 +24,7 @@ function Probe() {
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
   clearSnapshots()
 })
 
@@ -72,4 +73,19 @@ it('logout wipes the page-snapshot cache', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
   expect(vi.mocked(authApi.logout)).toHaveBeenCalledTimes(1)
   expect(getSnapshot('overview')).toBeUndefined()
+})
+
+it('logout clears the assistant session storage', () => {
+  // A financial chat transcript is session data of the same kind — and a more personal
+  // kind: it must never outlive the session that asked the questions.
+  sessionStorage.setItem('assistant:transcript', '[]')
+  sessionStorage.setItem('assistant:model', 'kimi-k3')
+  render(
+    <AuthProvider>
+      <Probe />
+    </AuthProvider>
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
+  expect(sessionStorage.getItem('assistant:model')).toBeNull()
 })

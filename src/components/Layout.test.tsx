@@ -20,6 +20,19 @@ vi.mock('./routeChunks', () => ({
   warmAllRoutes: vi.fn(),
 }))
 
+// The shell mounts the REAL AssistantDrawer (its presence in the layout is the contract
+// under test), so only its network module is stubbed — no shell test may reach fetch.
+// Wrappers rather than the vi.fn()s themselves: this factory is hoisted above the consts,
+// and only a call-time dereference survives that (AssistantDrawer.test.tsx's idiom).
+const fetchAssistantSettings = vi.fn()
+const fetchAssistantModels = vi.fn()
+const fetchContextPreview = vi.fn()
+vi.mock('../api/assistant', () => ({
+  fetchAssistantSettings: (...a: unknown[]) => fetchAssistantSettings(...a),
+  fetchAssistantModels: (...a: unknown[]) => fetchAssistantModels(...a),
+  fetchContextPreview: (...a: unknown[]) => fetchContextPreview(...a),
+}))
+
 function renderShell(initialPath = '/') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
@@ -96,6 +109,20 @@ beforeEach(() => {
   // these vi.fn()s would otherwise accumulate call history across this file's tests.
   vi.mocked(warmAllRoutes).mockClear()
   vi.mocked(prefetchRoute).mockClear()
+  // Not-configured on purpose: the shell tests need the drawer to settle without a
+  // composer or a model catalog to wait on.
+  fetchAssistantSettings.mockReset().mockResolvedValue({
+    key: { configured: false, source: null },
+    default_model: 'kimi-k3',
+  })
+  fetchAssistantModels.mockReset().mockResolvedValue({
+    configured: false,
+    key_source: null,
+    key_ok: false,
+    checked_at: null,
+    models: [],
+  })
+  fetchContextPreview.mockReset().mockResolvedValue({ sections: [] })
 })
 
 afterEach(() => {
@@ -241,5 +268,31 @@ describe('Layout — scroll restoration', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
     fireEvent.click(screen.getByRole('button', { name: 'go back' }))
     expect(window.scrollTo).toHaveBeenLastCalledWith(0, 0)
+  })
+})
+
+describe('Layout — assistant mount', () => {
+  it('mounts the assistant launcher, closed, without disturbing arrival focus', () => {
+    renderShell()
+    expect(screen.getByRole('button', { name: 'Open assistant' })).toBeTruthy()
+    // Mounted ≠ open: the drawer costs the page nothing until someone asks for it, and
+    // the arrival contract (browser's own focus stands) must survive the extra component.
+    expect(screen.queryByRole('complementary', { name: 'Assistant' })).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+    expect(fetchAssistantSettings).not.toHaveBeenCalled()
+  })
+
+  // The whole F7 wiring end to end: the palette asks the bus, the drawer Layout mounted
+  // answers. Neither knows about the other — this is the only place that proves the two
+  // halves meet.
+  it('opens the drawer from the palette Ask assistant action', async () => {
+    renderShell()
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    const combo = screen.getByRole('combobox')
+    fireEvent.change(combo, { target: { value: 'assistant' } })
+    fireEvent.keyDown(combo, { key: 'Enter' })
+    expect(await screen.findByRole('complementary', { name: 'Assistant' })).toBeTruthy()
+    // Settle the settings fetch inside act before the test ends.
+    expect(await screen.findByText(/no nvidia api key configured/i)).toBeTruthy()
   })
 })
