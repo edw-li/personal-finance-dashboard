@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     # Path to a PEM bundle for yfinance's curl_cffi session. Needed ONLY behind
     # TLS-intercepting proxies (this dev box — see plan probe 2); prod leaves it unset.
     yfinance_ca_bundle: str | None = None
+    # ── Assistant (2026-09-01 spec §3) ────────────────────────────────────────────
+    # The deploy-time baseline key; a Settings-page override (app_settings row) wins.
+    nvidia_api_key: str | None = None
+    # Tests point this at a mock; never user-facing.
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    # Dev-box only: PEM bundle when a TLS-intercepting proxy sits in the way (the
+    # yfinance_ca_bundle precedent above); prod leaves it unset.
+    nvidia_ca_bundle: str | None = None
     scheduler_enabled: bool = True
 
     @property
