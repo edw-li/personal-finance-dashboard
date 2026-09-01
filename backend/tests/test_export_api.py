@@ -9,7 +9,7 @@ import zipfile
 from datetime import date
 from decimal import Decimal
 
-from app.api.export import EXCLUDED_TABLES, EXPORTED_TABLES
+from app.api.export import EXCLUDED_TABLES, EXPORTED_TABLES, REDACTED_ROWS
 from app.database import Base
 from app.models import Account, AccountBalance, AppSetting, NetWorthSnapshot
 
@@ -26,6 +26,15 @@ def test_export_list_pins_every_metadata_table():
     # model lands here red until someone decides which — that decision is the feature.
     # (alembic_version is not a metadata table; the manifest carries the head instead.)
     assert set(exported_names) | EXCLUDED_TABLES == set(Base.metadata.tables)
+    # THE REDACTION PIN: a typo'd table name would silently redact NOTHING while the
+    # manifest still advertised the redaction, and a table without the `key` column the
+    # filter reads would AttributeError mid-request. Both are structural, so pin both.
+    models_by_table = {table: model for model, table in EXPORTED_TABLES}
+    for table_name in REDACTED_ROWS:
+        assert table_name in models_by_table, f"{table_name!r} is redacted but never exported"
+        assert "key" in models_by_table[table_name].__table__.columns, (
+            f"{table_name!r} has no `key` column — the row filter reads row.key"
+        )
 
 
 async def test_export_requires_auth(client):
@@ -126,7 +135,10 @@ async def test_export_redacts_the_nvidia_api_key_row(auth_client, db):
     resp = await auth_client.get(EXPORT)
     assert resp.status_code == 200, resp.text
     raw = resp.content
-    assert b"nvapi-SECRET" not in raw  # the whole ZIP, before anyone decompresses it
+    # Cheap outer net only: the members are DEFLATE-compressed, so this catches a
+    # regression that stored them uncompressed and nothing else. The decompressed-member
+    # assertions below are the real proof.
+    assert b"nvapi-SECRET" not in raw
     archive = zipfile.ZipFile(io.BytesIO(raw))
 
     manifest = json.loads(archive.read("manifest.json"))

@@ -102,11 +102,27 @@ EXPORTED_TABLES: tuple[tuple[type, str], ...] = (
 EXCLUDED_TABLES = frozenset({"users"})
 
 # Redacted ROWS (assistant spec 2026-09-01 §3): the assistant API key must not ride into
-# every backup ZIP. Row-level, not table-level — assistant_default_model and its siblings
-# still export. Keyed BY TABLE NAME on purpose: the filter below reads `row.key`, which
-# only AppSetting rows have, so a table absent from this dict is never touched. Filtered
-# once, before BOTH serializations (CSV + JSON read the same `rows` list).
-REDACTED_ROWS: dict[str, frozenset[str]] = {"app_settings": frozenset({KEY_SETTING})}
+# every export ZIP. Row-level, not table-level — assistant_default_model and its siblings
+# still export.
+#
+# MECHANISM: the loop below does REDACTED_ROWS.get(table_name) and skips the filter when
+# that returns None — being keyed by table name is the whole scoping story; the filter
+# never runs for a table that is not listed here.
+# PRECONDITION: a table listed here MUST have a `key` column, because the filter reads
+# `row.key` — several exported models besides AppSetting do (tax_inputs,
+# tax_input_definitions, contribution_limits), and one that does NOT would raise
+# AttributeError at request time, not import time. test_export_list_pins_every_metadata_table
+# pins both halves: listed table is exported, and its model carries `key`.
+#
+# Filtered once, before BOTH serializations (CSV + JSON read the same `rows` list) and
+# before the manifest count, so counts report EXPORTED rows.
+#
+# BOUNDARY (decided, spec §3): this covers the export ZIP only. The nightly pg_dump still
+# carries the row by design — it lands in a private OCI bucket and BACKUP_PASSPHRASE
+# encrypts it for anyone who wants that; a restore needs the key to survive.
+REDACTED_ROWS: dict[str, frozenset[str]] = {  # table -> values of its `key` column
+    "app_settings": frozenset({KEY_SETTING})
+}
 
 
 def _csv_cell(value: object) -> str:
@@ -191,11 +207,17 @@ async def export_snapshot(db: AsyncSession = Depends(get_db)) -> StreamingRespon
             "environment": settings.environment,
             "alembic_head": alembic_head,
             "app": "personal-finance-dashboard",
-            "note": "full user-data export; users and alembic_version are excluded by design",
+            "note": (
+                "full user-data export; users and alembic_version are excluded by design; "
+                "see redactions for withheld rows"
+            ),
             "tables": counts,
             # Standing note so a restore never mistakes an absent row for data loss.
+            # sorted() on both levels: determinism is structural, not dict-order luck.
             "redactions": [
-                f"{table}.{key}" for table, keys in REDACTED_ROWS.items() for key in sorted(keys)
+                f"{table}.{key}"
+                for table, keys in sorted(REDACTED_ROWS.items())
+                for key in sorted(keys)
             ],
         }
         archive.writestr("manifest.json", json.dumps(manifest, indent=2))
