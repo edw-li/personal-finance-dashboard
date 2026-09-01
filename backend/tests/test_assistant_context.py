@@ -16,6 +16,7 @@ from app.models import (
 from app.services.assistant_context import (
     CONTEXT_CHAR_CAP,
     MONTHS_WINDOW_TIGHT,
+    _decimate,
     build_context,
     jsonable,
     preview_sections,
@@ -120,6 +121,36 @@ async def test_a_payload_over_the_cap_rebuilds_at_the_tight_window(db):
     assert context["truncated"] is True
     assert len(context["spending"]["months"]) == MONTHS_WINDOW_TIGHT
     assert context["spending"]["movers"][0]["value"] == "1234.56"
+
+
+def test_decimate_always_keeps_the_terminal_point():
+    """Plain `series[::12]` only lands on the tail when len % 12 == 1 — a horizon whose
+    length is anything else would lose its FINAL value, which is the whole answer to
+    "where do I end up?"."""
+    assert _decimate(list(range(25))) == [0, 12, 24]  # already ends on the tail
+    assert _decimate(list(range(24))) == [0, 12, 23]  # 23 would have been dropped
+    assert _decimate([7]) == [7]
+    assert _decimate([]) == []
+
+
+async def test_projection_section_decimates_to_year_grain_keeping_the_last_month(db):
+    """The /projection builder's series stay index-aligned after decimation, and the
+    30-year horizon's last month survives it."""
+    account = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(account)
+    await db.flush()
+    snap = NetWorthSnapshot(month=date.today().replace(day=1))
+    db.add(snap)
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snap.id, account_id=account.id, balance=Decimal("100000.00")))
+    await db.commit()
+
+    section = (await build_context(db, route="/projection", search={}, view={}))["projection"]
+    start = date.fromisoformat(section["start_month"])
+    assert section["months"][-1] == date(start.year + 30, start.month, 1).isoformat()
+    lengths = {len(section[key]) for key in ("months", "projected", "coast")}
+    lengths |= {len(band) for band in (section["bands"] or {}).values()}
+    assert lengths == {31}  # t0 plus one point per projected year
 
 
 async def test_preview_summarizes_sections_with_row_counts(db):

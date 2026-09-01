@@ -49,6 +49,20 @@ def _tail(values: list, window: int) -> list:
     return values[-window:] if window > 0 else values
 
 
+def _decimate(values: list, step: int = 12) -> list:
+    """Month-grain → year-grain, ALWAYS keeping the terminal point.
+
+    A bare `values[::step]` lands on the last element only when `len(values) % step == 1`;
+    any other horizon length silently drops it, and the final value is the one the model
+    is most often asked about ("where do I end up in 30 years?")."""
+    if len(values) <= 1:
+        return list(values)
+    indices = list(range(0, len(values), step))
+    if indices[-1] != len(values) - 1:
+        indices.append(len(values) - 1)
+    return [values[index] for index in indices]
+
+
 def _view_owner(view: dict) -> str | None:
     raw = view.get("owner")
     return str(raw) if raw not in (None, "", "null") else None
@@ -395,10 +409,12 @@ async def _projection(db: AsyncSession, search: dict, view: dict) -> dict:
         return {"error": exc.detail}  # NO_SNAPSHOTS on a fresh database
     payload = p.model_dump()
     # Decimate month-grain series to year-grain: the model reads trends, not 360 points.
+    # Every series is sampled at the SAME indices, so index i still names one month across
+    # all of them — and the horizon's last month survives (see _decimate).
     for series_key in ("months", "projected", "coast"):
-        payload[series_key] = payload[series_key][::12]
+        payload[series_key] = _decimate(payload[series_key])
     if payload.get("bands"):
-        payload["bands"] = {k: v[::12] for k, v in payload["bands"].items()}
+        payload["bands"] = {k: _decimate(v) for k, v in payload["bands"].items()}
     return payload
 
 
