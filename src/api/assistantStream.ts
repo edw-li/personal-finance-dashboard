@@ -39,8 +39,9 @@ export interface AssistantErrorEvent {
 }
 
 /** How the stream ended, for whoever awaits `finished`. 'aborted' covers the user's Stop
- *  button and the 401 redirect alike: no answer, and nothing reported to the handlers.
- *  Every other outcome has already been reported through them. */
+ *  button and the 401 redirect alike: no TERMINAL report reached the handlers, though
+ *  tokens may already have been delivered. Every other outcome has been reported through
+ *  them. */
 export type ChatOutcome = 'done' | 'error' | 'interrupted' | 'aborted'
 
 export interface AssistantHandlers {
@@ -117,7 +118,8 @@ function dispatchFrame(frame: SseFrame, handlers: AssistantHandlers): 'done' | '
     case 'token': {
       // The server owns this shape, but a missing/null text would throw INSIDE this
       // module, where no caller can catch it — one frame must not cost the whole answer.
-      const text = (payload as { text?: unknown }).text
+      // `data: null` parses to null, so the read itself has to be optional too.
+      const text = (payload as { text?: unknown } | null)?.text
       if (typeof text === 'string') handlers.onToken(text)
       return null
     }

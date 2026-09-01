@@ -168,11 +168,13 @@ describe('streamChat', () => {
   })
 
   // Well-formed JSON, no text: onToken(undefined) would throw inside the reader loop, where
-  // the caller could never catch it — the frame is skipped instead.
+  // the caller could never catch it — the frame is skipped instead. `data: null` is the
+  // nastier shape: it parses fine, so only an optional READ keeps it from throwing.
   it('ignores a token frame carrying no text', async () => {
     stubFetch(async () =>
       sseResponse([
         'event: token\ndata: {}\n\n',
+        'event: token\ndata: null\n\n',
         'event: token\ndata: {"text":"only"}\n\n',
         'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
       ]),

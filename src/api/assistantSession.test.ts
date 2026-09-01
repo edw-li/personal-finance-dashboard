@@ -14,7 +14,12 @@ function item(content: string): TranscriptItem {
 }
 
 // jsdom keeps sessionStorage alive across tests in a file (MonthlyUpdatePage.test.tsx).
-afterEach(() => sessionStorage.clear())
+// restoreAllMocks is the belt to the blocked-write test's braces: if that test fails before
+// its mockRestore(), the throwing setItem spy would follow every later test out of the file.
+afterEach(() => {
+  vi.restoreAllMocks() // before the clear: a spied-out Storage method must be real again first
+  sessionStorage.clear()
+})
 
 describe('assistantSession', () => {
   it('round-trips the transcript and model', () => {
