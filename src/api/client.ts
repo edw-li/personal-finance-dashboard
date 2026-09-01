@@ -38,6 +38,14 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
 }
 
+// POST-for-read endpoints (the what-if family; here the assistant's context preview). The
+// server computes and never writes, so api()'s coarse non-GET invalidation must NOT fire —
+// the preview runs on every drawer open and would cost every page its instant paint.
+// Anything that CAN write keeps going through api().
+export async function apiReadOnly<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: 'POST', body: JSON.stringify(body) })
+}
+
 async function request<T>(path: string, options: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     // FormData bodies must NOT get a manual Content-Type: the browser writes

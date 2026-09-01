@@ -1673,3 +1673,56 @@ export interface PaceItem {
   ratio: string | null // 4dp fraction, e.g. "0.9500" — the tone was judged on THIS value
   tone: 'ok' | 'warn' | 'over'
 }
+
+// --- assistant (2026-09-01 spec §3–§5) ---
+
+export interface AssistantKeyStatus {
+  configured: boolean
+  source: 'env' | 'override' | null
+}
+
+export interface AssistantSettingsOut {
+  key: AssistantKeyStatus
+  default_model: string
+}
+
+// Tri-state api_key (the marriage-date rider): absent = unchanged, null = clear the
+// override, string = set.
+export interface AssistantSettingsUpdate {
+  api_key?: string | null
+  default_model?: string
+}
+
+export interface AssistantModelOut {
+  key: string
+  label: string
+  available: boolean
+  supports_tools: boolean
+  default: boolean
+}
+
+export interface AssistantModelsOut {
+  configured: boolean
+  key_source: 'env' | 'override' | null
+  // true = the catalog answered; false = key rejected/unreachable; null = no key.
+  key_ok: boolean | null
+  checked_at: string | null
+  models: AssistantModelOut[]
+}
+
+// What the drawer snapshots at send time: the route, its URL params, and whatever the
+// page published through useAssistantView.
+export interface AssistantContextIn {
+  route: string
+  search: Record<string, string>
+  view: Record<string, string | number | null>
+}
+
+export interface AssistantPreviewSection {
+  name: string
+  rows: number
+}
+
+export interface AssistantPreviewOut {
+  sections: AssistantPreviewSection[]
+}

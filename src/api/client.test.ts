@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, setToken } from './client'
+import { api, ApiError, apiReadOnly, setToken } from './client'
 import { clearSnapshots, getSnapshot, setSnapshot } from './snapshotCache'
 
 function mockFetchOk() {
@@ -139,5 +139,25 @@ describe('api — snapshot invalidation', () => {
     await expect(api('/things')).rejects.toThrow('Session expired')
     expect(assign).toHaveBeenCalledWith('/login')
     expect(getSnapshot('overview')).toBeUndefined()
+  })
+})
+
+describe('apiReadOnly — POST-for-read', () => {
+  beforeEach(() => clearSnapshots())
+
+  it('POSTs the body but leaves the snapshot cache standing', async () => {
+    setSnapshot('overview', { kept: true })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await apiReadOnly<{ ok: boolean }>('/assistant/context-preview', { context: {} })
+    expect(result.ok).toBe(true)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/assistant/context-preview')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe('{"context":{}}')
+    // The whole point: a compute-read must not cost every page its instant paint.
+    expect(getSnapshot('overview')).toEqual({ kept: true })
   })
 })
