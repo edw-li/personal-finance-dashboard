@@ -4,6 +4,16 @@ import type { AssistantErrorEvent, AssistantHandlers, ChatRequest } from './assi
 import { getSnapshot, setSnapshot } from './snapshotCache'
 import { setToken } from './client'
 
+type FetchImpl = (url: string, init?: RequestInit) => Promise<Response>
+
+/** One stub shape for every case, so the request itself stays inspectable (client.test.ts's
+ *  mockFetchOk arrangement) without a cast at each call site. */
+function stubFetch(impl: FetchImpl) {
+  const spy = vi.fn(impl)
+  vi.stubGlobal('fetch', spy)
+  return spy
+}
+
 function sseResponse(chunks: string[], status = 200): Response {
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
@@ -88,49 +98,42 @@ describe('streamChat', () => {
   }
 
   it('dispatches tokens then done', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        sseResponse([
-          'event: token\ndata: {"text":"Hel"}\n\n',
-          ': ping\n\nevent: token\ndata: {"text":"lo"}\n\n',
-          'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
-        ]),
-      ),
+    stubFetch(async () =>
+      sseResponse([
+        'event: token\ndata: {"text":"Hel"}\n\n',
+        ': ping\n\nevent: token\ndata: {"text":"lo"}\n\n',
+        'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
+      ]),
     )
     const h = handlers()
-    await streamChat(body, h).finished
+    expect(await streamChat(body, h).finished).toBe('done')
     expect(h.tokens.join('')).toBe('Hello')
     expect(h.dones).toEqual([{ model_used: 'kimi-k3' }])
     expect(h.errors).toEqual([])
   })
 
   it('POSTs the body to the chat endpoint with the bearer token', async () => {
-    const fetchMock = vi.fn(async () => sseResponse(['event: done\ndata: {"model_used":"k"}\n\n']))
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubFetch(async () => sseResponse(['event: done\ndata: {"model_used":"k"}\n\n']))
     setToken('tok') // afterEach's localStorage.clear() unsets it
     await streamChat(body, handlers()).finished
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/v1/assistant/chat')
-    expect(init.method).toBe('POST')
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok')
-    expect(init.body).toBe(JSON.stringify(body))
+    expect(init?.method).toBe('POST')
+    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer tok')
+    expect(init?.body).toBe(JSON.stringify(body))
   })
 
   it('dispatches the optional notice and tool events', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        sseResponse([
-          'event: notice\ndata: {"kind":"failover","from":"a","to":"b"}\n\n',
-          'event: tool_start\ndata: {"name":"spending","summary":"Dec 2025"}\n\n',
-          'event: tool_result\ndata: {"name":"spending","summary":"12 rows"}\n\n',
-          'event: done\ndata: {"model_used":"b"}\n\n',
-        ]),
-      ),
+    stubFetch(async () =>
+      sseResponse([
+        'event: notice\ndata: {"kind":"failover","from":"a","to":"b"}\n\n',
+        'event: tool_start\ndata: {"name":"spending","summary":"Dec 2025"}\n\n',
+        'event: tool_result\ndata: {"name":"spending","summary":"12 rows"}\n\n',
+        'event: done\ndata: {"model_used":"b"}\n\n',
+      ]),
     )
     const h = handlers()
-    await streamChat(body, h).finished
+    expect(await streamChat(body, h).finished).toBe('done')
     expect(h.notices).toEqual([{ kind: 'failover', from: 'a', to: 'b' }])
     expect(h.toolStarts).toEqual([{ name: 'spending', summary: 'Dec 2025' }])
     expect(h.toolResults).toEqual([{ name: 'spending', summary: '12 rows' }])
@@ -138,101 +141,159 @@ describe('streamChat', () => {
   })
 
   it('surfaces server error events', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        sseResponse(['event: error\ndata: {"kind":"bad_key","message":"nope"}\n\n']),
-      ),
+    stubFetch(async () =>
+      sseResponse(['event: error\ndata: {"kind":"bad_key","message":"nope"}\n\n']),
     )
     const h = handlers()
-    await streamChat(body, h).finished
+    expect(await streamChat(body, h).finished).toBe('error')
     expect(h.errors).toEqual([{ kind: 'bad_key', message: 'nope' }])
   })
 
   // A truncated or garbled frame must cost that frame only — never the answer already on
   // screen, and never the terminal event still to come.
   it('drops an unparseable frame and keeps streaming', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        sseResponse([
-          'event: token\ndata: {"text":"a"}\n\n',
-          'event: token\ndata: {not json\n\n',
-          'event: token\ndata: {"text":"b"}\n\n',
-          'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
-        ]),
-      ),
+    stubFetch(async () =>
+      sseResponse([
+        'event: token\ndata: {"text":"a"}\n\n',
+        'event: token\ndata: {not json\n\n',
+        'event: token\ndata: {"text":"b"}\n\n',
+        'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
+      ]),
     )
     const h = handlers()
-    await streamChat(body, h).finished
+    expect(await streamChat(body, h).finished).toBe('done')
     expect(h.tokens.join('')).toBe('ab')
     expect(h.dones).toEqual([{ model_used: 'kimi-k3' }])
     expect(h.errors).toEqual([])
   })
 
-  it('reports an interrupted stream that ended without a terminal event', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => sseResponse(['event: token\ndata: {"text":"par"}\n\n'])),
+  // Well-formed JSON, no text: onToken(undefined) would throw inside the reader loop, where
+  // the caller could never catch it — the frame is skipped instead.
+  it('ignores a token frame carrying no text', async () => {
+    stubFetch(async () =>
+      sseResponse([
+        'event: token\ndata: {}\n\n',
+        'event: token\ndata: {"text":"only"}\n\n',
+        'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
+      ]),
     )
     const h = handlers()
-    await streamChat(body, h).finished
+    expect(await streamChat(body, h).finished).toBe('done')
+    expect(h.tokens).toEqual(['only'])
+    expect(h.errors).toEqual([])
+  })
+
+  it('reports an interrupted stream that ended without a terminal event', async () => {
+    stubFetch(async () => sseResponse(['event: token\ndata: {"text":"par"}\n\n']))
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('interrupted')
     expect(h.tokens.join('')).toBe('par')
     expect(h.errors).toEqual([{ kind: 'interrupted', message: 'The stream ended unexpectedly.' }])
   })
 
-  it('maps a non-OK JSON response to an error handler call', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ detail: 'too many' }), { status: 429 })),
+  // A proxy that truncates the trailing blank line must not turn a complete answer into
+  // 'interrupted': the tail is re-terminated once after the stream closes.
+  it('flushes a final frame that lost its blank line', async () => {
+    stubFetch(async () =>
+      sseResponse([
+        'event: token\ndata: {"text":"all"}\n\n',
+        'event: done\ndata: {"model_used":"kimi-k3"}',
+      ]),
     )
     const h = handlers()
-    await streamChat(body, h).finished
-    expect(h.errors).toEqual([
-      { kind: 'rate_limited', message: 'too many', retry_after: undefined },
-    ])
+    expect(await streamChat(body, h).finished).toBe('done')
+    expect(h.tokens).toEqual(['all'])
+    expect(h.dones).toEqual([{ model_used: 'kimi-k3' }])
+    expect(h.errors).toEqual([])
+  })
+
+  // Without the cancel-and-break this hangs until the test times out — and in the browser it
+  // would hold the HTTP request open behind a finished answer.
+  it('stops reading after the terminal event even if the server holds the stream open', async () => {
+    const encoder = new TextEncoder()
+    let cancelled = false
+    stubFetch(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: done\ndata: {"model_used":"kimi-k3"}\n\n'))
+          // deliberately never closed
+        },
+        cancel() {
+          cancelled = true
+        },
+      })
+      return new Response(stream, { status: 200 })
+    })
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('done')
+    expect(h.dones).toEqual([{ model_used: 'kimi-k3' }])
+    expect(h.errors).toEqual([])
+    expect(cancelled).toBe(true)
+  })
+
+  it('maps a non-OK JSON response to an error handler call', async () => {
+    stubFetch(async () => new Response(JSON.stringify({ detail: 'too many' }), { status: 429 }))
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('error')
+    expect(h.errors).toEqual([{ kind: 'rate_limited', message: 'too many' }])
+    // No hint from the server means no key at all, not a key holding undefined — that
+    // distinction is what a countdown reads.
+    expect('retry_after' in h.errors[0]).toBe(false)
   })
 
   it('carries a numeric Retry-After through to the error payload', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ error: 'slow down' }), {
-            status: 429,
-            headers: { 'Retry-After': '30' },
-          }),
-      ),
+    stubFetch(
+      async () =>
+        new Response(JSON.stringify({ error: 'slow down' }), {
+          status: 429,
+          headers: { 'Retry-After': '30' },
+        }),
     )
     const h = handlers()
     await streamChat(body, h).finished
     expect(h.errors).toEqual([{ kind: 'rate_limited', message: 'slow down', retry_after: 30 }])
   })
 
-  it('maps 5xx to unavailable and other failures to bad_request', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ detail: 'upstream down' }), { status: 502 })),
+  it('omits a Retry-After that is not a positive number of seconds', async () => {
+    // The HTTP-date form is legal and unparseable as a count; 0 is nothing to count down.
+    stubFetch(
+      async () =>
+        new Response(JSON.stringify({ error: 'slow down' }), {
+          status: 429,
+          headers: { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' },
+        }),
     )
-    const server = handlers()
-    await streamChat(body, server).finished
-    expect(server.errors).toEqual([
-      { kind: 'unavailable', message: 'upstream down', retry_after: undefined },
-    ])
+    const dated = handlers()
+    await streamChat(body, dated).finished
+    expect('retry_after' in dated.errors[0]).toBe(false)
 
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response('<html>nope</html>', { status: 400, statusText: 'Bad Request' }),
-      ),
+    stubFetch(
+      async () =>
+        new Response(JSON.stringify({ error: 'slow down' }), {
+          status: 429,
+          headers: { 'Retry-After': '0' },
+        }),
     )
-    const client = handlers()
-    await streamChat(body, client).finished
+    const zero = handlers()
+    await streamChat(body, zero).finished
+    expect('retry_after' in zero.errors[0]).toBe(false)
+  })
+
+  it('maps 5xx to unavailable', async () => {
+    stubFetch(async () => new Response(JSON.stringify({ detail: 'upstream down' }), { status: 502 }))
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('error')
+    expect(h.errors).toEqual([{ kind: 'unavailable', message: 'upstream down' }])
+  })
+
+  it('maps other failures to bad_request, falling back to statusText', async () => {
+    stubFetch(
+      async () => new Response('<html>nope</html>', { status: 400, statusText: 'Bad Request' }),
+    )
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('error')
     // Non-JSON body: statusText is the fallback message (client.ts's posture).
-    expect(client.errors).toEqual([
-      { kind: 'bad_request', message: 'Bad Request', retry_after: undefined },
-    ])
+    expect(h.errors).toEqual([{ kind: 'bad_request', message: 'Bad Request' }])
   })
 
   // client.ts's session-expiry contract, replicated for the one path that bypasses it —
@@ -244,15 +305,12 @@ describe('streamChat', () => {
     const assign = vi.fn()
     // jsdom refuses real navigation, so the redirect is stubbed (client.test.ts's arrangement).
     vi.stubGlobal('location', { ...window.location, assign })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ detail: 'Not authenticated' }), { status: 401 }),
-      ),
+    stubFetch(
+      async () => new Response(JSON.stringify({ detail: 'Not authenticated' }), { status: 401 }),
     )
     const h = handlers()
-    await streamChat(body, h).finished
+    // 'aborted', not 'error': nothing was reported to the handlers and the page is leaving.
+    expect(await streamChat(body, h).finished).toBe('aborted')
     expect(assign).toHaveBeenCalledWith('/login')
     expect(localStorage.getItem('finance_token')).toBeNull()
     expect(getSnapshot('overview')).toBeUndefined()
@@ -261,56 +319,71 @@ describe('streamChat', () => {
   })
 
   it('reports a failed request as a network error', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')))
     const h = handlers()
-    await streamChat(body, h).finished
+    expect(await streamChat(body, h).finished).toBe('error')
     expect(h.errors).toEqual([
       { kind: 'network', message: 'Network error — is the server reachable?' },
     ])
   })
 
   it('abort() swallows the AbortError and fires no error handler', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        (_url: string, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () =>
-              reject(new DOMException('aborted', 'AbortError')),
-            )
-          }),
-      ),
+    const fetchMock = stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          )
+        }),
     )
     const h = handlers()
     const handle = streamChat(body, h)
     handle.abort()
-    await handle.finished
+    expect(await handle.finished).toBe('aborted')
     expect(h.errors).toEqual([])
+    expect(h.dones).toEqual([])
+    // The signal really reached fetch — otherwise the request outlives the drawer.
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true)
   })
 
   // Stopping mid-answer is a user action, not a failure: the reader's rejection is as
   // silent as the request's.
   it('abort() mid-stream ends quietly, keeping the tokens already delivered', async () => {
     const encoder = new TextEncoder()
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(encoder.encode('event: token\ndata: {"text":"half"}\n\n'))
-            init?.signal?.addEventListener('abort', () =>
-              controller.error(new DOMException('aborted', 'AbortError')),
-            )
-          },
-        })
-        return new Response(stream, { status: 200 })
-      }),
-    )
+    stubFetch(async (_url, init) => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: token\ndata: {"text":"half"}\n\n'))
+          init?.signal?.addEventListener('abort', () =>
+            controller.error(new DOMException('aborted', 'AbortError')),
+          )
+        },
+      })
+      return new Response(stream, { status: 200 })
+    })
     const h = handlers()
     const handle = streamChat(body, h)
     await vi.waitFor(() => expect(h.tokens).toEqual(['half']))
     handle.abort()
-    await handle.finished
+    expect(await handle.finished).toBe('aborted')
     expect(h.errors).toEqual([])
+  })
+
+  // The interrupted report is dispatched OUTSIDE the reader's try: a handler that throws
+  // must not land back in the catch and report a second, wrong 'network' failure — and
+  // `finished` must still resolve, or the drawer would stream forever.
+  it('resolves without a second report when an error handler itself throws', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubFetch(async () => sseResponse(['event: token\ndata: {"text":"par"}\n\n']))
+    const h = handlers()
+    const boom = new Error('render crashed')
+    h.onError = (e) => {
+      h.errors.push(e)
+      throw boom
+    }
+    expect(await streamChat(body, h).finished).toBe('error')
+    expect(h.errors).toEqual([{ kind: 'interrupted', message: 'The stream ended unexpectedly.' }])
+    expect(logged).toHaveBeenCalledWith(boom)
+    logged.mockRestore()
   })
 })
