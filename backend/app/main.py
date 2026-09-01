@@ -9,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api import (
     app_settings,
+    assistant,
     auth,
     calendar,
     comp,
@@ -96,6 +97,7 @@ app.include_router(app_settings.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
 app.include_router(overview.router, prefix="/api/v1")
+app.include_router(assistant.router, prefix="/api/v1")
 
 
 @app.get("/api/v1/health")
