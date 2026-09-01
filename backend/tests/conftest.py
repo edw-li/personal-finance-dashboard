@@ -99,6 +99,17 @@ def _reset_portfolio_account_factory():
     reset_accounts()
 
 
+@pytest.fixture(autouse=True)
+def _reset_assistant_module_state():
+    # The catalog verdict and the outbound-transport hook are module globals: a probe
+    # cached (or a MockTransport left) by one test would otherwise decide the next one.
+    # Imported here so the assistant service isn't pulled in at conftest import time.
+    from app.services import assistant_models
+
+    assistant_models.reset_catalog_cache()
+    assistant_models.TRANSPORT_OVERRIDE = None
+
+
 @pytest.fixture
 async def seeded_user(db):
     user = User(email="me@example.com", password_hash=hash_password("correct-horse"))
