@@ -11,6 +11,8 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
       ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      # Optional — no :? guard: the app boots fully without the assistant.
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
     healthcheck:
       # Boot runs alembic upgrade + seed before uvicorn listens; start_period
       # covers that window. A failed migration keeps the service unhealthy, so

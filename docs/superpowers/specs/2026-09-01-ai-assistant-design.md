@@ -88,7 +88,7 @@ Every request gets the **household summary**: people, latest net-worth total + M
 
 | route | bundle (beyond the household summary) |
 |---|---|
-| `/` | attention items, up-next events |
+| `/` | up-next events, money-flow summary (attention is client-side math; the household summary already carries its freshness feed) |
 | `/net-worth` | monthly group-total series, latest per-account table (name, group, balance, MoM); honors `view.owner`/`view.granularity` |
 | `/portfolio` | holdings rows (ticker, shares, price, value, weight, unrealized, yield, income), totals, allocation splits, realized summary, last-12 dividends, refresh status; honors `view.owner`, `view.detailTicker`. **Excludes** price history and sparklines |
 | `/spending` | month list, per-category monthly series + budgets, focused-month movers, yearly rollups, net-pay + savings-rate series; focused month from `search.month` |

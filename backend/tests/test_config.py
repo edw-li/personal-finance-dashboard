@@ -35,3 +35,15 @@ def test_out_of_range_admin_password_rejected_outside_dev():
     # bcrypt's limit is BYTES: 40 accented chars is 80 bytes and would crash seed at boot.
     with pytest.raises(ValueError, match="ADMIN_PASSWORD"):
         Settings(environment="prod", secret_key="x" * 64, admin_password="é" * 40)
+
+
+def test_assistant_config_defaults(monkeypatch):
+    # A developer shell that exports these would flip the asserts — and pytest's assertion
+    # rewriting would print the real key through the Settings repr. Clear them first.
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.delenv("NVIDIA_BASE_URL", raising=False)
+    monkeypatch.delenv("NVIDIA_CA_BUNDLE", raising=False)
+    s = Settings(_env_file=None)
+    assert s.nvidia_api_key is None
+    assert s.nvidia_base_url == "https://integrate.api.nvidia.com/v1"
+    assert s.nvidia_ca_bundle is None
