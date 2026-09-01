@@ -396,6 +396,27 @@ describe('AssistantDrawer', () => {
     expect(screen.queryByRole('button', { name: /retry with deepseek v4 pro/i })).toBeNull()
   })
 
+  // sessionStorage outlives the catalog: a model the server has since retired would leave
+  // the <select> with no matching option (value reads back as '') and name a dead model on
+  // every send.
+  it('reconciles a persisted model the catalog no longer offers', async () => {
+    sessionStorage.setItem('assistant:model', 'gone-model')
+    streamChat.mockImplementation(
+      (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+        h.onDone({ model_used: 'kimi-k3' })
+        return { abort: vi.fn(), finished: Promise.resolve() }
+      },
+    )
+    mount()
+    const input = await openDrawer()
+    const select = screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement
+    expect(select.value).toBe('kimi-k3') // the catalog's own default
+    fireEvent.change(input, { target: { value: 'still works?' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    expect((streamChat.mock.calls[0][0] as { model: string }).model).toBe('kimi-k3')
+  })
+
   // A stream can end without reporting anything to the handlers at all — the 401 redirect
   // and an abort raised elsewhere both resolve `finished` silently. Without that
   // continuation the composer would keep offering Stop for a stream that is already over.

@@ -1,10 +1,15 @@
 /* Assistant drawer (2026-09-01 spec §9). Z-map: bubble layer 2 < drawer 15 < palette 20
-   < toasts 30 — Ctrl+K must open ABOVE the drawer, and an Undo outlives both. */
+   < toasts 30 — Ctrl+K must open ABOVE the drawer, and an Undo outlives both.
+   The launcher shares the bottom-right corner with .toast-region (right/bottom 16px,
+   z 30), which wins the stack: parked at 1.25rem the bubble sits UNDER the first toast,
+   so the Undo that an action just offered covers the button. 4.75rem clears a
+   single-line toast (~2.4rem tall + its 1rem bottom inset) with room to spare; a taller
+   stack grows upward, away from the bubble. */
 
 .assistant-launcher {
   position: fixed;
   right: 1.25rem;
-  bottom: 1.25rem;
+  bottom: 4.75rem;
   z-index: 15;
   width: 44px;
   height: 44px;
@@ -12,7 +17,6 @@
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--accent);
-  font-size: 1.1rem;
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }

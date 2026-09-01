@@ -32,6 +32,10 @@ import './assistant.css'
 /** The server caps at 20; sending exactly its cap keeps 422s unreachable from here. */
 const SENT_MESSAGES_CAP = 20
 
+/** One drawer per app (Layout mounts it once), so a constant id is safe as an
+ *  aria-controls target. */
+const PREVIEW_LIST_ID = 'assistant-context-sections'
+
 const MODEL_LABELS: Record<string, string> = {
   'kimi-k3': 'Kimi K3',
   'deepseek-v4-pro-0813': 'DeepSeek V4 Pro',
@@ -45,6 +49,19 @@ function modelLabel(key: string, models: AssistantModelsOut | null): string {
 
 function pageLabel(route: string): string {
   return NAV_ITEMS.find((item) => item.to === route)?.label ?? route
+}
+
+/** Keeps the selection inside the catalog: a key the server has since retired — persisted
+ *  from an earlier session, or a stale default — falls back to the catalog's own default,
+ *  else its first available entry. Left alone while the catalog is unknown; whichever of
+ *  the two fetches lands last reconciles, so their order does not matter. */
+function resolveModel(key: string, models: AssistantModelsOut | null): string {
+  if (models === null || models.models.some((m) => m.key === key)) return key
+  return (
+    models.models.find((m) => m.default && m.available)?.key ??
+    models.models.find((m) => m.available)?.key ??
+    key
+  )
 }
 
 /** Module scope AND memoized on purpose: a streaming answer re-renders the whole
@@ -72,6 +89,10 @@ export default function AssistantDrawer() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<ChatStreamHandle | null>(null)
+  const modelsRef = useRef<AssistantModelsOut | null>(null)
+  // Whether the log is following new content. Flipped by the reader's own scrolling and
+  // re-armed by each send — asking a question is a request to watch the answer arrive.
+  const stickToBottom = useRef(true)
   // Guards a late stream event after New chat wiped the transcript: each send bumps it,
   // and handlers compare before touching state (the pages' seqRef idiom).
   const sendSeq = useRef(0)
@@ -93,12 +114,13 @@ export default function AssistantDrawer() {
     writeAssistantModel(model)
   }, [model])
 
-  // Open-bus subscription (palette's "Ask assistant"). Unkeyed: always current setters.
+  // Open-bus subscription (palette's "Ask assistant"). Subscribed once: setOpen is a
+  // useState setter, and React guarantees those are stable for the component's lifetime.
   useEffect(() => {
     const onOpen = () => setOpen(true)
     window.addEventListener(ASSISTANT_OPEN_EVENT, onOpen)
     return () => window.removeEventListener(ASSISTANT_OPEN_EVENT, onOpen)
-  })
+  }, [])
 
   // First open: load settings + models once. Promise continuations only (house law).
   useEffect(() => {
@@ -107,11 +129,19 @@ export default function AssistantDrawer() {
       .then((s) => {
         setSettings(s)
         setSettingsFailed(false)
-        setModel((current) => readAssistantModel() ?? s.default_model ?? current)
+        setModel((current) =>
+          resolveModel(readAssistantModel() ?? s.default_model ?? current, modelsRef.current),
+        )
       })
       .catch(() => setSettingsFailed(true))
     fetchAssistantModels()
-      .then(setModels)
+      .then((m) => {
+        // Mirrored to a ref as well: the settings continuation above needs the catalog to
+        // validate against, and its own `models` closure is the null from effect time.
+        modelsRef.current = m
+        setModels(m)
+        setModel((current) => resolveModel(current, m))
+      })
       .catch(() => setModels(null))
   }, [open, settings])
 
@@ -120,11 +150,22 @@ export default function AssistantDrawer() {
     if (open) inputRef.current?.focus()
   }, [open, settings])
 
-  // Keep the newest message in view as tokens land.
+  // Follow the newest message as tokens land — but only while the reader is still parked at
+  // the bottom. Someone scrolled up re-reading an earlier answer must not be yanked back
+  // down by the next token. Keyed on the transcript, not unkeyed: an unkeyed effect re-pins
+  // on EVERY render, so each keystroke in the composer would slam the log down too.
   useEffect(() => {
     const el = messagesRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  })
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
+  }, [transcript])
+
+  const onMessagesScroll = () => {
+    const el = messagesRef.current
+    if (el === null) return
+    // ~40px of slack: fractional scroll maths and a half-rendered last line mean a reader
+    // who IS at the bottom rarely measures as exactly zero.
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }
 
   const close = () => {
     setOpen(false)
@@ -171,12 +212,15 @@ export default function AssistantDrawer() {
    *  so a functional update queued by the caller would be clobbered by the stale closure. */
   const send = (text: string, withModel?: string, base?: TranscriptItem[]) => {
     const chosenModel = withModel ?? model
-    if (withModel !== undefined) setModel(withModel)
     const content = text.trim()
     if (content === '' || streaming || settings === null || !settings.key.configured) return
+    // Below the guard: a rejected send must not leave the model picker showing a model that
+    // was never asked anything.
+    if (withModel !== undefined) setModel(withModel)
     const seq = ++sendSeq.current
     const asked = buildContext()
     lastQuestion.current = content
+    stickToBottom.current = true
     const userItem: TranscriptItem = { role: 'user', content, contextLabel }
     const pendingAnswer: TranscriptItem = { role: 'assistant', content: '', tools: [] }
     const history = [...(base ?? transcript), userItem]
@@ -189,9 +233,14 @@ export default function AssistantDrawer() {
     const patchAnswer = (patch: (current: TranscriptItem) => TranscriptItem) => {
       if (seq !== sendSeq.current) return
       setTranscript((current) => {
-        if (current.length === 0) return current
+        const last = current.at(-1)
+        // The stream module promises nothing follows a terminal event, so the tail IS our
+        // pending answer. Checked anyway: if that invariant ever slips, a late token must
+        // be dropped rather than written into a user bubble or over a reported error.
+        if (last === undefined || last.role !== 'assistant' || last.error !== undefined)
+          return current
         const next = [...current]
-        next[next.length - 1] = patch(next[next.length - 1])
+        next[next.length - 1] = patch(last)
         return next
       })
     }
@@ -338,7 +387,9 @@ export default function AssistantDrawer() {
           }}
         >
           <div className="assistant-header">
-            <span className="assistant-title">✦ Assistant</span>
+            <span className="assistant-title">
+              <span aria-hidden="true">✦</span> Assistant
+            </span>
             <select
               className="assistant-model-select"
               aria-label="Model"
@@ -377,11 +428,17 @@ export default function AssistantDrawer() {
           </div>
           <div className="assistant-context">
             Seeing: {contextLabel} ·{' '}
-            <button type="button" className="assistant-context-toggle" onClick={togglePreview}>
+            <button
+              type="button"
+              className="assistant-context-toggle"
+              aria-expanded={previewOpen}
+              aria-controls={PREVIEW_LIST_ID}
+              onClick={togglePreview}
+            >
               what the assistant can see
             </button>
             {previewOpen && (
-              <ul className="assistant-context-sections">
+              <ul id={PREVIEW_LIST_ID} className="assistant-context-sections">
                 {previewSections === null ? (
                   <li>Loading…</li>
                 ) : previewSections.length === 0 ? (
@@ -396,7 +453,17 @@ export default function AssistantDrawer() {
               </ul>
             )}
           </div>
-          <div className="assistant-messages" role="log" aria-label="Conversation" ref={messagesRef}>
+          <div
+            className="assistant-messages"
+            role="log"
+            aria-label="Conversation"
+            // Busy while tokens stream: a live log would otherwise announce every
+            // fragment as it lands. Cleared on done/error, when the finished answer is
+            // announced once.
+            aria-busy={streaming}
+            ref={messagesRef}
+            onScroll={onMessagesScroll}
+          >
             {settingsFailed && (
               <div className="assistant-error" role="alert">
                 Couldn&apos;t reach the assistant service.
@@ -433,7 +500,7 @@ export default function AssistantDrawer() {
                   {item.notice && <p className="assistant-notice">{item.notice}</p>}
                   {(item.tools ?? []).map((tool, t) => (
                     <span key={t} className="assistant-tool-chip">
-                      ⚙ {tool.name}
+                      <span aria-hidden="true">⚙</span> {tool.name}
                       {tool.done ? '' : '…'}
                     </span>
                   ))}
