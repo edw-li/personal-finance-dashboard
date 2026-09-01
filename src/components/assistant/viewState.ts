@@ -21,13 +21,17 @@ export function subscribeAssistantView(listener: () => void): () => void {
 }
 
 function publish(view: AssistantView): void {
-  currentView = view
+  // Frozen because readAssistantView() hands out the live singleton: a caller that mutated
+  // it would silently rewrite what the drawer snapshots at send time.
+  currentView = Object.freeze(view)
   version += 1
   listeners.forEach((listener) => listener())
 }
 
-/** One call per page. Serialized dep: a fresh object literal each render must not
- *  republish (the memo-dep idiom the pages already use for people lists). */
+/** One call per page — last writer wins, and any publisher's unmount blanks the view for
+ *  all. Two concurrent publishers are unsupported. Serialized dep: a fresh object literal
+ *  each render must not republish (the memo-dep idiom the pages already use for people
+ *  lists). */
 export function useAssistantView(view: AssistantView): void {
   const serialized = JSON.stringify(view)
   useEffect(() => {
@@ -45,5 +49,7 @@ export function useAssistantViewVersion(): number {
 export const ASSISTANT_OPEN_EVENT = 'assistant:open'
 
 export function requestAssistantOpen(): void {
-  window.dispatchEvent(new Event(ASSISTANT_OPEN_EVENT))
+  // CustomEvent rather than Event so a future prefill can ride along in `detail` without
+  // changing every listener; there is no payload today.
+  window.dispatchEvent(new CustomEvent(ASSISTANT_OPEN_EVENT))
 }
