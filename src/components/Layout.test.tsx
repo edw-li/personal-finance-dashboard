@@ -20,6 +20,19 @@ vi.mock('./routeChunks', () => ({
   warmAllRoutes: vi.fn(),
 }))
 
+// The shell mounts the REAL AssistantDrawer (its presence in the layout is the contract
+// under test), so only its network module is stubbed — no shell test may reach fetch.
+// Wrappers rather than the vi.fn()s themselves: this factory is hoisted above the consts,
+// and only a call-time dereference survives that (AssistantDrawer.test.tsx's idiom).
+const fetchAssistantSettings = vi.fn()
+const fetchAssistantModels = vi.fn()
+const fetchContextPreview = vi.fn()
+vi.mock('../api/assistant', () => ({
+  fetchAssistantSettings: (...a: unknown[]) => fetchAssistantSettings(...a),
+  fetchAssistantModels: (...a: unknown[]) => fetchAssistantModels(...a),
+  fetchContextPreview: (...a: unknown[]) => fetchContextPreview(...a),
+}))
+
 function renderShell(initialPath = '/') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
@@ -96,6 +109,22 @@ beforeEach(() => {
   // these vi.fn()s would otherwise accumulate call history across this file's tests.
   vi.mocked(warmAllRoutes).mockClear()
   vi.mocked(prefetchRoute).mockClear()
+  // Configured, with a one-entry catalog: the drawer then settles on a STRUCTURAL landmark
+  // (its composer) that the shell tests can wait for without knowing a word of its copy.
+  fetchAssistantSettings.mockReset().mockResolvedValue({
+    key: { configured: true, source: 'env' },
+    default_model: 'kimi-k3',
+  })
+  fetchAssistantModels.mockReset().mockResolvedValue({
+    configured: true,
+    key_source: 'env',
+    key_ok: true,
+    checked_at: '2026-09-01T00:00:00Z',
+    models: [
+      { key: 'kimi-k3', label: 'Kimi K3', available: true, supports_tools: true, default: true },
+    ],
+  })
+  fetchContextPreview.mockReset().mockResolvedValue({ sections: [] })
 })
 
 afterEach(() => {
@@ -241,5 +270,47 @@ describe('Layout — scroll restoration', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
     fireEvent.click(screen.getByRole('button', { name: 'go back' }))
     expect(window.scrollTo).toHaveBeenLastCalledWith(0, 0)
+  })
+})
+
+describe('Layout — assistant mount', () => {
+  it('mounts the assistant launcher, closed, without disturbing arrival focus', () => {
+    renderShell()
+    expect(screen.getByRole('button', { name: 'Open assistant' })).toBeTruthy()
+    // Mounted ≠ open: the drawer costs the page nothing until someone asks for it, and
+    // the arrival contract (browser's own focus stands) must survive the extra component.
+    expect(screen.queryByRole('complementary', { name: 'Assistant' })).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+    expect(fetchAssistantSettings).not.toHaveBeenCalled()
+  })
+
+  // The whole F7 wiring end to end: the palette asks the bus, the drawer Layout mounted
+  // answers. Neither knows about the other — this is the only place that proves the two
+  // halves meet.
+  it('opens the drawer from the palette Ask assistant action', async () => {
+    renderShell()
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    const combo = screen.getByRole('combobox')
+    fireEvent.change(combo, { target: { value: 'assistant' } })
+    fireEvent.keyDown(combo, { key: 'Enter' })
+    expect(await screen.findByRole('complementary', { name: 'Assistant' })).toBeTruthy()
+    // Settles the settings fetch inside act, structurally: the composer is the drawer's
+    // contract, its wording is not, so no copy edit in there can break a shell test.
+    expect(await screen.findByRole('textbox', { name: /ask the assistant/i })).toBeTruthy()
+  })
+
+  // The palette sits ABOVE the drawer (z 20 vs 15) and both answer Escape. One keypress
+  // must dismiss exactly one of them: the drawer's window-level listener stands down for
+  // whoever already called preventDefault.
+  it('Escape in the palette closes only the palette, leaving the drawer open', async () => {
+    renderShell()
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    await screen.findByRole('textbox', { name: /ask the assistant/i })
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Command palette' }), {
+      key: 'Escape',
+    })
+    expect(document.querySelector('.palette-overlay')).toBeNull()
+    expect(screen.getByRole('complementary', { name: 'Assistant' })).toBeTruthy()
   })
 })

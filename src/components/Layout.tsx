@@ -2,6 +2,7 @@ import { LogOut } from 'lucide-react'
 import { Suspense, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigationType } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import AssistantDrawer from './assistant/AssistantDrawer'
 import CommandPalette from './CommandPalette'
 import './Layout.css'
 import { NAV_SECTIONS } from './navItems'
@@ -123,8 +124,10 @@ export default function Layout() {
       <main id="main" tabIndex={-1} className="content" ref={mainRef}>
         {/* Route chunks resolve here — the sidebar must not unmount while one loads, and a
             chunk that never arrives must not blank the app (RouteBoundary). The fallback's
-            class is .route-fallback, not panels.css's .empty-note: panels.css travels with
-            its importers, not this file, so this fallback cannot rely on it.
+            class is .route-fallback, not panels.css's .empty-note: panels.css reaches the
+            entry chunk only INCIDENTALLY (the assistant drawer below imports it), and a
+            fallback that leans on a neighbor's import staying put is one refactor from
+            rendering unstyled.
 
             key={pathname} remounts the boundary on navigation, which is what makes the retry
             real: React.lazy memoizes the rejected import, so re-rendering the FAILED route
@@ -139,6 +142,15 @@ export default function Layout() {
         </RouteBoundary>
       </main>
       <CommandPalette />
+      {/* Beside the palette, and last for the same reason: both are app-wide overlays that
+          outlive every route, so neither may sit inside <main> where a navigation would
+          unmount it (the drawer's transcript is per-sitting, not per-page).
+
+          Imported eagerly, like the palette, and for the same reasons: it must answer on
+          every route (including one whose own chunk is still loading, or has failed), and
+          lazy would put a network fetch — plus a second chunk-failure mode — between the
+          keypress and the drawer taking focus. The bill is ~6.3 kB gz on the entry chunk. */}
+      <AssistantDrawer />
     </div>
   )
 }

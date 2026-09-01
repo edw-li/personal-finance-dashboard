@@ -16,6 +16,7 @@ import {
 import type { OwnerScope } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
+import { useAssistantView } from '../components/assistant/viewState'
 import ChartZoomHint from '../components/ChartZoomHint'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
@@ -182,6 +183,15 @@ export default function PortfolioPage() {
   // holdings table, the allocation charts and the three record tabs — which is why the
   // chips sit under the page header rather than inside one card.
   const [owner, setOwner] = useState<OwnerScope>(null)
+  // What the assistant must answer against: the scope, the open record tab and the drill-in
+  // ticker, none of which is in the URL once the arrival param is consumed (2026-09-01
+  // spec §6). `owner` is stringified because the scope is a person id OR the literal
+  // 'joint' — one type on the wire beats a union.
+  useAssistantView({
+    owner: owner === null ? null : String(owner),
+    tab,
+    ticker: detailTicker,
+  })
   // Fetched on its own, never inside the page's Promise.all: the chips are an affordance,
   // and a household hiccup must not blank the portfolio (NetWorthPage's isolated-fetch
   // posture). null covers both "not loaded yet" and "failed".

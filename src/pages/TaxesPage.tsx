@@ -14,6 +14,7 @@ import {
   putTaxInputs,
 } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
+import { useAssistantView } from '../components/assistant/viewState'
 import InfoHint from '../components/InfoHint'
 import PageSkeleton from '../components/PageSkeleton'
 import BracketsEditor from '../components/taxes/BracketsEditor'
@@ -191,6 +192,9 @@ export default function TaxesPage() {
   // Only while the editors are mounted: a failed load unmounts them, and their last
   // reported flag must not outlive them into a spurious confirm.
   const dirty = detail !== null && (inputsDirty || bracketsDirty)
+
+  // The assistant answers against the year on screen (2026-09-01 spec §6).
+  useAssistantView({ year: selectedYear, filingStatus })
 
   // The year list alone: no selection change, no busy flip, nothing that blinks. It is the
   // reconciler behind an optimistic create and behind the chip counts a save moves, and

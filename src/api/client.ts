@@ -1,3 +1,4 @@
+import { clearAssistantSession } from './assistantSession'
 import { clearSnapshots } from './snapshotCache'
 
 const TOKEN_KEY = 'finance_token'
@@ -38,6 +39,16 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
 }
 
+// POST-for-read: a POST whose body is only the question, answered from a computation that
+// writes nothing — the shape the tax what-if endpoint established server-side. For those,
+// api()'s coarse non-GET invalidation must NOT fire; the assistant's context preview runs
+// on every drawer open and would otherwise cost every page its instant paint. Anything that
+// CAN write keeps going through api(). (Today's only caller is that preview; whatif.ts
+// still rides api() and is untouched.)
+export async function apiReadOnly<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: 'POST', body: JSON.stringify(body) })
+}
+
 async function request<T>(path: string, options: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     // FormData bodies must NOT get a manual Content-Type: the browser writes
@@ -65,6 +76,7 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
   if (res.status === 401 && !path.startsWith('/auth/login')) {
     clearToken()
     clearSnapshots() // snapshots are session data — they must not outlive the token
+    clearAssistantSession() // and a financial chat transcript must not outlive it either
     window.location.assign('/login')
     throw new ApiError('Session expired', 401)
   }

@@ -1,6 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AuthProvider, useAuth } from './AuthContext'
+import {
+  beginAssistantSession,
+  readAssistantTranscript,
+  writeAssistantTranscript,
+} from '../api/assistantSession'
 import * as authApi from '../api/auth'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 
@@ -11,10 +16,13 @@ vi.mock('../api/auth', () => ({
 }))
 
 function Probe() {
-  const { isAuthenticated, isLoading, logout } = useAuth()
+  const { isAuthenticated, isLoading, login, logout } = useAuth()
   return (
     <>
       <div data-testid="probe">{`${isAuthenticated}|${isLoading}`}</div>
+      <button type="button" onClick={() => void login('me@example.com', 'pw')}>
+        Log in
+      </button>
       <button type="button" onClick={logout}>
         Log out
       </button>
@@ -24,7 +32,11 @@ function Probe() {
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
   clearSnapshots()
+  // The assistant's session-ended latch is module state: a logout test would otherwise
+  // leave every later test in this file writing into a no-op.
+  beginAssistantSession()
 })
 
 afterEach(() => {
@@ -72,4 +84,42 @@ it('logout wipes the page-snapshot cache', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
   expect(vi.mocked(authApi.logout)).toHaveBeenCalledTimes(1)
   expect(getSnapshot('overview')).toBeUndefined()
+})
+
+it('logging back in re-arms the assistant persistence that logout latched off', async () => {
+  // Ending the session stops the assistant's storage writers dead — that is what keeps a
+  // late token from resurrecting a wiped transcript. But neither logout nor the login
+  // after it reloads the document, so the login has to lift the latch; otherwise the next
+  // sitting's conversation would silently stop surviving a refresh.
+  vi.mocked(authApi.fetchMe).mockResolvedValue({ email: 'me@example.com' })
+  render(
+    <AuthProvider>
+      <Probe />
+    </AuthProvider>
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  writeAssistantTranscript([{ role: 'user', content: 'after logout' }])
+  expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await waitFor(() => {
+    expect(screen.getByTestId('probe').textContent).toBe('true|false')
+  })
+  writeAssistantTranscript([{ role: 'user', content: 'after login' }])
+  expect(readAssistantTranscript()).toEqual([{ role: 'user', content: 'after login' }])
+})
+
+it('logout clears the assistant session storage', () => {
+  // A financial chat transcript is session data of the same kind — and a more personal
+  // kind: it must never outlive the session that asked the questions.
+  sessionStorage.setItem('assistant:transcript', '[]')
+  sessionStorage.setItem('assistant:model', 'kimi-k3')
+  render(
+    <AuthProvider>
+      <Probe />
+    </AuthProvider>
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
+  expect(sessionStorage.getItem('assistant:model')).toBeNull()
 })

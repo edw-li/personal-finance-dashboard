@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
+import { beginAssistantSession, clearAssistantSession } from '../api/assistantSession'
 import * as authApi from '../api/auth'
 import { getToken } from '../api/client'
 import { clearSnapshots } from '../api/snapshotCache'
@@ -35,12 +36,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (loginEmail: string, password: string) => {
     await authApi.login(loginEmail, password)
     const me = await authApi.fetchMe()
+    // Lifts logout's session-ended latch. Logging out and back in never reloads the
+    // document (both are client-side route changes), so the module-level latch would
+    // otherwise outlive the session it ended and leave the assistant unable to persist.
+    beginAssistantSession()
     setEmail(me.email)
   }, [])
 
   const logout = useCallback(() => {
     authApi.logout()
     clearSnapshots() // snapshots are session data — they must not outlive the session
+    clearAssistantSession() // and neither may a financial chat transcript
     setEmail(null)
   }, [])
 
