@@ -3,9 +3,20 @@
 // <a>, <img>, or raw HTML. Supported: paragraphs, #-headings (rendered as styled
 // <strong> — the page owns the heading outline), -/* and 1. lists, pipe tables, fenced
 // code, and inline `code` / **bold** / *italic*. Links render as "label (url)" text.
+//
+// This runs on every streamed token, against text that is usually a TRUNCATED prefix of a
+// real document, so two properties are load-bearing throughout: every regex is linear, and
+// every unterminated construct degrades to something renderable instead of throwing.
 import type { ReactNode } from 'react'
 
-const INLINE_TOKEN = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g
+// Emphasis runs must be flanked by non-space: a lone `*` between spaces is multiplication,
+// not markup, and finance answers are full of it ("$5 * 12 = $60" must keep its asterisk).
+const INLINE_TOKEN =
+  /(`[^`]+`|\*\*[^*\s](?:[^*]*[^*\s])?\*\*|\*[^*\s](?:[^*]*[^*\s])?\*|\[[^\]]+\]\([^)]+\))/g
+
+const BULLET_ITEM = /^\s*[-*]\s+/
+const ORDERED_ITEM = /^\s*(\d+)\.\s+/
+const HEADING = /^(#{1,6})\s+(.*)$/
 
 export function renderInline(text: string): ReactNode[] {
   // A capturing split interleaves the separators with the gaps, and adjacent tokens leave
@@ -31,7 +42,36 @@ export function renderInline(text: string): ReactNode[] {
 }
 
 function isTableDivider(line: string): boolean {
-  return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.includes('-')
+  // Three linear passes, deliberately NOT one regex. The obvious pattern for this
+  // (`[\s:|-]+\|[\s:|-]*`) puts `|` inside the class AND requires a literal `|`, so the two
+  // overlap: on a long pipe/dash line that ultimately fails, the engine retries every split
+  // point and the check goes quadratic (seconds on a pasted table, per candidate line, per
+  // streamed token). Anchored `^[\s:|-]+$` has no such ambiguity.
+  const t = line.trim()
+  return t.includes('|') && t.includes('-') && /^[\s:|-]+$/.test(t)
+}
+
+function isFence(line: string): boolean {
+  return line.trimStart().startsWith('```')
+}
+
+function startsTable(lines: string[], i: number): boolean {
+  return lines[i].includes('|') && i + 1 < lines.length && isTableDivider(lines[i + 1])
+}
+
+// The single source of truth for "line i opens a new block". Both greedy sweeps below (the
+// paragraph run and the table-row run) consult it, so neither can disagree with the
+// dispatcher about where its block ended — the bug that let a later `## Cost | Rev` heading
+// get swallowed as a fourth table row just because it contained a pipe.
+function startsNewBlock(lines: string[], i: number): boolean {
+  const line = lines[i]
+  return (
+    BULLET_ITEM.test(line) ||
+    ORDERED_ITEM.test(line) ||
+    HEADING.test(line) ||
+    isFence(line) ||
+    startsTable(lines, i)
+  )
 }
 
 function tableCells(line: string): string[] {
@@ -54,10 +94,10 @@ export function renderMarkdown(text: string): ReactNode[] {
       continue
     }
     // Fenced code: swallow to the closing fence (or EOF — stream-in-progress armor).
-    if (line.trimStart().startsWith('```')) {
+    if (isFence(line)) {
       const body: string[] = []
       i += 1
-      while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
+      while (i < lines.length && !isFence(lines[i])) {
         body.push(lines[i])
         i += 1
       }
@@ -69,7 +109,7 @@ export function renderMarkdown(text: string): ReactNode[] {
       )
       continue
     }
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+    const heading = HEADING.exec(line)
     if (heading) {
       out.push(
         <p key={key++} className="md-heading-row">
@@ -79,31 +119,41 @@ export function renderMarkdown(text: string): ReactNode[] {
       i += 1
       continue
     }
-    if (/^\s*[-*]\s+/.test(line)) {
+    if (BULLET_ITEM.test(line)) {
       const items: ReactNode[] = []
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-        items.push(<li key={items.length}>{renderInline(lines[i].replace(/^\s*[-*]\s+/, ''))}</li>)
+      while (i < lines.length && BULLET_ITEM.test(lines[i])) {
+        items.push(<li key={items.length}>{renderInline(lines[i].replace(BULLET_ITEM, ''))}</li>)
         i += 1
       }
       out.push(<ul key={key++}>{items}</ul>)
       continue
     }
-    if (/^\s*\d+\.\s+/.test(line)) {
+    if (ORDERED_ITEM.test(line)) {
+      // Honour the model's numbering: an answer that continues "3. …" after prose means it,
+      // and a browser would otherwise silently renumber it to 1.
+      const first = Number(ORDERED_ITEM.exec(line)?.[1] ?? 1)
       const items: ReactNode[] = []
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(
-          <li key={items.length}>{renderInline(lines[i].replace(/^\s*\d+\.\s+/, ''))}</li>,
-        )
+      while (i < lines.length && ORDERED_ITEM.test(lines[i])) {
+        items.push(<li key={items.length}>{renderInline(lines[i].replace(ORDERED_ITEM, ''))}</li>)
         i += 1
       }
-      out.push(<ol key={key++}>{items}</ol>)
+      out.push(
+        <ol key={key++} start={first === 1 ? undefined : first}>
+          {items}
+        </ol>,
+      )
       continue
     }
-    if (line.includes('|') && i + 1 < lines.length && isTableDivider(lines[i + 1])) {
+    if (startsTable(lines, i)) {
       const header = tableCells(line)
       i += 2 // header + divider
       const rows: string[][] = []
-      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+      while (
+        i < lines.length &&
+        lines[i].trim() !== '' &&
+        lines[i].includes('|') &&
+        !startsNewBlock(lines, i)
+      ) {
         rows.push(tableCells(lines[i]))
         i += 1
       }
@@ -132,15 +182,7 @@ export function renderMarkdown(text: string): ReactNode[] {
     // Paragraph: greedy to the next blank/structural line.
     const para: string[] = [line]
     i += 1
-    while (
-      i < lines.length &&
-      lines[i].trim() !== '' &&
-      !/^\s*[-*]\s+/.test(lines[i]) &&
-      !/^\s*\d+\.\s+/.test(lines[i]) &&
-      !/^(#{1,6})\s+/.test(lines[i]) &&
-      !lines[i].trimStart().startsWith('```') &&
-      !(lines[i].includes('|') && i + 1 < lines.length && isTableDivider(lines[i + 1]))
-    ) {
+    while (i < lines.length && lines[i].trim() !== '' && !startsNewBlock(lines, i)) {
       para.push(lines[i])
       i += 1
     }
