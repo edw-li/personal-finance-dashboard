@@ -55,6 +55,7 @@ from app.models import (
     TaxInputDefinition,
     TaxYear,
 )
+from app.services.assistant_models import KEY_SETTING
 
 router = APIRouter(prefix="/export", tags=["export"], dependencies=[Depends(get_current_user)])
 
@@ -99,6 +100,13 @@ EXPORTED_TABLES: tuple[tuple[type, str], ...] = (
 )
 
 EXCLUDED_TABLES = frozenset({"users"})
+
+# Redacted ROWS (assistant spec 2026-09-01 §3): the assistant API key must not ride into
+# every backup ZIP. Row-level, not table-level — assistant_default_model and its siblings
+# still export. Keyed BY TABLE NAME on purpose: the filter below reads `row.key`, which
+# only AppSetting rows have, so a table absent from this dict is never touched. Filtered
+# once, before BOTH serializations (CSV + JSON read the same `rows` list).
+REDACTED_ROWS: dict[str, frozenset[str]] = {"app_settings": frozenset({KEY_SETTING})}
 
 
 def _csv_cell(value: object) -> str:
@@ -164,6 +172,9 @@ async def export_snapshot(db: AsyncSession = Depends(get_db)) -> StreamingRespon
                 .scalars()
                 .all()
             )
+            redacted_keys = REDACTED_ROWS.get(table_name)
+            if redacted_keys is not None:
+                rows = [row for row in rows if row.key not in redacted_keys]
             counts[table_name] = len(rows)
             sink = io.StringIO()
             writer = csv.writer(sink)  # csv's default \r\n line ending IS RFC 4180's
@@ -182,6 +193,10 @@ async def export_snapshot(db: AsyncSession = Depends(get_db)) -> StreamingRespon
             "app": "personal-finance-dashboard",
             "note": "full user-data export; users and alembic_version are excluded by design",
             "tables": counts,
+            # Standing note so a restore never mistakes an absent row for data loss.
+            "redactions": [
+                f"{table}.{key}" for table, keys in REDACTED_ROWS.items() for key in sorted(keys)
+            ],
         }
         archive.writestr("manifest.json", json.dumps(manifest, indent=2))
         archive.writestr(

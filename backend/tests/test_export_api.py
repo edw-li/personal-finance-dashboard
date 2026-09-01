@@ -114,3 +114,33 @@ async def test_export_rows_round_trip_with_pinned_formats(auth_client, db):
     assert nested["tables"]["account_balances"][0]["balance"] == "1234.50"
     assert nested["tables"]["net_worth_snapshots"][0]["month"] == "2026-05-01"
     assert nested["tables"]["app_settings"] == [{"key": "swr_pct", "value": {"value": "0.04"}}]
+
+
+async def test_export_redacts_the_nvidia_api_key_row(auth_client, db):
+    """The assistant key (spec 2026-09-01 §3) must not ride into every backup ZIP — while
+    its app_settings siblings still export: the redaction is per-ROW, not per-table."""
+    db.add(AppSetting(key="nvidia_api_key", value={"value": "nvapi-SECRET"}))
+    db.add(AppSetting(key="assistant_default_model", value={"value": "kimi-k3"}))
+    await db.commit()
+
+    resp = await auth_client.get(EXPORT)
+    assert resp.status_code == 200, resp.text
+    raw = resp.content
+    assert b"nvapi-SECRET" not in raw  # the whole ZIP, before anyone decompresses it
+    archive = zipfile.ZipFile(io.BytesIO(raw))
+
+    manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["redactions"] == ["app_settings.nvidia_api_key"]
+    assert manifest["tables"]["app_settings"] == 1  # the count is the EXPORTED rows
+
+    # CSV and JSON alike — both serializations read the one filtered `rows` list, so the
+    # secret is absent from the decompressed members too, not merely from the ZIP bytes.
+    csv_text = archive.read("csv/app_settings.csv").decode("utf-8")
+    assert "assistant_default_model" in csv_text  # its sibling row still exports
+    assert "nvidia_api_key" not in csv_text
+    assert "nvapi-SECRET" not in csv_text
+
+    nested = json.loads(archive.read("finance-export.json"))
+    assert nested["tables"]["app_settings"] == [
+        {"key": "assistant_default_model", "value": {"value": "kimi-k3"}}
+    ]
