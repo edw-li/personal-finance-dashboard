@@ -79,6 +79,15 @@ class _RateLimited(Exception):
         self.retry_after = retry_after
 
 
+class _Internal(Exception):
+    """A 4xx that is neither a key nor a rate problem — a malformed or oversized request,
+    e.g. context-length. NOT _BadKey: the frontend deep-links that one to "fix your key in
+    Settings" and suppresses retry, which is a lie about a key that works fine."""
+
+    def __init__(self, message: str):
+        self.message = message
+
+
 def system_prompt(context_json: str, tools_enabled: bool) -> str:
     lines = [
         "You are the analyst inside a self-hosted personal-finance dashboard.",
@@ -133,7 +142,7 @@ def _status_error(response: httpx.Response) -> Exception:
         return _RateLimited(detail or "rate limited by the model endpoint", retry_after)
     if response.status_code >= 500 or response.status_code == 404:
         return _Retriable()
-    return _BadKey(detail or f"model endpoint answered {response.status_code}")
+    return _Internal(detail or f"model endpoint answered {response.status_code}")
 
 
 async def _model_round(
@@ -144,7 +153,8 @@ async def _model_round(
     tools_enabled: bool,
 ) -> AsyncIterator[tuple[str, object]]:
     """One streamed completion. Yields ("token", str) as content arrives, then exactly one
-    ("end", {"tool_calls": [...], "content": str}). Raises _Retriable/_BadKey/_RateLimited."""
+    ("end", {"tool_calls": [...], "content": str}). Raises
+    _Retriable/_BadKey/_RateLimited/_Internal."""
     body: dict = {"model": catalog_id, "messages": messages, "stream": True}
     if tools_enabled:
         body["tools"] = TOOL_SCHEMAS
@@ -206,13 +216,17 @@ async def _converse(
     model: AssistantModel,
     base_messages: list[dict],
     forwarded: list[bool],
+    deadline: float,
+    spent: list[int],
 ) -> AsyncIterator[str]:
-    """The whole multi-round conversation on ONE model. _Retriable escapes to the ladder."""
+    """The whole multi-round conversation on ONE model. _Retriable escapes to the ladder.
+
+    `deadline` and `spent` belong to the REQUEST, not to this model: spec §5 budgets six
+    tool calls and ninety seconds for the whole answer, so a four-model ladder must not
+    multiply either. Rounds stay per-model — a fresh model starts its own conversation."""
     messages = [dict(m) for m in base_messages]
-    started = time.monotonic()
-    tool_calls_spent = 0
     for _round in range(MAX_ROUNDS):
-        if time.monotonic() - started > TOTAL_BUDGET_SECONDS:
+        if time.monotonic() > deadline:
             yield sse(
                 "error", {"kind": "internal", "message": "The answer ran past its time budget."}
             )
@@ -230,13 +244,13 @@ async def _converse(
         if not tool_calls:
             yield sse("done", {"model_used": model.key})
             return
-        if tool_calls_spent + len(tool_calls) > MAX_TOOL_CALLS:
+        if spent[0] + len(tool_calls) > MAX_TOOL_CALLS:
             yield sse(
                 "error",
                 {"kind": "internal", "message": "The model kept requesting tools past the budget."},
             )
             return
-        tool_calls_spent += len(tool_calls)
+        spent[0] += len(tool_calls)
         messages.append(
             {
                 "role": "assistant",
@@ -320,16 +334,22 @@ async def stream_chat(*, model_key: str, messages: list[dict], context: dict) ->
         base_messages = [{"role": "system", "content": prompt}, *messages]
         ladder = [requested, *(m for m in REGISTRY if m.key != requested.key)]
         forwarded = [False]
+        # ONE budget for the request, not one per rung (spec §5).
+        deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
+        spent = [0]
         async with http_client(REQUEST_TIMEOUT) as client:
             for index, model in enumerate(ladder):
                 try:
                     async for frame in _converse(
-                        db, client, api_key, model, base_messages, forwarded
+                        db, client, api_key, model, base_messages, forwarded, deadline, spent
                     ):
                         yield frame
                     return
                 except _BadKey as exc:
                     yield sse("error", {"kind": "bad_key", "message": exc.message})
+                    return
+                except _Internal as exc:
+                    yield sse("error", {"kind": "internal", "message": exc.message})
                     return
                 except _RateLimited as exc:
                     payload: dict = {"kind": "rate_limited", "message": exc.message}
