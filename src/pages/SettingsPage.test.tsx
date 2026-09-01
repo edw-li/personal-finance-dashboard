@@ -70,10 +70,22 @@ vi.mock('../api/assistant', async (importOriginal) => ({
   putAssistantSettings: vi.fn(),
   fetchAssistantModels: vi.fn(),
 }))
+// LimitsCard owns a mount fetch too, and it was the one card left unmocked: the real
+// request rejected on its own schedule, so 'banners a failed load and refetches on Retry'
+// intermittently found the card's banner as a second role="alert" (and a second "Retry")
+// on cold runs. Its own behaviour is pinned in LimitsCard.test.tsx; this file only needs
+// the fetch answered so the card settles.
+vi.mock('../api/limits', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/limits')>()),
+  fetchLimits: vi.fn(),
+  putLimits: vi.fn(),
+  cloneLimits: vi.fn(),
+}))
 import { fetchAssistantSettings } from '../api/assistant'
 import { changePassword } from '../api/auth'
 import { fetchHousehold } from '../api/household'
 import { importXlsx } from '../api/importer'
+import { fetchLimits } from '../api/limits'
 import { fetchAccounts } from '../api/netWorth'
 import { fetchPortfolioAccounts } from '../api/portfolio'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
@@ -233,6 +245,9 @@ beforeEach(() => {
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING])
   vi.mocked(fetchPortfolioAccounts).mockResolvedValue([])
   vi.mocked(fetchCategories).mockResolvedValue([])
+  // No definitions: the card settles into its (empty) form without adding boxes or a
+  // banner to any of this file's queries.
+  vi.mocked(fetchLimits).mockResolvedValue({ year: new Date().getFullYear(), items: [] })
   vi.mocked(fetchAssistantSettings).mockResolvedValue({
     key: { configured: true, source: 'env' },
     default_model: 'kimi-k3',
