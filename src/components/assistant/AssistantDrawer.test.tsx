@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -65,17 +65,42 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
-async function openDrawer() {
+/** Opens the drawer and waits for the SETTLED state, returning the composer.
+ *
+ *  Waiting on the container alone is a race: the drawer mounts synchronously on the click,
+ *  but everything below the header waits on promises the open kicked off — the composer on
+ *  fetchAssistantSettings, the model catalog (which the retry ladder's nextModelAfter reads)
+ *  on fetchAssistantModels. A synchronous getBy* after such a helper fails whenever React
+ *  commits those after waitFor already returned; it reproduced about one run in ten. */
+async function openDrawer(): Promise<HTMLTextAreaElement> {
   fireEvent.click(screen.getByRole('button', { name: /open assistant/i }))
-  await waitFor(() => expect(screen.getByRole('complementary', { name: 'Assistant' })).toBeTruthy())
+  await screen.findByRole('complementary', { name: 'Assistant' })
+  const input = await screen.findByRole<HTMLTextAreaElement>('textbox', {
+    name: /ask the assistant/i,
+  })
+  // Until the catalog lands the select holds a single placeholder option; both fixtures
+  // below carry two or more, so "more than one" is the arrival signal.
+  await waitFor(() =>
+    expect(
+      within(screen.getByRole('combobox', { name: 'Model' })).getAllByRole('option').length,
+    ).toBeGreaterThan(1),
+  )
+  return input
+}
+
+/** The not-configured variant: there is no composer to settle on, so the setup note that
+ *  replaces it is the signal that fetchAssistantSettings has landed. */
+async function openDrawerUnconfigured() {
+  fireEvent.click(screen.getByRole('button', { name: /open assistant/i }))
+  await screen.findByRole('complementary', { name: 'Assistant' })
+  return screen.findByText(/no nvidia api key configured/i)
 }
 
 describe('AssistantDrawer', () => {
   it('opens from the launcher, focuses the input, Esc closes and restores focus', async () => {
     mount()
     const launcher = screen.getByRole('button', { name: /open assistant/i })
-    await openDrawer()
-    const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+    const input = await openDrawer()
     await waitFor(() => expect(document.activeElement).toBe(input))
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(screen.queryByRole('complementary', { name: 'Assistant' })).toBeNull()
@@ -96,8 +121,7 @@ describe('AssistantDrawer', () => {
       default_model: 'kimi-k3',
     })
     mount()
-    await openDrawer()
-    expect(screen.getByText(/no nvidia api key configured/i)).toBeTruthy()
+    expect(await openDrawerUnconfigured()).toBeTruthy()
     expect(screen.queryByRole('textbox', { name: /ask the assistant/i })).toBeNull()
   })
 
@@ -113,8 +137,7 @@ describe('AssistantDrawer', () => {
       },
     )
     mount()
-    await openDrawer()
-    const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+    const input = await openDrawer()
     fireEvent.change(input, { target: { value: 'why did housing spike?' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(screen.getByText(/Housing was \$2,030\.00\./)).toBeTruthy())
@@ -133,8 +156,7 @@ describe('AssistantDrawer', () => {
       },
     )
     mount()
-    await openDrawer()
-    const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+    const input = await openDrawer()
     fireEvent.change(input, { target: { value: 'hello?' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(screen.getByText(/every model failed/)).toBeTruthy())
@@ -152,8 +174,7 @@ describe('AssistantDrawer', () => {
       },
     )
     mount()
-    await openDrawer()
-    const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+    const input = await openDrawer()
     fireEvent.change(input, { target: { value: 'long one' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(screen.getByText('partial')).toBeTruthy())
@@ -172,8 +193,7 @@ describe('AssistantDrawer', () => {
       },
     )
     const first = mount()
-    await openDrawer()
-    const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+    const input = await openDrawer()
     fireEvent.change(input, { target: { value: 'persist me' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(screen.getByText('answer')).toBeTruthy())
@@ -209,8 +229,7 @@ describe('AssistantDrawer', () => {
       },
     )
     mount()
-    await openDrawer()
-    const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+    const input = await openDrawer()
     fireEvent.change(input, { target: { value: 'q' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() =>
@@ -274,8 +293,7 @@ describe('AssistantDrawer', () => {
         },
       )
     mount()
-    await openDrawer()
-    const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+    const input = await openDrawer()
     fireEvent.change(input, { target: { value: 'why did housing spike?' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(screen.getByText(/every model failed/)).toBeTruthy())
@@ -311,8 +329,7 @@ describe('AssistantDrawer', () => {
         },
       )
     mount()
-    await openDrawer()
-    const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+    const input = await openDrawer()
     fireEvent.change(input, { target: { value: 'q1' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(screen.getByText(/died mid-answer/)).toBeTruthy())
@@ -323,5 +340,81 @@ describe('AssistantDrawer', () => {
     expect(screen.queryByText(/died mid-answer/)).toBeNull()
     const retry = streamChat.mock.calls[1][0] as { messages: { content: string }[] }
     expect(retry.messages.map((m) => m.content)).toEqual(['q1'])
+  })
+
+  // The ladder must step DOWN the catalog: the fallback offered after a retry fails is
+  // chosen against the model that just ran, not against the drawer's `model` state — which
+  // is still the previous one, because setModel(retryModel) has not committed inside the
+  // same event. Catalog order is load-bearing here: nextModelAfter returns the first
+  // available key that is not the one it was asked about, so DeepSeek-first is what makes
+  // "kimi → DeepSeek → Ultra" distinguishable from a stuck "kimi → DeepSeek → DeepSeek".
+  it('a second failure offers the next model down, never the one that just failed', async () => {
+    fetchAssistantModels.mockResolvedValue({
+      ...MODELS,
+      models: [
+        {
+          key: 'deepseek-v4-pro-0813',
+          label: 'DeepSeek V4 Pro',
+          available: true,
+          supports_tools: true,
+          default: false,
+        },
+        {
+          key: 'nemotron-3-ultra-550b',
+          label: 'Nemotron 3 Ultra 550B',
+          available: true,
+          supports_tools: true,
+          default: false,
+        },
+        { key: 'kimi-k3', label: 'Kimi K3', available: true, supports_tools: true, default: true },
+      ],
+    })
+    streamChat
+      .mockImplementationOnce(
+        (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+          h.onError({ kind: 'unavailable', message: 'kimi is down' })
+          return { abort: vi.fn(), finished: Promise.resolve() }
+        },
+      )
+      .mockImplementationOnce(
+        (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+          h.onError({ kind: 'unavailable', message: 'deepseek is down too' })
+          return { abort: vi.fn(), finished: Promise.resolve() }
+        },
+      )
+    mount()
+    const input = await openDrawer()
+    fireEvent.change(input, { target: { value: 'anyone home?' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await screen.findByRole('button', { name: /retry with deepseek v4 pro/i })
+    fireEvent.click(screen.getByRole('button', { name: /retry with deepseek v4 pro/i }))
+    await waitFor(() => expect(screen.getByText(/deepseek is down too/)).toBeTruthy())
+    // The retry really ran on DeepSeek…
+    expect((streamChat.mock.calls[1][0] as { model: string }).model).toBe('deepseek-v4-pro-0813')
+    // …so the next rung is Ultra, and DeepSeek is not offered a second time.
+    expect(screen.getByRole('button', { name: /retry with nemotron 3 ultra 550b/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /retry with deepseek v4 pro/i })).toBeNull()
+  })
+
+  // A stream can end without reporting anything to the handlers at all — the 401 redirect
+  // and an abort raised elsewhere both resolve `finished` silently. Without that
+  // continuation the composer would keep offering Stop for a stream that is already over.
+  it('a stream that reports nothing still clears the streaming state when it finishes', async () => {
+    let finish: (outcome: 'aborted') => void = () => {}
+    streamChat.mockImplementation(() => ({
+      abort: vi.fn(),
+      finished: new Promise<'aborted'>((resolve) => {
+        finish = resolve
+      }),
+    }))
+    mount()
+    const input = await openDrawer()
+    fireEvent.change(input, { target: { value: 'silent one' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await screen.findByRole('button', { name: /stop/i })
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+    finish('aborted')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /stop/i })).toBeNull()
   })
 })
