@@ -5,6 +5,7 @@ import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
 import AccountsCard from '../components/settings/AccountsCard'
+import AssistantCard from '../components/settings/AssistantCard'
 import CategoriesCard from '../components/settings/CategoriesCard'
 import HouseholdCard from '../components/settings/HouseholdCard'
 import ImportReportView from '../components/settings/ImportReportView'
@@ -491,6 +492,10 @@ export default function SettingsPage() {
           {/* Contribution limits (2026-08-27 spec §5): its own fetch and error state, the
               same loadedOnce gate as the cards above it. */}
           <LimitsCard />
+
+          {/* Assistant key + default model (2026-09-01 spec §10): its own fetch and error
+              state, the same loadedOnce gate as the cards above it. */}
+          <AssistantCard />
         </div>
       )}
     </div>

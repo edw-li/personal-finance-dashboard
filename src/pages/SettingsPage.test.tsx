@@ -61,6 +61,16 @@ vi.mock('../api/portfolio', async (importOriginal) => ({
   fetchPortfolioAccounts: vi.fn(),
   patchPortfolioAccount: vi.fn(),
 }))
+// The Assistant card owns a fetch of its own (2026-09-01 spec §10); unmocked it would make
+// a real network call from every test in this file and banner the failure — a SECOND
+// "Retry" button on a page whose own retry test asks for that name.
+vi.mock('../api/assistant', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/assistant')>()),
+  fetchAssistantSettings: vi.fn(),
+  putAssistantSettings: vi.fn(),
+  fetchAssistantModels: vi.fn(),
+}))
+import { fetchAssistantSettings } from '../api/assistant'
 import { changePassword } from '../api/auth'
 import { fetchHousehold } from '../api/household'
 import { importXlsx } from '../api/importer'
@@ -223,6 +233,10 @@ beforeEach(() => {
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING])
   vi.mocked(fetchPortfolioAccounts).mockResolvedValue([])
   vi.mocked(fetchCategories).mockResolvedValue([])
+  vi.mocked(fetchAssistantSettings).mockResolvedValue({
+    key: { configured: true, source: 'env' },
+    default_model: 'kimi-k3',
+  })
   confirmSpy.mockReturnValue(true)
 })
 
@@ -817,5 +831,26 @@ describe('SettingsPage — household, accounts and categories cards', () => {
     expect(screen.queryByText('Accounts')).toBeNull()
     expect(screen.queryByText('Spending categories')).toBeNull()
     expect(vi.mocked(fetchHousehold)).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsPage — assistant card', () => {
+  it('mounts the Assistant card last, behind the same loadedOnce gate', async () => {
+    render(<SettingsPage />)
+
+    const assistant = await screen.findByRole('region', { name: 'Assistant' })
+    // Last on the page on purpose: it configures a side feature, not the dashboard's own
+    // numbers, so it sits below the data cards the page exists for.
+    expectInDocumentOrder(screen.getByRole('heading', { name: /Contribution limits/ }), assistant)
+    await waitFor(() => expect(vi.mocked(fetchAssistantSettings)).toHaveBeenCalledTimes(1))
+  })
+
+  it('offers no Assistant card when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    render(<SettingsPage />)
+
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Assistant' })).toBeNull()
+    expect(vi.mocked(fetchAssistantSettings)).not.toHaveBeenCalled()
   })
 })
