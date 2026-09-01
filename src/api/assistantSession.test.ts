@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   clearAssistantSession,
   readAssistantModel,
@@ -35,6 +35,25 @@ describe('assistantSession', () => {
   it('reads empty on corrupt JSON instead of throwing', () => {
     sessionStorage.setItem('assistant:transcript', '{nope')
     expect(readAssistantTranscript()).toEqual([])
+  })
+
+  it('drops entries that are not shaped like transcript items', () => {
+    // Well-formed JSON, wrong shapes: the drawer dereferences .role/.content on every
+    // entry it renders, so a survivor here is a crash there.
+    sessionStorage.setItem('assistant:transcript', '[null,3,{"role":"user"}]')
+    expect(readAssistantTranscript()).toEqual([])
+    sessionStorage.setItem('assistant:transcript', '[{"role":"user","content":"ok"},5]')
+    expect(readAssistantTranscript()).toEqual([{ role: 'user', content: 'ok' }])
+  })
+
+  it('swallows a blocked write rather than throwing at the caller', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError')
+    })
+    expect(() => writeAssistantTranscript([item('x')])).not.toThrow()
+    expect(() => writeAssistantModel('kimi-k3')).not.toThrow()
+    expect(setItem).toHaveBeenCalledTimes(2) // the guard was really exercised, not skipped
+    setItem.mockRestore()
   })
 
   it('clearAssistantSession removes both keys', () => {

@@ -34,6 +34,13 @@ describe('assistant client', () => {
     expect(options?.body).toBe('{"api_key":null}')
   })
 
+  it('sends no api_key property at all when the caller omits it', async () => {
+    await putAssistantSettings({ default_model: 'x' })
+    const [, options] = vi.mocked(api).mock.calls[0]
+    // The absent arm of the same tri-state: switching the model must not disturb a stored key.
+    expect(options?.body).toBe('{"default_model":"x"}')
+  })
+
   it('adds ?probe=1 only when probing', async () => {
     // The bare call reads the cached probe result; probing costs a live NVIDIA round-trip.
     await fetchAssistantModels()

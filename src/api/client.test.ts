@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError, apiReadOnly, setToken } from './client'
 import { clearSnapshots, getSnapshot, setSnapshot } from './snapshotCache'
 
-function mockFetchOk() {
-  const spy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) })
+function mockFetchOk(body: unknown = {}) {
+  const spy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body })
   vi.stubGlobal('fetch', spy)
   return spy
 }
@@ -147,10 +147,7 @@ describe('apiReadOnly — POST-for-read', () => {
 
   it('POSTs the body but leaves the snapshot cache standing', async () => {
     setSnapshot('overview', { kept: true })
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) })
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = mockFetchOk({ ok: true })
     const result = await apiReadOnly<{ ok: boolean }>('/assistant/context-preview', { context: {} })
     expect(result.ok).toBe(true)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]

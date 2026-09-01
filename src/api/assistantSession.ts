@@ -35,10 +35,19 @@ const MODEL_KEY = 'assistant:model'
 /** Bounds sessionStorage; the server caps messages per request separately (last 20). */
 export const TRANSCRIPT_CAP = 40
 
+// A shape check, not a validator (readDraft's posture): anything the drawer will later
+// dereference — role and content — must be there, because a hand-edited or half-written
+// entry would otherwise crash the render rather than the read.
+function isTranscriptItem(value: unknown): value is TranscriptItem {
+  if (typeof value !== 'object' || value === null) return false
+  const item = value as TranscriptItem
+  return (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string'
+}
+
 export function readAssistantTranscript(): TranscriptItem[] {
   try {
     const parsed: unknown = JSON.parse(sessionStorage.getItem(TRANSCRIPT_KEY) ?? '[]')
-    return Array.isArray(parsed) ? (parsed as TranscriptItem[]) : []
+    return Array.isArray(parsed) ? parsed.filter(isTranscriptItem) : []
   } catch {
     return [] // a corrupt entry is discarded, never thrown (the wizard-draft posture)
   }
@@ -53,7 +62,11 @@ export function writeAssistantTranscript(items: TranscriptItem[]): void {
 }
 
 export function readAssistantModel(): string | null {
-  return sessionStorage.getItem(MODEL_KEY)
+  try {
+    return sessionStorage.getItem(MODEL_KEY)
+  } catch {
+    return null // storage blocked entirely — fall back to the server's default model
+  }
 }
 
 export function writeAssistantModel(key: string): void {
@@ -65,6 +78,11 @@ export function writeAssistantModel(key: string): void {
 }
 
 export function clearAssistantSession(): void {
-  sessionStorage.removeItem(TRANSCRIPT_KEY)
-  sessionStorage.removeItem(MODEL_KEY)
+  try {
+    sessionStorage.removeItem(TRANSCRIPT_KEY)
+    sessionStorage.removeItem(MODEL_KEY)
+  } catch {
+    // This runs on the 401 and logout paths: a blocked-storage throw here would abort the
+    // redirect that actually protects the session. A stale transcript is the lesser evil.
+  }
 }

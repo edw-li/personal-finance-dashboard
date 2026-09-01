@@ -38,10 +38,12 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
 }
 
-// POST-for-read endpoints (the what-if family; here the assistant's context preview). The
-// server computes and never writes, so api()'s coarse non-GET invalidation must NOT fire —
-// the preview runs on every drawer open and would cost every page its instant paint.
-// Anything that CAN write keeps going through api().
+// POST-for-read: a POST whose body is only the question, answered from a computation that
+// writes nothing — the shape the tax what-if endpoint established server-side. For those,
+// api()'s coarse non-GET invalidation must NOT fire; the assistant's context preview runs
+// on every drawer open and would otherwise cost every page its instant paint. Anything that
+// CAN write keeps going through api(). (Today's only caller is that preview; whatif.ts
+// still rides api() and is untouched.)
 export async function apiReadOnly<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: JSON.stringify(body) })
 }

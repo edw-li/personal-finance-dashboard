@@ -25,8 +25,8 @@ export function fetchAssistantModels(probe = false): Promise<AssistantModelsOut>
   return api<AssistantModelsOut>(`/assistant/models${probe ? '?probe=1' : ''}`)
 }
 
-/** POST-for-read (the what-if precedent): apiReadOnly, so opening the drawer never wipes
- *  the page snapshots. */
+/** A POST that only reads — the pattern the tax what-if endpoint established. It rides
+ *  apiReadOnly so opening the drawer never wipes the page snapshots. */
 export function fetchContextPreview(context: AssistantContextIn): Promise<AssistantPreviewOut> {
   return apiReadOnly<AssistantPreviewOut>('/assistant/context-preview', { context })
 }
