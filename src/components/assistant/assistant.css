@@ -2,9 +2,9 @@
    < toasts 30 — Ctrl+K must open ABOVE the drawer, and an Undo outlives both.
    The launcher shares the bottom-right corner with .toast-region (right/bottom 16px,
    z 30), which wins the stack: parked at 1.25rem the bubble sits UNDER the first toast,
-   so the Undo that an action just offered covers the button. 4.75rem clears a
-   single-line toast (~2.4rem tall + its 1rem bottom inset) with room to spare; a taller
-   stack grows upward, away from the bubble. */
+   so the Undo that an action just offered covers the button. 4.75rem clears a single
+   toast (~2.4rem tall + its 1rem bottom inset); the region is bottom-anchored, so a stack
+   of two or more grows upward INTO the bubble and still overlaps — accepted. */
 
 .assistant-launcher {
   position: fixed;

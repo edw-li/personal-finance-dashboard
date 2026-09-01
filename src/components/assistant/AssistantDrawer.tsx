@@ -154,10 +154,12 @@ export default function AssistantDrawer() {
   // the bottom. Someone scrolled up re-reading an earlier answer must not be yanked back
   // down by the next token. Keyed on the transcript, not unkeyed: an unkeyed effect re-pins
   // on EVERY render, so each keystroke in the composer would slam the log down too.
+  // `open` is a dep because reopening mounts a FRESH messages div at scrollTop 0: without
+  // it a settled transcript reopens showing its oldest message.
   useEffect(() => {
     const el = messagesRef.current
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
-  }, [transcript])
+  }, [transcript, open])
 
   const onMessagesScroll = () => {
     const el = messagesRef.current
