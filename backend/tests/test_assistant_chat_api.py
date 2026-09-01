@@ -612,3 +612,58 @@ async def test_tool_error_rolls_back_so_a_later_tool_still_works(monkeypatch):
     assert len(tool_messages) == 2
     assert "error" in json.loads(tool_messages[0]["content"])
     assert json.loads(tool_messages[1]["content"])["month"] == "2026-08-01"
+
+
+CHAT_URL = "/api/v1/assistant/chat"
+PREVIEW_URL = "/api/v1/assistant/context-preview"
+
+
+def _chat_body(**overrides):
+    body = {
+        "model": "kimi-k3",
+        "context": {"route": "/", "search": {}, "view": {}},
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    body.update(overrides)
+    return body
+
+
+async def test_chat_requires_auth(client):
+    assert (await client.post(CHAT_URL, json=_chat_body())).status_code == 401
+
+
+async def test_chat_unknown_model_422(auth_client):
+    r = await auth_client.post(CHAT_URL, json=_chat_body(model="gpt-9"))
+    assert r.status_code == 422
+
+
+async def test_chat_oversized_transcript_422(auth_client):
+    messages = [{"role": "user", "content": "x"}] * 21
+    r = await auth_client.post(CHAT_URL, json=_chat_body(messages=messages))
+    assert r.status_code == 422
+
+
+async def test_chat_streams_sse_with_proxy_survival_headers(auth_client, monkeypatch):
+    def responder(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=_openai_stream([_delta("hey"), _finish()]),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", _transport(responder))
+    r = await auth_client.post(CHAT_URL, json=_chat_body())
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert r.headers["x-accel-buffering"] == "no"
+    assert r.headers["cache-control"] == "no-cache"
+    assert "event: token" in r.text and "event: done" in r.text
+
+
+async def test_preview_lists_sections(auth_client):
+    r = await auth_client.post(
+        PREVIEW_URL, json={"context": {"route": "/", "search": {}, "view": {}}}
+    )
+    assert r.status_code == 200
+    names = [s["name"] for s in r.json()["sections"]]
+    assert "household" in names

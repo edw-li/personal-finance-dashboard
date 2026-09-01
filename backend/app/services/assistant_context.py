@@ -501,4 +501,11 @@ async def preview_sections(db: AsyncSession, *, route: str, search: dict, view: 
             return max(list_lengths) if list_lengths else len(section)
         return 1
 
-    return [{"name": name, "rows": _rows(section)} for name, section in context.items()]
+    return [
+        {"name": name, "rows": _rows(section)}
+        for name, section in context.items()
+        # build_context's cap flag is a bare bool riding in the same dict, not a section:
+        # left in, the chip would advertise a "truncated" section with 1 row as if it were
+        # data the assistant read. Name AND shape, so a real section could still use it.
+        if not (name == "truncated" and not isinstance(section, dict | list))
+    ]

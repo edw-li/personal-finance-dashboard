@@ -1,9 +1,10 @@
 """/assistant/settings + /assistant/models (spec §3–§4). The key value must NEVER
 appear in any response body — asserted on the raw text, not the parsed JSON."""
 
+import time
+
 import httpx
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import assistant as assistant_api
 from app.config import settings
@@ -161,19 +162,47 @@ async def test_put_clearing_the_key_also_resets_the_probe_cache(auth_client, db,
     assert seen == ["Bearer nvapi-override", "Bearer nvapi-env"]
 
 
-async def test_the_key_reset_lands_after_the_commit(auth_client, monkeypatch):
+async def test_the_key_reset_lands_after_the_commit(auth_client, db, monkeypatch):
     # Ordering is the invariant, not a style point: resetting BEFORE the write is durable
     # re-opens the window the generation guard closed — a probe kicked off in that gap
     # reads the OLD key and is free to cache its verdict against the new generation.
     events: list[str] = []
-    real_commit = AsyncSession.commit
+    # Patched on the INSTANCE the request will use (conftest overrides get_db with this
+    # very session), not on AsyncSession itself: a class-level spy would also count the
+    # commits of any other session alive in this test — and `real_commit` is already
+    # bound, so the wrapper takes no self.
+    real_commit = db.commit
 
-    async def spy_commit(self: AsyncSession) -> None:
+    async def spy_commit() -> None:
         events.append("commit")
-        await real_commit(self)
+        await real_commit()
 
-    monkeypatch.setattr(AsyncSession, "commit", spy_commit)
+    monkeypatch.setattr(db, "commit", spy_commit)
     monkeypatch.setattr(assistant_api, "reset_catalog_cache", lambda: events.append("reset"))
     r = await auth_client.put(SETTINGS_URL, json={"api_key": "nvapi-typed"})
     assert r.status_code == 200, r.text
     assert events == ["commit", "reset"]
+
+
+async def test_a_rejected_model_leaves_the_key_row_and_the_probe_cache_alone(
+    auth_client, db, monkeypatch
+):
+    """One PUT, two fields: the key write lands in the session BEFORE default_model is
+    validated, so the 422 must take the whole request down — no half-applied key, and no
+    cache reset for a change that never happened."""
+    db.add(AppSetting(key="nvidia_api_key", value={"value": "nvapi-keep"}))
+    await db.commit()
+    seeded = (time.time(), True, frozenset({"sentinel"}))
+    monkeypatch.setattr(assistant_models, "_catalog_cache", seeded)
+
+    r = await auth_client.put(SETTINGS_URL, json={"api_key": "nvapi-new", "default_model": "gpt-9"})
+    assert r.status_code == 422
+    assert "nvapi-new" not in r.text
+
+    # Production's get_db closes the session on the error path, which rolls the pending
+    # write back; conftest hands every request one long-lived session that outlives the
+    # 500/422 and still holds the dirty instance in its identity map — so do it by hand,
+    # or this asserts against the in-memory mutation instead of the database.
+    await db.rollback()
+    assert (await db.get(AppSetting, "nvidia_api_key")).value == {"value": "nvapi-keep"}
+    assert assistant_models._catalog_cache == seeded  # the verdict is still about the old key

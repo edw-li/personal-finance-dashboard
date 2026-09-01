@@ -153,7 +153,11 @@ async def test_cached_read_reports_the_original_checked_at(monkeypatch):
         httpx.MockTransport(_no_request_expected),
     )
     seeded_at = time.time() - 1.0
-    assistant_models._catalog_cache = (seeded_at, True, frozenset({"sentinel"}))
+    # monkeypatch, not a raw assignment: the seed then unwinds with the test even if an
+    # assert below fires first (conftest's autouse reset covers the next test either way).
+    monkeypatch.setattr(
+        assistant_models, "_catalog_cache", (seeded_at, True, frozenset({"sentinel"}))
+    )
     key_ok, ids, checked_at = await probe_catalog("k", force=False)
     assert (key_ok, ids) == (True, frozenset({"sentinel"}))
     assert checked_at == seeded_at  # the card must not claim a check it never made

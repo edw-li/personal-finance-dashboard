@@ -122,6 +122,13 @@ async def test_a_payload_over_the_cap_rebuilds_at_the_tight_window(db):
     assert len(context["spending"]["months"]) == MONTHS_WINDOW_TIGHT
     assert context["spending"]["movers"][0]["value"] == "1234.56"
 
+    # ...and that flag is NOT a section: the transparency chip would otherwise list
+    # {"name": "truncated", "rows": 1} beside the real ones, reading as data the assistant
+    # supposedly consulted. Asserted here because this is the only case that sets it.
+    names = [s["name"] for s in await preview_sections(db, route="/spending", search={}, view={})]
+    assert "truncated" not in names
+    assert names == ["household", "spending"]
+
 
 def test_decimate_always_keeps_the_terminal_point():
     """Plain `series[::12]` only lands on the tail when len % 12 == 1 — a horizon whose
