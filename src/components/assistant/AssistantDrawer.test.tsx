@@ -143,6 +143,45 @@ describe('AssistantDrawer', () => {
     expect(document.activeElement).toBe(launcher)
   })
 
+  // The settings fetch decides whether there is a composer at all, so it lands a commit or
+  // more after the open. A reader who has already moved on inside the drawer must not be
+  // yanked into the composer when it finally appears.
+  it('does not steal focus into a composer that arrives late', async () => {
+    let land: (settings: unknown) => void = () => {}
+    fetchAssistantSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          land = resolve
+        }),
+    )
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: /open assistant/i }))
+    const drawer = await screen.findByRole('complementary', { name: 'Assistant' })
+    await waitFor(() => expect(document.activeElement).toBe(drawer))
+    const newChat = screen.getByRole('button', { name: 'New chat' })
+    newChat.focus()
+    await act(async () => {
+      land({ key: { configured: true, source: 'env' }, default_model: 'kimi-k3' })
+    })
+    await screen.findByRole('textbox', { name: /ask the assistant/i })
+    expect(document.activeElement).toBe(newChat)
+  })
+
+  // Nothing traps focus in a complementary region: one click on the page behind the drawer
+  // moves it out, and from there the root's onKeyDown never sees the keypress. Escape has
+  // to keep closing anyway — the window listener is what makes that true.
+  it('Esc closes from outside the drawer, after focus has wandered off', async () => {
+    mount()
+    const launcher = screen.getByRole('button', { name: /open assistant/i })
+    await openDrawer()
+    const wandered = document.activeElement as HTMLElement
+    wandered.blur()
+    expect(document.activeElement).toBe(document.body)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('complementary', { name: 'Assistant' })).toBeNull()
+    expect(document.activeElement).toBe(launcher)
+  })
+
   it('streams an answer: tokens accumulate, tool chip renders, done stamps the model', async () => {
     streamChat.mockImplementation(
       (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {

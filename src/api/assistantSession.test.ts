@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  beginAssistantSession,
   clearAssistantSession,
   readAssistantModel,
   readAssistantTranscript,
@@ -19,6 +20,9 @@ function item(content: string): TranscriptItem {
 afterEach(() => {
   vi.restoreAllMocks() // before the clear: a spied-out Storage method must be real again first
   sessionStorage.clear()
+  // The session-ended latch is MODULE state, so a test that ends the session would leave
+  // every later test in this file writing into a no-op. Re-armed here, not in each test.
+  beginAssistantSession()
 })
 
 describe('assistantSession', () => {
@@ -67,5 +71,29 @@ describe('assistantSession', () => {
     clearAssistantSession()
     expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
     expect(sessionStorage.getItem('assistant:model')).toBeNull()
+  })
+
+  // The 401 path wipes and THEN redirects, and the redirect takes milliseconds to commit:
+  // an SSE token already in flight can drive one more setTranscript, whose mirror effect
+  // would re-persist the transcript we just deleted. The wipe has to be final.
+  it('ignores writes once the session has ended (no transcript resurrection)', () => {
+    writeAssistantTranscript([item('asked before the 401')])
+    clearAssistantSession()
+    writeAssistantTranscript([item('a token that arrived late')])
+    writeAssistantModel('kimi-k3')
+    expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
+    expect(sessionStorage.getItem('assistant:model')).toBeNull()
+  })
+
+  // Logout, and the login after it, are client-side route changes — this module outlives
+  // both. Without the re-arm the latch would silently disable persistence for the whole
+  // rest of the tab's life, and only a manual reload would bring it back.
+  it('beginAssistantSession re-arms the writers for the next login', () => {
+    clearAssistantSession()
+    beginAssistantSession()
+    writeAssistantTranscript([item('new session')])
+    writeAssistantModel('kimi-k3')
+    expect(readAssistantTranscript()).toEqual([item('new session')])
+    expect(readAssistantModel()).toBe('kimi-k3')
   })
 })

@@ -76,7 +76,7 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
   if (res.status === 401 && !path.startsWith('/auth/login')) {
     clearToken()
     clearSnapshots() // snapshots are session data — they must not outlive the token
-    clearAssistantSession()
+    clearAssistantSession() // and a financial chat transcript must not outlive it either
     window.location.assign('/login')
     throw new ApiError('Session expired', 401)
   }

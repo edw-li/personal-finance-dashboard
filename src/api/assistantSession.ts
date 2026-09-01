@@ -32,6 +32,14 @@ export interface TranscriptItem {
 const TRANSCRIPT_KEY = 'assistant:transcript'
 const MODEL_KEY = 'assistant:model'
 
+// Latched by clearAssistantSession(), and the reason both writers below check it: on the
+// 401 path the wipe is followed by window.location.assign('/login'), and that navigation
+// takes MILLISECONDS to commit. The document keeps running meanwhile, so an SSE token
+// already in flight can still reach setTranscript, whose mirror effect would re-persist
+// the very transcript we just deleted — a resurrection the redirect then leaves behind for
+// the next person through this tab. The latch closes that window for good.
+let sessionEnded = false
+
 /** Bounds sessionStorage; the server caps messages per request separately (last 20). */
 export const TRANSCRIPT_CAP = 40
 
@@ -54,6 +62,7 @@ export function readAssistantTranscript(): TranscriptItem[] {
 }
 
 export function writeAssistantTranscript(items: TranscriptItem[]): void {
+  if (sessionEnded) return
   try {
     sessionStorage.setItem(TRANSCRIPT_KEY, JSON.stringify(items.slice(-TRANSCRIPT_CAP)))
   } catch {
@@ -70,6 +79,7 @@ export function readAssistantModel(): string | null {
 }
 
 export function writeAssistantModel(key: string): void {
+  if (sessionEnded) return
   try {
     sessionStorage.setItem(MODEL_KEY, key)
   } catch {
@@ -77,7 +87,18 @@ export function writeAssistantModel(key: string): void {
   }
 }
 
+/** Re-arms the writers after a session end that did NOT tear the document down. Called on
+ *  a successful login: logout and the login that follows it are both client-side route
+ *  changes (AuthContext's setEmail → ProtectedRoute → LoginPage → navigate('/')), so this
+ *  module outlives them, and without this the latch would silently disable assistant
+ *  persistence for the rest of the tab's life. The 401 path needs no such call — that one
+ *  really does replace the document. */
+export function beginAssistantSession(): void {
+  sessionEnded = false
+}
+
 export function clearAssistantSession(): void {
+  sessionEnded = true
   try {
     sessionStorage.removeItem(TRANSCRIPT_KEY)
     sessionStorage.removeItem(MODEL_KEY)

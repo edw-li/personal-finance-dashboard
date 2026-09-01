@@ -109,18 +109,20 @@ beforeEach(() => {
   // these vi.fn()s would otherwise accumulate call history across this file's tests.
   vi.mocked(warmAllRoutes).mockClear()
   vi.mocked(prefetchRoute).mockClear()
-  // Not-configured on purpose: the shell tests need the drawer to settle without a
-  // composer or a model catalog to wait on.
+  // Configured, with a one-entry catalog: the drawer then settles on a STRUCTURAL landmark
+  // (its composer) that the shell tests can wait for without knowing a word of its copy.
   fetchAssistantSettings.mockReset().mockResolvedValue({
-    key: { configured: false, source: null },
+    key: { configured: true, source: 'env' },
     default_model: 'kimi-k3',
   })
   fetchAssistantModels.mockReset().mockResolvedValue({
-    configured: false,
-    key_source: null,
-    key_ok: false,
-    checked_at: null,
-    models: [],
+    configured: true,
+    key_source: 'env',
+    key_ok: true,
+    checked_at: '2026-09-01T00:00:00Z',
+    models: [
+      { key: 'kimi-k3', label: 'Kimi K3', available: true, supports_tools: true, default: true },
+    ],
   })
   fetchContextPreview.mockReset().mockResolvedValue({ sections: [] })
 })
@@ -292,7 +294,23 @@ describe('Layout — assistant mount', () => {
     fireEvent.change(combo, { target: { value: 'assistant' } })
     fireEvent.keyDown(combo, { key: 'Enter' })
     expect(await screen.findByRole('complementary', { name: 'Assistant' })).toBeTruthy()
-    // Settle the settings fetch inside act before the test ends.
-    expect(await screen.findByText(/no nvidia api key configured/i)).toBeTruthy()
+    // Settles the settings fetch inside act, structurally: the composer is the drawer's
+    // contract, its wording is not, so no copy edit in there can break a shell test.
+    expect(await screen.findByRole('textbox', { name: /ask the assistant/i })).toBeTruthy()
+  })
+
+  // The palette sits ABOVE the drawer (z 20 vs 15) and both answer Escape. One keypress
+  // must dismiss exactly one of them: the drawer's window-level listener stands down for
+  // whoever already called preventDefault.
+  it('Escape in the palette closes only the palette, leaving the drawer open', async () => {
+    renderShell()
+    fireEvent.click(screen.getByRole('button', { name: 'Open assistant' }))
+    await screen.findByRole('textbox', { name: /ask the assistant/i })
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Command palette' }), {
+      key: 'Escape',
+    })
+    expect(document.querySelector('.palette-overlay')).toBeNull()
+    expect(screen.getByRole('complementary', { name: 'Assistant' })).toBeTruthy()
   })
 })

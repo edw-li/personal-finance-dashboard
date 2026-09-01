@@ -1,5 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import type { KeyboardEvent } from 'react'
+// Aliased, the palette's idiom: the window-level Escape listener below needs the DOM's
+// KeyboardEvent, which React's same-named type would otherwise shadow.
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Sparkles, Square, X } from 'lucide-react'
 import {
@@ -146,16 +148,24 @@ export default function AssistantDrawer() {
       .catch(() => setModels(null))
   }, [open, settings])
 
-  // Focus hand-off: into the input on open; back to the launcher on close. Without a
-  // composer to hold it — settings still loading, not configured, or the fetch failed —
-  // the drawer ROOT takes focus instead (tabIndex -1). Load-bearing: Escape rides the
-  // root's onKeyDown, which only sees events raised inside the drawer, so a keypress
-  // landing on <body> would leave the drawer uncloseable from the keyboard. Re-runs on
-  // `settings` so the composer, once it exists, still gets the focus.
+  // Focus hand-off on open: into the composer if it is already there, else the drawer ROOT
+  // (tabIndex -1) — settings may still be loading, or there may be no composer at all (not
+  // configured, or the settings fetch failed). Opening a panel and leaving focus behind on
+  // the page is what strands screen-reader and keyboard users; Escape itself no longer
+  // depends on this, the window listener below covers that.
   useEffect(() => {
     if (!open) return
     if (inputRef.current !== null) inputRef.current.focus()
     else drawerRef.current?.focus()
+  }, [open])
+
+  // The composer arrives a commit later, when the settings fetch lands. Hand focus on to
+  // it — but ONLY if focus is still parked on the placeholder the effect above chose. By
+  // then the reader may have tabbed to the model picker or clicked into the transcript,
+  // and a late fetch must never yank them out of wherever they went.
+  useEffect(() => {
+    if (!open || inputRef.current === null) return
+    if (document.activeElement === drawerRef.current) inputRef.current.focus()
   }, [open, settings])
 
   // Follow the newest message as tokens land — but only while the reader is still parked at
@@ -182,6 +192,24 @@ export default function AssistantDrawer() {
     setPreviewOpen(false)
     launcherRef.current?.focus()
   }
+
+  // Escape closes from ANYWHERE while the drawer is open. The root's onKeyDown only sees
+  // events raised inside the drawer, and this is a complementary region, not a modal —
+  // nothing traps focus, so a single click on the page behind it would otherwise leave the
+  // drawer keyboard-uncloseable. Window-level and unkeyed (the palette's idiom): the
+  // listener re-registers each render, so `close` is never a stale closure.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => {
+      // defaultPrevented means something on top already answered this Escape — the palette
+      // (z 20, above the drawer), the drawer's own root handler, a page's dialog. Closing
+      // underneath it would dismiss two things with one keypress.
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   const buildContext = (): AssistantContextIn => ({
     route: location.pathname,
@@ -360,7 +388,7 @@ export default function AssistantDrawer() {
     setTranscript([])
   }
 
-  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       send(input)
