@@ -12,6 +12,9 @@ export interface TranscriptTool {
 export interface TranscriptError {
   kind: string
   message: string
+  /** The server's rate-limit hint, in seconds, carried through from the error event so the
+   *  bubble can count down to a live Retry (spec §9). Absent when it gave none. */
+  retry_after?: number
   retryModel?: string
 }
 

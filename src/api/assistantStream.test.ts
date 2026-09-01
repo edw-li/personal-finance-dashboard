@@ -288,6 +288,37 @@ describe('streamChat', () => {
     expect(h.errors).toEqual([{ kind: 'unavailable', message: 'upstream down' }])
   })
 
+  // FastAPI's validation errors carry a LIST detail, never a string. Read as a string it
+  // falls through to statusText — "Unprocessable Content" — which names neither the field
+  // the server rejected nor the limit it broke, and this endpoint's 422s (an over-cap
+  // message, too many of them) are exactly the ones a reader can act on.
+  it('flattens a 422 validation detail list into the message', async () => {
+    stubFetch(
+      async () =>
+        new Response(
+          JSON.stringify({ detail: [{ msg: 'String should have at most 8000 characters' }] }),
+          { status: 422, statusText: 'Unprocessable Content' },
+        ),
+    )
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('error')
+    expect(h.errors).toEqual([
+      { kind: 'bad_request', message: 'String should have at most 8000 characters' },
+    ])
+  })
+
+  it('joins a multi-entry 422 detail, naming what it cannot read', async () => {
+    stubFetch(
+      async () =>
+        new Response(JSON.stringify({ detail: [{ msg: 'field a is bad' }, { loc: ['body'] }] }), {
+          status: 422,
+        }),
+    )
+    const h = handlers()
+    await streamChat(body, h).finished
+    expect(h.errors[0].message).toBe('field a is bad; Invalid input')
+  })
+
   it('maps other failures to bad_request, falling back to statusText', async () => {
     stubFetch(
       async () => new Response('<html>nope</html>', { status: 400, statusText: 'Bad Request' }),

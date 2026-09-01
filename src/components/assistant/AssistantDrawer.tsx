@@ -34,6 +34,13 @@ import './assistant.css'
 /** The server caps at 20; sending exactly its cap keeps 422s unreachable from here. */
 const SENT_MESSAGES_CAP = 20
 
+/** ChatMessageIn.content is `Field(max_length=8000)` server-side, and the composer is not
+ *  the risk — a long ANSWER is. One over-cap reply lands in the transcript, rides every
+ *  later send as history, and 422s all of them: the conversation wedges, with New chat the
+ *  only way out. Truncating costs the tail of an old message the model has already used;
+ *  not truncating costs the thread. */
+const SENT_CONTENT_CAP = 8000
+
 /** One drawer per app (Layout mounts it once), so a constant id is safe as an
  *  aria-controls target. */
 const PREVIEW_LIST_ID = 'assistant-context-sections'
@@ -73,6 +80,59 @@ function resolveModel(key: string, models: AssistantModelsOut | null): string {
 const MessageBody = memo(function MessageBody({ text }: { text: string }) {
   return <>{renderMarkdown(text)}</>
 })
+
+/** The retry affordance, with the rate-limit countdown spec §9 asks for: a 429 that came
+ *  with a `retry_after` hint holds the button shut until the wait is actually over, so the
+ *  obvious next click cannot earn a second 429.
+ *
+ *  Module scope for MessageBody's reason — a component declared inside the drawer is a new
+ *  type on every render, so each streamed token would remount this and restart the count —
+ *  and self-contained so the once-a-second tick re-renders the button alone, not the log.
+ *
+ *  prefers-reduced-motion is deliberately not consulted: a number that updates once a
+ *  second is changing CONTENT, not moving anything, and the alternative that setting would
+ *  buy (a disabled button with no stated reason) is worse for exactly those readers. */
+function RetryCountdown({
+  seconds,
+  label,
+  onRetry,
+}: {
+  /** The server's hint, or undefined when it gave none — then there is nothing to count
+   *  and the button is live from the first paint, as it was before this existed. */
+  seconds: number | undefined
+  label: string
+  onRetry: () => void
+}) {
+  // Whole seconds left. Seeded at mount, not in an effect, so the first paint already shows
+  // the full count; a hand-edited sessionStorage transcript could carry anything, and a
+  // NaN here would disable the button forever.
+  const [left, setLeft] = useState(() =>
+    typeof seconds === 'number' && Number.isFinite(seconds) ? Math.max(0, Math.ceil(seconds)) : 0,
+  )
+  // Keyed on `left`, so the timer is re-armed each tick and its cleanup really stops at
+  // zero. An interval started once and left running would keep firing for as long as the
+  // error bubble sits in the transcript — which is until New chat.
+  useEffect(() => {
+    if (left <= 0) return
+    const id = setInterval(() => setLeft((n) => (n <= 1 ? 0 : n - 1)), 1000)
+    return () => clearInterval(id)
+  }, [left])
+  return (
+    <>
+      {left > 0 && (
+        // aria-live="off" against the enclosing role="alert": without it every tick would
+        // be announced, assertively, once a second. The text stays in the accessibility
+        // tree for a reader who navigates to it — it just stops interrupting them.
+        <p className="assistant-meta" aria-live="off">
+          Retry in {left}s
+        </p>
+      )}
+      <button type="button" className="button" disabled={left > 0} onClick={onRetry}>
+        Retry with {label}
+      </button>
+    </>
+  )
+}
 
 export default function AssistantDrawer() {
   const location = useLocation()
@@ -292,7 +352,7 @@ export default function AssistantDrawer() {
         messages: history
           .filter((item) => item.content.trim() !== '')
           .slice(-SENT_MESSAGES_CAP)
-          .map(({ role, content: c }) => ({ role, content: c })),
+          .map(({ role, content: c }) => ({ role, content: c.slice(0, SENT_CONTENT_CAP) })),
       },
       {
         onNotice: (notice) =>
@@ -560,13 +620,14 @@ export default function AssistantDrawer() {
                         </p>
                       )}
                       {item.error.kind !== 'bad_key' && item.error.retryModel && (
-                        <button
-                          type="button"
-                          className="button"
-                          onClick={() => retryWith(item.error?.retryModel ?? model)}
-                        >
-                          Retry with {modelLabel(item.error.retryModel, models)}
-                        </button>
+                        // No `key` needed to restart the count after a second failure:
+                        // retrying always passes through a no-error transcript state, which
+                        // unmounts this and takes its state with it.
+                        <RetryCountdown
+                          seconds={item.error.retry_after}
+                          label={modelLabel(item.error.retryModel, models)}
+                          onRetry={() => retryWith(item.error?.retryModel ?? model)}
+                        />
                       )}
                     </div>
                   )}

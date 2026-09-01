@@ -199,6 +199,13 @@
   margin-top: 0.4rem;
 }
 
+/* The rate-limit countdown, which sits directly above that button: the message-body
+   paragraph rule's 0.55rem bottom margin stacked on the button's own margin-top opens a gap
+   this two-line block does not need. */
+.assistant-error .assistant-meta {
+  margin: 0;
+}
+
 .assistant-samples {
   display: flex;
   flex-wrap: wrap;

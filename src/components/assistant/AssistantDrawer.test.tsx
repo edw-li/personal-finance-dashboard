@@ -88,6 +88,17 @@ async function openDrawer(): Promise<HTMLTextAreaElement> {
   return input
 }
 
+/** openDrawer's fake-timer twin. waitFor and findBy poll on setInterval/setTimeout, which
+ *  vi.useFakeTimers freezes — and @testing-library only auto-advances for JEST's fake
+ *  clock, so under vitest's they hang. The drawer's own settling is promise-work only
+ *  (settings + models), so draining the microtask queue inside act() is enough. */
+async function settle() {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 /** The not-configured variant: there is no composer to settle on, so the setup note that
  *  replaces it is the signal that fetchAssistantSettings has landed. */
 async function openDrawerUnconfigured() {
@@ -472,6 +483,106 @@ describe('AssistantDrawer', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(streamChat).toHaveBeenCalled())
     expect((streamChat.mock.calls[0][0] as { model: string }).model).toBe('kimi-k3')
+  })
+
+  // The backend caps ChatMessageIn.content at 8000 chars. A long ANSWER is the one that
+  // gets there: it lands in the transcript, rides every later send as history and 422s all
+  // of them, wedging the conversation until New chat. One truncated tail is the cheap half
+  // of that trade.
+  it('truncates over-cap history so one long answer cannot wedge every later send', async () => {
+    sessionStorage.setItem(
+      'assistant:transcript',
+      JSON.stringify([
+        { role: 'user', content: 'give me everything' },
+        { role: 'assistant', content: 'x'.repeat(9000) },
+      ]),
+    )
+    streamChat.mockImplementation(
+      (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+        h.onDone({ model_used: 'kimi-k3' })
+        return { abort: vi.fn(), finished: Promise.resolve() }
+      },
+    )
+    mount()
+    const input = await openDrawer()
+    fireEvent.change(input, { target: { value: 'and now a short one' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    const body = streamChat.mock.calls[0][0] as { messages: { content: string }[] }
+    expect(body.messages.map((m) => m.content.length)).toEqual([18, 8000, 19])
+    expect(body.messages.every((m) => m.content.length <= 8000)).toBe(true)
+    // Truncated, not dropped: the head of the answer is still the history the model needs.
+    expect(body.messages[1].content).toBe('x'.repeat(8000))
+  })
+
+  // Spec §9: a 429 that came with a Retry-After hint holds the retry shut until the wait is
+  // really over — the obvious next click cannot earn a second 429.
+  it('a rate_limited retry_after counts down and only then enables Retry', async () => {
+    // Installed BEFORE the mount: RetryCountdown arms its interval as it renders, and one
+    // started under real timers would never see advanceTimersByTime. That rules out
+    // waitFor/findBy for the rest of the test — both poll on the timers now frozen — so the
+    // open settles by draining microtasks instead (ToastProvider's fake-timer posture).
+    vi.useFakeTimers()
+    try {
+      streamChat.mockImplementation(
+        (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+          h.onError({ kind: 'rate_limited', message: 'too many requests', retry_after: 3 })
+          return { abort: vi.fn(), finished: Promise.resolve() }
+        },
+      )
+      mount()
+      fireEvent.click(screen.getByRole('button', { name: /open assistant/i }))
+      await settle()
+      const input = screen.getByRole('textbox', { name: /ask the assistant/i })
+      fireEvent.change(input, { target: { value: 'q' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      await settle()
+
+      expect(screen.getByText(/too many requests/)).toBeTruthy()
+      const retry = () =>
+        screen.getByRole('button', { name: /retry with/i }) as HTMLButtonElement
+      expect(screen.getByText(/retry in 3s/i)).toBeTruthy()
+      expect(retry().disabled).toBe(true)
+
+      act(() => {
+        vi.advanceTimersByTime(1000)
+      })
+      expect(screen.getByText(/retry in 2s/i)).toBeTruthy()
+      expect(retry().disabled).toBe(true)
+
+      act(() => {
+        vi.advanceTimersByTime(2000)
+      })
+      // At zero the wait line is gone and the button is live.
+      expect(screen.queryByText(/retry in/i)).toBeNull()
+      expect(retry().disabled).toBe(false)
+
+      // And the timer really stopped: no further ticks, no further renders.
+      act(() => {
+        vi.advanceTimersByTime(10_000)
+      })
+      expect(retry().disabled).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // No hint from the server means nothing to wait for: the affordance behaves exactly as it
+  // did before the countdown existed.
+  it('an error without retry_after leaves Retry live immediately', async () => {
+    streamChat.mockImplementation(
+      (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+        h.onError({ kind: 'unavailable', message: 'every model failed' })
+        return { abort: vi.fn(), finished: Promise.resolve() }
+      },
+    )
+    mount()
+    const input = await openDrawer()
+    fireEvent.change(input, { target: { value: 'q' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    const retry = await screen.findByRole<HTMLButtonElement>('button', { name: /retry with/i })
+    expect(retry.disabled).toBe(false)
+    expect(screen.queryByText(/retry in/i)).toBeNull()
   })
 
   // A stream can end without reporting anything to the handlers at all — the 401 redirect

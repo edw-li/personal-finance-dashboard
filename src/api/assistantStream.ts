@@ -18,14 +18,16 @@ export interface ChatRequest {
   messages: ChatMessageIn[]
 }
 
-/** The kinds this client and the server emit today. The trailing `string & {}` arm keeps
- *  the literals in autocomplete without closing the set: a new server-side kind must
- *  render as an unknown error, never fail to type-check. */
+/** The kinds this client and the server emit today — `internal` is the agent loop's own
+ *  (budget exhausted, tool loop refused), the rest map from HTTP status or arise here. The
+ *  trailing `string & {}` arm keeps the literals in autocomplete without closing the set: a
+ *  kind added server-side later must render as an unknown error, never fail to type-check. */
 export type AssistantErrorKind =
   | 'bad_key'
   | 'rate_limited'
   | 'unavailable'
   | 'bad_request'
+  | 'internal'
   | 'network'
   | 'interrupted'
   | (string & {})
@@ -165,9 +167,17 @@ export function streamChat(body: ChatRequest, handlers: AssistantHandlers): Chat
     if (!res.ok || res.body === null) {
       let detail = res.statusText
       try {
+        // FastAPI errors use {detail} (a string, or an ARRAY for 422 validation errors);
+        // slowapi's 429 rate-limit body uses {error}. Flattened exactly as client.ts:83-94
+        // does: without the array arm a 422 reads "Unprocessable Content", which tells the
+        // reader nothing about WHICH field the server rejected or by how much.
         const parsed = (await res.json()) as { detail?: unknown; error?: unknown }
         const raw = parsed.detail ?? parsed.error
-        if (typeof raw === 'string') detail = raw
+        if (typeof raw === 'string') {
+          detail = raw
+        } else if (Array.isArray(raw)) {
+          detail = raw.map((d) => (d as { msg?: string }).msg ?? 'Invalid input').join('; ')
+        }
       } catch {
         // non-JSON error body
       }
