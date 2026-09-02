@@ -18,9 +18,9 @@
 
 - `GET /api/v1/assistant/settings` → `{key: {configured, source: "env"|"override"|null}, default_model}`
 - `PUT /api/v1/assistant/settings` `{api_key?: string|null, default_model?: string}` → GET shape. Tri-state `api_key` via `model_fields_set`: absent = unchanged, null/blank = clear override, string = set.
-- `GET /api/v1/assistant/models[?probe=1]` → `{configured, key_source, key_ok: bool|null, checked_at, models: [{key, label, available, supports_tools, default}]}` — `key_ok`: true = catalog answered 200; false = rejected/unreachable; null = no key.
+- `GET /api/v1/assistant/models[?probe=1]` → `{configured, key_source, key_ok: bool|null, checked_at, models: [{key, label, available, supports_tools, default, catalog_id: str|null}]}` — `key_ok`: true = catalog answered 200; false = rejected/unreachable; null = no key.
 - `POST /api/v1/assistant/context-preview` `{context}` → `{sections: [{name, rows}]}`
-- `POST /api/v1/assistant/chat` `{model, context: {route, search, view}, messages}` → SSE. Events: `notice {kind:"failover", from, to}` · `tool_start {name, summary}` · `tool_result {name, summary}` · `token {text}` · `done {model_used}` · `error {kind: bad_key|rate_limited|unavailable|bad_request|internal, message, retry_after?}`. Keepalive comments `: ping\n\n`. Headers: `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
+- `POST /api/v1/assistant/chat` `{model, context: {route, search, view}, messages}` → SSE. Events: `status {text}` (progress narration: reading the page, asking a model, retrying, still-waiting) · `thinking {text}` (reasoning delta, display-only) · `notice {kind:"failover", from, to}` · `tool_start {name, summary}` · `tool_result {name, summary}` · `token {text}` · `done {model_used}` · `error {kind: bad_key|rate_limited|unavailable|bad_request|internal, message, retry_after?}`. Keepalive comments `: ping\n\n`. Headers: `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
 - Registry: `kimi-k3` (default) / `deepseek-v4-pro-0813` / `nemotron-3-ultra-550b` / `nemotron-3.5-lightning`.
 
 ## Load-bearing facts (verified against the codebase 2026-09-01)

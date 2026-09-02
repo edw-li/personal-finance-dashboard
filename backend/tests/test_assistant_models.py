@@ -1,6 +1,7 @@
 """Registry, key precedence, and the catalog probe (spec §3–§4)."""
 
 import asyncio
+import re
 import time
 
 import httpx
@@ -17,6 +18,7 @@ from app.services.assistant_models import (
     probe_catalog,
     registry_entry,
     resolve_api_key,
+    resolve_catalog_id,
     resolve_default_model,
 )
 
@@ -222,3 +224,87 @@ def test_context_dicts_are_item_capped():
         ChatContextIn(route="/spending", search={str(i): "v" for i in range(41)})
     with pytest.raises(ValidationError):
         ChatContextIn(route="/spending", view={str(i): i for i in range(41)})
+
+
+# --- catalog matching (self-healing ids) ------------------------------------------------
+
+
+def _model(key: str = "nemotron-3-ultra-550b"):
+    entry = registry_entry(key)
+    assert entry is not None
+    return entry
+
+
+def test_an_exact_catalog_id_always_wins():
+    model = _model()
+    # The bare id also matches the pattern AND is shorter; the registry spelling still wins.
+    ids = frozenset({model.catalog_id, "nvidia/nemotron-3-ultra"})
+    assert resolve_catalog_id(model, ids) == model.catalog_id
+
+
+def test_a_renamed_id_resolves_by_pattern():
+    model = _model()
+    assert (
+        resolve_catalog_id(model, frozenset({"nvidia/nemotron-3-ultra-550b-v1.2"}))
+        == "nvidia/nemotron-3-ultra-550b-v1.2"
+    )
+
+
+def test_the_shortest_pattern_match_wins_as_the_canonical_id():
+    """A catalog lists the base model beside its quantized/instruct siblings; the base
+    spelling is the short one, and it is the one a plain chat request wants."""
+    model = _model()
+    ids = frozenset(
+        {
+            "nvidia/nemotron-3-ultra-550b-v1.2",
+            "nvidia/nemotron-3-ultra-550b-instruct-fp8",
+            "nvidia/nemotron-3-ultra-550b-base-nim-latest",
+        }
+    )
+    assert resolve_catalog_id(model, ids) == "nvidia/nemotron-3-ultra-550b-v1.2"
+
+
+def test_equal_length_matches_break_alphabetically():
+    # Two equally short candidates must resolve deterministically, or the chosen model
+    # would flap between page loads.
+    model = _model()
+    ids = frozenset({"nvidia/nemotron-3-ultra-550c", "nvidia/nemotron-3-ultra-550b"})
+    assert resolve_catalog_id(model, ids) == "nvidia/nemotron-3-ultra-550b"
+
+
+def test_matching_ignores_case():
+    model = _model()
+    assert (
+        resolve_catalog_id(model, frozenset({"NVIDIA/Nemotron-3-Ultra-550B-V2"}))
+        == "NVIDIA/Nemotron-3-Ultra-550B-V2"
+    )
+
+
+def test_nothing_matching_resolves_to_none():
+    assert resolve_catalog_id(_model(), frozenset({"meta/llama-4-70b"})) is None
+    assert resolve_catalog_id(_model(), frozenset()) is None
+
+
+def test_every_catalog_id_also_matches_its_own_patterns():
+    """Exact id and patterns must describe the SAME model: if a verified id is edited to
+    something the patterns no longer recognize, the safety net silently stops covering it."""
+    for model in REGISTRY:
+        assert any(
+            re.search(pattern, model.catalog_id, re.IGNORECASE)
+            for pattern in model.catalog_patterns
+        ), model.key
+
+
+def test_every_registry_pattern_matches_its_own_id_and_a_renamed_one():
+    # The guard that keeps a typo'd pattern from silently reading as "unavailable".
+    for model in REGISTRY:
+        assert resolve_catalog_id(model, frozenset({model.catalog_id})) == model.catalog_id
+        renamed = f"{model.catalog_id}-v1.2"
+        assert resolve_catalog_id(model, frozenset({renamed})) == renamed
+
+
+def test_no_pattern_poaches_another_registry_models_id():
+    # Cross-talk would answer on a model the user did not pick and never say so.
+    for model in REGISTRY:
+        others = frozenset(o.catalog_id for o in REGISTRY if o.key != model.key)
+        assert resolve_catalog_id(model, others) is None

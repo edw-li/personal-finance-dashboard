@@ -69,6 +69,8 @@ Stateless server: the client re-sends the transcript (capped: last 20 messages, 
 
 | event | data | meaning |
 |---|---|---|
+| `status` | `{text}` | progress narration: reading the page, asking/retrying a model, still waiting |
+| `thinking` | `{text}` | reasoning delta (display-only: never replayed upstream, never an answer) |
 | `notice` | `{kind: "failover", from, to}` | model switched before content |
 | `tool_start` | `{name, summary}` | e.g. `{"run_tax_whatif", "sell 200 NVDA in 2026"}` — the UI's ⚙ chip |
 | `tool_result` | `{name, summary}` | one-line outcome |

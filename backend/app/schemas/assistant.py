@@ -29,6 +29,9 @@ class AssistantModelOut(BaseModel):
     available: bool
     supports_tools: bool
     default: bool
+    # The id the chat request will really carry, resolved against the live catalog (it can
+    # differ from the registry guess by a version suffix). None whenever unavailable.
+    catalog_id: str | None = None
 
 
 class AssistantModelsOut(BaseModel):

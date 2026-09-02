@@ -2,11 +2,17 @@
 
 THE registry: `key` is the app's stable vocabulary; `catalog_id` is NVIDIA's spelling —
 DATA, not code, so a catalog rename is a one-line edit. All four models postdate the
-spec author's knowledge cutoff: catalog_ids below are the convention-based guesses the
-morning verification checks against the live /v1/models (an id the catalog doesn't list
-simply reads as unavailable, never a crash).
+spec author's knowledge cutoff, so the ids started as convention-based guesses; the
+2026-09-02 real-key run against the live /v1/models VERIFIED all four, and corrected
+both Nemotrons (the catalog suffixes their parameter counts: `-a55b`, `-30b-a3b`).
+
+That correction is why `catalog_patterns` exists: an id that misses by a version suffix
+now RESOLVES against the live listing (resolve_catalog_id) instead of reading as an
+absent model — the symptom that made both Nemotrons look unavailable in the dropdown.
+The exact id still wins; the patterns are the safety net, not the rule.
 """
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -38,6 +44,10 @@ class AssistantModel:
     label: str
     supports_tools: bool
     blurb: str
+    # Case-insensitive regexes matched against live catalog ids when `catalog_id` misses.
+    # Keep them narrow enough that no pattern can claim a SIBLING registry model's id —
+    # answering on a model the user did not pick, silently, is the failure mode here.
+    catalog_patterns: tuple[str, ...] = ()
 
 
 REGISTRY: tuple[AssistantModel, ...] = (
@@ -47,6 +57,7 @@ REGISTRY: tuple[AssistantModel, ...] = (
         label="Kimi K3",
         supports_tools=True,
         blurb="default",
+        catalog_patterns=(r"kimi-k3",),
     ),
     AssistantModel(
         key="deepseek-v4-pro-0813",
@@ -54,20 +65,23 @@ REGISTRY: tuple[AssistantModel, ...] = (
         label="DeepSeek V4 Pro",
         supports_tools=True,
         blurb="",
+        catalog_patterns=(r"deepseek-v4[-_.]?pro", r"deepseek.*v4.*pro"),
     ),
     AssistantModel(
         key="nemotron-3-ultra-550b",
-        catalog_id="nvidia/nemotron-3-ultra-550b",
+        catalog_id="nvidia/nemotron-3-ultra-550b-a55b",
         label="Nemotron 3 Ultra 550B",
         supports_tools=True,
         blurb="",
+        catalog_patterns=(r"nemotron-3-ultra", r"nemotron.*3.*ultra"),
     ),
     AssistantModel(
         key="nemotron-3.5-lightning",
-        catalog_id="nvidia/nemotron-3.5-lightning",
+        catalog_id="nvidia/nemotron-3.5-lightning-30b-a3b",
         label="Nemotron 3.5 Lightning",
         supports_tools=True,
         blurb="fastest — the failover ladder's last resort",
+        catalog_patterns=(r"nemotron-3\.5.*lightning", r"nemotron.*lightning"),
     ),
 )
 
@@ -76,6 +90,26 @@ DEFAULT_MODEL_KEY = "kimi-k3"
 
 def registry_entry(key: str) -> AssistantModel | None:
     return next((m for m in REGISTRY if m.key == key), None)
+
+
+def resolve_catalog_id(model: AssistantModel, ids: frozenset[str]) -> str | None:
+    """The id to REQUEST for `model` given a live catalog listing, or None if it isn't
+    there at all. Pure — the availability flag and the chat ladder both read it.
+
+    The exact registry spelling wins whenever the catalog offers it. Otherwise the
+    SHORTEST pattern match is the canonical one: a catalog lists the base model beside
+    its `-instruct` / `-fp8` / `-nim` siblings, and the base spelling is the short one.
+    Ties break alphabetically so the choice can't flap between page loads."""
+    if model.catalog_id in ids:
+        return model.catalog_id
+    matches = [
+        candidate
+        for candidate in ids
+        if any(re.search(pattern, candidate, re.IGNORECASE) for pattern in model.catalog_patterns)
+    ]
+    if not matches:
+        return None
+    return min(matches, key=lambda candidate: (len(candidate), candidate))
 
 
 def http_client(timeout: httpx.Timeout | float) -> httpx.AsyncClient:

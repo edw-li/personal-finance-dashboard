@@ -90,6 +90,8 @@ async def test_models_unconfigured_lists_registry_all_unavailable(auth_client):
         "nemotron-3.5-lightning",
     ]
     assert all(m["available"] is False for m in body["models"])
+    # Nothing was probed, so there is no resolved id to name either.
+    assert all(m["catalog_id"] is None for m in body["models"])
     assert body["models"][0]["default"] is True
 
 
@@ -122,7 +124,39 @@ async def test_models_probe_marks_catalog_hits_available(auth_client, monkeypatc
     assert body["key_ok"] is True and body["checked_at"] is not None
     by_key = {m["key"]: m for m in body["models"]}
     assert by_key["kimi-k3"]["available"] is True
+    assert by_key["kimi-k3"]["catalog_id"] == "moonshotai/kimi-k3"
     assert by_key["nemotron-3.5-lightning"]["available"] is False
+    assert by_key["nemotron-3.5-lightning"]["catalog_id"] is None
+
+
+async def test_models_resolve_a_renamed_catalog_id(auth_client, monkeypatch):
+    """The morning's real-key finding: the catalog spells the Nemotrons with a suffix the
+    registry guessed without. A convention-guessed id must not read as 'unavailable' when
+    the model is plainly there — the row reports the id the chat request will actually use."""
+    monkeypatch.setattr(settings, "nvidia_api_key", "k")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "nvidia/nemotron-3-ultra-550b-v1.2"},
+                    {"id": "nvidia/nemotron-3.5-lightning-instruct"},
+                ]
+            },
+        )
+
+    monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", httpx.MockTransport(handler))
+    body = (await auth_client.get(MODELS_URL + "?probe=1")).json()
+    by_key = {m["key"]: m for m in body["models"]}
+    assert by_key["nemotron-3-ultra-550b"]["available"] is True
+    assert by_key["nemotron-3-ultra-550b"]["catalog_id"] == "nvidia/nemotron-3-ultra-550b-v1.2"
+    assert by_key["nemotron-3.5-lightning"]["available"] is True
+    assert (
+        by_key["nemotron-3.5-lightning"]["catalog_id"] == "nvidia/nemotron-3.5-lightning-instruct"
+    )
+    assert by_key["kimi-k3"]["available"] is False  # genuinely absent, and still says so
+    assert by_key["kimi-k3"]["catalog_id"] is None
 
 
 async def test_put_key_resets_probe_cache(auth_client, monkeypatch):

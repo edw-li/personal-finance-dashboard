@@ -37,6 +37,7 @@ from app.services.assistant_models import (
     registry_entry,
     reset_catalog_cache,
     resolve_api_key,
+    resolve_catalog_id,
     resolve_default_model,
 )
 
@@ -104,17 +105,25 @@ async def put_settings(
 
 def _model_rows(default_key: str, ids: frozenset[str], key_ok: bool) -> list[AssistantModelOut]:
     """The registry as wire rows. `available` needs BOTH a working key and a catalog hit,
-    so the unprobed (no-key) card passes key_ok=False with an empty id set."""
-    return [
-        AssistantModelOut(
-            key=m.key,
-            label=m.label,
-            available=key_ok and m.catalog_id in ids,
-            supports_tools=m.supports_tools,
-            default=m.key == default_key,
+    so the unprobed (no-key) card passes key_ok=False with an empty id set.
+
+    The hit is resolved, not literal: a catalog that spells a model with a version suffix
+    the registry guessed without is still that model (assistant_models.resolve_catalog_id),
+    and the row reports the id chat will actually request."""
+    rows = []
+    for m in REGISTRY:
+        resolved = resolve_catalog_id(m, ids) if key_ok else None
+        rows.append(
+            AssistantModelOut(
+                key=m.key,
+                label=m.label,
+                available=resolved is not None,
+                supports_tools=m.supports_tools,
+                default=m.key == default_key,
+                catalog_id=resolved,
+            )
         )
-        for m in REGISTRY
-    ]
+    return rows
 
 
 # int, not bool, and compared `== 1`: ?probe=1 is the only spelling that forces a live

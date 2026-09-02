@@ -18,8 +18,10 @@ from app.services.assistant_models import (
     REGISTRY,
     AssistantModel,
     http_client,
+    probe_catalog,
     registry_entry,
     resolve_api_key,
+    resolve_catalog_id,
 )
 from app.services.assistant_tools import TOOL_SCHEMAS, execute_tool
 
@@ -31,6 +33,18 @@ MAX_ROUNDS = 4
 MAX_TOOL_CALLS = 6
 TOTAL_BUDGET_SECONDS = 90.0
 KEEPALIVE_SECONDS = 15.0
+# How long a silent model round goes unnarrated. A `: ping` comment keeps the socket
+# alive but is invisible to the user, and a free endpoint can think for a minute before
+# its first frame — say so instead of showing dead air.
+WAIT_STATUS_SECONDS = 15.0
+# One transient 5xx is usually the endpoint, not the model: pause, ask the SAME model
+# again, and only then walk the ladder (a failover answers worse AND says so).
+RETRY_DELAY_SECONDS = 1.5
+# Below this much budget, re-asking would eat the answer's remaining time. Sized against
+# REQUEST_TIMEOUT.read on purpose: a read timeout burns 75 of the 90 s budget, and those
+# last 15 s belong to the NEXT rung — not to a second helping of the model that just hung
+# (measured 2026-09-02: DeepSeek's endpoint times out rather than refusing).
+RETRY_MIN_REMAINING_SECONDS = 20.0
 # connect fast; read generous per-chunk (the keepalive covers client liveness, and the
 # total budget bounds the whole answer); a silently dead upstream errors inside budget.
 REQUEST_TIMEOUT = httpx.Timeout(connect=10.0, read=75.0, write=10.0, pool=10.0)
@@ -152,9 +166,16 @@ async def _model_round(
     messages: list[dict],
     tools_enabled: bool,
 ) -> AsyncIterator[tuple[str, object]]:
-    """One streamed completion. Yields ("token", str) as content arrives, then exactly one
+    """One streamed completion. Yields ("thinking", str) for reasoning deltas and
+    ("token", str) as content arrives, then exactly one
     ("end", {"tool_calls": [...], "content": str}). Raises
-    _Retriable/_BadKey/_RateLimited/_Internal."""
+    _Retriable/_BadKey/_RateLimited/_Internal.
+
+    Reasoning is display-only: it is NOT content. Kimi K3 streams `reasoning_content`
+    before its first `content` delta (verified 2026-09-02) — forwarding it is what turns
+    the pre-answer silence into something the user can watch, but it must never be
+    replayed to the model, counted as an answer, or block the failover ladder. A round
+    that ends with reasoning and nothing else is legal — the content is simply empty."""
     body: dict = {"model": catalog_id, "messages": messages, "stream": True}
     if tools_enabled:
         body["tools"] = TOOL_SCHEMAS
@@ -184,6 +205,11 @@ async def _model_round(
                 if not choices:
                     continue
                 delta = choices[0].get("delta") or {}
+                # Two spellings in the wild for the same thing; whichever arrives first in
+                # a chunk is the one forwarded, and neither touches content_parts.
+                reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                if isinstance(reasoning, str) and reasoning:
+                    yield ("thinking", reasoning)
                 text = delta.get("content")
                 if isinstance(text, str) and text:
                     content_parts.append(text)
@@ -209,17 +235,55 @@ async def _model_round(
     )
 
 
+async def _narrate_wait(
+    source: AsyncIterator[tuple[str, object]], label: str, interval: float
+) -> AsyncIterator[tuple[str, object]]:
+    """Pass a round through unchanged, but narrate the wait for its FIRST frame.
+
+    DeepSeek's endpoint has been measured sitting silent for 75 s before answering
+    (2026-09-02); the keepalive comment that covers the socket says nothing to the person
+    watching. Same parked-task shape as _with_keepalive — wait_for would cancel the
+    pending read. Once anything arrives the model is clearly alive and this shuts up."""
+    iterator = source.__aiter__()
+    pending: asyncio.Task | None = asyncio.ensure_future(anext(iterator))
+    waited = 0.0
+    try:
+        while True:
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                waited += interval
+                yield ("status", f"Still waiting on {label}… ({waited:.0f}s)")
+                continue
+            task, pending = pending, None
+            try:
+                # An upstream failure lands HERE, not at the yield: _Retriable and friends
+                # propagate to the ladder exactly as they would without this wrapper.
+                first = task.result()
+            except StopAsyncIteration:
+                return
+            yield first
+            break
+        async for item in iterator:
+            yield item
+    finally:
+        if pending is not None:
+            pending.cancel()
+
+
 async def _converse(
     db,
     client: httpx.AsyncClient,
     api_key: str,
     model: AssistantModel,
+    catalog_id: str,
     base_messages: list[dict],
     forwarded: list[bool],
     deadline: float,
     spent: list[int],
 ) -> AsyncIterator[str]:
-    """The whole multi-round conversation on ONE model. _Retriable escapes to the ladder.
+    """The whole multi-round conversation on ONE model, requested as `catalog_id` (the
+    live catalog's spelling, which can differ from the registry guess). _Retriable escapes
+    to the ladder.
 
     `deadline` and `spent` belong to the REQUEST, not to this model: spec §5 budgets six
     tool calls and ninety seconds for the whole answer, so a four-model ladder must not
@@ -231,13 +295,30 @@ async def _converse(
                 "error", {"kind": "internal", "message": "The answer ran past its time budget."}
             )
             return
+        # Narration before the call, not after: the whole point is the silence in between.
+        yield sse(
+            "status",
+            {
+                "text": (
+                    f"Asking {model.label}…" if _round == 0 else f"{model.label} is continuing…"
+                )
+            },
+        )
         end_payload: dict = {}
-        async for kind, payload in _model_round(
-            client, api_key, model.catalog_id, messages, model.supports_tools
+        async for kind, payload in _narrate_wait(
+            _model_round(client, api_key, catalog_id, messages, model.supports_tools),
+            model.label,
+            WAIT_STATUS_SECONDS,
         ):
             if kind == "token":
                 forwarded[0] = True
                 yield sse("token", {"text": payload})
+            elif kind == "thinking":
+                # Deliberately does NOT set forwarded[0]: reasoning is not an answer, so a
+                # rung that thinks and then dies may still hand off to the next model.
+                yield sse("thinking", {"text": payload})
+            elif kind == "status":
+                yield sse("status", {"text": payload})
             else:
                 end_payload = payload  # type: ignore[assignment]
         tool_calls = end_payload.get("tool_calls") or []
@@ -307,6 +388,9 @@ async def _converse(
 
 
 async def stream_chat(*, model_key: str, messages: list[dict], context: dict) -> AsyncIterator[str]:
+    # The very first frame, before the session, the context build or any network hop: the
+    # user pressed Send and must see the machine move (the reported dead-air symptom).
+    yield sse("status", {"text": "Reading the page's data…"})
     async with SESSION_FACTORY() as db:
         api_key, _source = await resolve_api_key(db)
         if api_key is None:
@@ -332,47 +416,93 @@ async def stream_chat(*, model_key: str, messages: list[dict], context: dict) ->
         )
         prompt = system_prompt(json.dumps(context_payload), requested.supports_tools)
         base_messages = [{"role": "system", "content": prompt}, *messages]
-        ladder = [requested, *(m for m in REGISTRY if m.key != requested.key)]
+        # ONE probe for the whole stream (cached — the drawer's /models call usually filled
+        # it already). It decides how each rung is SPELLED, and prunes rungs the catalog
+        # doesn't list at all: asking for those buys a 404 and a bogus failover notice.
+        key_ok, catalog_ids, _checked_at = await probe_catalog(api_key, force=False)
+        rungs = [requested, *(m for m in REGISTRY if m.key != requested.key)]
+        ladder: list[tuple[AssistantModel, str]] = []
+        for rung in rungs:
+            # No verdict (rejected key / unreachable catalog) is not the same as "absent":
+            # with nothing to go on, the registry spelling is still the best guess.
+            resolved = resolve_catalog_id(rung, catalog_ids) if key_ok else rung.catalog_id
+            if resolved is not None:
+                ladder.append((rung, resolved))
+        if not ladder:
+            # A catalog that matches nothing at all (wholesale rename) must not silently
+            # answer nothing — try the model the user actually asked for.
+            ladder = [(requested, requested.catalog_id)]
         forwarded = [False]
         # ONE budget for the request, not one per rung (spec §5).
         deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
         spent = [0]
         async with http_client(REQUEST_TIMEOUT) as client:
-            for index, model in enumerate(ladder):
-                try:
-                    async for frame in _converse(
-                        db, client, api_key, model, base_messages, forwarded, deadline, spent
-                    ):
-                        yield frame
-                    return
-                except _BadKey as exc:
-                    yield sse("error", {"kind": "bad_key", "message": exc.message})
-                    return
-                except _Internal as exc:
-                    yield sse("error", {"kind": "internal", "message": exc.message})
-                    return
-                except _RateLimited as exc:
-                    payload: dict = {"kind": "rate_limited", "message": exc.message}
-                    if exc.retry_after is not None:
-                        payload["retry_after"] = exc.retry_after
-                    yield sse("error", payload)
-                    return
-                except _Retriable:
-                    if forwarded[0]:
+            for index, (model, catalog_id) in enumerate(ladder):
+                retried = False
+                while True:
+                    try:
+                        async for frame in _converse(
+                            db,
+                            client,
+                            api_key,
+                            model,
+                            catalog_id,
+                            base_messages,
+                            forwarded,
+                            deadline,
+                            spent,
+                        ):
+                            yield frame
+                        return
+                    except _BadKey as exc:
+                        yield sse("error", {"kind": "bad_key", "message": exc.message})
+                        return
+                    except _Internal as exc:
+                        yield sse("error", {"kind": "internal", "message": exc.message})
+                        return
+                    except _RateLimited as exc:
+                        payload: dict = {"kind": "rate_limited", "message": exc.message}
+                        if exc.retry_after is not None:
+                            payload["retry_after"] = exc.retry_after
+                        yield sse("error", payload)
+                        return
+                    except _Retriable:
+                        if forwarded[0]:
+                            yield sse(
+                                "error",
+                                {
+                                    "kind": "unavailable",
+                                    "message": f"{model.label} failed mid-answer.",
+                                },
+                            )
+                            return
+                        # One transient blip is not a verdict on the model. Retry this rung
+                        # once — but only while enough budget is left to spend on it; a read
+                        # timeout has usually eaten it already.
+                        if (
+                            not retried
+                            and deadline - time.monotonic() > RETRY_MIN_REMAINING_SECONDS
+                        ):
+                            retried = True
+                            yield sse("status", {"text": f"Retrying {model.label}…"})
+                            await asyncio.sleep(RETRY_DELAY_SECONDS)
+                            continue
+                        if index + 1 < len(ladder):
+                            yield sse(
+                                "notice",
+                                {
+                                    "kind": "failover",
+                                    "from": model.key,
+                                    "to": ladder[index + 1][0].key,
+                                },
+                            )
+                            break
+                        tried = ", ".join(m.label for m, _ in ladder)
                         yield sse(
                             "error",
-                            {"kind": "unavailable", "message": f"{model.label} failed mid-answer."},
+                            {
+                                "kind": "unavailable",
+                                "message": f"Every model failed — tried {tried}.",
+                            },
                         )
                         return
-                    if index + 1 < len(ladder):
-                        yield sse(
-                            "notice",
-                            {"kind": "failover", "from": model.key, "to": ladder[index + 1].key},
-                        )
-                        continue
-                    tried = ", ".join(m.label for m in ladder)
-                    yield sse(
-                        "error",
-                        {"kind": "unavailable", "message": f"Every model failed — tried {tried}."},
-                    )
-                    return
