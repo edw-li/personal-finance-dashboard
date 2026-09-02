@@ -776,10 +776,9 @@ describe('AssistantDrawer progress feedback', () => {
   // renders ~15px further from the window edge than the same value on `bottom` does. jsdom
   // does no layout, so the contract under test is the published variable the CSS reads.
   it('publishes the scrollbar gutter so the launcher gaps can match', () => {
-    Object.defineProperty(document.documentElement, 'clientWidth', {
-      value: 1009,
-      configurable: true,
-    })
+    const rectSpy = vi
+      .spyOn(document.documentElement, 'getBoundingClientRect')
+      .mockReturnValue({ width: 1009 } as DOMRect)
     vi.stubGlobal('innerWidth', 1024)
     try {
       mount()
@@ -788,10 +787,7 @@ describe('AssistantDrawer progress feedback', () => {
       )
 
       // Zoom, or a window-level overlay-scrollbar setting, changes it mid-session.
-      Object.defineProperty(document.documentElement, 'clientWidth', {
-        value: 1024,
-        configurable: true,
-      })
+      rectSpy.mockReturnValue({ width: 1024 } as DOMRect)
       act(() => {
         window.dispatchEvent(new Event('resize'))
       })
@@ -800,7 +796,7 @@ describe('AssistantDrawer progress feedback', () => {
       )
     } finally {
       vi.unstubAllGlobals()
-      Reflect.deleteProperty(document.documentElement, 'clientWidth')
+      rectSpy.mockRestore()
       document.documentElement.style.removeProperty('--assistant-scrollbar-gutter')
     }
   })

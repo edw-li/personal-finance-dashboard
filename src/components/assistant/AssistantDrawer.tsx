@@ -202,7 +202,13 @@ export default function AssistantDrawer() {
   // inset in assistant.css. Re-measured on resize because zoom changes it mid-session.
   useEffect(() => {
     const measure = () => {
-      const gutter = Math.max(0, window.innerWidth - document.documentElement.clientWidth)
+      // The ROOT BOX's rendered width, not clientWidth: under scrollbar-gutter: stable Chrome
+      // reports documentElement.clientWidth === innerWidth even with a live scrollbar
+      // (measured 1440/1440/1425 on 2026-09-02), so only the box width sees the gutter.
+      const gutter = Math.max(
+        0,
+        window.innerWidth - document.documentElement.getBoundingClientRect().width,
+      )
       document.documentElement.style.setProperty('--assistant-scrollbar-gutter', `${gutter}px`)
     }
     measure()

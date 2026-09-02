@@ -11,7 +11,7 @@
   /* Not a bare 1.25rem: `html { scrollbar-gutter: stable }` (index.css) reserves the
      scrollbar's column, and `right` is measured inside it — so an equal `bottom` renders a
      visibly SMALLER gap than the right one. The drawer measures the reservation at runtime
-     (innerWidth − documentElement.clientWidth) and publishes it here; the 0px fallback is
+     (innerWidth − the root box's rendered width) and publishes it here; the 0px fallback is
      what the first paint, and any platform with overlay scrollbars, gets. */
   bottom: calc(1.25rem + var(--assistant-scrollbar-gutter, 0px));
   z-index: 15;
