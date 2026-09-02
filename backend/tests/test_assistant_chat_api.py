@@ -721,6 +721,43 @@ async def test_an_unresolvable_rung_is_skipped_by_the_ladder(monkeypatch):
     assert events[-1] == ("done", {"model_used": "nemotron-3-ultra-550b"})
 
 
+async def test_a_skipped_requested_model_is_announced_with_a_notice(monkeypatch):
+    """Skipping the user's own pick is the one skip that needs words: answering on a
+    model they did not choose, silently, is indistinguishable from a wrong answer. Same
+    grammar as a mid-flight failover, so the drawer's existing line already reads it:
+    "Answered by Nemotron 3 Ultra 550B — Kimi K3 was unavailable"."""
+    seen: list[str] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content)["model"])
+        return httpx.Response(
+            200,
+            text=_openai_stream([_delta("hi"), _finish()]),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    # The catalog has no Kimi and no DeepSeek at all.
+    _seed_catalog(monkeypatch, ["nvidia/nemotron-3-ultra-550b-v1.2"])
+    monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", _transport(responder))
+    frames = await _collect(
+        stream_chat(
+            model_key="kimi-k3",
+            messages=[{"role": "user", "content": "q"}],
+            context={"route": "/", "search": {}, "view": {}},
+        )
+    )
+    events = _all_events(frames)
+    assert events[0][0] == "status"  # the opening narration still leads
+    assert events[1] == (
+        "notice",
+        {"kind": "failover", "from": "kimi-k3", "to": "nemotron-3-ultra-550b"},
+    )
+    # ...and it lands BEFORE the rung announces itself, so the two read as one sentence.
+    assert events[2] == ("status", {"text": "Asking Nemotron 3 Ultra 550B…"})
+    assert not any("kimi" in model for model in seen)  # never asked, just accounted for
+    assert events[-1] == ("done", {"model_used": "nemotron-3-ultra-550b"})
+
+
 async def test_a_failed_probe_falls_back_to_the_registry_spelling(monkeypatch):
     """No verdict is not the same as "not listed": an unreachable catalog must leave the
     loop exactly as it behaved before resolution existed."""
@@ -779,6 +816,7 @@ async def test_the_ladder_never_empties_when_nothing_resolves(monkeypatch):
         )
     )
     assert seen == ["moonshotai/kimi-k3"]
+    assert "notice" not in [e for e, _ in events]  # nothing was skipped, so nothing to say
     assert events[-1] == ("done", {"model_used": "kimi-k3"})
 
 

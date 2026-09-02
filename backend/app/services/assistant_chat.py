@@ -432,6 +432,11 @@ async def stream_chat(*, model_key: str, messages: list[dict], context: dict) ->
             # A catalog that matches nothing at all (wholesale rename) must not silently
             # answer nothing — try the model the user actually asked for.
             ladder = [(requested, requested.catalog_id)]
+        elif ladder[0][0].key != requested.key:
+            # The pick itself was pruned. Every OTHER skip is invisible bookkeeping, but
+            # this one changes who answers, so it gets the same words a mid-flight failover
+            # gets — never a silent substitution.
+            yield sse("notice", {"kind": "failover", "from": requested.key, "to": ladder[0][0].key})
         forwarded = [False]
         # ONE budget for the request, not one per rung (spec §5).
         deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
