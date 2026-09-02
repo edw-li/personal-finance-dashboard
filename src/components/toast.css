@@ -2,15 +2,23 @@
    app's bubble layer (2) and the palette overlay (20) — an Undo affordance is never
    buried under the thing that spawned it. */
 
+/* Shifted LEFT of the assistant launcher (assistant.css: .assistant-launcher, fixed at
+   right 1.25rem, 44px wide, z 15). The two share this corner and the toasts win the stack,
+   so parked at 16px they covered the bubble — and the bubble's old answer, sitting 4.75rem
+   up, cost it a bottom gap twice its right one. 1.25rem + 44px + 0.75rem clears the bubble
+   and its own right inset; toasts stack upward from here, out of its way for good. */
 .toast-region {
   position: fixed;
-  right: 16px;
+  right: calc(1.25rem + 44px + 0.75rem);
   bottom: 16px;
   z-index: 30;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: 360px;
+  /* The region grows LEFTWARD from that inset, so a flat 360px would start off-screen on a
+     narrow viewport now that the inset is 76px rather than 16px. 6rem is the inset plus a
+     little left breathing room. */
+  max-width: min(360px, calc(100vw - 6rem));
 }
 
 .toast {

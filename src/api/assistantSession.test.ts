@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  appendThinking,
   beginAssistantSession,
   clearAssistantSession,
   readAssistantModel,
   readAssistantTranscript,
+  THINKING_CAP,
   TRANSCRIPT_CAP,
   writeAssistantModel,
   writeAssistantTranscript,
@@ -95,5 +97,26 @@ describe('assistantSession', () => {
     writeAssistantModel('kimi-k3')
     expect(readAssistantTranscript()).toEqual([item('new session')])
     expect(readAssistantModel()).toBe('kimi-k3')
+  })
+
+  describe('appendThinking', () => {
+    it('accumulates onto nothing and onto what is already there', () => {
+      expect(appendThinking(undefined, 'one ')).toBe('one ')
+      expect(appendThinking('one ', 'two')).toBe('one two')
+    })
+
+    // Reasoning streams are unbounded and land in sessionStorage on every chunk. The tail is
+    // the part a reader is watching, so the cap drops the OLDEST — the opposite end from the
+    // message-content cap, which keeps the head a model has already been shown.
+    it('caps at THINKING_CAP characters, keeping the newest', () => {
+      const capped = appendThinking('a'.repeat(THINKING_CAP), 'bbb')
+      expect(capped).toHaveLength(THINKING_CAP)
+      expect(capped.endsWith('bbb')).toBe(true)
+      expect(capped.startsWith('a')).toBe(true)
+    })
+
+    it('caps a single over-long chunk too', () => {
+      expect(appendThinking(undefined, 'x'.repeat(THINKING_CAP + 500))).toHaveLength(THINKING_CAP)
+    })
   })
 })

@@ -16,6 +16,14 @@
   font-size: 0.85rem;
 }
 
+/* A machine identifier trailing prose that is already muted — the assistant probe's resolved
+   catalog id ("· nvidia/…") inside a .settings-note list. Dimmer and smaller again, so a
+   long path qualifies the model label without competing with the ✓/✗ verdict before it. */
+.settings-note-muted {
+  opacity: 0.75;
+  font-size: 0.78rem;
+}
+
 /* --- import report --- */
 
 /* One sheet's block in the import diff (heading + counts + its warnings/errors). */

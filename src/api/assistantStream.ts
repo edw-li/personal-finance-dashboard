@@ -50,6 +50,12 @@ export interface AssistantHandlers {
   onNotice?: (notice: { kind: string; from: string; to: string }) => void
   onToolStart?: (tool: { name: string; summary: string }) => void
   onToolResult?: (tool: { name: string; summary: string }) => void
+  /** One line of honest progress ("Reading your spending…") while there is nothing else to
+   *  show. Optional, like the tool pair: a server that never emits `status` simply leaves
+   *  the caller on whatever it put up itself. */
+  onStatus?: (text: string) => void
+  /** The model's reasoning stream, chunk by chunk — displayed, never replayed upstream. */
+  onThinking?: (text: string) => void
   onToken: (text: string) => void
   onDone: (done: { model_used: string }) => void
   onError: (error: AssistantErrorEvent) => void
@@ -123,6 +129,18 @@ function dispatchFrame(frame: SseFrame, handlers: AssistantHandlers): 'done' | '
       // `data: null` parses to null, so the read itself has to be optional too.
       const text = (payload as { text?: unknown } | null)?.text
       if (typeof text === 'string') handlers.onToken(text)
+      return null
+    }
+    case 'status': {
+      // Guarded exactly like `token` above, and for its reason: a missing or non-string
+      // text would throw inside the reader loop, where no caller can catch it.
+      const text = (payload as { text?: unknown } | null)?.text
+      if (typeof text === 'string') handlers.onStatus?.(text)
+      return null
+    }
+    case 'thinking': {
+      const text = (payload as { text?: unknown } | null)?.text
+      if (typeof text === 'string') handlers.onThinking?.(text)
       return null
     }
     case 'done':

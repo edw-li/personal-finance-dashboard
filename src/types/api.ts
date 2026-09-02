@@ -1699,6 +1699,10 @@ export interface AssistantModelOut {
   available: boolean
   supports_tools: boolean
   default: boolean
+  /** The live catalog id this registry key resolved to ("nvidia/…"), or null when the probe
+   *  never got that far. Shown in the Settings probe list so a real-key verification can see
+   *  WHAT matched, not just that something did. */
+  catalog_id: string | null
 }
 
 export interface AssistantModelsOut {

@@ -10,6 +10,7 @@ import {
   fetchContextPreview,
 } from '../../api/assistant'
 import {
+  appendThinking,
   readAssistantModel,
   readAssistantTranscript,
   writeAssistantModel,
@@ -142,7 +143,14 @@ export default function AssistantDrawer() {
   const [settingsFailed, setSettingsFailed] = useState(false)
   const [models, setModels] = useState<AssistantModelsOut | null>(null)
   const [model, setModel] = useState<string>(() => readAssistantModel() ?? 'kimi-k3')
-  const [transcript, setTranscript] = useState<TranscriptItem[]>(() => readAssistantTranscript())
+  // Sanitised on the way in: a tab closed mid-stream persisted the pending item WITH its
+  // `status`, and restoring that would paint a spinner for a stream that died with the tab —
+  // no event is ever coming to clear it. The mirror effect then re-persists it cleaned.
+  const [transcript, setTranscript] = useState<TranscriptItem[]>(() =>
+    readAssistantTranscript().map((item) =>
+      item.status === undefined ? item : { ...item, status: undefined },
+    ),
+  )
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [previewSections, setPreviewSections] = useState<AssistantPreviewSection[] | null>(null)
@@ -183,6 +191,23 @@ export default function AssistantDrawer() {
     const onOpen = () => setOpen(true)
     window.addEventListener(ASSISTANT_OPEN_EVENT, onOpen)
     return () => window.removeEventListener(ASSISTANT_OPEN_EVENT, onOpen)
+  }, [])
+
+  // `html { scrollbar-gutter: stable }` (index.css) permanently reserves the scrollbar's
+  // column, and a fixed element's `right` is measured INSIDE it — so the launcher's
+  // `right: 1.25rem` reads ~15px further from the window edge than the identical value on
+  // `bottom` does, which is exactly the lopsided corner the user reported. The gutter is a
+  // runtime measurement (it varies by platform, by zoom, and with overlay-scrollbar
+  // settings), so it is published as a custom property here and added back to the bottom
+  // inset in assistant.css. Re-measured on resize because zoom changes it mid-session.
+  useEffect(() => {
+    const measure = () => {
+      const gutter = Math.max(0, window.innerWidth - document.documentElement.clientWidth)
+      document.documentElement.style.setProperty('--assistant-scrollbar-gutter', `${gutter}px`)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
   }, [])
 
   // First open: load settings + models once. Promise continuations only (house law).
@@ -320,7 +345,16 @@ export default function AssistantDrawer() {
     lastQuestion.current = content
     stickToBottom.current = true
     const userItem: TranscriptItem = { role: 'user', content, contextLabel }
-    const pendingAnswer: TranscriptItem = { role: 'assistant', content: '', tools: [] }
+    // Seeded WITH a status, not empty: with a real key the first token can be twenty
+    // seconds out, and an empty bubble for twenty seconds reads as broken. This one word
+    // is on screen from the keystroke — before the request has even left — and the server's
+    // own `status` events overwrite it as soon as it can say something more specific.
+    const pendingAnswer: TranscriptItem = {
+      role: 'assistant',
+      content: '',
+      tools: [],
+      status: 'Sending…',
+    }
     const history = [...(base ?? transcript), userItem]
     setTranscript([...history, pendingAnswer])
     setInput('')
@@ -359,7 +393,14 @@ export default function AssistantDrawer() {
           patchAnswer((item) => ({
             ...item,
             notice: `Answered by ${modelLabel(notice.to, models)} — ${modelLabel(notice.from, models)} was unavailable.`,
+            // A failover restarts the answer on a different model, so whatever reasoning is
+            // on screen belongs to one that is no longer running. Dropped rather than left
+            // to be read as the new model's.
+            thinking: undefined,
           })),
+        onStatus: (text2) => patchAnswer((item) => ({ ...item, status: text2 })),
+        onThinking: (text2) =>
+          patchAnswer((item) => ({ ...item, thinking: appendThinking(item.thinking, text2) })),
         onToolStart: (tool) =>
           patchAnswer((item) => ({
             ...item,
@@ -374,11 +415,14 @@ export default function AssistantDrawer() {
           })),
         onToken: (text2) => {
           receivedTokens = true
-          patchAnswer((item) => ({ ...item, content: item.content + text2 }))
+          // The first token IS the progress report: a status line left underneath the answer
+          // would claim the assistant is still deciding what to do while it is plainly
+          // answering. Cleared unconditionally — it is already undefined after the first.
+          patchAnswer((item) => ({ ...item, content: item.content + text2, status: undefined }))
         },
         onDone: (done) => {
           if (seq !== sendSeq.current) return
-          patchAnswer((item) => ({ ...item, model: done.model_used }))
+          patchAnswer((item) => ({ ...item, model: done.model_used, status: undefined }))
           setStreaming(false)
         },
         onError: (error) => {
@@ -400,6 +444,7 @@ export default function AssistantDrawer() {
           }
           patchAnswer((item) => ({
             ...item,
+            status: undefined,
             error: { ...error, retryModel: nextModelAfter(chosenModel) },
           }))
         },
@@ -421,7 +466,10 @@ export default function AssistantDrawer() {
       if (current.length === 0) return current
       const next = [...current]
       const last = next[next.length - 1]
-      if (last.role === 'assistant') next[next.length - 1] = { ...last, stopped: true }
+      // status cleared with it: nothing is in flight any more, and a persisted "Reading your
+      // spending…" would outlive the stream it described.
+      if (last.role === 'assistant')
+        next[next.length - 1] = { ...last, stopped: true, status: undefined }
       return next
     })
   }
@@ -507,6 +555,7 @@ export default function AssistantDrawer() {
                     available: true,
                     supports_tools: true,
                     default: true,
+                    catalog_id: null,
                   },
                 ]
               ).map((m) => (
@@ -529,7 +578,12 @@ export default function AssistantDrawer() {
             </button>
           </div>
           <div className="assistant-context">
-            Seeing: {contextLabel} ·{' '}
+            {/* Ellipsised rather than wrapped: on Taxes this reads "Taxes · year: 2026 ·
+                filingStatus: single", which pushed the toggle onto a second line and shoved
+                the whole conversation down. The full text stays reachable as the tooltip. */}
+            <span className="assistant-context-label" title={contextLabel}>
+              Seeing: {contextLabel}
+            </span>
             <button
               type="button"
               className="assistant-context-toggle"
@@ -600,12 +654,46 @@ export default function AssistantDrawer() {
               ) : (
                 <div key={index} className="assistant-msg assistant-msg-assistant">
                   {item.notice && <p className="assistant-notice">{item.notice}</p>}
-                  {(item.tools ?? []).map((tool, t) => (
-                    <span key={t} className="assistant-tool-chip">
-                      <span aria-hidden="true">⚙</span> {tool.name}
-                      {tool.done ? '' : '…'}
-                    </span>
-                  ))}
+                  {(item.tools ?? []).length > 0 && (
+                    // Wrapped so the chips are their own wrapping flex row: as bare inline
+                    // elements they shared a line box with the answer's first paragraph and
+                    // their margins fought its.
+                    <div className="assistant-tools">
+                      {(item.tools ?? []).map((tool, t) => (
+                        <span key={t} className="assistant-tool-chip">
+                          <span aria-hidden="true">⚙</span> {tool.name}
+                          {tool.done ? '' : '…'}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* Only for the item still streaming, and only while it has nothing to
+                      show: an earlier empty bubble (a stopped answer) must not sprout a
+                      spinner because a LATER send is in flight. */}
+                  {streaming &&
+                    index === transcript.length - 1 &&
+                    item.content === '' &&
+                    item.error === undefined && (
+                      <div className="assistant-progress">
+                        <span className="assistant-spinner" aria-hidden="true" />{' '}
+                        {item.status ?? 'Working…'}
+                      </div>
+                    )}
+                  {item.thinking !== undefined && item.thinking !== '' && (
+                    // `open` flips true → undefined the instant the answer starts. React
+                    // writes the attribute only when the PROP changes, so that one flip
+                    // collapses the block and then hands it over: a reader who opens it back
+                    // up is never stamped shut again by the next token.
+                    <details
+                      className="assistant-thinking"
+                      open={item.content === '' ? true : undefined}
+                    >
+                      <summary>{item.content === '' ? 'Reasoning…' : 'Reasoning'}</summary>
+                      {/* Plain text, not markdown: a reasoning stream is half-formed by
+                          definition, and a stray ``` or | would render as a broken table. */}
+                      <div className="assistant-thinking-body">{item.thinking}</div>
+                    </details>
+                  )}
                   {item.content !== '' && <MessageBody text={item.content} />}
                   {item.stopped && <p className="assistant-meta">Stopped.</p>}
                   {item.model && !item.error && (

@@ -234,6 +234,15 @@ export default function AssistantCard() {
                   <li key={m.key}>
                     {m.available ? '✓' : '✗'} {m.label}
                     {m.available ? '' : ' — unavailable'}
+                    {/* Which catalog entry the registry key actually resolved to. A verdict
+                        of "✓ Nemotron 3 Ultra 550B" alone cannot distinguish the right match
+                        from a fallback the probe quietly settled on, and that distinction is
+                        the whole point of testing against a real key. Truthy rather than
+                        `!== null`: the field carries a server-side default, so a response
+                        that predates it arrives as undefined, not null. */}
+                    {m.catalog_id && (
+                      <span className="settings-note-muted"> · {m.catalog_id}</span>
+                    )}
                   </li>
                 ))}
               </ul>

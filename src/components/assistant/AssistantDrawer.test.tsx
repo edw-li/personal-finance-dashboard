@@ -607,3 +607,201 @@ describe('AssistantDrawer', () => {
     expect(screen.queryByRole('button', { name: /stop/i })).toBeNull()
   })
 })
+
+// Progress feedback (2026-09-02). The complaint these answer is dead air: with a real key
+// the first token can be twenty seconds out, and until it landed the drawer rendered an
+// empty bubble that looked broken.
+describe('AssistantDrawer progress feedback', () => {
+  /** Captures the handlers of every send, on a stream that never resolves — so each test
+   *  drives the events it cares about and nothing else fires behind it. An array, not a
+   *  `let`, because a `let` assigned only inside a callback narrows to `null` at the use
+   *  site and would need a non-null assertion (which lint bans). */
+  function captureHandlers(): import('../../api/assistantStream').AssistantHandlers[] {
+    const captured: import('../../api/assistantStream').AssistantHandlers[] = []
+    streamChat.mockImplementation(
+      (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+        captured.push(h)
+        return { abort: vi.fn(), finished: new Promise(() => {}) }
+      },
+    )
+    return captured
+  }
+
+  async function ask(text = 'why did housing spike?') {
+    const input = await openDrawer()
+    fireEvent.change(input, { target: { value: text } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    return input
+  }
+
+  // The whole point: something honest is on screen from the keystroke, not from the first
+  // server event. The stream here never calls a handler at all.
+  it("renders 'Sending…' synchronously on Enter, before any server event", async () => {
+    captureHandlers()
+    mount()
+    await ask()
+    expect(screen.getByText('Sending…')).toBeTruthy()
+    expect(document.querySelector('.assistant-spinner')).toBeTruthy()
+  })
+
+  it('a status event replaces the placeholder text', async () => {
+    const captured = captureHandlers()
+    mount()
+    await ask()
+    act(() => captured[0].onStatus?.('Reading your spending…'))
+    expect(screen.getByText('Reading your spending…')).toBeTruthy()
+    expect(screen.queryByText('Sending…')).toBeNull()
+  })
+
+  // The first token IS the progress report — a status line left underneath it would claim
+  // the assistant is still deciding what to do while it is plainly answering.
+  it('the first token clears the status row', async () => {
+    const captured = captureHandlers()
+    mount()
+    await ask()
+    act(() => captured[0].onStatus?.('Reading your spending…'))
+    act(() => captured[0].onToken('Housing was '))
+    expect(screen.queryByText('Reading your spending…')).toBeNull()
+    expect(document.querySelector('.assistant-progress')).toBeNull()
+    expect(screen.getByText(/Housing was/)).toBeTruthy()
+    // Cleared out of the ITEM, not merely hidden behind the answer that replaced it: every
+    // patch mirrors to sessionStorage, and a status left there rides the next restore.
+    expect(sessionStorage.getItem('assistant:transcript')).not.toContain('Reading your spending')
+  })
+
+  it('done clears the progress row even when no token ever arrived', async () => {
+    const captured = captureHandlers()
+    mount()
+    await ask()
+    expect(document.querySelector('.assistant-progress')).toBeTruthy()
+    act(() => captured[0].onStatus?.('Reading your spending…'))
+    act(() => captured[0].onDone({ model_used: 'kimi-k3' }))
+    expect(document.querySelector('.assistant-progress')).toBeNull()
+    expect(sessionStorage.getItem('assistant:transcript')).not.toContain('Reading your spending')
+  })
+
+  it('an error clears the progress row and shows the failure instead', async () => {
+    const captured = captureHandlers()
+    mount()
+    await ask()
+    act(() => captured[0].onToken('half an answer '))
+    act(() => captured[0].onStatus?.('Reading your spending…'))
+    act(() => captured[0].onError({ kind: 'unavailable', message: 'every model failed' }))
+    expect(document.querySelector('.assistant-progress')).toBeNull()
+    expect(screen.getByText(/every model failed/)).toBeTruthy()
+    expect(sessionStorage.getItem('assistant:transcript')).not.toContain('Reading your spending')
+  })
+
+  it('reasoning streams open, then collapses when the answer starts', async () => {
+    const captured = captureHandlers()
+    mount()
+    await ask()
+    act(() => captured[0].onThinking?.('The user asks about '))
+    act(() => captured[0].onThinking?.('housing.'))
+    const details = () => document.querySelector('details.assistant-thinking')
+    expect(details()?.hasAttribute('open')).toBe(true)
+    expect(screen.getByText('Reasoning…')).toBeTruthy()
+    expect(screen.getByText('The user asks about housing.')).toBeTruthy()
+
+    act(() => captured[0].onToken('Housing was '))
+    // The `open` attribute is gone, so the block is collapsed AND the reader may reopen it:
+    // React only writes `open` when the prop changes, so a manual toggle afterwards sticks.
+    expect(details()?.hasAttribute('open')).toBe(false)
+    expect(screen.getByText('Reasoning')).toBeTruthy()
+    expect(screen.queryByText('Reasoning…')).toBeNull()
+  })
+
+  // A failover restarts the answer on a different model, so the reasoning on screen belongs
+  // to a model that is no longer running.
+  it('a failover notice clears the reasoning collected so far', async () => {
+    const captured = captureHandlers()
+    mount()
+    await ask()
+    act(() => captured[0].onThinking?.('first model was thinking'))
+    expect(document.querySelector('details.assistant-thinking')).toBeTruthy()
+    act(() =>
+      captured[0].onNotice?.({ kind: 'failover', from: 'kimi-k3', to: 'nemotron-3.5-lightning' }),
+    )
+    expect(document.querySelector('details.assistant-thinking')).toBeNull()
+    expect(screen.queryByText('first model was thinking')).toBeNull()
+  })
+
+  // A tab closed mid-stream persists the pending item WITH its status. Restoring that would
+  // paint a spinner for a stream that died with the tab, and no event will ever clear it.
+  it('drops a persisted status on mount so a dead stream shows no spinner', async () => {
+    sessionStorage.setItem(
+      'assistant:transcript',
+      JSON.stringify([
+        { role: 'user', content: 'asked before the tab closed' },
+        { role: 'assistant', content: '', status: 'Reading your spending…', tools: [] },
+      ]),
+    )
+    captureHandlers()
+    mount()
+    await openDrawer()
+    expect(screen.queryByText('Reading your spending…')).toBeNull()
+    expect(document.querySelector('.assistant-progress')).toBeNull()
+    // And the sanitised transcript is what gets re-persisted — not just hidden.
+    expect(sessionStorage.getItem('assistant:transcript')).not.toMatch(/status/)
+  })
+
+  // Neither field is conversation: `status` is UI chrome and `thinking` is a model's scratch
+  // pad, which some providers reject outright when replayed as assistant content.
+  it('never sends status or thinking upstream', async () => {
+    sessionStorage.setItem(
+      'assistant:transcript',
+      JSON.stringify([
+        { role: 'user', content: 'q1' },
+        {
+          role: 'assistant',
+          content: 'a1',
+          thinking: 'scratch pad',
+          status: 'Working…',
+          model: 'kimi-k3',
+        },
+      ]),
+    )
+    captureHandlers()
+    mount()
+    await ask('q2')
+    const body = streamChat.mock.calls[0][0] as { messages: unknown[] }
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'q2' },
+    ])
+  })
+
+  // `html { scrollbar-gutter: stable }` reserves the scrollbar's column, so `right: 1.25rem`
+  // renders ~15px further from the window edge than the same value on `bottom` does. jsdom
+  // does no layout, so the contract under test is the published variable the CSS reads.
+  it('publishes the scrollbar gutter so the launcher gaps can match', () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      value: 1009,
+      configurable: true,
+    })
+    vi.stubGlobal('innerWidth', 1024)
+    try {
+      mount()
+      expect(document.documentElement.style.getPropertyValue('--assistant-scrollbar-gutter')).toBe(
+        '15px',
+      )
+
+      // Zoom, or a window-level overlay-scrollbar setting, changes it mid-session.
+      Object.defineProperty(document.documentElement, 'clientWidth', {
+        value: 1024,
+        configurable: true,
+      })
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      expect(document.documentElement.style.getPropertyValue('--assistant-scrollbar-gutter')).toBe(
+        '0px',
+      )
+    } finally {
+      vi.unstubAllGlobals()
+      Reflect.deleteProperty(document.documentElement, 'clientWidth')
+      document.documentElement.style.removeProperty('--assistant-scrollbar-gutter')
+    }
+  })
+})

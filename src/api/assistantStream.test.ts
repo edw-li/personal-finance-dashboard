@@ -32,6 +32,8 @@ interface Recorder extends AssistantHandlers {
   notices: { kind: string; from: string; to: string }[]
   toolStarts: { name: string; summary: string }[]
   toolResults: { name: string; summary: string }[]
+  statuses: string[]
+  thinkings: string[]
 }
 
 // Typed collectors rather than unknown[]: the assertions below compare whole payloads, so
@@ -43,6 +45,8 @@ function handlers(): Recorder {
   const notices: { kind: string; from: string; to: string }[] = []
   const toolStarts: { name: string; summary: string }[] = []
   const toolResults: { name: string; summary: string }[] = []
+  const statuses: string[] = []
+  const thinkings: string[] = []
   return {
     tokens,
     dones,
@@ -50,12 +54,16 @@ function handlers(): Recorder {
     notices,
     toolStarts,
     toolResults,
+    statuses,
+    thinkings,
     onToken: (text) => tokens.push(text),
     onDone: (d) => dones.push(d),
     onError: (e) => errors.push(e),
     onNotice: (n) => notices.push(n),
     onToolStart: (t) => toolStarts.push(t),
     onToolResult: (t) => toolResults.push(t),
+    onStatus: (text) => statuses.push(text),
+    onThinking: (text) => thinkings.push(text),
   }
 }
 
@@ -182,6 +190,65 @@ describe('streamChat', () => {
     const h = handlers()
     expect(await streamChat(body, h).finished).toBe('done')
     expect(h.tokens).toEqual(['only'])
+    expect(h.errors).toEqual([])
+  })
+
+  // The progress pair (2026-09-02): `status` is the one-line "what am I doing" the drawer
+  // shows instead of dead air, `thinking` the model's reasoning stream. Both are optional
+  // handlers — an older server that never emits them changes nothing here.
+  it('dispatches status and thinking events', async () => {
+    stubFetch(async () =>
+      sseResponse([
+        'event: status\ndata: {"text":"Reading your spending…"}\n\n',
+        'event: thinking\ndata: {"text":"The user asks about "}\n\n',
+        'event: thinking\ndata: {"text":"housing."}\n\n',
+        'event: status\ndata: {"text":"Writing the answer…"}\n\n',
+        'event: token\ndata: {"text":"Housing"}\n\n',
+        'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
+      ]),
+    )
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('done')
+    expect(h.statuses).toEqual(['Reading your spending…', 'Writing the answer…'])
+    expect(h.thinkings.join('')).toBe('The user asks about housing.')
+    expect(h.tokens).toEqual(['Housing'])
+    expect(h.errors).toEqual([])
+  })
+
+  // The token guard's reason, applied twice more: a missing or non-string text would throw
+  // INSIDE the reader loop, where no caller can catch it, and cost the whole answer.
+  it('ignores status and thinking frames carrying no text', async () => {
+    stubFetch(async () =>
+      sseResponse([
+        'event: status\ndata: {}\n\n',
+        'event: status\ndata: null\n\n',
+        'event: thinking\ndata: {"text":42}\n\n',
+        'event: thinking\ndata: null\n\n',
+        'event: status\ndata: {"text":"real"}\n\n',
+        'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
+      ]),
+    )
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('done')
+    expect(h.statuses).toEqual(['real'])
+    expect(h.thinkings).toEqual([])
+    expect(h.errors).toEqual([])
+  })
+
+  // Both are optional: a server that emits them to a caller that did not register them must
+  // not blow up the stream (the notice/tool handlers' posture).
+  it('tolerates status and thinking with no handlers registered', async () => {
+    stubFetch(async () =>
+      sseResponse([
+        'event: status\ndata: {"text":"working"}\n\n',
+        'event: thinking\ndata: {"text":"hmm"}\n\n',
+        'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
+      ]),
+    )
+    const h = handlers()
+    delete h.onStatus
+    delete h.onThinking
+    expect(await streamChat(body, h).finished).toBe('done')
     expect(h.errors).toEqual([])
   })
 

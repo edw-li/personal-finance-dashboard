@@ -30,10 +30,29 @@ export interface TranscriptItem {
   stopped?: boolean
   /** "Spending · Dec 2025" — what the question was asked against. */
   contextLabel?: string
+  /** The server's one-line progress report while the answer is still empty ("Reading your
+   *  spending…"). UI chrome only: cleared by the first token and never sent upstream. */
+  status?: string
+  /** The model's reasoning stream, accumulated (see appendThinking). Shown in a collapsible
+   *  block; never replayed upstream — some completion endpoints reject a reasoning trace
+   *  replayed as assistant content, and it is not conversation in any case. */
+  thinking?: string
 }
 
 const TRANSCRIPT_KEY = 'assistant:transcript'
 const MODEL_KEY = 'assistant:model'
+
+/** Reasoning streams are unbounded, and every chunk mirrors to sessionStorage. 4000 chars
+ *  is a few screens of scrollback — enough to see what the model was weighing, small enough
+ *  that a runaway trace cannot blow the storage quota out from under the transcript. */
+export const THINKING_CAP = 4000
+
+/** Appends a reasoning chunk, keeping the NEWEST characters. The opposite end from the
+ *  message-content cap, deliberately: history is truncated at the head because the model has
+ *  already been shown it, whereas the reasoning tail is the part a reader is watching. */
+export function appendThinking(current: string | undefined, chunk: string): string {
+  return `${current ?? ''}${chunk}`.slice(-THINKING_CAP)
+}
 
 // Latched by clearAssistantSession(), and the reason both writers below check it: on the
 // 401 path the wipe is followed by window.location.assign('/login'), and that navigation

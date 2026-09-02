@@ -1,15 +1,19 @@
 /* Assistant drawer (2026-09-01 spec §9). Z-map: bubble layer 2 < drawer 15 < palette 20
    < toasts 30 — Ctrl+K must open ABOVE the drawer, and an Undo outlives both.
-   The launcher shares the bottom-right corner with .toast-region (right/bottom 16px,
-   z 30), which wins the stack: parked at 1.25rem the bubble sits UNDER the first toast,
-   so the Undo that an action just offered covers the button. 4.75rem clears a single
-   toast (~2.4rem tall + its 1rem bottom inset); the region is bottom-anchored, so a stack
-   of two or more grows upward INTO the bubble and still overlaps — accepted. */
+   The launcher used to dodge .toast-region (z 30, same corner) by sitting 4.75rem up,
+   which left a bottom gap twice the size of its right one. The toasts move sideways
+   instead (toast.css: right past the bubble's 44px + a gutter), so the launcher can own
+   the corner and both of its gaps can be the same 1.25rem. */
 
 .assistant-launcher {
   position: fixed;
   right: 1.25rem;
-  bottom: 4.75rem;
+  /* Not a bare 1.25rem: `html { scrollbar-gutter: stable }` (index.css) reserves the
+     scrollbar's column, and `right` is measured inside it — so an equal `bottom` renders a
+     visibly SMALLER gap than the right one. The drawer measures the reservation at runtime
+     (innerWidth − documentElement.clientWidth) and publishes it here; the 0px fallback is
+     what the first paint, and any platform with overlay scrollbars, gets. */
+  bottom: calc(1.25rem + var(--assistant-scrollbar-gutter, 0px));
   z-index: 15;
   width: 44px;
   height: 44px;
@@ -39,11 +43,15 @@
   box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45);
 }
 
+/* One line, always. At 400px the four children measured ~4px of slack, so any longer model
+   label wrapped the Close button onto a row of its own. nowrap + a shrinkable select makes
+   the SELECT absorb the overflow (it ellipsises) instead of the layout breaking. */
 .assistant-header {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.65rem 0.85rem;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
   border-bottom: 1px solid var(--border);
 }
 
@@ -51,10 +59,17 @@
   font-weight: 600;
   font-size: 0.95rem;
   margin-right: auto;
+  white-space: nowrap;
+  flex: none;
 }
 
+/* The only elastic child: min-width 0 is what actually lets a flex item shrink below its
+   content width, without which the ellipsis never engages. */
 .assistant-model-select {
-  max-width: 170px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 150px;
+  text-overflow: ellipsis;
   background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -64,6 +79,8 @@
 }
 
 .assistant-icon-button {
+  flex: none;
+  white-space: nowrap;
   background: none;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -77,14 +94,31 @@
   color: var(--text);
 }
 
+/* A row, not prose: on Taxes the label reads "Taxes · year: 2026 · filingStatus: single",
+   which wrapped the toggle onto its own line and pushed the transcript down. The label
+   ellipsises and the toggle keeps its width. */
 .assistant-context {
-  padding: 0.45rem 0.85rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.75rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.75rem;
   color: var(--muted);
 }
 
+.assistant-context-label {
+  flex: 1;
+  min-width: 0; /* without it a flex item never shrinks past its content, so no ellipsis */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .assistant-context-toggle {
+  flex: none;
+  white-space: nowrap;
   background: none;
   border: none;
   padding: 0;
@@ -93,7 +127,10 @@
   cursor: pointer;
 }
 
+/* The expanded list is a third flex child; 100% basis breaks it to its own row under the
+   label and toggle rather than squeezing in beside them. */
 .assistant-context-sections {
+  flex-basis: 100%;
   margin: 0.35rem 0 0;
   padding-left: 1.1rem;
 }
@@ -164,15 +201,31 @@
   margin: 0.55rem 0 0.35rem;
 }
 
+/* The bubble's own trailing margin is the .assistant-messages gap's job; the last block
+   inside it adding another one made every answer sit lopsided in its slot. */
+.assistant-msg-assistant > :last-child {
+  margin-bottom: 0;
+}
+
 .assistant-meta {
   color: var(--muted);
   font-size: 0.72rem;
+  margin: 0.35rem 0 0;
 }
 
 .assistant-notice {
   color: var(--warn);
   font-size: 0.75rem;
-  margin: 0 0 0.25rem;
+  margin: 0 0 0.35rem;
+}
+
+/* The chips own their row. As bare inline elements they shared a line box with the answer's
+   first paragraph, and their per-chip margins fought its. */
+.assistant-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
 }
 
 .assistant-tool-chip {
@@ -184,7 +237,52 @@
   padding: 0.1rem 0.55rem;
   font-size: 0.72rem;
   color: var(--muted);
-  margin: 0 0.3rem 0.35rem 0;
+}
+
+/* Live progress, shown only while the answer is still empty (2026-09-02): with a real key
+   the first token can be twenty seconds out, and an empty bubble reads as broken. */
+.assistant-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.assistant-spinner {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  /* One quadrant in the accent colour is what reads as rotation; under reduced motion the
+     ring simply sits there, which still says "something is pending" without moving. */
+  border-top-color: var(--accent);
+}
+
+/* The model's reasoning stream. Open while the answer is empty (the drawer flips the `open`
+   prop to undefined once tokens start, which collapses it once and then leaves it to the
+   reader) and plain text throughout — a half-formed trace full of stray ``` or | would
+   render as broken markdown. */
+.assistant-thinking {
+  margin-bottom: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.assistant-thinking > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.assistant-thinking-body {
+  margin-top: 0.3rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 12rem;
+  overflow-y: auto;
 }
 
 .assistant-error {
@@ -227,15 +325,20 @@
   border-color: var(--accent);
 }
 
+/* flex-end, not the default stretch: stretch grew Send to the textarea's full 54px, a
+   button-shaped slab next to a two-line box. Bottom-aligned it keeps its natural height and
+   its baseline sits with the composer's last line. */
 .assistant-composer {
   display: flex;
+  align-items: flex-end;
   gap: 0.5rem;
-  padding: 0.65rem 0.85rem;
+  padding: 0.65rem 0.75rem;
   border-top: 1px solid var(--border);
 }
 
 .assistant-composer textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   background: var(--surface-2);
   color: var(--text);
@@ -244,6 +347,7 @@
   padding: 0.5rem 0.65rem;
   font: inherit;
   font-size: 0.85rem;
+  line-height: 1.35;
   min-height: 2.6rem;
   max-height: 8rem;
 }
@@ -263,6 +367,16 @@
     from {
       transform: translateX(24px);
       opacity: 0;
+    }
+  }
+
+  .assistant-spinner {
+    animation: assistant-spin 700ms linear infinite;
+  }
+
+  @keyframes assistant-spin {
+    to {
+      transform: rotate(360deg);
     }
   }
 }
