@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { OwnerScope } from '../../api/netWorth'
 import type { RangePreset } from '../../charts/timeZoom'
+import { getLocal, setLocal } from '../../prefs/prefsStore'
 
 // The ONE scope rule (2026-09-03 shell spec §6): the URL is the source of truth, localStorage
 // remembers owner and range across pages, defaults fill whatever is left. `month` is never
@@ -59,7 +60,7 @@ export function ownerToParam(owner: OwnerScope): string {
 
 export function readMemory(): ScopeMemory {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(SCOPE_KEY) ?? '{}')
+    const parsed: unknown = getLocal('scope') ?? {}
     if (parsed === null || typeof parsed !== 'object') return {}
     const record = parsed as Record<string, unknown>
     const memory: ScopeMemory = {}
@@ -77,11 +78,9 @@ export function readMemory(): ScopeMemory {
 }
 
 function writeMemory(next: ScopeMemory): void {
-  try {
-    localStorage.setItem(SCOPE_KEY, JSON.stringify(next))
-  } catch {
-    // Memory is a nicety; the URL still carries the truth.
-  }
+  // Through the store: it swallows a blocked localStorage (the URL still carries the truth)
+  // and mirrors the memory to the account (2026-09-03 data-lifecycle spec §10).
+  setLocal('scope', next)
 }
 
 export function useScope(uses: ScopeUses = {}): {
