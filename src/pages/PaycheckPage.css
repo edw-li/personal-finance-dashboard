@@ -168,25 +168,10 @@
   margin-top: 0.6rem;
 }
 
-/* ── The person switcher ───────────────────────────────────────────── */
+/* ── The household figure ──────────────────────────────────────────── */
 
-/* NetWorthPage's owner-row shape, restated rather than imported: that stylesheet travels
-   with its own page, and this file must not depend on it happening to be in the bundle
-   (this file's opening note). */
-.paycheck-person-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
-}
-
-.paycheck-person-row .eyebrow {
-  margin: 0;
-}
-
-/* The household figure is a sibling of the switcher, not part of the per-person card below
-   it. The shared .kpi-row-lone fence already stops its single tile from stretching. */
+/* A sibling of the scope row's person chips, not part of the per-person card below it. The
+   shared .kpi-row-lone fence already stops its single tile from stretching. */
 .paycheck-household {
   margin-bottom: 1rem;
 }

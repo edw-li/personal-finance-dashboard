@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type { HouseholdOut, PaycheckBreakdownOut, PaycheckProfileOut } from '../types/api'
@@ -207,6 +207,22 @@ function twoEarners(sam: PaycheckBreakdownOut | Error = samBreakdown) {
 
 // --- helpers --------------------------------------------------------------------------
 
+/** What the URL says after the scope row has had its way with it. */
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+}
+
+/** The page under a real router entry — the scope row reads the owner off the URL. */
+function renderPage(entry = '/paycheck') {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <PaycheckPage />
+      <LocationProbe />
+    </MemoryRouter>,
+  )
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason: unknown) => void
@@ -236,6 +252,9 @@ const confirmSpy = vi.spyOn(window, 'confirm')
 
 beforeEach(() => {
   clearSnapshots()
+  // The scope remembers the owner across pages (useScope's localStorage mirror); a chip
+  // pressed in one test would otherwise decide which person the next one opens on.
+  localStorage.clear()
   vi.mocked(fetchHousehold).mockResolvedValue(household())
   vi.mocked(fetchProfiles).mockResolvedValue(PROFILES)
   vi.mocked(fetchBreakdown).mockResolvedValue(breakdownOf(profile2026))
@@ -925,6 +944,40 @@ describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
   })
 })
 
+describe('PaycheckPage — shell scope', () => {
+  it('the scope row shows the two people without All or Joint, primary pressed by default', async () => {
+    twoEarners()
+    renderPage()
+
+    await screen.findByRole('group', { name: 'Whose' })
+    // A paycheck belongs to ONE person (spec §6): there is no household paycheck to add up
+    // and no joint one to file, so neither chip exists.
+    expect(screen.queryByRole('button', { name: 'All' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Joint' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Me' }).getAttribute('aria-pressed')).toBe('true')
+    // The page's own switcher is gone — the scope row IS the person picker now.
+    expect(document.querySelector('.paycheck-person-row')).toBeNull()
+    expect(document.querySelector('.page-header')).toBeNull()
+    expect(document.querySelector('.page-frame-header h1')?.textContent).toBe('Paycheck')
+  })
+
+  it('?owner=<partner> fetches that person’s breakdown; the primary means no person param', async () => {
+    twoEarners()
+    renderPage(`/paycheck?owner=${SAM.id}`)
+
+    await waitFor(() =>
+      expect(vi.mocked(fetchBreakdown)).toHaveBeenLastCalledWith(undefined, SAM.id),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Me' }))
+    // The primary carries NO person param on the wire — the request this page has always
+    // made — even though the URL now names them.
+    await waitFor(() =>
+      expect(vi.mocked(fetchBreakdown)).toHaveBeenLastCalledWith(undefined, undefined),
+    )
+    expect(screen.getByTestId('location').textContent).toContain(`owner=${ME.id}`)
+  })
+})
+
 describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
   it('seeds the carry-forward form from the PRIMARY’s latest row even when the household lands late', async () => {
     // Production on 2026-09-03: the partner's profile was the newest row overall, the
@@ -953,13 +1006,13 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     await screen.findByText('$3,384.16')
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
     // Nothing to switch between: a one-option control is not an affordance, it is noise.
-    expect(screen.queryByRole('group', { name: 'Person' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
   })
 
   it('renders one chip per person, primary first, with the primary lit', async () => {
     twoEarners()
     render(<PaycheckPage />, { wrapper: MemoryRouter })
-    const chips = await screen.findByRole('group', { name: 'Person' })
+    const chips = await screen.findByRole('group', { name: 'Whose' })
     // Primary first, then everyone else by id — the same order NetWorthPage's owner chips
     // use, so a person sits in the same place on both pages.
     expect([...chips.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
@@ -973,7 +1026,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
   it('switches the waterfall to the chip’s person and drops the pinned row', async () => {
     twoEarners()
     render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByRole('group', { name: 'Person' })
+    await screen.findByRole('group', { name: 'Whose' })
 
     // Pin a row of MY history first: the switch has to abandon it, or the next request
     // would ask for one person's profile id under another person's scope.
@@ -995,7 +1048,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
   it('filters the history to the chip’s person and reseeds the form from THEIR latest row', async () => {
     twoEarners()
     render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByRole('group', { name: 'Person' })
+    await screen.findByRole('group', { name: 'Whose' })
 
     // My two rows, and no sign of Sam's — one list on the wire, grouped here.
     await waitFor(() => expect(screen.queryByText('Mar 1, 2026')).toBeNull())
@@ -1015,7 +1068,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
   it('carries the picked person on a create, and nothing at all on the primary’s', async () => {
     twoEarners()
     render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByRole('group', { name: 'Person' })
+    await screen.findByRole('group', { name: 'Whose' })
 
     type('Effective date', '2026-09-01')
     fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
@@ -1040,7 +1093,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
     await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalled())
 
     // The switcher is an affordance; losing it must cost the chips and nothing else.
-    expect(screen.queryByRole('group', { name: 'Person' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
     // The history degrades to today's WHOLE list rather than an empty table: with no
     // household there is no person to filter by, and an empty table would be a lie.
@@ -1068,7 +1121,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
   it('leaves the tile out when the partner has no profile in force', async () => {
     twoEarners(new ApiError('no paycheck profiles', 404))
     render(<PaycheckPage />, { wrapper: MemoryRouter })
-    await screen.findByRole('group', { name: 'Person' })
+    await screen.findByRole('group', { name: 'Whose' })
     await waitFor(() =>
       expect(vi.mocked(fetchBreakdown).mock.calls).toContainEqual([undefined, SAM.id]),
     )
@@ -1116,7 +1169,7 @@ describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
 
     // 1. No switcher, no household tile — nothing to switch between, and one person's net
     //    is not a household sum.
-    expect(screen.queryByRole('group', { name: 'Person' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
     expect(screen.queryByText('Household take-home')).toBeNull()
     // 2. ONE breakdown request, with NEITHER param: the partner legs never fire, so the
     //    page costs exactly what it cost before this batch.
