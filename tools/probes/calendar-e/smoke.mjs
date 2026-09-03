@@ -68,6 +68,10 @@ const MONTH = '2026-09'
 // dev data, so two added events push it past the three-chip cap and the "+N more" appears.
 const DAY = `${MONTH}-15`
 
+// Every override key the walk PUTs, drained after the browser closes (see the interceptor).
+const overrideKeys = new Set()
+const OVERRIDE_PUT = new RegExp(String.raw`/api/v1/calendar/overrides/([^?]+)`)
+
 const THEMES = ['dark', 'light'].filter(
   (t) => !process.env.ONLY_THEME || t === process.env.ONLY_THEME,
 )
@@ -181,13 +185,21 @@ async function makeContext(theme) {
     },
     [TOKEN, theme],
   )
-  const state = { theme, route: 'boot', errors: [], warnings: [], http: [], prefsWrites: [] }
+  // `closing` mutes the reporters while the context tears down: a page with eight card
+  // fetches in flight always has some of them aborted by the close itself, and those are the
+  // harness talking, not the app.
+  const state = { theme, route: 'boot', closing: false, errors: [], warnings: [], http: [], prefsWrites: [] }
   const stamp = new Date().toISOString()
   const themeEntry = { value: theme, updated_at: stamp }
   await ctx.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const target = request.url().replace(/^https?:\/\/[^/]+/, API)
     const isPrefs = /\/api\/v1\/prefs\b/.test(target)
+    // "Reopen" is a PUT with done=false, not a DELETE, so putting a deadline back leaves an
+    // all-default override ROW behind. Record every key the walk writes and drop the rows at
+    // the end: "the dev database is left as it was found" has to mean the table too.
+    const overridePut = OVERRIDE_PUT.exec(target)
+    if (overridePut && request.method() === 'PUT') overrideKeys.add(decodeURIComponent(overridePut[1]))
     if (isPrefs && request.method() !== 'GET') {
       state.prefsWrites.push({ route: state.route, method: request.method(), body: (request.postData() || '').slice(0, 200) })
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ prefs: { theme: themeEntry } }) })
@@ -196,9 +208,18 @@ async function makeContext(theme) {
     let upstream
     try {
       upstream = await route.fetch({ url: target })
-    } catch (e) {
-      problem(`${theme} ${state.route}: ${target} could not be reached (${e.message})`)
-      return route.abort()
+    } catch {
+      // One retry before calling it a defect: a single-worker dev uvicorn drops the odd
+      // connection under the double-fetch React's StrictMode makes in dev, and a smoke that
+      // fails on that reports the harness rather than the app. A second failure is real.
+      try {
+        upstream = await route.fetch({ url: target })
+      } catch (e) {
+        if (!state.closing) {
+          problem(`${theme} ${state.route}: ${target} could not be reached twice (${e.message})`)
+        }
+        return route.abort().catch(() => {})
+      }
     }
     const ms = Date.now() - started
     if (/\/api\/v1\/calendar\?/.test(target)) {
@@ -213,7 +234,7 @@ async function makeContext(theme) {
   })
 
   const take = (entry) => {
-    if (NOISE.test(entry.text) || NOISE.test(entry.url)) return
+    if (state.closing || NOISE.test(entry.text) || NOISE.test(entry.url)) return
     const rule = BENIGN.find((b) => b.test(entry))
     if (rule) {
       report.knownBenign.push({ theme, route: state.route, rule: rule.id, why: rule.why, ...entry })
@@ -264,14 +285,19 @@ async function makeContext(theme) {
     for (const e of taken) problem(`${theme} ${label}: ${e.kind} ${e.text}${e.url ? ` <${e.url}>` : ''}`)
     return taken
   }
-  return { ctx, page, state, visit, drain }
+  const finish = async () => {
+    state.closing = true
+    await page.close()
+    await ctx.close()
+  }
+  return { page, state, visit, drain, finish }
 }
 
 // ---------------------------------------------------------------------------------------
 // Pass 1 — the read-only walk, both themes.
 // ---------------------------------------------------------------------------------------
 for (const theme of THEMES) {
-  const { ctx, page, state, visit, drain } = await makeContext(theme)
+  const { page, state, visit, drain, finish } = await makeContext(theme)
 
   // --- the month grid ---
   let waited = await visit(`/calendar?month=${MONTH}`)
@@ -367,15 +393,14 @@ for (const theme of THEMES) {
   drain('/settings#calendar')
 
   report.routes.push({ theme, name: '_walk-logs', warnings: state.warnings.splice(0), prefsWrites: state.prefsWrites })
-  await page.close()
-  await ctx.close()
+  await finish()
 }
 
 // ---------------------------------------------------------------------------------------
 // Pass 2 — the write walk, dark only. Everything it creates it removes.
 // ---------------------------------------------------------------------------------------
 if (!process.env.SKIP_ACTIONS) {
-  const { ctx, page, state, visit, drain } = await makeContext(THEMES[0] ?? 'dark')
+  const { page, state, visit, drain, finish } = await makeContext(THEMES[0] ?? 'dark')
   const step = (name, value) => report.actions.push({ name, ...value })
   const LABEL = 'Smoke insurance'
   const EDITED = 'Smoke insurance (edited)'
@@ -408,22 +433,35 @@ if (!process.env.SKIP_ACTIONS) {
     const button = await page.$(`.cal-popover button:has-text("${label}")`)
     if (!button) return false
     await button.click()
-    await page.waitForTimeout(1200)
+    await page.waitForTimeout(600)
     return true
+  }
+  // POLL, never a fixed wait: the write is followed by a re-fetch of the whole window, and
+  // that GET has been seen taking 1.3 s on this box — a sleep long enough to be safe today is
+  // a smoke that passes for the wrong reason tomorrow.
+  const doneChips = async (want) => {
+    let count = -1
+    for (let i = 0; i < 40; i++) {
+      count = await page.evaluate(`document.querySelectorAll('.cal-chip.is-done').length`)
+      if (count === want) return count
+      await page.waitForTimeout(250)
+    }
+    return count
   }
   if (!(await openTaxPopover())) problem(`actions: no tax-deadline chip on ${DAY} to override`)
   else {
     // Baseline first: an interrupted earlier run can leave the deadline marked done, and a
     // walk that assumes its starting state proves nothing about the write it then makes.
     await clickInPopover('Reopen')
+    await doneChips(0)
     const marked = await clickInPopover('Mark done')
-    const done = await page.evaluate(`document.querySelectorAll('.cal-chip.is-done').length`)
+    const done = await doneChips(1)
     await shoot(page, 'actions-3-override-done')
     if (!marked) problem('actions: the deadline popover offers no "Mark done"')
     if (done < 1) problem('actions: Mark done wrote the override but no chip renders as done')
     // Put it back: the overlay row is the user's, not the smoke's.
     if (!(await clickInPopover('Reopen'))) problem('actions: the done chip offers no Reopen')
-    const left = await page.evaluate(`document.querySelectorAll('.cal-chip.is-done').length`)
+    const left = await doneChips(0)
     if (left !== 0) problem(`actions: ${left} chip(s) still done after Reopen — the walk left an override behind`)
     step('override', { doneChips: done, afterReopen: left })
   }
@@ -439,11 +477,19 @@ if (!process.env.SKIP_ACTIONS) {
     await page.fill('[aria-label="Amount (optional)"]', amount)
     await page.selectOption('.cal-form select >> nth=1', 'out')
     await page.click('button:has-text("Save event")')
-    await page.waitForTimeout(900)
+    // The form unmounts on a successful save (`setForm(null)`), which is the honest signal
+    // that the POST landed — a fixed sleep here raced the land-on-save re-fetch.
+    await page.waitForSelector('.cal-form', { state: 'detached', timeout: 15000 })
+    await page.waitForTimeout(400)
   }
   await addEvent(LABEL, '180')
   await addEvent('Smoke gym', '45')
+  // …and the re-fetch behind it lands separately, so poll for the fold rather than assume it.
   let dom = await page.evaluate(CAL_PROBE)
+  for (let i = 0; i < 40 && !dom.more.some((m) => m.day === DAY); i++) {
+    await page.waitForTimeout(250)
+    dom = await page.evaluate(CAL_PROBE)
+  }
   const added = dom.chips.filter((c) => /^Smoke/.test(c.text ?? ''))
   const overflow = dom.more.find((m) => m.day === DAY)
   if (added.length + (overflow ? 1 : 0) < 1) problem(`actions: neither added event reached ${DAY}`)
@@ -501,21 +547,18 @@ if (!process.env.SKIP_ACTIONS) {
   }
 
   // --- edit, delete, Undo, delete again ---
+  // Through the LIST, not the grid: the grid folds past three chips, so whether an event is
+  // a chip or a drawer row depends on how many of them are still undeleted — which is the
+  // one thing these steps keep changing. The list shows every event of the month, unfolded,
+  // and its rows expand the same EventDetails the chips do.
   const openSmoke = async (label) => {
-    const chip = await page.$(`[data-day="${DAY}"] .cal-chip:has-text("${label}")`)
-    if (chip) {
-      await chip.click()
-      return true
-    }
-    // Past the cap the event lives in the drawer, which carries the same EventDetails.
-    await page.click(`[data-day="${DAY}"] .cal-more`)
-    await page.waitForTimeout(400)
-    const row = await page.$(`.cal-drawer .cal-drawer-row:has-text("${label}")`)
+    await visit('/calendar?view=list')
+    const row = await page.$(`.cal-list-item:has-text("${label}")`)
     if (!row) return false
     await row.click()
+    await page.waitForTimeout(400)
     return true
   }
-  await visit(`/calendar?month=${MONTH}`)
   if (!(await openSmoke(LABEL))) problem(`actions: could not reach "${LABEL}" to edit it`)
   else {
     await page.waitForTimeout(300)
@@ -532,16 +575,18 @@ if (!process.env.SKIP_ACTIONS) {
   }
 
   const deleteSmoke = async (label) => {
-    await visit(`/calendar?month=${MONTH}`)
     if (!(await openSmoke(label))) return false
-    await page.waitForTimeout(300)
     await page.click('button:has-text("Delete")')
     await page.waitForTimeout(900)
     return true
   }
   if (!(await deleteSmoke(EDITED))) problem(`actions: could not reach "${EDITED}" to delete it`)
   else {
-    const undo = await page.$('button:has-text("Undo")')
+    // Wait for the toast rather than sleep at it: it appears only once the DELETE resolves,
+    // and it auto-dismisses, so both ends of that window are the app's timing, not ours.
+    const undo = await page
+      .waitForSelector('button:has-text("Undo")', { timeout: 10000 })
+      .catch(() => null)
     await shoot(page, 'actions-5-deleted-with-undo')
     if (!undo) problem('actions: the delete toast offered no Undo')
     else {
@@ -602,11 +647,22 @@ if (!process.env.SKIP_ACTIONS) {
 
   drain('actions')
   report.actions.push({ name: '_action-logs', warnings: state.warnings.splice(0), http: state.http.splice(0), prefsWrites: state.prefsWrites })
-  await page.close()
-  await ctx.close()
+  await finish()
 }
 
 await browser.close()
+
+// The override rows the walk wrote, removed through the API's own DELETE. Straight from node
+// with the bearer: the browser is gone by now, and this is bookkeeping, not a walked path.
+report.overridesRemoved = []
+for (const key of overrideKeys) {
+  const url = `${API}/api/v1/calendar/overrides/${encodeURIComponent(key)}`
+  const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${TOKEN}` } })
+  // 404 is fine: an interrupted pass can leave a key recorded whose row never landed.
+  if (res.status !== 204 && res.status !== 404) problem(`cleanup: DELETE override ${key} answered ${res.status}`)
+  report.overridesRemoved.push({ key, status: res.status })
+}
+
 report.files = files
 writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 1))
 
