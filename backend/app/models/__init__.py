@@ -1,5 +1,11 @@
 from app.models.app_setting import AppSetting
-from app.models.calendar import CustomEvent
+from app.models.calendar import (
+    DIRECTIONS,
+    RECURRENCES,
+    CalendarEventOverride,
+    CalendarFeedToken,
+    CustomEvent,
+)
 from app.models.comp import (
     CompEvent,
     EsppLot,
@@ -9,6 +15,7 @@ from app.models.comp import (
     RsuGrant,
 )
 from app.models.credit_cards import (
+    CREDIT_RESET_CADENCES,
     REWARDS_CURRENCIES,
     CardCredit,
     CreditCard,
@@ -44,6 +51,9 @@ __all__ = [
     "Account",
     "AccountBalance",
     "AppSetting",
+    "CREDIT_RESET_CADENCES",
+    "CalendarEventOverride",
+    "CalendarFeedToken",
     "CardCredit",
     "CategoryBudget",
     "ChangeLog",
@@ -52,6 +62,7 @@ __all__ = [
     "CreditCard",
     "CreditLimitEvent",
     "CustomEvent",
+    "DIRECTIONS",
     "DIVIDEND_SOURCES",
     "DividendPayment",
     "EsppLot",
@@ -70,6 +81,7 @@ __all__ = [
     "PortfolioValueHistory",
     "PositionTransaction",
     "PriceHistory",
+    "RECURRENCES",
     "REWARDS_CURRENCIES",
     "RewardCategory",
     "RewardRate",
