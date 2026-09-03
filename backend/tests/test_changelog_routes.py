@@ -168,3 +168,137 @@ async def test_account_create_update_delete_are_logged(auth_client, db):
     assert logged[1].after["is_active"] is False
     assert logged[2].before["slug"] == "brokerage" and logged[2].after is None
     assert {r.month for r in logged} == {None}
+
+
+# ── spending months ──────────────────────────────────────────────────────────────────
+
+
+async def two_categories(db) -> tuple[SpendingCategory, SpendingCategory]:
+    food = SpendingCategory(name="Food", slug="food", sort_order=1)
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=2)
+    db.add_all([food, rent])
+    await db.commit()
+    return food, rent
+
+
+async def test_spending_put_logs_rows_and_cashflow(auth_client, db):
+    food, rent = await two_categories(db)
+    resp = await auth_client.put(
+        f"{SP}/months/2026-09-01",
+        json={
+            "net_pay": "5000.00",
+            "amounts": [
+                {"category_id": food.id, "amount": "400.00"},
+                {"category_id": rent.id, "amount": "1800.00"},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    logged = await rows(db, body["batch_id"])
+    assert sorted((r.op, r.table_name) for r in logged) == [
+        ("insert", "monthly_cashflow"),
+        ("insert", "monthly_spending"),
+        ("insert", "monthly_spending"),
+    ]
+    assert {r.label for r in logged} == {"Saved Sep 2026 spending — 2 updated, take-home set"}
+    cashflow = next(r for r in logged if r.table_name == "monthly_cashflow")
+    assert cashflow.pk == {"month": "2026-09-01"} and cashflow.after["net_pay"] == "5000.00"
+
+    cleared = await auth_client.put(
+        f"{SP}/months/2026-09-01",
+        json={
+            "net_pay": None,
+            "amounts": [
+                {"category_id": food.id, "amount": "450.00"},
+                {"category_id": rent.id, "amount": "1800.00"},
+            ],
+        },
+    )
+    logged = await rows(db, cleared.json()["batch_id"])
+    assert sorted((r.op, r.table_name) for r in logged) == [
+        ("delete", "monthly_cashflow"),
+        ("update", "monthly_spending"),
+    ]
+    assert {r.label for r in logged} == {"Saved Sep 2026 spending — 1 updated, take-home cleared"}
+    unchanged = await auth_client.put(
+        f"{SP}/months/2026-09-01",
+        json={
+            "amounts": [
+                {"category_id": food.id, "amount": "450.00"},
+                {"category_id": rent.id, "amount": "1800.00"},
+            ]
+        },
+    )
+    assert unchanged.json()["batch_id"] is None
+
+
+async def test_spending_delete_logs_everything_and_honours_the_repair_source(auth_client, db):
+    food, rent = await two_categories(db)
+    await auth_client.put(
+        f"{SP}/months/2026-09-01",
+        json={
+            "net_pay": "5000.00",
+            "amounts": [
+                {"category_id": food.id, "amount": "0.00"},
+                {"category_id": rent.id, "amount": "0.00"},
+            ],
+        },
+    )
+    resp = await auth_client.delete(
+        f"{SP}/months/2026-09-01", headers={"X-Change-Source": "repair"}
+    )
+    assert resp.status_code == 204
+    logged = await rows(db, resp.headers["x-change-batch"])
+    assert sorted((r.op, r.table_name) for r in logged) == [
+        ("delete", "monthly_cashflow"),
+        ("delete", "monthly_spending"),
+        ("delete", "monthly_spending"),
+    ]
+    assert {r.source for r in logged} == {"repair"}  # the health card's repair (spec §11)
+    assert {r.label for r in logged} == {"Deleted Sep 2026 spending"}
+    assert (await db.execute(select(MonthlySpending))).scalars().all() == []
+    assert (await db.execute(select(MonthlyCashflow))).scalars().all() == []
+
+
+async def test_a_bogus_claimed_source_reads_as_ui(auth_client, db):
+    created = await auth_client.post(
+        f"{SP}/categories", json={"name": "Fun"}, headers={"X-Change-Source": "scheduler"}
+    )
+    assert created.status_code == 201
+    logged = (await db.execute(select(ChangeLog))).scalars().all()
+    assert [(r.source, r.label) for r in logged] == [("ui", "Created category Fun")]
+
+
+# ── categories and budgets ───────────────────────────────────────────────────────────
+
+
+async def test_category_and_budget_paths_are_logged(auth_client, db):
+    created = await auth_client.post(f"{SP}/categories", json={"name": "Fun"})
+    category_id = created.json()["id"]
+    await auth_client.patch(f"{SP}/categories/{category_id}", json={"name": "Leisure"})
+    set_budget = await auth_client.put(
+        f"{SP}/categories/{category_id}/budget",
+        json={"amount": "200.00", "effective_month": "2026-09-01"},
+    )
+    assert set_budget.status_code == 200
+    rewrite = await auth_client.put(
+        f"{SP}/categories/{category_id}/budget",
+        json={"amount": "250.00", "effective_month": "2026-09-01"},
+    )
+    assert rewrite.status_code == 200
+    removed = await auth_client.delete(f"{SP}/categories/{category_id}/budget/2026-09-01")
+    assert removed.status_code == 204
+    deleted = await auth_client.delete(f"{SP}/categories/{category_id}")
+    assert deleted.status_code == 204
+    logged = (await db.execute(select(ChangeLog).order_by(ChangeLog.id))).scalars().all()
+    assert [(r.op, r.table_name, r.label, r.month) for r in logged] == [
+        ("insert", "spending_categories", "Created category Fun", None),
+        ("update", "spending_categories", "Updated category Leisure", None),
+        ("insert", "category_budgets", "Set Leisure budget from Sep 2026", date(2026, 9, 1)),
+        ("update", "category_budgets", "Set Leisure budget from Sep 2026", date(2026, 9, 1)),
+        ("delete", "category_budgets", "Removed Leisure budget row for Sep 2026", date(2026, 9, 1)),
+        ("delete", "spending_categories", "Deleted category Leisure", None),
+    ]
+    assert logged[3].before["amount"] == "200.00" and logged[3].after["amount"] == "250.00"
+    assert (await db.execute(select(CategoryBudget))).scalars().all() == []
