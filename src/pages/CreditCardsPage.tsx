@@ -314,14 +314,14 @@ export default function CreditCardsPage() {
           </button>
         }
         scopeRow={
-          <>
-            <ScopeBar owner />
-            {/* What "whose" MEANS here is page-specific, so the hint rides beside the shared
-                control rather than inside it — and only when there is a choice to explain. */}
-            {orderedPeople.length > 1 && (
-              <InfoHint text="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The matrix, the tiles and the credit-line chart follow this; the roster below always lists every card, since it is where ownership is edited." />
-            )}
-          </>
+          // What "whose" MEANS here is page-specific — a joint CARD is held by either of
+          // you — so the sentence rides in the bar's own ⓘ. Standing beside it as a second
+          // ⓘ (which is where it started) put two of them side by side once the bar grew a
+          // default explanation of its own.
+          <ScopeBar
+            owner
+            ownerHint="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The matrix, the tiles and the credit-line chart follow this; the roster below always lists every card, since it is where ownership is edited."
+          />
         }
         resource={{
           // `cards === null` is the first-payload sentinel: a seeded snapshot fills it before

@@ -538,6 +538,26 @@ describe('CreditCardsPage — snapshot cache (2026-08-27 spec §1)', () => {
 })
 
 describe('CreditCardsPage — card ownership', () => {
+  // The bar answers "Whose" itself now, so the page's cards-specific sentence has to be the
+  // bar's ownerHint: standing beside it as a second InfoHint put two ⓘ in one row, each
+  // giving a different answer to the same question.
+  it("answers Whose exactly once, in the cards own words", async () => {
+    const { container } = renderPage()
+    await screen.findByRole('group', { name: 'Whose' })
+    const scopeRow = container.querySelector('.page-frame-scope') as HTMLElement
+    expect(scopeRow.querySelectorAll('.info-hint').length).toBe(1)
+    // InfoHint carries its sentence as the button's accessible name.
+    expect(
+      screen.getByRole('button', {
+        name: /A person's view is their own cards plus the joint ones/,
+      }),
+    ).toBeTruthy()
+    // ...and not the shell's generic default, which says "accounts".
+    expect(
+      screen.queryByRole('button', { name: /their own accounts plus the joint ones/ }),
+    ).toBeNull()
+  })
+
   it('shows the owner per row and defaults a NEW card to the primary person', async () => {
     renderPage()
     await screen.findByText('Card roster')

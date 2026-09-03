@@ -656,21 +656,36 @@ it('shows the alert alone on a failed first load and retries back into the skele
   expect(container.querySelector('.page-skeleton')).not.toBeNull()
 })
 
-// Pinned verbatim: this sentence is the page's only defence against reading the weekly
-// performance line as one person's (spec §5) — and, since A3, against wondering where the
-// live dot went on a person view.
-const HOUSEHOLD_HINT =
+// Pinned verbatim, both halves: together they are the page's only defence against reading
+// the weekly performance line as one person's (spec §5) — and, since A3, against wondering
+// where the live dot went on a person view. The half that answers "whose view is this?"
+// lives in the scope row's ⓘ (ScopeBar's ownerHint), so it is on screen at every scope
+// including All; the half that only means something beside the chart stays on the card.
+const OWNER_HINT =
   "A person's view is their own portfolio accounts plus the joint ones — that is what a " +
   'joint account is. Joint shows only the shared accounts. Performance, sparklines and ' +
-  'price refresh always cover the whole household — the owner chips scope holdings, ' +
-  'allocation, dividends, transactions and realized gains. Person views omit the live ' +
-  'price dot because the history is household-wide.'
+  'price refresh always cover the whole household.'
+const HOUSEHOLD_HINT =
+  'The owner chips scope holdings, allocation, dividends, transactions and realized gains ' +
+  '— not this chart, the sparklines or price refresh, which always cover the whole ' +
+  'household. Person views omit the live price dot because the history is household-wide.'
+
+it("overrides the shell's default answer to Whose with the portfolio one", async () => {
+  renderPage()
+  await screen.findByRole('group', { name: 'Whose' })
+  // InfoHint carries its sentence as the button's accessible name, so the override is
+  // readable without opening the bubble — and the shell's default must NOT be what shows.
+  expect(screen.getByRole('button', { name: OWNER_HINT })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /Each person has their own view/ })).toBeNull()
+})
 
 it('says the performance card is household-wide only while a scope is active', async () => {
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })
   // Nothing is scoped on All, so the caveat would be noise.
   expect(screen.queryByText(HOUSEHOLD_HINT)).toBeNull()
+  // ...though the scope row's own answer is up the whole time.
+  expect(screen.getByRole('button', { name: OWNER_HINT })).toBeTruthy()
 
   fireEvent.click(chip('Sam'))
   expect(await screen.findByText(HOUSEHOLD_HINT)).toBeTruthy()

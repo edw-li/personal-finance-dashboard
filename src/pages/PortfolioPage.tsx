@@ -544,7 +544,16 @@ export default function PortfolioPage() {
             )}
           </>
         }
-        scopeRow={<ScopeBar owner range />}
+        scopeRow={
+          // Overrides the bar's default "Whose": this page's accounts are portfolio labels,
+          // and — the part no other page has to say — the performance line, the sparklines
+          // and price refresh ignore the chips entirely.
+          <ScopeBar
+            owner
+            range
+            ownerHint="A person's view is their own portfolio accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts. Performance, sparklines and price refresh always cover the whole household."
+          />
+        }
         // A failed FIRST load leaves holdings null: the frame shows the alert alone rather
         // than a page of empty tables that read as "you own nothing".
         resource={{
@@ -627,15 +636,16 @@ export default function PortfolioPage() {
               </div>
               {/* Outside the ternary on purpose: the caveat is true whether or not there is
                   a history to draw, and it only appears once a chip has actually narrowed
-                  the rest of the page (spec §5 — on All it would be noise). */}
+                  the rest of the page (spec §5 — on All it would be noise). What the scope
+                  row's ⓘ already says is not repeated; what is left is the part that only
+                  makes sense standing on this card — which panels the chips DO scope, and
+                  the dot that goes missing. */}
               {owner !== null && (
                 <p className="hint">
-                  A person's view is their own portfolio accounts plus the joint ones — that
-                  is what a joint account is. Joint shows only the shared accounts.
-                  Performance, sparklines and price refresh always cover the whole household —
-                  the owner chips scope holdings, allocation, dividends, transactions and
-                  realized gains. Person views omit the live price dot because the history is
-                  household-wide.
+                  The owner chips scope holdings, allocation, dividends, transactions and
+                  realized gains — not this chart, the sparklines or price refresh, which
+                  always cover the whole household. Person views omit the live price dot
+                  because the history is household-wide.
                 </p>
               )}
               {performanceOption && history ? (
