@@ -142,8 +142,41 @@ def test_espp_events_keep_v1_dates_and_labels_with_stable_keys():
     assert [(e.label, e.detail, e.key) for e in by_type["offering_start"]] == [
         ("ESPP offering starts", "subscription price 120", "espp:offering:2026-09-01")
     ]
-    assert all(e.href == "/espp" and e.amount is None for e in events)
+    assert all(e.href == "/espp" for e in events)
+    # The purchase carries the contribution (pinned below); the other two are dates only.
+    assert all(e.amount is None for e in events if e.type != "espp_purchase")
     assert by_type["espp_purchase"][0].direction == "neutral"
+
+
+def test_espp_purchase_carries_the_modelers_contribution_and_stays_null_when_nothing_is_entered():
+    stored = [
+        StoredPeriod(
+            1,
+            "1H26",
+            date(2025, 9, 1),
+            date(2026, 2, 27),
+            Decimal("60000"),
+            Decimal("2500"),
+            Decimal("0.14"),
+        )
+    ]
+    year = Window(date(2026, 1, 1), date(2026, 12, 31))
+    events = espp_events(stored, [], [], year)
+    purchases = {e.event_date: e for e in events if e.type == "espp_purchase"}
+    # (60000 + 2500) x 0.14 = 8750.00 - run_modeler's `contribution` line, no price needed.
+    first = purchases[date(2026, 2, 27)]
+    assert (first.amount, first.direction, first.basis) == (
+        Decimal("8750.00"),
+        "neutral",
+        "estimated",
+    )
+    assert first.detail == "1H26 · contribution ≈ $8,750.00"
+    # The derived Mar-Aug row seeds from the latest stored period, so it is priced too.
+    assert purchases[date(2026, 8, 31)].amount == Decimal("8750.00")
+    # Nothing stored: derived rows seed at 0 -> unknowable, not "$0.00".
+    bare = {e.event_date: e for e in espp_events([], [], [], year) if e.type == "espp_purchase"}
+    assert bare[date(2026, 8, 31)].amount is None
+    assert bare[date(2026, 8, 31)].detail == "Mar–Aug 2026"
 
 
 # --- dividends ---------------------------------------------------------------------------
