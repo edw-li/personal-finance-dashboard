@@ -8,6 +8,8 @@ import ToastProvider from './components/ToastProvider'
 import { AuthProvider } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
+import LandingRedirect from './prefs/LandingRedirect'
+import SessionPrefs from './prefs/SessionPrefs'
 
 // Route-level splitting (Plans 3-5 deferred it here): echarts + each page leave the entry
 // chunk; Login and the 404 stay eager (first paint must not wait on a chunk). The import
@@ -31,13 +33,21 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
+        <SessionPrefs />
         <ToastProvider>
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route element={<ProtectedRoute />}>
                 <Route element={<Layout />}>
-                  <Route path="/" element={<OverviewPage />} />
+                  <Route
+                    path="/"
+                    element={
+                      <LandingRedirect>
+                        <OverviewPage />
+                      </LandingRedirect>
+                    }
+                  />
                   <Route path="/update" element={<MonthlyUpdatePage />} />
                   <Route path="/net-worth" element={<NetWorthPage />} />
                   <Route path="/spending" element={<SpendingPage />} />

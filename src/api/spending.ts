@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, apiWithHeaders } from './client'
 import type {
   AmountEntry,
   CategoryBudgetEntry,
@@ -78,7 +78,16 @@ export function deleteCategoryBudget(categoryId: number, effectiveMonth: string)
   })
 }
 
-// 404 when the month has neither spending rows nor a cashflow row — "already gone".
-export function deleteSpendingMonth(month: string): Promise<void> {
-  return api<void>(`/spending/months/${month}`, { method: 'DELETE' })
+// 404 when the month has neither spending rows nor a cashflow row — "already gone". The 204
+// carries the change batch (spec §9). `source: 'repair'` is the Data-health card's zero-month
+// fix: the server logs the batch as a repair (still undoable) instead of a UI delete.
+export async function deleteSpendingMonth(
+  month: string,
+  options: { source?: 'repair' } = {},
+): Promise<{ batchId: string | null }> {
+  const { headers } = await apiWithHeaders<void>(`/spending/months/${month}`, {
+    method: 'DELETE',
+    ...(options.source === undefined ? {} : { headers: { 'X-Change-Source': options.source } }),
+  })
+  return { batchId: headers.get('x-change-batch') }
 }

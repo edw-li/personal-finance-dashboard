@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, apiWithHeaders } from './client'
 import type {
   AccountCreate,
   AccountOut,
@@ -77,7 +77,10 @@ export function putMonthBalances(
   })
 }
 
-// 404 when the month has no snapshot — the wizard delete treats that as "already gone".
-export function deleteMonthBalances(month: string): Promise<void> {
-  return api<void>(`/net-worth/months/${month}`, { method: 'DELETE' })
+// 404 when the month has no snapshot — the wizard delete treats that as "already gone". The
+// 204 carries the change batch in X-Change-Batch (2026-09-03 data-lifecycle spec §9); null
+// when nothing was logged, so the caller offers no Undo.
+export async function deleteMonthBalances(month: string): Promise<{ batchId: string | null }> {
+  const { headers } = await apiWithHeaders<void>(`/net-worth/months/${month}`, { method: 'DELETE' })
+  return { batchId: headers.get('x-change-batch') }
 }

@@ -1,7 +1,10 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ThemeProvider from '../shell/ThemeProvider'
 import AppearanceCard from './AppearanceCard'
+
+// The store PATCHes every change and GETs once per session; no test here wants a network.
+vi.mock('../../api/prefs', () => ({ fetchPrefs: vi.fn(), patchPrefs: vi.fn(), deletePref: vi.fn() }))
 
 beforeEach(() => localStorage.clear())
 afterEach(cleanup)
@@ -42,5 +45,34 @@ describe('AppearanceCard', () => {
       </ThemeProvider>,
     )
     expect(document.getElementById('appearance')).toBeTruthy()
+  })
+  it('offers the landing page over the nav and remembers it through the store', () => {
+    render(
+      <ThemeProvider>
+        <AppearanceCard />
+      </ThemeProvider>,
+    )
+    const select = screen.getByLabelText('Landing page') as HTMLSelectElement
+    expect(select.value).toBe('/')
+    expect([...select.options].map((o) => o.textContent)).toContain('Net worth')
+    fireEvent.change(select, { target: { value: '/net-worth' } })
+    expect(localStorage.getItem('finance.landingPage')).toBe('/net-worth')
+    expect(
+      screen.getByText('Remembered in this browser; synced to your account once signed in.'),
+    ).toBeTruthy()
+  })
+
+  it('says so once the server has answered', async () => {
+    const { fetchPrefs } = await import('../../api/prefs')
+    const { resetPrefsStoreForTests, syncFromServer } = await import('../../prefs/prefsStore')
+    resetPrefsStoreForTests()
+    vi.mocked(fetchPrefs).mockResolvedValue({ prefs: {} })
+    render(
+      <ThemeProvider>
+        <AppearanceCard />
+      </ThemeProvider>,
+    )
+    await syncFromServer()
+    await waitFor(() => expect(screen.getByText('Synced to your account.')).toBeTruthy())
   })
 })

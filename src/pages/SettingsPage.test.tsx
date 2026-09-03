@@ -83,20 +83,25 @@ vi.mock('../api/limits', async (importOriginal) => ({
   putLimits: vi.fn(),
   cloneLimits: vi.fn(),
 }))
-// The Backups and Restore cards (2026-09-03 data-lifecycle spec §7–§8) each own a fetch of
-// the stored snapshots; unmocked they would hit the network from every test in this file.
+// The Backups, Restore, Health and Activity cards (2026-09-03 data-lifecycle spec §7–§9, §11)
+// each own a fetch; unmocked they would hit the network from every test in this file.
 vi.mock('../api/lifecycle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/lifecycle')>()),
   fetchSnapshots: vi.fn(),
   createSnapshot: vi.fn(),
   restoreUpload: vi.fn(),
   restoreStored: vi.fn(),
+  fetchActivity: vi.fn(),
+  fetchActivityRun: vi.fn(),
+  undoBatch: vi.fn(),
+  fetchHealth: vi.fn(),
 }))
 import { createSnapshot, fetchSnapshots } from '../api/lifecycle'
 import { fetchAssistantSettings } from '../api/assistant'
 import { changePassword } from '../api/auth'
 import { fetchHousehold } from '../api/household'
 import { importXlsx } from '../api/importer'
+import { fetchActivity, fetchHealth } from '../api/lifecycle'
 import { fetchLimits } from '../api/limits'
 import { fetchAccounts } from '../api/netWorth'
 import { fetchPortfolioAccounts } from '../api/portfolio'
@@ -271,6 +276,9 @@ beforeEach(() => {
     key: { configured: true, source: 'env' },
     default_model: 'kimi-k3',
   })
+  // Empty answers: neither card adds a row, a banner or a button to this file's queries.
+  vi.mocked(fetchActivity).mockResolvedValue({ entries: [], next_before: null })
+  vi.mocked(fetchHealth).mockResolvedValue({ checked_at: '2026-09-04T09:00:00+00:00', checks: [] })
   confirmSpy.mockReturnValue(true)
 })
 
@@ -627,7 +635,8 @@ describe('SettingsPage — xlsx import', () => {
     expect(vi.mocked(importXlsx).mock.calls[0]).toEqual([file, true])
 
     expect(await screen.findByText('Dry run — nothing was written.')).toBeTruthy()
-    expect(screen.getByText('Spending')).toBeTruthy()
+    // By role: the Appearance card's Landing page select carries a 'Spending' option too.
+    expect(screen.getByRole('heading', { name: 'Spending' })).toBeTruthy()
     expect(screen.getByText('transaction')).toBeTruthy()
     // A header row, unlike the plan's headerless skeleton: the glyphs alone say nothing
     // about which of the importer's four verbs a number belongs to.
@@ -648,7 +657,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(screen.getByText('2024-03-05 new: Gas 51.00')).toBeTruthy()
     // All nine sheets come back on every report; the eight that changed nothing are not
     // headings — a wall of empty sections would bury the one that did.
-    expect(screen.queryByText('Paycheck')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Paycheck' })).toBeNull()
     expect(screen.queryByText(APPLIED_NOTE)).toBeNull()
   })
 
@@ -664,7 +673,7 @@ describe('SettingsPage — xlsx import', () => {
 
     // The fourth arm of the has-content filter: a sheet can change nothing countable and
     // still have something to show. Dropped, its preview lines would vanish silently.
-    expect(await screen.findByText('Paycheck')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Paycheck' })).toBeTruthy()
     // No "(+n more)" when nothing was dropped — the cap is news only when it bit.
     expect(screen.getByText('1 sample changes')).toBeTruthy()
     expect(screen.getByText('2024-06-14 gross 12500.00 -> 12750.00')).toBeTruthy()
@@ -1013,6 +1022,27 @@ describe('SettingsPage — assistant card', () => {
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Assistant' })).toBeNull()
     expect(vi.mocked(fetchAssistantSettings)).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsPage — health and activity cards', () => {
+  it('mounts Data health then Activity directly before the App settings card', async () => {
+    renderPage()
+    const health = await screen.findByRole('region', { name: 'Data health' })
+    const activity = screen.getByRole('region', { name: 'Activity' })
+    const appSettings = document.getElementById('app-settings')
+    expect(health.nextElementSibling).toBe(activity)
+    expect(activity.nextElementSibling).toBe(appSettings)
+    await waitFor(() => expect(vi.mocked(fetchHealth)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(fetchActivity)).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers neither card when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    renderPage()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Data health' })).toBeNull()
+    expect(vi.mocked(fetchHealth)).not.toHaveBeenCalled()
   })
 })
 

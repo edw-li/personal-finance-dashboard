@@ -5,6 +5,9 @@ import { act, cleanup, render, renderHook, screen } from '@testing-library/react
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ThemeProvider, { DENSITY_KEY, LIGHT_QUERY, THEME_KEY, useTheme } from './ThemeProvider'
 
+// The store PATCHes on every change and GETs once per session; no test here wants a network.
+vi.mock('../../api/prefs', () => ({ fetchPrefs: vi.fn(), patchPrefs: vi.fn(), deletePref: vi.fn() }))
+
 function Probe() {
   const { theme, resolved, density, version, setTheme, setDensity } = useTheme()
   return (
@@ -138,5 +141,32 @@ describe('ThemeProvider', () => {
     expect(html).toContain(LIGHT_QUERY)
     expect(html).toContain('dataset.theme')
     expect(html).toContain('dataset.density')
+  })
+
+  // A server value that lands after first paint (2026-09-03 data-lifecycle spec §10) moves the
+  // live state, not only storage — the shell re-renders for the signed-in state anyway.
+  it('adopts a theme and density synced from the server', async () => {
+    const { fetchPrefs } = await import('../../api/prefs')
+    const { resetPrefsStoreForTests, syncFromServer } = await import('../../prefs/prefsStore')
+    resetPrefsStoreForTests()
+    vi.mocked(fetchPrefs).mockResolvedValue({
+      prefs: {
+        theme: { value: 'light', updated_at: '2026-09-04T09:00:00+00:00' },
+        density: { value: 'compact', updated_at: '2026-09-04T09:00:00+00:00' },
+      },
+    })
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    )
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    await act(async () => {
+      await syncFromServer()
+    })
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(document.documentElement.dataset.density).toBe('compact')
+    expect(state()).toBe('light|light|compact|1')
+    expect(localStorage.getItem('finance.theme')).toBe('light')
   })
 })

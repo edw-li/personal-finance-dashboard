@@ -11,6 +11,7 @@ import {
   putMonthBalances,
 } from '../api/netWorth'
 import { fetchHousehold } from '../api/household'
+import { undoBatch } from '../api/lifecycle'
 import {
   deleteSpendingMonth,
   fetchCategories,
@@ -406,6 +407,30 @@ export default function MonthlyUpdatePage() {
     }
   }, [accounts, balances, categories, amounts, netPay, prevNetWorth])
 
+  // Undo (2026-09-03 data-lifecycle spec §9): the spending batch, then the balances batch —
+  // the reverse of the save's order — each its own request; the first failure stops the
+  // sequence and its sentence is shown. `after` (reload, or return to the month) runs on
+  // success AND after a partial failure, because a half-reversed month is still a changed one.
+  const undoBatches = async (batchIds: (string | null)[], done: string, after: () => void) => {
+    let reversed = 0
+    try {
+      for (const id of batchIds) {
+        if (id === null) continue
+        await undoBatch(id)
+        reversed += 1
+      }
+      toast.success(done)
+      after()
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Undo failed')
+      // A PARTIAL undo still moved the data (leg 1 reversed, leg 2 was refused — a 409 from
+      // a later change touching the same rows). The boxes and the banner now describe rows
+      // that no longer exist, so `after` runs anyway: only a sequence that reversed NOTHING
+      // may leave the screen as it is.
+      if (reversed > 0) after()
+    }
+  }
+
   const save = async () => {
     setSaving(true)
     setError(null)
@@ -475,6 +500,22 @@ export default function MonthlyUpdatePage() {
           // it — and says it from the server's own flag, not from what we hoped we sent.
           (spendResult.net_pay_cleared ? ' Household take-home cleared.' : ''),
       )
+      const saveBatches = [spendResult.batch_id ?? null, balanceResult.batch_id ?? null]
+      if (saveBatches.some((id) => id !== null)) {
+        toast.success(
+          `Saved ${formatMonth(month)} — ${balanceResult.created + balanceResult.updated} balances updated`,
+          {
+            action: {
+              label: 'Undo',
+              onAction: () =>
+                void undoBatches(saveBatches, `Undone — ${formatMonth(month)} is back to how it was.`, () => {
+                  setLoading(true)
+                  setLoadNonce((n) => n + 1)
+                }),
+            },
+          },
+        )
+      }
       // Coverage moved: this month now has both feeds. Tell the scope row to re-read it.
       setCoverageNonce((n) => n + 1)
       // What the wire received IS what the boxes now hold. Adopting the canonical values
@@ -512,11 +553,11 @@ export default function MonthlyUpdatePage() {
   // Each leg tolerates ITS OWN 404 — a balances-only month must still fully clear, and
   // the mirror case too — but any other failure surfaces and stops the sequence (a retry
   // re-runs both; the leg that already succeeded then 404s and is tolerated).
-  const tolerate404 = async (call: Promise<void>) => {
+  const tolerate404 = async <T,>(call: Promise<T>): Promise<T | null> => {
     try {
-      await call
+      return await call
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) return
+      if (err instanceof ApiError && err.status === 404) return null
       throw err
     }
   }
@@ -525,10 +566,30 @@ export default function MonthlyUpdatePage() {
     setDeleting(true)
     setError(null)
     try {
-      await tolerate404(deleteMonthBalances(month))
-      await tolerate404(deleteSpendingMonth(month))
+      // Named *Delete, not *Leg: `balancesLeg` is already this component's remembered
+      // half-landed SAVE (the A8 retry), and shadowing it here would read as the same thing.
+      const balancesDelete = await tolerate404(deleteMonthBalances(month))
+      const spendingDelete = await tolerate404(deleteSpendingMonth(month))
       sessionStorage.removeItem(draftKey(month))
-      toast.success(`Deleted ${formatMonth(month)} — balances and spending removed.`)
+      const deleted = month
+      const deleteBatches = [spendingDelete?.batchId ?? null, balancesDelete?.batchId ?? null]
+      toast.success(
+        `Deleted ${formatMonth(month)} — balances and spending removed.`,
+        deleteBatches.some((id) => id !== null)
+          ? {
+              action: {
+                label: 'Undo',
+                onAction: () =>
+                  void undoBatches(deleteBatches, `Undone — ${formatMonth(deleted)} is back.`, () => {
+                    // Back to the undone month's wizard; the nonce covers the same-month case.
+                    setLoading(true)
+                    setLoadNonce((n) => n + 1)
+                    setParams(() => new URLSearchParams({ month: deleted, step: 'balances' }))
+                  }),
+              },
+            }
+          : undefined,
+      )
       setDeleteArm('')
       setSaved(null)
       // A8 adaptation: a remembered half-landed save describes rows that no longer exist —
@@ -1172,7 +1233,8 @@ export default function MonthlyUpdatePage() {
                 <h3 className="eyebrow">Danger</h3>
                 <p className="drill-hint">
                   Delete this month everywhere: its balances snapshot, spending rows and
-                  take-home. This cannot be undone.
+                  take-home. Undo is offered for six seconds afterwards, and the Activity card
+                  can undo it later.
                 </p>
                 <div className="danger-row">
                   <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
