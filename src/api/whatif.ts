@@ -1,4 +1,4 @@
-import { api } from './client'
+import { apiReadOnly } from './client'
 import type { EsppSaleIn, SaleLegIn, WhatIfOut } from '../types/api'
 
 // The one call of the tax sandbox. NOTHING is stored: the endpoint loads the year's stored
@@ -19,6 +19,10 @@ export interface WhatIfBody {
 // 404 when the year has no stored row or a leg names an unknown security/lot, 409 for a lot
 // that is already sold, 422 for an oversell, a non-positive figure or an unknown override
 // key — all with the router's own sentences, which the panel renders verbatim.
+//
+// apiReadOnly, not api(): this POST is the sandbox's question, not a save. Under api() every
+// run — and the panel re-runs on each edit — dropped the /taxes families and cost the pages
+// behind it their instant paint for data no what-if can have moved.
 export function runWhatIf(body: WhatIfBody): Promise<WhatIfOut> {
-  return api<WhatIfOut>('/taxes/what-if', { method: 'POST', body: JSON.stringify(body) })
+  return apiReadOnly<WhatIfOut>('/taxes/what-if', body)
 }

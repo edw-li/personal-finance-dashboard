@@ -53,13 +53,20 @@ export class ApiError extends Error {
 // are `<family>` or `<family>:…`, so the map is read as a prefix on the PATH and a family
 // prefix on the KEY. `shell` rides /spending and /net-worth because the scope ribbon caches
 // household + month coverage under it, and both move when a month is saved.
+//
+// Every family below is one a page actually writes: an entry that matches no live key reads
+// as coverage that isn't there. The cross-page rows are the ones that bite — the spending
+// matrix's four_pct_rule is computed from the net-worth investable bases; the credit-cards
+// page keeps ONE snapshot that embeds the spending categories, the spending matrix and
+// /net-worth/accounts; and both the ESPP lots and the comp vesting schedule are valued at the
+// portfolio's latest quote, so a price refresh moves them.
 const MUTATION_FAMILIES: [prefix: string, families: string[]][] = [
-  ['/spending', ['spending', 'overview', 'projection', 'shell']],
-  ['/net-worth', ['networth', 'net-worth', 'overview', 'projection', 'update', 'shell']],
-  ['/portfolio', ['portfolio', 'overview', 'calendar']],
-  ['/prices', ['portfolio', 'overview', 'calendar']],
+  ['/spending', ['spending', 'overview', 'projection', 'shell', 'credit-cards']],
+  ['/net-worth', ['net-worth', 'overview', 'projection', 'shell', 'spending', 'credit-cards']],
+  ['/portfolio', ['portfolio', 'overview', 'calendar', 'espp', 'comp']],
+  ['/prices', ['portfolio', 'overview', 'calendar', 'espp', 'comp']],
   ['/calendar', ['calendar', 'overview']],
-  ['/credit-cards', ['cards', 'credit-cards']],
+  ['/credit-cards', ['credit-cards']],
   ['/taxes', ['taxes', 'overview']],
   // Pay, equity and the limits that govern them are ONE dependency web: a comp edit moves
   // the paycheck, the ESPP contribution, the tax estimate, the projection and the calendar.
@@ -101,8 +108,9 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 // writes nothing — the shape the tax what-if endpoint established server-side. For those,
 // api()'s coarse non-GET invalidation must NOT fire; the assistant's context preview runs
 // on every drawer open and would otherwise cost every page its instant paint. Anything that
-// CAN write keeps going through api(). (Today's only caller is that preview; whatif.ts
-// still rides api() and is untouched.)
+// CAN write keeps going through api(). (Callers: the assistant's context preview and the tax
+// what-if sandbox — the latter loads a year's stored inputs, runs the engine twice and stores
+// nothing.)
 export async function apiReadOnly<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: JSON.stringify(body) })
 }

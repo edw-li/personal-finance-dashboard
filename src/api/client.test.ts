@@ -154,6 +154,40 @@ describe('api — snapshot invalidation', () => {
     expect(getSnapshot('portfolio:all')).toBe(1)
   })
 
+  // The credit-cards page keeps ONE snapshot that embeds the spending categories, the
+  // spending matrix AND /net-worth/accounts, and the matrix's four_pct_rule is computed from
+  // the net-worth investable bases — so a saved month moves both pages, not just its own.
+  it('a PUT to /net-worth drops spending and credit-cards too, but keeps portfolio', async () => {
+    setSnapshot('net-worth:monthly:all', 1)
+    setSnapshot('spending', 1)
+    setSnapshot('credit-cards', 1)
+    setSnapshot('overview', 1)
+    setSnapshot('portfolio:all', 1)
+    mockFetchOk()
+    await api('/net-worth/months/2026-09-01', { method: 'PUT', body: '{}' })
+    expect(getSnapshot('net-worth:monthly:all')).toBeUndefined()
+    expect(getSnapshot('spending')).toBeUndefined()
+    expect(getSnapshot('credit-cards')).toBeUndefined()
+    expect(getSnapshot('overview')).toBeUndefined()
+    // Balances cannot move holdings — the portfolio page keeps its instant paint.
+    expect(getSnapshot('portfolio:all')).toBe(1)
+  })
+
+  // ESPP lots and the comp vesting schedule are both VALUED at the portfolio's latest quote,
+  // so a refresh restates them; nothing it does touches a tax year's stored inputs.
+  it('a POST to /prices/refresh drops the espp and comp families but keeps taxes', async () => {
+    setSnapshot('espp:lots', 1)
+    setSnapshot('comp:schedule', 1)
+    setSnapshot('portfolio:all', 1)
+    setSnapshot('taxes:years', 1)
+    mockFetchOk()
+    await api('/prices/refresh', { method: 'POST', body: '{}' })
+    expect(getSnapshot('espp:lots')).toBeUndefined()
+    expect(getSnapshot('comp:schedule')).toBeUndefined()
+    expect(getSnapshot('portfolio:all')).toBeUndefined()
+    expect(getSnapshot('taxes:years')).toBe(1)
+  })
+
   // Prefix matching is on the FAMILY, not on a substring: 'portfolio' must not take
   // 'projection:default' with it, and 'net-worth' must not spare 'net-worth:monthly:all'.
   it('a POST to /portfolio drops the portfolio, overview and calendar families only', async () => {

@@ -391,18 +391,29 @@ cycles Dark ↔ Light and sets the stored theme explicitly. The favicon stays da
   it would overflow the viewport's right edge; `aria-describedby` links trigger and bubble.
 - **Targeted cache invalidation:** `api()` maps a mutation's path to snapshot-key families and
   invalidates only those; unknown paths clear everything (today's behavior). Snapshot keys are
-  normalized to a `<family>:…` prefix where they are not already.
+  normalized to a `<family>:…` prefix where they are not already, and every family named below is
+  one a page actually writes — a family that matches no live key reads as coverage that isn't there.
 
   | Mutation path prefix | Families invalidated |
   |---|---|
-  | `/spending` | spending, overview, projection |
-  | `/net-worth` | networth, overview, projection, update |
-  | `/portfolio`, `/prices` | portfolio, overview, calendar |
+  | `/spending` | spending, overview, projection, shell, credit-cards |
+  | `/net-worth` | net-worth, overview, projection, shell, spending, credit-cards |
+  | `/portfolio`, `/prices` | portfolio, overview, calendar, espp, comp |
   | `/calendar` | calendar, overview |
-  | `/credit-cards` | cards |
+  | `/credit-cards` | credit-cards |
   | `/taxes` | taxes, overview |
   | `/paycheck`, `/comp`, `/espp`, `/limits` | paycheck, comp, espp, taxes, projection, calendar, overview |
   | `/household`, `/settings`, `/import`, `/auth` | all |
+
+  The cross-page rows: `shell` rides the two month-writing paths because the scope ribbon caches
+  household + coverage under it; the spending matrix's `four_pct_rule` is computed from the
+  net-worth investable bases; the credit-cards page keeps ONE snapshot that embeds the spending
+  categories, the spending matrix and `/net-worth/accounts`; and the ESPP lots and comp vesting
+  schedule are both valued at the portfolio's latest quote, so a price refresh restates them.
+
+- **POST-for-read:** a POST whose body is only the question — `/assistant/context-preview` and
+  `/taxes/what-if` — rides `apiReadOnly`, which skips invalidation entirely. Both re-run on
+  interaction (a drawer open, a what-if keystroke) and neither writes.
 
 - **Legibility floor:** eyebrows, table heads and nav headings ≥ 0.72 rem; delta text ≥ 0.8 rem;
   `.stat-value` gets `font-variant-numeric: tabular-nums`; `OTHER_SERIES_COLOR` is raised to ≥ 3:1;

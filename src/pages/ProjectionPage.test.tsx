@@ -543,7 +543,7 @@ describe('ProjectionPage', () => {
   // The app-wide ⓘ transcription's canary (spec §5): the copy is only a deliverable if it
   // actually reaches the DOM, and this page carries both shapes — a tile label and two
   // chart-card headings. The authored words ride in aria-label, which is what a screen
-  // reader hears and what the CSS bubble renders from data-tip.
+  // reader hears; the bubble itself renders the same words when the hint opens.
   it('hangs a hint on the FI-target tile and on both chart headings', async () => {
     renderPage()
     await screen.findByText('$1,500,000.00')
