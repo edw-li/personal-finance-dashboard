@@ -13,6 +13,7 @@ import asyncio
 import csv
 import io
 import json
+import os
 import re
 import zipfile
 from collections.abc import Iterable, Mapping
@@ -334,12 +335,20 @@ def trim_directory(directory: Path, pattern: re.Pattern[str], keep: int) -> list
     return removed
 
 
-def _write_file(
+def write_file(
     directory: Path, name: str, payload: bytes, pattern: re.Pattern[str], keep: int
 ) -> Path:
+    """ATOMIC publish of one archive, then trim. The bytes land in `<name>.part` and
+    os.replace renames them into place: a crash mid-write leaves a `.part` that matches
+    NO name pattern, never a truncated ZIP that the listing would happily offer to
+    restore. os.replace is atomic within a directory on both POSIX and Windows. The trim
+    runs AFTER the replace so the new file counts toward `keep`. Sync — async callers wrap
+    it in asyncio.to_thread (the nightly snapshot job in L4 shares this writer)."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
-    path.write_bytes(payload)
+    part = directory / f"{name}.part"
+    part.write_bytes(payload)
+    os.replace(part, path)
     trim_directory(directory, pattern, keep)
     return path
 
@@ -361,7 +370,7 @@ async def write_restore_point(db: AsyncSession, *, actor: str | None) -> Restore
     snap = await build_snapshot_zip(db)
     name = f"pre-restore-{snap.exported_at:%Y%m%d-%H%M%S-%f}.zip"
     path = await asyncio.to_thread(
-        _write_file,
+        write_file,
         restore_points_dir(),
         name,
         snap.payload,

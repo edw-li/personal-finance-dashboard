@@ -72,3 +72,9 @@ async def test_user_preference_updated_at_is_python_side(db, seeded_user):
     db.add(row)
     await db.commit()
     assert row.updated_at >= before
+    # And it ADVANCES on update — §10 compares this stamp across two devices, so a re-save
+    # that kept the old stamp would let a stale device win.
+    first = row.updated_at
+    row.value = "cozy"
+    await db.commit()
+    assert row.updated_at > first

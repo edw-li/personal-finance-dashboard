@@ -79,6 +79,9 @@ class UserPreference(Base):
     # Any JSON: 'dark', {"owner": "all", "range": "1y"}, ["nav:/", ...]. NOT NULL — a reset
     # DELETEs the row rather than storing a null (prefs router).
     value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    # onupdate too, not just default: §10's last-writer-wins compares this stamp across two
+    # devices, so a re-save of an existing key MUST advance it. Python-side (no server-side
+    # trigger), so the ORM writer reads the new value back without a refresh.
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
     )

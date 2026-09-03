@@ -143,6 +143,10 @@ async def test_write_restore_point_writes_trims_and_records(db):
     for _ in range(RESTORE_POINTS_KEEP + 1):
         points.append(await write_restore_point(db, actor="me@example.com"))
     names = sorted(p.name for p in restore_points_dir().iterdir())
+    # Atomic publish: the bytes land in <name>.part and os.replace renames them into place,
+    # so a finished write leaves NO .part behind — and a crashed one leaves only a .part,
+    # which matches no name pattern and can never be offered as a restorable archive.
+    assert [n for n in names if n.endswith(".part")] == []
     assert len(names) == RESTORE_POINTS_KEEP  # the oldest was trimmed
     assert names == sorted(p.name for p in points)[1:]
     assert all(RESTORE_POINT_NAME_RE.fullmatch(n) for n in names)
