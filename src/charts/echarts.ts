@@ -11,10 +11,13 @@ import {
   TreemapChart,
 } from 'echarts/charts'
 import {
+  AriaComponent,
   DataZoomInsideComponent,
   GridComponent,
   LegendComponent,
+  MarkAreaComponent,
   MarkLineComponent,
+  MarkPointComponent,
   TooltipComponent,
   VisualMapComponent,
 } from 'echarts/components'
@@ -38,6 +41,7 @@ import type {
   TreemapSeriesOption,
 } from 'echarts/charts'
 import type {
+  AriaComponentOption,
   DataZoomComponentOption,
   GridComponentOption,
   LegendComponentOption,
@@ -68,6 +72,13 @@ echarts.use([
   LegendComponent,
   VisualMapComponent,
   MarkLineComponent,
+  // Chart grammar (2026-09-04): the post-FI wash is a markArea, the p10/p50/p90 arrivals are
+  // markPoints, and the opt-in textures ride the aria component's decal (Appearance › Chart
+  // patterns). Registered here or they draw NOTHING in the tree-shaken build — the real-echarts
+  // probes in C4/C5/C7 are what prove the registration, since jsdom never paints.
+  MarkAreaComponent,
+  MarkPointComponent,
+  AriaComponent,
   // Inside-only zoom (src/charts/timeZoom.ts): the range chips cover the common windows,
   // ctrl+wheel / drag-pan fine-tunes. The slider flavour is deliberately NOT registered —
   // a 30px scrub bar under every chart is chrome the minimal theme does not want.
@@ -105,6 +116,7 @@ export type EChartsOption = ComposeOption<
   | TooltipComponentOption
   | LegendComponentOption
   | VisualMapComponentOption
+  | AriaComponentOption
 >
 
 export { echarts }
