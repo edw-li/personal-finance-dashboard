@@ -5,6 +5,7 @@ import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type {
   CalendarEvent,
+  CalendarEventType,
   DividendOut,
   EsppLotOut,
   EsppLotsResponse,
@@ -22,7 +23,7 @@ import type {
 } from '../types/api'
 import { calendarEvent } from '../testing/calendarFixtures'
 import { formatDate, formatMonth } from '../utils/format'
-import { addMonths, currentMonthIso, todayIso } from '../utils/months'
+import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
 
 // Six modules, eleven clients, one snapshot: the page's whole contract is that these
@@ -320,12 +321,26 @@ const HOUSEHOLD = {
   marriage_date: null,
 }
 
+// DISTINCT types on purpose: Up next allows only ONE payday (2026-09-03 calendar spec
+// §14), so six paydays would legitimately rank down to a single row. None of them is a
+// deadline, so the strip's order stays plain date order.
+const UP_NEXT_TYPES: CalendarEventType[] = [
+  'payday',
+  'rsu_vest',
+  'ex_dividend',
+  'espp_purchase',
+  'espp_qualify',
+  'offering_start',
+]
+
 function upNextEvents(count = 6): CalendarEvent[] {
   return Array.from({ length: count }, (_, i) =>
     calendarEvent({
       date: daysAgo(-(i + 1)),
-      type: 'payday',
+      type: UP_NEXT_TYPES[i % UP_NEXT_TYPES.length],
       label: `Upcoming event ${i + 1}`,
+      amount: '6812.44',
+      direction: 'in',
     }),
   )
 }
@@ -1038,6 +1053,30 @@ it('renders a custom event as a plain row — no page to open (spec §9.2)', asy
   expect(screen.getByText(/Car insurance/).closest('a')).toBeNull()
   // Computed neighbors keep their links.
   expect(screen.getByText(/Upcoming event 1/).closest('a')?.getAttribute('href')).toBe('/paycheck')
+})
+
+// The ranking and the 45-day line (2026-09-03 calendar spec §14): a deadline that is close
+// leads, a second payday is dropped from the LIST, and the line still sums the whole window.
+it('ranks Up next with one payday and prints the 45-day line with amounts', async () => {
+  serve()
+  const today = todayIso()
+  vi.mocked(fetchCalendar).mockResolvedValue({
+    sources: [],
+    quote_as_of: null,
+    events: [
+      calendarEvent({ date: addDays(today, 3), type: 'payday', label: 'Payday', amount: '6812.44', direction: 'in' }),
+      calendarEvent({ date: addDays(today, 18), type: 'payday', label: 'Payday', amount: '6812.44', direction: 'in' }),
+      calendarEvent({ date: addDays(today, 10), type: 'tax_deadline', label: 'Tax deadline — Q3', amount: '1200.00', direction: 'out', basis: 'estimated' }),
+    ],
+  })
+  renderPage()
+  await screen.findByText(/Tax deadline — Q3/)
+  const items = Array.from(document.querySelectorAll('.up-next-list li')).map((li) => li.textContent)
+  expect(items).toHaveLength(2) // the second payday is dropped from the list
+  expect(items[0]).toContain('Tax deadline — Q3') // a deadline within 14 days leads
+  expect(items[0]).toContain('~−$1.2k')
+  // Both paydays are in the window even though only one is listed.
+  expect(screen.getByText('Next 45 days: +$13.6k in · ~−$1.2k out')).toBeTruthy()
 })
 
 it('a calendar failure dents only the strip, never the snapshot', async () => {
