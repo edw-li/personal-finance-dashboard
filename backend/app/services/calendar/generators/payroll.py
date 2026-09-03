@@ -11,8 +11,8 @@ from ..model import Event, Item, Window, make_event
 
 
 def person_suffix(name: str) -> str:
-    """The ONE person-tag grammar: `"<label> — <name>"` (calendar_events.person_suffix's
-    definition, kept byte-identical — the frontend's stripPersonSuffix peels it)."""
+    """The ONE person-tag grammar: `"<label> — <name>"` — this is its definition, and the
+    frontend's stripPersonSuffix peels it."""
     return f" — {name}"
 
 
