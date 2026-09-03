@@ -20,6 +20,7 @@ import {
   parseRetire,
   parseSale,
   readEntries,
+  toWireDecimal,
   withEntries,
 } from './scenarioUrl'
 
@@ -45,6 +46,23 @@ describe('wire tokens', () => {
   it('accepts canonical decimals only', () => {
     for (const ok of ['0', '0.15', '250', '250.00', '-0.5', '23500']) expect(isWireDecimal(ok)).toBe(true)
     for (const bad of ['', '.', '5.', '.5', '+5', '1e3', '$5', '1,000', ' 5']) expect(isWireDecimal(bad)).toBe(false)
+  })
+
+  // The three spellings canonicalAmount hands back VERBATIM. Unnormalized, "+15" reaches
+  // decimal.ts, whose PLAIN pattern has no "+", and THROWS inside the box's own range check.
+  it('normalizes the tolerant spellings a box can produce, and refuses the rest', () => {
+    expect(toWireDecimal('+15')).toBe('15')
+    expect(toWireDecimal('200000.')).toBe('200000')
+    expect(toWireDecimal('+0.15')).toBe('0.15')
+    expect(toWireDecimal('.5')).toBe('0.5')
+    expect(toWireDecimal('-.5')).toBe('-0.5')
+    expect(toWireDecimal('+.5')).toBe('0.5')
+    expect(toWireDecimal(' 250.00 ')).toBe('250.00')
+    // Already canonical: verbatim, so canonicalizing a server figure is a no-op.
+    for (const ok of ['0', '0.15', '-0.5', '23500']) expect(toWireDecimal(ok)).toBe(ok)
+    for (const bad of ['', '.', '+', '-', '1e3', '$5', '1,000', 'abc', '1.2.3', '5-']) {
+      expect(toWireDecimal(bad)).toBeNull()
+    }
   })
 })
 

@@ -7,6 +7,7 @@ import { formatCurrency } from '../utils/format'
 import { shiftPoint } from '../utils/percent'
 import { compareDecimals, decimalsIn, subtractDecimals, trimZeros } from './decimal'
 import DeltaChip from './DeltaChip'
+import { toWireDecimal } from './scenarioUrl'
 import './sandbox.css'
 
 // A labelled range above an AmountInput of the same kind, on ONE wire value (2026-09-03
@@ -79,11 +80,17 @@ export default function SliderBox({
       onChange('', true)
       return
     }
-    if (!isAmount(text, { expressions: false })) {
+    // Two gates, both this control's own. `isAmount` refuses the garbage; `toWireDecimal`
+    // then normalizes the three spellings canonicalAmount hands back VERBATIM ("+15",
+    // "200000.", ".5"), because the comparison below — and the codec that reads the URL
+    // afterwards — speak only the wire grammar. Normalize BEFORE the percent shift, so the
+    // shift is always given a decimal it can move.
+    const typed = toWireDecimal(canonicalAmount(text, { expressions: false }))
+    if (!isAmount(text, { expressions: false }) || typed === null) {
       setBoxError(`${label} must be a number`)
       return
     }
-    const wire = fromBox(canonicalAmount(text, { expressions: false }))
+    const wire = fromBox(typed)
     if (compareDecimals(wire, min) < 0 || compareDecimals(wire, max) > 0) {
       setBoxError(`${label} must be between ${display(min)} and ${display(max)}`)
       return

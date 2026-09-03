@@ -122,6 +122,46 @@ describe('SliderBox', () => {
     expect(box().getAttribute('aria-describedby')).toBe(alert.id)
   })
 
+  // canonicalAmount is deliberately IDEMPOTENT — "+15" and "200000." come back verbatim —
+  // and decimal.ts's exact arithmetic THROWS on a leading "+". Unnormalized, the box's own
+  // range check was the throw site, so a perfectly ordinary keystroke took the card down
+  // before any onChange fired.
+  it('normalizes the spellings canonicalAmount hands back verbatim', () => {
+    const onChange = mount()
+    fireEvent.focus(box())
+    fireEvent.change(box(), { target: { value: '+15' } })
+    fireEvent.blur(box())
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(onChange).toHaveBeenLastCalledWith('0.15', true)
+
+    fireEvent.focus(box())
+    fireEvent.change(box(), { target: { value: '17.' } })
+    fireEvent.blur(box())
+    expect(onChange).toHaveBeenLastCalledWith('0.17', true)
+
+    // ".5" is half a percent, not a refusal: the leading zero the wire grammar wants is
+    // added here rather than left for the codec to drop.
+    fireEvent.focus(box())
+    fireEvent.change(box(), { target: { value: '.5' } })
+    fireEvent.blur(box())
+    expect(onChange).toHaveBeenLastCalledWith('0.005', true)
+  })
+
+  it('normalizes a money box the same way, and still refuses what is left', () => {
+    const onChange = mount({ kind: 'money', value: '250', actual: '100.00', min: '0', max: '500', step: '5' })
+    fireEvent.focus(box())
+    fireEvent.change(box(), { target: { value: '+300.' } })
+    fireEvent.blur(box())
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(onChange).toHaveBeenLastCalledWith('300', true)
+
+    // Nothing normalization can rescue still earns the box's OWN sentence, never a throw.
+    fireEvent.focus(box())
+    fireEvent.change(box(), { target: { value: '+' } })
+    fireEvent.blur(box())
+    expect(screen.getByRole('alert').textContent).toBe('Traditional 401(k) must be a number')
+  })
+
   it('snapToStep uses the step’s own decimals', () => {
     expect(snapToStep('0.15500000000000003', '0.005')).toBe('0.155')
     expect(snapToStep('255.00000001', '5')).toBe('255')

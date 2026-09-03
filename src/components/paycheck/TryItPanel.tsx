@@ -5,7 +5,7 @@ import CompareTable, { type CompareRow } from '../../sandbox/CompareTable'
 import { compareDecimals } from '../../sandbox/decimal'
 import PresetRow from '../../sandbox/PresetRow'
 import SandboxPanel from '../../sandbox/SandboxPanel'
-import { readEntries } from '../../sandbox/scenarioUrl'
+import { readEntries, toWireDecimal } from '../../sandbox/scenarioUrl'
 import SliderBox from '../../sandbox/SliderBox'
 import { useSandbox, type PinResult, type SandboxSpec } from '../../sandbox/useSandbox'
 import type {
@@ -85,14 +85,14 @@ type NumericKnob = Exclude<PaycheckKnob, 'hsa_coverage'>
  * SliderBox and BoxKnob canonicalize with `canonicalAmount`, which is deliberately tolerant
  * and IDEMPOTENT: "200000." and "+15" come back verbatim rather than normalized. Writing
  * either into the URL would put an entry there that `decodePaycheck` drops on the very next
- * render — the knob would snap back to "actual" with nothing said. So the two spellings the
- * boxes can produce are normalized here, and anything the fence still refuses is not
- * written at all.
+ * render — the knob would snap back to "actual" with nothing said. `toWireDecimal` is the
+ * grammar's own normalizer for exactly those spellings (SliderBox runs it too, since the
+ * unsigned form is also what `decimal.ts` can compare without throwing); this adds the
+ * PER-KNOB fence on top, and anything it still refuses is not written at all.
  */
 function wireOf(key: NumericKnob, raw: string): string | null {
-  const unsigned = raw.startsWith('+') ? raw.slice(1) : raw
-  const text = unsigned.endsWith('.') ? unsigned.slice(0, -1) : unsigned
-  return acceptKnob(key, text) ? text : null
+  const text = toWireDecimal(raw)
+  return text !== null && acceptKnob(key, text) ? text : null
 }
 
 export default function TryItPanel({
