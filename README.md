@@ -63,6 +63,36 @@ grammar answers the same questions everywhere. Design record:
   (see 4.4) apart from a real error, and offers Reload plus Copy details (message, stack, route, build
   hash, last `/system/status`).
 
+## Calendar
+
+**/calendar** is the forward engine: every dated thing the household cares about, with the money on
+it. Design record:
+[`docs/superpowers/specs/2026-09-03-calendar-design.md`](docs/superpowers/specs/2026-09-03-calendar-design.md).
+
+- **Computed on read, never stored.** `GET /calendar?start&end` composes vests, paydays, ESPP dates,
+  ex-dividends, tax deadlines, card fee / credit-reset / anniversary events, the monthly-update
+  reminder and your own custom events from the same services the owning pages use — so a figure here
+  is never a second, staler copy of one on **/comp**, **/paycheck** or **/taxes**. Each event carries
+  `amount`, `direction`, `basis` (confirmed / scheduled / estimated) and `items[]`, and the answer
+  ends with a `sources[]` health list saying what each generator could and could not see (six cards
+  without an `opened_on` produce no card events, and the footer says so).
+- **Folded, not repeated.** Four grants vesting on one date are one chip with the total; paydays fold
+  across people. Three chips cap a day, the rest become **+N more** opening a day drawer; the grid is
+  an ARIA grid with a roving tabindex, and the visible month is `?month=YYYY-MM` (`?view=list`,
+  `?add=1&date=` complete the URL grammar). A four-tile cash-flow strip and per-week gutters sum the
+  visible month in integer cents.
+- **Your edits ride on top.** `PUT /calendar/overrides/{key}` stores only what you typed — done,
+  hidden, a note, your own figure — keyed by the event's stable `source:entity_ref:date`. An override
+  whose source disappears is silently unmatched, never an error.
+- **One ICS builder, two doors.** `GET /calendar/export.ics?start&end` is the "Add to calendar (.ics)"
+  download (bearer, 400-day fence); `GET /calendar/feed.ics?token=` is the subscription feed for a
+  phone or desktop calendar app — same renderer, stable UIDs, `VALARM` on deadlines, `ETag`/304 on
+  re-polls. Set `PUBLIC_URL` so the links inside each event point back at your deploy. Tokens are
+  minted, listed and revoked in Settings → **Calendar feed**, which also owns the monthly-update
+  reminder day; see **Calendar feed tokens** under Security notes for the credential's posture.
+- **Overview "Up next"** ranks the same events — deadlines due within 14 days first, at most one
+  payday, five rows — and adds one line for what the next 45 days move in and out.
+
 ---
 
 ## Part 0 — Before you start (on your local machine)
@@ -289,6 +319,7 @@ Fill in every value:
 | `ADMIN_PASSWORD` | your login password, 8–72 bytes (bcrypt limit) |
 | `OCI_*` | backup settings — fill in during Part 5 (values may be blank until then; they're only read by the backup script) |
 | `NVIDIA_API_KEY` | optional — powers the ✦ assistant (build.nvidia.com); blank disables it; a key saved in Settings overrides it |
+| `PUBLIC_URL` | optional — `https://<public-ip>` (no trailing slash). The base the calendar's ICS events link back to; blank leaves a bare path, which a phone's calendar app cannot open |
 
 ### 3.3 Build and start
 
