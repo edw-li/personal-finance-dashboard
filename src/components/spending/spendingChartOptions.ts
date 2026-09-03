@@ -341,7 +341,10 @@ export function heatmapOption({
     grid: grid('heatmap'),
     tooltip: itemTooltip<{ value?: unknown }>({
       body: (p) => {
-        const [c, r, v] = (p.value ?? []) as [number, number, number]
+        // Defensive on the SHAPE, not just on null: a heatmap item param carries the
+        // [col, row, value] triple, and destructuring anything else would throw inside a
+        // formatter — where echarts has no boundary and the whole card would blank.
+        const [c, r, v] = (Array.isArray(p.value) ? p.value : []) as [number, number, number]
         const dollars = raw[r]?.[c]
         if (dollars === null || dollars === undefined) return null
         const label = `${name(r)} · ${monthLabels[c] ?? ''}`

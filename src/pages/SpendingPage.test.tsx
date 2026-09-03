@@ -26,7 +26,6 @@ vi.mock('../components/EChart', async () => {
       ariaLabel,
       onLegendChange,
       onDataZoom,
-      exportConfig,
       animateEntrance = true,
     }: {
       option: {
@@ -37,7 +36,7 @@ vi.mock('../components/EChart', async () => {
         }[]
         legend?: { selected?: Record<string, boolean> }
         dataZoom?: { startValue?: number; endValue?: number }[]
-        tooltip?: { valueFormatter?: (value: unknown) => string }
+        tooltip?: { formatter?: (params: unknown) => string }
         yAxis?: {
           min?: number | ((extent: { min: number; max: number }) => number)
           max?: number | ((extent: { min: number; max: number }) => number)
@@ -47,7 +46,6 @@ vi.mock('../components/EChart', async () => {
       ariaLabel?: string
       onLegendChange?: (selected: Record<string, boolean>) => void
       onDataZoom?: (window: { startValue: number; endValue: number }) => void
-      exportConfig?: { name: string }
       animateEntrance?: boolean
     }) =>
       createElement('div', {
@@ -60,8 +58,10 @@ vi.mock('../components/EChart', async () => {
           .join('|'),
         'data-legend-selected': JSON.stringify(option.legend?.selected ?? null),
         'data-zoom': JSON.stringify(option.dataZoom?.[0] ?? null),
-        'data-pct-sample': option.tooltip?.valueFormatter?.(0.35) ?? '',
-        'data-export-name': exportConfig?.name ?? '',
+        'data-pct-sample':
+          option.tooltip?.formatter?.([
+            { seriesName: 'Savings rate (actual)', seriesType: 'line', value: 0.35 },
+          ]) ?? '',
         // A6: the bar stacks' raw data arrays — the absent-month gap pin reads them.
         'data-bar-data': JSON.stringify(
           (option.series ?? []).filter((s) => s.type === 'bar').map((s) => s.data ?? []),
@@ -76,7 +76,7 @@ vi.mock('../components/EChart', async () => {
             ? String(option.yAxis.max({ min: -1.8, max: 0.6 }))
             : '',
         onClick: () => onClick?.({ dataIndex: 0 }),
-        onMouseEnter: () => onLegendChange?.({ 'Net pay': false, '4% rule': true }),
+        onMouseEnter: () => onLegendChange?.({ 'Net pay': false, 'Sustainable spend': true }),
         // A SECOND legendselectchanged shape, carrying a map disjoint from mouseEnter's:
         // echarts hands each chart its OWN full name→shown map, so this is what a toggle
         // on a sibling chart (different series entirely) looks like arriving at the page.
@@ -241,9 +241,7 @@ describe('SpendingPage — chart aria', () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
     expect(
-      document.querySelector(
-        '[aria-label="Heatmap of spend per category per month — darker is more"]',
-      ),
+      document.querySelector('[aria-label="Heatmap of spend per category per month"]'),
     ).not.toBeNull()
     expect(
       document.querySelector(
@@ -260,20 +258,73 @@ describe('SpendingPage — tooltip fixes', () => {
     const samples = screen
       .getAllByTestId('echart')
       .map((el) => el.getAttribute('data-pct-sample'))
-    expect(samples).toContain('35.0%') // the savings chart's valueFormatter, sampled at 0.35
-    expect(samples).not.toContain('+35.0%')
+    // The savings chart's grammar tooltip, sampled at 0.35 — a rate is a level, unsigned.
+    expect(samples.some((sample) => sample?.includes('35.0%'))).toBe(true)
+    expect(samples.some((sample) => sample?.includes('+35.0%'))).toBe(false)
   })
 
   it('opts the bars chart into the export menu as "spending"', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
-    expect(screen.getAllByTestId('echart')[0].getAttribute('data-export-name')).toBe('spending')
+    expect(screen.getByRole('group', { name: 'Export spending' })).toBeTruthy()
   })
 
   it('captions every inside-zoom chart — bars, savings rate, trends — and nothing else', async () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
     expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(3)
+  })
+})
+
+describe('SpendingPage — the grammar mounts (charts C3)', () => {
+  it('mounts all six charts through ChartCard with labels and export rows', async () => {
+    renderPage()
+    await screen.findByText(/Monthly spend vs net pay/)
+    // bars, savings, trends, heatmap, flow — the pie shares the bars' card and shows only
+    // when a month is drilled.
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(5)
+    expect(screen.getByLabelText(/Stacked bar chart of monthly spending/)).toBeTruthy()
+    expect(screen.getByLabelText(/Heatmap of spend per category per month/)).toBeTruthy()
+    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(3)
+  })
+
+  it('F1: the heatmap opens on Row, switches modes, and hides dormant rows behind a toggle', async () => {
+    // The shared fixture has no never-spent category; F1's toggle needs one.
+    vi.mocked(fetchMatrix).mockResolvedValue(
+      matrixFixture({
+        categories: [
+          ...matrixFixture().categories,
+          { id: 4, name: 'Dormant', slug: 'dormant', sort_order: 3, is_active: true },
+        ],
+        series: [
+          ...matrixFixture().series,
+          { category_id: 4, values: ['0.00', '0.00'], budgets: [null, null] },
+        ],
+      }),
+    )
+    renderPage()
+    await screen.findByText(/Month × category heatmap/)
+    expect(screen.getByRole('button', { name: 'Row' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'vs average' }))
+    expect(screen.getByRole('button', { name: 'vs average' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Show 1 dormant/ }))
+    expect(screen.getByRole('button', { name: /Hide 1 dormant/ })).toBeTruthy()
+  })
+
+  it('the hero tiles follow the VIEWED month, not the latest one', async () => {
+    renderPage()
+    await screen.findByText(/Monthly spend vs net pay/)
+    const spendTile = (label: string) =>
+      screen.getByText(label).closest('.stat-tile')?.querySelector('.stat-value')?.textContent
+    expect(spendTile('Spend — Jul 2026')).toBe('$2,580.00')
+    expect(screen.getByText('57.0%')).toBeTruthy() // July's rate
+    fireEvent.click(screen.getAllByTestId('echart')[0]) // drill June (dataIndex 0)
+    await screen.findByText('Spend — Jun 2026')
+    expect(spendTile('Spend — Jun 2026')).toBe('$2,750.00') // June's total, not July's
+    expect(screen.getByText('54.2%')).toBeTruthy()
+    expect(screen.queryByText('57.0%')).toBeNull()
   })
 })
 
@@ -369,7 +420,7 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
     expect(bars.getAttribute('data-legend-selected')).toBe(
       JSON.stringify({ 'Total budget': false }),
     )
-    fireEvent.mouseEnter(bars) // stands in for legendselectchanged {'Net pay': false, '4% rule': true}
+    fireEvent.mouseEnter(bars) // stands in for legendselectchanged {'Net pay': false, 'Sustainable spend': true}
     // Rebuild the options with a fresh identity — a range pick, which the scope row turns
     // into a URL write and the page mirrors back into `range` (the shared default is 1Y,
     // so All is the change here).
@@ -378,7 +429,7 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
       JSON.parse(
         screen.getAllByTestId('echart')[0].getAttribute('data-legend-selected') ?? '{}',
       ),
-    ).toEqual({ 'Total budget': false, 'Net pay': false, '4% rule': true })
+    ).toEqual({ 'Total budget': false, 'Net pay': false, 'Sustainable spend': true })
   })
 
   it('merges a sibling chart’s picks instead of clobbering — no series resurrects', async () => {
@@ -398,7 +449,7 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
     expect(JSON.parse(legendCharts()[0].getAttribute('data-legend-selected') ?? '{}')).toEqual({
       'Total budget': false,
       'Net pay': false, // STAYS hidden — the whole point
-      '4% rule': true,
+      'Sustainable spend': true,
       Rent: false, // and the sibling's pick rides along, inert where no series claims it
     })
   })
