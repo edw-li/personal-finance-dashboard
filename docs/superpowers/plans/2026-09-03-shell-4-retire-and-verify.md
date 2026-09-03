@@ -1,0 +1,110 @@
+# Shell 4 — Retire the old controls and verify the shell — Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** With every page migrated (Plans 2 and 3), delete the components and CSS the shell replaced, prove nothing still references them, bring the spec and README in line with what shipped, and run the full suites plus a two-theme visual smoke — per `docs/superpowers/specs/2026-09-03-shell-grammar-design.md` §5 success criteria and §16 phase 4.
+
+**Architecture:** Deletions are guarded by grep: a file or rule is removed only after the search for its importers/selectors comes back empty. File deletions are `git rm`; CSS rule deletions are edits. This plan runs LAST in the overnight batch because deletions are the one class of change a human may want to see coming.
+
+**Tech Stack:** git, ripgrep/grep, vitest, tsc, eslint, vite build, pytest; the audit's headless Edge walk (`playwright-core` from the npx cache with the Node-20 version spoof) for the smoke.
+
+**Prerequisites:** Plans 1a, 1b, 1c, 2, 3 merged into `main`; dev stack runnable (backend on 8000 with the token_version migration applied to the dev DB, frontend on 5173).
+
+---
+
+### Task 1: Delete the replaced components
+
+**Files:**
+- Delete: `src/components/MonthRibbon.tsx`, `src/components/MonthRibbon.test.tsx`, `src/components/RangeChips.tsx` (+ `RangeChips.test.tsx` if present), `src/pages/PlaceholderPage.tsx` (+ test if present)
+
+- [ ] **Step 1: Prove they are unreferenced**
+
+```bash
+grep -rn "components/MonthRibbon'\|from './MonthRibbon'\|components/RangeChips'\|from './RangeChips'\|PlaceholderPage" src --include=*.ts --include=*.tsx | grep -v "^src/components/MonthRibbon\|^src/components/RangeChips\|^src/pages/PlaceholderPage"
+```
+
+Expected: no output. (The shell's ribbon is `src/components/shell/MonthRibbon.tsx` — the path filter above excludes only the OLD files; a hit on `shell/MonthRibbon` is fine and must NOT be deleted.) If anything still imports an old file, stop and migrate that importer first (it is a Plan 3 miss).
+
+- [ ] **Step 2: Delete**
+
+```bash
+git rm src/components/MonthRibbon.tsx src/components/MonthRibbon.test.tsx src/components/RangeChips.tsx src/pages/PlaceholderPage.tsx
+# plus RangeChips.test.tsx / PlaceholderPage.test.tsx if they exist
+```
+
+- [ ] **Step 3: Check** `npx tsc -b && npx vitest run src/components` → green.
+
+- [ ] **Step 4: Commit** `git commit -m "chore(shell): retire the old MonthRibbon, RangeChips and PlaceholderPage"`
+
+---
+
+### Task 2: Delete the replaced CSS
+
+**Files:**
+- Modify: `src/components/panels.css`, `src/pages/NetWorthPage.css`, `src/pages/PaycheckPage.css`, `src/pages/PortfolioPage.css`, `src/pages/CreditCardsPage.css`, `src/pages/SpendingPage.css` (whichever still carry the rules below)
+
+- [ ] **Step 1: For each selector, grep for users before deleting**
+
+| Selector(s) | Grep | Delete when |
+|---|---|---|
+| `.page-header`, `.page-header h1`, `.page-header .spacer` (panels.css) | `grep -rn 'page-header\|className="spacer"' src --include=*.tsx` | no hits outside `shell/` (PageFrame uses `.page-frame-*`) |
+| `.month-ribbon`, `.month-chip*` old ribbon rules (panels.css) | `grep -rn 'month-ribbon\|month-chip' src --include=*.tsx` | the only hits are in `shell/MonthRibbon.tsx`, and those classes are styled in `shell.css` — if `shell/MonthRibbon.tsx` reuses the `.month-ribbon`/`.month-chip` names from panels.css, MOVE the rules into `shell.css` instead of deleting |
+| `.segmented`, `.segmented button*` (panels.css) | `grep -rn 'className="segmented\|className={`segmented' src --include=*.tsx` | no hits outside `shell/Segmented.tsx`; same move-not-delete rule if the shell component reuses the class names |
+| `.range-chips*` | `grep -rn 'range-chips' src` | no hits |
+| `.networth-owner-row*`, `.paycheck-person-row*`, `.portfolio-owner-row*`, the Credit-cards owner row class | `grep -rn '<name>' src --include=*.tsx` | no hits |
+| `.header-actions` (Portfolio) | `grep -rn 'header-actions' src --include=*.tsx` | no hits |
+| `.loading-fallback` (Calendar) | `grep -rn 'loading-fallback' src` | no hits |
+
+- [ ] **Step 2: Delete the dead rules**; leave anything still referenced.
+
+- [ ] **Step 3: Check** `npx vitest run && npx tsc -b && npm run build` → green; the build's CSS size should drop a little.
+
+- [ ] **Step 4: Commit** `git commit -am "chore(shell): remove the page-header, old ribbon/segmented/range-chip and owner-row CSS"`
+
+---
+
+### Task 3: Success-criteria sweep (spec §5)
+
+- [ ] Run and expect NO output from each:
+
+```bash
+grep -rn 'className="page-header"\|className="header-actions"' src/pages
+grep -rn "from '../components/PageSkeleton'" src/pages
+grep -rn 'className="error-banner"' src --include=*.tsx | grep -v 'src/components/shell/'
+grep -rn '>Loading…<\|Loading…</p>' src/pages
+grep -rn 'SkeletonCard' src/pages
+```
+
+- [ ] `src/components/PageSkeleton.tsx`: if `SkeletonCard` is now used only by `shell/Feed.tsx` and `PageSkeleton` only by `shell/PageFrame.tsx`, leave the module where it is (two importers, both shell) — do not move files in this plan. If it exports anything with zero importers (e.g. a `SkeletonTiles` variant), remove that export and its test case.
+
+- [ ] Commit any trims: `git commit -am "chore(shell): drop unused PageSkeleton variants"`
+
+---
+
+### Task 4: Spec and README follow-through
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-09-03-shell-grammar-design.md` §11 (light token values and acceptance), §5 (the `scope` prop became `scopeRow`), §6 (`owner: { joint, all }`)
+- Modify: `README.md` frontend section
+
+- [ ] **Step 1: Spec §11** — replace the "starting light values" hexes with the shipped ones from `src/theme/tokens.ts` (read the file; do not type from memory), state that acceptance is ≥ 4.5:1 on BOTH `--bg` and `--surface` for text/muted/positive/negative/warn/accent, ≥ 3:1 for the eight slots and `--other-series`, and that `--warn` equals `--chart-4` in both themes; mention `--on-accent`. **§5** — note that PageFrame takes `scopeRow?: ReactNode` and pages compose `<ScopeBar …/>` into it (the `scope` declaration object in the original API was folded into ScopeBar's props). **§6** — add `owner: { joint: false, all: false }` (Paycheck) and the legacy `month=YYYY-MM-DD` acceptance.
+
+- [ ] **Step 2: README** — in the frontend section, add a short "Shell primitives" paragraph: `PageFrame` (title row, actions, subheader, sticky scope row, five states), `ScopeBar` + `useScope` (URL grammar `owner=all|<id>|joint`, `range=all|1y|ytd`, `month=YYYY-MM`, remembered owner/range in `finance.scope`), `MonthRibbon` 2.0 (two-tone coverage, `GET /coverage`), `Segmented` (toggle/tabs/steps/chips), `Feed`/`FeedBanner`, `ThemeProvider` (`finance.theme`, `finance.density`; charts re-theme via versioned ECharts themes + option recolor), the command palette registry, session renewal (`POST /auth/renew`, `token_version`), and the `ShellErrorBoundary`. Keep it to one screen; link the spec.
+
+- [ ] **Step 3: Commit** `git add docs README.md && git commit -m "docs(shell): spec values as shipped; README shell primitives"`
+
+---
+
+### Task 5: Full verification
+
+- [ ] **Frontend:** `npx tsc -b && npx eslint . && npx vitest run && npm run build` — all green (a lone `waitFor` timeout under load is a known flake: re-run that file alone once).
+- [ ] **Backend:** from `backend/`, `.venv/Scripts/python.exe -m pytest -q` with `FINANCE_TEST_DB=finance_test_shell4` — all green; `alembic heads` shows exactly one head (`b8e4d17c2a90`).
+- [ ] **Dev DB:** `alembic upgrade head` against the dev database (adds `users.token_version`); log in once to confirm the new `ver` claim is issued and `POST /auth/renew` returns 200.
+- [ ] **Smoke, both themes:** with backend + frontend running, run the headless walk over all routes — `/`, `/?owner=2`, `/net-worth`, `/net-worth?month=<an entered month>&range=ytd`, `/spending`, `/spending?month=<month>`, `/portfolio?owner=joint`, `/credit-cards`, `/paycheck?owner=2`, `/update`, `/comp`, `/espp`, `/taxes`, `/projection`, `/calendar`, `/settings#appearance`, `/nope` — first with `localStorage.finance.theme='dark'`, then `'light'`, then once with `finance.density='compact'`. For each: no console errors, a `.page-frame-header h1`, the sticky row present where the spec says (`.page-frame-scope` on Net worth, Spending, Portfolio, Credit cards, Monthly update, Overview), `is-stuck` after `window.scrollTo(0, 1200)` on Net worth, ECharts canvases painted (non-blank pixels) under both themes, palette (Ctrl+K) opens and finds "Appearance", and the sidebar footer shows the build hash and health. Save screenshots to the session scratchpad under `shell-smoke/<theme>/<route>.png`.
+- [ ] **Record** the results (counts, any flake, any visual nit) in the memory note for the batch.
+
+---
+
+## Self-review
+
+**Spec coverage:** §16 phase 4 (remove PlaceholderPage, old palette list — already replaced by 1c's registry, so only verify no dead file remains — unused PageSkeleton variants, control CSS; full suites; two-theme smoke; README) → Tasks 1–5; §5 success criteria grep → Task 3. **Placeholders:** none — every deletion has its grep and its condition. **Type consistency:** n/a (no new code).

@@ -1136,6 +1136,42 @@ Change log → Activity card and per-month history; import history with stored r
 the app's own export; undo for saves/deletes; backup verify; Settings information architecture
 with a generic preferences endpoint.
 
+### Post-fix ranking (2026-09-03, after the projection / card-setup / paycheck-seed fixes)
+
+**Data actions the owner can take today, no code:** delete the phantom September 2026 spending
+rows (`DELETE /api/v1/spending/months/2026-09-01`, balances untouched); enter the 2026 federal
+bracket, SS wage base and capital-gains thresholds on the Taxes page (the stored 2026 tables are
+2025's); enter the 2026 contribution limits in Settings so the pace strip works; map the 19 card
+categories as described in the credit-card fix notes.
+
+**Ranked product changes:**
+1. Wizard decoupling + implicit-zero prevention + a repair action for zero-filled months (§4
+   ideas 1–3). The phantom month recurs every balances-only save.
+2. Coverage honesty (§3 idea 1, §0b): "entered" = at least one real value; flag the missing
+   month, not the zero-filled one; two-tone ribbon; money-flow YTD basis; per-card "as of".
+3. Savings definition unification: the projection now counts payroll savings while every
+   savings-rate tile still uses net pay − spend (Overview YTD reads −2.2% beside a projection
+   saving ≈ $5.6k/mo). One "total savings" service, cash and total shown side by side.
+4. Category kind (fixed / discretionary / transfer): "Taxes" and "Investments" are counted as
+   spend, inflating annual spend and therefore the FI target; excluding transfers moves the
+   headline FI figures again.
+5. Bracket staleness badge + index-by-percent helper + per-table verified toggle (§9 idea 2).
+6. RSU vest stream in the projection: the remaining gap between the momentum chart and the model
+   is ≈ $360k of scheduled vests through 2030; a dated vest stream (net of the 22%+10.23%+FICA
+   withholding already in `withholding_calc`) closes it. Then reconcile the two charts (§5 ideas
+   2–3) and add the sensitivity tornado.
+7. Employer-exposure tile (NVDA holdings + ESPP lots + unvested RSUs as % of net worth) on
+   Overview and Net worth — the household's largest single risk, computed nowhere.
+8. Shell grammar (§2 ideas 1–8): PageFrame, shared owner/range/month scope in the URL, findable
+   palette, session renewal, theme bridge.
+9. Chart grammar + the specific visual fixes (§12 ideas 1–10).
+10. Planning sandboxes (§8 idea 1, §9 ideas 5–6, §5 idea 5).
+11. Calendar: one chip per vest date with its value, folded paydays, card fee/credit events,
+    recurrence, subscription feed (§10 ideas 1–3, 8–9).
+12. Assistant grounding (§11 ideas 1–6).
+13. Two-earner empty-state gating (§5 idea 13).
+14. Data lifecycle (§4 ideas 6–8).
+
 ### Quick wins (small, high-visibility)
 Pay periods / percentages rendered as currency in the tax form · hero values clipping in narrow
 windows · 36-chip Deactivate wall → one outage banner · Overview "Refresh" that doesn't refresh
