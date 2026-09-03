@@ -5,6 +5,8 @@ ceiling, plaintext-once tokens."""
 import hashlib
 from datetime import UTC, date, datetime, timedelta
 
+import icalendar
+
 from app.models import CalendarFeedToken
 
 CALENDAR = "/api/v1/calendar"
@@ -163,3 +165,26 @@ async def test_feed_is_rate_limited_per_ip(client):
     for _ in range(60):
         assert (await client.get(f"{CALENDAR}/feed.ics?token={'z' * 43}")).status_code == 404
     assert (await client.get(f"{CALENDAR}/feed.ics?token={'z' * 43}")).status_code == 429
+
+
+async def test_feed_parses_with_icalendar_and_revalidates(client, auth_client, monkeypatch):
+    """A real RFC 5545 parser, not more of our own assertions: the folding, escaping and
+    CRLF the hand-rolled renderer emits have to survive the library calendar apps use.
+    `icalendar` is a pinned dev requirement, so a missing install is a hard error here
+    rather than a silent skip that would let a broken feed ship."""
+    freeze_today(monkeypatch)
+    await auth_client.post(
+        f"{CALENDAR}/events",
+        json={"date": "2026-09-12", "label": "Car insurance", "amount": "180", "direction": "out"},
+    )
+    _, plaintext = await make_token(auth_client)
+    del client.headers["Authorization"]
+    first = await client.get(f"{CALENDAR}/feed.ics?token={plaintext}")
+    assert first.status_code == 200
+    parsed = icalendar.Calendar.from_ical(first.content)
+    summaries = [str(component.get("SUMMARY")) for component in parsed.walk("VEVENT")]
+    assert "Car insurance · -$180.00" in summaries
+    revalidated = await client.get(
+        f"{CALENDAR}/feed.ics?token={plaintext}", headers={"If-None-Match": first.headers["etag"]}
+    )
+    assert revalidated.status_code == 304
