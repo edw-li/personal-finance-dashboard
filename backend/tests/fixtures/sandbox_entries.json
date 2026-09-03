@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "note": "Encoder/decoder parity pins for the sandbox `whatif` URL grammar (2026-09-03 planning-sandboxes spec §6, §12). Read by src/sandbox/scenarioUrl.test.ts and backend/tests/test_sandbox_links.py; both must produce `url` from `entries` byte for byte.",
+  "cases": [
+    {
+      "page": "taxes",
+      "entries": [
+        "sale:7:40",
+        "sale:9:10:62.50:S",
+        "sale:11:5::S",
+        "espp:3",
+        "espp:4:150.0000",
+        "qualified_dividends:null",
+        "trad_401k_contributions:23500"
+      ],
+      "url": "/taxes?whatif=sale%3A7%3A40&whatif=sale%3A9%3A10%3A62.50%3AS&whatif=sale%3A11%3A5%3A%3AS&whatif=espp%3A3&whatif=espp%3A4%3A150.0000&whatif=qualified_dividends%3Anull&whatif=trad_401k_contributions%3A23500"
+    },
+    {
+      "page": "paycheck",
+      "entries": ["hsa_coverage:family", "hsa_per_check:250", "trad_401k_pct:0.15"],
+      "url": "/paycheck?whatif=hsa_coverage%3Afamily&whatif=hsa_per_check%3A250&whatif=trad_401k_pct%3A0.15"
+    },
+    {
+      "page": "projection",
+      "entries": ["annual_return:0.06", "monthly_contribution:5400", "retire:2:2035-06"],
+      "url": "/projection?whatif=annual_return%3A0.06&whatif=monthly_contribution%3A5400&whatif=retire%3A2%3A2035-06"
+    },
+    {
+      "page": "taxes",
+      "entries": [],
+      "url": "/taxes"
+    }
+  ]
+}
