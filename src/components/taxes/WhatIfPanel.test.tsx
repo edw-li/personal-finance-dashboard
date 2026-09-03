@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type {
@@ -6,18 +7,36 @@ import type {
   EsppLotsResponse,
   HoldingOut,
   HoldingsResponse,
+  LimitsOut,
   TaxSummaryOut,
   WhatIfOut,
 } from '../../types/api'
 import WhatIfPanel from './WhatIfPanel'
 
-// Every request this panel makes is stubbed — the three modules it owns end to end.
+// Every request this panel makes is stubbed — the four modules it owns end to end.
 vi.mock('../../api/whatif', () => ({ runWhatIf: vi.fn() }))
 vi.mock('../../api/portfolio', () => ({ fetchHoldings: vi.fn() }))
 vi.mock('../../api/espp', () => ({ fetchLots: vi.fn() }))
+vi.mock('../../api/limits', () => ({ fetchLimits: vi.fn() }))
 import { fetchLots } from '../../api/espp'
+import { fetchLimits } from '../../api/limits'
 import { fetchHoldings } from '../../api/portfolio'
 import { runWhatIf } from '../../api/whatif'
+
+// The Δ bar rides a real ChartCard; only the canvas underneath is stood in for, so the
+// card's own chrome — the aria sentence it forwards (F11), the empty state — is exercised.
+vi.mock('../EChart', async () => {
+  const { createElement } = await import('react')
+  return {
+    default: ({ ariaLabel }: { ariaLabel?: string }) =>
+      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel }),
+  }
+})
+
+// The sandbox grammar's pin row and the hook both toast; nothing here asserts on them, but
+// a real provider would have to be mounted around every render.
+const toast = { success: vi.fn(), info: vi.fn(), error: vi.fn() }
+vi.mock('../ToastProvider', () => ({ useToast: () => toast }))
 
 // A promise this file settles by hand — the only way to hold two runs in flight at once and
 // choose which one answers first (TaxesPage.test.tsx's).
@@ -186,31 +205,68 @@ function resultFixture(overrides: Partial<WhatIfOut> = {}): WhatIfOut {
   }
 }
 
-// Anchored: "Run what-if" is a button too.
-const openButton = () =>
-  screen.getByRole('button', { name: /^(Open|Close) what-if$/ }) as HTMLButtonElement
-const runButton = () => screen.getByRole('button', { name: /Run what-if|Running/ }) as HTMLButtonElement
+// Anchored: "Open what-if" / "Close what-if" — the Run button is gone (spec §10: live).
+const openButton = () => screen.getByRole('button', { name: /^(Open|Close) what-if$/ }) as HTMLButtonElement
 const addSale = () => screen.getByRole('button', { name: 'Add sale' }) as HTMLButtonElement
 const addEsppSale = () => screen.getByRole('button', { name: 'Add ESPP sale' }) as HTMLButtonElement
 const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement
 
 // A tile is found by its LABEL, then read for the two things the contract is about: the
-// figure and the delta line's tone/glyph.
+// figure and the delta line's tone/glyph. The label is searched with getAllByText because
+// the compare table below carries row labels of its own ("Effective rate" is both a tile
+// and a row) — the tile is the match that sits inside one.
 function tile(label: string): HTMLElement {
-  const node = screen.getByText(label).closest('.stat-tile')
-  if (node === null) throw new Error(`no stat tile labelled ${label}`)
+  const node = screen
+    .getAllByText(label)
+    .map((match) => match.closest('.stat-tile'))
+    .find((found) => found !== null)
+  if (node === undefined) throw new Error(`no stat tile labelled ${label}`)
   return node as HTMLElement
 }
 
-// Opens the card and waits for both feeds to land.
+function Url() {
+  const l = useLocation()
+  return <span data-testid="url">{l.pathname + l.search}</span>
+}
+const url = () => screen.getByTestId('url').textContent
+
+function limitsFixture(): LimitsOut {
+  return {
+    year: 2024,
+    items: [
+      { key: 'limit_401k_elective', label: '401(k) elective deferral', value: '23500.00' },
+      { key: 'limit_415c_total', label: '415(c) total additions', value: null },
+      { key: 'limit_hsa_self', label: 'HSA — self-only', value: '4300.00' },
+      { key: 'limit_hsa_family', label: 'HSA — family', value: null },
+      { key: 'limit_espp_423', label: 'ESPP §423 annual', value: '25000.00' },
+    ],
+  }
+}
+
+function mount(entry = '/taxes', props: Partial<Parameters<typeof WhatIfPanel>[0]> = {}) {
+  const onApplyOverrides = vi.fn()
+  const view = render(
+    <MemoryRouter initialEntries={[entry]}>
+      <WhatIfPanel year={2024} onApplyOverrides={onApplyOverrides} {...props} />
+      <Url />
+    </MemoryRouter>,
+  )
+  return { ...view, onApplyOverrides }
+}
+
 async function openPanel() {
   fireEvent.click(openButton())
   await waitFor(() => expect(addSale()).toBeTruthy())
 }
 
+// The last body runWhatIf was asked for.
+const lastBody = () => vi.mocked(runWhatIf).mock.calls.at(-1)?.[0]
+
 beforeEach(() => {
+  localStorage.clear()
   vi.mocked(fetchHoldings).mockResolvedValue(holdingsFixture())
   vi.mocked(fetchLots).mockResolvedValue(lotsFixture())
+  vi.mocked(fetchLimits).mockResolvedValue(limitsFixture())
   vi.mocked(runWhatIf).mockResolvedValue(resultFixture())
 })
 
@@ -221,206 +277,171 @@ afterEach(() => {
 
 describe('WhatIfPanel', () => {
   it('mounts CLOSED and spends no request until it is opened', () => {
-    render(<WhatIfPanel year={2024} />)
-    const toggle = openButton()
-    expect(toggle.textContent).toBe('Open what-if')
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    // The whole point of the lazy feeds: the page is long and this card may never be used.
+    mount()
+    expect(openButton().textContent).toBe('Open what-if')
+    expect(openButton().getAttribute('aria-expanded')).toBe('false')
     expect(vi.mocked(fetchHoldings)).not.toHaveBeenCalled()
     expect(vi.mocked(fetchLots)).not.toHaveBeenCalled()
-    expect(screen.queryByRole('button', { name: 'Add sale' })).toBeNull()
+    expect(vi.mocked(fetchLimits)).not.toHaveBeenCalled()
+    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
   })
 
-  it('loads BOTH feeds on first open, and only once across a close/reopen', async () => {
-    render(<WhatIfPanel year={2024} />)
+  it('loads the three feeds on first open (once across a close/reopen) and runs the empty scenario for the baseline', async () => {
+    mount()
     await openPanel()
-
     expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(1)
-    expect(openButton().getAttribute('aria-expanded')).toBe('true')
-
+    expect(vi.mocked(fetchLimits)).toHaveBeenCalledWith(2024)
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledWith({ year: 2024, sales: [], espp_sales: [] }))
     fireEvent.click(openButton())
-    expect(screen.queryByRole('button', { name: 'Add sale' })).toBeNull()
     fireEvent.click(openButton())
     await waitFor(() => expect(addSale()).toBeTruthy())
-    // Reopening re-reads nothing: the ref, not the state, is what says "already fetched".
     expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(1)
   })
 
-  it('prefills Add sale from the first held security, then moves to the next one', async () => {
-    render(<WhatIfPanel year={2024} />)
+  it('Add sale prefills the first held security at its quote, writes the URL and runs at once; the second row moves on', async () => {
+    mount()
     await openPanel()
-
     fireEvent.click(addSale())
-    // The whole position at the latest quote, verbatim from the holdings feed.
+    expect(url()).toBe('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    await waitFor(() =>
+      expect(lastBody()).toEqual({ year: 2024, sales: [{ security_id: 7, shares: '100.0000', price: '62.50', term: 'long' }], espp_sales: [] }),
+    )
     expect((screen.getByLabelText('Sell') as HTMLSelectElement).value).toBe('7')
     expect(field('Sale 1 shares').value).toBe('100.0000')
-    expect(field('Sale 1 price').value).toBe('62.50')
-    const term = screen.getByRole('group', { name: 'Sale 1 term' })
-    expect(within(term).getByRole('button', { name: 'Long' }).getAttribute('aria-pressed')).toBe(
-      'true',
-    )
-
     fireEvent.click(addSale())
-    // The second row is the next security NOT already in a leg — two rows for one ticker
-    // would sell the same shares twice without ever tripping the oversell fence. QQQ is
-    // unpriced, so its price prefills blank (the omit case).
-    expect(field('Sale 2 shares').value).toBe('10.0000')
-    expect(field('Sale 2 price').value).toBe('')
-    // Both held securities are now in legs, so there is nothing left to add.
+    // QQQ is unpriced: no price field, the omit case.
+    expect(url()).toBe('/taxes?whatif=sale%3A7%3A100.0000%3A62.50&whatif=sale%3A9%3A10.0000')
     expect(addSale().disabled).toBe(true)
   })
 
-  it('posts exactly what was typed, with a blank price OMITTED from the body', async () => {
-    render(<WhatIfPanel year={2024} />)
-    await openPanel()
-    fireEvent.click(addSale())
-    fireEvent.change(field('Sale 1 shares'), { target: { value: '40' } })
-    fireEvent.change(field('Sale 1 price'), { target: { value: '' } })
-    fireEvent.click(within(screen.getByRole('group', { name: 'Sale 1 term' })).getByRole('button', {
-      name: 'Short',
-    }))
-    fireEvent.click(runButton())
-
-    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
-    expect(vi.mocked(runWhatIf)).toHaveBeenCalledWith({
-      year: 2024,
-      sales: [{ security_id: 7, shares: '40', term: 'short' }],
-      espp_sales: [],
-    })
-    // Not `price: ''` and not `price: undefined`: the KEY's absence is what asks the server
-    // for the security's latest quote (the blank-omit convention).
-    const body = vi.mocked(runWhatIf).mock.calls[0][0]
-    expect('price' in body.sales[0]).toBe(false)
+  it('typing shares debounces (400 ms) and a blank price is OMITTED; blur commits immediately', async () => {
+    vi.useFakeTimers()
+    try {
+      mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+      await act(async () => {})
+      fireEvent.change(field('Sale 1 shares'), { target: { value: '40' } })
+      expect(url()).toBe('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+      await act(async () => {
+        vi.advanceTimersByTime(400)
+      })
+      expect(url()).toBe('/taxes?whatif=sale%3A7%3A40%3A62.50')
+      fireEvent.change(field('Sale 1 price'), { target: { value: '' } })
+      fireEvent.blur(field('Sale 1 price'))
+      expect(url()).toBe('/taxes?whatif=sale%3A7%3A40')
+      await act(async () => {})
+      const body = lastBody()!
+      expect(body.sales).toEqual([{ security_id: 7, shares: '40', term: 'long' }])
+      expect('price' in body.sales[0]).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('prefills an ESPP leg from the first unsold lot and ships its sale price', async () => {
-    render(<WhatIfPanel year={2024} />)
+  it('a term click is immediate and spells S in the URL', async () => {
+    mount('/taxes?whatif=sale%3A7%3A40')
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Sale 1 term' })).toBeTruthy())
+    fireEvent.click(within(screen.getByRole('group', { name: 'Sale 1 term' })).getByRole('button', { name: 'Short' }))
+    expect(url()).toBe('/taxes?whatif=sale%3A7%3A40%3A%3AS')
+    await waitFor(() => expect(lastBody()?.sales[0].term).toBe('short'))
+  })
+
+  it('refuses an oversell / zero / bad price in the box’s words, spending no request and leaving the URL alone', async () => {
+    mount('/taxes?whatif=sale%3A7%3A40')
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    fireEvent.change(field('Sale 1 shares'), { target: { value: '200' } })
+    fireEvent.blur(field('Sale 1 shares'))
+    expect(screen.getByRole('alert').textContent).toContain('selling 200 VTI — only 100.0000 held')
+    expect(url()).toBe('/taxes?whatif=sale%3A7%3A40')
+    fireEvent.change(field('Sale 1 shares'), { target: { value: '0' } })
+    fireEvent.blur(field('Sale 1 shares'))
+    expect(screen.getByRole('alert').textContent).toContain('VTI: shares must be a number greater than 0')
+    fireEvent.change(field('Sale 1 price'), { target: { value: '-5' } })
+    fireEvent.blur(field('Sale 1 price'))
+    expect(screen.getByRole('alert').textContent).toContain('VTI: price must be a number greater than 0, or blank')
+    expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1)
+  })
+
+  it('prefills an ESPP leg from the first unsold lot at the lots quote and runs', async () => {
+    mount()
     await openPanel()
     fireEvent.click(addEsppSale())
-
-    // Labelled by purchase date + shares; the SOLD lot is not offered at all.
+    expect(url()).toBe('/taxes?whatif=espp%3A3%3A150.00000')
     const select = screen.getByLabelText('ESPP lot') as HTMLSelectElement
-    expect(select.value).toBe('3')
-    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
-      'Feb 28, 2026 — 30 sh',
-    ])
-    // Prefilled from the quote the lots table itself was priced at.
-    expect(field('ESPP sale 1 price').value).toBe('150.00000')
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Feb 28, 2026 — 30 sh'])
+    await waitFor(() => expect(lastBody()).toEqual({ year: 2024, sales: [], espp_sales: [{ lot_id: 3, sale_price: '150.00000' }] }))
+  })
 
-    fireEvent.click(runButton())
-    await waitFor(() =>
-      expect(vi.mocked(runWhatIf)).toHaveBeenCalledWith({
-        year: 2024,
-        sales: [],
-        espp_sales: [{ lot_id: 3, sale_price: '150.00000' }],
+  it('renders the two Δ tiles, the ten compare rows (NIIT from niit_tax) and the changed inputs as they arrived', async () => {
+    vi.mocked(runWhatIf).mockResolvedValue(
+      resultFixture({
+        baseline: { ...summaryFixture(2024, '376543.22', '0.246914'), niit: { taxable_income: '0.00', gains_amount: '1989.28', tax: '75.59', effective_rate: null } },
+        scenario: { ...summaryFixture(2024, '372222.22', '0.281234'), niit: { taxable_income: '0.00', gains_amount: '1989.28', tax: '0.00', effective_rate: null } },
+        delta: { ...resultFixture().delta, niit_tax: '-75.59' },
       }),
     )
-  })
-
-  it('refuses an oversell in the box’s own vocabulary, before spending a request', async () => {
-    render(<WhatIfPanel year={2024} />)
-    await openPanel()
-    fireEvent.click(addSale())
-    fireEvent.change(field('Sale 1 shares'), { target: { value: '200' } })
-    fireEvent.click(runButton())
-
-    // The server's own oversell sentence — one vocabulary, no round trip.
-    expect(screen.getByRole('alert').textContent).toContain('selling 200 VTI — only 100.0000 held')
-    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
-
-    fireEvent.change(field('Sale 1 shares'), { target: { value: '0' } })
-    fireEvent.click(runButton())
-    expect(screen.getByRole('alert').textContent).toContain(
-      'VTI: shares must be a number greater than 0',
-    )
-    fireEvent.change(field('Sale 1 shares'), { target: { value: '10' } })
-    fireEvent.change(field('Sale 1 price'), { target: { value: '-5' } })
-    fireEvent.click(runButton())
-    expect(screen.getByRole('alert').textContent).toContain(
-      'VTI: price must be a number greater than 0, or blank',
-    )
-    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
-  })
-
-  it('keeps Run shut until there is a leg to run', async () => {
-    render(<WhatIfPanel year={2024} />)
-    await openPanel()
-    expect(runButton().disabled).toBe(true)
-    fireEvent.click(addSale())
-    expect(runButton().disabled).toBe(false)
-    fireEvent.click(screen.getByRole('button', { name: 'Remove sale 1' }))
-    expect(runButton().disabled).toBe(true)
-  })
-
-  it('renders the delta tiles and the changed inputs exactly as they arrived', async () => {
-    render(<WhatIfPanel year={2024} />)
-    await openPanel()
-    fireEvent.click(addSale())
-    fireEvent.click(runButton())
-    await waitFor(() => expect(screen.getByText('Δ total tax')).toBeTruthy())
-
-    // The endpoint's own subtraction of two quantized summaries, formatted and nothing else.
-    const tax = tile('Δ total tax')
-    expect(tax.querySelector('.stat-value')?.textContent).toBe('$4,321.00')
-    // MORE tax is a WORSE outcome: the glyph follows the NUMBER (up) while the colour
-    // follows good/bad (negative) — the inversion StatTile's contract asks for explicitly.
-    const taxDelta = tax.querySelector('.stat-delta')
-    expect(taxDelta?.className).toContain('stat-delta-negative')
-    expect(taxDelta?.textContent).toContain('▲')
-    expect(taxDelta?.textContent).toContain('more tax than 2024 as stored')
-
-    const takeHome = tile('Δ take-home')
-    expect(takeHome.querySelector('.stat-value')?.textContent).toBe('-$4,321.00')
-    expect(takeHome.querySelector('.stat-delta')?.className).toContain('stat-delta-negative')
-    expect(takeHome.querySelector('.stat-delta')?.textContent).toContain(
-      '$376,543.22 → $372,222.22',
-    )
-
-    // A rate is a level, not a movement: both sides of it, from the two summaries.
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    await screen.findByText('Δ total tax')
+    expect(tile('Δ total tax').querySelector('.stat-value')?.textContent).toBe('$4,321.00')
+    expect(tile('Δ total tax').querySelector('.stat-delta')?.className).toContain('stat-delta-negative')
     expect(tile('Effective rate').querySelector('.stat-value')?.textContent).toBe('24.7% → 28.1%')
-
-    // "{label} — {before} → {after}": the label is the definition table's own text and
-    // carries a colon of its own, so the separator is an em dash — a second colon here
-    // would double-punctuate every capital-gains row.
-    expect(
-      screen.getByText('LTCG: Brokerage Gain/Loss — $12,000.00 → $30,500.00'),
-    ).toBeTruthy()
-    // The per-leg table, server figures verbatim.
+    const niit = screen.getByText('NIIT').closest('tr') as HTMLElement
+    expect(within(niit).getAllByRole('cell').map((c) => c.textContent)).toEqual(['NIIT', '$75.59', '$0.00', '-$75.59'])
+    expect(within(niit).getByText('-$75.59').className).toContain('delta-chip-positive') // less NIIT reads green
+    const takeHome = screen.getByText('Take-home').closest('tr') as HTMLElement
+    expect(within(takeHome).getAllByRole('cell').map((c) => c.textContent)).toEqual(['Take-home', '$376,543.22', '$372,222.22', '-$4,321.00'])
+    expect(screen.getByText('LTCG: Brokerage Gain/Loss — $12,000.00 → $30,500.00')).toBeTruthy()
     expect(screen.getByText('$1,250.00')).toBeTruthy()
+    // WHERE it moved, beside how much: the per-jurisdiction Δ bar, through the one chart
+    // mount the chart spec allows.
+    expect(
+      screen.getByLabelText('Change in tax by jurisdiction, scenario minus baseline'),
+    ).toBeTruthy()
   })
 
-  it('puts the server sentence in a role=alert and drops the stale scenario with it', async () => {
-    render(<WhatIfPanel year={2024} />)
-    await openPanel()
-    fireEvent.click(addSale())
-    fireEvent.click(runButton())
-    await waitFor(() => expect(screen.getByText('Δ total tax')).toBeTruthy())
+  it('says nothing moved rather than drawing seven bars of zero', async () => {
+    vi.mocked(runWhatIf).mockResolvedValue(
+      resultFixture({
+        delta: {
+          total_tax: '0.00',
+          take_home: '0.00',
+          federal_tax: '0.00',
+          state_tax: '0.00',
+          medicare_tax: '0.00',
+          social_security_tax: '0.00',
+          disability_tax: '0.00',
+          capital_gains_tax: '0.00',
+          effective_rate: null,
+        },
+      }),
+    )
+    mount('/taxes?whatif=sale%3A7%3A40')
+    expect(
+      await screen.findByText('Nothing moved — every jurisdiction computes to the stored year.'),
+    ).toBeTruthy()
+    expect(screen.queryByTestId('echart')).toBeNull()
+  })
 
+  it('an absent NIIT block prints the em dash', async () => {
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    const niit = (await screen.findByText('NIIT')).closest('tr') as HTMLElement
+    expect(within(niit).getAllByRole('cell').map((c) => c.textContent)).toEqual(['NIIT', '—', '—', '—'])
+  })
+
+  it('keeps the last result under the stale line when a run fails, in the server’s words', async () => {
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    await screen.findByText('Δ total tax')
     vi.mocked(runWhatIf).mockRejectedValueOnce(new ApiError('unknown input key: nope', 422))
-    fireEvent.click(runButton())
-
+    fireEvent.click(within(screen.getByRole('group', { name: 'Sale 1 term' })).getByRole('button', { name: 'Short' }))
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toContain('unknown input key: nope')
-    // The answer is a function of the legs; leaving the last one up would read as the
-    // answer for the ones now in the form.
-    expect(screen.queryByText('Δ total tax')).toBeNull()
+    expect(alert.textContent).toBe('unknown input key: nope — this scenario may be showing earlier data.')
+    expect(screen.getByText('Δ total tax')).toBeTruthy()
   })
 
   it('renders scenario warnings in the advisory register, never as an error', async () => {
-    vi.mocked(runWhatIf).mockResolvedValue(
-      resultFixture({
-        warnings: ['VTI: acquisition dates unknown — treated as long-term'],
-      }),
-    )
-    render(<WhatIfPanel year={2024} />)
-    await openPanel()
-    fireEvent.click(addSale())
-    fireEvent.click(runButton())
-
+    vi.mocked(runWhatIf).mockResolvedValue(resultFixture({ warnings: ['VTI: acquisition dates unknown — treated as long-term'] }))
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
     const warning = await screen.findByText('VTI: acquisition dates unknown — treated as long-term')
-    // The scenario RAN: an amber advisory, not a banner (the engine's own register).
     expect(warning.closest('.tax-warnings')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
   })
@@ -428,204 +449,143 @@ describe('WhatIfPanel', () => {
   it('lets only the NEWEST of two overlapping runs land', async () => {
     const slow = deferred<WhatIfOut>()
     const fast = deferred<WhatIfOut>()
-    vi.mocked(runWhatIf).mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise)
-    render(<WhatIfPanel year={2024} />)
+    mount()
     await openPanel()
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    vi.mocked(runWhatIf).mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise)
     fireEvent.click(addSale())
-
-    fireEvent.click(runButton())
-    fireEvent.click(runButton())
-    expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(2)
-
+    fireEvent.click(addEsppSale())
     await act(async () => {
       fast.resolve(resultFixture({ delta: { ...resultFixture().delta, total_tax: '2222.22' } }))
     })
     expect(tile('Δ total tax').querySelector('.stat-value')?.textContent).toBe('$2,222.22')
-
     await act(async () => {
       slow.resolve(resultFixture({ delta: { ...resultFixture().delta, total_tax: '1111.11' } }))
     })
-    // The older run answers LAST and must not replace the newer scenario on screen — the
-    // seq ref, not the network, decides which answer belongs to the legs in the form.
     expect(tile('Δ total tax').querySelector('.stat-value')?.textContent).toBe('$2,222.22')
-  })
-
-  it('drops a failure that a newer run has already outlived', async () => {
-    const stale = deferred<WhatIfOut>()
-    vi.mocked(runWhatIf)
-      .mockReturnValueOnce(stale.promise)
-      .mockResolvedValueOnce(resultFixture())
-    render(<WhatIfPanel year={2024} />)
-    await openPanel()
-    fireEvent.click(addSale())
-
-    fireEvent.click(runButton())
-    fireEvent.click(runButton())
-    await waitFor(() => expect(screen.getByText('Δ total tax')).toBeTruthy())
-
-    await act(async () => {
-      stale.reject(new ApiError('scenario unavailable', 500))
-    })
-    // A failure only drops the run it was asked about; this one is a run behind.
-    expect(screen.queryByText('scenario unavailable')).toBeNull()
-    expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.getByText('Δ total tax')).toBeTruthy()
   })
 
   it('surfaces a feed failure without pretending the book is empty, and retries it', async () => {
     vi.mocked(fetchHoldings).mockRejectedValueOnce(new ApiError('Network error', 0))
-    render(<WhatIfPanel year={2024} />)
+    mount()
     fireEvent.click(openButton())
-
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('Network error')
-    // No form of empty selects under the banner: with no feed there is nothing to sell.
     expect(screen.queryByRole('button', { name: 'Add sale' })).toBeNull()
-
-    // The feeds are fetched once per MOUNT, so the banner owns the only second chance.
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(addSale()).toBeTruthy())
-    expect(screen.queryByRole('alert')).toBeNull()
     expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(2)
   })
 
-  it('starts over when the page remounts it under a new year', async () => {
-    const { rerender } = render(<WhatIfPanel key="whatif-2024" year={2024} />)
-    await openPanel()
-    fireEvent.click(addSale())
-    fireEvent.click(runButton())
-    await waitFor(() => expect(screen.getByText('Δ total tax')).toBeTruthy())
+  it('re-runs the URL’s scenario against the new year when the page remounts it', async () => {
+    const { rerender } = mount('/taxes?whatif=sale%3A7%3A40')
+    await waitFor(() => expect(lastBody()?.year).toBe(2024))
+    rerender(
+      <MemoryRouter initialEntries={['/taxes?whatif=sale%3A7%3A40']}>
+        <WhatIfPanel key="whatif-2025" year={2025} />
+        <Url />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(lastBody()).toEqual({ year: 2025, sales: [{ security_id: 7, shares: '40', term: 'long' }], espp_sales: [] }))
+    expect(screen.getByRole('heading', { name: /What if — 2025/ })).toBeTruthy()
+  })
 
-    // The page keys this panel by year: a switch is a REMOUNT, so the legs and the scenario
-    // go with the year they were run against (a stale scenario under a new year's heading
-    // would lie), and the card is closed again with its feeds unspent.
-    rerender(<WhatIfPanel key="whatif-2025" year={2025} />)
-    expect(screen.queryByText('Δ total tax')).toBeNull()
-    expect(screen.getByRole('heading', { name: 'What if — 2025' })).toBeTruthy()
+  it('opens and runs when a link lands entries while the card is already mounted', async () => {
+    // The assistant's "Open in what-if" fired from /taxes: same page, same YEAR, so nothing
+    // remounts — the entries have to be read every render, not just in the initializer, or
+    // the link would move the address bar and nothing else.
+    render(
+      <MemoryRouter initialEntries={['/taxes']}>
+        <WhatIfPanel year={2024} />
+        <Url />
+        <Link to="/taxes?whatif=sale%3A7%3A40">open it</Link>
+      </MemoryRouter>,
+    )
+    expect(openButton().getAttribute('aria-expanded')).toBe('false')
+    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('link', { name: 'open it' }))
+    await waitFor(() => expect(addSale()).toBeTruthy())
+    expect(openButton().getAttribute('aria-expanded')).toBe('true')
+    await waitFor(() =>
+      expect(lastBody()?.sales).toEqual([{ security_id: 7, shares: '40', term: 'long' }]),
+    )
+    // The feeds are still fetched ONCE — the effect follows `open`, the ref inside is the guard.
+    expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
+
+    // ...and the latch: a card closed BY HAND stays closed while the URL still holds its
+    // entries, so the re-open follows a navigation and never a re-render.
+    fireEvent.click(openButton())
+    expect(openButton().getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: 'Open what-if' }))
+    fireEvent.click(openButton())
     expect(openButton().getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('auto-opens and seeds one leg when a deep link named a ticker', async () => {
-    render(<WhatIfPanel year={2024} initialTicker="qqq" />)
+  // --- legacy aliases (spec §6) -----------------------------------------------------------
 
-    // Open on arrival, feeds loaded, and the NAMED holding (case-insensitively) prefilled.
-    await waitFor(() => expect(field('Sale 1 shares').value).toBe('10.0000'))
+  it('normalizes ?whatif=TICKER into a sale entry once the holdings land, in one replace', async () => {
+    mount('/taxes?whatif=qqq&year=2024')
     expect(openButton().getAttribute('aria-expanded')).toBe('true')
-    expect((screen.getByLabelText('Sell') as HTMLSelectElement).value).toBe('9')
+    await waitFor(() => expect(url()).toBe('/taxes?year=2024&whatif=sale%3A9%3A10.0000'))
+    await waitFor(() => expect(lastBody()?.sales).toEqual([{ security_id: 9, shares: '10.0000', term: 'long' }]))
     expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
   })
 
-  it('auto-opens and seeds the named UNSOLD lot, and ignores one that is sold', async () => {
-    const { unmount } = render(<WhatIfPanel year={2024} initialLotId={3} />)
-    await waitFor(() => expect(field('ESPP sale 1 price').value).toBe('150.00000'))
-    expect((screen.getByLabelText('ESPP lot') as HTMLSelectElement).value).toBe('3')
-    unmount()
-
-    // Lot 4 is sold: the card still opens, but seeds nothing — the honest answer for a link
-    // whose lot has been disposed of since it was made.
-    render(<WhatIfPanel year={2024} initialLotId={4} />)
+  it('normalizes ?whatif-lot=<id> into an espp entry at the lots quote, and drops a sold lot silently', async () => {
+    mount('/taxes?whatif-lot=3')
+    await waitFor(() => expect(url()).toBe('/taxes?whatif=espp%3A3%3A150.00000'))
+    cleanup()
+    vi.mocked(fetchHoldings).mockResolvedValue(holdingsFixture())
+    vi.mocked(fetchLots).mockResolvedValue(lotsFixture())
+    mount('/taxes?whatif-lot=4')
     await waitFor(() => expect(addEsppSale()).toBeTruthy())
-    expect(screen.queryByLabelText('ESPP lot')).toBeNull()
+    // The alias rewrite rides the feeds' promise, and the hook coalesces the write into the
+    // next commit, so the drop lands a tick after the form does.
+    await waitFor(() => expect(url()).toBe('/taxes'))
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  // --- input overrides (D1, design 2026-08-31) -------------------------------------------
+  // --- input overrides (D1, design 2026-08-31) ---------------------------------------------
 
   const DEFS = [
     { key: 'annual_salary', label: 'Annual Salary' },
     { key: 'itemized_deduction', label: 'Itemized Deduction' },
   ]
-  const addOverride = () =>
-    screen.getByRole('button', { name: 'Add override' }) as HTMLButtonElement
+  const addOverride = () => screen.getByRole('button', { name: 'Add override' }) as HTMLButtonElement
 
-  it('adds an override row on the first unused key and posts canonical values', async () => {
-    render(<WhatIfPanel year={2024} definitions={DEFS} />)
+  it('adds an override row on the first unused key as a null entry, and posts canonical values on commit', async () => {
+    mount('/taxes', { definitions: DEFS })
     await openPanel()
     fireEvent.click(addOverride())
-
-    // Label + key, from the definitions the page handed down.
+    expect(url()).toBe('/taxes?whatif=annual_salary%3Anull')
+    await waitFor(() => expect(lastBody()).toEqual({ year: 2024, sales: [], espp_sales: [], overrides: { annual_salary: null } }))
     const select = screen.getByLabelText('Override') as HTMLSelectElement
-    expect(select.value).toBe('annual_salary')
     expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
       'Annual Salary (annual_salary)',
       'Itemized Deduction (itemized_deduction)',
     ])
-
-    // Run is open with ONLY an override leg — a scenario needs no sale to mean something.
-    expect(runButton().disabled).toBe(false)
+    fireEvent.focus(field('Override 1 value'))
     fireEvent.change(field('Override 1 value'), { target: { value: '$210,000' } })
-    fireEvent.click(runButton())
-
-    // Canonical at the wire (the InputsForm boundary), and the two sale lists stay [].
-    await waitFor(() =>
-      expect(vi.mocked(runWhatIf)).toHaveBeenCalledWith({
-        year: 2024,
-        sales: [],
-        espp_sales: [],
-        overrides: { annual_salary: '210000' },
-      }),
-    )
+    fireEvent.blur(field('Override 1 value'))
+    expect(url()).toBe('/taxes?whatif=annual_salary%3A210000')
+    await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: '210000' }))
   })
 
-  it('sends null for a blank value — the clear-this-input case', async () => {
-    render(<WhatIfPanel year={2024} definitions={DEFS} />)
-    await openPanel()
-    fireEvent.click(addOverride())
-    fireEvent.click(runButton())
-
-    await waitFor(() =>
-      expect(vi.mocked(runWhatIf)).toHaveBeenCalledWith({
-        year: 2024,
-        sales: [],
-        espp_sales: [],
-        overrides: { annual_salary: null },
-      }),
-    )
-  })
-
-  it('omits the overrides key entirely when no override rows exist', async () => {
-    render(<WhatIfPanel year={2024} definitions={DEFS} />)
-    await openPanel()
-    fireEvent.click(addSale())
-    fireEvent.click(runButton())
-
+  it('refuses a duplicated key and a garbled value in the box’s words, spending no request', async () => {
+    mount('/taxes?whatif=annual_salary%3Anull&whatif=itemized_deduction%3Anull', { definitions: DEFS })
     await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
-    // The pre-override wire, byte-identical — the exact-body pins above depend on it.
-    expect('overrides' in vi.mocked(runWhatIf).mock.calls[0][0]).toBe(false)
-  })
-
-  it('refuses a duplicated key in the box’s own vocabulary, before spending a request', async () => {
-    render(<WhatIfPanel year={2024} definitions={DEFS} />)
-    await openPanel()
-    fireEvent.click(addOverride()) // annual_salary
-    fireEvent.click(addOverride()) // itemized_deduction
-    // Point the second row at the first row's key.
-    fireEvent.change(screen.getAllByLabelText('Override')[1], {
-      target: { value: 'annual_salary' },
-    })
-    fireEvent.click(runButton())
-
-    expect(screen.getByRole('alert').textContent).toContain(
-      'Annual Salary is overridden twice — one row per key',
-    )
-    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
-  })
-
-  it('refuses a garbled value and names the row by its label', async () => {
-    render(<WhatIfPanel year={2024} definitions={DEFS} />)
-    await openPanel()
-    fireEvent.click(addOverride())
+    fireEvent.change(screen.getAllByLabelText('Override')[1], { target: { value: 'annual_salary' } })
+    expect(screen.getByRole('alert').textContent).toContain('Annual Salary is overridden twice — one row per key')
+    fireEvent.focus(field('Override 1 value'))
     fireEvent.change(field('Override 1 value'), { target: { value: '12..3' } })
-    fireEvent.click(runButton())
-
-    expect(screen.getByRole('alert').textContent).toContain(
-      'Annual Salary: enter a number, or leave the value blank to clear it',
-    )
-    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
+    fireEvent.blur(field('Override 1 value'))
+    expect(screen.getByRole('alert').textContent).toContain('Annual Salary: enter a number, or leave the value blank to clear it')
+    expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1)
   })
 
   it('keeps Add override shut once every key is taken, and with no definitions at all', async () => {
-    render(<WhatIfPanel year={2024} definitions={DEFS} />)
+    mount('/taxes', { definitions: DEFS })
     await openPanel()
     fireEvent.click(addOverride())
     fireEvent.click(addOverride())
@@ -633,11 +593,125 @@ describe('WhatIfPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove override 2' }))
     expect(addOverride().disabled).toBe(false)
     cleanup()
-
     vi.mocked(fetchHoldings).mockResolvedValue(holdingsFixture())
     vi.mocked(fetchLots).mockResolvedValue(lotsFixture())
-    render(<WhatIfPanel year={2024} />)
+    mount()
     await openPanel()
     expect(addOverride().disabled).toBe(true)
+  })
+
+  // The codec's own fence, not a looser Number() test: ".5", "+5" and "5." all pass
+  // Number() but parseSale/parseEspp/parseOverride refuse them on arrival — a box that
+  // accepted one would write an entry the very next decode drops, and the leg would vanish
+  // without a word (lane P's BoxKnob, same lesson).
+  it('refuses the spellings the URL codec would drop, in every box', async () => {
+    mount('/taxes?whatif=sale%3A7%3A40&whatif=espp%3A3%3A150.00000&whatif=annual_salary%3Anull', {
+      definitions: DEFS,
+    })
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    const before = url()
+
+    for (const bad of ['.5', '+5', '5.']) {
+      fireEvent.change(field('Sale 1 shares'), { target: { value: bad } })
+      fireEvent.blur(field('Sale 1 shares'))
+      expect(screen.getByRole('alert').textContent).toContain('VTI: shares must be a number')
+      fireEvent.change(field('Sale 1 price'), { target: { value: bad } })
+      fireEvent.blur(field('Sale 1 price'))
+      expect(screen.getByRole('alert').textContent).toContain('VTI: price must be a number')
+      fireEvent.change(field('ESPP sale 1 price'), { target: { value: bad } })
+      fireEvent.blur(field('ESPP sale 1 price'))
+      expect(screen.getByRole('alert')).toBeTruthy()
+      fireEvent.focus(field('Override 1 value'))
+      fireEvent.change(field('Override 1 value'), { target: { value: bad } })
+      fireEvent.blur(field('Override 1 value'))
+      expect(screen.getByRole('alert').textContent).toContain('Annual Salary: enter a number')
+    }
+
+    // Nothing reached the URL, so nothing can silently vanish out of it on the next decode.
+    expect(url()).toBe(before)
+    expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1)
+  })
+
+  // --- presets, pins, Apply ----------------------------------------------------------------
+
+  it('presets write knobs immediately; missing data disables a chip with its sentence', async () => {
+    mount('/taxes', { definitions: DEFS })
+    await openPanel()
+    await waitFor(() => expect(vi.mocked(fetchLimits)).toHaveBeenCalled())
+    fireEvent.click(await screen.findByRole('button', { name: 'Max 401(k)' }))
+    expect(url()).toBe('/taxes?whatif=trad_401k_contributions%3A23500.00')
+    fireEvent.click(screen.getByRole('button', { name: 'Sell all VTI' }))
+    expect(url()).toBe('/taxes?whatif=sale%3A7%3A100.0000&whatif=trad_401k_contributions%3A23500.00')
+    const qqq = screen.getByRole('button', { name: 'Sell all QQQ' }) as HTMLButtonElement
+    expect(qqq.disabled).toBe(true)
+    expect(qqq.title).toBe('No quote for QQQ — enter a price in Portfolio')
+    const family = screen.getByRole('button', { name: 'Max HSA — family' }) as HTMLButtonElement
+    expect(family.disabled).toBe(true)
+    expect(family.title).toBe("Enter 2024's HSA family limit in Settings › Limits")
+    expect((screen.getByRole('button', { name: 'Realize gains to the 15% ceiling' }) as HTMLButtonElement).title).toBe(
+      "Enter 2024's capital-gains brackets first",
+    )
+  })
+
+  it('pins the live scenario and shows it as a compare column; Reset empties the URL', async () => {
+    mount('/taxes?whatif=sale%3A7%3A100.0000%3A62.50')
+    await screen.findByText('Δ total tax')
+    fireEvent.click(screen.getByRole('button', { name: 'Pin this scenario' }))
+    // Two doors offer it: the pin row's chip and the compare column's own header.
+    expect(screen.getAllByRole('button', { name: 'Unpin Sell 100.0000 VTI' })).toHaveLength(2)
+    await waitFor(() => expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toContain('Sell 100.0000 VTIUnpin'))
+    expect(JSON.parse(localStorage.getItem('finance.sandbox.taxes') ?? '{}').pins[0].entries).toEqual(['sale:7:100.0000:62.50'])
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to actual' }))
+    expect(url()).toBe('/taxes')
+    await waitFor(() => expect(lastBody()).toEqual({ year: 2024, sales: [], espp_sales: [] }))
+  })
+
+  it('holds Apply shut until the result on screen is the URL’s own answer', async () => {
+    const applyButton = () =>
+      screen.getByRole('button', { name: 'Apply 1 override to 2024' }) as HTMLButtonElement
+    const { onApplyOverrides } = mount('/taxes?whatif=annual_salary%3A210000', {
+      definitions: DEFS,
+    })
+    await screen.findByText('Δ total tax')
+    expect(applyButton().disabled).toBe(false)
+
+    // Apply confirms `changed_inputs` from the run ON SCREEN but PUTs the URL's overrides —
+    // so inside the run that follows a keystroke those are two different scenarios, and an
+    // ungated button would confirm 210000's before → after and write 220000.
+    const slow = deferred<WhatIfOut>()
+    vi.mocked(runWhatIf).mockReturnValueOnce(slow.promise)
+    fireEvent.focus(field('Override 1 value'))
+    fireEvent.change(field('Override 1 value'), { target: { value: '220000' } })
+    fireEvent.blur(field('Override 1 value'))
+    await waitFor(() => expect(applyButton().disabled).toBe(true))
+    fireEvent.click(applyButton())
+    expect(onApplyOverrides).not.toHaveBeenCalled()
+
+    await act(async () => {
+      slow.resolve(resultFixture())
+    })
+    await waitFor(() => expect(applyButton().disabled).toBe(false))
+
+    // The other half: a refusal leaves an OLDER result under the stale line, which is not
+    // this scenario's answer either.
+    vi.mocked(runWhatIf).mockRejectedValueOnce(new ApiError('unknown input key: nope', 422))
+    fireEvent.focus(field('Override 1 value'))
+    fireEvent.change(field('Override 1 value'), { target: { value: '230000' } })
+    fireEvent.blur(field('Override 1 value'))
+    await waitFor(() => expect(applyButton().disabled).toBe(true))
+    expect(onApplyOverrides).not.toHaveBeenCalled()
+  })
+
+  it('Apply hands the overrides and the changed inputs up, and renders only with overrides present', async () => {
+    const { onApplyOverrides } = mount('/taxes?whatif=sale%3A7%3A40', { definitions: DEFS })
+    await screen.findByText('Δ total tax')
+    expect(screen.queryByRole('button', { name: /^Apply \d+ override/ })).toBeNull()
+    fireEvent.click(addOverride())
+    fireEvent.focus(field('Override 1 value'))
+    fireEvent.change(field('Override 1 value'), { target: { value: '210000' } })
+    fireEvent.blur(field('Override 1 value'))
+    await waitFor(() => expect(lastBody()?.overrides).toEqual({ annual_salary: '210000' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply 1 override to 2024' }))
+    expect(onApplyOverrides).toHaveBeenCalledWith({ annual_salary: '210000' }, resultFixture().changed_inputs)
   })
 })

@@ -492,9 +492,12 @@ function LotsPanel({
                     {/* UNSOLD rows only: the what-if card models a PROSPECTIVE sale, and a
                         lot that already has a sold date 409s there (api/taxes.py). The link
                         wears .button so it sits in the row-actions rank with its two
-                        neighbours rather than reading as body text. */}
+                        neighbours rather than reading as body text. An espp entry in the
+                        sandbox grammar (2026-09-03 planning-sandboxes spec §6) — no price,
+                        so the card prefills this table's own quote; the legacy
+                        `?whatif-lot=` still works as an alias. */}
                     {!lot.is_sold && (
-                      <Link className="button" to={`/taxes?whatif-lot=${lot.id}`}>
+                      <Link className="button" to={`/taxes?whatif=${encodeURIComponent(`espp:${lot.id}`)}`}>
                         Model sale →
                       </Link>
                     )}

@@ -237,11 +237,15 @@ export default function HoldingDetailPanel({
         </p>
       )}
       {/* The unrealized figure above raises exactly one question this panel cannot answer —
-          what selling it would COST — and /taxes is where the engine answers it. The ticker
-          rides the URL and the what-if card seeds one leg from it; encoded, because a
-          ticker is server text and this page does not get to assume it is [A-Z]. */}
+          what selling it would COST — and /taxes is where the engine answers it. The new
+          sandbox grammar (2026-09-03 planning-sandboxes spec §6) carries the whole position
+          as a sale entry: the SERVER's id and this panel's own share text, in the endpoint's
+          vocabulary, with the price left off so the card prefills the latest quote. Naming
+          the id rather than the ticker also retires the "is it [A-Z]" question — the old
+          `?whatif=TICKER` still works as an alias for links already in the wild. Encoded,
+          because the entry's own colons are not the URL's. */}
       <p className="hint">
-        <Link to={`/taxes?whatif=${encodeURIComponent(holding.ticker)}`}>
+        <Link to={`/taxes?whatif=${encodeURIComponent(`sale:${holding.security_id}:${holding.shares}`)}`}>
           Model selling {holding.ticker} in Taxes →
         </Link>
       </p>

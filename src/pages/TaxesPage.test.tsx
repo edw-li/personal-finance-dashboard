@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { Link, MemoryRouter, useLocation, useNavigationType } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
@@ -63,31 +63,49 @@ vi.mock('../components/EChart', async () => {
       }),
   }
 })
-// The what-if card owns two feeds and a whole test file of its own (WhatIfPanel.test.tsx
-// pins the seeding end of the deep links, and its own year-keyed remount). Here it is a
-// marker reporting the four props the page hands it — which IS this page's whole contract
-// with it, and keeps a card the page never opens from spending requests in these tests.
+// The what-if card owns three feeds and a whole test file of its own (WhatIfPanel.test.tsx
+// pins the URL grammar and its own year-keyed remount). Here it is a marker reporting the
+// props the page hands it — which IS this page's whole contract with it — plus a door onto
+// the Apply callback, and it keeps a card the page never opens from spending requests.
 vi.mock('../components/taxes/WhatIfPanel', async () => {
   const { createElement } = await import('react')
   return {
     default: ({
       year,
-      initialTicker,
-      initialLotId,
       definitions,
+      onApplyOverrides,
     }: {
       year: number
-      initialTicker?: string | null
-      initialLotId?: number | null
       definitions?: { key: string; label: string }[]
+      onApplyOverrides?: (
+        overrides: Record<string, string | null>,
+        changed: { key: string; label: string; before: string; after: string }[],
+      ) => void
     }) =>
-      createElement('div', {
-        'data-testid': 'whatif-panel',
-        'data-year': String(year),
-        'data-ticker': initialTicker ?? '',
-        'data-lot': initialLotId == null ? '' : String(initialLotId),
-        'data-defs': (definitions ?? []).map((d) => d.key).join(','),
-      }),
+      createElement(
+        'div',
+        {
+          'data-testid': 'whatif-panel',
+          'data-year': String(year),
+          'data-defs': (definitions ?? []).map((d) => d.key).join(','),
+        },
+        createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: () =>
+              onApplyOverrides?.({ annual_salary: '210000' }, [
+                {
+                  key: 'annual_salary',
+                  label: 'Annual Salary',
+                  before: '188930.00',
+                  after: '210000.00',
+                },
+              ]),
+          },
+          'Apply 1 override to 2024',
+        ),
+      ),
   }
 })
 import {
@@ -336,8 +354,20 @@ const confirmSpy = vi.spyOn(window, 'confirm')
 // what-if params and never rewrites them (a reload re-seeding the same leg is honest).
 function LocationProbe() {
   const location = useLocation()
-  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+  // PUSH vs REPLACE: the drill-param convention is replace, so Back leaves the page rather
+  // than walking every year the user looked at.
+  const navigationType = useNavigationType()
+  return (
+    <>
+      <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+      <span data-testid="nav-type">{navigationType}</span>
+      {/* A door for the in-page navigate the assistant's what-if link is: /taxes is already
+          mounted, so the year has to move without a remount. */}
+      <Link to="/taxes?year=2024">go 2024</Link>
+    </>
+  )
 }
+const navType = () => screen.getByTestId('nav-type').textContent
 
 // Every render goes through a router: the page reads the what-if deep-link params with
 // useSearchParams, which is not optional about its router.
@@ -1172,44 +1202,16 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
   })
 
-  it('hands the what-if card the ticker a holdings deep link named', async () => {
-    renderPage('/taxes?whatif=VTI')
-    const panel = await screen.findByTestId('whatif-panel')
-
-    // Verbatim off the URL — the panel matches it against its own holdings feed, and a
-    // ticker that matches nothing is its problem, not the page's.
-    expect(panel.getAttribute('data-ticker')).toBe('VTI')
-    expect(panel.getAttribute('data-lot')).toBe('')
-    expect(panel.getAttribute('data-year')).toBe('2024')
-    // Deliberately NOT cleared: this page owns no history writes, and a reload re-seeding
-    // the same leg is the honest reading of the URL the user is sitting on.
-    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
-  })
-
-  it('reads ?whatif-lot as a lot id, and lets a garbled one seed nothing', async () => {
-    renderPage('/taxes?whatif-lot=3')
-    const panel = await screen.findByTestId('whatif-panel')
-    expect(panel.getAttribute('data-lot')).toBe('3')
-    expect(panel.getAttribute('data-ticker')).toBe('')
-    cleanup()
-
-    // A hand-edited URL is nobody's lot: null seeds nothing and the card mounts closed, the
-    // way it does for every visitor who arrived without a link.
-    renderPage('/taxes?whatif-lot=not-a-lot')
-    expect((await screen.findByTestId('whatif-panel')).getAttribute('data-lot')).toBe('')
-  })
-
-  it('keeps the seeds on the card across a year switch', async () => {
-    renderPage('/taxes?whatif=VTI')
+  it('leaves the whatif family in the URL for the card to read, and re-keys it on a year switch', async () => {
+    renderPage('/taxes?whatif=sale%3A7%3A40')
     await screen.findByLabelText('Annual Salary')
+    // Deliberately NOT read or cleared here: the entries are the PANEL's state now
+    // (WhatIfPanel.test.tsx owns that grammar), and this page only re-keys the card by year.
+    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=sale%3A7%3A40')
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
 
-    // The panel is keyed by year, so this is a fresh mount — and the seed is a property of
-    // the URL, not of the year, so it goes down again: the link said "model selling VTI",
-    // and it means that against whichever year is on screen.
-    //
     // waitFor, not a bare read off findByTestId: the card is on screen either way (it is the
     // PROPS that move), and the year only reaches it when the switch's three payloads land —
     // which the "was 2023 requested" wait above does not promise. Read straight, this raced
@@ -1217,7 +1219,76 @@ describe('TaxesPage', () => {
     await waitFor(() =>
       expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2023'),
     )
-    expect(screen.getByTestId('whatif-panel').getAttribute('data-ticker')).toBe('VTI')
+    // The scenario belongs to the URL, not to the year: it survives the switch to be re-run
+    // against whichever year is now on screen.
+    expect(screen.getByTestId('location').textContent).toContain('whatif=sale%3A7%3A40')
+  })
+
+  // The SINGLE-column branch: annual_salary is a per-person key, but a one-person year has
+  // exactly one row for it, so the household total and the primary's row are the same number
+  // and the `values` shorthand writes what the scenario previewed.
+  it('Apply from the what-if confirms before → after, PUTs the overrides once and remounts the inputs form', async () => {
+    // The PUT echo carries the moved salary — the remount is what puts it on screen,
+    // because InputsForm ignores prop replacement by design.
+    const echo = inputsFor(2024)
+    echo.sections[0].items[0].value = '210000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValue(echo)
+    renderPage()
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    // The server's own before → after, and only for the key actually being WRITTEN.
+    expect(confirmSpy.mock.calls[0][0]).toBe(
+      "This writes 1 input to 2024's stored return and reloads the form below. Continue?\nAnnual Salary: $188,930.00 → $210,000.00",
+    )
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: { annual_salary: '210000' },
+    })
+    // The same landing chain the withholding card's Apply uses: remounted form, fresh totals.
+    await waitFor(() => expect(salary().value).toBe('$210,000.00'))
+    await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
+  })
+
+  it('names the unsaved edits Apply is about to discard', async () => {
+    renderPage()
+    await screen.findByTestId('whatif-panel')
+    fireEvent.change(salary(), { target: { value: '$999,000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    // ONE question, not two: the write and the discard are the same decision.
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0][0]).toContain(
+      "reloads the form below, discarding its unsaved edits. Continue?",
+    )
+    // The epoch remount threw the typed value away with the form that held it.
+    await waitFor(() => expect(salary().value).toBe('$200,000.00'))
+  })
+
+  it('a declined confirm writes nothing', async () => {
+    confirmSpy.mockReturnValue(false)
+    renderPage()
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+  })
+
+  it('refuses Apply for a per-person key on a multi-column year, naming the form that can split it', async () => {
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
+    renderPage()
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+
+    // The engine reads ONE household figure, so the what-if applied 210000 to Alex + Sam's
+    // total — but this PUT's `values` shorthand writes the PRIMARY's row alone, leaving Sam's
+    // 90000 standing: 300000 stored under a 210000 answer. Refused before the confirm, so the
+    // user is never asked to approve a write that cannot mean what it says.
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(
+      await screen.findByText(
+        'Annual Salary is stored per person, and 2024 is filed with 2 columns — the scenario ran against their total. Edit it in Tax inputs — 2024, which says which person.',
+      ),
+    ).toBeTruthy()
   })
 
   it('hands the year’s input definitions to the what-if card, deduped by key', async () => {
@@ -1308,24 +1379,118 @@ describe('TaxesPage', () => {
   })
 })
 
-describe('?year= deep link (2026-08-25 spec §2d)', () => {
+// The page's selected tax year lives in ?year= (2026-09-03 sandbox lane T): every card on
+// this page — the what-if most of all — answers for ONE year, so a shared address has to
+// name it. The assistant's "Open in what-if" link emits /taxes?whatif=…&year=YYYY.
+describe('?year= selected tax year', () => {
+  it('opens the year the URL names, and never loads the latest one on the way', async () => {
+    renderPage('/taxes?year=2023&whatif=sale%3A7%3A40')
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
+    // The load-bearing half: 2023 is selected BEFORE anything is fetched, so the what-if
+    // entries are never run against a year the link did not ask for — and the latest year's
+    // three payloads are not spent on the way past it either.
+    expect(vi.mocked(fetchTaxInputs)).not.toHaveBeenCalledWith(2024)
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2023'),
+    )
+    // Read, not rewritten: the address the user is sitting on already says this.
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/taxes?year=2023&whatif=sale%3A7%3A40',
+    )
+  })
+
+  it('falls back to the latest year when the param is absent, garbled or unknown', async () => {
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+    )
+    // A bare /taxes is left bare: this page writes the param from its own doors only, so it
+    // never races the what-if card for the search string on arrival.
+    expect(screen.getByTestId('location').textContent).toBe('/taxes')
+    cleanup()
+
+    renderPage('/taxes?year=banana')
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+    )
+    cleanup()
+
+    // A year the list does not carry: the latest, the way a bare /taxes goes.
+    renderPage('/taxes?year=1999')
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+    )
+    expect(vi.mocked(fetchTaxInputs)).not.toHaveBeenCalledWith(1999)
+  })
+
+  it('mirrors a chip pick into the URL, replace-style, beside the sibling params', async () => {
+    renderPage('/taxes?whatif=sale%3A7%3A40')
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/taxes?whatif=sale%3A7%3A40&year=2023',
+      ),
+    )
+    // The what-if entries are untouched: two writers, one search string, and this one only
+    // ever sets its own key.
+    expect(navType()).toBe('REPLACE')
+  })
+
+  it('follows an in-page navigate to another year — the assistant link while /taxes is up', async () => {
+    renderPage('/taxes?year=2023')
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
+
+    fireEvent.click(screen.getByRole('link', { name: 'go 2024' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+    )
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024)
+  })
+
+  it('drops the param with the year a delete removed', async () => {
+    renderPage('/taxes?year=2024')
+    await screen.findByLabelText('Annual Salary')
+    fireEvent.click(deleteYearButton())
+    await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
+    // Nothing is selected any more, so the URL must stop naming a year that is gone.
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/taxes'))
+  })
+})
+
+// The composition card's drill is ?comp=, NOT ?year= — that one is the page's own selected
+// tax year (below). Two different questions: this card's resting state is "no drill at all",
+// which a selected year cannot say.
+describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
   it('opens the year pie straight from the URL', async () => {
     const taxed2023 = summaryFor(2023)
     taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
-    renderPage('/taxes?year=2023')
+    renderPage('/taxes?comp=2023')
     expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+  })
+
+  it('drills independently of the year the PAGE is on', async () => {
+    const taxed2023 = summaryFor(2023)
+    taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
+    renderPage('/taxes?comp=2023')
+    // The pie is 2023's while the page — and the what-if card it hands the year to — is
+    // still on the latest year. One param each, so neither can drag the other.
+    expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+    expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024')
   })
 
   it('ignores a garbled or unknown year — the trend renders as usual', async () => {
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
       years: [summaryFor(2023), summaryFor(2024)],
     })
-    renderPage('/taxes?year=banana')
+    renderPage('/taxes?comp=banana')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     expect(screen.queryByText(/Tax breakdown —/)).toBeNull()
     cleanup()
-    renderPage('/taxes?year=1999')
+    renderPage('/taxes?comp=1999')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     expect(screen.queryByText(/Tax breakdown —/)).toBeNull()
   })
@@ -1334,14 +1499,16 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
     const taxed2023 = summaryFor(2023)
     taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
-    renderPage('/taxes?whatif=VTI')
+    renderPage('/taxes?whatif=sale%3A7%3A40')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     fireEvent.click(trendChart()) // the trend; the mock clicks 2023
     await screen.findByText('Tax breakdown — 2023')
-    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI&year=2023')
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/taxes?whatif=sale%3A7%3A40&comp=2023',
+    )
     fireEvent.click(trendChart()) // any click in detail mode returns
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
-    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
+    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=sale%3A7%3A40')
   })
 })
 

@@ -61,6 +61,8 @@ const ROSTER = [
   'cardValue',
   'creditLine',
   'paycheckSankey',
+  // Sandbox T (planning-sandboxes spec section 10) — the what-if's per-jurisdiction delta.
+  'whatIfDeltaBar',
 ]
 
 describe('the fixture roster', () => {
