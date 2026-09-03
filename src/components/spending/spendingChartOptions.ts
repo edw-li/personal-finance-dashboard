@@ -9,7 +9,7 @@ import { legendFor } from '../../charts/legend'
 import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
 import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from '../../charts/scales'
-import { INK, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { rangeZoom } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
 import { axisTooltip, itemTooltip } from '../../charts/tooltip'
@@ -461,5 +461,68 @@ export function categoryTrendCsv(
   return {
     headers: ['Month', ...trend.map((t) => nameById.get(t.categoryId) ?? String(t.categoryId))],
     rows: matrix.months.map((m, i) => [m, ...trend.map((t) => valuesById.get(t.categoryId)?.[i] ?? '')]),
+  }
+}
+
+const SM_COLUMNS = 3
+export const SM_CELL_HEIGHT = 110
+
+export interface SmallMultiplesInput {
+  matrix: SpendingMatrix
+  order: number[]
+  nameById: Map<number, string>
+  monthLabels: string[]
+}
+
+/** The card's height for a given row count — one formula, so the page and the builder
+ *  cannot disagree about how tall the grid it emits actually is. */
+export const smallMultiplesHeight = (count: number) =>
+  Math.ceil(count / SM_COLUMNS) * SM_CELL_HEIGHT + 24
+
+/** Every category as a tiny line, three per row, ONE option (§20: one mount, not nineteen).
+ *  Cells share the month axis but scale their own money axis — the reading is shape, not size. */
+export function categorySmallMultiplesOption({
+  matrix, order, nameById, monthLabels,
+}: SmallMultiplesInput): EChartsOption | null {
+  if (matrix.months.length === 0 || order.length === 0) return null
+  const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+  const name = (id: number) => nameById.get(id) ?? String(id)
+  const cell = (i: number) => {
+    const col = i % SM_COLUMNS
+    const row = Math.floor(i / SM_COLUMNS)
+    return {
+      left: `${(col / SM_COLUMNS) * 100 + 2}%`,
+      width: `${100 / SM_COLUMNS - 4}%`,
+      top: row * SM_CELL_HEIGHT + 24,
+      height: SM_CELL_HEIGHT - 44,
+    }
+  }
+  return {
+    grid: order.map((_, i) => cell(i)),
+    title: order.map((id, i) => ({
+      text: name(id),
+      left: cell(i).left,
+      top: cell(i).top - 22,
+      textStyle: { color: MUTED, fontSize: 11, fontWeight: 600 as const },
+    })),
+    // Only the bottom row prints month labels: three columns of dates would out-shout the
+    // shapes the grid exists to compare.
+    xAxis: order.map((_, i) => ({
+      ...monthAxis(monthLabels),
+      gridIndex: i,
+      axisLabel: { show: i >= order.length - SM_COLUMNS, interval: 'auto' as const },
+    })),
+    yAxis: order.map((_, i) => ({ ...moneyAxis(), gridIndex: i, splitNumber: 2 })),
+    tooltip: axisTooltip({ unit: 'money' }),
+    series: order.map((id, i) => ({
+      ...LINE,
+      name: name(id),
+      xAxisIndex: i,
+      yAxisIndex: i,
+      // One entity per cell: the hue carries no identity here, so every cell wears slot 0.
+      color: PALETTE[0],
+      connectNulls: false,
+      data: (valuesById.get(id) ?? []).map((v) => (v === null ? null : Number(v))),
+    })),
   }
 }

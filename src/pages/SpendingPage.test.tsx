@@ -313,6 +313,17 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
     expect(screen.getByRole('button', { name: /Hide 1 dormant/ })).toBeTruthy()
   })
 
+  it('§18: the trends card swaps to small multiples on All categories', async () => {
+    renderPage()
+    await screen.findByText(/Category trends/)
+    expect(screen.getByLabelText(/Line chart of the selected categories/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'All categories' }))
+    expect(screen.getByLabelText(/Small multiples/)).toBeTruthy()
+    // The picker and the zoom caption belong to the single-axis reading only.
+    expect(screen.queryByRole('button', { name: 'Fun', pressed: false })).toBeNull()
+    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(2)
+  })
+
   it('the hero tiles follow the VIEWED month, not the latest one', async () => {
     renderPage()
     await screen.findByText(/Monthly spend vs net pay/)

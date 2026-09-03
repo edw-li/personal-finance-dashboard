@@ -18,6 +18,7 @@ import {
   MarkAreaComponent,
   MarkLineComponent,
   MarkPointComponent,
+  TitleComponent,
   TooltipComponent,
   VisualMapComponent,
 } from 'echarts/components'
@@ -79,6 +80,10 @@ echarts.use([
   MarkAreaComponent,
   MarkPointComponent,
   AriaComponent,
+  // Per-cell captions on the small-multiples grid (/spending Category trends -> All): that
+  // option emits one title per cell, and an UNREGISTERED title component draws nothing in
+  // the tree-shaken build — a grid of unlabelled sparklines. Nothing else uses `title`.
+  TitleComponent,
   // Inside-only zoom (src/charts/timeZoom.ts): the range chips cover the common windows,
   // ctrl+wheel / drag-pan fine-tunes. The slider flavour is deliberately NOT registered —
   // a 30px scrub bar under every chart is chrome the minimal theme does not want.

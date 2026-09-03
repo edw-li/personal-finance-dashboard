@@ -16,6 +16,7 @@ import Segmented from '../components/shell/Segmented'
 import BudgetPanel from '../components/spending/BudgetPanel'
 import {
   HEATMAP_MODES,
+  categorySmallMultiplesOption,
   categoryTrendCsv,
   categoryTrendOption,
   heatmapCsv,
@@ -25,6 +26,7 @@ import {
   monthPieOption,
   savingsRateCsv,
   savingsRateOption,
+  smallMultiplesHeight,
   spendingBarsOption,
   spendingCsv,
 } from '../components/spending/spendingChartOptions'
@@ -146,6 +148,9 @@ export default function SpendingPage() {
   // a cent take up rows. Card-local — neither belongs in the shared URL scope.
   const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('row')
   const [showDormant, setShowDormant] = useState(false)
+  // The trends card's two readings: up to three picks compared on one axis, or EVERY
+  // category as its own tiny line (small multiples — one option, one mount).
+  const [trendView, setTrendView] = useState<'compare' | 'all'>('compare')
   // Instance handle for the bars chart so heatmap hover can dispatch highlights into it.
   const barsChartRef = useRef<EChartsInstance | null>(null)
 
@@ -324,6 +329,15 @@ export default function SpendingPage() {
         ? null
         : categoryTrendOption({ matrix, trend, nameById, monthLabels, range, selected: legendSelected }),
     [matrix, trend, nameById, monthLabels, range, legendSelected],
+  )
+
+  // Every category's shape at once — the same all-time order the heatmap rows use.
+  const smallMultiples = useMemo(
+    () =>
+      matrix === null
+        ? null
+        : categorySmallMultiplesOption({ matrix, order: heatmapOrder, nameById, monthLabels }),
+    [matrix, heatmapOrder, nameById, monthLabels],
   )
 
   const toggleTrend = (categoryId: number) => {
@@ -611,19 +625,54 @@ export default function SpendingPage() {
           <ChartCard
             span={6}
             title="Category trends"
-            hint="Single-category history — pick up to 3 to compare; a picked category's budget rides along as a dashed step."
-            ariaLabel="Line chart of the selected categories’ monthly spend with their budgets"
-            option={trendOpt}
-            empty={`Pick up to ${MAX_TREND} categories.`}
+            hint="Single-category history — pick up to 3 to compare; a picked category's budget rides along as a dashed step. All categories draws every one as its own tiny line, each on its own scale: the reading is shape, not size."
+            ariaLabel={
+              trendView === 'all'
+                ? 'Small multiples: every spending category’s monthly history as its own tiny line'
+                : 'Line chart of the selected categories’ monthly spend with their budgets'
+            }
+            option={trendView === 'all' ? smallMultiples : trendOpt}
+            empty={
+              trendView === 'all' ? 'No months entered yet.' : `Pick up to ${MAX_TREND} categories.`
+            }
             exportName="category-trends"
-            csv={matrix === null ? undefined : () => categoryTrendCsv(matrix, trend, nameById)}
-            height={220}
-            zoomable
-            group="spending"
+            csv={
+              matrix === null
+                ? undefined
+                : trendView === 'all'
+                  ? () =>
+                      categoryTrendCsv(
+                        matrix,
+                        heatmapOrder.map((categoryId, slot) => ({ categoryId, slot })),
+                        nameById,
+                      )
+                  : () => categoryTrendCsv(matrix, trend, nameById)
+            }
+            height={trendView === 'all' ? smallMultiplesHeight(heatmapOrder.length) : 220}
+            // Small multiples carry no dataZoom and no shared axis: the window controls and
+            // the sibling group belong to the single-axis reading only.
+            zoomable={trendView === 'compare'}
+            group={trendView === 'compare' ? 'spending' : undefined}
             onLegendChange={onLegendChange}
-            onDataZoom={onZoomWindow}
-            zoomWindow={zoomWindow}
+            onDataZoom={trendView === 'compare' ? onZoomWindow : undefined}
+            zoomWindow={trendView === 'compare' ? zoomWindow : undefined}
+            controls={
+              <Segmented
+                variant="toggle"
+                size="sm"
+                ariaLabel="Trend view"
+                options={[
+                  { value: 'compare', label: 'Compare' },
+                  // "All categories", not "All": the scope row's range chips already own
+                  // the word All on this page.
+                  { value: 'all', label: 'All categories' },
+                ]}
+                value={trendView}
+                onChange={setTrendView}
+              />
+            }
             footer={
+              trendView === 'all' ? undefined : (
               <div className="chip-row">
                 {matrix?.categories.map((category) => {
                   const active = trend.find((t) => t.categoryId === category.id)
@@ -648,6 +697,7 @@ export default function SpendingPage() {
                   )
                 })}
               </div>
+              )
             }
           />
 

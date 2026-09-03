@@ -7,6 +7,7 @@ import type { SpendingMatrix } from '../../types/api'
 import {
   HEATMAP_MODES,
   SUSTAINABLE_SPEND,
+  categorySmallMultiplesOption,
   categoryTrendCsv,
   categoryTrendOption,
   heatmapCsv,
@@ -400,5 +401,25 @@ describe('categoryTrendOption', () => {
       headers: ['Month', 'Groceries <b>& more</b>', 'Rent'],
       rows: [['2026-06-01', '600.00', '2000.00'], ['2026-07-01', '', '2000.00']],
     })
+  })
+})
+
+describe('categorySmallMultiplesOption', () => {
+  it('one cell per category in three columns: shared month axis, own money axis, one grammar line each', () => {
+    const option = categorySmallMultiplesOption({ matrix: matrixFixture(), order: [1, 2, 3], nameById: NAMES, monthLabels: LABELS }) as unknown as {
+      grid: unknown[]; xAxis: { gridIndex: number }[]; yAxis: { gridIndex: number; axisLabel: { formatter: unknown } }[]
+      title: { text: string }[]; series: { xAxisIndex: number; yAxisIndex: number; name: string; color: string; data: unknown[] }[]
+      tooltip: { formatter: (p: unknown) => string }
+    }
+    expect(option.grid).toHaveLength(3)
+    expect(option.xAxis.map((a) => a.gridIndex)).toEqual([0, 1, 2])
+    expect(option.yAxis.every((a) => a.axisLabel.formatter === compactMoney)).toBe(true)
+    expect(option.title.map((t) => t.text)).toEqual(['Rent', 'Groceries <b>& more</b>', 'Fun'])
+    expect(option.series.map((s) => [s.name, s.xAxisIndex, s.yAxisIndex])).toEqual([['Rent', 0, 0], ['Groceries <b>& more</b>', 1, 1], ['Fun', 2, 2]])
+    expect(option.series.every((s) => s.color === PALETTE[0])).toBe(true) // one entity per cell: no identity hue needed
+    expect(option.series[1].data).toEqual([600, null])
+  })
+  it('is null with nothing to draw', () => {
+    expect(categorySmallMultiplesOption({ matrix: matrixFixture({ months: [] }), order: [1], nameById: NAMES, monthLabels: [] })).toBeNull()
   })
 })
