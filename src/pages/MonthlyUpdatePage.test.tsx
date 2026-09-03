@@ -1096,6 +1096,9 @@ it('arms on the typed month, fires both deletes tolerating a 404, clears the dra
   expect(spendingApi.deleteSpendingMonth).toHaveBeenCalledWith('2026-07-01')
   await screen.findByText(`Deleted ${formatMonth('2026-07-01')} — balances and spending removed.`)
   expect(sessionStorage.getItem('finance-update-draft:2026-07-01')).toBeNull()
+  // The deleted month has no feeds left: the ribbon must re-read coverage so its chip
+  // empties, exactly as a save fills one.
+  await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(1))
   // Landed on the CURRENT month's wizard.
   await waitFor(() =>
     expect(
@@ -1150,8 +1153,7 @@ describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => 
     const before = vi.mocked(fetchCoverage).mock.calls.length
     fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
     await screen.findByText(/month saved/i)
-    await waitFor(() =>
-      expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(before),
-    )
+    // Exactly once — a nonce that changed twice would fetch coverage twice per save.
+    await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBe(before + 1))
   })
 })

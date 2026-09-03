@@ -179,10 +179,13 @@ export default function CreditCardsPage() {
   // ONE filter point for the whole page: the roster table, the matrix, the four KPI tiles,
   // the card-value bars and the credit-line history all read this or a memo derived from it.
   //
-  // The DRILL opts out on purpose. It renders INSTEAD of the grid and the chips, so a person
-  // chip left active must not make another owner's card fall out of the optimizer — the only
-  // other reason a card has no value is that it is archived, and the detail says exactly
-  // that in words.
+  // The DRILL opts out on purpose — and now visibly so: the owner chips live in the sticky
+  // scope row, which stays on screen while a card is open, so the page shows a scope the
+  // detail below it is deliberately ignoring. That asymmetry is the right one. The drill
+  // answers "is THIS card worth keeping", which is a question about the whole lineup: a
+  // person chip left active must not make another owner's card fall out of the optimizer and
+  // silently zero the marginal. The only other reason a card has no value is that it is
+  // archived, and the detail says exactly that in words.
   const activeCards = activeCard === null ? scopedCards : householdCards
 
   const suggested = useMemo(

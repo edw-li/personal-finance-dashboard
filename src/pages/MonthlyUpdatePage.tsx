@@ -147,11 +147,12 @@ export default function MonthlyUpdatePage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
-  // Bumped on every successful save and handed to the scope row as `revalidate`: the ribbon
-  // re-reads /coverage so the month just entered fills its chip WITHOUT leaving the page.
-  // (The legacy wizard got this for free by reloading coverage on every month change; the
-  // shared ribbon fetches once, so the page has to say when its coverage moved.)
-  const [saveNonce, setSaveNonce] = useState(0)
+  // Bumped whenever THIS page changes what /coverage would say — a save fills a month, a
+  // delete empties one — and handed to the scope row as `revalidate`, so the ribbon re-reads
+  // coverage and the chip follows without leaving the page. (The legacy wizard got this for
+  // free by reloading coverage on every month change; the shared ribbon fetches once, so the
+  // page has to say when its coverage moved.)
+  const [coverageNonce, setCoverageNonce] = useState(0)
   // A8 (2026-08-31 tier-1): the balances leg that already COMMITTED while its spending
   // sibling failed — the month, the exact canonical payload it shipped, and the server's
   // counts. A retry whose payload still matches skips the balances PUT (retry-only-the-
@@ -475,7 +476,7 @@ export default function MonthlyUpdatePage() {
           (spendResult.net_pay_cleared ? ' Household take-home cleared.' : ''),
       )
       // Coverage moved: this month now has both feeds. Tell the scope row to re-read it.
-      setSaveNonce((n) => n + 1)
+      setCoverageNonce((n) => n + 1)
       // What the wire received IS what the boxes now hold. Adopting the canonical values
       // into the STATE as well as the baseline is load-bearing: a cell advanced past by
       // clicks still held raw text ("9,000"), and a baseline taken from that raw state
@@ -538,6 +539,9 @@ export default function MonthlyUpdatePage() {
       // Land on the CURRENT month's wizard; the nonce covers the deleted-month ===
       // current-month case, where the month param does not change.
       setLoadNonce((n) => n + 1)
+      // Coverage moved the other way: the deleted month has no feeds left, so its chip has to
+      // empty. loadNonce only re-seeds the FORM — the shared ribbon needs its own word.
+      setCoverageNonce((n) => n + 1)
       setParams(() => new URLSearchParams({ month: currentMonthIso(), step: 'balances' }))
     } catch (err) {
       setError(
@@ -746,7 +750,7 @@ export default function MonthlyUpdatePage() {
                 being typed into the month the user is leaving. */}
             <ScopeBar
               month={{ mode: 'edit', anchor, selected: month, onSelect: selectMonth }}
-              revalidate={saveNonce}
+              revalidate={coverageNonce}
             />
             {!coveredMonths.has(anchor) && month !== anchor && (
               <button className="button" onClick={() => selectMonth(anchor)}>
