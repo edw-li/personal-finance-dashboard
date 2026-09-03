@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -36,8 +36,9 @@ async def me(user: User = Depends(get_current_user)) -> MeResponse:
 
 @router.post("/renew", response_model=TokenResponse)
 async def renew(user: User = Depends(get_current_user)) -> TokenResponse:
-    """A fresh 24 h token for an active session (2026-09-03 shell spec §10). Same version, so
-    a password change elsewhere still ends this session at its next request."""
+    """A fresh full-length token (`access_token_expire_hours`) for an active session
+    (2026-09-03 shell spec §10). Same version, so a password change elsewhere still ends
+    this session at its next request."""
     return TokenResponse(access_token=create_access_token(user.id, user.token_version))
 
 
@@ -54,11 +55,20 @@ async def change_password(
     if not current_ok:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     try:
-        user.password_hash = hash_password(body.new_password)
+        new_hash = hash_password(body.new_password)
     except ValueError:
         raise HTTPException(status_code=400, detail="Password must be at most 72 bytes") from None
     # Every other session's token now carries a stale version and dies at its next request;
     # this response carries the only live one, so the tab that changed the password stays in.
-    user.token_version += 1
+    # SQL-side bump: concurrent changes get distinct versions and only the last survives;
+    # a Python-side `+= 1` writes the same N+1 from both and leaves both tokens live.
+    new_version = (
+        await db.execute(
+            update(User)
+            .where(User.id == user.id)
+            .values(password_hash=new_hash, token_version=User.token_version + 1)
+            .returning(User.token_version)
+        )
+    ).scalar_one()
     await db.commit()
-    return TokenResponse(access_token=create_access_token(user.id, user.token_version))
+    return TokenResponse(access_token=create_access_token(user.id, new_version))

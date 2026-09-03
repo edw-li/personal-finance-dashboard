@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import jwt as pyjwt
 from sqlalchemy import delete
 
@@ -85,7 +87,7 @@ async def test_login_rate_limited(client, seeded_user):
 
 
 async def test_me_rejects_token_for_missing_user(client, db, seeded_user):
-    token = create_access_token(seeded_user.id)
+    token = create_access_token(seeded_user.id, seeded_user.token_version)
     await db.execute(delete(User).where(User.id == seeded_user.id))
     await db.commit()
     client.headers["Authorization"] = f"Bearer {token}"
@@ -127,21 +129,27 @@ async def test_change_password_multibyte_over_72_bytes_rejected(auth_client):
     assert resp.json()["detail"] == "Password must be at most 72 bytes"
 
 
-async def test_renew_issues_a_fresh_token_with_a_later_expiry(auth_client, client):
-    old = client.headers["Authorization"].split(" ", 1)[1]
-    resp = await auth_client.post("/api/v1/auth/renew")
+async def test_renew_issues_a_fresh_token_with_a_later_expiry(client, seeded_user):
+    # The old token is hand-minted one minute from expiry: a renewal against a freshly issued
+    # login token shares its whole-second `exp`, so `new >= old` would also pass for a
+    # byte-identical re-mint. Against a 1-minute expiry the fresh one MUST be strictly later.
+    soon = datetime.now(UTC) + timedelta(minutes=1)
+    old = pyjwt.encode(
+        {"sub": str(seeded_user.id), "ver": 0, "exp": soon},
+        settings.secret_key,
+        algorithm=ALGORITHM,
+    )
+    client.headers["Authorization"] = f"Bearer {old}"
+    resp = await client.post("/api/v1/auth/renew")
     assert resp.status_code == 200, resp.text
-    new = resp.json()["access_token"]
-    old_claims = pyjwt.decode(old, settings.secret_key, algorithms=[ALGORITHM])
-    new_claims = pyjwt.decode(new, settings.secret_key, algorithms=[ALGORITHM])
+    new_claims = pyjwt.decode(
+        resp.json()["access_token"], settings.secret_key, algorithms=[ALGORITHM]
+    )
     # Same subject and version: a renewal EXTENDS a session, it never starts a new one, so a
     # password change elsewhere still ends this one at its next request.
-    assert (new_claims["sub"], new_claims["ver"]) == (old_claims["sub"], old_claims["ver"])
-    # `>=`, not `>`, and no `new != old`: `exp` is a whole number of seconds, so renewing
-    # inside the same second as the login re-mints a byte-identical token. The guarantee is
-    # that the expiry never moves BACKWARDS -- a renewal can only ever buy time.
-    assert new_claims["exp"] >= old_claims["exp"]
-    client.headers["Authorization"] = f"Bearer {new}"
+    assert (new_claims["sub"], new_claims["ver"]) == (str(seeded_user.id), 0)
+    assert new_claims["exp"] > int(soon.timestamp())  # strictly later, deterministic
+    client.headers["Authorization"] = f"Bearer {resp.json()['access_token']}"
     assert (await client.get("/api/v1/auth/me")).status_code == 200
 
 
@@ -152,7 +160,13 @@ async def test_renew_requires_auth(client):
 async def test_change_password_signs_out_every_other_session_but_not_this_one(
     auth_client, client, seeded_user
 ):
+    signed_in = client.headers["Authorization"]
     other = create_access_token(seeded_user.id, seeded_user.token_version)
+    # Prove the second session was accepted BEFORE the change, so its 401 below can only be
+    # the version bump and not a token that never worked in the first place.
+    client.headers["Authorization"] = f"Bearer {other}"
+    assert (await client.get("/api/v1/auth/me")).status_code == 200
+    client.headers["Authorization"] = signed_in
     resp = await auth_client.post(
         "/api/v1/auth/change-password",
         json={"current_password": "correct-horse", "new_password": "new-pass-123"},

@@ -16,7 +16,7 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode(), password_hash.encode())
 
 
-def create_access_token(user_id: int, token_version: int = 0) -> str:
+def create_access_token(user_id: int, token_version: int) -> str:
     payload = {
         "sub": str(user_id),
         "ver": token_version,
@@ -41,6 +41,9 @@ def decode_access_token(token: str) -> tuple[int, int]:
             algorithms=[ALGORITHM],
             options={"require": ["exp", "sub"]},
         )
-        return int(payload["sub"]), int(payload.get("ver", 0))
+        ver = payload.get("ver", 0)
+        if type(ver) is not int:  # only ints are ever minted; rejects None/str/float/bool
+            raise ValueError("invalid token")
+        return int(payload["sub"]), ver
     except (jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
         raise ValueError("invalid token") from exc

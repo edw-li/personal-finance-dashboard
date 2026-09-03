@@ -57,3 +57,16 @@ def test_jwt_non_numeric_sub_rejected():
     )
     with pytest.raises(ValueError, match="invalid token"):
         decode_access_token(token)
+
+
+@pytest.mark.parametrize("ver", [None, "abc", 1.5, [1]])
+def test_jwt_malformed_version_rejected(ver):
+    """Only ints are ever minted, so anything else is a forged/corrupt token and must raise
+    the same opaque ValueError as any other bad token -- never reach the version compare."""
+    token = pyjwt.encode(
+        {"sub": "1", "ver": ver, "exp": datetime.now(UTC) + timedelta(hours=1)},
+        settings.secret_key,
+        algorithm="HS256",
+    )
+    with pytest.raises(ValueError, match="invalid token"):
+        decode_access_token(token)
