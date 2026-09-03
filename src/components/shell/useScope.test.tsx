@@ -15,6 +15,14 @@ function Probe({ uses }: { uses: ScopeUses }) {
       <button onClick={() => setScope({ range: 'ytd' })}>ytd</button>
       <button onClick={() => setScope({ month: '2026-02-01' })}>feb</button>
       <button onClick={() => setScope({ month: null })}>latest</button>
+      <button
+        onClick={() => {
+          setScope({ owner: 2 })
+          setScope({ range: 'ytd' })
+        }}
+      >
+        owner 2 then ytd
+      </button>
     </div>
   )
 }
@@ -35,6 +43,8 @@ const url = () => screen.getByTestId('url').textContent
 
 describe('useScope', () => {
   it('reads the URL first', () => {
+    // Memory says something else entirely — the URL must win, key by key.
+    localStorage.setItem(SCOPE_KEY, JSON.stringify({ owner: 'joint', range: 'all' }))
     mount('/net-worth?owner=2&range=ytd&month=2026-02')
     expect(scope()).toBe('2|ytd|2026-02-01')
   })
@@ -59,6 +69,12 @@ describe('useScope', () => {
     expect(scope()).toBe('2|ytd|null') // range is still readable, just not written
   })
 
+  it('leaves a month param alone on a page that does not use month', () => {
+    mount('/portfolio?month=2026-07-01', { owner: true, range: true })
+    expect(url()).toBe('/portfolio?month=2026-07-01&owner=all&range=1y')
+    expect(scope()).toBe('null|1y|2026-07-01') // readable, but neither rewritten nor dropped
+  })
+
   it('setScope writes the URL and remembers owner and range, never month', () => {
     mount('/net-worth')
     act(() => screen.getByText('owner 2').click())
@@ -71,9 +87,17 @@ describe('useScope', () => {
     expect(url()).toBe('/net-worth?owner=2&range=ytd')
   })
 
+  it('coalesces two setScope calls made in the same tick', () => {
+    mount('/net-worth')
+    act(() => screen.getByText('owner 2 then ytd').click())
+    expect(url()).toBe('/net-worth?owner=2&range=ytd')
+    expect(scope()).toBe('2|ytd|null')
+  })
+
   it('ignores garbage values and falls through to defaults', () => {
     mount('/net-worth?owner=bob&range=5y&month=next')
     expect(scope()).toBe('null|1y|null')
+    expect(url()).toBe('/net-worth?owner=all&range=1y')
   })
 
   it('accepts a legacy YYYY-MM-DD month link and rewrites it to YYYY-MM', () => {

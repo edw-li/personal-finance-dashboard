@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { OwnerScope } from '../../api/netWorth'
 import type { RangePreset } from '../../charts/timeZoom'
@@ -28,11 +28,16 @@ interface ScopeMemory {
   range?: RangePreset
 }
 
+/** A person owner is a real person row id: whole and positive. `0` is not a person. */
+const isPersonId = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0
+
 export function parseOwner(raw: string | null): OwnerScope | undefined {
   if (raw === null) return undefined
   if (raw === 'all') return null
   if (raw === 'joint') return 'joint'
-  return /^\d{1,10}$/.test(raw) ? Number(raw) : undefined
+  if (!/^\d{1,10}$/.test(raw)) return undefined
+  const id = Number(raw)
+  return isPersonId(id) ? id : undefined
 }
 
 export function parseRange(raw: string | null): RangePreset | undefined {
@@ -58,12 +63,13 @@ export function readMemory(): ScopeMemory {
     if (parsed === null || typeof parsed !== 'object') return {}
     const record = parsed as Record<string, unknown>
     const memory: ScopeMemory = {}
-    if (record.owner === null || record.owner === 'joint' || typeof record.owner === 'number') {
+    // Storage is user-writable and survives schema changes — validate it with the same
+    // predicates the URL goes through rather than trusting whatever is on disk.
+    if (record.owner === null || record.owner === 'joint' || isPersonId(record.owner)) {
       memory.owner = record.owner as OwnerScope
     }
-    if (record.range === 'all' || record.range === '1y' || record.range === 'ytd') {
-      memory.range = record.range
-    }
+    const range = typeof record.range === 'string' ? parseRange(record.range) : undefined
+    if (range !== undefined) memory.range = range
     return memory
   } catch {
     return {}
@@ -87,6 +93,15 @@ export function useScope(uses: ScopeUses = {}): {
   const rawRange = searchParams.get('range')
   const rawMonth = searchParams.get('month')
 
+  // react-router's setter — functional form included — hands back the RENDER's params, not the
+  // live URL, so two setScope calls in one tick would each start from the same snapshot and the
+  // second would drop the first's key. The ref carries the uncommitted params until the URL
+  // catches up. Declared before the normalization effect so it is cleared first each commit.
+  const pendingRef = useRef<URLSearchParams | null>(null)
+  useEffect(() => {
+    pendingRef.current = null
+  }, [searchParams])
+
   const scope = useMemo<Scope>(() => {
     const memory = readMemory()
     const owner = parseOwner(rawOwner)
@@ -96,6 +111,8 @@ export function useScope(uses: ScopeUses = {}): {
       range: range !== undefined ? range : (memory.range ?? DEFAULT_RANGE),
       month: parseMonth(rawMonth) ?? null,
     }
+    // Memory is re-read only when a raw URL value changes: the URL is the truth and storage is
+    // a one-shot fallback for the keys it left empty, not a subscription to another tab's edits.
   }, [rawOwner, rawRange, rawMonth])
 
   // Arrival normalization: a page that USES a key gets it written into the URL when it is
@@ -103,6 +120,7 @@ export function useScope(uses: ScopeUses = {}): {
   // convention) — the back button never sees this. Idempotent: it only fires when the URL
   // actually differs from what the scope resolved to.
   useEffect(() => {
+    if (pendingRef.current) return // a write is in flight; this re-runs when it lands
     const next = new URLSearchParams(searchParams)
     let changed = false
     if (uses.owner && rawOwner !== ownerToParam(scope.owner)) {
@@ -123,12 +141,15 @@ export function useScope(uses: ScopeUses = {}): {
         changed = true
       }
     }
-    if (changed) setSearchParams(next, { replace: true })
+    if (changed) {
+      pendingRef.current = next
+      setSearchParams(next, { replace: true })
+    }
   }, [uses.owner, uses.range, uses.month, rawOwner, rawRange, rawMonth, scope, searchParams, setSearchParams])
 
   const setScope = useCallback(
     (partial: Partial<Scope>) => {
-      const next = new URLSearchParams(searchParams)
+      const next = new URLSearchParams(pendingRef.current ?? searchParams)
       const memory = readMemory()
       if (partial.owner !== undefined) {
         next.set('owner', ownerToParam(partial.owner))
@@ -138,11 +159,16 @@ export function useScope(uses: ScopeUses = {}): {
         next.set('range', partial.range)
         memory.range = partial.range
       }
-      if ('month' in partial) {
-        if (partial.month === null || partial.month === undefined) next.delete('month')
-        else next.set('month', partial.month.slice(0, 7))
+      // `month: undefined` means "leave the month alone" (the field is simply absent from a
+      // partial); only an explicit null clears it, and a string has to survive parseMonth.
+      if (partial.month === null) {
+        next.delete('month')
+      } else if (partial.month !== undefined) {
+        const month = parseMonth(partial.month)
+        if (month !== undefined) next.set('month', month.slice(0, 7))
       }
       if (partial.owner !== undefined || partial.range !== undefined) writeMemory(memory)
+      pendingRef.current = next
       setSearchParams(next, { replace: true })
     },
     [searchParams, setSearchParams],
