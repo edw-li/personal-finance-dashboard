@@ -6,6 +6,8 @@ import { lightFromDark, recolorOption } from '../charts/recolor'
 import type { ZoomWindow } from '../charts/timeZoom'
 import ChartExportMenu from './ChartExportMenu'
 import type { ExportConfig } from './ChartExportMenu'
+import { useChartDecals } from './useChartDecals'
+import { useReducedMotion } from './useReducedMotion'
 import { useTheme } from './shell/ThemeProvider'
 
 export type EChartsInstance = ReturnType<typeof echarts.init>
@@ -18,10 +20,6 @@ export interface EChartEventParams {
   dataIndex?: number
   value?: unknown
 }
-
-const REDUCED_MOTION =
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 export default function EChart({
   option,
@@ -36,6 +34,7 @@ export default function EChart({
   exportConfig,
   animateEntrance = true,
   zoomWindow,
+  group,
 }: {
   option: EChartsOption
   height?: number
@@ -67,14 +66,24 @@ export default function EChart({
    *  animated dataZoom ACTION on the live instance instead of a notMerge rebuild —
    *  the range chips morph instead of snapping (spec Addendum §A2). Pass a
    *  useMemo'd value: the fingerprint compare below runs per effect firing.
-   *  CONTRACT: the fingerprint is JSON — function-valued props (tooltip/axisLabel
-   *  formatters) are invisible to it. A formatter closure may only capture state that
+   *  CONTRACT: the fingerprint is JSON — it carries the option, the resolved theme and
+   *  `__decals`, and function-valued props (tooltip/axisLabel formatters, grammar.ts's
+   *  `stagger` delay) are invisible to it. A formatter closure may only capture state that
    *  ALSO surfaces in serializable option parts (series names/ids/data), or a
    *  formatter-only change would ride the fast path and never reach the chart. All
    *  six wired options hold this today (verified 2026-08-27). */
   zoomWindow?: ZoomWindow
+  /** echarts.connect group (chart spec §8): same-axis siblings share axisPointer and zoom.
+   *  Set on the instance and connected in the init effect so a theme re-init re-connects. */
+  group?: string
 }) {
   const { resolved, version: themeVersion } = useTheme()
+  // Live (spec §11): a change of the OS preference while mounted re-runs the option effect
+  // below and re-applies `animation: false` — the module-scope read it replaces froze the
+  // answer at first import.
+  const reducedMotion = useReducedMotion()
+  // Appearance › Chart patterns (spec §14).
+  const decals = useChartDecals()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<EChartsInstance | null>(null)
   // Fingerprint of the last APPLIED option minus its dataZoom (the zoom fast path's
@@ -110,6 +119,13 @@ export default function EChart({
     // to keep. Series colors are handled by recolorOption in the effect below, not here.
     const name = registerThemeVersion(resolved, themeVersion)
     const chart = echarts.init(el, name)
+    if (group !== undefined) {
+      // A disposed instance leaves its group by itself, and every init (theme re-inits
+      // included) reconnects — so dispose below deliberately does NOT call disconnect(),
+      // which would unlink the surviving siblings too.
+      chart.group = group
+      echarts.connect(group)
+    }
     chart.on('click', (params) => onClickRef.current?.(params as EChartEventParams))
     chart.on('mouseover', (params) => onHoverRef.current?.(params as EChartEventParams))
     // mouseout fires per-item; globalout covers fast exits that skip it — without it a
@@ -144,7 +160,7 @@ export default function EChart({
       lastStrippedRef.current = null
       if (instanceRef) instanceRef.current = null
     }
-  }, [instanceRef, resolved, themeVersion])
+  }, [instanceRef, resolved, themeVersion, group])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -153,7 +169,12 @@ export default function EChart({
     // zoom-only change (which would skip the rebuild and leave the old colors painted).
     // Second line of defence only: the init effect's lastStrippedRef reset already denies
     // the fast path its "equal to the last applied option" precondition after a rebuild.
-    const stripped = JSON.stringify({ ...option, dataZoom: undefined, __theme: resolved })
+    const stripped = JSON.stringify({
+      ...option,
+      dataZoom: undefined,
+      __theme: resolved,
+      __decals: decals,
+    })
     // Zoom-only fast path (spec Addendum §A2): same option apart from the window → an
     // animated dataZoom ACTION morphs the series on the live instance; the notMerge
     // rebuild below is what used to make the chips snap. Skipped under reduced motion
@@ -161,7 +182,7 @@ export default function EChart({
     // as a no-op when the chart already sits at the target (the ctrl+wheel mirror's
     // echo: datazoom event → page state → option rebuild → same window).
     if (
-      !REDUCED_MOTION &&
+      !reducedMotion &&
       zoomWindow !== undefined &&
       lastStrippedRef.current !== null &&
       lastStrippedRef.current === stripped
@@ -193,11 +214,14 @@ export default function EChart({
     // Builders stay theme-blind (charts/recolor.ts). Dark is the identity.
     const themed =
       resolved === 'light' ? (recolorOption(option, lightFromDark) as EChartsOption) : option
-    const base = REDUCED_MOTION ? quiesceRipples(themed) : themed
+    const base = reducedMotion ? quiesceRipples(themed) : themed
     chart.setOption(
       {
         ...base,
-        ...(REDUCED_MOTION
+        // Decals ride echarts' aria component; its own label generation is OFF because it
+        // would overwrite the container's house aria-label with a generated sentence.
+        ...(decals ? { aria: { enabled: true, label: { enabled: false }, decal: { show: true } } } : {}),
+        ...(reducedMotion
           ? { animation: false }
           : !animateEntrance
             ? { animationDuration: 0 }
@@ -214,7 +238,7 @@ export default function EChart({
     // useMemo their options. `themeVersion` cannot move without `resolved` today
     // (ThemeProvider bumps it only when the palette changes); it is listed because the
     // init effect keys on it, and the two must not drift.
-  }, [option, animateEntrance, zoomWindow, resolved, themeVersion])
+  }, [option, animateEntrance, zoomWindow, resolved, themeVersion, reducedMotion, decals])
 
   return (
     <>
