@@ -74,13 +74,19 @@ export default function ChartExportMenu({
       downloadDataUrl(raw, `${config.name}.png`)
       return
     }
-    void captioned(raw).then((url) => downloadDataUrl(url, `${config.name}.png`))
+    void captioned(raw)
+      // Decoration must NEVER fail an export (exportImage.ts's own contract). It already
+      // returns the raw URL where the canvas cannot draw, but the image DECODE rejects —
+      // uncaught that would be an unhandled rejection AND a click that downloads nothing.
+      .catch(() => raw)
+      .then((url) => downloadDataUrl(url, `${config.name}.png`))
   }
 
   const copy = async () => {
     const raw = snapshot()
     if (raw === null) return
-    const url = await captioned(raw)
+    // Same fallback as png(): an undecorated copy beats no copy at all.
+    const url = await captioned(raw).catch(() => raw)
     const Item = (globalThis as { ClipboardItem?: new (items: Record<string, Blob>) => ClipboardItem }).ClipboardItem
     if (Item !== undefined && typeof navigator.clipboard?.write === 'function') {
       try {

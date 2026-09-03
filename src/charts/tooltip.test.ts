@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { tooltipRows } from '../testing/tooltipRows'
-import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE } from './theme'
+import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE } from './theme'
 import { axisTooltip, brandTooltip, isGrammarTooltip, itemTooltip, swatch } from './tooltip'
 
 const P = (over: Record<string, unknown>) => ({ seriesType: 'bar', color: PALETTE[0], ...over })
@@ -99,6 +99,17 @@ describe('swatch', () => {
     expect(swatch(PALETTE[0], { wash: true })).toContain('is-wash')
     expect(swatch(undefined)).toContain('var(--muted)') // an unknown color can never inject
     expect(swatch('javascript:alert(1)')).toContain('var(--muted)')
+  })
+
+  // The diverging ramp DOES get variables (--diverge-1…9, tokens.ts cssDeclarations), so a
+  // "vs average" heatmap's swatch follows the theme instead of staying dark on light — the
+  // documented §7 cost is the SEQUENTIAL ramp alone, which no palette emits.
+  it('maps every diverging step to its --diverge-N variable', () => {
+    expect(DIVERGING.map((hex) => swatch(hex))).toEqual(
+      DIVERGING.map(
+        (_, i) => `<i class="chart-tip-swatch" style="background:var(--diverge-${i + 1})"></i>`,
+      ),
+    )
   })
 })
 

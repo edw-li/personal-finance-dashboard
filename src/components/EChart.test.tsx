@@ -310,6 +310,30 @@ describe('zoomWindow fast path', () => {
     expect(chart.dispatchAction).not.toHaveBeenCalled()
   })
 
+  // The fingerprint carries `__reduced` for exactly this: under reduce the applied option
+  // holds `animation: false`, and the fast path is gated on `!reducedMotion`. A live
+  // reduce → no-preference flip therefore ARRIVES at a re-enabled fast path with an
+  // otherwise-unchanged option — without `__reduced` it would settle as a no-op (the chart
+  // already sits at the window) and the animation-less option would stay painted.
+  it('a live reduce → no-preference flip rebuilds instead of riding the zoom fast path', () => {
+    let listeners: (() => void)[] = []
+    const media = {
+      matches: true,
+      addEventListener: (_: string, cb: () => void) => { listeners.push(cb) },
+      removeEventListener: (_: string, cb: () => void) => { listeners = listeners.filter((l) => l !== cb) },
+    }
+    vi.stubGlobal('matchMedia', () => media)
+    const option = { series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption
+    render(<EChart option={option} zoomWindow={{ startValue: 3, endValue: 9 }} />)
+    const chart = instances[0]
+    expect((chart.setOption.mock.calls[0] as [Record<string, unknown>])[0].animation).toBe(false)
+    // Same option object, same window — only the OS preference moves.
+    act(() => { media.matches = false; listeners.forEach((l) => l()) })
+    expect(chart.setOption).toHaveBeenCalledTimes(2)
+    expect('animation' in (chart.setOption.mock.calls[1] as [Record<string, unknown>])[0]).toBe(false)
+    expect(chart.dispatchAction).not.toHaveBeenCalled()
+  })
+
   it('without zoomWindow, a zoom-only change still rebuilds (opt-in contract)', () => {
     const { rerender } = render(
       <EChart

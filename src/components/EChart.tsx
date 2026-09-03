@@ -66,11 +66,11 @@ export default function EChart({
    *  animated dataZoom ACTION on the live instance instead of a notMerge rebuild —
    *  the range chips morph instead of snapping (spec Addendum §A2). Pass a
    *  useMemo'd value: the fingerprint compare below runs per effect firing.
-   *  CONTRACT: the fingerprint is JSON — it carries the option, the resolved theme and
-   *  `__decals`, and function-valued props (tooltip/axisLabel formatters, grammar.ts's
-   *  `stagger` delay) are invisible to it. A formatter closure may only capture state that
-   *  ALSO surfaces in serializable option parts (series names/ids/data), or a
-   *  formatter-only change would ride the fast path and never reach the chart. All
+   *  CONTRACT: the fingerprint is JSON — it carries the option, the resolved theme,
+   *  `__decals` and `__reduced`, and function-valued props (tooltip/axisLabel formatters,
+   *  grammar.ts's `stagger` delay) are invisible to it. A formatter closure may only
+   *  capture state that ALSO surfaces in serializable option parts (series names/ids/data),
+   *  or a formatter-only change would ride the fast path and never reach the chart. All
    *  six wired options hold this today (verified 2026-08-27). */
   zoomWindow?: ZoomWindow
   /** echarts.connect group (chart spec §8): same-axis siblings share axisPointer and zoom.
@@ -169,11 +169,17 @@ export default function EChart({
     // zoom-only change (which would skip the rebuild and leave the old colors painted).
     // Second line of defence only: the init effect's lastStrippedRef reset already denies
     // the fast path its "equal to the last applied option" precondition after a rebuild.
+    // `__reduced` is load-bearing in its own right: the applied option carries
+    // `animation: false` under reduce, so a LIVE reduce → no-preference flip has to rebuild
+    // to lift it. Without it the flip would find an unchanged fingerprint, take the fast
+    // path (which the same flip has just re-enabled) and settle as a no-op — leaving the
+    // chart animation-less until some unrelated data change repainted it.
     const stripped = JSON.stringify({
       ...option,
       dataZoom: undefined,
       __theme: resolved,
       __decals: decals,
+      __reduced: reducedMotion,
     })
     // Zoom-only fast path (spec Addendum §A2): same option apart from the window → an
     // animated dataZoom ACTION morphs the series on the live instance; the notMerge

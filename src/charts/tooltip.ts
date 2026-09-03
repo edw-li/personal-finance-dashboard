@@ -6,7 +6,7 @@
 // the theme for free. Every series name is escaped unconditionally: category, account,
 // grant and card names are user text, and the "own constants only" exemption ends here.
 // Depends on: charts/theme.ts (the token hexes the swatch map keys on), utils/format.ts.
-import { INK, MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from './theme'
+import { DIVERGING, INK, MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from './theme'
 import { escapeHtml, formatCurrency, formatPct, formatShares } from '../utils/format'
 
 export type TooltipUnit = 'money' | 'percent' | 'shares'
@@ -63,10 +63,15 @@ export function isGrammarTooltip(formatter: unknown): boolean {
   return typeof formatter === 'function' && BRAND.has(formatter)
 }
 
-// Token hex → CSS variable. Sequential/diverging steps have no variable and fall back to
-// the hex (they stay dark under the light theme — a documented cost, spec §7).
+// Token hex → CSS variable. The SEQUENTIAL ramp is the one scale with no variables (12
+// steps, emitted by no palette) and falls back to the hex — its steps stay dark under the
+// light theme, a documented cost (spec §7). The diverging steps do have `--diverge-1…9`
+// (tokens.ts cssDeclarations), so they are mapped and follow the theme like the palette.
+// No hex is claimed twice: tokens.test.ts holds every diverging step distinct from every
+// other token and from its siblings.
 const CSS_VARS: ReadonlyMap<string, string> = new Map<string, string>([
   ...PALETTE.map((hex, i) => [hex.toLowerCase(), `var(--chart-${i + 1})`] as [string, string]),
+  ...DIVERGING.map((hex, i) => [hex.toLowerCase(), `var(--diverge-${i + 1})`] as [string, string]),
   [OTHER_SERIES_COLOR.toLowerCase(), 'var(--other-series)'],
   [INK.toLowerCase(), 'var(--text)'],
   [MUTED.toLowerCase(), 'var(--muted)'],

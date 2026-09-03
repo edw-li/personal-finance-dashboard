@@ -9,7 +9,7 @@ vi.mock('../charts/exportImage', () => ({
 
 import ChartExportMenu from './ChartExportMenu'
 import ToastProvider from './ToastProvider'
-import { captionedPng } from '../charts/exportImage'
+import { captionedPng, dataUrlToBlob } from '../charts/exportImage'
 import { downloadDataUrl, downloadText } from '../utils/download'
 
 const chart = { getDataURL: vi.fn(() => 'data:image/png;base64,RAW') }
@@ -32,6 +32,30 @@ describe('ChartExportMenu', () => {
     expect(captionedPng).toHaveBeenCalledWith('data:image/png;base64,RAW', expect.objectContaining({
       title: 'Net worth', caption: 'as of Aug 14, 2026', surface: '#171a21', ink: '#e6e9ef', muted: '#8b93a3', exportedOn: expect.stringMatching(/\w{3} \d{1,2}, \d{4}/),
     }))
+  })
+
+  // captionedPng returns the raw URL where the canvas cannot draw, but the image DECODE
+  // rejects — and an export that decorates must still export. Uncaught, the throw below
+  // was an unhandled rejection AND a click that silently downloaded nothing.
+  it('PNG falls back to the raw snapshot when decoration rejects', async () => {
+    vi.mocked(captionedPng).mockRejectedValueOnce(new Error('export image failed to decode'))
+    render(<ChartExportMenu config={{ name: 'net-worth', title: 'Net worth' }} getChart={() => chart} />)
+    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
+    await waitFor(() =>
+      expect(downloadDataUrl).toHaveBeenCalledWith('data:image/png;base64,RAW', 'net-worth.png'),
+    )
+  })
+
+  it('Copy falls back to the raw snapshot when decoration rejects', async () => {
+    vi.mocked(captionedPng).mockRejectedValueOnce(new Error('export image failed to decode'))
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class { constructor(public items: Record<string, Blob>) {} })
+    vi.stubGlobal('navigator', { clipboard: { write } })
+    render(<ToastProvider><ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} /></ToastProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1))
+    expect(dataUrlToBlob).toHaveBeenCalledWith('data:image/png;base64,RAW')
+    expect(await screen.findByText('Chart copied')).toBeTruthy()
   })
 
   it('Copy writes a PNG ClipboardItem when the browser can', async () => {
