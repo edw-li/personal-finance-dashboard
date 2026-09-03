@@ -568,6 +568,38 @@ describe('WhatIfPanel', () => {
     expect(addOverride().disabled).toBe(true)
   })
 
+  // The codec's own fence, not a looser Number() test: ".5", "+5" and "5." all pass
+  // Number() but parseSale/parseEspp/parseOverride refuse them on arrival — a box that
+  // accepted one would write an entry the very next decode drops, and the leg would vanish
+  // without a word (lane P's BoxKnob, same lesson).
+  it('refuses the spellings the URL codec would drop, in every box', async () => {
+    mount('/taxes?whatif=sale%3A7%3A40&whatif=espp%3A3%3A150.00000&whatif=annual_salary%3Anull', {
+      definitions: DEFS,
+    })
+    await waitFor(() => expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1))
+    const before = url()
+
+    for (const bad of ['.5', '+5', '5.']) {
+      fireEvent.change(field('Sale 1 shares'), { target: { value: bad } })
+      fireEvent.blur(field('Sale 1 shares'))
+      expect(screen.getByRole('alert').textContent).toContain('VTI: shares must be a number')
+      fireEvent.change(field('Sale 1 price'), { target: { value: bad } })
+      fireEvent.blur(field('Sale 1 price'))
+      expect(screen.getByRole('alert').textContent).toContain('VTI: price must be a number')
+      fireEvent.change(field('ESPP sale 1 price'), { target: { value: bad } })
+      fireEvent.blur(field('ESPP sale 1 price'))
+      expect(screen.getByRole('alert')).toBeTruthy()
+      fireEvent.focus(field('Override 1 value'))
+      fireEvent.change(field('Override 1 value'), { target: { value: bad } })
+      fireEvent.blur(field('Override 1 value'))
+      expect(screen.getByRole('alert').textContent).toContain('Annual Salary: enter a number')
+    }
+
+    // Nothing reached the URL, so nothing can silently vanish out of it on the next decode.
+    expect(url()).toBe(before)
+    expect(vi.mocked(runWhatIf)).toHaveBeenCalledTimes(1)
+  })
+
   // --- presets, pins, Apply ----------------------------------------------------------------
 
   it('presets write knobs immediately; missing data disables a chip with its sentence', async () => {

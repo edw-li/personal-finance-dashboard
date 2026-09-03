@@ -10,7 +10,14 @@ import CompareTable from '../../sandbox/CompareTable'
 import { inverted } from '../../sandbox/DeltaChip'
 import PresetRow from '../../sandbox/PresetRow'
 import SandboxPanel from '../../sandbox/SandboxPanel'
-import { legacyLotId, legacyTicker, readEntries, type EsppEntry, type SaleEntry } from '../../sandbox/scenarioUrl'
+import {
+  isWireDecimal,
+  legacyLotId,
+  legacyTicker,
+  readEntries,
+  type EsppEntry,
+  type SaleEntry,
+} from '../../sandbox/scenarioUrl'
 import { useSandbox, type PinResult, type SandboxSpec } from '../../sandbox/useSandbox'
 import type {
   ChangedInput,
@@ -26,7 +33,6 @@ import type {
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils/format'
-import { isPlainDecimal } from '../../utils/percent'
 import { toneOf } from '../../utils/tone'
 import type { Tone } from '../../utils/tone'
 import AmountInput from '../AmountInput'
@@ -573,8 +579,12 @@ export default function WhatIfPanel({
                     value={leg.shares}
                     validate={(text) => {
                       const shares = text.trim()
-                      if (shares === '' || !isPlainDecimal(shares) || !(Number(shares) > 0))
-                        return `${ticker}: shares must be a number greater than 0`
+                      // The CODEC's fence, never a looser Number() test: ".5", "+5" and
+                      // "5." all pass Number() but parseSale refuses them on arrival, so a
+                      // box that took one would write an entry the next decode drops — the
+                      // leg would vanish without a word (lane P's BoxKnob, same lesson).
+                      if (shares === '' || !isWireDecimal(shares) || !(Number(shares) > 0))
+                        return `${ticker}: shares must be a number greater than 0, like 12.5`
                       // The server's own sentence (api/taxes.py's oversell 422) — one vocabulary.
                       if (holding !== undefined && Number(shares) > Number(holding.shares))
                         return `selling ${shares} ${ticker} — only ${holding.shares} held`
@@ -589,8 +599,8 @@ export default function WhatIfPanel({
                     value={leg.price ?? ''}
                     validate={(text) => {
                       const price = text.trim()
-                      return price !== '' && (!isPlainDecimal(price) || !(Number(price) > 0))
-                        ? `${ticker}: price must be a number greater than 0, or blank`
+                      return price !== '' && (!isWireDecimal(price) || !(Number(price) > 0))
+                        ? `${ticker}: price must be a number greater than 0, or blank — like 62.50`
                         : null
                     }}
                     onCommit={(text, immediate) => {
@@ -667,8 +677,8 @@ export default function WhatIfPanel({
                     value={leg.sale_price ?? ''}
                     validate={(text) => {
                       const price = text.trim()
-                      return price !== '' && (!isPlainDecimal(price) || !(Number(price) > 0))
-                        ? `Lot ${lot === undefined ? leg.lot_id : formatDate(lot.purchase_date)}: sale price must be a number greater than 0, or blank`
+                      return price !== '' && (!isWireDecimal(price) || !(Number(price) > 0))
+                        ? `Lot ${lot === undefined ? leg.lot_id : formatDate(lot.purchase_date)}: sale price must be a number greater than 0, or blank — like 150.00`
                         : null
                     }}
                     onCommit={(text, immediate) => {
@@ -736,7 +746,9 @@ export default function WhatIfPanel({
                         value={scenario.overrides[key] ?? ''}
                         onCommit={(canonical, immediate) => setOverrideValue(key, canonical, immediate)}
                         onInvalid={() =>
-                          setFormError(`${label}: enter a number, or leave the value blank to clear it`)
+                          setFormError(
+                            `${label}: enter a number, or leave the value blank to clear it — like 210000`,
+                          )
                         }
                       />
                       <button
@@ -873,11 +885,15 @@ function DraftAmount({
       onCommit(null, true)
       return
     }
-    if (!isAmount(trimmed)) {
+    // isAmount is the TOLERANT grammar ("$1,600"); canonicalAmount strips the dressing but
+    // passes ".5", "+5" and "5." through unchanged — and formatOverride would then write an
+    // entry parseOverride refuses. Gate on the codec's own accept, like the leg boxes above.
+    const canonical = isAmount(trimmed) ? canonicalAmount(trimmed) : ''
+    if (!isWireDecimal(canonical)) {
       onInvalid()
       return
     }
-    onCommit(canonicalAmount(trimmed), true)
+    onCommit(canonical, true)
   }
   return (
     <span
