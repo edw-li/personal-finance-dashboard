@@ -240,10 +240,14 @@ export function heatTreemapOption(
           show: true,
           fontSize: 11,
           overflow: 'truncate' as const,
-          formatter: (p: { data?: HeatLeaf }) =>
-            p.data === undefined
+          // `data?: unknown` so the callback stays assignable to echarts' CallbackDataParams
+          // (whose data is OptionDataItem); the leaf shape is this builder's own.
+          formatter: (p: { data?: unknown }) => {
+            const leaf = p.data as HeatLeaf | undefined
+            return leaf === undefined
               ? ''
-              : `${p.data.name}\n${formatCurrencyCompact(p.data.value[0])} · ${formatPct(p.data.pct)}`,
+              : `${leaf.name}\n${formatCurrencyCompact(leaf.value[0])} · ${formatPct(leaf.pct)}`
+          },
         },
         levels: [
           {},

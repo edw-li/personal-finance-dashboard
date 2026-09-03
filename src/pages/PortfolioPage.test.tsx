@@ -47,13 +47,16 @@ vi.mock('../components/EChart', async () => {
   return {
     default: ({
       option,
+      ariaLabel,
       animateEntrance = true,
     }: {
       option: { series?: { name?: string }[] }
+      ariaLabel?: string
       animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
+        'aria-label': ariaLabel,
         'data-series': (option.series ?? []).map((s) => s.name ?? '').join('|'),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
@@ -669,6 +672,18 @@ const HOUSEHOLD_HINT =
   'The owner chips scope holdings, allocation, dividends, transactions and realized gains ' +
   '— not this chart, the sparklines or price refresh, which always cover the whole ' +
   'household. Person views omit the live price dot because the history is household-wide.'
+
+it('mounts performance, the heat-treemap, the donut and dividends through ChartCard', async () => {
+  renderPage()
+  await screen.findByText('Performance')
+  expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
+  expect(screen.getByLabelText(/Treemap of holdings by industry and ticker/)).toBeTruthy()
+  expect(screen.getByLabelText(/Donut chart of portfolio share by holding type/)).toBeTruthy()
+  expect(screen.getByRole('group', { name: 'Export portfolio-performance' })).toBeTruthy()
+  expect(screen.getByRole('group', { name: 'Heat metric' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Day change' }))
+  expect(screen.getByLabelText(/shaded by day change/)).toBeTruthy()
+})
 
 it("overrides the shell's default answer to Whose with the portfolio one", async () => {
   renderPage()

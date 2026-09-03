@@ -196,8 +196,15 @@ describe('HoldingDetailPanel price history', () => {
   })
 
   it('refetches on a span change and ignores a re-click of the active span', async () => {
+    // A year-plus of coverage: a response SHORTER than the window it asked for is what
+    // disables the longer chips (F4), and this test is about the refetch, not the disable.
+    vi.mocked(fetchPriceHistory).mockResolvedValue({
+      ticker: 'AAA',
+      points: [{ d: '2025-08-14', c: '90.00' }, ...POINTS.points],
+    })
     renderPanel()
     await screen.findByTestId('echart')
+    expect(screen.getByRole('button', { name: 'All' })).toBeTruthy() // 'Max' is gone (F13)
 
     fireEvent.click(screen.getByRole('button', { name: '3Y' }))
     await waitFor(() => expect(fetchPriceHistory).toHaveBeenCalledWith('AAA', 1095))
@@ -221,6 +228,20 @@ describe('HoldingDetailPanel price history', () => {
     await screen.findByTestId('echart')
     expect(fetchPriceHistory).toHaveBeenLastCalledWith('AAA', 365)
     expect(screen.queryByText('history unavailable')).toBeNull()
+  })
+
+  it('disables spans longer than the history and prints the window summary', async () => {
+    // 365 asked, two points a day apart returned: the extent is known → 3Y and All are moot.
+    vi.mocked(fetchPriceHistory).mockResolvedValue({
+      ticker: 'AAA',
+      points: [{ d: '2026-08-10', c: '100.00' }, { d: '2026-08-12', c: '110.00' }],
+    })
+    renderPanel()
+    await screen.findByText(/over this window · history since Aug 10, 2026/)
+    expect(screen.getByText(/\+10\.0% over this window/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '1Y' }).hasAttribute('disabled')).toBe(false)
+    expect(screen.getByRole('button', { name: '3Y' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByRole('button', { name: 'All' }).hasAttribute('disabled')).toBe(true)
   })
 
   it('says why one bar cannot be a line, in manual-pricing words when it applies', async () => {

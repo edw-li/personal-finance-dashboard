@@ -16,8 +16,7 @@ import type { OwnerScope } from '../api/portfolio'
 import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { useAssistantView } from '../components/assistant/viewState'
-import ChartZoomHint from '../components/ChartZoomHint'
-import EChart from '../components/EChart'
+import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import AllocationPanel from '../components/portfolio/AllocationPanel'
 import DividendsPanel from '../components/portfolio/DividendsPanel'
@@ -141,7 +140,6 @@ export default function PortfolioPage() {
   const [dividendEvents, setDividendEvents] = useState<DividendEventOut[]>(
     cached?.dividendEvents ?? [],
   )
-  const [industry, setIndustry] = useState<AllocationResponse | null>(cached?.industry ?? null)
   const [byType, setByType] = useState<AllocationResponse | null>(cached?.byType ?? null)
   const [byAccount, setByAccount] = useState<AllocationResponse | null>(
     cached?.byAccount ?? null,
@@ -270,7 +268,6 @@ export default function PortfolioPage() {
     setTransactions(snap.transactions)
     setDividends(snap.dividends)
     setDividendEvents(snap.dividendEvents)
-    setIndustry(snap.industry)
     setByType(snap.byType)
     setByAccount(snap.byAccount)
     setSparklines(snap.sparklines)
@@ -428,18 +425,18 @@ export default function PortfolioPage() {
     // end of the household series drew a fake cliff. Only the All view bridges to "now";
     // null also suppresses the dashed connector and the "Live" legend entry (both live
     // inside the builder's livePt branch).
+    // The picks ride INTO the builder (F9): legendFor() owns the legend's shape, so a page
+    // that spread its own `legend` over the result would drop the scroll/pager rules.
     const base = portfolioHistoryOption(
       history,
       owner === null ? liveFromHoldings(holdings) : null,
       events,
+      { selected: legendSelected },
     )
     return base === null
       ? null
       : {
           ...base,
-          // The builder's legend is a plain {top: 0}, shared verbatim with OverviewPage
-          // (which has no picks to persist) — the page layers its mirrors over it here.
-          legend: { top: 0, selected: legendSelected },
           // startValue indexes history.dates; the appended live category sits at the
           // END, so the indices are unshifted and the window runs out to the ping.
           dataZoom: rangeZoom(history.dates, range),
@@ -627,42 +624,34 @@ export default function PortfolioPage() {
                 />
               </div>
             )}
-            <section className="panel">
-              <div className="panel-title-row">
-                <h2 className="panel-title">
-                  Performance
-                  <InfoHint text="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)." />
-                </h2>
-              </div>
-              {/* Outside the ternary on purpose: the caveat is true whether or not there is
-                  a history to draw, and it only appears once a chip has actually narrowed
-                  the rest of the page (spec §5 — on All it would be noise). What the scope
-                  row's ⓘ already says is not repeated; what is left is the part that only
-                  makes sense standing on this card — which panels the chips DO scope, and
-                  the dot that goes missing. */}
-              {owner !== null && (
-                <p className="hint">
-                  The owner chips scope holdings, allocation, dividends, transactions and
-                  realized gains — not this chart, the sparklines or price refresh, which
-                  always cover the whole household. Person views omit the live price dot
-                  because the history is household-wide.
-                </p>
-              )}
-              {performanceOption && history ? (
+            <ChartCard
+              title="Performance"
+              hint="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)."
+              ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
+              option={performanceOption}
+              empty="No performance history yet — import your workbook in Settings to load it."
+              exportName="portfolio-performance"
+              csv={history === null ? undefined : () => portfolioHistoryCsv(history)}
+              height={300}
+              zoomable
+              onLegendChange={onLegendChange}
+              onDataZoom={onZoomWindow}
+              zoomWindow={zoomWindow}
+              footer={
                 <>
-                  <EChart
-                    option={performanceOption}
-                    height={300}
-                    onLegendChange={onLegendChange}
-                    onDataZoom={onZoomWindow}
-                    zoomWindow={zoomWindow}
-                    exportConfig={{
-                      name: 'portfolio-performance',
-                      csv: () => portfolioHistoryCsv(history),
-                    }}
-                    animateEntrance={!fromCache}
-                  />
-                  <ChartZoomHint />
+                  {/* True whether or not there is a history to draw, and only once a chip has
+                      actually narrowed the rest of the page (spec §5 — on All it would be
+                      noise). What the scope row's ⓘ already says is not repeated; what is left
+                      is the part that only makes sense standing on this card — which panels the
+                      chips DO scope, and the dot that goes missing. */}
+                  {owner !== null && (
+                    <p className="hint">
+                      The owner chips scope holdings, allocation, dividends, transactions and
+                      realized gains — not this chart, the sparklines or price refresh, which
+                      always cover the whole household. Person views omit the live price dot
+                      because the history is household-wide.
+                    </p>
+                  )}
                   {/* Two benchmark legs, one distinction: the baseline invests only the
                       STARTING balance; the contribution-matched line adds every inferred
                       flow. Said here so neither gap reads as outperformance. */}
@@ -672,12 +661,8 @@ export default function PortfolioPage() {
                     inferred contribution as it lands.
                   </p>
                 </>
-              ) : (
-                <p className="empty-note">
-                  No performance history yet — import your workbook in Settings to load it.
-                </p>
-              )}
-            </section>
+              }
+            />
             <section className="panel">
               <div className="panel-title-row">
                 <h2 className="panel-title">
@@ -727,7 +712,12 @@ export default function PortfolioPage() {
                 </>
               )}
             </section>
-            <AllocationPanel industry={industry} byType={byType} byAccount={byAccount} />
+            <AllocationPanel
+              holdings={holdings.holdings}
+              byType={byType}
+              byAccount={byAccount}
+              onSelectTicker={setDetailTicker}
+            />
             {/* The ?tab= arrival's scroll-and-focus target: the strip alone would leave the
                 panel it selects (and that panel's form) off-screen below it. */}
             <div id="portfolio-records">

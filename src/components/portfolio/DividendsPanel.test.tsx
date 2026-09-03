@@ -15,9 +15,16 @@ vi.mock('../../api/portfolio', () => ({
 vi.mock('../EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ option }: { option: { xAxis?: { data?: unknown[] } } }) =>
+    default: ({
+      option,
+      ariaLabel,
+    }: {
+      option: { xAxis?: { data?: unknown[] } }
+      ariaLabel?: string
+    }) =>
       createElement('div', {
         'data-testid': 'echart',
+        'aria-label': ariaLabel,
         'data-categories': (option.xAxis?.data ?? []).join(','),
       }),
   }
@@ -106,13 +113,16 @@ describe('DividendsPanel income analytics', () => {
     expect(tileValue('Projected annual income')).toBe('$432.10')
   })
 
-  it('charts the trailing 24 months ending on the current one', () => {
+  it('charts the trailing 24 months ending on the current one, in a ChartCard', () => {
     pinToday()
     renderPanel([AUTO])
     const categories = screen.getByTestId('echart').getAttribute('data-categories')!.split(',')
     expect(categories).toHaveLength(24)
     expect(categories[0]).toBe('Sep 2024')
     expect(categories[23]).toBe('Aug 2026')
+    // The card's own chrome: the house sentence on the canvas, the export row above it (F11, F12).
+    expect(screen.getByLabelText(/Bar chart of dividend income per month/)).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Export dividends' })).toBeTruthy()
   })
 
   it('dashes the projection tile when nothing is priced yet', () => {
