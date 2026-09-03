@@ -8,7 +8,7 @@ saved cron and the status endpoints can name the next run and report whether it 
 running; all degrade to no-op/None/False when nothing is running."""
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,6 +27,12 @@ SCHEDULER_TIMEZONE = "America/Los_Angeles"
 JOB_ID = "price_refresh"
 CATCHUP_JOB_ID = "price_refresh_catchup"
 CATCHUP_DELAY_SECONDS = 10
+
+# Nightly logical snapshot (2026-09-03 data-lifecycle spec §8): every day, weekends
+# included — the export is about the database, not the market.
+SNAPSHOT_CRON = "30 23 * * *"
+SNAPSHOT_JOB_ID = "snapshot_nightly"
+SNAPSHOT_CATCHUP_JOB_ID = "snapshot_nightly_catchup"
 
 # The running scheduler, if any — set by start_scheduler, read by the accessors below.
 _scheduler: AsyncIOScheduler | None = None
@@ -57,6 +63,10 @@ def build_trigger(cron: str) -> CronTrigger:
     except ValueError:
         logger.warning("invalid price_refresh_cron %r — using default", cron)
         return CronTrigger.from_crontab(DEFAULT_PRICE_REFRESH_CRON, timezone=SCHEDULER_TIMEZONE)
+
+
+def build_snapshot_trigger() -> CronTrigger:
+    return CronTrigger.from_crontab(SNAPSHOT_CRON, timezone=SCHEDULER_TIMEZONE)
 
 
 def get_next_run_time() -> datetime | None:
@@ -124,6 +134,15 @@ async def _refresh_job(trigger_label: str = "scheduled") -> None:
     )
 
 
+async def _snapshot_job(trigger_label: str = "scheduled") -> None:
+    # Deferred imports, like _refresh_job: keep app import time (and pytest collection) lean.
+    from app.database import SessionLocal
+    from app.services.snapshot_store import run_snapshot_job
+
+    async with SessionLocal() as db:
+        await run_snapshot_job(db, now=datetime.now(UTC), trigger=trigger_label)
+
+
 async def start_scheduler() -> AsyncIOScheduler:
     global _scheduler
     from app.database import SessionLocal
@@ -163,6 +182,32 @@ async def start_scheduler() -> AsyncIOScheduler:
             kwargs={"trigger_label": "scheduled (catch-up)"},
         )
         logger.info("catching up today's missed price refresh")
+    if settings.snapshot_enabled:
+        from app.services.snapshot_store import latest_snapshot_run_at
+
+        async with SessionLocal() as db:
+            last_snapshot_at = await latest_snapshot_run_at(db)
+        snapshot_trigger = build_snapshot_trigger()
+        scheduler.add_job(
+            _snapshot_job,
+            trigger=snapshot_trigger,
+            id=SNAPSHOT_JOB_ID,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+        # The same catch-up as the price refresh, keyed on the newest SUCCESSFUL snapshot
+        # run: a boot after 23:30 with nothing written today snapshots a few seconds in.
+        if missed_todays_run(snapshot_trigger, last_snapshot_at, now):
+            scheduler.add_job(
+                _snapshot_job,
+                trigger="date",
+                run_date=now + timedelta(seconds=CATCHUP_DELAY_SECONDS),
+                id=SNAPSHOT_CATCHUP_JOB_ID,
+                kwargs={"trigger_label": "scheduled (catch-up)"},
+            )
+            logger.info("catching up today's missed snapshot")
+        logger.info("nightly snapshot scheduled: %r (%s)", SNAPSHOT_CRON, SCHEDULER_TIMEZONE)
     scheduler.start()
     _scheduler = scheduler
     logger.info("price refresh scheduled: %r (%s)", cron, SCHEDULER_TIMEZONE)
