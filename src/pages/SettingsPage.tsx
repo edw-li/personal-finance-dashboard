@@ -8,10 +8,12 @@ import InfoHint from '../components/InfoHint'
 import AccountsCard from '../components/settings/AccountsCard'
 import AppearanceCard from '../components/settings/AppearanceCard'
 import AssistantCard from '../components/settings/AssistantCard'
+import BackupsCard from '../components/settings/BackupsCard'
 import CategoriesCard from '../components/settings/CategoriesCard'
 import HouseholdCard from '../components/settings/HouseholdCard'
 import ImportReportView from '../components/settings/ImportReportView'
 import LimitsCard from '../components/settings/LimitsCard'
+import RestoreCard from '../components/settings/RestoreCard'
 import SystemCard from '../components/settings/SystemCard'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
@@ -126,7 +128,14 @@ export default function SettingsPage() {
     el.scrollIntoView?.({ block: 'start' })
     el.classList.add('is-highlighted')
     const timer = setTimeout(() => el.classList.remove('is-highlighted'), 1200)
-    return () => clearTimeout(timer)
+    // The class is ours to take back, not only the timer: a re-run (or an unmount) before
+    // the timeout fires would otherwise cancel the one thing that removes it and leave the
+    // card ringed for good — which is what stripping an arrival param used to cause, since
+    // the strip re-rendered this page with a hash-less location.
+    return () => {
+      clearTimeout(timer)
+      el.classList.remove('is-highlighted')
+    }
   }, [hash, loading])
 
   // Every settings keystroke retires both sentences under the form: they describe the
@@ -385,6 +394,12 @@ export default function SettingsPage() {
                   page as pure status. Own fetch/error (SystemCard), same loadedOnce gate as
                   everything here: a settings GET that failed means the API is unreachable. */}
               <SystemCard />
+
+              {/* Backups & snapshots, then Restore (2026-09-03 data-lifecycle spec §7–§8): the
+                  stored nightly files beside the marker that describes the host's dump, and the
+                  way back from either. Own fetches, the page's loadedOnce gate. */}
+              <BackupsCard />
+              <RestoreCard />
 
               <section className="card span-6" id="app-settings">
                 <h2 className="eyebrow">

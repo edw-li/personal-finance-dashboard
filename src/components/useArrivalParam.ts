@@ -1,5 +1,26 @@
-import { useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect } from 'react'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+
+/** Consume an arrival param: drop `key` from the query, replace-style, KEEPING the anchor.
+ *
+ *  `setSearchParams` navigates to a search string alone, which resolves against the current
+ *  pathname and throws the hash away — so consuming the Backups card's
+ *  `/settings?restore=<name>#restore` used to leave `/settings`, and the page's anchored
+ *  scroll-and-ring effect (which hangs off `location.hash`) re-ran with nothing to aim at,
+ *  cancelling the only timer that takes the ring back off. The command in the query is
+ *  one-shot; the anchor in the hash is where the reader is. */
+function useConsumeParam(): (searchParams: URLSearchParams, key: string) => void {
+  const navigate = useNavigate()
+  const { pathname, hash } = useLocation()
+  return useCallback(
+    (searchParams: URLSearchParams, key: string) => {
+      const next = new URLSearchParams(searchParams)
+      next.delete(key)
+      navigate({ pathname, search: next.toString(), hash }, { replace: true })
+    },
+    [navigate, pathname, hash],
+  )
+}
 
 // A one-shot arrival COMMAND in the URL (?tab=dividends): read it whenever it appears —
 // on mount AND on an in-page navigate (the palette fires one while /portfolio is already
@@ -11,17 +32,16 @@ export function useArrivalParam<T extends string>(
   allowed: readonly T[],
   apply: (value: T) => void,
 ): void {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
+  const consume = useConsumeParam()
   const raw = searchParams.get(key)
   useEffect(() => {
     if (raw === null) return
     if ((allowed as readonly string[]).includes(raw)) apply(raw as T)
-    const next = new URLSearchParams(searchParams)
-    next.delete(key)
-    setSearchParams(next, { replace: true })
+    consume(searchParams, key)
     // The strip changes searchParams identity and nulls `raw`, so the re-run
     // early-returns; a double-apply between renders is idempotent by contract.
-  }, [raw, key, allowed, apply, searchParams, setSearchParams])
+  }, [raw, key, allowed, apply, searchParams, consume])
 }
 
 /** Like useArrivalParam, for values that are DATA rather than an enum (a ticker, an
@@ -38,15 +58,14 @@ export function useArrivalParam<T extends string>(
  *
  *  `apply` must be identity-stable (useCallback), or the effect would loop. */
 export function useArrivalValue(key: string, apply: (value: string) => boolean | void): void {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
+  const consume = useConsumeParam()
   const raw = searchParams.get(key)
   useEffect(() => {
     if (raw === null) return
     if (raw.trim() !== '' && apply(raw.trim()) === false) return
-    const next = new URLSearchParams(searchParams)
-    next.delete(key)
-    setSearchParams(next, { replace: true })
-  }, [raw, key, apply, searchParams, setSearchParams])
+    consume(searchParams, key)
+  }, [raw, key, apply, searchParams, consume])
 }
 
 /** A one-shot arrival COMMAND that carries a companion VALUE (`?add=1&date=2026-09-16` —

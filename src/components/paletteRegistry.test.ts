@@ -58,4 +58,15 @@ describe('paletteRegistry', () => {
     expect(all[0].id).toBe('action:add-dividend')
     expect(all.length).toBe(entries.length)
   })
+
+  it('anchors the four data-lifecycle cards (2026-09-03 spec §3)', () => {
+    for (const [query, id] of [
+      ['snapshot now', 'backups'],
+      ['roll back', 'restore'],
+      ['undo', 'activity'],
+      ['stale quotes', 'health'],
+    ] as const) {
+      expect(matchEntries(query, entries).some((e) => e.to === `/settings#${id}`), query).toBe(true)
+    }
+  })
 })

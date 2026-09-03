@@ -1,9 +1,15 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { RestoreReport } from '../../types/api'
 import RestoreReportView from './RestoreReportView'
 
 afterEach(cleanup)
+
+// The schema line dates an INSTANT, and it does so on the local clock (the one the Restore
+// card's select and its arm box read) — so the expectations below only mean something with
+// a timezone pinned.
+beforeAll(() => vi.stubEnv('TZ', 'America/Los_Angeles'))
+afterAll(() => vi.unstubAllEnvs())
 
 function report(over: Partial<RestoreReport> = {}): RestoreReport {
   return {
@@ -58,6 +64,13 @@ describe('RestoreReportView', () => {
       ),
     ).toBeTruthy()
     expect(screen.getByText('Kept from this server: backup_status, backup_runs')).toBeTruthy()
+  })
+
+  it('dates the snapshot on the local clock, not on the stamp’s UTC text', () => {
+    // The 23:30 PT nightly, stamped 06:30 the next morning in UTC: the Restore card lists
+    // it as Sep 3 and asks for 2026-09-03 to be typed, so this line has to agree.
+    render(<RestoreReportView report={report({ exported_at: '2026-09-04T06:30:00+00:00' })} />)
+    expect(screen.getByText(/^Snapshot from Sep 3, 2026 ·/)).toBeTruthy()
   })
 
   it('says incompatible in words and renders warnings and errors', () => {
