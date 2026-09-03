@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
+import { GRID_VARIANTS } from '../../charts/grammar'
 import { INK, PALETTE } from '../../charts/theme'
+import { tooltipRows } from '../../testing/tooltipRows'
 import type { CompEventOut } from '../../types/api'
-import { TC_CHART_LABEL, TC_COLORS, TC_LABELS, tcTrajectoryOption } from './compChartOptions'
+import {
+  TC_CHART_LABEL,
+  TC_COLORS,
+  TC_LABELS,
+  tcTrajectoryCsv,
+  tcTrajectoryOption,
+} from './compChartOptions'
 
 // --- the golden events ----------------------------------------------------------------
 // Wire shape of GET /comp/events. The computed columns are the plan's pinned Focal History
@@ -117,11 +125,6 @@ function categoriesOf(option: EChartsOption | null): string[] {
   return (option as unknown as { xAxis: { data: string[] } }).xAxis.data
 }
 
-function valueFormatterOf(option: EChartsOption | null): (v: unknown) => string {
-  return (option as unknown as { tooltip: { valueFormatter: (v: unknown) => string } }).tooltip
-    .valueFormatter
-}
-
 function moneyAxisLabelOf(option: EChartsOption | null): (value: number) => string {
   return (option as unknown as { yAxis: { axisLabel: { formatter: (v: number) => string } } })
     .yAxis.axisLabel.formatter
@@ -224,10 +227,48 @@ describe('tcTrajectoryOption', () => {
     expect(line.color).toBe(INK)
   })
 
-  it('formats both units as money', () => {
-    const option = tcTrajectoryOption(GOLDEN_EVENTS)
-    expect(valueFormatterOf(option)(411078)).toBe('$411,078.00')
-    expect(valueFormatterOf(option)(null)).toBe('—')
-    expect(moneyAxisLabelOf(option)(411078)).toBe('$411.1K')
+  it('F7: base and equity by value, NO Total row (the line is the total), then the line; shadow pointer', () => {
+    const option = tcTrajectoryOption(GOLDEN_EVENTS) as unknown as {
+      tooltip: { axisPointer: unknown; formatter: (p: unknown) => string }
+    }
+    expect(option.tooltip.axisPointer).toEqual({ type: 'shadow' })
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: 'Base', seriesType: 'bar', axisValueLabel: '2026', value: 188930, color: PALETTE[0] },
+        { seriesName: 'Equity value (incl. refresh)', seriesType: 'bar', value: 412924.46, color: PALETTE[1] },
+        { seriesName: 'Total comp', seriesType: 'line', value: 601854.46, color: INK },
+      ]),
+    )
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', 'Equity value (incl. refresh)', '$412,924.46'],
+      ['row', 'Base', '$188,930.00'],
+      ['row', 'Total comp', '$601,854.46'],
+    ])
+    expect(moneyAxisLabelOf(option as never)(411078)).toBe('$411.1K')
+  })
+
+  it('grammar: money grid, 24px staggered stacks with focus, page legend picks', () => {
+    const option = tcTrajectoryOption(GOLDEN_EVENTS, { selected: { Base: false } }) as unknown as {
+      grid: unknown
+      legend: { selected: unknown }
+      series: { barMaxWidth?: number; emphasis?: unknown; animationDelay?: () => number }[]
+    }
+    expect(option.grid).toEqual(GRID_VARIANTS.default)
+    expect(option.legend.selected).toEqual({ Base: false })
+    expect(option.series[0].barMaxWidth).toBe(24) // F13, was 46
+    expect(option.series[1].animationDelay?.()).toBe(12)
+    expect(option.series[2].emphasis).toEqual({ focus: 'series' })
+  })
+
+  it('exports year × base / equity / total', () => {
+    expect(tcTrajectoryCsv(GOLDEN_EVENTS)).toEqual({
+      headers: ['Focal year', 'Base', 'Equity value (incl. refresh)', 'Total comp'],
+      rows: [
+        [2024, '151000.00', '260078.00', '411078.00'],
+        [2025, '162000.00', '343878.28', '505878.28'],
+        [2026, '188930.00', '412924.46', '601854.46'],
+        [2027, '188930.00', '0.00', '188930.00'],
+      ],
+    })
   })
 })
