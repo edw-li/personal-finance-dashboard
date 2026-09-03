@@ -13,6 +13,7 @@ vi.mock('../api/paycheck', () => ({
   updateProfile: vi.fn(),
   deleteProfile: vi.fn(),
   fetchBreakdown: vi.fn(),
+  previewPaycheck: vi.fn(),
 }))
 // The chips' source. Mocked because the page now fetches it on mount: unmocked, the real
 // client would reach `fetch` in jsdom and the isolated-fetch catch would swallow a network
@@ -48,6 +49,7 @@ import {
   deleteProfile,
   fetchBreakdown,
   fetchProfiles,
+  previewPaycheck,
   updateProfile,
 } from '../api/paycheck'
 import { fetchHousehold } from '../api/household'
@@ -95,6 +97,13 @@ const profile2025: PaycheckProfileOut = {
 
 // effective_date DESC, the order the router answers in.
 const PROFILES = [profile2026, profile2025]
+
+// The Try it card's payload is the sandbox's own business (TryItPanel.test.tsx pins every
+// figure); here the lines only have to be present, so one flat block stands in for all six.
+const PREVIEW_LINES = {
+  gross: '0.00', trad_401k: '0.00', dental_vision: '0.00', hsa: '0.00', taxable: '0.00', withholding: '0.00',
+  post_tax: '0.00', roth_401k: '0.00', after_tax_401k: '0.00', espp: '0.00', net_pay: '0.00', savings: '0.00',
+}
 
 function breakdownOf(
   profile: PaycheckProfileOut,
@@ -975,6 +984,29 @@ describe('PaycheckPage — shell scope', () => {
       expect(vi.mocked(fetchBreakdown)).toHaveBeenLastCalledWith(undefined, undefined),
     )
     expect(screen.getByTestId('location').textContent).toContain(`owner=${ME.id}`)
+  })
+
+  it('Apply from Try it pre-fills the profile form for next month and writes nothing', async () => {
+    const out = {
+      profile: profile2026,
+      per_check: { baseline: PREVIEW_LINES, scenario: PREVIEW_LINES, delta: PREVIEW_LINES },
+      monthly: { baseline: PREVIEW_LINES, scenario: PREVIEW_LINES, delta: PREVIEW_LINES },
+      annual: { baseline: PREVIEW_LINES, scenario: PREVIEW_LINES, delta: PREVIEW_LINES },
+      pace: { baseline: [], scenario: [] },
+      changed: [],
+      warnings: [],
+    }
+    vi.mocked(previewPaycheck).mockResolvedValue(out)
+    renderPage('/paycheck?whatif=trad_401k_pct%3A0.2')
+    await screen.findByText('Payroll savings')
+    fireEvent.click(screen.getByRole('button', { name: /^Save as profile effective / }))
+    const trad = (await screen.findAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement
+    expect(trad.value).toBe('20%') // AmountInput's blurred echo of the seeded "20"
+    const date = document.getElementById('paycheck-effective-date') as HTMLInputElement
+    expect(date.value).toMatch(/^\d{4}-\d{2}-01$/)
+    expect(document.activeElement).toBe(date)
+    expect(createProfile).not.toHaveBeenCalled()
+    expect(updateProfile).not.toHaveBeenCalled()
   })
 })
 
