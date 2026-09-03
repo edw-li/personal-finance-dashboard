@@ -1,7 +1,8 @@
+/* The stepper is the frame's subheader now (2026-09-03 spec §5), and
+   `.page-frame-subheader` owns the space under it — a margin here would double it. */
 .wizard-steps {
   display: flex;
   gap: 0.4rem;
-  margin-bottom: 1.25rem;
 }
 
 .wizard-step {

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import type { ClipboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CalendarCheck, CalendarPlus } from 'lucide-react'
+import { CalendarPlus } from 'lucide-react'
 import { ApiError } from '../api/client'
 import {
   deleteMonthBalances,
@@ -20,8 +20,10 @@ import {
 } from '../api/spending'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
-import MonthRibbon from '../components/MonthRibbon'
 import { useToast } from '../components/ToastProvider'
+import { FeedBanner } from '../components/shell/Feed'
+import PageFrame from '../components/shell/PageFrame'
+import ScopeBar from '../components/shell/ScopeBar'
 import { GROUP_LABELS, GROUP_ORDER } from '../charts/theme'
 import type {
   AccountOut,
@@ -145,6 +147,12 @@ export default function MonthlyUpdatePage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
+  // Bumped whenever THIS page changes what /coverage would say — a save fills a month, a
+  // delete empties one — and handed to the scope row as `revalidate`, so the ribbon re-reads
+  // coverage and the chip follows without leaving the page. (The legacy wizard got this for
+  // free by reloading coverage on every month change; the shared ribbon fetches once, so the
+  // page has to say when its coverage moved.)
+  const [coverageNonce, setCoverageNonce] = useState(0)
   // A8 (2026-08-31 tier-1): the balances leg that already COMMITTED while its spending
   // sibling failed — the month, the exact canonical payload it shipped, and the server's
   // counts. A retry whose payload still matches skips the balances PUT (retry-only-the-
@@ -467,6 +475,8 @@ export default function MonthlyUpdatePage() {
           // it — and says it from the server's own flag, not from what we hoped we sent.
           (spendResult.net_pay_cleared ? ' Household take-home cleared.' : ''),
       )
+      // Coverage moved: this month now has both feeds. Tell the scope row to re-read it.
+      setCoverageNonce((n) => n + 1)
       // What the wire received IS what the boxes now hold. Adopting the canonical values
       // into the STATE as well as the baseline is load-bearing: a cell advanced past by
       // clicks still held raw text ("9,000"), and a baseline taken from that raw state
@@ -529,6 +539,9 @@ export default function MonthlyUpdatePage() {
       // Land on the CURRENT month's wizard; the nonce covers the deleted-month ===
       // current-month case, where the month param does not change.
       setLoadNonce((n) => n + 1)
+      // Coverage moved the other way: the deleted month has no feeds left, so its chip has to
+      // empty. loadNonce only re-seeds the FORM — the shared ribbon needs its own word.
+      setCoverageNonce((n) => n + 1)
       setParams(() => new URLSearchParams({ month: currentMonthIso(), step: 'balances' }))
     } catch (err) {
       setError(
@@ -714,497 +727,497 @@ export default function MonthlyUpdatePage() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1>
-          <CalendarCheck size={20} style={{ verticalAlign: '-3px', marginRight: '0.5rem' }} />
-          Monthly update — {formatMonth(month)}
-        </h1>
-        <div className="spacer" />
-        <MonthRibbon
-          anchor={anchor}
-          filledMonths={coveredMonths}
-          selected={month}
-          onSelect={selectMonth}
-        />
-        {!coveredMonths.has(anchor) && month !== anchor && (
-          <button className="button" onClick={() => selectMonth(anchor)}>
-            <CalendarPlus size={15} /> Start {formatMonth(anchor)}
-          </button>
-        )}
-      </div>
-
-      <div className="wizard-steps">
-        {STEPS.map((s, i) => (
-          <button
-            key={s}
-            type="button"
-            className={`wizard-step${s === step ? ' active' : ''}`}
-            onClick={() => setStep(s)}
-          >
-            <span className="step-index">{i + 1}</span>
-            {STEP_LABELS[s]}
-          </button>
-        ))}
-      </div>
-
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
-      {restored && (
-        // Advisory, not an error: nothing failed — work was preserved. The discard button
-        // is the only way to decline it; saving is the way to accept it.
-        <div className="draft-note" role="status">
-          <span>
-            Restored unsaved entries for {formatMonth(month)} — they are not saved yet.
-          </span>
-          <button type="button" className="button" onClick={discardDraft}>
-            Discard restored entries
-          </button>
-        </div>
-      )}
-      {saved && (
-        <div className="card" style={{ marginBottom: '1rem' }}>
-          <h2 className="eyebrow">Month saved</h2>
-          <p>{saved}</p>
-          <p>
-            <Link to="/net-worth">See net worth</Link> · <Link to="/spending">See spending</Link>
-          </p>
-        </div>
-      )}
-
-      {!loading && step === 'balances' && (
-        <div
-          className="card"
-          data-entry-scope=""
-          onPaste={(e) => handlePaste(e, orderedBalanceRows, (id) => `bal-${id}`, setBalances)}
-        >
-          <h2 className="eyebrow">
-            {monthExisted ? 'Edit balances' : 'Enter balances (pre-filled from last month)'}
-            <InfoHint text="Every account&apos;s balance for the month, pre-filled from the prior month; components are tracked inside their parent." />
-          </h2>
-          <div className="meta-row">
-            <label>
-              Recorded on
-              <input
-                type="date"
-                className="field-input"
-                value={recordedOn}
-                onChange={(e) => setRecordedOn(e.target.value)}
-              />
-            </label>
-            <label>
-              Notes
-              <input
-                type="text"
-                className="field-input"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="optional"
-              />
-            </label>
+      <PageFrame
+        title={`Monthly update — ${formatMonth(month)}`}
+        subheader={
+          <div className="wizard-steps">
+            {STEPS.map((s, i) => (
+              <button
+                key={s}
+                type="button"
+                className={`wizard-step${s === step ? ' active' : ''}`}
+                onClick={() => setStep(s)}
+              >
+                <span className="step-index">{i + 1}</span>
+                {STEP_LABELS[s]}
+              </button>
+            ))}
           </div>
-          {/* One table, not a card per group: cells sit in a single visual column so the
-              Phase 1 Enter/arrow protocol (DOM order = this GROUP_ORDER walk) goes straight
-              down, the way the sheet's muscle memory expects (spec §4.2). */}
-          <table className="data-table entry-table">
-            <thead>
-              <tr>
-                <th>Account</th>
-                <th className="num entry-ref">Last month</th>
-                <th className="num">This month</th>
-                <th className="num entry-delta">Δ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ownerSections.map((section) => {
-                const ownerTotals = subtotalOf(section.rows)
-                // Same cents rule as every other subtotal here.
-                const ownerCents = Math.round((ownerTotals.now - ownerTotals.prior) * 100)
-                return (
-                  <Fragment key={section.key}>
-                    {section.label !== null && (
-                      <tr className="entry-owner-row">
-                        <th colSpan={4}>{section.label}</th>
-                      </tr>
-                    )}
-                    {GROUP_ORDER.map((group) => {
-                      const groupAccounts = section.rows.filter((a) => a.group === group)
-                      if (groupAccounts.length === 0) return null
-                      const totals = subtotalOf(groupAccounts)
-                      // Same cents rule as the footer's delta above (and the spending Δ
-                      // below): two sums of doubles that ought to cancel can miss by a few
-                      // ulp, and this row is exactly where a conserving transfer shows up.
-                      // Text only — the subtotal Δ carries no tone class, so rounding here
-                      // fixes the "-$0.00".
-                      const subCents = Math.round((totals.now - totals.prior) * 100)
-                      return (
-                        <Fragment key={group}>
-                          <tr className="entry-group-row">
-                            <th colSpan={4}>{GROUP_LABELS[group]}</th>
-                          </tr>
-                          {groupAccounts.map((account) => {
-                            const value = balances[account.id] ?? ''
-                            const prior = priorBalances[account.id]
-                            const delta =
-                              prior === undefined ? null : committed(value) - Number(prior)
-                            return (
-                              <tr key={account.id}>
-                                <td
-                                  className={account.is_component ? 'entry-component' : undefined}
-                                >
-                                  <label htmlFor={`bal-${account.id}`}>
-                                    {account.name}
-                                    {account.is_component && (
-                                      <span className="badge">component</span>
-                                    )}
-                                  </label>
-                                </td>
-                                <td className="num entry-ref">
-                                  {prior === undefined ? '—' : formatCurrency(prior)}
-                                </td>
-                                <td className="num entry-cell-col">
-                                  <AmountInput
-                                    id={`bal-${account.id}`}
-                                    className={
-                                      `${isAmount(value) ? '' : 'invalid'}${
-                                        flashIds.has(`bal-${account.id}`) ? ' pasted-flash' : ''
-                                      }`.trim() || undefined
-                                    }
-                                    autoFocus={account.id === firstBalanceId}
-                                    value={value}
-                                    onValueChange={(next) =>
-                                      setBalances((cur) => ({ ...cur, [account.id]: next }))
-                                    }
-                                  />
-                                  {/* A1 (2026-08-31 tier-1): advisory amber, NEVER a gate —
-                                      a card can legitimately go positive after a refund, so
-                                      Next/Save stay enabled and the table hint below keeps
-                                      stating the sign convention. */}
-                                  {account.group === 'liability' && committed(value) > 0 && (
-                                    <span className="entry-liability-cue" role="status">
-                                      liabilities are entered negative
-                                      <button
-                                        type="button"
-                                        className="button"
-                                        aria-label={`Flip sign on ${account.name}`}
-                                        onClick={() => flipSign(account.id)}
-                                      >
-                                        Flip sign
-                                      </button>
-                                    </span>
-                                  )}
-                                </td>
-                                <td
-                                  className={`num entry-delta${
-                                    delta === null || delta === 0
-                                      ? ''
-                                      : delta > 0
-                                        ? ' delta-positive'
-                                        : ' delta-negative'
-                                  }`}
-                                >
-                                  {/* Typo tripwire: a fat-fingered digit shows a huge Δ instantly. */}
-                                  {delta === null ? '—' : formatCurrency(delta)}
-                                </td>
-                              </tr>
-                            )
-                          })}
-                          <tr className="entry-subtotal-row">
-                            <td>Subtotal</td>
-                            {/* No prior month at all (the first-ever entry) means there is
-                                no prior subtotal — '—', never a fabricated $0.00 that would
-                                read as "you had nothing" and make every Δ look like pure
-                                growth. Per-row cells already say '—' via the missing
-                                priorBalances. */}
-                            <td className="num entry-ref">
-                              {prevNetWorth === null ? '—' : formatCurrency(totals.prior)}
-                            </td>
-                            <td className="num">{formatCurrency(totals.now)}</td>
-                            <td className="num entry-delta">
-                              {prevNetWorth === null
-                                ? '—'
-                                : formatCurrency(subCents === 0 ? 0 : subCents / 100)}
-                            </td>
-                          </tr>
-                        </Fragment>
-                      )
-                    })}
-                    {/* The owner total sits a LEVEL ABOVE the group subtotals — coarser,
-                        not a replacement — and closes its section the way every subtotal in
-                        this table follows the rows it sums. */}
-                    {section.label !== null && (
-                      <tr className="entry-owner-subtotal-row">
-                        <td>{section.label} total</td>
-                        <td className="num entry-ref">
-                          {prevNetWorth === null ? '—' : formatCurrency(ownerTotals.prior)}
-                        </td>
-                        <td className="num">{formatCurrency(ownerTotals.now)}</td>
-                        <td className="num entry-delta">
-                          {prevNetWorth === null
-                            ? '—'
-                            : formatCurrency(ownerCents === 0 ? 0 : ownerCents / 100)}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
-          <p className="drill-hint">
-            Liabilities are stored signed — enter card balances as negative numbers.
-          </p>
-          {pasteNote && (
-            <p className="drill-hint" role="status" aria-live="polite">
-              {pasteNote}
-            </p>
-          )}
-          {/* Named, not just role="status": the draft banner (and Phase 2's paste note)
-              are status nodes too, so screen readers — and every selector — need this one
-              to say WHAT it is announcing. */}
-          <div className="entry-footer" role="status" aria-label="Live totals">
-            <span>
-              Net worth (live): <strong>{formatCurrency(preview.netWorth)}</strong>
-            </span>
-            {preview.delta !== null && (
-              <span className={preview.delta >= 0 ? 'delta-positive' : 'delta-negative'}>
-                {/* Glyph + color, never color alone (Global visual rule; StatTile's pattern). */}
-                <span aria-hidden="true">{preview.delta >= 0 ? '▲ ' : '▼ '}</span>
-                {formatCurrency(preview.delta)} vs prior month
-              </span>
+        }
+        scopeRow={
+          <>
+            {/* Edit mode: the wizard owns the click, because only it knows about the draft
+                being typed into the month the user is leaving. */}
+            <ScopeBar
+              month={{ mode: 'edit', anchor, selected: month, onSelect: selectMonth }}
+              revalidate={coverageNonce}
+            />
+            {!coveredMonths.has(anchor) && month !== anchor && (
+              <button className="button" onClick={() => selectMonth(anchor)}>
+                <CalendarPlus size={15} /> Start {formatMonth(anchor)}
+              </button>
             )}
-          </div>
-          <div className="wizard-footer">
-            <span />
-            <button
-              className="button button-primary"
-              data-entry-primary=""
-              disabled={loading || accounts.length === 0 || !balancesValid}
-              onClick={() => setStep('spending')}
-            >
-              Next: spending
+          </>
+        }
+        // The wizard is a FORM, not a feed: its own `loading` gates the step bodies below and
+        // its errors are save failures, not a lifecycle the frame could retry.
+        resource={{ status: 'ready' }}
+      >
+        <FeedBanner error={error} />
+        {restored && (
+          // Advisory, not an error: nothing failed — work was preserved. The discard button
+          // is the only way to decline it; saving is the way to accept it.
+          <div className="draft-note" role="status">
+            <span>
+              Restored unsaved entries for {formatMonth(month)} — they are not saved yet.
+            </span>
+            <button type="button" className="button" onClick={discardDraft}>
+              Discard restored entries
             </button>
           </div>
-        </div>
-      )}
-
-      {!loading && step === 'spending' && (
-        <div
-          className="card"
-          data-entry-scope=""
-          onPaste={(e) => handlePaste(e, categories, (id) => `amt-${id}`, setAmounts)}
-        >
-          <h2 className="eyebrow">
-            Spending & take-home
-            <InfoHint text="The month&apos;s spend per category plus the household&apos;s take-home pay — a blank take-home skips the cashflow row." />
-          </h2>
-          <div className="meta-row">
-            <label>
-              Household take-home
-              <AmountInput
-                className={netPay.trim() === '' || isAmount(netPay) ? undefined : 'invalid'}
-                autoFocus
-                value={netPay}
-                onValueChange={setNetPay}
-                placeholder="leave blank to skip"
-              />
-            </label>
-          </div>
-          {/* Same single visual column as the balances step — DOM order is the categories'
-              render order, so the Phase 1 Enter/arrow protocol walks straight down. */}
-          <table className="data-table entry-table">
-            <thead>
-              <tr>
-                <th>Category</th>
-                <th className="num entry-ref">Typical (3-mo median)</th>
-                <th className="num">This month</th>
-                <th className="num entry-delta">Δ vs typical</th>
-              </tr>
-            </thead>
-            <tbody>
-              {categories.map((category) => {
-                const value = amounts[category.id] ?? ''
-                const typical = matrix === null ? null : typicalSpend(matrix, month, category.id)
-                const delta =
-                  typical === null ? null : (Number(canonicalAmount(value)) || 0) - typical
-                // CENTS decide both the tone and the text. A two-sample median averages
-                // inexact doubles ((0.10 + 0.20) / 2 is 0.15000000000000002), so a month
-                // that matches typical exactly lands at ±1e-14 — enough to tone a formatted
-                // $0.00 in whichever delta colour the residue's sign picks. Rounding first
-                // also fixes the text, since Intl prints "-$0.00" for a negative zero; the
-                // === 0 branch is what hands formatCurrency a positive one.
-                const deltaCents = delta === null ? null : Math.round(delta * 100)
-                const budget = monthBudgets[category.id]
-                const overBudget =
-                  budget !== undefined && (Number(canonicalAmount(value)) || 0) > Number(budget)
-                return (
-                  <tr key={category.id}>
-                    <td>
-                      <label htmlFor={`amt-${category.id}`}>{category.name}</label>
-                    </td>
-                    <td className="num entry-ref">
-                      {typical === null ? '—' : formatCurrency(typical)}
-                    </td>
-                    <td className="num entry-cell-col">
-                      <AmountInput
-                        id={`amt-${category.id}`}
-                        className={
-                          `${isAmount(value) ? '' : 'invalid'}${
-                            flashIds.has(`amt-${category.id}`) ? ' pasted-flash' : ''
-                          }`.trim() || undefined
-                        }
-                        value={value}
-                        onValueChange={(next) =>
-                          setAmounts((cur) => ({ ...cur, [category.id]: next }))
-                        }
-                      />
-                      {budget !== undefined && (
-                        <span className={`entry-budget${overBudget ? ' delta-negative' : ''}`}>
-                          {/* Glyph + colour, never colour alone (StatTile's grammar):
-                              the amount went UP past the budget — the bad direction. */}
-                          {overBudget && <span aria-hidden="true">▲ </span>}
-                          {`of ${formatCurrency(budget)}`}
-                        </span>
-                      )}
-                    </td>
-                    {/* TONE INVERSION vs the balances Δ, deliberately: a POSITIVE delta
-                        here is overspending against the typical month — the BAD direction
-                        — so the sign→color mapping is the mirror of a rising balance's. */}
-                    <td
-                      className={`num entry-delta${
-                        deltaCents === null || deltaCents === 0
-                          ? ''
-                          : deltaCents > 0
-                            ? ' delta-negative' /* overspend vs typical reads as the bad direction */
-                            : ' delta-positive'
-                      }`}
-                    >
-                      {deltaCents === null
-                        ? '—'
-                        : formatCurrency(deltaCents === 0 ? 0 : deltaCents / 100)}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          {pasteNote && (
-            <p className="drill-hint" role="status" aria-live="polite">
-              {pasteNote}
+        )}
+        {saved && (
+          <div className="card" style={{ marginBottom: '1rem' }}>
+            <h2 className="eyebrow">Month saved</h2>
+            <p>{saved}</p>
+            <p>
+              <Link to="/net-worth">See net worth</Link> · <Link to="/spending">See spending</Link>
             </p>
-          )}
-          <div className="entry-footer" role="status" aria-label="Live totals">
-            <span>
-              Total spend (live): <strong>{formatCurrency(preview.totalSpend)}</strong>
-            </span>
-            <span>
-              Savings rate:{' '}
-              {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
-            </span>
           </div>
-          <div className="wizard-footer">
-            <button className="button" onClick={() => setStep('balances')}>
-              Back
-            </button>
-            <button
-              className="button button-primary"
-              data-entry-primary=""
-              disabled={!amountsValid}
-              onClick={() => setStep('review')}
-            >
-              Next: review
-            </button>
-          </div>
-        </div>
-      )}
+        )}
 
-      {!loading && step === 'review' && (
-        <div className="card">
-          <h2 className="eyebrow">
-            Review & save — {formatMonth(month)}
-            <InfoHint text="A client-side preview; the server&apos;s rounding is authoritative once saved." />
-          </h2>
-          <div className="review-grid">
-            <div>
-              <div className="stat-label">Net worth (preview)</div>
-              <div className="stat-value">{formatCurrency(preview.netWorth)}</div>
+        {!loading && step === 'balances' && (
+          <div
+            className="card"
+            data-entry-scope=""
+            onPaste={(e) => handlePaste(e, orderedBalanceRows, (id) => `bal-${id}`, setBalances)}
+          >
+            <h2 className="eyebrow">
+              {monthExisted ? 'Edit balances' : 'Enter balances (pre-filled from last month)'}
+              <InfoHint text="Every account&apos;s balance for the month, pre-filled from the prior month; components are tracked inside their parent." />
+            </h2>
+            <div className="meta-row">
+              <label>
+                Recorded on
+                <input
+                  type="date"
+                  className="field-input"
+                  value={recordedOn}
+                  onChange={(e) => setRecordedOn(e.target.value)}
+                />
+              </label>
+              <label>
+                Notes
+                <input
+                  type="text"
+                  className="field-input"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="optional"
+                />
+              </label>
+            </div>
+            {/* One table, not a card per group: cells sit in a single visual column so the
+                Phase 1 Enter/arrow protocol (DOM order = this GROUP_ORDER walk) goes straight
+                down, the way the sheet's muscle memory expects (spec §4.2). */}
+            <table className="data-table entry-table">
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th className="num entry-ref">Last month</th>
+                  <th className="num">This month</th>
+                  <th className="num entry-delta">Δ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ownerSections.map((section) => {
+                  const ownerTotals = subtotalOf(section.rows)
+                  // Same cents rule as every other subtotal here.
+                  const ownerCents = Math.round((ownerTotals.now - ownerTotals.prior) * 100)
+                  return (
+                    <Fragment key={section.key}>
+                      {section.label !== null && (
+                        <tr className="entry-owner-row">
+                          <th colSpan={4}>{section.label}</th>
+                        </tr>
+                      )}
+                      {GROUP_ORDER.map((group) => {
+                        const groupAccounts = section.rows.filter((a) => a.group === group)
+                        if (groupAccounts.length === 0) return null
+                        const totals = subtotalOf(groupAccounts)
+                        // Same cents rule as the footer's delta above (and the spending Δ
+                        // below): two sums of doubles that ought to cancel can miss by a few
+                        // ulp, and this row is exactly where a conserving transfer shows up.
+                        // Text only — the subtotal Δ carries no tone class, so rounding here
+                        // fixes the "-$0.00".
+                        const subCents = Math.round((totals.now - totals.prior) * 100)
+                        return (
+                          <Fragment key={group}>
+                            <tr className="entry-group-row">
+                              <th colSpan={4}>{GROUP_LABELS[group]}</th>
+                            </tr>
+                            {groupAccounts.map((account) => {
+                              const value = balances[account.id] ?? ''
+                              const prior = priorBalances[account.id]
+                              const delta =
+                                prior === undefined ? null : committed(value) - Number(prior)
+                              return (
+                                <tr key={account.id}>
+                                  <td
+                                    className={account.is_component ? 'entry-component' : undefined}
+                                  >
+                                    <label htmlFor={`bal-${account.id}`}>
+                                      {account.name}
+                                      {account.is_component && (
+                                        <span className="badge">component</span>
+                                      )}
+                                    </label>
+                                  </td>
+                                  <td className="num entry-ref">
+                                    {prior === undefined ? '—' : formatCurrency(prior)}
+                                  </td>
+                                  <td className="num entry-cell-col">
+                                    <AmountInput
+                                      id={`bal-${account.id}`}
+                                      className={
+                                        `${isAmount(value) ? '' : 'invalid'}${
+                                          flashIds.has(`bal-${account.id}`) ? ' pasted-flash' : ''
+                                        }`.trim() || undefined
+                                      }
+                                      autoFocus={account.id === firstBalanceId}
+                                      value={value}
+                                      onValueChange={(next) =>
+                                        setBalances((cur) => ({ ...cur, [account.id]: next }))
+                                      }
+                                    />
+                                    {/* A1 (2026-08-31 tier-1): advisory amber, NEVER a gate —
+                                        a card can legitimately go positive after a refund, so
+                                        Next/Save stay enabled and the table hint below keeps
+                                        stating the sign convention. */}
+                                    {account.group === 'liability' && committed(value) > 0 && (
+                                      <span className="entry-liability-cue" role="status">
+                                        liabilities are entered negative
+                                        <button
+                                          type="button"
+                                          className="button"
+                                          aria-label={`Flip sign on ${account.name}`}
+                                          onClick={() => flipSign(account.id)}
+                                        >
+                                          Flip sign
+                                        </button>
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td
+                                    className={`num entry-delta${
+                                      delta === null || delta === 0
+                                        ? ''
+                                        : delta > 0
+                                          ? ' delta-positive'
+                                          : ' delta-negative'
+                                    }`}
+                                  >
+                                    {/* Typo tripwire: a fat-fingered digit shows a huge Δ instantly. */}
+                                    {delta === null ? '—' : formatCurrency(delta)}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                            <tr className="entry-subtotal-row">
+                              <td>Subtotal</td>
+                              {/* No prior month at all (the first-ever entry) means there is
+                                  no prior subtotal — '—', never a fabricated $0.00 that would
+                                  read as "you had nothing" and make every Δ look like pure
+                                  growth. Per-row cells already say '—' via the missing
+                                  priorBalances. */}
+                              <td className="num entry-ref">
+                                {prevNetWorth === null ? '—' : formatCurrency(totals.prior)}
+                              </td>
+                              <td className="num">{formatCurrency(totals.now)}</td>
+                              <td className="num entry-delta">
+                                {prevNetWorth === null
+                                  ? '—'
+                                  : formatCurrency(subCents === 0 ? 0 : subCents / 100)}
+                              </td>
+                            </tr>
+                          </Fragment>
+                        )
+                      })}
+                      {/* The owner total sits a LEVEL ABOVE the group subtotals — coarser,
+                          not a replacement — and closes its section the way every subtotal in
+                          this table follows the rows it sums. */}
+                      {section.label !== null && (
+                        <tr className="entry-owner-subtotal-row">
+                          <td>{section.label} total</td>
+                          <td className="num entry-ref">
+                            {prevNetWorth === null ? '—' : formatCurrency(ownerTotals.prior)}
+                          </td>
+                          <td className="num">{formatCurrency(ownerTotals.now)}</td>
+                          <td className="num entry-delta">
+                            {prevNetWorth === null
+                              ? '—'
+                              : formatCurrency(ownerCents === 0 ? 0 : ownerCents / 100)}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+            <p className="drill-hint">
+              Liabilities are stored signed — enter card balances as negative numbers.
+            </p>
+            {pasteNote && (
+              <p className="drill-hint" role="status" aria-live="polite">
+                {pasteNote}
+              </p>
+            )}
+            {/* Named, not just role="status": the draft banner (and Phase 2's paste note)
+                are status nodes too, so screen readers — and every selector — need this one
+                to say WHAT it is announcing. */}
+            <div className="entry-footer" role="status" aria-label="Live totals">
+              <span>
+                Net worth (live): <strong>{formatCurrency(preview.netWorth)}</strong>
+              </span>
               {preview.delta !== null && (
-                <div
-                  className={`stat-delta ${preview.delta >= 0 ? 'stat-delta-positive' : 'stat-delta-negative'}`}
-                >
+                <span className={preview.delta >= 0 ? 'delta-positive' : 'delta-negative'}>
                   {/* Glyph + color, never color alone (Global visual rule; StatTile's pattern). */}
                   <span aria-hidden="true">{preview.delta >= 0 ? '▲ ' : '▼ '}</span>
                   {formatCurrency(preview.delta)} vs prior month
-                </div>
+                </span>
               )}
             </div>
-            <div>
-              <div className="stat-label">Total spend</div>
-              <div className="stat-value">{formatCurrency(preview.totalSpend)}</div>
-            </div>
-            <div>
-              <div className="stat-label">Savings rate</div>
-              <div className="stat-value">
-                {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
-              </div>
+            <div className="wizard-footer">
+              <span />
+              <button
+                className="button button-primary"
+                data-entry-primary=""
+                disabled={loading || accounts.length === 0 || !balancesValid}
+                onClick={() => setStep('spending')}
+              >
+                Next: spending
+              </button>
             </div>
           </div>
-          <p className="drill-hint" style={{ marginTop: '0.75rem' }}>
-            Server-side rounding (2 decimals, half-up) is authoritative; the preview is
-            client math. {stepIndex === 2 && !balancesValid ? 'Fix balance entries first.' : ''}
-          </p>
-          {monthExisted && (
-            <div className="danger-zone">
-              <h3 className="eyebrow">Danger</h3>
-              <p className="drill-hint">
-                Delete this month everywhere: its balances snapshot, spending rows and
-                take-home. This cannot be undone.
-              </p>
-              <div className="danger-row">
-                <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
-                <input
-                  id="delete-arm"
-                  type="text"
-                  className="field-input"
-                  value={deleteArm}
-                  onChange={(e) => setDeleteArm(e.target.value)}
-                  placeholder={month.slice(0, 7)}
+        )}
+
+        {!loading && step === 'spending' && (
+          <div
+            className="card"
+            data-entry-scope=""
+            onPaste={(e) => handlePaste(e, categories, (id) => `amt-${id}`, setAmounts)}
+          >
+            <h2 className="eyebrow">
+              Spending & take-home
+              <InfoHint text="The month&apos;s spend per category plus the household&apos;s take-home pay — a blank take-home skips the cashflow row." />
+            </h2>
+            <div className="meta-row">
+              <label>
+                Household take-home
+                <AmountInput
+                  className={netPay.trim() === '' || isAmount(netPay) ? undefined : 'invalid'}
+                  autoFocus
+                  value={netPay}
+                  onValueChange={setNetPay}
+                  placeholder="leave blank to skip"
                 />
-                <button
-                  type="button"
-                  className="button danger-button"
-                  disabled={deleting || deleteArm.trim() !== month.slice(0, 7)}
-                  onClick={() => void deleteMonth()}
-                >
-                  {deleting ? 'Deleting…' : 'Delete this month'}
-                </button>
+              </label>
+            </div>
+            {/* Same single visual column as the balances step — DOM order is the categories'
+                render order, so the Phase 1 Enter/arrow protocol walks straight down. */}
+            <table className="data-table entry-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th className="num entry-ref">Typical (3-mo median)</th>
+                  <th className="num">This month</th>
+                  <th className="num entry-delta">Δ vs typical</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categories.map((category) => {
+                  const value = amounts[category.id] ?? ''
+                  const typical = matrix === null ? null : typicalSpend(matrix, month, category.id)
+                  const delta =
+                    typical === null ? null : (Number(canonicalAmount(value)) || 0) - typical
+                  // CENTS decide both the tone and the text. A two-sample median averages
+                  // inexact doubles ((0.10 + 0.20) / 2 is 0.15000000000000002), so a month
+                  // that matches typical exactly lands at ±1e-14 — enough to tone a formatted
+                  // $0.00 in whichever delta colour the residue's sign picks. Rounding first
+                  // also fixes the text, since Intl prints "-$0.00" for a negative zero; the
+                  // === 0 branch is what hands formatCurrency a positive one.
+                  const deltaCents = delta === null ? null : Math.round(delta * 100)
+                  const budget = monthBudgets[category.id]
+                  const overBudget =
+                    budget !== undefined && (Number(canonicalAmount(value)) || 0) > Number(budget)
+                  return (
+                    <tr key={category.id}>
+                      <td>
+                        <label htmlFor={`amt-${category.id}`}>{category.name}</label>
+                      </td>
+                      <td className="num entry-ref">
+                        {typical === null ? '—' : formatCurrency(typical)}
+                      </td>
+                      <td className="num entry-cell-col">
+                        <AmountInput
+                          id={`amt-${category.id}`}
+                          className={
+                            `${isAmount(value) ? '' : 'invalid'}${
+                              flashIds.has(`amt-${category.id}`) ? ' pasted-flash' : ''
+                            }`.trim() || undefined
+                          }
+                          value={value}
+                          onValueChange={(next) =>
+                            setAmounts((cur) => ({ ...cur, [category.id]: next }))
+                          }
+                        />
+                        {budget !== undefined && (
+                          <span className={`entry-budget${overBudget ? ' delta-negative' : ''}`}>
+                            {/* Glyph + colour, never colour alone (StatTile's grammar):
+                                the amount went UP past the budget — the bad direction. */}
+                            {overBudget && <span aria-hidden="true">▲ </span>}
+                            {`of ${formatCurrency(budget)}`}
+                          </span>
+                        )}
+                      </td>
+                      {/* TONE INVERSION vs the balances Δ, deliberately: a POSITIVE delta
+                          here is overspending against the typical month — the BAD direction
+                          — so the sign→color mapping is the mirror of a rising balance's. */}
+                      <td
+                        className={`num entry-delta${
+                          deltaCents === null || deltaCents === 0
+                            ? ''
+                            : deltaCents > 0
+                              ? ' delta-negative' /* overspend vs typical reads as the bad direction */
+                              : ' delta-positive'
+                        }`}
+                      >
+                        {deltaCents === null
+                          ? '—'
+                          : formatCurrency(deltaCents === 0 ? 0 : deltaCents / 100)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {pasteNote && (
+              <p className="drill-hint" role="status" aria-live="polite">
+                {pasteNote}
+              </p>
+            )}
+            <div className="entry-footer" role="status" aria-label="Live totals">
+              <span>
+                Total spend (live): <strong>{formatCurrency(preview.totalSpend)}</strong>
+              </span>
+              <span>
+                Savings rate:{' '}
+                {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
+              </span>
+            </div>
+            <div className="wizard-footer">
+              <button className="button" onClick={() => setStep('balances')}>
+                Back
+              </button>
+              <button
+                className="button button-primary"
+                data-entry-primary=""
+                disabled={!amountsValid}
+                onClick={() => setStep('review')}
+              >
+                Next: review
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!loading && step === 'review' && (
+          <div className="card">
+            <h2 className="eyebrow">
+              Review & save — {formatMonth(month)}
+              <InfoHint text="A client-side preview; the server&apos;s rounding is authoritative once saved." />
+            </h2>
+            <div className="review-grid">
+              <div>
+                <div className="stat-label">Net worth (preview)</div>
+                <div className="stat-value">{formatCurrency(preview.netWorth)}</div>
+                {preview.delta !== null && (
+                  <div
+                    className={`stat-delta ${preview.delta >= 0 ? 'stat-delta-positive' : 'stat-delta-negative'}`}
+                  >
+                    {/* Glyph + color, never color alone (Global visual rule; StatTile's pattern). */}
+                    <span aria-hidden="true">{preview.delta >= 0 ? '▲ ' : '▼ '}</span>
+                    {formatCurrency(preview.delta)} vs prior month
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="stat-label">Total spend</div>
+                <div className="stat-value">{formatCurrency(preview.totalSpend)}</div>
+              </div>
+              <div>
+                <div className="stat-label">Savings rate</div>
+                <div className="stat-value">
+                  {preview.savings === null ? '—' : formatPct(preview.savings, { signed: false })}
+                </div>
               </div>
             </div>
-          )}
-          <div className="wizard-footer">
-            <button className="button" onClick={() => setStep('spending')}>
-              Back
-            </button>
-            {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
-                failed load both validity flags are vacuously true, and a meta-only PUT
-                to an existing month would clear its saved note. */}
-            <button
-              className="button button-primary"
-              disabled={
-                saving || loading || accounts.length === 0 || !balancesValid || !amountsValid
-              }
-              onClick={() => void save()}
-            >
-              {/* A8: while a committed balances leg is remembered, the primary IS the
-                  retry the banner promised. (After an in-between balance edit the click
-                  re-sends balances too — save() compares the payload, not the label.) */}
-              {saving ? 'Saving…' : balancesLeg !== null ? 'Retry spending' : 'Save month'}
-            </button>
+            <p className="drill-hint" style={{ marginTop: '0.75rem' }}>
+              Server-side rounding (2 decimals, half-up) is authoritative; the preview is
+              client math. {stepIndex === 2 && !balancesValid ? 'Fix balance entries first.' : ''}
+            </p>
+            {monthExisted && (
+              <div className="danger-zone">
+                <h3 className="eyebrow">Danger</h3>
+                <p className="drill-hint">
+                  Delete this month everywhere: its balances snapshot, spending rows and
+                  take-home. This cannot be undone.
+                </p>
+                <div className="danger-row">
+                  <label htmlFor="delete-arm">Type {month.slice(0, 7)} to confirm</label>
+                  <input
+                    id="delete-arm"
+                    type="text"
+                    className="field-input"
+                    value={deleteArm}
+                    onChange={(e) => setDeleteArm(e.target.value)}
+                    placeholder={month.slice(0, 7)}
+                  />
+                  <button
+                    type="button"
+                    className="button danger-button"
+                    disabled={deleting || deleteArm.trim() !== month.slice(0, 7)}
+                    onClick={() => void deleteMonth()}
+                  >
+                    {deleting ? 'Deleting…' : 'Delete this month'}
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="wizard-footer">
+              <button className="button" onClick={() => setStep('spending')}>
+                Back
+              </button>
+              {/* accounts.length === 0 doubles as the "load succeeded" sentinel: after a
+                  failed load both validity flags are vacuously true, and a meta-only PUT
+                  to an existing month would clear its saved note. */}
+              <button
+                className="button button-primary"
+                disabled={
+                  saving || loading || accounts.length === 0 || !balancesValid || !amountsValid
+                }
+                onClick={() => void save()}
+              >
+                {/* A8: while a committed balances leg is remembered, the primary IS the
+                    retry the banner promised. (After an in-between balance edit the click
+                    re-sends balances too — save() compares the payload, not the label.) */}
+                {saving ? 'Saving…' : balancesLeg !== null ? 'Retry spending' : 'Save month'}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </PageFrame>
     </div>
   )
 }

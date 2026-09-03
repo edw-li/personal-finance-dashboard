@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { MemoryRouter, useLocation } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MonthlyUpdatePage from './MonthlyUpdatePage'
 import ToastProvider from '../components/ToastProvider'
 import { ApiError } from '../api/client'
@@ -20,10 +20,14 @@ vi.mock('../api/spending', () => ({
   putSpendingMonth: vi.fn(),
 }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
+// The scope row's ribbon reads /coverage for its two-tone chips (2026-09-03 spec §7).
+vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 
 import * as netWorthApi from '../api/netWorth'
 import * as spendingApi from '../api/spending'
 import * as householdApi from '../api/household'
+import { fetchCoverage } from '../api/coverage'
+import { clearSnapshots } from '../api/snapshotCache'
 import { formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 
@@ -59,6 +63,13 @@ const creditCard = {
 const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
 
 beforeEach(() => {
+  // The ScopeBar caches /coverage under a shell:* snapshot key that outlives a test.
+  clearSnapshots()
+  vi.mocked(fetchCoverage).mockResolvedValue({
+    balances: ['2026-07-01'],
+    spending: ['2026-07-01'],
+    net_pay: ['2026-07-01'],
+  })
   // One-person household by default: every pre-existing test in this file asserts the FLAT
   // group walk, and that is exactly what a single person must keep rendering.
   vi.mocked(householdApi.fetchHousehold).mockResolvedValue({
@@ -119,12 +130,22 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
-function renderWizard() {
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+}
+
+function renderPage(entry = '/update?month=2026-08-01') {
   return render(
-    <MemoryRouter initialEntries={['/update?month=2026-08-01']}>
+    <MemoryRouter initialEntries={[entry]}>
       <MonthlyUpdatePage />
+      <LocationProbe />
     </MemoryRouter>,
   )
+}
+
+function renderWizard() {
+  return renderPage()
 }
 
 it('walks balances -> spending -> review and submits both PUTs', async () => {
@@ -197,11 +218,11 @@ it('resets notes/date on month switch and survives same-month clicks', async () 
 
   // Clicking the already-selected month must NOT blank the wizard (the [month]
   // effect never re-runs, so nothing would ever clear an unconditional loading flip).
-  fireEvent.click(screen.getByRole('button', { name: 'Aug 2026 — no data' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Aug 2026/ }))
   expect(screen.getByLabelText('Checking')).toBeDefined()
 
   // Switching months must reset notes/date — never leak them into the new month.
-  fireEvent.click(screen.getByRole('button', { name: 'Jun 2026 — no data' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
   await waitFor(() => {
     expect((screen.getByLabelText(/notes/i) as HTMLInputElement).value).toBe('')
   })
@@ -248,14 +269,14 @@ it('keeps a draft per month across ribbon switches', async () => {
   renderWizard()
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
 
-  fireEvent.click(screen.getByRole('button', { name: 'Jun 2026 — no data' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
   await waitFor(() =>
     expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('0.00'),
   )
   // June is untouched: no draft, no banner — August's work never leaks sideways.
   expect(screen.queryByText(/restored unsaved entries/i)).toBeNull()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Aug 2026 — no data' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Aug 2026/ }))
   await screen.findByText(/restored unsaved entries/i)
   expect((screen.getByLabelText('Checking') as HTMLInputElement).value).toBe('1600.00')
 })
@@ -1075,6 +1096,9 @@ it('arms on the typed month, fires both deletes tolerating a 404, clears the dra
   expect(spendingApi.deleteSpendingMonth).toHaveBeenCalledWith('2026-07-01')
   await screen.findByText(`Deleted ${formatMonth('2026-07-01')} — balances and spending removed.`)
   expect(sessionStorage.getItem('finance-update-draft:2026-07-01')).toBeNull()
+  // The deleted month has no feeds left: the ribbon must re-read coverage so its chip
+  // empties, exactly as a save fills one.
+  await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(1))
   // Landed on the CURRENT month's wizard.
   await waitFor(() =>
     expect(
@@ -1097,4 +1121,39 @@ it('surfaces a non-404 delete failure, stops before the second leg, stays on the
   expect(alert).not.toBeNull()
   expect(spendingApi.deleteSpendingMonth).not.toHaveBeenCalled()
   expect(screen.getByText(`Monthly update — ${formatMonth('2026-07-01')}`)).toBeDefined()
+})
+
+describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => {
+  it('renders the month title without an icon, the steps under it, and the ribbon in the scope row', async () => {
+    renderPage('/update?month=2026-09-01')
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Monthly update — Sep 2026' }),
+    ).toBeTruthy()
+    expect(document.querySelector('.page-frame-subheader .wizard-steps')).toBeTruthy()
+    expect(document.querySelector('.page-frame-scope .ribbon')).toBeTruthy()
+    expect(document.querySelector('.page-header')).toBeNull()
+  })
+
+  it('a ribbon click goes through the wizard’s own handler (draft-safe) and lands on balances', async () => {
+    renderPage('/update?month=2026-09-01&step=spending')
+    fireEvent.click(await screen.findByRole('button', { name: /^Aug 2026/ }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/update?month=2026-08-01&step=balances',
+      ),
+    )
+  })
+
+  it('re-reads coverage after a save, so the just-saved chip fills without leaving the month', async () => {
+    renderWizard()
+    fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+    fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+    await screen.findByLabelText('Food')
+    fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+    const before = vi.mocked(fetchCoverage).mock.calls.length
+    fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+    await screen.findByText(/month saved/i)
+    // Exactly once — a nonce that changed twice would fetch coverage twice per save.
+    await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBe(before + 1))
+  })
 })

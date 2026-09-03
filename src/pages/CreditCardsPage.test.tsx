@@ -179,6 +179,10 @@ function matrixRow(name: string): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks()
   clearSnapshots()
+  // The shared scope remembers a deliberate owner pick in localStorage, and jsdom keeps it
+  // alive across tests in this file — without this, one test's chip click would filter the
+  // next test's page before it has rendered a single chip.
+  localStorage.clear()
   seedHappyPath()
 })
 
@@ -299,7 +303,10 @@ describe('CreditCardsPage', () => {
     renderPage()
     await screen.findByText('Rewards matrix — best card per category')
     fireEvent.click(screen.getByRole('button', { name: 'Open Venture X details' }))
-    expect(screen.getByTestId('location').textContent).toBe('/credit-cards?card=venture-x')
+    // `owner=all` is the shared scope's arrival normalization — every view is shareable.
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/credit-cards?owner=all&card=venture-x',
+    )
     await screen.findByText('Worth keeping? (est.)')
     expect(screen.getByText('AF $395.00')).toBeTruthy()
     // Matrix is gone while drilled.
@@ -311,7 +318,8 @@ describe('CreditCardsPage', () => {
     await screen.findByText('Worth keeping? (est.)')
     fireEvent.click(screen.getByRole('button', { name: 'Back to the matrix' }))
     await screen.findByText('Rewards matrix — best card per category')
-    expect(screen.getByTestId('location').textContent).toBe('/credit-cards')
+    // The drill param is gone; the scope param the frame normalized in stays.
+    expect(screen.getByTestId('location').textContent).toBe('/credit-cards?owner=all')
   })
 
   it('a garbled ?card= slug falls back to the matrix view', async () => {
@@ -539,7 +547,8 @@ describe('CreditCardsPage — card ownership', () => {
     )
     expect(owners).toEqual(['Ed', 'Ed', 'Sam'])
     // The fresh form follows the roster once /household lands — Joint must be a CHOICE.
-    // `selector` disambiguates from the chips group, which is also labelled Owner.
+    // `selector` keeps this on the form's own select — the shared scope row's chips are
+    // labelled "Whose", but the selector is the durable way to name this box.
     const select = screen.getByLabelText('Owner', { selector: 'select' }) as HTMLSelectElement
     expect(select.value).toBe('1')
   })
@@ -628,7 +637,7 @@ describe('CreditCardsPage — owner chips and the household advantage', () => {
     })
     renderPage()
     await screen.findByText('Card roster')
-    expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
   })
 
   it('badges each matrix column with its owner', async () => {
@@ -683,5 +692,31 @@ describe('CreditCardsPage — section order (2026-08-31 audit)', () => {
     const roster = screen.getByRole('heading', { name: /Card roster/ })
     const categories = screen.getByRole('heading', { name: /Categories & weights/ })
     expectInDocumentOrder(matrix, value, line, roster, categories)
+  })
+})
+
+describe('CreditCardsPage — shell scope (2026-09-03 spec §5–§6)', () => {
+  it('filters by the URL owner without refetching', async () => {
+    renderPage('/credit-cards?owner=2')
+    await screen.findByText('Credit cards')
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Whose' })).toBeTruthy())
+    // Sam owns RH Gold alone — the URL alone put the page in that scope.
+    expect(screen.queryByRole('button', { name: 'Open SavorOne details' })).toBeNull()
+    const calls = vi.mocked(fetchCreditCards).mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Joint' }))
+    expect(screen.getByTestId('location').textContent).toContain('owner=joint')
+    // The data invariant (spec §6): owner is a CLIENT-side filter here, never a refetch.
+    expect(vi.mocked(fetchCreditCards).mock.calls.length).toBe(calls)
+    // The page's own chip row is gone — the shared scope row is the only owner control.
+    expect(document.querySelector('.cards-owner-row')).toBeNull()
+  })
+
+  it('renders through PageFrame with the add action in the title row', async () => {
+    renderPage('/credit-cards')
+    await screen.findByText('Credit cards')
+    expect(
+      screen.getByRole('button', { name: '+ Add card' }).closest('.page-frame-actions'),
+    ).toBeTruthy()
+    expect(document.querySelector('.page-header')).toBeNull()
   })
 })
