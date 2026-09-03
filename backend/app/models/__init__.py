@@ -17,6 +17,7 @@ from app.models.credit_cards import (
     RewardRate,
 )
 from app.models.household import Person
+from app.models.lifecycle import ChangeLog, LifecycleRun, UserPreference
 from app.models.limits import ContributionLimit
 from app.models.net_worth import ACCOUNT_GROUPS, Account, AccountBalance, NetWorthSnapshot
 from app.models.portfolio import (
@@ -45,6 +46,7 @@ __all__ = [
     "AppSetting",
     "CardCredit",
     "CategoryBudget",
+    "ChangeLog",
     "CompEvent",
     "ContributionLimit",
     "CreditCard",
@@ -57,6 +59,7 @@ __all__ = [
     "EsppPeriod",
     "HOLDING_TYPES",
     "LatestPrice",
+    "LifecycleRun",
     "MonthlyCashflow",
     "MonthlySpending",
     "NetWorthSnapshot",
@@ -81,4 +84,5 @@ __all__ = [
     "TaxInputDefinition",
     "TaxYear",
     "User",
+    "UserPreference",
 ]
