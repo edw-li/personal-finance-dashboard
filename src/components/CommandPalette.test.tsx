@@ -48,6 +48,9 @@ const openPalette = () => fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
 const combo = () => screen.getByRole('combobox')
 const type = (value: string) => fireEvent.change(combo(), { target: { value } })
 const group = (title: string) => screen.getByRole('group', { name: title })
+/** aria-selected down the rendered list — the highlight's position, in display order. */
+const selection = () =>
+  screen.getAllByRole('option').map((el) => el.getAttribute('aria-selected'))
 
 const NVDA: SecurityOut = {
   id: 1,
@@ -157,6 +160,30 @@ describe('CommandPalette', () => {
     expect(options[options.length - 1].getAttribute('aria-selected')).toBe('true')
   })
 
+  it('arrows walk the displayed list from the best match; a new query drops the override', () => {
+    renderPalette()
+    openPalette()
+    // "pay" hits three rows: the Add dividend action (alias "payment") heads the display in
+    // house order, then Pages — Paycheck (a label hit, the top score) before Calendar
+    // ("payday"). So the highlight starts on row two, not row one.
+    type('pay')
+    expect(selection()).toEqual(['false', 'true', 'false'])
+    // Down walks the VISIBLE order from the highlight: the next row down, not the top of
+    // the list — the arrows follow the map the reader is looking at.
+    fireEvent.keyDown(combo(), { key: 'ArrowDown' })
+    expect(selection()).toEqual(['false', 'false', 'true'])
+    // A new query clears the arrow override: "spen"'s best match IS its first row, and a
+    // surviving index-2 override would have clamped onto the second one instead.
+    type('spen')
+    expect(selection()).toEqual(['true', 'false'])
+    fireEvent.keyDown(combo(), { key: 'ArrowDown' })
+    expect(selection()).toEqual(['false', 'true'])
+    // Escape closes, and the next open starts clean on the first row of the empty list.
+    fireEvent.keyDown(combo(), { key: 'Escape' })
+    openPalette()
+    expect(selection()[0]).toBe('true')
+  })
+
   it('traps Tab on the input — the palette is a one-stop focus zone', () => {
     renderPalette()
     openPalette()
@@ -222,16 +249,25 @@ describe('CommandPalette', () => {
     renderPalette()
     openPalette()
     type('rsu')
-    // Kind headers come in the house order (spec §9), so a page hit heads the Pages group
-    // rather than the whole list; the alias is what makes Comp reachable at all.
+    // Kind headers come in the house order (spec §9): the update wizard answers "rsu"
+    // faintly (through the letters of its own label) and, being an Action, heads the
+    // DISPLAY — the list is a stable map, so it does not reshuffle by score.
+    expect(
+      Array.from(document.querySelectorAll('.palette-group-title')).map((el) => el.textContent),
+    ).toEqual(['Actions', 'Pages'])
     expect(within(group('Pages')).getAllByRole('option')[0].textContent).toContain('Comp')
+    // …but Enter does the thing that was TYPED: "rsu" is Comp's own alias and the
+    // best-scoring hit, so the highlight starts on it, two rows down the visible list.
+    fireEvent.keyDown(combo(), { key: 'Enter' })
+    expect(screen.getByTestId('pathname').textContent).toBe('/comp')
+    openPalette()
     type('password')
     fireEvent.keyDown(combo(), { key: 'Enter' })
     expect(screen.getByTestId('pathname').textContent).toBe('/settings')
     expect(screen.getByTestId('hash').textContent).toBe('#password')
   })
 
-  it('lists holdings once they load and opens the drill deep link', async () => {
+  it('lists holdings once they load and Enter opens the drill deep link', async () => {
     vi.mocked(fetchSecurities).mockResolvedValue([NVDA])
     renderPalette()
     openPalette()
@@ -239,9 +275,10 @@ describe('CommandPalette', () => {
     // 'Holdings' too, and findByText would find both.
     await screen.findByRole('group', { name: 'Holdings' })
     type('nvda')
-    // Picked by name, not by position: Settings sorts above Holdings, and the Assistant
-    // card's "nvidia" alias also answers this query.
-    fireEvent.mouseDown(screen.getByRole('option', { name: /NVDA/ }))
+    // Settings sorts above Holdings in the display, and the Assistant card answers this
+    // query too (its "nvidia" alias) — but the ticker is the exact-label hit, so Enter
+    // takes the holding rather than whatever the grouping happened to put on row one.
+    fireEvent.keyDown(combo(), { key: 'Enter' })
     expect(screen.getByTestId('pathname').textContent).toBe('/portfolio')
     expect(screen.getByTestId('search').textContent).toBe('?ticker=NVDA')
   })
@@ -256,9 +293,11 @@ describe('CommandPalette', () => {
     renderPalette()
     openPalette()
     type('calen')
-    // "Add custom event" (alias: calendar) is an Action, so it sorts above the page.
-    fireEvent.mouseDown(within(group('Pages')).getAllByRole('option')[0])
+    // "Add custom event" (alias: calendar) is an Action, so it heads the display — but the
+    // page is the stronger match, so Enter lands on /calendar and not on its ?add=1 form.
+    fireEvent.keyDown(combo(), { key: 'Enter' })
     expect(screen.getByTestId('pathname').textContent).toBe('/calendar')
+    expect(screen.getByTestId('search').textContent).toBe('')
     expect(JSON.parse(localStorage.getItem('commandPalette.recent') ?? '[]')).toEqual([
       'nav:/calendar',
     ])

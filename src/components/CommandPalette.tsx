@@ -57,7 +57,9 @@ export default function CommandPalette() {
   const toast = useToast()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
+  // An OVERRIDE, not the selection: null means "wherever the current query points"
+  // (see `defaultIndex`). Arrows and the pointer set it; a new query clears it.
+  const [active, setActive] = useState<number | null>(null)
   const [entities, setEntities] = useState<PaletteEntry[]>([])
   const entitiesLoadedAt = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -67,7 +69,7 @@ export default function CommandPalette() {
     previousFocus.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
     setQuery('')
-    setActive(0)
+    setActive(null)
     setOpen(true)
   }
 
@@ -156,7 +158,16 @@ export default function CommandPalette() {
   const groups = groupMatches(matches)
   // The flat order the keyboard walks: group order, then rank inside each group.
   const flat = groups.flatMap((g) => g.items)
-  const activeIndex = flat.length === 0 ? -1 : Math.min(active, flat.length - 1)
+  // Two different jobs, spec §9. The DISPLAY is a stable map — kind headers in the house
+  // order (Actions · Pages · Settings · entities) so the list never reshuffles under the
+  // reader's eyes. Enter is "do the thing I typed", which is the best-SCORING match
+  // wherever the grouping happened to file it: "rsu" means Comp even though the update
+  // wizard heads the Actions group above it. So the highlight starts on `matches[0]`,
+  // which groupMatches re-buckets by reference (never copies) and always keeps at the
+  // head of its own group — so it is always present in `flat`. An empty query has nothing
+  // typed to be "best" about: recents already lead, so row one leads with them.
+  const defaultIndex = query.trim() === '' ? 0 : Math.max(0, flat.indexOf(matches[0]))
+  const activeIndex = flat.length === 0 ? -1 : Math.min(active ?? defaultIndex, flat.length - 1)
 
   const execute = (item: PaletteEntry) => {
     pushRecent(item.id)
@@ -250,9 +261,12 @@ export default function CommandPalette() {
           aria-label="Command palette"
           placeholder="Jump to a page or run an action…"
           value={query}
+          // The override is dropped HERE rather than in an effect on `query`: the new
+          // query's own best match must already be highlighted in the very render that
+          // shows its results, or an Enter in the same tick would run the old row.
           onChange={(event) => {
             setQuery(event.target.value)
-            setActive(0)
+            setActive(null)
           }}
           onKeyDown={onInputKeyDown}
         />

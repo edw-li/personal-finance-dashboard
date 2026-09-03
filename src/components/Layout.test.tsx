@@ -330,7 +330,12 @@ describe('Layout — assistant mount', () => {
     renderShell()
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
     const combo = screen.getByRole('combobox')
-    fireEvent.change(combo, { target: { value: 'assistant' } })
+    // Names the ACTION, not the noun: since the registry gained Settings sections, a bare
+    // "assistant" is the Assistant card's own label and outscores "Ask assistant" — and
+    // Enter now runs the best-scoring match rather than the first row of the first group
+    // (spec §9). The assertion below is untouched; only the query is made unambiguous, so
+    // this stays a test of the bus and not of the ranking.
+    fireEvent.change(combo, { target: { value: 'ask assist' } })
     fireEvent.keyDown(combo, { key: 'Enter' })
     expect(await screen.findByRole('complementary', { name: 'Assistant' })).toBeTruthy()
     // Settles the settings fetch inside act, structurally: the composer is the drawer's
