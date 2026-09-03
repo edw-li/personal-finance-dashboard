@@ -168,11 +168,12 @@ export function trendOption(
   const stacked = amounts.some((a) => a[niitIndex] !== 0)
     ? [...TAX_LABELS]
     : TAX_LABELS.slice(0, niitIndex)
-  const top = stacked.length - 1
 
   return {
     grid: grid(),
-    legend: legendFor(stacked.length, selected),
+    // `data` pinned to the jurisdictions: the rate's carrier series below is not a
+    // jurisdiction and must never appear as an entry the user can switch off.
+    legend: { ...legendFor(stacked.length, selected), data: stacked },
     tooltip: axisTooltip({
       unit: 'money',
       groups: stacked,
@@ -186,21 +187,35 @@ export function trendOption(
       { gap: true },
     ),
     yAxis: moneyAxis(),
-    series: stacked.map((label, i) => ({
-      id: TAX_SERIES_IDS[i],
-      name: label,
-      type: 'bar' as const,
-      stack: 'tax',
-      ...BAR_MARKS,
-      barMaxWidth: 24,
-      ...stagger(i),
-      color: TAX_COLORS[i],
-      universalTransition: true,
-      // The cap label rides the TOP series so it sits on the year's total; an empty string
-      // for a year with no gross income (no rate to state).
-      ...(i === top ? { label: capLabel((p) => rateText(p.dataIndex)) } : {}),
-      data: amounts.map((a) => a[i]),
-    })),
+    series: [
+      ...stacked.map((label, i) => ({
+        id: TAX_SERIES_IDS[i],
+        name: label,
+        type: 'bar' as const,
+        stack: 'tax',
+        ...BAR_MARKS,
+        barMaxWidth: 24,
+        ...stagger(i),
+        color: TAX_COLORS[i],
+        universalTransition: true,
+        data: amounts.map((a) => a[i]),
+      })),
+      // The rate's carrier: a zero-height, transparent, silent member of the SAME stack, so
+      // its cap label sits on the year's total without belonging to any jurisdiction.
+      // Riding the top jurisdiction instead would have taken every year's rate off the
+      // chart the moment that one was hidden from the legend — and the pick persists (F9).
+      {
+        name: 'Effective rate',
+        type: 'bar' as const,
+        stack: 'tax',
+        silent: true,
+        tooltip: { show: false },
+        itemStyle: { color: 'transparent' },
+        barMaxWidth: 24,
+        data: amounts.map(() => 0),
+        label: capLabel((p) => rateText(p.dataIndex)),
+      },
+    ],
   }
 }
 

@@ -389,32 +389,47 @@ describe('trendOption', () => {
     // year has it — a series that came and went across one chart would lie.
     expect(series[6].data).toEqual([0, 75.59, 418.88, 0])
 
-    expect(series).toHaveLength(7) // no rate line (F15)
+    // Seven jurisdictions + the rate's transparent carrier; no rate LINE and no second
+    // axis (F15).
+    expect(series).toHaveLength(8)
     expect(series.every((s) => s.type === 'bar')).toBe(true)
     const yAxis = (
       option as unknown as { yAxis: { type: string; axisLabel: { formatter: unknown } } }
     ).yAxis
     expect(Array.isArray(yAxis)).toBe(false) // one axis (F15)
     expect(yAxis.axisLabel.formatter).toBe(compactMoney)
-    // The rate rides the TOP series' cap as a direct label — the 6dp fraction ×100, 1dp.
-    const cap = (series[6] as { label?: { formatter: (p: { dataIndex: number }) => string } }).label!
-    expect(cap.formatter({ dataIndex: 0 })).toBe('27.2%')
-    expect(cap.formatter({ dataIndex: 1 })).toBe('30.6%')
-    expect(series.slice(0, 6).every((s) => (s as { label?: unknown }).label === undefined)).toBe(
+    // The rate rides the CARRIER's cap as a direct label — the 6dp fraction ×100, 1dp.
+    const carrier = series[7] as {
+      name?: string
+      silent?: boolean
+      data?: unknown[]
+      label?: { formatter: (p: { dataIndex: number }) => string }
+    }
+    expect([carrier.name, carrier.silent]).toEqual(['Effective rate', true])
+    expect(carrier.data).toEqual([0, 0, 0, 0]) // zero height: a label holder, not an addend
+    expect(carrier.label!.formatter({ dataIndex: 0 })).toBe('27.2%')
+    expect(carrier.label!.formatter({ dataIndex: 1 })).toBe('30.6%')
+    // No jurisdiction owns a label, so hiding one cannot take the rate off the chart.
+    expect(series.slice(0, 7).every((s) => (s as { label?: unknown }).label === undefined)).toBe(
       true,
     )
+    // ...and the carrier is not a legend entry: `data` names the jurisdictions only.
+    expect((option as unknown as { legend: { data: string[] } }).legend.data).toEqual([
+      ...TAX_LABELS,
+    ])
     expect((series[0] as { barMaxWidth?: number }).barMaxWidth).toBe(24) // F13
     expect((option as unknown as { grid: unknown }).grid).toEqual(GRID_VARIANTS.default)
   })
 
   it('stacks NIIT only when some year in the feed carries it', () => {
     // 2024 has the surcharge, 2026 does not — one nonzero year brings the series for BOTH.
+    // slice(0, -1) drops the rate's carrier, which is never a jurisdiction.
     const withNiit = seriesOf(trendOption([2024, 2026].map(summaryFixture)))
-    expect(withNiit.map((s) => s.name)).toEqual([...TAX_LABELS])
+    expect(withNiit.slice(0, -1).map((s) => s.name)).toEqual([...TAX_LABELS])
     // A feed where NOBODY pays it drops the stack entirely: an all-zero series would add a
     // legend entry and a $0.00 tooltip row to every pre-NIIT year.
     const without = seriesOf(trendOption([summaryFixture(2026)]))
-    expect(without.map((s) => s.name)).toEqual(TAX_LABELS.slice(0, -1))
+    expect(without.slice(0, -1).map((s) => s.name)).toEqual(TAX_LABELS.slice(0, -1))
     expect(without.map((s) => s.name)).not.toContain('NIIT')
   })
 
@@ -474,7 +489,7 @@ describe('trendOption', () => {
     // No rate to state for a year with no gross income: the cap label goes blank rather
     // than printing a 0.0% the engine never computed — and the tooltip drops its footer.
     expect(
-      (series[6] as { label: { formatter: (p: { dataIndex: number }) => string } }).label.formatter({
+      (series[7] as { label: { formatter: (p: { dataIndex: number }) => string } }).label.formatter({
         dataIndex: 1,
       }),
     ).toBe('')
@@ -502,11 +517,24 @@ describe('trendOption', () => {
     // drill-in is a hard cut instead of a morph (SpendingPage's cat-${id} idiom).
     expect(series.slice(0, 7).map((s) => s.id)).toEqual([...TAX_SERIES_IDS])
     expect(series.slice(0, 7).every((s) => s.universalTransition === true)).toBe(true)
-    // §11: every stack member enters 12ms behind the one before it (a FUNCTION delay, so
-    // the zoom fast path's JSON fingerprint never sees it).
+    // §11: every DRAWN stack member enters 12ms behind the one before it (a FUNCTION delay,
+    // so the zoom fast path's JSON fingerprint never sees it). The transparent carrier has
+    // nothing to animate.
     expect(
-      series.every((s) => typeof (s as { animationDelay?: unknown }).animationDelay === 'function'),
+      series
+        .slice(0, 7)
+        .every((s) => typeof (s as { animationDelay?: unknown }).animationDelay === 'function'),
     ).toBe(true)
+  })
+
+  it('keeps the rate on screen when the top jurisdiction is switched off', () => {
+    // The whole point of the carrier: NIIT hidden (and the pick persists, F9) must not take
+    // every year's rate label with it.
+    const series = seriesOf(trendOption([summaryFixture(2024)], { selected: { NIIT: false } }))
+    const carrier = series[7] as {
+      label: { formatter: (p: { dataIndex: number }) => string }
+    }
+    expect(carrier.label.formatter({ dataIndex: 0 })).toBe('30.6%')
   })
 
   it("feeds the panel's legend picks back in", () => {
