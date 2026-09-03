@@ -9,7 +9,10 @@ import type { PrefsOut } from '../types/api'
 // a key the server has is adopted, unless the user changed it this session before the answer
 // (then the browser wins and PATCHes up); every later change writes local synchronously and
 // PATCHes debounced 400 ms per key; a failed PATCH retries on the next change or session and
-// is never surfaced. The storage keys keep their old spellings so nothing is lost on deploy.
+// is never surfaced — the keys still owed to the server are themselves persisted, so a reload
+// between the failure and the retry does not turn into a silent revert. The storage keys keep
+// their old spellings so nothing is lost on deploy; `endSession` drops the sync state (never
+// the values) when the account goes away.
 
 export type PrefKey = 'theme' | 'density' | 'scope' | 'palette_recents' | 'landing_page'
 export type ThemeChoice = 'system' | 'dark' | 'light'
@@ -36,6 +39,10 @@ export const STORAGE_KEYS: Record<PrefKey, string> = {
   landing_page: 'finance.landingPage',
 }
 export const PREF_KEYS = Object.keys(STORAGE_KEYS) as PrefKey[]
+// The bookkeeping key, beside the value keys but deliberately NOT one of them: PREF_KEYS is
+// STORAGE_KEYS' own key list, so an entry there would become a sixth preference the sync
+// tries to GET, adopt and PATCH. One key holds the whole set (see `dirty` below).
+export const DIRTY_STORAGE_KEY = 'finance.prefsDirty'
 export const PREFS_SNAPSHOT = 'shell:prefs'
 export const PATCH_DEBOUNCE_MS = 400
 const RECENTS_MAX = 8
@@ -122,11 +129,58 @@ const codecs: { [K in PrefKey]: Codec<PrefValues[K]> } = {
 
 // Module state — one store per tab. resetPrefsStoreForTests() clears it.
 let synced = false
-const dirty = new Set<PrefKey>() // changed this session before/after the server answered
+// TWO sets, because they answer two different questions:
+//  • `changed` — did the user move this key since the tab opened? That is what makes the
+//    browser win over a GET that was already in flight, so a PATCH landing first must NOT
+//    forget it: the answer to that GET still carries the pre-change value.
+//  • `dirty` — is the SERVER's copy of this key still behind the browser's? Persisted under
+//    DIRTY_STORAGE_KEY, because in memory alone a failed PATCH followed by a reload would let
+//    the next session ADOPT the server's stale value and silently revert what the user picked,
+//    while spec §10 rule 4 promises a retry "on the next change or session".
+const changed = new Set<PrefKey>()
+const dirty = new Set<PrefKey>()
 const pending = new Map<PrefKey, unknown>() // server values awaiting a PATCH (debounced or failed)
 const timers = new Map<PrefKey, ReturnType<typeof setTimeout>>()
 const listeners = new Map<PrefKey, Set<(value: never) => void>>()
 const syncedListeners = new Set<(synced: boolean) => void>()
+
+function readDirty(): PrefKey[] {
+  let raw: string | null = null
+  try {
+    raw = localStorage.getItem(DIRTY_STORAGE_KEY)
+  } catch {
+    return []
+  }
+  const parsed = parseJson(raw)
+  if (!Array.isArray(parsed)) return []
+  // Filtered against the registry: a key some future build stops knowing would otherwise sit
+  // in the set for the life of the browser, asking for a seed nothing can read.
+  return parsed.filter((key): key is PrefKey => PREF_KEYS.includes(key as PrefKey))
+}
+
+function writeDirty(): void {
+  try {
+    if (dirty.size === 0) localStorage.removeItem(DIRTY_STORAGE_KEY)
+    else localStorage.setItem(DIRTY_STORAGE_KEY, JSON.stringify([...dirty]))
+  } catch {
+    // A blocked localStorage costs the retry-after-reload, never the preference itself.
+  }
+}
+
+/** The server now holds these keys' values, so they are no longer behind — unless a NEWER
+ *  change is already queued behind the PATCH that just landed (`pending` still has it). */
+function confirmSent(keys: PrefKey[]): void {
+  let cleared = false
+  for (const key of keys) {
+    if (pending.has(key)) continue
+    cleared = dirty.delete(key) || cleared
+  }
+  if (cleared) writeDirty()
+}
+
+// Store init: last session's unconfirmed keys come back, so the next sync seeds them up
+// instead of adopting over them.
+readDirty().forEach((key) => dirty.add(key))
 
 function writeStorage(key: PrefKey, raw: string): void {
   try {
@@ -148,7 +202,11 @@ export function getLocal<K extends PrefKey>(key: K): PrefValues[K] | undefined {
  *  the caller already holds the new value; notifications are for server ADOPTIONS. */
 export function setLocal<K extends PrefKey>(key: K, value: PrefValues[K]): void {
   writeStorage(key, codecs[key].write(value))
-  dirty.add(key)
+  changed.add(key)
+  if (!dirty.has(key)) {
+    dirty.add(key)
+    writeDirty()
+  }
   pending.set(key, codecs[key].toServer(value))
   const existing = timers.get(key)
   if (existing !== undefined) clearTimeout(existing)
@@ -170,10 +228,12 @@ async function flushKey(key: PrefKey): Promise<void> {
   for (const [candidate, value] of pending) {
     if (candidate === key || !timers.has(candidate)) body[candidate] = value
   }
-  if (Object.keys(body).length === 0) return
-  for (const sent of Object.keys(body)) pending.delete(sent as PrefKey)
+  const sentKeys = Object.keys(body) as PrefKey[]
+  if (sentKeys.length === 0) return
+  for (const sent of sentKeys) pending.delete(sent)
   try {
     await patchPrefs(body)
+    confirmSent(sentKeys)
   } catch {
     for (const [sent, value] of Object.entries(body)) {
       if (!pending.has(sent as PrefKey)) pending.set(sent as PrefKey, value)
@@ -199,9 +259,10 @@ export async function syncFromServer(): Promise<void> {
   for (const key of PREF_KEYS) {
     const server = out.prefs[key]
     const local = getLocal(key)
-    if (server === undefined || dirty.has(key)) {
-      // The server has nothing, or the user moved this key before the answer: the browser
-      // seeds the account.
+    if (server === undefined || changed.has(key) || dirty.has(key)) {
+      // The server has nothing, the user moved this key before the answer landed, or an
+      // earlier PATCH never got through (`dirty` survived a reload): the browser seeds the
+      // account. Adopting here is what would revert the user's own choice.
       if (local !== undefined) seed[key] = (codecs[key].toServer as (v: unknown) => unknown)(local)
       continue
     }
@@ -210,16 +271,37 @@ export async function syncFromServer(): Promise<void> {
   }
   for (const [key, value] of pending) seed[key] = value // earlier failed PATCHes ride along
   pending.clear()
-  dirty.clear()
+  // The GET has landed, so there is no in-flight answer left to lose a race against; from
+  // here on `dirty` alone tracks what the server is still missing.
+  changed.clear()
   synced = true
   syncedListeners.forEach((listener) => listener(true))
-  if (Object.keys(seed).length > 0) {
+  const seeded = Object.keys(seed) as PrefKey[]
+  if (seeded.length > 0) {
     try {
       await patchPrefs(seed)
+      confirmSent(seeded)
     } catch {
       for (const [key, value] of Object.entries(seed)) pending.set(key as PrefKey, value)
     }
   }
+}
+
+/** The session ended in this tab (sign-out, or an identity that stopped answering). Every
+ *  piece of sync state belongs to the account that just left: its dirty keys would seed the
+ *  NEXT account's server from this one's choices, a pending PATCH would post them under the
+ *  next token, and `synced` would have Appearance claim "Synced to your account." before any
+ *  GET. The VALUES stay — they are this browser's paint, and the next sign-in reconciles
+ *  them. Key subscriptions stay too: they belong to mounted components, not to the session. */
+export function endSession(): void {
+  synced = false
+  changed.clear()
+  dirty.clear()
+  writeDirty()
+  pending.clear()
+  timers.forEach((timer) => clearTimeout(timer))
+  timers.clear()
+  syncedListeners.forEach((listener) => listener(false))
 }
 
 export function subscribe<K extends PrefKey>(
@@ -247,10 +329,14 @@ export function subscribeSynced(listener: (synced: boolean) => void): () => void
 
 export function resetPrefsStoreForTests(): void {
   synced = false
-  dirty.clear()
+  changed.clear()
   pending.clear()
   timers.forEach((timer) => clearTimeout(timer))
   timers.clear()
   listeners.clear()
   syncedListeners.clear()
+  // A fresh module load, storage included — `dirty` is re-read exactly as it is at init, so a
+  // test simulates a reload by calling this WITHOUT clearing localStorage.
+  dirty.clear()
+  readDirty().forEach((key) => dirty.add(key))
 }

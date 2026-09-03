@@ -409,14 +409,25 @@ export default function MonthlyUpdatePage() {
 
   // Undo (2026-09-03 data-lifecycle spec §9): the spending batch, then the balances batch —
   // the reverse of the save's order — each its own request; the first failure stops the
-  // sequence and its sentence is shown. `after` runs on success (reload, or return to the month).
+  // sequence and its sentence is shown. `after` (reload, or return to the month) runs on
+  // success AND after a partial failure, because a half-reversed month is still a changed one.
   const undoBatches = async (batchIds: (string | null)[], done: string, after: () => void) => {
+    let reversed = 0
     try {
-      for (const id of batchIds) if (id !== null) await undoBatch(id)
+      for (const id of batchIds) {
+        if (id === null) continue
+        await undoBatch(id)
+        reversed += 1
+      }
       toast.success(done)
       after()
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Undo failed')
+      // A PARTIAL undo still moved the data (leg 1 reversed, leg 2 was refused — a 409 from
+      // a later change touching the same rows). The boxes and the banner now describe rows
+      // that no longer exist, so `after` runs anyway: only a sequence that reversed NOTHING
+      // may leave the screen as it is.
+      if (reversed > 0) after()
     }
   }
 

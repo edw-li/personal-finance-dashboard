@@ -90,7 +90,10 @@ export default function ActivityCard() {
 
   const undo = (batchId: string, label: string) => {
     if (armed !== batchId) {
-      setArmed(batchId) // first click arms; a click elsewhere disarms via load()
+      // First click arms, the second fires — an undo is itself reversible, so it asks rather
+      // than makes the reader type. Only arming another row, or a feed reload (load() clears
+      // it), disarms: a click elsewhere on the page does NOT, and never did.
+      setArmed(batchId)
       return
     }
     setBusy(true)
@@ -121,6 +124,9 @@ export default function ActivityCard() {
       <FeedBanner error={error} retry={load} retryLabel="Retry loading activity" />
       {entries === null && error === null && <p className="empty-note">Loading…</p>}
       {entries !== null && entries.length === 0 && <p className="empty-note">Nothing recorded yet.</p>}
+      {/* Absolute timestamps, not "3 minutes ago": this repo has no relative-time formatter,
+          and a trail of money-bearing writes is read AGAINST the clock — which month a save
+          landed in matters more here than how long ago it was. */}
       {entries !== null && entries.length > 0 && (
         <ul className="activity-list">
           {entries.map((entry) =>

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setToken } from '../api/client'
 import {
+  DIRTY_STORAGE_KEY,
   PATCH_DEBOUNCE_MS,
   PREFS_SNAPSHOT,
   STORAGE_KEYS,
+  endSession,
   getLocal,
   isSynced,
   resetPrefsStoreForTests,
@@ -110,6 +112,7 @@ describe('prefsStore — session sync', () => {
     expect(fetchPrefs).toHaveBeenCalledTimes(1)
     expect(getSnapshot(PREFS_SNAPSHOT)).toEqual({ prefs: {} })
     expect(patchPrefs).toHaveBeenCalledWith({ theme: 'light', scope: { owner: 'joint', range: 'all' } })
+    expect(patchPrefs).toHaveBeenCalledTimes(1) // ONE seed for the whole browser copy
     expect(isSynced()).toBe(true)
     expect(seen).toEqual([true])
   })
@@ -160,6 +163,26 @@ describe('prefsStore — session sync', () => {
     expect(localStorage.getItem('finance.scope')).toBe(JSON.stringify({ owner: null, range: 'ytd' }))
   })
 
+  // Same rule, harder timing: the toggle's own PATCH lands BEFORE the answer to a GET that
+  // was issued before the toggle. That answer still carries the pre-toggle value, so the key
+  // being "confirmed" by the PATCH must not make the sync adopt it.
+  it('keeps that key even when its PATCH lands before the GET answers', async () => {
+    let release: (value: { prefs: Record<string, { value: unknown; updated_at: string }> }) => void = () => {}
+    vi.mocked(fetchPrefs).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const sync = syncFromServer()
+    setLocal('theme', 'light')
+    await vi.advanceTimersByTimeAsync(PATCH_DEBOUNCE_MS)
+    expect(patchPrefs).toHaveBeenCalledWith({ theme: 'light' })
+    release({ prefs: { theme: entry('system') } })
+    await sync
+    expect(localStorage.getItem('finance.theme')).toBe('light')
+  })
+
   it('ignores a server value of the wrong shape and stays quiet when the GET fails', async () => {
     localStorage.setItem('finance.theme', 'light')
     vi.mocked(fetchPrefs).mockResolvedValue({ prefs: { theme: entry('neon') } })
@@ -169,5 +192,58 @@ describe('prefsStore — session sync', () => {
     vi.mocked(fetchPrefs).mockRejectedValue(new Error('offline'))
     await expect(syncFromServer()).resolves.toBeUndefined()
     expect(isSynced()).toBe(false)
+  })
+})
+
+// Spec §10 rule 4 promises a failed PATCH retries "on the next change or session" — and a
+// reload happens between those. In memory only, the dirty set died with the tab and the next
+// session ADOPTED the server's stale value, silently reverting what the user had picked.
+describe('prefsStore — the dirty set survives a reload', () => {
+  it('re-PATCHes a key whose PATCH failed before the reload instead of adopting over it', async () => {
+    vi.mocked(patchPrefs).mockRejectedValueOnce(new Error('500'))
+    setLocal('theme', 'light')
+    await vi.advanceTimersByTimeAsync(PATCH_DEBOUNCE_MS)
+    expect(patchPrefs).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(localStorage.getItem(DIRTY_STORAGE_KEY) ?? '[]')).toEqual(['theme'])
+    resetPrefsStoreForTests() // the reload: memory is gone, localStorage is not
+    vi.mocked(fetchPrefs).mockResolvedValue({ prefs: { theme: entry('system') } })
+    await syncFromServer()
+    expect(patchPrefs).toHaveBeenLastCalledWith({ theme: 'light' })
+    expect(localStorage.getItem('finance.theme')).toBe('light')
+    // The retry landed, so the key is the server's business again — the NEXT session adopts.
+    expect(localStorage.getItem(DIRTY_STORAGE_KEY)).toBeNull()
+  })
+
+  it('forgets a key as soon as its PATCH succeeds, so a second browser can still be adopted', async () => {
+    setLocal('density', 'compact')
+    expect(JSON.parse(localStorage.getItem(DIRTY_STORAGE_KEY) ?? '[]')).toEqual(['density'])
+    await vi.advanceTimersByTimeAsync(PATCH_DEBOUNCE_MS)
+    expect(localStorage.getItem(DIRTY_STORAGE_KEY)).toBeNull()
+    resetPrefsStoreForTests()
+    vi.mocked(fetchPrefs).mockResolvedValue({ prefs: { density: entry('comfortable') } })
+    await syncFromServer()
+    expect(getLocal('density')).toBe('comfortable')
+  })
+})
+
+describe('prefsStore — session end', () => {
+  it('drops the sync state at sign-out so the next account is adopted, not seeded', async () => {
+    const seen: boolean[] = []
+    subscribeSynced((v) => seen.push(v))
+    await syncFromServer()
+    expect(isSynced()).toBe(true)
+    setLocal('theme', 'light') // dirty, with its PATCH still inside the debounce
+    vi.mocked(patchPrefs).mockClear()
+    endSession()
+    expect(isSynced()).toBe(false)
+    expect(seen).toEqual([true, false]) // Appearance must stop claiming "Synced to your account."
+    expect(localStorage.getItem(DIRTY_STORAGE_KEY)).toBeNull()
+    await vi.advanceTimersByTimeAsync(PATCH_DEBOUNCE_MS)
+    expect(patchPrefs).not.toHaveBeenCalled() // the pending PATCH went with the session
+    // The next sign-in in this tab: nothing is dirty, so the account's own value wins.
+    vi.mocked(fetchPrefs).mockResolvedValue({ prefs: { theme: entry('system') } })
+    await syncFromServer()
+    expect(localStorage.getItem('finance.theme')).toBe('system')
+    expect(patchPrefs).not.toHaveBeenCalled()
   })
 })

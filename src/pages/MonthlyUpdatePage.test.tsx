@@ -1171,6 +1171,33 @@ it('a 404 leg leaves no batch to undo, so Undo only fires the leg that wrote', a
   expect(lifecycleApi.undoBatch).toHaveBeenCalledWith('b-nw')
 })
 
+// Half an undo is still a change: the spending rows came back, the balances were refused.
+// Leaving the screen alone would keep showing the deleted month's state as if nothing had
+// happened, and the next save would be typed over rows that no longer match the server.
+it('a partial undo still reloads — leg 1 landed even though leg 2 was refused', async () => {
+  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
+  vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-sp' })
+  vi.mocked(lifecycleApi.undoBatch)
+    .mockResolvedValueOnce({
+      type: 'batch', batch_id: 'u-3', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
+      label: 'Undid: Deleted Jul 2026 spending', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
+    })
+    .mockRejectedValueOnce(new ApiError('a later change touched these rows', 409))
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  await screen.findByRole('button', { name: 'Delete this month' })
+  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(2))
+  await screen.findByText('a later change touched these rows')
+  expect(screen.queryByText('Undone — Jul 2026 is back.')).toBeNull()
+  await waitFor(() =>
+    expect(
+      screen.getByRole('heading', { level: 1, name: `Monthly update — ${formatMonth('2026-07-01')}` }),
+    ).toBeTruthy(),
+  )
+})
+
 it('the save toast carries Undo when a batch was written, and fires spending then balances', async () => {
   vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
     month: '2026-08-01', snapshot_created: true, created: 1, updated: 0, unchanged: 0, batch_id: 'b-nw2',

@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { OwnerScope } from '../../api/netWorth'
 import type { RangePreset } from '../../charts/timeZoom'
-import { getLocal, setLocal } from '../../prefs/prefsStore'
+import { STORAGE_KEYS, getLocal, setLocal } from '../../prefs/prefsStore'
 
 // The ONE scope rule (2026-09-03 shell spec §6): the URL is the source of truth, localStorage
 // remembers owner and range across pages, defaults fill whatever is left. `month` is never
 // remembered — it means something different on every page that has one.
-export const SCOPE_KEY = 'finance.scope'
+// An alias of prefsStore's registry, not a second copy of the spelling (useScope.test pins
+// it): the store owns every storage key, and two literals for one key is how a rename
+// silently forgets the reader's scope.
+export const SCOPE_KEY = STORAGE_KEYS.scope
 export const DEFAULT_RANGE: RangePreset = '1y'
 
 export interface Scope {
