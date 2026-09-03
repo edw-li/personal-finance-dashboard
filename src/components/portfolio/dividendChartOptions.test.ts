@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { PALETTE } from '../../charts/theme'
+import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
+import { PALETTE, SURFACE } from '../../charts/theme'
+import { isGrammarTooltip } from '../../charts/tooltip'
+import { tooltipRows } from '../../testing/tooltipRows'
 import type { DividendOut } from '../../types/api'
 import {
   INCOME_WINDOW_MONTHS,
@@ -157,5 +160,37 @@ describe('monthlyIncomeSums / monthlyIncomeCsv', () => {
     expect(csv.rows).toHaveLength(24)
     expect(csv.rows[23]).toEqual(['2026-08-01', '5.00'])
     expect(csv.rows[0]).toEqual([csv.rows[0][0], '0.00'])
+  })
+})
+
+describe('monthlyIncomeOption — grammar', () => {
+  it('no-legend grid, compact ticks, the bar marks, a shadow-pointer money tooltip', () => {
+    const option = monthlyIncomeOption([dividend('2026-06-05', '8.20')], TODAY) as unknown as {
+      grid: unknown
+      yAxis: { axisLabel: { formatter: unknown } }
+      tooltip: { axisPointer: unknown; formatter: (p: unknown) => string }
+      series: { barMaxWidth: number; itemStyle: unknown; emphasis: unknown }[]
+    }
+    expect(option.grid).toEqual(GRID_VARIANTS.noLegend)
+    expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
+    expect(option.series[0]).toMatchObject({
+      barMaxWidth: 22,
+      itemStyle: { borderColor: SURFACE, borderWidth: 1 },
+      emphasis: { focus: 'series' },
+    })
+    expect(option.tooltip.axisPointer).toEqual({ type: 'shadow' })
+    expect(isGrammarTooltip(option.tooltip.formatter)).toBe(true)
+    const rows = tooltipRows(
+      option.tooltip.formatter([
+        {
+          seriesName: 'Dividends',
+          seriesType: 'bar',
+          axisValueLabel: 'Jun 2026',
+          value: 8.2,
+          color: PALETTE[0],
+        },
+      ]),
+    )
+    expect(rows.rows).toEqual([{ kind: 'row', label: 'Dividends', value: '$8.20' }])
   })
 })

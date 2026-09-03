@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { INK, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
-import type { AllocationResponse } from '../../types/api'
-import { TYPE_LABELS, donutOption, positiveSlices, treemapOption } from './allocationChartOptions'
+import { DIVERGING, INK, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
+import { tooltipRows } from '../../testing/tooltipRows'
+import type { AllocationResponse, HoldingOut } from '../../types/api'
+import {
+  HEAT_CLAMP,
+  HEAT_METRICS,
+  TYPE_LABELS,
+  donutCsv,
+  donutOption,
+  heatTreemapCsv,
+  heatTreemapOption,
+  positiveSlices,
+  treemapOption,
+} from './allocationChartOptions'
 
 // Wire shape of GET /portfolio/allocation?by=… — pydantic v2 serializes Decimal as strings,
 // and the server sends the slices already sorted by market value descending (which is what
@@ -129,8 +140,8 @@ describe('donutOption', () => {
     )
     // Account names are user text and the formatter builds HTML: unescaped, a name is
     // markup in the tooltip.
-    expect(tooltipFormatterOf(option)({ name: '<b>ETF</b>', value: 3000 })).toBe(
-      '&lt;b&gt;ETF&lt;/b&gt;: $3.0K (75.0%)',
+    expect(tooltipRows(tooltipFormatterOf(option)({ name: '<b>ETF</b>', value: 3000 })).label).toBe(
+      '&lt;b&gt;ETF&lt;/b&gt;',
     )
     expect(tooltipFormatterOf(treemapOption(allocation([
       ['<b>x</b>', '3000.00'],
@@ -186,5 +197,149 @@ describe('treemapOption', () => {
     ])
     expect(data.map((s) => s.label?.color)).toEqual([SURFACE, SURFACE, INK])
     expect(data.map((s) => s.value)).toEqual([1000, 313, 312])
+  })
+})
+
+// --- the heat-treemap (F5) ------------------------------------------------------------
+function holding(
+  over: Partial<HoldingOut> & Pick<HoldingOut, 'ticker' | 'market_value'>,
+): HoldingOut {
+  return {
+    security_id: 1, name: over.ticker, industry: 'Semis', holding_type: 'stock',
+    is_manual_priced: false, shares: '1', avg_cost: '1', cost_basis: '1', price: '1',
+    quoted_at: null, price_source: 'yfinance', day_change_pct: '0.01', day_change_amount: '1',
+    weight_pct: null, unrealized_gl: '1', unrealized_gl_pct: '0.10', realized_gl: '0',
+    dividends_collected: '0', annual_dividend: null, annual_income: null, yield_pct: null,
+    yoc_pct: null, xirr_pct: null, accounts: [], warnings: [],
+    ...over,
+  }
+}
+
+const BOOK = [
+  holding({ ticker: 'NVDA', market_value: '600000.00', unrealized_gl_pct: '0.80', day_change_pct: '-0.02' }),
+  holding({ ticker: 'AMD', market_value: '200000.00', unrealized_gl_pct: '-0.10' }),
+  holding({ ticker: 'VOO', market_value: '195000.00', industry: null, holding_type: 'etf', unrealized_gl_pct: '0.25' }),
+  holding({ ticker: 'TINY', market_value: '3000.00', unrealized_gl_pct: '0.05' }), // 0.3% → folded
+  holding({ ticker: 'TINIER', market_value: '2000.00', unrealized_gl_pct: '-0.05' }),
+  holding({ ticker: 'UNPRICED', market_value: null }),
+]
+
+interface Leaf {
+  name: string
+  value: [number, number]
+  ticker: string | null
+  pct: number
+  label: { color: string }
+  children?: Leaf[]
+}
+
+const readHeat = (option: unknown) =>
+  option as {
+    tooltip: { trigger: string; formatter: (p: unknown) => string }
+    series: {
+      type: string
+      visualDimension?: number
+      visualMin?: number
+      visualMax?: number
+      levels: {
+        colorMappingBy?: string
+        color?: string[]
+        visualDimension?: number
+        visualMin?: number
+        visualMax?: number
+      }[]
+      label: { formatter: (p: { data: Leaf }) => string }
+      data: Leaf[]
+    }[]
+  }
+
+describe('heatTreemapOption', () => {
+  it('groups tickers under their industry (type label when none), area = market value, fill = the clamped metric', () => {
+    const option = readHeat(heatTreemapOption(BOOK, 'unrealized'))
+    const series = option.series[0]
+    expect(series.type).toBe('treemap')
+    // The colour mapping lives on the PARENT tier, not the series and not the leaf tier:
+    // echarts' treemapVisual builds a node's children's mapping from that NODE's own model
+    // (buildVisualMapping(nodeModel) + statistic()'s nodeModel.get('visualDimension')), so
+    // the industry level configures its ticker children. The 2026-09-04 probe drew all three
+    // placements — series-scoped and levels[2]-scoped both came out one flat colour, and only
+    // this one ramped (scratchpad/charts-c4-probe/variants.png; tools/probes/charts-c4).
+    expect(series.visualDimension).toBeUndefined()
+    expect(series.levels[1]).toMatchObject({
+      colorMappingBy: 'value',
+      color: [...DIVERGING],
+      visualDimension: 1,
+      visualMin: -HEAT_CLAMP,
+      visualMax: HEAT_CLAMP,
+    })
+    expect(series.levels[2].color).toBeUndefined()
+    expect(series.data.map((g) => g.name)).toEqual(['Semis', 'ETF']) // biggest industry first
+    const semis = series.data[0]
+    expect(semis.children!.map((l) => l.name)).toEqual(['NVDA', 'AMD', 'Other'])
+    expect(semis.children![0].value).toEqual([600000, HEAT_CLAMP]) // +80% clamps to +50%
+    expect(semis.children![0].pct).toBe(0.8) // the tooltip keeps the true figure
+    expect(semis.children![1].value).toEqual([200000, -0.1])
+    // Two slivers (0.3% + 0.2% of a $1M book) fold into one Other cell with a value-weighted %.
+    expect(semis.children![2]).toMatchObject({ name: 'Other', ticker: null, value: [5000, 0.01] })
+    expect(series.data[1].children![0]).toMatchObject({ name: 'VOO', value: [195000, 0.25] })
+    // Saturated arms take the surface ink, the neutral middle takes text ink.
+    expect(semis.children![0].label.color).toBe(SURFACE)
+    expect(semis.children![1].label.color).toBe(INK)
+    expect(series.label.formatter({ data: semis.children![0] })).toBe('NVDA\n$600.0K · +80.0%')
+  })
+
+  it('Day change reads day_change_pct; unpriced holdings are excluded; empty book → null', () => {
+    const series = readHeat(heatTreemapOption(BOOK, 'day')).series[0]
+    expect(series.data[0].children![0].value).toEqual([600000, -0.02])
+    expect(heatTreemapOption([holding({ ticker: 'X', market_value: null })], 'day')).toBeNull()
+    expect(HEAT_METRICS.map((m) => m.label)).toEqual(['Unrealized', 'Day change'])
+  })
+
+  it('F7: value first, ticker, the metric and share; industry nodes summarise; the root is silent', () => {
+    const option = readHeat(heatTreemapOption(BOOK, 'unrealized'))
+    const leaf = option.series[0].data[0].children![0]
+    const parsed = tooltipRows(option.tooltip.formatter({ name: 'NVDA', value: leaf.value, data: leaf }))
+    expect([parsed.lead, parsed.label, parsed.sub]).toEqual([
+      '$600,000.00', 'NVDA', '+80.0% unrealized · 60.0% of holdings · Semis',
+    ])
+    const group = tooltipRows(
+      option.tooltip.formatter({ name: 'Semis', value: [805000, 0], data: option.series[0].data[0] }),
+    )
+    expect([group.lead, group.label, group.sub]).toEqual(['$805,000.00', 'Semis', '80.5% of holdings'])
+    expect(option.tooltip.formatter({ name: '', value: [1000000, 0] })).toBe('')
+  })
+
+  it('exports every priced holding with both metrics', () => {
+    const csv = heatTreemapCsv(BOOK)
+    expect(csv.headers).toEqual(['Industry', 'Ticker', 'Market value', 'Unrealized %', 'Day change %'])
+    expect(csv.rows[0]).toEqual(['Semis', 'NVDA', '600000.00', '0.80', '-0.02'])
+    expect(csv.rows).toHaveLength(5)
+  })
+})
+
+describe('donutOption — grammar', () => {
+  it('F7: value first, the escaped name, the share of holdings; CSV lists the drawn arcs', () => {
+    const data = allocation([['<b>ETF</b>', '3000.00'], ['stock', '1000.00']])
+    const format = (
+      donutOption(data, false) as unknown as {
+        tooltip: { trigger: string; formatter: (p: unknown) => string }
+      }
+    ).tooltip
+    expect(format.trigger).toBe('item')
+    const parsed = tooltipRows(format.formatter({ name: '<b>ETF</b>', value: 3000 }))
+    expect([parsed.lead, parsed.label, parsed.sub]).toEqual([
+      '$3,000.00', '&lt;b&gt;ETF&lt;/b&gt;', '75.0% of holdings',
+    ])
+    expect(
+      donutCsv(
+        allocation([
+          ['etf', '5000.00'], ['stock', '3000.00'], ['private', '2000.00'], ['mutual_fund', '400.00'],
+        ]),
+        true,
+      ),
+    ).toEqual({
+      headers: ['Slice', 'Market value'],
+      rows: [['ETF', '5000.00'], ['Stock', '3000.00'], ['Private', '2000.00'], ['Other', '400.00']],
+    })
   })
 })

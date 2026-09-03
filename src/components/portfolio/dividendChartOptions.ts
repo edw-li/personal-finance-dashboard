@@ -1,10 +1,12 @@
 // Pure option builder for the dividend income chart — no React, no fetching, no theme
 // decisions of its own (historyChartOptions.ts posture). Number() is display-only.
 import type { EChartsOption } from '../../charts/echarts'
-import { PALETTE, SURFACE } from '../../charts/theme'
+import { BAR_MARKS, grid, moneyAxis, monthAxis } from '../../charts/grammar'
+import { PALETTE } from '../../charts/theme'
+import { axisTooltip } from '../../charts/tooltip'
 import type { DividendOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
+import { formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 
 export const INCOME_WINDOW_MONTHS = 24
@@ -51,20 +53,16 @@ export function monthlyIncomeOption(
   const rows = monthlyIncomeSums(dividends, todayIso)
   if (rows === null) return null
   return {
-    grid: { left: 70, right: 16, top: 16, bottom: 28 },
-    xAxis: { type: 'category', data: rows.map((r) => formatMonth(r.month)) },
-    yAxis: {
-      type: 'value',
-      axisLabel: { formatter: (v: number) => formatCurrencyCompact(v) },
-    },
-    tooltip: { trigger: 'axis', valueFormatter: (v) => formatCurrency(v as number) },
+    grid: grid('noLegend'),
+    xAxis: monthAxis(rows.map((r) => formatMonth(r.month)), { gap: true }),
+    yAxis: moneyAxis(),
+    tooltip: axisTooltip({ unit: 'money', pointer: 'shadow' }),
     series: [
       {
         type: 'bar',
         name: 'Dividends',
-        barMaxWidth: 22,
+        ...BAR_MARKS,
         color: PALETTE[0],
-        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
         data: rows.map((r) => r.amount),
       },
     ],
