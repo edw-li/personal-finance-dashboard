@@ -148,6 +148,45 @@ def test_paycheck_waterfall_collapses_a_negative_zero_net():
     assert str(lines["monthly_net"]) == "0.00"
 
 
+def test_waterfall_keys_are_the_breakdown_keys_in_sheet_order():
+    """The preview and the projection read the chain by NAME; the tuples pin the names."""
+    from app.services.paycheck_calc import PAYROLL_SAVING_KEYS, WATERFALL_KEYS
+
+    lines = breakdown(
+        type(
+            "P",
+            (),
+            {
+                "annual_salary": D("120000"),
+                "pay_periods_per_year": 24,
+                "trad_401k_pct": D("0.1"),
+                "roth_401k_pct": D("0"),
+                "after_tax_401k_pct": D("0"),
+                "espp_pct": D("0.05"),
+                "withholding_pct": D("0.2"),
+                "dental_vision_per_check": D("0"),
+                "hsa_per_check": D("100"),
+            },
+        )()
+    )
+    assert WATERFALL_KEYS == (
+        "gross",
+        "trad_401k",
+        "dental_vision",
+        "hsa",
+        "taxable",
+        "withholding",
+        "post_tax",
+        "roth_401k",
+        "after_tax_401k",
+        "espp",
+        "net_pay",
+    )
+    assert set(WATERFALL_KEYS) | {"monthly_net"} == set(lines)
+    assert PAYROLL_SAVING_KEYS == ("trad_401k", "roth_401k", "after_tax_401k", "espp", "hsa")
+    assert sum(lines[key] for key in PAYROLL_SAVING_KEYS) == D("850")  # 500 + 0 + 0 + 250 + 100
+
+
 # --- comp_calc (pure) ---
 
 
