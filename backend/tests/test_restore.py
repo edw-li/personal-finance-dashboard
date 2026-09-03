@@ -2,12 +2,16 @@ import io
 import json
 import zipfile
 from collections.abc import Callable
+from datetime import date
+from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.lifecycle.restore import (
+    RESTORE_PRESERVED_SETTINGS,
     SnapshotError,
+    apply_restore,
     check_schema,
     load_snapshot,
     parse_tables,
@@ -15,11 +19,16 @@ from app.lifecycle.restore import (
 )
 from app.models import (
     Account,
+    AppSetting,
+    CategoryBudget,
     ChangeLog,
+    CreditCard,
+    CustomEvent,
     LifecycleRun,
+    SpendingCategory,
     UserPreference,
 )
-from app.schemas.lifecycle import RestoreTableDiff
+from app.schemas.lifecycle import RestoreReport, RestoreTableDiff
 from app.services.snapshot import EXPORTED_TABLES, build_snapshot_zip, restore_points_dir
 
 TABLE_NAMES = [name for _, name in EXPORTED_TABLES]
@@ -225,3 +234,200 @@ async def test_diff_tables_hashes_identity_through_the_csv_writer(db, seeded_use
     # A dry run writes nothing: no restore point, no run, no change-log row.
     assert not restore_points_dir().exists()
     assert await count(db, LifecycleRun) == 0 and await count(db, ChangeLog) == 0
+
+
+# ── apply_restore ────────────────────────────────────────────────────────────────────
+
+
+async def seed_a_book(db, seeded_user) -> None:
+    """A workbook import plus the UI-only rows the workbook never carries (spec §13)."""
+    from app.importer.service import run_import
+    from tests.workbook_builder import build_workbook
+
+    report = await run_import(build_workbook(), db, dry_run=False)
+    assert report.applied and not report.has_errors
+    category = (
+        (await db.execute(select(SpendingCategory).order_by(SpendingCategory.id))).scalars().first()
+    )
+    db.add(
+        CategoryBudget(
+            category_id=category.id, effective_month=date(2024, 1, 1), amount=Decimal("500.00")
+        )
+    )
+    db.add(CustomEvent(event_date=date(2026, 12, 25), label="Bonus lands", detail=None))
+    db.add(
+        CreditCard(
+            name="Sapphire",
+            slug="sapphire",
+            rewards_currency="points",
+            annual_fee=Decimal("95.00"),
+            point_value_cents=Decimal("1.5000"),
+        )
+    )
+    db.add(UserPreference(user_id=seeded_user.id, key="theme", value="light"))
+    await db.commit()
+
+
+async def wipe_exported_tables(db) -> None:
+    names = ", ".join(f'"{name}"' for name in TABLE_NAMES)
+    await db.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+    await db.commit()
+
+
+async def restore_now(db, payload: bytes, user_id: int) -> RestoreReport:
+    return await apply_restore(
+        db,
+        load_snapshot(payload),
+        user_id=user_id,
+        actor="me@example.com",
+        server_head=None,
+        source_name="finance-export.zip",
+        size_bytes=len(payload),
+    )
+
+
+async def test_apply_restore_round_trips_every_table_byte_for_byte(db, seeded_user):
+    await seed_a_book(db, seeded_user)
+    before = await build_snapshot_zip(db)
+    assert before.counts["accounts"] == 3 and before.counts["credit_cards"] == 1
+    await wipe_exported_tables(db)
+    assert await count(db, Account) == 0
+
+    report = await restore_now(db, before.payload, seeded_user.id)
+    assert report.applied is True and report.dry_run is False
+    assert report.tables["accounts"] == RestoreTableDiff(current=0, incoming=3, identical=False)
+    assert report.restore_point is not None
+    assert (restore_points_dir() / report.restore_point).is_file()
+    assert report.batch_id is not None and report.run_id is not None
+
+    after = await build_snapshot_zip(db)
+    a = zipfile.ZipFile(io.BytesIO(before.payload))
+    b = zipfile.ZipFile(io.BytesIO(after.payload))
+    assert (
+        json.loads(a.read("finance-export.json"))["tables"]
+        == json.loads(b.read("finance-export.json"))["tables"]
+    )
+    for name in a.namelist():
+        if name.startswith("csv/"):
+            assert a.read(name) == b.read(name), name
+
+    # The trail: one summary change-log row, one restore run holding the report, plus the
+    # restore point's own run (committed before the transaction).
+    rows = (await db.execute(select(ChangeLog))).scalars().all()
+    assert [(r.op, r.source, r.table_name) for r in rows] == [("batch", "restore", "*")]
+    assert rows[0].after == {
+        "tables": {name: diff.incoming for name, diff in report.tables.items()}
+    }
+    assert rows[0].batch_id == report.batch_id
+    runs = (await db.execute(select(LifecycleRun).order_by(LifecycleRun.id))).scalars().all()
+    assert [r.kind for r in runs] == ["restore_point", "restore"]
+    assert runs[1].id == report.run_id and runs[1].batch_id == report.batch_id
+    assert runs[1].report["restore_point"] == report.restore_point
+    assert runs[1].filename == "finance-export.zip" and runs[1].size_bytes == len(before.payload)
+
+
+async def test_apply_restore_preserves_this_servers_operational_settings(db, seeded_user):
+    db.add(AppSetting(key="backup_status", value={"snapshot": True}))
+    db.add(AppSetting(key="swr_pct", value={"value": "0.04"}))
+    await db.commit()
+    snap = await build_snapshot_zip(db)  # carries backup_status = {"snapshot": True}
+    for key, value in (
+        ("backup_status", {"server": True}),
+        ("nvidia_api_key", {"value": "nvapi-x"}),
+        ("swr_pct", {"value": "0.99"}),
+    ):
+        setting = await db.get(AppSetting, key)
+        if setting is None:
+            db.add(AppSetting(key=key, value=value))
+        else:
+            setting.value = value
+    await db.commit()
+
+    report = await restore_now(db, snap.payload, seeded_user.id)
+    assert report.preserved_settings == ["backup_status", "nvidia_api_key"]
+    stored = {s.key: s.value for s in (await db.execute(select(AppSetting))).scalars()}
+    assert stored["backup_status"] == {"server": True}  # this server's marker, not the snapshot's
+    assert stored["nvidia_api_key"] == {"value": "nvapi-x"}  # the key survives a restore
+    assert stored["swr_pct"] == {"value": "0.04"}  # ordinary settings come from the snapshot
+    for key in RESTORE_PRESERVED_SETTINGS:
+        assert key in {
+            "nvidia_api_key",
+            "backup_status",
+            "backup_runs",
+            "refresh_runs",
+            "last_refresh",
+        }
+
+
+async def test_apply_restore_rewrites_preferences_fixes_the_self_reference_and_resumes_sequences(
+    db, seeded_user
+):
+    parent = Account(name="401k", slug="401k", group="pre_tax", sort_order=1)
+    db.add(parent)
+    await db.flush()
+    # The child has the LOWER sort but the HIGHER id: the export writes it after its parent,
+    # but a snapshot from a book where the child was created first would not — the apply
+    # must not depend on file order for the self-reference.
+    child = Account(
+        name="401k Bucket",
+        slug="401k-bucket",
+        group="pre_tax",
+        sort_order=0,
+        is_component=True,
+        parent_account_id=parent.id,
+    )
+    db.add(child)
+    db.add(UserPreference(user_id=seeded_user.id, key="density", value="compact"))
+    await db.commit()
+    snap = await build_snapshot_zip(db)
+
+    def swap_order_and_user(tables):
+        tables["accounts"].reverse()  # child first
+        tables["user_preferences"][0]["user_id"] = 999
+
+    await wipe_exported_tables(db)
+    report = await restore_now(
+        db, rezip(snap.payload, tables_patch=swap_order_and_user), seeded_user.id
+    )
+    assert report.applied is True
+    accounts = {a.slug: a for a in (await db.execute(select(Account))).scalars()}
+    assert accounts["401k-bucket"].parent_account_id == accounts["401k"].id
+    pref = (await db.execute(select(UserPreference))).scalar_one()
+    assert (pref.user_id, pref.key, pref.value) == (seeded_user.id, "density", "compact")
+    # Sequences resume past the restored ids: the next account is max(id)+1, not a collision.
+    fresh = Account(name="New", slug="new", group="cash", sort_order=9)
+    db.add(fresh)
+    await db.commit()
+    assert fresh.id == max(accounts["401k"].id, accounts["401k-bucket"].id) + 1
+
+
+async def test_apply_restore_keeps_three_restore_points(db, seeded_user):
+    snap = await build_snapshot_zip(db)
+    for _ in range(4):
+        await restore_now(db, snap.payload, seeded_user.id)
+    assert len(list(restore_points_dir().iterdir())) == 3
+    kinds = [
+        r.kind for r in (await db.execute(select(LifecycleRun).order_by(LifecycleRun.id))).scalars()
+    ]
+    assert kinds == ["restore_point", "restore"] * 4
+
+
+async def test_apply_restore_rolls_back_and_keeps_the_restore_point_on_failure(
+    db, seeded_user, monkeypatch
+):
+    db.add(Account(name="Keep", slug="keep", group="cash", sort_order=1))
+    await db.commit()
+    snap = await build_snapshot_zip(db)
+
+    def explode():
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr("app.lifecycle.restore._exported_in_fk_order", explode)
+    with pytest.raises(RuntimeError, match="disk on fire"):
+        await restore_now(db, snap.payload, seeded_user.id)
+    await db.rollback()  # what the router does
+    assert await count(db, Account) == 1  # the TRUNCATE rolled back with everything else
+    assert await count(db, ChangeLog) == 0
+    runs = (await db.execute(select(LifecycleRun))).scalars().all()
+    assert [r.kind for r in runs] == ["restore_point"]  # committed on its own, still listed
+    assert len(list(restore_points_dir().iterdir())) == 1

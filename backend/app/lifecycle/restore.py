@@ -17,16 +17,19 @@ Any exception rolls the transaction back; the restore point (its own committed r
 import hashlib
 import io
 import json
+import logging
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
+from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.system import BACKUP_RUNS_KEY, BACKUP_STATUS_KEY
 from app.config import settings
-from app.models import AppSetting
+from app.database import Base
+from app.models import AppSetting, ChangeLog, LifecycleRun
 from app.schemas.lifecycle import RestoreReport, RestoreSchema, RestoreTableDiff
 from app.services.assistant_models import KEY_SETTING
 from app.services.price_service import LAST_REFRESH_KEY, REFRESH_RUNS_KEY
@@ -36,7 +39,10 @@ from app.services.snapshot import (
     csv_for_rows,
     parse_cell,
     row_dict,
+    write_restore_point,
 )
+
+logger = logging.getLogger(__name__)
 
 NOT_A_SNAPSHOT = "Not a snapshot ZIP from this app"
 APP_MARKER = "personal-finance-dashboard"
@@ -267,3 +273,144 @@ async def plan_restore(
         batch_id=None,
         run_id=None,
     )
+
+
+def _exported_in_fk_order() -> list[tuple[type, str]]:
+    """The exported tables in Base.metadata.sorted_tables order — people before accounts,
+    snapshots before balances. The export's own order is not FK-safe."""
+    by_name = {name: model for model, name in EXPORTED_TABLES}
+    return [
+        (by_name[table.name], table.name)
+        for table in Base.metadata.sorted_tables
+        if table.name in by_name
+    ]
+
+
+def _label_for(snapshot: LoadedSnapshot) -> str:
+    if snapshot.exported_at is None:
+        return "Restored snapshot"
+    at = snapshot.exported_at
+    return f"Restored snapshot from {at:%b} {at.day}, {at.year}"  # no %-d: not portable
+
+
+async def apply_restore(
+    db: AsyncSession,
+    snapshot: LoadedSnapshot,
+    *,
+    user_id: int | None,
+    actor: str | None,
+    server_head: str | None,
+    source_name: str | None,
+    size_bytes: int | None,
+) -> RestoreReport:
+    """The seven steps of spec §7, one transaction after the restore point. The caller
+    rolls back on any exception (the router and the CLI both do); the restore point's run
+    was committed on its own and stays listed."""
+    schema = check_schema(snapshot, server_head)
+    parsed = parse_tables(snapshot, user_id=user_id)
+    # (1) The current database, kept: commits its own run; raising here means nothing below ran.
+    point = await write_restore_point(db, actor=actor)
+    # (2) This server's operational rows, read before the truncate.
+    preserved_rows = [
+        (setting.key, setting.value)
+        for setting in (
+            await db.execute(
+                select(AppSetting).where(AppSetting.key.in_(RESTORE_PRESERVED_SETTINGS))
+            )
+        ).scalars()
+    ]
+    preserved_keys = sorted(key for key, _ in preserved_rows)
+    tables = await diff_tables(db, parsed)  # what this restore changes, measured first
+    # (3) One statement. CASCADE reaches nothing outside the set: the trails and users have
+    # no FKs INTO the exported tables (user_preferences points the other way, at users).
+    names = ", ".join(f'"{name}"' for _, name in EXPORTED_TABLES)
+    await db.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+    # Every instance the session loaded now describes a row that no longer exists.
+    db.expunge_all()
+    # (4) Insert in FK order; the self-reference goes in null and is fixed up after.
+    for model, name in _exported_in_fk_order():
+        table = model.__table__
+        absent = set(parsed.absent.get(name, ()))
+        rows = [
+            {key: value for key, value in row.items() if key not in absent}
+            for row in parsed.rows[name]
+        ]
+        if name == "app_settings":
+            rows = [row for row in rows if row["key"] not in RESTORE_PRESERVED_SETTINGS]
+        deferred: list[tuple[object, object]] = []
+        self_ref = SELF_REFERENCES.get(name)
+        if self_ref is not None:
+            fixed: list[dict[str, object]] = []
+            for row in rows:
+                if row.get(self_ref) is not None:
+                    deferred.append((row["id"], row[self_ref]))
+                    row = {**row, self_ref: None}
+                fixed.append(row)
+            rows = fixed
+        if rows:
+            await db.execute(insert(table), rows)
+        for pk_value, ref in deferred:
+            await db.execute(update(table).where(table.c.id == pk_value).values({self_ref: ref}))
+    # (5) Sequences resume past the restored ids (RESTART IDENTITY reset them to 1).
+    for model, name in EXPORTED_TABLES:
+        table = model.__table__
+        auto = table.autoincrement_column
+        if auto is None:
+            continue
+        await db.execute(
+            text(
+                f"SELECT setval(pg_get_serial_sequence('{name}', '{auto.key}'), "
+                f"COALESCE((SELECT MAX({auto.key}) FROM {name}), 0) + 1, false)"
+            )
+        )
+    # (6) This server's rows come back.
+    if preserved_rows:
+        await db.execute(
+            insert(AppSetting.__table__),
+            [{"key": key, "value": value} for key, value in preserved_rows],
+        )
+    # (7) Record it — inside the same transaction, so a failed restore records nothing.
+    counts = {name: diff.incoming for name, diff in tables.items()}
+    batch_id: UUID = uuid4()
+    db.add(
+        ChangeLog(
+            batch_id=batch_id,
+            source="restore",
+            actor=actor,
+            label=_label_for(snapshot),
+            table_name="*",
+            pk={},
+            op="batch",
+            before=None,
+            after={"tables": counts},
+            month=None,
+        )
+    )
+    run = LifecycleRun(
+        kind="restore",
+        dry_run=False,
+        ok=True,
+        actor=actor,
+        filename=source_name,
+        size_bytes=size_bytes,
+        batch_id=batch_id,
+    )
+    db.add(run)
+    await db.flush()
+    report = RestoreReport(
+        dry_run=False,
+        applied=True,
+        exported_at=snapshot.exported_at,
+        schema=schema,
+        tables=tables,
+        preserved_settings=preserved_keys,
+        warnings=parsed.warnings,
+        errors=[],
+        restore_point=point.name,
+        batch_id=batch_id,
+        run_id=run.id,
+    )
+    run.report = report.model_dump(mode="json")
+    await db.commit()
+    logger.info("restored snapshot %s: %s", source_name, counts)
+    return report
