@@ -580,12 +580,17 @@ async def feed_ics(
     """The subscription feed: 30 days back, 365 forward. Unknown or revoked tokens 404 with
     one sentence — no oracle for token existence. The body's sha256 is the ETag; a matching
     If-None-Match is a 304 with no body, which is what makes a 12-hour poll cheap."""
+    presented_hash = _hash_token(token)
     row = (
         await db.execute(
-            select(CalendarFeedToken).where(CalendarFeedToken.token_hash == _hash_token(token))
+            select(CalendarFeedToken).where(CalendarFeedToken.token_hash == presented_hash)
         )
     ).scalar_one_or_none()
-    if row is None:
+    # The indexed equality NARROWS, compare_digest DECIDES: the credential verdict must not
+    # rest on the database's collation semantics (a case-insensitive collation would widen
+    # `=`) nor on an early-returning byte compare. Both sides are already hashes of a
+    # 256-bit random token, so no secret is in the timing either way — this keeps it so.
+    if row is None or not secrets.compare_digest(row.token_hash, presented_hash):
         raise HTTPException(status_code=404, detail="feed not found")
     now = datetime.now(tz=UTC)
     # At most one write per hour per token: a calendar app polls on its own schedule and an
@@ -600,11 +605,11 @@ async def feed_ics(
     body = render(events, public_url=settings.public_url).encode("utf-8")
     etag = f'"{hashlib.sha256(body).hexdigest()}"'
     headers = {"ETag": etag, "Cache-Control": "private, max-age=3600"}
-    presented = {
+    presented_etags = {
         candidate.strip().removeprefix("W/")
         for candidate in request.headers.get("if-none-match", "").split(",")
     }
-    if etag in presented:
+    if etag in presented_etags:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type=ICS_MEDIA_TYPE, headers=headers)
 
