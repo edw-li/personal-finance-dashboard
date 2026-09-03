@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useCallback, useState } from 'react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { useArrivalParam, useArrivalValue } from './useArrivalParam'
+import { useArrivalPair, useArrivalParam, useArrivalValue } from './useArrivalParam'
 
 const TABS = ['dividends', 'securities', 'realized'] as const
 
@@ -143,5 +143,66 @@ describe('useArrivalValue', () => {
     await waitFor(() =>
       expect(screen.getByTestId('location').textContent).toBe('/portfolio'),
     )
+  })
+})
+
+const ADD = ['1'] as const
+
+function PairProbe({
+  apply,
+}: {
+  apply: (value: string, companion: string | null, params: URLSearchParams) => void
+}) {
+  const { pathname, search } = useLocation()
+  const stable = useCallback(
+    (value: string, companion: string | null, params: URLSearchParams) =>
+      apply(value, companion, params),
+    [apply],
+  )
+  useArrivalPair('add', ADD, 'date', stable)
+  return <div data-testid="location">{pathname + search}</div>
+}
+
+function renderPairProbe(
+  initialEntry: string,
+  fold?: (params: URLSearchParams) => void,
+) {
+  const apply = vi.fn((_v: string, _c: string | null, params: URLSearchParams) => fold?.(params))
+  render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <PairProbe apply={apply} />
+    </MemoryRouter>,
+  )
+  return apply
+}
+
+describe('useArrivalPair', () => {
+  it('hands over the command and its companion, consuming BOTH in one replace', () => {
+    const apply = renderPairProbe('/calendar?add=1&date=2026-09-16&view=list')
+    expect(apply).toHaveBeenCalledWith('1', '2026-09-16', expect.any(URLSearchParams))
+    expect(screen.getByTestId('location').textContent).toBe('/calendar?view=list')
+  })
+
+  it('folds what apply writes into that SAME replace — no second write to drop it', () => {
+    renderPairProbe('/calendar?add=1&date=2026-09-16', (params) => params.set('month', '2026-09'))
+    expect(screen.getByTestId('location').textContent).toBe('/calendar?month=2026-09')
+  })
+
+  it('a missing companion is null, not an error', () => {
+    const apply = renderPairProbe('/calendar?add=1')
+    expect(apply).toHaveBeenCalledWith('1', null, expect.any(URLSearchParams))
+    expect(screen.getByTestId('location').textContent).toBe('/calendar')
+  })
+
+  it('strips an invalid command without applying it, companion included', () => {
+    const apply = renderPairProbe('/calendar?add=9&date=2026-09-16')
+    expect(apply).not.toHaveBeenCalled()
+    expect(screen.getByTestId('location').textContent).toBe('/calendar')
+  })
+
+  it('does nothing at all when the command is absent', () => {
+    const apply = renderPairProbe('/calendar?date=2026-09-16')
+    expect(apply).not.toHaveBeenCalled()
+    expect(screen.getByTestId('location').textContent).toBe('/calendar?date=2026-09-16')
   })
 })
