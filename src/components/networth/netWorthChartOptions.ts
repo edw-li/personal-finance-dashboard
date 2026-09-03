@@ -20,6 +20,10 @@ import { escapeHtml, formatCurrency, formatCurrencyCompact, formatMonth } from '
  * NetWorthPage). */
 export const NOTES_SERIES = 'Notes'
 
+/** The net-worth line's series name. A constant because the drill has to RESERVE it (see
+ * stackSeriesNames) — two spellings would let the reservation drift from the series. */
+export const NET_WORTH_SERIES = 'Net worth'
+
 interface AxisTooltipParam {
   seriesName?: string
   marker?: string
@@ -197,7 +201,7 @@ export function netWorthStackOption({
 
   const netWorthLine = {
     ...LINE,
-    name: 'Net worth',
+    name: NET_WORTH_SERIES,
     lineStyle: { width: 2.5 },
     color: INK,
     z: 10,
@@ -318,6 +322,53 @@ export interface DrillPick {
   slot: number
 }
 
+/**
+ * Every series name the STACK above the drill can put on screen, in any mode: the seven
+ * group labels, the net-worth line, the notes layer, and the owner columns (each person's
+ * name, plus 'Joint' for the null-person row).
+ *
+ * Why the drill has to know them: both cards ride ONE echarts connect group
+ * (`group="net-worth"`, so the zoom windows stay locked), and echarts 6 relays every
+ * action across a connect group — `legendselectchanged` included. Series are matched BY
+ * NAME, so a drill legend click on an account literally named "Cash" toggles the stack's
+ * Cash series too. Per-chart legend maps on the page stop the page's own mirroring; they
+ * cannot stop echarts' relay. Only distinct NAMES can.
+ */
+function stackSeriesNames(ts: Pick<NetWorthTimeseries, 'owner_series'>): Set<string> {
+  return new Set<string>([
+    ...GROUP_ORDER.map((g) => GROUP_LABELS[g]),
+    NET_WORTH_SERIES,
+    NOTES_SERIES,
+    // `?? []` is stale-deploy armor, as everywhere owner_series is read; `?? 'Joint'`
+    // matches the owner stack's own label for the null-person row.
+    ...(ts.owner_series ?? []).map((s) => s.name ?? 'Joint'),
+  ])
+}
+
+/** claimNodeName's pattern (charts/sankey.ts, where a colliding CATEGORY name would crash
+ *  the sankey) with an account-shaped suffix: a picked account named "Cash" draws as
+ *  "Cash (account)" so it can never share a name with a stack series — or with another
+ *  pick, since `taken` grows as the drill is walked. */
+function claimSeriesName(name: string, taken: Set<string>): string {
+  let candidate = name
+  if (taken.has(candidate)) candidate = `${name} (account)`
+  let n = 2
+  while (taken.has(candidate)) candidate = `${name} (account ${n++})`
+  taken.add(candidate)
+  return candidate
+}
+
+/** The drill's series names in pick order, claimed against the stack's (above). One helper
+ *  so the chart's legend and the CSV's headers can never disagree about a name. */
+function drillNames(
+  ts: Pick<NetWorthTimeseries, 'accounts' | 'owner_series'>,
+  drill: DrillPick[],
+): string[] {
+  const nameById = new Map(ts.accounts.map((a) => [a.id, a.name]))
+  const taken = stackSeriesNames(ts)
+  return drill.map((d) => claimSeriesName(nameById.get(d.accountId) ?? String(d.accountId), taken))
+}
+
 export interface NetWorthDrillInput {
   ts: NetWorthTimeseries
   drill: DrillPick[]
@@ -330,7 +381,7 @@ export interface NetWorthDrillInput {
 export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDrillInput): EChartsOption | null {
   if (drill.length === 0 || ts.months.length === 0) return null
   const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
-  const nameById = new Map(ts.accounts.map((a) => [a.id, a.name]))
+  const names = drillNames(ts, drill)
   return {
     dataZoom: rangeZoom(ts.months, range),
     grid: grid('endLabel'),
@@ -338,9 +389,9 @@ export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDril
     tooltip: axisTooltip({ unit: 'money' }),
     xAxis: monthAxis(ts.months.map(formatMonth)),
     yAxis: moneyAxis(),
-    series: drill.map(({ accountId, slot }) => ({
+    series: drill.map(({ accountId, slot }, i) => ({
       ...LINE,
-      name: nameById.get(accountId) ?? String(accountId),
+      name: names[i],
       // Circles on hover only: the line is the data, the dots are the hover affordance.
       symbol: 'circle' as const,
       symbolSize: 8,
@@ -352,12 +403,13 @@ export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDril
   }
 }
 
-/** The drill-down as a table (F12): month rows × the picked accounts, verbatim strings. */
+/** The drill-down as a table (F12): month rows × the picked accounts, verbatim strings.
+ *  Headers carry the CLAIMED names (drillNames) so the export reads back exactly as the
+ *  chart's legend does — including the ' (account)' suffix on a colliding name. */
 export function netWorthDrillCsv(ts: NetWorthTimeseries, drill: DrillPick[]): ExportTable {
   const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
-  const nameById = new Map(ts.accounts.map((a) => [a.id, a.name]))
   return {
-    headers: ['Month', ...drill.map((d) => nameById.get(d.accountId) ?? String(d.accountId))],
+    headers: ['Month', ...drillNames(ts, drill)],
     rows: ts.months.map((month, i) => [month, ...drill.map((d) => byId.get(d.accountId)?.[i] ?? '')]),
   }
 }

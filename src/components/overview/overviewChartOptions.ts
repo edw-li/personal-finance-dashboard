@@ -8,7 +8,7 @@
 // only the comparison average — a presentation figure that never leaves the page — is a
 // number.
 import type { EChartsOption } from '../../charts/echarts'
-import { BAR_MARKS, LINE, WASH, cents, grid, moneyAxis, monthAxis } from '../../charts/grammar'
+import { BAR_MARKS, LINE, WASH, grid, moneyAxis, monthAxis } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { referenceLine } from '../../charts/reference'
 import { PALETTE } from '../../charts/theme'
@@ -55,18 +55,27 @@ export function recentSpendOption(
   if (matrix.months.length === 0) return null
   const start = Math.max(0, matrix.months.length - months)
   const totals = matrix.totals.slice(start).map(Number)
-  // F14: the window's own mean as a reference — the same window the bars show, so the line
-  // and the bars answer one question ("is this month over my recent average?").
-  const mean = cents(totals.reduce((sum, t) => sum + t, 0) / totals.length)
+  // F14: the reference is spendStats' OWN avg12 — the mean of the twelve months STRICTLY
+  // BEFORE the latest one — not the mean of the drawn window. The spend tile prints that
+  // number under the same words ("over/under $X 12-mo avg"), and the label on this line
+  // says the same thing; a window mean (which includes the latest month, so the bar being
+  // judged drags its own baseline) would put two different numbers behind one name.
+  // Taken from spendStats rather than recomputed so they cannot drift apart, and NOT
+  // re-rounded through cents(): the tile formats this exact float.
+  const mean = spendStats(matrix).avg12
+  // A single-month book has nothing before the latest to average: no line, no legend entry
+  // for a comparison that does not exist yet (the tile suppresses its delta for the same
+  // reason).
+  const average = mean === null ? [] : [referenceLine(AVERAGE_SERIES, totals.map(() => mean))]
   return {
     grid: grid(),
-    legend: legendFor(2),
+    legend: legendFor(1 + average.length),
     xAxis: monthAxis(matrix.months.slice(start).map(formatMonth), { gap: true }),
     yAxis: moneyAxis(),
     tooltip: axisTooltip({ unit: 'money', references: [AVERAGE_SERIES], pointer: 'shadow' }),
     series: [
       { type: 'bar', name: 'Spend', ...BAR_MARKS, color: PALETTE[1], data: totals },
-      referenceLine(AVERAGE_SERIES, totals.map(() => mean)),
+      ...average,
     ],
   }
 }

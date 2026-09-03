@@ -159,12 +159,18 @@ export default function NetWorthPage() {
   // Mirrors of the charts' own events (2026-08-25 spec §2e), fed back through the
   // memoized options so a granularity refetch or notMerge rebuild no longer resets them.
   // The ZOOM window stays shared — both charts ride one month axis and one set of chips.
-  // Legend picks are one map PER CHART (2026-08-31 tier-1 A2): an account literally named
-  // "Cash"/"Other"/"Taxable"/"Net worth" collides with a group series' name, and one
-  // merged map let a drill toggle silently hide the same-named GROUP in the stacked chart
-  // (and shrink the tooltip's Assets subtotal). Each chart feeds and reads only its own.
+  // Legend picks are one map PER CHART (2026-08-31 tier-1 A2): one merged map let a drill
+  // toggle silently hide the same-named GROUP in the stacked chart (and shrink the
+  // tooltip's Assets subtotal). Each chart feeds and reads only its own.
+  // Split maps alone do NOT close that collision, though — both cards ride one
+  // `group="net-worth"` connect group and echarts 6 relays every action across it,
+  // legendselectchanged included, matching series BY NAME. So the drill also CLAIMS its
+  // account names against the stack's reserved set (netWorthChartOptions.stackSeriesNames):
+  // an account literally named "Cash"/"Other"/"Net worth"/a person's name draws as
+  // "Cash (account)" and has nothing on the other chart to toggle.
   // Still MERGED within a chart: echarts hands over the firing chart's whole name→shown
-  // map, and a stale key is inert in legend.selected (echarts ignores unclaimed names).
+  // map, and a stale key is inert in legend.selected (echarts ignores unclaimed names) —
+  // which is also what happens to a pick made under a name a rename has since freed.
   const [stackedLegend, setStackedLegend] = useState<Record<string, boolean>>({})
   const [drillLegend, setDrillLegend] = useState<Record<string, boolean>>({})
   const onStackedLegendChange = (selected: Record<string, boolean>) =>
@@ -555,7 +561,9 @@ export default function NetWorthPage() {
           {data !== null && viewedIndex >= 1 && (
             <ChartCard
               title={`What moved — ${formatMonth(months[viewedIndex])}`}
-              hint="How each account group moved net worth from the prior snapshot to this one — a waterfall from last month’s total to this month’s. Groups that did not move are left out."
+              // "the previous period's", not "last month's": the same card draws the step
+              // between two QUARTERS under the Quarterly grain.
+              hint="How each account group moved net worth from the prior snapshot to this one — a waterfall from the previous period’s total to this one’s. Groups that did not move are left out."
               ariaLabel="Waterfall chart of how each account group moved net worth from the prior month to this one"
               option={bridgeOption}
               empty="Nothing moved between these two months."

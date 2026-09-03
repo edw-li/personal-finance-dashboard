@@ -176,17 +176,33 @@ describe('recentSpendOption', () => {
     expect(bars.emphasis).toEqual({ focus: 'series', itemStyle: { borderColor: INK } })
   })
 
-  it('F14: a dashed 12-mo average reference at the mean of the shown months, listed after the bars', () => {
-    const option = recentSpendOption({ months: monthsFrom('2026-01-01', 3), totals: totalsFrom(3) })
+  it('F14: a dashed reference at the SPEND TILE’s own 12-mo average, listed after the bars', () => {
+    const feed = { months: monthsFrom('2026-01-01', 3), totals: totalsFrom(3) }
+    const option = recentSpendOption(feed)
     const [bars, average] = seriesOf(option)
     expect(bars.name).toBe('Spend')
     expect(average).toMatchObject({ name: '12-mo average', type: 'line', color: MUTED, z: 9, lineStyle: { width: 2, type: 'dashed' } })
-    expect(average.data).toEqual([200, 200, 200])
+    // One label, ONE number: the line is spendStats.avg12 — the mean of the months
+    // STRICTLY BEFORE the latest (100, 200 → 150), which is exactly what the tile
+    // prints as “over/under $150.00 12-mo avg”. The mean of the SHOWN window
+    // (100, 200, 300 → 200) would let the judged bar drag its own baseline.
+    expect(average.data).toEqual([150, 150, 150])
+    expect((average.data as number[])[0]).toBe(spendStats(feed).avg12)
     expect((option as unknown as { legend: { type: string } }).legend.type).toBe('plain')
     expect(gridOf(option)).toEqual(GRID_VARIANTS.default)
-    // The reference rides the trailing window: a 14-month feed averages its last twelve.
-    const long = recentSpendOption({ months: monthsFrom('2025-01-01', 14), totals: totalsFrom(14) })
-    expect((seriesOf(long)[1].data as number[])[0]).toBe(850)
+    // A 14-month feed: months[1..12] = 200…1300, mean 750 — the tile's figure again,
+    // not the drawn window's 850.
+    const long = { months: monthsFrom('2025-01-01', 14), totals: totalsFrom(14) }
+    expect((seriesOf(recentSpendOption(long))[1].data as number[])[0]).toBe(750)
+    expect((seriesOf(recentSpendOption(long))[1].data as number[])[0]).toBe(spendStats(long).avg12)
+  })
+
+  it('drops the reference when there is no month before the latest to average', () => {
+    // A one-month book: avg12 is null, the tile shows no delta, and a line at the single
+    // bar's own value would be a comparison with itself.
+    const feed = { months: monthsFrom('2026-01-01', 1), totals: totalsFrom(1) }
+    expect(spendStats(feed).avg12).toBeNull()
+    expect(seriesOf(recentSpendOption(feed)).map((s) => s.name)).toEqual(['Spend'])
   })
 
   it('keeps only the last twelve months of a longer feed', () => {

@@ -49,8 +49,10 @@ vi.mock('../components/EChart', async () => {
         'data-legend-selected': JSON.stringify(option.legend?.selected ?? null),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
-        // An account literally named "Cash" toggled off — the A2 collision case.
-        onMouseEnter: () => onLegendChange?.({ Cash: false }),
+        // The chart's FIRST legend entry toggled off. Keyed off this chart's own series
+        // name rather than a literal, because the A2 case turns on what that name IS: an
+        // account named "Cash" now reports under its claimed spelling.
+        onMouseEnter: () => onLegendChange?.({ [(option.series ?? [])[0]?.name ?? '']: false }),
       }),
   }
 })
@@ -429,7 +431,10 @@ it('re-seeds the drill for a new scope whose payload is IDENTICAL to the one on 
 // ── Legend collision (2026-08-31 tier-1 A2) ───────────────────────────────────────────────
 // One merged legend map let an account literally named "Cash" toggle the stacked chart's
 // Cash GROUP off from the drill chart — silently hiding the group and shrinking the
-// tooltip's Assets subtotal. The two charts now hold separate maps.
+// tooltip's Assets subtotal. The two charts now hold separate maps — AND the drill
+// claims its names (netWorthChartOptions.stackSeriesNames), because both cards ride one
+// `group="net-worth"` connect group and echarts 6 relays legendselectchanged across a
+// group by series NAME, which no amount of page-side map splitting can intercept.
 it('keeps a drill toggle on an account named "Cash" out of the stacked chart', async () => {
   vi.mocked(fetchTimeseries).mockResolvedValue(
     timeseriesOut({
@@ -444,16 +449,18 @@ it('keeps a drill toggle on an account named "Cash" out of the stacked chart', a
   )
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })
-  // The drill seeds to the biggest account — the one wearing the colliding name.
+  // The drill seeds to the biggest account — the one wearing the colliding name, which
+  // therefore draws under the CLAIMED spelling. The suffix is visible on purpose: the
+  // legend has to admit that this entry is the account, not the group.
   await waitFor(() =>
-    expect(drilled().getAttribute('data-series')).toBe('Cash'),
+    expect(drilled().getAttribute('data-series')).toBe('Cash (account)'),
   )
 
-  fireEvent.mouseEnter(drilled()) // drill legend: { Cash: false }
+  fireEvent.mouseEnter(drilled()) // drill legend: { 'Cash (account)': false }
 
   expect(
     JSON.parse(drilled().getAttribute('data-legend-selected') ?? '{}'),
-  ).toEqual({ Cash: false })
+  ).toEqual({ 'Cash (account)': false })
   // The stacked chart's own map never saw the toggle — its Cash GROUP series (and the
   // Assets subtotal the tooltip builds over it) stay untouched.
   expect(

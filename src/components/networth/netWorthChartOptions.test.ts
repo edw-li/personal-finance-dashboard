@@ -321,6 +321,55 @@ describe('netWorthDrillOption', () => {
       ],
     })
   })
+
+  // 2026-08-31 tier-1 A2, re-closed: the stack and the drill share ONE echarts connect
+  // group (group="net-worth", so their zoom windows stay locked), and echarts 6 relays
+  // every action across a connect group — legendselectchanged included, matched BY
+  // SERIES NAME. Per-chart legend maps on the page stop the page's mirroring; they cannot
+  // stop the relay. Distinct names can, so a colliding account wears a visible suffix.
+  const account = (id: number, name: string) =>
+    ({ id, name, slug: `a${id}`, group: 'cash', is_active: true, is_component: false }) as never
+  const COLLIDING_IDS = [20, 21, 22, 23, 24, 25, 26]
+  const COLLIDING = ts({
+    accounts: [
+      account(20, 'Cash'), // a group label
+      account(21, 'Cash'), // ...and a second one, so the numbering branch runs too
+      account(22, 'Net worth'), // the INK line
+      account(23, 'Sam'), // an owner column (people.name)
+      account(24, 'Joint'), // the null-person owner column's label
+      account(25, 'Notes'), // the annotation layer
+      account(26, 'Brokerage'), // collides with nothing
+    ],
+    series: COLLIDING_IDS.map((id) => ({ account_id: id, values: ['1.00', '2.00', '3.00'] })),
+  })
+  const COLLIDING_DRILL = COLLIDING_IDS.map((accountId, slot) => ({ accountId, slot }))
+  const CLAIMED = [
+    'Cash (account)',
+    'Cash (account 2)',
+    'Net worth (account)',
+    'Sam (account)',
+    'Joint (account)',
+    'Notes (account)',
+    'Brokerage', // untouched: claiming only fires on a real collision
+  ]
+
+  it('claims a drill name that a stack series already owns, in EITHER stack mode', () => {
+    const option = read(netWorthDrillOption({ ts: COLLIDING, drill: COLLIDING_DRILL, range: { preset: 'all' }, selected: {} }))
+    expect(option.series.map((s) => s.name)).toEqual(CLAIMED)
+    // The whole point: nothing the drill draws answers to a name the stack draws under.
+    const stackNames = new Set(
+      ['group', 'owner', 'share'].flatMap((mode) =>
+        read(netWorthStackOption({ ts: COLLIDING, mode: mode as 'group', ...base })).series.map((s) => s.name),
+      ),
+    )
+    expect(option.series.map((s) => s.name).filter((n) => stackNames.has(n as string))).toEqual([])
+  })
+
+  it('exports the CSV under the same claimed headers the legend shows', () => {
+    expect(netWorthDrillCsv(COLLIDING, COLLIDING_DRILL).headers).toEqual(['Month', ...CLAIMED])
+    // And the untouched case stays byte-identical — see the export test above.
+    expect(netWorthDrillCsv(DRILL_TS, [{ accountId: 10, slot: 0 }]).headers).toEqual(['Month', 'Checking'])
+  })
 })
 
 import { netWorthBridgeCsv, netWorthBridgeOption } from './netWorthChartOptions'

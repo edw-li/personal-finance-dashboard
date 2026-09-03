@@ -574,7 +574,11 @@ export default function OverviewPage() {
               />
               <ChartCard
                 title="Recent spending"
-                hint="Total spend for each of the last 12 entered months, with their average as the dashed line."
+                // The dashed line is spendStats.avg12 (the twelve months BEFORE the
+                // latest), which is also the figure the spend tile compares against — the
+                // hint has to name that window, not "their average", or one label reads as
+                // two numbers (F14).
+                hint="Total spend for each of the last 12 entered months. The dashed line is the average of the 12 months before the latest — the same figure the spend tile compares this month against."
                 ariaLabel="Bar chart of total spending for each of the last 12 entered months, with the 12-month average"
                 option={bars}
                 empty="No spending months yet."
