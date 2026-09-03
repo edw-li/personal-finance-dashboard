@@ -10,6 +10,8 @@
 
 **Prerequisites:** Plans 1a, 1b, 1c, 2, 3 merged into `main`; dev stack runnable (backend on 8000 with the token_version migration applied to the dev DB, frontend on 5173).
 
+**Overnight sequencing (2026-09-03 mandate):** Tasks 3–5 (grep sweep, spec/README follow-through, verification + smoke) run right after Plan 3. Tasks 1–2 are deletions and run at the VERY END of the night, after the chart-grammar, sandboxes, calendar and data-lifecycle work — together with the other cleanup (scratch test databases, merged worktrees and branches).
+
 ---
 
 ### Task 1: Delete the replaced components
