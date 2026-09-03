@@ -457,9 +457,10 @@ describe('SettingsPage — app settings', () => {
   })
 
   it('banners a failed load and refetches on Retry', async () => {
+    const second = deferred<AppSettingsOut>()
     vi.mocked(fetchAppSettings)
       .mockRejectedValueOnce(new ApiError('settings unavailable', 503))
-      .mockResolvedValue(SETTINGS)
+      .mockReturnValue(second.promise)
     renderPage()
 
     // The frame is ready (the Appearance card needs no network), so the failure arrives as
@@ -470,6 +471,12 @@ describe('SettingsPage — app settings', () => {
     expect(screen.queryByLabelText('ESPP ticker')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading settings' }))
+    // The retry takes the error with it, so the frame drops back to its skeleton: a banner
+    // left standing over a page that is trying again says nothing is happening.
+    expect(screen.getByText('Loading…')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    second.resolve(SETTINGS)
     expect(await screen.findByLabelText('ESPP ticker')).toBeTruthy()
     expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2)
     expect(swrBox().value).toBe('4.5')

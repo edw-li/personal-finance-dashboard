@@ -104,6 +104,10 @@ export default function SettingsPage() {
   // when the first load failed, and the frame's stale line if cards are already up.
   const retryLoad = () => {
     setLoading(true)
+    // Cleared WITH the request, the house recipe: left standing, the banner would sit there
+    // through the whole retry with nothing to say the page is trying again. Dropping it
+    // returns the frame to its skeleton, which is the in-flight cue.
+    setError(null)
     load()
   }
 
