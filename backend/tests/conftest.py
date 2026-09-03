@@ -1,9 +1,10 @@
 import os
 import re
+from contextlib import contextmanager
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -128,3 +129,35 @@ async def auth_client(client, seeded_user):
     token = resp.json()["access_token"]
     client.headers["Authorization"] = f"Bearer {token}"
     return client
+
+
+@pytest.fixture
+def forbid_writes(db):
+    """A context-manager FACTORY: inside `with forbid_writes():` any flush of the shared test
+    session that carries new, dirty or deleted objects fails the test (2026-09-03
+    planning-sandboxes spec §14). A factory rather than an always-on fixture so a test can
+    seed and commit first, then engage the guard around the one request under proof.
+
+    Attached to the SYNC session underneath the AsyncSession — SQLAlchemy's ORM events are
+    dispatched there. Removed in `finally`, so a failing assertion cannot leave the listener
+    on a session the next test reuses.
+    """
+
+    @contextmanager
+    def guard():
+        def refuse(session, flush_context, instances):
+            if session.new or session.dirty or session.deleted:
+                raise AssertionError(
+                    "write attempted under forbid_writes: "
+                    f"new={list(session.new)} dirty={list(session.dirty)} "
+                    f"deleted={list(session.deleted)}"
+                )
+
+        sync_session = db.sync_session
+        event.listen(sync_session, "before_flush", refuse)
+        try:
+            yield
+        finally:
+            event.remove(sync_session, "before_flush", refuse)
+
+    return guard
