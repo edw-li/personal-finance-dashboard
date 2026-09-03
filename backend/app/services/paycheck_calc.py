@@ -19,6 +19,29 @@ from decimal import ROUND_HALF_UP, Decimal
 ZERO = Decimal("0")
 MONEY_QUANTUM = Decimal("0.01")
 MONTHS_PER_YEAR = Decimal("12")
+# The eleven lines of one check, in the sheet's waterfall order — exactly the numeric fields
+# of schemas.paycheck.BreakdownOut minus the monthly roll-up. The preview endpoint and the
+# projection read `breakdown()`'s dict by these names, so the order lives in one place.
+WATERFALL_KEYS = (
+    "gross",
+    "trad_401k",
+    "dental_vision",
+    "hsa",
+    "taxable",
+    "withholding",
+    "post_tax",
+    "roth_401k",
+    "after_tax_401k",
+    "espp",
+    "net_pay",
+)
+# The paycheck lines that are SAVINGS — money that leaves the check but lands in an account
+# the household owns. Dental/vision and withholding are costs; employer match is not
+# modeled (limit_check.py's caveat); the take-home itself is what the projection's
+# `_trailing_savings` nets against spend, so it is deliberately not in this tuple. Lives
+# here (not in api/projection.py) because the paycheck preview sums it too, and the
+# projection router already imports from this module — the reverse import would be a cycle.
+PAYROLL_SAVING_KEYS = ("trad_401k", "roth_401k", "after_tax_401k", "espp", "hsa")
 
 
 def half_up2(value: Decimal) -> Decimal:

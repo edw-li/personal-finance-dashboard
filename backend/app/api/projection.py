@@ -52,7 +52,7 @@ from app.schemas.projection import (
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import get_swr_pct, investable_base
-from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
+from app.services.paycheck_calc import MONTHS_PER_YEAR, PAYROLL_SAVING_KEYS, breakdown, half_up2
 from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
 
@@ -104,11 +104,7 @@ NO_CASHFLOW_WARNING = "no cashflow history — monthly contribution defaulted to
 NO_CASHFLOW_PAYROLL_WARNING = (
     "no cashflow history — the monthly contribution is payroll deductions alone"
 )
-# The paycheck lines that are SAVINGS — money that leaves the check but lands in an account
-# the household owns. Dental/vision and withholding are costs; employer match is not
-# modeled (limit_check.py's caveat); the take-home itself is what `_trailing_savings`
-# nets against spend, so it is deliberately not in this tuple.
-PAYROLL_SAVING_KEYS = ("trad_401k", "roth_401k", "after_tax_401k", "espp", "hsa")
+# PAYROLL_SAVING_KEYS: imported from paycheck_calc (shared with the paycheck preview).
 NO_SPEND_WARNING = "no spending history — provide an annual spend to model the FI target"
 NO_SWR_WARNING = "withdrawal rate is 0 — no FI target to model"
 

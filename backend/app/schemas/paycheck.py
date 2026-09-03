@@ -129,3 +129,88 @@ class BreakdownOut(BaseModel):
     # limits. Empty only if the profile somehow yields no rows at all — the two 401(k)
     # rows are unconditional.
     pace: list[PaceItemOut]
+
+
+class ProfileOverrides(BaseModel):
+    """The knobs of a `POST /preview` scenario (2026-09-03 planning-sandboxes spec §13).
+
+    Every field optional; unknown keys are REFUSED (`extra='forbid'`), so a mistyped knob
+    422s instead of silently modelling the base profile. Values are validated in the router
+    by the WRITERS' own helpers, word for word — a scenario obeys exactly the rules a stored
+    row does, and its 422s read exactly like theirs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    annual_salary: Decimal | None = None
+    pay_periods_per_year: int | None = None
+    trad_401k_pct: Decimal | None = None
+    roth_401k_pct: Decimal | None = None
+    after_tax_401k_pct: Decimal | None = None
+    espp_pct: Decimal | None = None
+    withholding_pct: Decimal | None = None
+    dental_vision_per_check: Decimal | None = None
+    hsa_per_check: Decimal | None = None
+    hsa_coverage: str | None = None
+
+
+class PreviewIn(BaseModel):
+    # The base: the same two selectors GET /breakdown takes — an explicit row wins, absent
+    # means the primary's profile in force (the wire's back-compat rule).
+    profile_id: int | None = Field(default=None, ge=1, le=INT32_MAX)
+    person_id: int | None = Field(default=None, ge=1, le=INT32_MAX)
+    overrides: ProfileOverrides = Field(default_factory=ProfileOverrides)
+
+
+class PreviewLines(BaseModel):
+    """The eleven waterfall lines plus `savings` (trad + Roth + after-tax + ESPP + HSA — the
+    figure the projection consumes), each a 2dp display value of the full-precision chain.
+    In a delta block every field is the difference of two such figures, so the Δ column can
+    never contradict its neighbours."""
+
+    gross: Decimal
+    trad_401k: Decimal
+    dental_vision: Decimal
+    hsa: Decimal
+    taxable: Decimal
+    withholding: Decimal
+    post_tax: Decimal
+    roth_401k: Decimal
+    after_tax_401k: Decimal
+    espp: Decimal
+    net_pay: Decimal
+    savings: Decimal
+
+
+class PreviewBlock(BaseModel):
+    baseline: PreviewLines
+    scenario: PreviewLines
+    delta: PreviewLines
+
+
+class PreviewPace(BaseModel):
+    baseline: list[PaceItemOut]
+    scenario: list[PaceItemOut]
+
+
+class ChangedField(BaseModel):
+    """One profile field the scenario moved — `before`/`after` as plain text because the
+    fields are mixed (money, a 9dp fraction, an integer, a coverage tier)."""
+
+    key: str
+    label: str
+    before: str
+    after: str
+
+
+class PreviewOut(BaseModel):
+    profile: ProfileOut
+    per_check: PreviewBlock
+    # Scaled server-side on the full-precision chain by the profile's OWN cadence (each side
+    # its own — a scenario may change pay_periods_per_year), then quantized.
+    monthly: PreviewBlock
+    annual: PreviewBlock
+    pace: PreviewPace
+    changed: list[ChangedField]
+    # Scenario-side advisories only (CONTRIBUTIONS_WARNING / NEGATIVE_NET_WARNING).
+    warnings: list[str]
