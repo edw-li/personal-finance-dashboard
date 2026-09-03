@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { PALETTE, SURFACE } from '../../charts/theme'
+import { GRID_VARIANTS } from '../../charts/grammar'
+import { INK, MUTED, PALETTE, SURFACE } from '../../charts/theme'
+import { tooltipRows } from '../../testing/tooltipRows'
 import type { TaxSummaryOut } from '../../types/api'
 import {
+  netWorthTrendCsv,
   netWorthTrendOption,
   pickTaxSummary,
+  recentSpendCsv,
   recentSpendOption,
   spendStats,
 } from './overviewChartOptions'
@@ -53,11 +57,15 @@ function summary(year: number): TaxSummaryOut {
 // EChartsOption is a wide union; narrowed once here so the assertions stay about the data.
 interface SeriesLike {
   type?: string
+  name?: string
   color?: string
   symbol?: string
   barMaxWidth?: number
   itemStyle?: { borderColor?: string; borderWidth?: number }
   areaStyle?: { opacity?: number }
+  emphasis?: { focus?: string; itemStyle?: { borderColor?: string } }
+  lineStyle?: { width?: number; type?: string }
+  z?: number
   data?: unknown[]
 }
 
@@ -82,17 +90,20 @@ function yAxisOf(option: EChartsOption | null): {
   return (option as unknown as { yAxis: { show?: boolean; scale?: boolean; axisLabel?: { formatter?: (v: number) => string } } }).yAxis
 }
 
-function valueFormatterOf(option: EChartsOption | null): (v: number) => string {
-  return (option as unknown as { tooltip: { valueFormatter: (v: number) => string } }).tooltip
-    .valueFormatter
-}
-
 function tooltipOf(option: EChartsOption | null): {
   trigger?: string
   axisPointer?: { type?: string }
+  formatter: (p: unknown) => string
 } {
-  return (option as unknown as { tooltip: { trigger?: string; axisPointer?: { type?: string } } })
-    .tooltip
+  return (
+    option as unknown as {
+      tooltip: { trigger?: string; axisPointer?: { type?: string }; formatter: (p: unknown) => string }
+    }
+  ).tooltip
+}
+
+function gridOf(option: EChartsOption | null): unknown {
+  return (option as unknown as { grid: unknown }).grid
 }
 
 describe('netWorthTrendOption', () => {
@@ -115,7 +126,17 @@ describe('netWorthTrendOption', () => {
     // Compact ticks, exact tooltip: the axis is a scale, the tooltip is a figure
     // (recentSpendOption's exact grammar).
     expect(yAxisOf(option).axisLabel?.formatter?.(1500)).toBe('$1.5K')
-    expect(valueFormatterOf(option)(1234.5)).toBe('$1,234.50')
+    // F7: one grammar tooltip, read through its row contract rather than a valueFormatter.
+    expect(
+      tooltipRows(
+        tooltipOf(option).formatter([
+          { seriesName: 'Net worth', seriesType: 'line', axisValueLabel: 'Dec 2025', value: -250.5, color: PALETTE[0] },
+        ]),
+      ).rows,
+    ).toEqual([{ kind: 'row', label: 'Net worth', value: '-$250.50' }])
+    // §8: a single-series card takes the noLegend grid; §9 gives the line series focus.
+    expect(gridOf(option)).toEqual(GRID_VARIANTS.noLegend)
+    expect(line.emphasis).toEqual({ focus: 'series' })
     // A washed area over a VISIBLE axis needs the honest zero baseline
     // (historyChartOptions' rule) — so no scale:true, and the wash drops to the house's
     // visible-axis opacity.
@@ -152,6 +173,36 @@ describe('recentSpendOption', () => {
     expect(bars.barMaxWidth).toBe(22)
     expect(bars.data).toEqual([100, 200, 300])
     expect(categoriesOf(option)).toEqual(['Jan 2026', 'Feb 2026', 'Mar 2026'])
+    expect(bars.emphasis).toEqual({ focus: 'series', itemStyle: { borderColor: INK } })
+  })
+
+  it('F14: a dashed reference at the SPEND TILE’s own 12-mo average, listed after the bars', () => {
+    const feed = { months: monthsFrom('2026-01-01', 3), totals: totalsFrom(3) }
+    const option = recentSpendOption(feed)
+    const [bars, average] = seriesOf(option)
+    expect(bars.name).toBe('Spend')
+    expect(average).toMatchObject({ name: '12-mo average', type: 'line', color: MUTED, z: 9, lineStyle: { width: 2, type: 'dashed' } })
+    // One label, ONE number: the line is spendStats.avg12 — the mean of the months
+    // STRICTLY BEFORE the latest (100, 200 → 150), which is exactly what the tile
+    // prints as “over/under $150.00 12-mo avg”. The mean of the SHOWN window
+    // (100, 200, 300 → 200) would let the judged bar drag its own baseline.
+    expect(average.data).toEqual([150, 150, 150])
+    expect((average.data as number[])[0]).toBe(spendStats(feed).avg12)
+    expect((option as unknown as { legend: { type: string } }).legend.type).toBe('plain')
+    expect(gridOf(option)).toEqual(GRID_VARIANTS.default)
+    // A 14-month feed: months[1..12] = 200…1300, mean 750 — the tile's figure again,
+    // not the drawn window's 850.
+    const long = { months: monthsFrom('2025-01-01', 14), totals: totalsFrom(14) }
+    expect((seriesOf(recentSpendOption(long))[1].data as number[])[0]).toBe(750)
+    expect((seriesOf(recentSpendOption(long))[1].data as number[])[0]).toBe(spendStats(long).avg12)
+  })
+
+  it('drops the reference when there is no month before the latest to average', () => {
+    // A one-month book: avg12 is null, the tile shows no delta, and a line at the single
+    // bar's own value would be a comparison with itself.
+    const feed = { months: monthsFrom('2026-01-01', 1), totals: totalsFrom(1) }
+    expect(spendStats(feed).avg12).toBeNull()
+    expect(seriesOf(recentSpendOption(feed)).map((s) => s.name)).toEqual(['Spend'])
   })
 
   it('keeps only the last twelve months of a longer feed', () => {
@@ -180,11 +231,21 @@ describe('recentSpendOption', () => {
     const option = recentSpendOption({ months: monthsFrom('2026-01-01', 2), totals: totalsFrom(2) })
     // Compact ticks, exact tooltip: the axis is a scale, the tooltip is a figure.
     expect(yAxisOf(option).axisLabel?.formatter?.(1500)).toBe('$1.5K')
-    expect(valueFormatterOf(option)(1234.5)).toBe('$1,234.50')
-    // Labeled axes, so echarts' default pointer rule points at something and stays —
-    // the same posture the net-worth trend now wears.
-    expect(tooltipOf(option).axisPointer).toBeUndefined()
+    expect(tooltipOf(option).axisPointer).toEqual({ type: 'shadow' }) // F7: bars take the shadow rule
+    const rows = tooltipRows(tooltipOf(option).formatter([
+      { seriesName: 'Spend', seriesType: 'bar', axisValueLabel: 'Jan 2026', value: 100, color: PALETTE[1] },
+      { seriesName: '12-mo average', seriesType: 'line', value: 150, color: MUTED },
+    ]))
+    expect(rows.rows.map((r) => [r.kind, r.label, r.value])).toEqual([['row', 'Spend', '$100.00'], ['ref', '12-mo average', '$150.00']])
     expect(recentSpendOption({ months: [], totals: [] })).toBeNull()
+  })
+})
+
+describe('the overview CSVs (F12)', () => {
+  it('exports the trend and the shown spend months', () => {
+    expect(netWorthTrendCsv({ months: ['2026-01-01', '2026-02-01'], net_worth: ['1.00', '2.00'] })).toEqual({ headers: ['Month', 'Net worth'], rows: [['2026-01-01', '1.00'], ['2026-02-01', '2.00']] })
+    expect(recentSpendCsv({ months: monthsFrom('2025-01-01', 14), totals: totalsFrom(14) }).rows).toHaveLength(12)
+    expect(recentSpendCsv({ months: monthsFrom('2026-01-01', 2), totals: totalsFrom(2) })).toEqual({ headers: ['Month', 'Spend'], rows: [['2026-01-01', '100.00'], ['2026-02-01', '200.00']] })
   })
 })
 

@@ -83,15 +83,19 @@ vi.mock('../components/EChart', async () => {
   return {
     default: ({
       option,
+      ariaLabel,
       onClick,
       animateEntrance = true,
     }: {
       option: { xAxis?: { data?: unknown[] } }
+      ariaLabel?: string
       onClick?: (params: { dataIndex?: number }) => void
       animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
+        // ChartCard hands every mount its house sentence (F11) — the page test reads it.
+        'aria-label': ariaLabel,
         'data-categories': (option.xAxis?.data ?? []).join(','),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
@@ -968,11 +972,13 @@ describe('OverviewPage failures', () => {
     // The previous snapshot survives the failure — a dashboard that blanks itself on a
     // dropped connection is worse than one that admits the numbers are a minute old.
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
-    // Three, not four: failAll fails the money-flow fetch too, and that card's whole
-    // point is to dent ITSELF — it swaps its sankey for the inline retry while the
-    // snapshot's own three charts stay up with the previous payload.
-    expect(screen.getAllByTestId('echart')).toHaveLength(3)
+    // failAll fails the money-flow fetch too, and that card dents ITSELF: on ChartCard's
+    // grammar a failure with data already on screen keeps the sankey up and adds the
+    // card-local advisory + Retry (the frame's "ready + error" rule), so all four charts
+    // stay while only the money-flow card admits it is behind.
+    expect(screen.getAllByTestId('echart')).toHaveLength(4)
     expect(screen.getByText(/Couldn't load the money flow/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry loading the money flow' })).toBeTruthy()
   })
 
   it('lets the newest snapshot win when two loads overlap', async () => {
@@ -1123,9 +1129,11 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
     setSnapshot('overview:all', snapshotOf(payload))
     pendAllSnapshotFetches()
     const { container } = renderPage()
-    // The hero tile's number is up on the very first paint, with no Loading… line.
+    // The hero tile's number is up on the very first paint, with no page skeleton. (The
+    // money-flow card carries its OWN status line while its isolated fetch is in flight —
+    // that track has no seed here, and it is a card-level state, not the page's.)
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
-    expect(screen.queryByText('Loading…')).toBeNull()
+    expect(container.querySelector('.page-skeleton')).toBeNull()
     // Revalidating under the house dim, and the requests really went out.
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
     expect(vi.mocked(fetchSummary)).toHaveBeenCalledTimes(1)
@@ -1361,5 +1369,19 @@ describe('OverviewPage — shell frame and owner scope', () => {
     await screen.findByText('Net worth — Aug 2026')
     expect(screen.queryByRole('button', { name: /spending has no owner/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /weekly checkpoints/ })).toBeNull()
+  })
+})
+
+describe('OverviewPage chart cards (charts C2)', () => {
+  it('mounts the three snapshot charts through ChartCard with labels, export rows and the drill links', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth trend')
+    expect(screen.getByLabelText('Line chart of net worth at every monthly snapshot')).toBeTruthy()
+    expect(screen.getByLabelText(/Line chart of portfolio value against cost basis/)).toBeTruthy()
+    expect(screen.getByLabelText(/Bar chart of total spending for each of the last 12 entered months/)).toBeTruthy()
+    expect(screen.getAllByRole('group', { name: /Export/ }).length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByRole('link', { name: 'Open net worth →' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open spending →' })).toBeTruthy()
   })
 })
