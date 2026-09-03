@@ -1512,6 +1512,19 @@ export interface CalendarOverrideOut extends CalendarOverrideBody {
   key: string
 }
 
+/** One subscription credential (GET/POST /calendar/feed-tokens). The plaintext token rides
+ *  ONLY on the POST answer (`FeedTokenCreated`) — never on a list. */
+export interface FeedTokenOut {
+  id: number
+  label: string
+  created_at: string
+  last_used_at: string | null
+}
+
+export interface FeedTokenCreated extends FeedTokenOut {
+  token: string
+}
+
 // --- projection ---
 // GET /projection — the FIRE modeler (the ESPP modeler's shape: knobs as query params,
 // the echo is what the page's form seeds from). Money 2dp; rates 6dp when a param was
