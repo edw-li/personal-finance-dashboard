@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react'
 import type { ReactNode } from 'react'
+import type { ResolvedTheme } from '../../theme/tokens'
 
 // The shell's appearance state (2026-09-03 shell spec §11). Browser-local by decision:
 // localStorage now, the Data-lifecycle spec's server prefs later. `version` is the chart
@@ -16,7 +17,10 @@ import type { ReactNode } from 'react'
 // How it is used: mount <ThemeProvider> once around the app, then `useTheme()` anywhere for
 // the current values plus `setTheme(system|dark|light)` and `setDensity(comfortable|compact)`.
 export type ThemeChoice = 'system' | 'dark' | 'light'
-export type ResolvedTheme = 'dark' | 'light'
+// Defined in src/theme/tokens.ts (with the palettes it names) and re-exported here so UI
+// callers keep one import, while charts/ types itself off the token file instead of
+// reaching into components/. Type-only in both directions — nothing is bundled.
+export type { ResolvedTheme }
 export type Density = 'comfortable' | 'compact'
 
 // index.html's inline script repeats these literally; ThemeProvider.test pins them.

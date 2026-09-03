@@ -45,10 +45,10 @@ import type {
   VisualMapComponentOption,
 } from 'echarts/components'
 import type { ComposeOption } from 'echarts/core'
-import { DARK, LIGHT } from '../theme/tokens'
+// ResolvedTheme is declared with the palettes rather than in ThemeProvider so this file —
+// the root of the lazy chart chunk — never names a module under components/ at all.
+import { DARK, LIGHT, type ResolvedTheme } from '../theme/tokens'
 import { FINANCE_THEME, buildTheme } from './theme'
-// `import type` on purpose: a value import would pull React into this lazy chart chunk.
-import type { ResolvedTheme } from '../components/shell/ThemeProvider'
 
 echarts.use([
   BarChart,

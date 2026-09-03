@@ -90,5 +90,9 @@ export function buildTheme(t: ThemeTokens) {
   }
 }
 
-// Registered once by src/charts/echarts.ts as 'finance' (the version-0 name).
+// Registered by src/charts/echarts.ts as 'finance' at import — the bare fallback for any
+// init that happens before/without registerThemeVersion. NOT a standing guarantee that
+// 'finance' holds DARK: 'finance' IS the version-0 name, so a boot under a persisted light
+// theme re-registers that same name with buildTheme(LIGHT) (EChart registers the palette
+// it is about to init with, every time).
 export const FINANCE_THEME = buildTheme(DARK)

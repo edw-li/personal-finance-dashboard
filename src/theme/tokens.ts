@@ -5,6 +5,12 @@
 // Dark values are the pre-existing ones (index.css + charts/theme.ts), unchanged except
 // `otherSeries`, raised from #4a5060 (2.16:1) to meet 3:1 on the surface.
 
+/** The palette actually in force. It lives HERE rather than with the state that owns it
+ *  (components/shell/ThemeProvider, which re-exports it for UI callers) so the chart
+ *  bridge can type its arguments without charts/ importing from components/ — that file
+ *  is the lazy chart chunk's root and must not reach into React's tree, even by name. */
+export type ResolvedTheme = 'dark' | 'light'
+
 export interface ThemeTokens {
   bg: string
   surface: string
@@ -25,8 +31,15 @@ export interface ThemeTokens {
   otherSeries: string
   /** Fixed slot order IS the CVD-safety mechanism — never reorder (charts/theme.ts). */
   palette: readonly [string, string, string, string, string, string, string, string]
-  /** 12 steps, near-zero first (recedes into the card), for heatmaps. */
-  sequential: readonly string[]
+  /** 12 steps, near-zero first (recedes into the card), for heatmaps. A fixed-LENGTH tuple
+   *  like `palette`: charts/recolor.ts maps DARK → LIGHT by POSITION, so equal lengths are
+   *  what guarantee every dark step has a light twin (a 13th dark step would otherwise map
+   *  to undefined and paint a hole). The compiler enforces it here; recolor.test.ts pins
+   *  the resulting map. */
+  sequential: readonly [
+    string, string, string, string, string, string,
+    string, string, string, string, string, string,
+  ]
 }
 
 export const DARK: ThemeTokens = {
