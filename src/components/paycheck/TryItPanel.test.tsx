@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type {
@@ -11,12 +11,12 @@ import type {
 } from '../../types/api'
 import TryItPanel from './TryItPanel'
 
-vi.mock('../../api/paycheck', () => ({
-  previewPaycheck: vi.fn(),
-  createProfile: vi.fn(),
-  updateProfile: vi.fn(),
-}))
-import { createProfile, previewPaycheck, updateProfile } from '../../api/paycheck'
+// One export, because the panel imports one: the write-purity conformance walk
+// (sandboxConformance.test.ts) is what proves no writer is reachable from here — a
+// `expect(createProfile).not.toHaveBeenCalled()` on a module the panel never imports would
+// pass forever while proving nothing.
+vi.mock('../../api/paycheck', () => ({ previewPaycheck: vi.fn() }))
+import { previewPaycheck } from '../../api/paycheck'
 const toast = { success: vi.fn(), info: vi.fn(), error: vi.fn() }
 vi.mock('../ToastProvider', () => ({ useToast: () => toast }))
 
@@ -76,11 +76,22 @@ function Url() {
   return <span data-testid="url">{l.pathname + l.search}</span>
 }
 
+/** An in-page navigation into a scenario link — the assistant's deep links, in one button. */
+function DeepLink() {
+  const navigate = useNavigate()
+  return (
+    <button type="button" onClick={() => navigate('/paycheck?whatif=trad_401k_pct%3A0.15')}>
+      Deep link
+    </button>
+  )
+}
+
 function mount(entry = '/paycheck', onApply = vi.fn()) {
   render(
     <MemoryRouter initialEntries={[entry]}>
       <TryItPanel profileId={null} personId={null} breakdown={breakdown} onApply={onApply} />
       <Url />
+      <DeepLink />
     </MemoryRouter>,
   )
   return onApply
@@ -188,8 +199,6 @@ describe('TryItPanel', () => {
     expect(seed.hsa_coverage).toBe('family')
     expect(seed.annual_salary).toBe('100000.00')
     expect(seed.effective_date).toMatch(/^\d{4}-\d{2}-01$/)
-    expect(createProfile).not.toHaveBeenCalled()
-    expect(updateProfile).not.toHaveBeenCalled()
   })
 
   it('no Apply while the scenario is empty', async () => {
@@ -207,6 +216,52 @@ describe('TryItPanel', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe('trad_401k_pct must be between 0 and 1 — this scenario may be showing earlier data.')
     expect(screen.getByText('Net pay')).toBeTruthy()
+  })
+
+  it('a navigation into a scenario link opens the card and runs it, page already mounted', async () => {
+    mount()
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+    expect(previewPaycheck).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Deep link' }))
+    // Open on the SAME commit the URL changed on — no frame of closed card, no effect.
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    await waitFor(() =>
+      expect(previewPaycheck).toHaveBeenCalledWith({ profile_id: null, person_id: null, overrides: { trad_401k_pct: '0.15' } }),
+    )
+    // Closing it by hand sticks, even though the URL still holds the knob.
+    fireEvent.click(toggle())
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('a knob back on the profile’s own figure leaves the URL, whichever control moved it', async () => {
+    mount('/paycheck?whatif=trad_401k_pct%3A0.15&whatif=hsa_coverage%3Afamily')
+    await screen.findByText('Net pay')
+    // The slider's caption hands back the profile's 9dp string; "0.13" is the same knob
+    // position, so the entry goes rather than being restated.
+    fireEvent.click(screen.getByRole('button', { name: 'actual 13%' }))
+    expect(url()).toBe('/paycheck?whatif=hsa_coverage%3Afamily')
+    fireEvent.click(within(screen.getByRole('group', { name: 'HSA coverage' })).getByRole('button', { name: 'Self only' }))
+    expect(url()).toBe('/paycheck')
+  })
+
+  it('refuses a box spelling the URL grammar would drop, in the box’s own sentence', async () => {
+    mount()
+    fireEvent.click(toggle())
+    await waitFor(() => expect(previewPaycheck).toHaveBeenCalledTimes(1))
+    const salary = screen.getByLabelText('Annual salary') as HTMLInputElement
+    // Number("200000.") is 200000, but the codec refuses a trailing point — without the
+    // fence the URL would take it and drop it on the next render, reverting to actual.
+    fireEvent.focus(salary)
+    fireEvent.change(salary, { target: { value: '200000.' } })
+    fireEvent.blur(salary)
+    expect(screen.getByRole('alert').textContent).toBe('Annual salary must be a plain positive amount, like 200000')
+    expect(url()).toBe('/paycheck')
+    const periods = screen.getByLabelText('Pay periods per year') as HTMLInputElement
+    fireEvent.focus(periods)
+    fireEvent.change(periods, { target: { value: '26.5' } })
+    fireEvent.blur(periods)
+    expect(screen.getByText('pay_periods_per_year must be a whole number between 1 and 366')).toBeTruthy()
+    expect(url()).toBe('/paycheck')
   })
 
   it('the coverage toggle and the salary box are knobs too', async () => {

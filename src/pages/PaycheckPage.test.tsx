@@ -105,6 +105,19 @@ const PREVIEW_LINES = {
   post_tax: '0.00', roth_401k: '0.00', after_tax_401k: '0.00', espp: '0.00', net_pay: '0.00', savings: '0.00',
 }
 
+function previewOf(profile: PaycheckProfileOut) {
+  const block = { baseline: PREVIEW_LINES, scenario: PREVIEW_LINES, delta: PREVIEW_LINES }
+  return {
+    profile,
+    per_check: block,
+    monthly: block,
+    annual: block,
+    pace: { baseline: [], scenario: [] },
+    changed: [],
+    warnings: [],
+  }
+}
+
 function breakdownOf(
   profile: PaycheckProfileOut,
   over: Partial<PaycheckBreakdownOut> = {},
@@ -987,16 +1000,7 @@ describe('PaycheckPage — shell scope', () => {
   })
 
   it('Apply from Try it pre-fills the profile form for next month and writes nothing', async () => {
-    const out = {
-      profile: profile2026,
-      per_check: { baseline: PREVIEW_LINES, scenario: PREVIEW_LINES, delta: PREVIEW_LINES },
-      monthly: { baseline: PREVIEW_LINES, scenario: PREVIEW_LINES, delta: PREVIEW_LINES },
-      annual: { baseline: PREVIEW_LINES, scenario: PREVIEW_LINES, delta: PREVIEW_LINES },
-      pace: { baseline: [], scenario: [] },
-      changed: [],
-      warnings: [],
-    }
-    vi.mocked(previewPaycheck).mockResolvedValue(out)
+    vi.mocked(previewPaycheck).mockResolvedValue(previewOf(profile2026))
     renderPage('/paycheck?whatif=trad_401k_pct%3A0.2')
     await screen.findByText('Payroll savings')
     fireEvent.click(screen.getByRole('button', { name: /^Save as profile effective / }))
@@ -1007,6 +1011,33 @@ describe('PaycheckPage — shell scope', () => {
     expect(document.activeElement).toBe(date)
     expect(createProfile).not.toHaveBeenCalled()
     expect(updateProfile).not.toHaveBeenCalled()
+  })
+
+  it('never hands one person’s applied scenario to another person’s form', async () => {
+    // jsdom implements no scrollIntoView (PortfolioPage.test.tsx carries the same note); the
+    // seeded mount calls it, so the stub is how "and it did not scroll again" is sayable.
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    twoEarners()
+    vi.mocked(previewPaycheck).mockResolvedValue(previewOf(profile2026))
+    renderPage('/paycheck?whatif=trad_401k_pct%3A0.2')
+    await screen.findByText('Payroll savings')
+    fireEvent.click(screen.getByRole('button', { name: /^Save as profile effective / }))
+    expect(((await screen.findAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement).value).toBe('20%')
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+    await screen.findByText('Per-check breakdown — effective Mar 1, 2026')
+    // Sam's own latest row seeds Sam's carry-forward form — 6%, never the 20% modelled for
+    // the primary — and the seeded-mount scroll/focus does not run again.
+    const trad = (await screen.findAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement
+    expect(trad.value).toBe('6%')
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).not.toBe(document.getElementById('paycheck-effective-date'))
   })
 })
 

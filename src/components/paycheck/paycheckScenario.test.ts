@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PaycheckProfileOut } from '../../types/api'
+import type { PaycheckScenario } from './paycheckScenario'
 import {
   applySeedFor,
   decodePaycheck,
@@ -54,6 +55,44 @@ describe('paycheck scenario codec', () => {
     ).toEqual({ trad_401k_pct: '0.2' })
     expect(isEmptyPaycheck({})).toBe(true)
     expect(isEmptyPaycheck({ espp_pct: '0' })).toBe(false)
+  })
+
+  // One entry per case, on a DISTINCT key each time: a matrix that reused one key would let
+  // a fence regression through, because last-wins means the accepted duplicate beside the
+  // refused value produces the same object either way.
+  it('fences every knob at its own bound — just inside is kept, just outside is dropped', () => {
+    const inside: [string, PaycheckScenario][] = [
+      ['trad_401k_pct:1', { trad_401k_pct: '1' }], // the server's [0, 1]; the track clamps the chips
+      ['withholding_pct:0', { withholding_pct: '0' }],
+      ['espp_pct:0.000000001', { espp_pct: '0.000000001' }],
+      ['pay_periods_per_year:1', { pay_periods_per_year: '1' }],
+      ['pay_periods_per_year:366', { pay_periods_per_year: '366' }],
+      ['hsa_per_check:0', { hsa_per_check: '0' }],
+      ['annual_salary:0.01', { annual_salary: '0.01' }],
+      ['hsa_coverage:none', { hsa_coverage: 'none' }],
+    ]
+    for (const [entry, expected] of inside) {
+      expect(decodePaycheck([entry])).toEqual(expected)
+    }
+    const outside = [
+      'withholding_pct:1.5', // above the server's 1
+      'roth_401k_pct:-0.000000001', // below zero
+      'after_tax_401k_pct:1e-3', // exponent notation: Python's Decimal would take it as 0.001
+      'trad_401k_pct:0.15.1', // two points
+      'espp_pct:+0.15', // a leading plus is not a canonical wire decimal
+      'annual_salary:200000.', // a trailing point is not either
+      'hsa_per_check:-5', // an amount below zero
+      'annual_salary:0', // the divide-by-zero the server refuses
+      'pay_periods_per_year:0',
+      'pay_periods_per_year:367',
+      'pay_periods_per_year:1000', // four digits
+      'pay_periods_per_year:26.5', // a count is a whole number
+      'hsa_coverage:spouse', // not a stored tier
+      'trad_401k_pct:', // an empty field
+    ]
+    for (const entry of outside) {
+      expect(decodePaycheck([entry])).toEqual({})
+    }
   })
 
   it('copies knobs straight into the preview body, periods as a number', () => {
@@ -118,10 +157,22 @@ describe('paycheck scenario codec', () => {
     )
   })
 
-  it('caps Max 401(k) at the server bound when the limit exceeds the salary', () => {
+  it('caps a preset at the knob’s own track, not just at the server bound', () => {
     const apply = vi.fn()
-    paycheckPresets({ salary: '20000', periods: 24, coverage: 'self', esppPct: '0', limitFor: () => '24500' }, apply)[0].apply()
-    expect(apply).toHaveBeenLastCalledWith({ trad_401k_pct: '1' })
+    // 24500 / 20000 = 1.225: past the server's 1 AND past the slider's 50 %. The chip has
+    // to land on the track it moves, or the thumb sits off the end and the box refuses it.
+    const presets = paycheckPresets(
+      { salary: '20000', periods: 1, coverage: 'self', esppPct: '0.2', limitFor: () => '24500' },
+      apply,
+    )
+    presets[0].apply()
+    expect(apply).toHaveBeenLastCalledWith({ trad_401k_pct: '0.5' })
+    // 24500 for a single yearly check is far past the $500 HSA track.
+    presets[1].apply()
+    expect(apply).toHaveBeenLastCalledWith({ hsa_per_check: '500' })
+    // And the ESPP chip keeps landing on the §423 ceiling.
+    presets[2].apply()
+    expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0.15' })
   })
 
   it('builds the Apply seed: the profile with the scenario applied, percents shifted, dated next month', () => {

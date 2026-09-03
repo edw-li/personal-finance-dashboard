@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { previewPaycheck } from '../../api/paycheck'
 import CompareTable, { type CompareRow } from '../../sandbox/CompareTable'
+import { compareDecimals } from '../../sandbox/decimal'
 import PresetRow from '../../sandbox/PresetRow'
 import SandboxPanel from '../../sandbox/SandboxPanel'
 import { readEntries } from '../../sandbox/scenarioUrl'
@@ -22,6 +23,10 @@ import PacePanel from './PacePanel'
 import {
   ESPP_MAX_PCT,
   HSA_TIERS,
+  KNOB_MAX,
+  MAX_PAY_PERIODS,
+  MIN_PAY_PERIODS,
+  acceptKnob,
   applySeedFor,
   decodePaycheck,
   encodePaycheck,
@@ -69,8 +74,26 @@ const COVERAGE_OPTIONS: { value: HsaCoverage; label: string }[] = [
   { value: 'family', label: 'Family' },
 ]
 
-const MIN_PAY_PERIODS = 1
-const MAX_PAY_PERIODS = 366
+/** Every knob but the coverage tier: a decimal the URL can carry, so one `knob` handler and
+ *  one "equals actual" comparison covers all of them. */
+type NumericKnob = Exclude<PaycheckKnob, 'hsa_coverage'>
+
+/**
+ * The wire spelling of a box's or slider's canonical text, or null when the codec would
+ * refuse it.
+ *
+ * SliderBox and BoxKnob canonicalize with `canonicalAmount`, which is deliberately tolerant
+ * and IDEMPOTENT: "200000." and "+15" come back verbatim rather than normalized. Writing
+ * either into the URL would put an entry there that `decodePaycheck` drops on the very next
+ * render — the knob would snap back to "actual" with nothing said. So the two spellings the
+ * boxes can produce are normalized here, and anything the fence still refuses is not
+ * written at all.
+ */
+function wireOf(key: NumericKnob, raw: string): string | null {
+  const unsigned = raw.startsWith('+') ? raw.slice(1) : raw
+  const text = unsigned.endsWith('.') ? unsigned.slice(0, -1) : unsigned
+  return acceptKnob(key, text) ? text : null
+}
 
 export default function TryItPanel({
   profileId,
@@ -88,7 +111,18 @@ export default function TryItPanel({
 }) {
   const [params] = useSearchParams()
   // Arriving with entries opens the panel (spec §6); otherwise closed by default (§8.1).
-  const [open, setOpen] = useState(() => readEntries(params).length > 0)
+  const hasEntries = readEntries(params).length > 0
+  const [open, setOpen] = useState(hasEntries)
+  // ...and so does a navigation INTO a scenario link while the page is already mounted —
+  // the assistant's deep links and the Portfolio drill-in are exactly that (spec §6, §12).
+  // Adjusted DURING render, never from an effect body (the house rule): React re-renders
+  // immediately, so nothing paints closed, and the previous value is the latch — a card the
+  // user closed by hand stays closed while the URL still holds its knobs.
+  const [hadEntries, setHadEntries] = useState(hasEntries)
+  if (hasEntries !== hadEntries) {
+    setHadEntries(hasEntries)
+    if (hasEntries) setOpen(true)
+  }
   const [unit, setUnit] = useState<Unit>('per_check')
   const profile = breakdown.profile
 
@@ -112,16 +146,30 @@ export default function TryItPanel({
   const sandbox = useSandbox(spec)
   const { scenario, result } = sandbox
 
-  const knob = (key: PaycheckKnob) => (next: string, commit: boolean) =>
+  /** The profile's own figure for a knob — the baseline every control resets to. */
+  const actualFor = (key: NumericKnob): string =>
+    key === 'pay_periods_per_year' ? String(profile.pay_periods_per_year) : profile[key]
+
+  const knob = (key: NumericKnob) => (next: string, commit: boolean) => {
+    const wire = next === '' ? '' : wireOf(key, next)
+    // A spelling the codec would drop is not written: the URL never learns a value it
+    // refuses, and the control keeps whatever it is showing.
+    if (wire === null) return
+    // ONE meaning for "actual" across every control (the coverage toggle's rule, promoted):
+    // a value back ON the profile's own figure DELETES the entry rather than restating it,
+    // so `?whatif=` carries only what differs and the badge reads "derived" again. Numeric,
+    // not textual — "0.13" and "0.130000000" are the same knob position.
+    const drop = wire === '' || compareDecimals(wire, actualFor(key)) === 0
     sandbox.set(
       (current) => {
         const draft = { ...current }
-        if (next === '') delete draft[key]
-        else draft[key] = next
+        if (drop) delete draft[key]
+        else draft[key] = wire
         return draft
       },
       { immediate: commit },
     )
+  }
 
   // The scenario's own salary/periods/coverage size the presets; limits come from the pace
   // rows already in the payload — the scenario's first (its coverage may differ), then the
@@ -209,11 +257,13 @@ export default function TryItPanel({
         </button>
       }
     >
-      <SliderBox id="tryit-trad" label="Traditional 401(k)" kind="percent" value={scenario.trad_401k_pct ?? ''} actual={profile.trad_401k_pct} min="0" max="0.5" step="0.005" onChange={knob('trad_401k_pct')} />
-      <SliderBox id="tryit-roth" label="Roth 401(k)" kind="percent" value={scenario.roth_401k_pct ?? ''} actual={profile.roth_401k_pct} min="0" max="0.5" step="0.005" onChange={knob('roth_401k_pct')} />
-      <SliderBox id="tryit-after" label="After-tax 401(k)" kind="percent" value={scenario.after_tax_401k_pct ?? ''} actual={profile.after_tax_401k_pct} min="0" max="0.5" step="0.005" onChange={knob('after_tax_401k_pct')} />
+      {/* Every ceiling is KNOB_MAX's — the same number the presets clamp to, so a chip can
+          never park a thumb off its own track. */}
+      <SliderBox id="tryit-trad" label="Traditional 401(k)" kind="percent" value={scenario.trad_401k_pct ?? ''} actual={profile.trad_401k_pct} min="0" max={KNOB_MAX.trad_401k_pct} step="0.005" onChange={knob('trad_401k_pct')} />
+      <SliderBox id="tryit-roth" label="Roth 401(k)" kind="percent" value={scenario.roth_401k_pct ?? ''} actual={profile.roth_401k_pct} min="0" max={KNOB_MAX.roth_401k_pct} step="0.005" onChange={knob('roth_401k_pct')} />
+      <SliderBox id="tryit-after" label="After-tax 401(k)" kind="percent" value={scenario.after_tax_401k_pct ?? ''} actual={profile.after_tax_401k_pct} min="0" max={KNOB_MAX.after_tax_401k_pct} step="0.005" onChange={knob('after_tax_401k_pct')} />
       <SliderBox id="tryit-espp" label="ESPP" kind="percent" hint="Capped at 15% — the §423 ceiling." value={scenario.espp_pct ?? ''} actual={profile.espp_pct} min="0" max={ESPP_MAX_PCT} step="0.005" onChange={knob('espp_pct')} />
-      <SliderBox id="tryit-hsa" label="HSA per check" kind="money" value={scenario.hsa_per_check ?? ''} actual={profile.hsa_per_check} min="0" max="500" step="5" onChange={knob('hsa_per_check')} />
+      <SliderBox id="tryit-hsa" label="HSA per check" kind="money" value={scenario.hsa_per_check ?? ''} actual={profile.hsa_per_check} min="0" max={KNOB_MAX.hsa_per_check} step="5" onChange={knob('hsa_per_check')} />
       <div className="slider-box">
         <div className="slider-box-head">
           <span>HSA coverage</span>
@@ -247,17 +297,24 @@ export default function TryItPanel({
         value={scenario.withholding_pct ?? ''}
         actual={profile.withholding_pct}
         min="0"
-        max="0.6"
+        max={KNOB_MAX.withholding_pct}
         step="0.001"
         onChange={knob('withholding_pct')}
       />
+      {/* Both boxes validate through the CODEC's own fence, never a looser Number() test:
+          "200000.", "+200000" and ".5" all pass Number() but are refused on arrival, and a
+          box that accepted one of them would revert to actual without a word. */}
       <BoxKnob
         id="tryit-salary"
         label="Annual salary"
         kind="money"
         value={scenario.annual_salary ?? ''}
         actual={profile.annual_salary}
-        validate={(text) => (Number(text) > 0 ? null : 'Annual salary must be positive')}
+        validate={(text) =>
+          acceptKnob('annual_salary', text)
+            ? null
+            : 'Annual salary must be a plain positive amount, like 200000'
+        }
         onCommit={knob('annual_salary')}
       />
       <BoxKnob
@@ -266,12 +323,11 @@ export default function TryItPanel({
         kind="plain"
         value={scenario.pay_periods_per_year ?? ''}
         actual={String(profile.pay_periods_per_year)}
-        validate={(text) => {
-          const n = Number(text)
-          return Number.isInteger(n) && n >= MIN_PAY_PERIODS && n <= MAX_PAY_PERIODS
+        validate={(text) =>
+          acceptKnob('pay_periods_per_year', text)
             ? null
-            : `pay_periods_per_year must be between ${MIN_PAY_PERIODS} and ${MAX_PAY_PERIODS}`
-        }}
+            : `pay_periods_per_year must be a whole number between ${MIN_PAY_PERIODS} and ${MAX_PAY_PERIODS}`
+        }
         onCommit={knob('pay_periods_per_year')}
       />
       <p className="drill-hint">

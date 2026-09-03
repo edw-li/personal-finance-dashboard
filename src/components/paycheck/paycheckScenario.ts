@@ -35,8 +35,9 @@ export type PaycheckScenario = Partial<Record<PaycheckKnob, string>>
 export const HSA_TIERS: readonly HsaCoverage[] = ['none', 'self', 'family']
 // The paycheck router's own bounds (app/api/paycheck.py MIN_PAY_PERIODS / MAX_PAY_PERIODS):
 // refuse a typo in the box rather than spend a request on the 422 that says the same thing.
-const MIN_PAY_PERIODS = 1
-const MAX_PAY_PERIODS = 366
+// Exported so the panel's periods box cannot drift from the fence its value has to clear.
+export const MIN_PAY_PERIODS = 1
+export const MAX_PAY_PERIODS = 366
 // app/limit_keys.py — the keys the pace rows carry.
 export const LIMIT_401K_ELECTIVE = 'limit_401k_elective'
 export const LIMIT_ESPP_423 = 'limit_espp_423'
@@ -47,7 +48,24 @@ export const HSA_LIMIT_KEY: Record<Exclude<HsaCoverage, 'none'>, string> = {
 // The §423 ceiling on the ESPP slider (spec §9): 15 % of salary.
 export const ESPP_MAX_PCT = '0.15'
 
-function accept(key: PaycheckKnob, value: string): boolean {
+/** Each knob's own ceiling (spec §9): trad/Roth/after-tax 0–50 %, ESPP the §423 15 %, HSA
+ *  $0–500, withholding 0–60 %. ONE number per track, read by the slider that draws it and
+ *  by the presets that aim at it — a preset may not park a knob off its own track, and the
+ *  server's [0, 1] bound is a wider fence behind these, not a substitute for them. */
+export const KNOB_MAX = {
+  trad_401k_pct: '0.5',
+  roth_401k_pct: '0.5',
+  after_tax_401k_pct: '0.5',
+  espp_pct: ESPP_MAX_PCT,
+  withholding_pct: '0.6',
+  hsa_per_check: '500',
+} as const
+
+/** Whether the URL (or a box) may carry `value` for `key`. THE fence: the codec drops
+ *  anything this refuses, so every control that writes a knob asks this first — otherwise a
+ *  spelling the box accepted ("200000.", "+15") would be written and silently dropped on the
+ *  next render, snapping the knob back to actual with nothing said. */
+export function acceptKnob(key: PaycheckKnob, value: string): boolean {
   if (key === 'hsa_coverage') return (HSA_TIERS as readonly string[]).includes(value)
   if (key === 'pay_periods_per_year') {
     return /^\d{1,3}$/.test(value) && Number(value) >= MIN_PAY_PERIODS && Number(value) <= MAX_PAY_PERIODS
@@ -63,7 +81,7 @@ export function decodePaycheck(entries: string[]): PaycheckScenario {
     entries
       .map(parseEntry)
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-      .map((entry) => parseKnob(entry, KNOBS, accept))
+      .map((entry) => parseKnob(entry, KNOBS, acceptKnob))
       .filter((knob): knob is NonNullable<typeof knob> => knob !== null),
     (knob) => knob.key,
   )
@@ -143,10 +161,12 @@ export function paycheckPresets(
   const elective = ctx.limitFor(LIMIT_401K_ELECTIVE)
   const hsaLimit = ctx.coverage === 'none' ? null : ctx.limitFor(HSA_LIMIT_KEY[ctx.coverage])
   const espp = ctx.limitFor(LIMIT_ESPP_423)
-  const fraction = (limit: string) => {
-    const raw = divideDecimals(limit, ctx.salary, 9) ?? '0'
-    return compareDecimals(raw, '1') > 0 ? '1' : raw // the server's [0, 1] bound
-  }
+  // Two ceilings, both real: the knob's own track and the server's [0, 1]. A limit larger
+  // than the salary (a part-year hire, a partner's smaller base) would otherwise ask for a
+  // percentage the slider cannot show and the box would refuse — the chip must land ON the
+  // track it moves.
+  const clamp = (value: string, max: string) => (compareDecimals(value, max) > 0 ? max : value)
+  const fraction = (limit: string) => clamp(divideDecimals(limit, ctx.salary, 9) ?? '0', '1')
   return [
     {
       id: 'max401k',
@@ -154,7 +174,9 @@ export function paycheckPresets(
       disabled: elective === null,
       title: elective === null ? `Enter this year's 401(k) limit ${LIMITS_HINT}` : undefined,
       apply: () => {
-        if (elective !== null) apply({ trad_401k_pct: fraction(elective) })
+        if (elective !== null) {
+          apply({ trad_401k_pct: clamp(fraction(elective), KNOB_MAX.trad_401k_pct) })
+        }
       },
     },
     {
@@ -169,7 +191,8 @@ export function paycheckPresets(
             : undefined,
       apply: () => {
         if (hsaLimit !== null) {
-          apply({ hsa_per_check: divideDecimals(hsaLimit, String(ctx.periods), 2) ?? '0' })
+          const perCheck = divideDecimals(hsaLimit, String(ctx.periods), 2) ?? '0'
+          apply({ hsa_per_check: clamp(perCheck, KNOB_MAX.hsa_per_check) })
         }
       },
     },
@@ -183,8 +206,9 @@ export function paycheckPresets(
           : undefined,
       apply: () => {
         if (espp === null) return
-        const byLimit = fraction(espp)
-        apply({ espp_pct: compareDecimals(byLimit, ESPP_MAX_PCT) < 0 ? byLimit : ESPP_MAX_PCT })
+        // The lesser of the §423 ceiling and the limit ÷ salary — the same clamp as the
+        // other two chips, since the ESPP track's max IS the ceiling.
+        apply({ espp_pct: clamp(fraction(espp), KNOB_MAX.espp_pct) })
       },
     },
     {

@@ -764,7 +764,17 @@ export default function PaycheckPage() {
   // profile form by REMOUNTING the panel with it (the nonce rides its key) — an explicit user
   // action, so replacing a half-typed row is the asked-for outcome, and no effect ever
   // setStates to do it. The form's own Add profile stays the only write.
-  const [applySeed, setApplySeed] = useState<{ seed: ApplySeed; nonce: number } | null>(null)
+  //
+  // `forKey` is the profile panel's key AT THE MOMENT OF THE CLICK. The panel remounts for
+  // reasons of its own — a person chip, the household landing and flipping `switchable` —
+  // and a seed with no owner attached would be handed to whichever form mounted next: one
+  // person's scenario pre-filling another person's new-profile row, scrolled and focused as
+  // if they had asked for it (review I1).
+  const [applySeed, setApplySeed] = useState<{
+    seed: ApplySeed
+    nonce: number
+    forKey: string
+  } | null>(null)
 
   // Two INDEPENDENT loads: a breakdown 404 must not blank the profile table, so each
   // carries its own sequence guard, its own banner and its own busy flag.
@@ -968,6 +978,10 @@ export default function PaycheckPage() {
       setFromCache(true)
       setBreakdown(peeked)
     }
+    // An applied scenario belongs to the person it was modelled for; leaving them drops it
+    // (the same reason the pinned profile is dropped just above). The key check at the mount
+    // below is the fence — this only keeps a parked seed from coming back on a switch home.
+    setApplySeed(null)
     setSelection({ profileId: null, personId })
   }
 
@@ -998,6 +1012,11 @@ export default function PaycheckPage() {
         : profiles.filter((p) => p.person_id === activePersonId),
     [profiles, switchable, activePersonId],
   )
+
+  // The profile panel's identity: the chip's pick, and whether the list is scoped yet (see
+  // the mount below). An Apply seed is only ever handed to the panel it was applied FROM.
+  const profilesKey = `${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`
+  const seedForPanel = applySeed?.forKey === profilesKey ? applySeed : null
 
   // The ONE place this page adds money up, and only because there is no server figure for
   // it in this batch. Legal here where the waterfall's lines are not (rule 9): each leg is
@@ -1108,7 +1127,13 @@ export default function PaycheckPage() {
                 profileId={selection.profileId}
                 personId={selection.personId}
                 breakdown={data}
-                onApply={(seed) => setApplySeed((current) => ({ seed, nonce: (current?.nonce ?? 0) + 1 }))}
+                onApply={(seed) =>
+                  setApplySeed((current) => ({
+                    seed,
+                    nonce: (current?.nonce ?? 0) + 1,
+                    forKey: profilesKey,
+                  }))
+                }
               />
             </>
           )}
@@ -1138,7 +1163,7 @@ export default function PaycheckPage() {
                household resolves re-seeds from the primary's own latest row; the only
                typing that can be lost is whatever landed in that first instant. */
             <ProfilesPanel
-              key={`${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}:${applySeed?.nonce ?? 0}`}
+              key={`${profilesKey}:${seedForPanel?.nonce ?? 0}`}
               profiles={shownProfiles}
               personId={selection.personId}
               shownId={breakdown?.profile.id ?? null}
@@ -1146,7 +1171,7 @@ export default function PaycheckPage() {
               onSelect={selectProfile}
               onShowCurrent={showCurrent}
               onChanged={onProfilesChanged}
-              initialForm={applySeed?.seed}
+              initialForm={seedForPanel?.seed}
             />
           )}
         </Feed>
