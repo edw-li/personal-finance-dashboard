@@ -149,6 +149,13 @@
   border-bottom: 1px solid transparent;
 }
 
+/* A declared scope row can still render nothing (a one-person household hides the owner control
+   and the page declared no other control): an empty sticky row must not take space or draw its
+   hairline. `:empty` matches because ScopeBar returns null, leaving no DOM nodes in the slot. */
+.page-frame-scope:empty {
+  display: none;
+}
+
 .page-frame-scope.is-stuck {
   border-bottom-color: var(--border);
 }
