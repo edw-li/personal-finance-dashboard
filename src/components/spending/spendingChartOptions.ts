@@ -6,13 +6,14 @@ import type { EChartsOption } from '../../charts/echarts'
 import { BAR_MARKS, LINE, grid, moneyAxis, monthAxis, stagger } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { budgetReference, referenceLine } from '../../charts/reference'
-import { INK, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
+import { INK, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { rangeZoom } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
-import { axisTooltip } from '../../charts/tooltip'
+import { axisTooltip, itemTooltip } from '../../charts/tooltip'
 import type { SpendingMatrix } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { escapeHtml, formatCurrency } from '../../utils/format'
+import { buildMonthSlices } from '../../utils/spending'
 
 // Axis-tooltip params subset the formatter reads (historyChartOptions' posture).
 interface AxisTooltipParam {
@@ -201,5 +202,56 @@ export function spendingBarsOption({
     xAxis: monthAxis(monthLabels, { gap: true }),
     yAxis: moneyAxis(),
     series,
+  }
+}
+
+/** One month's breakdown as the bars' drill-in: the SAME top-N fold and slots as the stack,
+ *  morphing from the bar segments by id. Null when the month has nothing positive to draw. */
+export function monthPieOption(
+  matrix: Pick<SpendingMatrix, 'categories' | 'series'>,
+  topIds: number[],
+  monthIndex: number,
+): EChartsOption | null {
+  if (monthIndex < 0) return null
+  const slices = buildMonthSlices(matrix, topIds, monthIndex)
+  if (slices.length === 0) return null
+  return {
+    tooltip: itemTooltip<{ name?: string; value?: unknown; percent?: number }>({
+      body: (p) => ({
+        value: Number(p.value),
+        label: p.name ?? '',
+        sub: `${(p.percent ?? 0).toFixed(1)}% of the month`,
+      }),
+    }),
+    series: [
+      {
+        id: 'month-pie',
+        type: 'pie' as const,
+        radius: ['42%', '70%'],
+        itemStyle: { borderColor: SURFACE, borderWidth: 2 },
+        label: { color: INK, formatter: '{b}  {d}%' },
+        emphasis: { itemStyle: { borderColor: INK } },
+        // Morph the month's bar segments into slices and back out on exit; a plain swap
+        // under reduced motion (EChart forces animation off).
+        universalTransition: { enabled: true, seriesKey: [...topIds.map((id) => `cat-${id}`), 'other'] },
+        data: slices.map((s) => ({
+          name: s.name,
+          value: s.value,
+          itemStyle: { color: s.slot === null ? OTHER_SERIES_COLOR : PALETTE[s.slot] },
+        })),
+      },
+    ],
+  }
+}
+
+/** The drilled month as a table (F12): the drawn slices, Other included. */
+export function monthPieCsv(
+  matrix: Pick<SpendingMatrix, 'categories' | 'series'>,
+  topIds: number[],
+  monthIndex: number,
+): ExportTable {
+  return {
+    headers: ['Category', 'Amount'],
+    rows: buildMonthSlices(matrix, topIds, monthIndex).map((s) => [s.name, s.value.toFixed(2)]),
   }
 }

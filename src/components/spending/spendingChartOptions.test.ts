@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { tooltipRows } from '../../testing/tooltipRows'
+import { isGrammarTooltip } from '../../charts/tooltip'
 import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import type { SpendingMatrix } from '../../types/api'
 import {
   SUSTAINABLE_SPEND,
+  monthPieCsv,
+  monthPieOption,
   spendingBarsOption,
   spendingBarsTooltipFormatter,
   spendingCsv,
@@ -226,5 +229,36 @@ describe('spendingBarsOption', () => {
 
   it('returns null with no months', () => {
     expect(spendingBarsOption(barsInput(matrixFixture({ months: [], totals: [], net_pay: [], four_pct_rule: [], total_budget: [], savings_rate: [] })))).toBeNull()
+  })
+})
+
+describe('monthPieOption', () => {
+  it('slices the month on the bars’ own slots, morphing from their ids, with a value-first item tooltip', () => {
+    const option = monthPieOption(matrixFixture(), [1, 2], 0) as unknown as {
+      tooltip: { trigger: string; formatter: (p: unknown) => string }
+      series: { id: string; type: string; universalTransition: unknown; data: { name: string; value: number; itemStyle: { color: string } }[] }[]
+    }
+    expect(option.series[0]).toMatchObject({ id: 'month-pie', type: 'pie', universalTransition: { enabled: true, seriesKey: ['cat-1', 'cat-2', 'other'] } })
+    expect(option.series[0].data).toEqual([
+      { name: 'Rent', value: 2000, itemStyle: { color: PALETTE[0] } },
+      { name: 'Groceries <b>& more</b>', value: 600, itemStyle: { color: PALETTE[1] } },
+      { name: 'Other', value: 150, itemStyle: { color: OTHER_SERIES_COLOR } },
+    ])
+    expect(option.tooltip.trigger).toBe('item')
+    expect(isGrammarTooltip(option.tooltip.formatter)).toBe(true)
+    const parsed = tooltipRows(option.tooltip.formatter({ name: 'Groceries <b>& more</b>', value: 600, percent: 21.8 }))
+    expect(parsed.lead).toBe('$600.00')
+    expect(parsed.label).toBe('Groceries &lt;b&gt;&amp; more&lt;/b&gt;')
+    expect(parsed.sub).toBe('21.8% of the month')
+  })
+  it('is null for a month with nothing drawable or out of range', () => {
+    expect(monthPieOption(matrixFixture(), [1, 2], -1)).toBeNull()
+    expect(monthPieOption(matrixFixture({ series: [{ category_id: 1, values: ['0.00', '0.00'], budgets: [null, null] }] }), [1], 0)).toBeNull()
+  })
+  it('exports the slices as a table', () => {
+    expect(monthPieCsv(matrixFixture(), [1, 2], 0)).toEqual({
+      headers: ['Category', 'Amount'],
+      rows: [['Rent', '2000.00'], ['Groceries <b>& more</b>', '600.00'], ['Other', '150.00']],
+    })
   })
 })
