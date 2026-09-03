@@ -494,7 +494,6 @@ export default function CalendarPage() {
               }}
             />
             <h2 className="cal-title">{formatMonth(month)}</h2>
-            <div className="spacer" />
             <Segmented
               variant="toggle"
               ariaLabel="Calendar view"
