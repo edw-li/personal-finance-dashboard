@@ -10,7 +10,7 @@
 /* .panel / .panel-title are used by all four panels (and by the page's holdings section)
    but are defined NOWHERE in panels.css — built here from the same tokens as .card. */
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem 1.25rem; min-width: 0; margin-bottom: 16px; }
-.panel-title { margin: 0 0 0.75rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.panel-title { margin: 0 0 0.75rem; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
 .panel-title-row { display: flex; justify-content: space-between; align-items: center; }
 
 /* AllocationPanel's own two-up layout travels with the component that renders it. */

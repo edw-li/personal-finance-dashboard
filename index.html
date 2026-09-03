@@ -2,6 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Mirrors ThemeProvider's readChoice/readDensity/resolveTheme (keys, defaults, query) —
+      // ThemeProvider.test pins the literals. Runs before React so a light user sees no dark flash.
+      try {
+        // Density first: it never depends on matchMedia, so a throw below cannot cost the stamp.
+        if (localStorage.getItem('finance.density') === 'compact') document.documentElement.dataset.density = 'compact';
+        var t = localStorage.getItem('finance.theme');
+        var light =
+          t === 'light' ||
+          (t === 'system' &&
+            typeof matchMedia === 'function' &&
+            matchMedia('(prefers-color-scheme: light)').matches);
+        document.documentElement.dataset.theme = light ? 'light' : 'dark';
+      } catch (e) {}
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex, nofollow" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

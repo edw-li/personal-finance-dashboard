@@ -33,13 +33,13 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 1.1rem 1.25rem 1.25rem;
+  padding: var(--density-card-pad);
   min-width: 0;
 }
 
 .card-grid {
   display: grid;
-  gap: 1rem;
+  gap: var(--density-grid-gap);
   grid-template-columns: repeat(12, 1fr);
 }
 
@@ -56,7 +56,7 @@
 
 .eyebrow {
   margin: 0 0 0.75rem;
-  font-size: 0.6875rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -67,8 +67,8 @@
 
 .kpi-row {
   display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--density-grid-gap);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   margin-bottom: 1rem;
 }
 
@@ -84,10 +84,12 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.9rem 1.1rem 1rem;
+  /* The query container .stat-value sizes against — see its comment. */
+  container-type: inline-size;
 }
 
 .stat-label {
-  font-size: 0.6875rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -95,15 +97,24 @@
   margin-bottom: 0.45rem;
 }
 
+/* Sized from the TILE, not the viewport. .kpi-row is repeat(auto-fit, minmax(220px, 1fr)),
+   so tile width sawtooths as the window grows — a purely vw-scaled value stayed large
+   through the narrow phase and an 11-13 character amount wrapped mid-number ("$799,395.1"
+   over "2" around 1200-1450px). The cqi term is the last resort: past the point where the
+   number would no longer fit, the font shrinks with its own tile. The number itself never
+   breaks — nowrap forbids it, so a too-long value overflows visibly rather than lying about
+   its digits; tabular numerals keep count-ups steady. */
 .stat-value {
   font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
-  font-size: 1.45rem;
+  font-size: min(clamp(1.1rem, 0.9rem + 0.5vw, 1.45rem), 10.5cqi);
   font-weight: 600;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .stat-tile-hero .stat-value {
-  font-size: 2.4rem;
+  font-size: min(clamp(1.5rem, 1rem + 1.1vw, 2.4rem), 10.5cqi);
 }
 
 .stat-delta {
@@ -172,17 +183,18 @@
 
 .data-table th {
   text-align: left;
-  font-size: 0.6875rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--muted);
-  padding: 0.5rem 0.6rem;
+  /* Same track as td: a literal padding here misaligned .num headers in compact. */
+  padding: var(--density-cell-pad);
   border-bottom: 1px solid var(--border);
 }
 
 .data-table td {
-  padding: 0.45rem 0.6rem;
+  padding: var(--density-cell-pad);
   border-bottom: 1px solid var(--surface-2);
 }
 
@@ -203,7 +215,7 @@
   padding: 0.1rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 0.625rem;
+  font-size: 0.66rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
@@ -237,7 +249,7 @@
 .button-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0b0e14;
+  color: var(--on-accent);
   font-weight: 600;
 }
 

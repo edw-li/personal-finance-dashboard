@@ -1,19 +1,14 @@
-// THE chart color source of truth. dataviz-validated 2026-08-14 on surface #171a21
-// (all six checks pass: lightness band, chroma, adjacent CVD dE 8.4, normal-vision 19.3,
-// contrast >= 3:1). Fixed slot order IS the CVD-safety mechanism — never reorder, never
-// cycle past 8, never invent a hue outside this file.
+// THE chart color source of truth for BUILDERS: the dark constants below are the DARK
+// tokens (src/theme/tokens.ts) and stay hard-coded in options on purpose — under a light
+// theme EChart recolors the finished option through charts/recolor.ts, so no builder ever
+// branches on theme. dataviz-validated 2026-08-14 on surface #171a21 (lightness band,
+// chroma, adjacent CVD dE 8.4, normal-vision 19.3, contrast >= 3:1). Fixed slot order IS
+// the CVD-safety mechanism — never reorder, never cycle past 8, never invent a hue outside
+// tokens.ts.
+import { DARK, type ThemeTokens } from '../theme/tokens'
 import type { AccountGroup } from '../types/api'
 
-export const PALETTE = [
-  '#3987e5', // 1 blue
-  '#d95926', // 2 orange
-  '#199e70', // 3 aqua
-  '#c98500', // 4 yellow
-  '#d55181', // 5 magenta
-  '#008300', // 6 green
-  '#9085e9', // 7 violet
-  '#e66767', // 8 red
-] as const
+export const PALETTE = DARK.palette
 
 // Groups wear fixed entity colors (stack adjacency = validated palette adjacency).
 export const GROUP_COLORS: Record<AccountGroup, string> = {
@@ -41,55 +36,59 @@ export const GROUP_ORDER: AccountGroup[] = [
 ]
 
 // Sequential blue, dark -> light on the dark surface (near-zero recedes to the card).
-export const SEQUENTIAL_BLUE = [
-  '#0d366b', '#104281', '#184f95', '#1c5cab', '#256abf', '#2a78d6',
-  '#3987e5', '#5598e7', '#6da7ec', '#86b6ef', '#9ec5f4', '#cde2fb',
-] as const
+export const SEQUENTIAL_BLUE = DARK.sequential
 
-export const OTHER_SERIES_COLOR = '#4a5060' // neutral gray for the folded "Other" stack
+// Neutral gray for the folded "Other" stack — 3.6:1 on the surface (was #4a5060 at 2.16:1).
+export const OTHER_SERIES_COLOR = DARK.otherSeries
 
-export const INK = '#e6e9ef'
-export const MUTED = '#8b93a3'
-export const GRID_LINE = '#1e222c' // one step off the card surface, solid hairline
-export const AXIS_LINE = '#262b36'
-export const SURFACE = '#171a21'
-export const SURFACE_2 = '#1e222c'
-export const POSITIVE = '#3fb968'
-export const NEGATIVE = '#e05252'
+export const INK = DARK.text
+export const MUTED = DARK.muted
+export const GRID_LINE = DARK.gridLine // one step off the card surface, solid hairline
+export const AXIS_LINE = DARK.axisLine
+export const SURFACE = DARK.surface
+export const SURFACE_2 = DARK.surface2
+export const POSITIVE = DARK.positive
+export const NEGATIVE = DARK.negative
 
 const FONT_FAMILY = "system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 
-// Registered once by src/charts/echarts.ts.
-export const FINANCE_THEME = {
-  color: [...PALETTE],
-  backgroundColor: 'transparent',
-  textStyle: { color: MUTED, fontFamily: FONT_FAMILY },
-  categoryAxis: {
-    axisLine: { lineStyle: { color: AXIS_LINE } },
-    axisTick: { show: false },
-    axisLabel: { color: MUTED },
-    splitLine: { show: false },
-  },
-  valueAxis: {
-    axisLine: { show: false },
-    axisTick: { show: false },
-    axisLabel: { color: MUTED },
-    splitLine: { lineStyle: { color: GRID_LINE, width: 1, type: 'solid' } },
-  },
-  legend: {
-    textStyle: { color: INK, fontSize: 12 },
-    icon: 'roundRect',
-    itemWidth: 12,
-    itemHeight: 8,
-  },
-  tooltip: {
-    backgroundColor: SURFACE_2,
-    borderColor: AXIS_LINE,
-    borderWidth: 1,
-    textStyle: { color: INK, fontSize: 12 },
-    extraCssText: 'box-shadow: 0 4px 16px rgba(0,0,0,0.4); border-radius: 8px;',
-  },
-  // echarts 6's default visualMap label token (#54555a) is ~2.3:1 on our surface and
-  // does not follow textStyle — pin it here so heatmaps don't compensate per-page.
-  visualMap: { textStyle: { color: MUTED } },
+/** The ECharts theme object for a token set — registered per resolved theme by
+ *  charts/echarts.ts (`registerThemeVersion`). */
+export function buildTheme(t: ThemeTokens) {
+  return {
+    color: [...t.palette],
+    backgroundColor: 'transparent',
+    textStyle: { color: t.muted, fontFamily: FONT_FAMILY },
+    categoryAxis: {
+      axisLine: { lineStyle: { color: t.axisLine } },
+      axisTick: { show: false },
+      axisLabel: { color: t.muted },
+      splitLine: { show: false },
+    },
+    valueAxis: {
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: t.muted },
+      splitLine: { lineStyle: { color: t.gridLine, width: 1, type: 'solid' as const } },
+    },
+    legend: {
+      textStyle: { color: t.text, fontSize: 12 },
+      icon: 'roundRect',
+      itemWidth: 12,
+      itemHeight: 8,
+    },
+    tooltip: {
+      backgroundColor: t.surface2,
+      borderColor: t.axisLine,
+      borderWidth: 1,
+      textStyle: { color: t.text, fontSize: 12 },
+      extraCssText: 'box-shadow: 0 4px 16px rgba(0,0,0,0.4); border-radius: 8px;',
+    },
+    // echarts 6's default visualMap label token (#54555a) is ~2.3:1 on our surface and
+    // does not follow textStyle — pin it here so heatmaps don't compensate per-page.
+    visualMap: { textStyle: { color: t.muted } },
+  }
 }
+
+// Registered once by src/charts/echarts.ts as 'finance' (the version-0 name).
+export const FINANCE_THEME = buildTheme(DARK)
