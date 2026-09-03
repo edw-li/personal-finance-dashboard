@@ -1,0 +1,73 @@
+/* Shell styles — shared by the shell primitives */
+
+/* The sidebar's identity block (2026-09-03 shell spec §12). It carries its own top border
+   instead of the old .sidebar-separator, and margin-top:auto pins it to the bottom of the
+   column however short the nav gets. */
+.sidebar-footer {
+  margin-top: auto;
+  padding: 0.5rem 0.25rem 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.sidebar-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  min-width: 0;
+}
+
+.sidebar-footer-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-footer-pill {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Amber only for dev: the pill's whole job is that a dev tab can never be mistaken for
+   the real one, and a muted prod pill keeps the everyday case quiet. */
+.sidebar-footer-pill.is-dev {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.sidebar-footer-hash {
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+}
+
+.sidebar-footer-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.sidebar-footer-icon:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.sidebar-footer-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

@@ -106,23 +106,6 @@
   color: var(--accent);
 }
 
-.logout-button {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0.75rem;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.logout-button:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-
 .content {
   flex: 1;
   min-width: 0;
@@ -164,10 +147,15 @@
   cursor: pointer;
 }
 
-/* The separator between Settings and Log out (2026-08-25 polish §7). */
-.sidebar-separator {
-  border-top: 1px solid var(--border);
-  margin: 0.5rem 0.25rem;
+/* The shell boundary's own fallback (2026-09-03 shell spec §12): it replaces the WHOLE
+   layout, not a page body, so it centers itself in the viewport instead of sitting at the
+   top of a column that no longer exists. Gap, because it carries two buttons. */
+.shell-fallback {
+  min-height: 40vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
 }
 
 /* Skip link (polish §5): parked above the viewport until keyboard focus arrives. */
@@ -199,7 +187,6 @@
    absent: its focus reveal must stay instant. */
 @media (prefers-reduced-motion: no-preference) {
   .nav-link,
-  .logout-button,
   .route-fallback-button {
     transition:
       background-color var(--t-fast) ease,

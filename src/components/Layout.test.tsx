@@ -5,6 +5,7 @@ import { fetchCreditCards } from '../api/creditCards'
 import { fetchAccounts } from '../api/netWorth'
 import { fetchSecurities } from '../api/portfolio'
 import { fetchCategories } from '../api/spending'
+import { fetchSystemStatus } from '../api/system'
 import Layout from './Layout'
 import { prefetchRoute, warmAllRoutes } from './routeChunks'
 
@@ -45,6 +46,10 @@ vi.mock('../api/portfolio', () => ({ fetchSecurities: vi.fn() }))
 vi.mock('../api/netWorth', () => ({ fetchAccounts: vi.fn() }))
 vi.mock('../api/spending', () => ({ fetchCategories: vi.fn() }))
 vi.mock('../api/creditCards', () => ({ fetchCreditCards: vi.fn() }))
+
+// The sidebar footer asks /system/status for its environment pill — same rule, no shell
+// test may reach fetch.
+vi.mock('../api/system', () => ({ fetchSystemStatus: vi.fn() }))
 
 function renderShell(initialPath = '/') {
   return render(
@@ -142,6 +147,10 @@ beforeEach(() => {
   vi.mocked(fetchAccounts).mockResolvedValue([])
   vi.mocked(fetchCategories).mockResolvedValue([])
   vi.mocked(fetchCreditCards).mockResolvedValue([])
+  vi.mocked(fetchSystemStatus).mockResolvedValue({
+    environment: 'dev',
+    database: { alembic_head: 'f7d3b2a91c40', size_bytes: 1 },
+  } as never)
 })
 
 afterEach(async () => {
@@ -176,8 +185,9 @@ describe('Layout — sidebar v2', () => {
       'Calendar',
       'Settings',
     ])
-    // The separator sits between Settings and Log out.
-    expect(document.querySelector('.sidebar-separator')).not.toBeNull()
+    // The footer closes the sidebar — it carries the old separator's border, the identity
+    // block and Log out.
+    expect(document.querySelector('.sidebar-footer')).not.toBeNull()
     expect(screen.getByRole('button', { name: /log out/i })).toBeTruthy()
   })
 
