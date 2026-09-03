@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { createDividend, deleteDividend, updateDividend } from '../../api/portfolio'
 import AmountInput from '../AmountInput'
-import EChart from '../EChart'
+import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import { useToast } from '../ToastProvider'
@@ -222,13 +222,16 @@ export default function DividendsPanel({
               hint="Each holding's trailing-12-month dividend rate × shares held, summed."
             />
           </div>
-          {chart && (
-            <EChart
-              option={chart}
-              height={220}
-              exportConfig={{ name: 'dividends', csv: () => monthlyIncomeCsv(dividends, todayIso()) }}
-            />
-          )}
+          <ChartCard
+            title="Monthly dividend income"
+            hint="Dividends received per month over the trailing two years, quiet months at zero."
+            ariaLabel="Bar chart of dividend income per month over the trailing two years"
+            option={chart}
+            empty="No dividends in the trailing two years."
+            exportName="dividends"
+            csv={() => monthlyIncomeCsv(dividends, todayIso())}
+            height={220}
+          />
         </>
       )}
       <FeedBanner error={error} />

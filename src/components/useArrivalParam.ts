@@ -48,3 +48,30 @@ export function useArrivalValue(key: string, apply: (value: string) => boolean |
     setSearchParams(next, { replace: true })
   }, [raw, key, apply, searchParams, setSearchParams])
 }
+
+/** A one-shot arrival COMMAND that carries a companion VALUE (`?add=1&date=2026-09-16` —
+ *  the palette's "add an event on this day"). Both keys are consumed in ONE replace, so
+ *  neither write can drop the other's, and `apply` may fold further params into that same
+ *  write through the `params` it is handed (the calendar folds in the month it jumped to).
+ *  An invalid command is stripped without applying, companion included — garbage in the URL
+ *  is nobody's state. `apply` must be identity-stable (useCallback), or the effect loops. */
+export function useArrivalPair<T extends string>(
+  key: string,
+  allowed: readonly T[],
+  companion: string,
+  apply: (value: T, companion: string | null, params: URLSearchParams) => void,
+): void {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const raw = searchParams.get(key)
+  const rawCompanion = searchParams.get(companion)
+  useEffect(() => {
+    if (raw === null) return
+    const next = new URLSearchParams(searchParams)
+    next.delete(key)
+    next.delete(companion)
+    if ((allowed as readonly string[]).includes(raw)) apply(raw as T, rawCompanion, next)
+    setSearchParams(next, { replace: true })
+    // The strip nulls `raw`, so the re-run early-returns; a double-apply between renders is
+    // idempotent by contract (the same as useArrivalParam's).
+  }, [raw, rawCompanion, key, allowed, companion, apply, searchParams, setSearchParams])
+}

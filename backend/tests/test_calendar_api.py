@@ -1,24 +1,75 @@
 """Endpoint tests: loading + validation + the GET-never-rejects law. Composition RULES
-are pinned in test_calendar_events.py — here each type appears once to prove its loader
-(the fold's held-filter, the sold-lot filter, the cadence gate, the snapshot probe)."""
+are pinned in tests/calendar/ — here each type appears once to prove its loader (the
+fold's held-filter, the sold-lot filter, the cadence gate, the snapshot probe)."""
 
-from datetime import date
-from decimal import Decimal
+import re
+from datetime import UTC, date, datetime
+from decimal import ROUND_DOWN, Decimal
 
+from sqlalchemy import select
+
+from app.api import calendar as calendar_api
 from app.models import (
+    AppSetting,
+    CardCredit,
+    CreditCard,
     EsppLot,
     EsppOffering,
+    LatestPrice,
     NetWorthSnapshot,
     PaycheckProfile,
     Person,
     PositionTransaction,
     RsuGrant,
     Security,
+    SecurityDividendEvent,
+    TaxBracket,
+    TaxInput,
+    TaxYear,
 )
+from app.seed import seed_tax_definitions
+from app.services import rsu_vesting
 from tests.portfolio_factories import acct
 
 CALENDAR = "/api/v1/calendar"
 TODAY = date(2026, 8, 24)  # a Monday; the router's clock is product_today()
+# Feb 2026: every 2026 payment date AND the Apr 15 filing are still ahead.
+FEBRUARY = date(2026, 2, 2)
+APRIL = f"{CALENDAR}?start=2026-04-01&end=2026-04-30"
+# Every 2dp figure a detail renders, in order — the sentence and the `amount` have to be
+# the same numbers, which is the wiring the two filing-balance tests are about.
+MONEY_RE = re.compile(r"\$([\d,]+\.\d{2})")
+
+
+def money(rendered: str) -> Decimal:
+    return Decimal(rendered.replace(",", ""))
+
+
+async def seed_priceable_year(db, year: int, w2: str = "240000") -> None:
+    """A year the engine can price: the input definitions, one W-2 row and flat bracket
+    tables at column scale (test_withholding_api's shape)."""
+    await seed_tax_definitions(db)
+    db.add(TaxYear(year=year, filing_status="single"))
+    await db.flush()
+    db.add(TaxInput(year=year, key="latest_w2_income", value=Decimal(w2)))
+    for name, table in {
+        "federal": [("0.1000", "0.00")],
+        "state": [("0.0500", "0.00")],
+        "medicare": [("0.0145", "0.00")],
+        "social_security": [("0.0620", "0.00"), ("0.0000", "168600.00")],
+        "disability": [("0.0110", "0.00")],
+        "capital_gains": [("0.1500", "0.00")],
+    }.items():
+        for index, (rate, threshold) in enumerate(table, start=1):
+            db.add(
+                TaxBracket(
+                    year=year,
+                    jurisdiction=name,
+                    bracket_index=index,
+                    rate=Decimal(rate),
+                    threshold=Decimal(threshold),
+                )
+            )
 
 
 def freeze_today(monkeypatch):
@@ -177,9 +228,9 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
     for event in events:
         by_type.setdefault(event["type"], []).append(event)
 
-    assert [(e["date"], e["detail"]) for e in by_type["rsu_vest"]] == [
-        ("2026-09-16", "25 sh — 2025 offer")
-    ]  # the broken grant is silently absent — that absence IS the degradation
+    assert [(e["date"], e["detail"], e["amount"], e["key"]) for e in by_type["rsu_vest"]] == [
+        ("2026-09-16", "25 sh — 2025 offer", None, "rsu:vest:2026-09-16")
+    ]  # the broken grant is silently absent; no ticker → unpriced (amount null, never 0)
     assert [(e["date"], e["label"]) for e in by_type["espp_qualify"]] == [
         ("2026-09-01", "ESPP lot qualifies — 2024-08-30")
     ]  # the sold lot contributes nothing
@@ -196,11 +247,40 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
         "2026-09-15",
         "2026-09-30",
     ]
+    # 120000 / 24 checks, no deductions → net 5000 per check, folded across ONE person.
+    assert {e["amount"] for e in by_type["payday"]} == {"5000.00"}
+    assert by_type["payday"][0]["items"] == [
+        {
+            "label": "Me",
+            "amount": "5000.00",
+            "person_id": by_type["payday"][0]["items"][0]["person_id"],
+            "detail": None,
+        }
+    ]
+    assert resp.json()["quote_as_of"] is None
+    assert [source["source"] for source in resp.json()["sources"]] == [
+        "rsu",
+        "espp",
+        "dividend",
+        "payroll",
+        "tax",
+        "card",
+        "ritual",
+        "custom",
+    ]
     assert [(e["date"], e["detail"]) for e in by_type["tax_deadline"]] == [
         ("2026-09-15", "Q3 estimated payment")
     ]
-    assert [(e["date"], e["detail"], e["href"]) for e in by_type["update_due"]] == [
-        ("2026-08-24", "Enter July 2026", "/update")
+    # August's reminder (enter July) was due Aug 1 — overdue, re-dated to today with its
+    # key unchanged; September's (enter August) is scheduled.
+    assert [(e["date"], e["label"], e["key"], e["href"]) for e in by_type["update_due"]] == [
+        ("2026-08-24", "Monthly update — enter July 2026", "ritual:2026-07:2026-08-01", "/update"),
+        (
+            "2026-09-01",
+            "Monthly update — enter August 2026",
+            "ritual:2026-08:2026-09-01",
+            "/update",
+        ),
     ]
     # No stored periods: the derived Mar–Aug 2026 slot's purchase is Aug 31 (Feb 27 is
     # clipped by the range — the clip works through the API too).
@@ -227,12 +307,16 @@ async def test_calendar_omits_paydays_for_other_cadences(auth_client, db, monkey
     assert [e for e in resp.json()["events"] if e["type"] == "payday"] == []
 
 
-async def test_calendar_update_due_absent_when_previous_month_entered(auth_client, db, monkeypatch):
+async def test_calendar_update_due_only_scheduled_when_previous_month_entered(
+    auth_client, db, monkeypatch
+):
     freeze_today(monkeypatch)
     db.add(NetWorthSnapshot(month=date(2026, 7, 1)))
     await db.commit()
     resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")
-    assert [e for e in resp.json()["events"] if e["type"] == "update_due"] == []
+    assert [
+        (e["date"], e["label"]) for e in resp.json()["events"] if e["type"] == "update_due"
+    ] == [("2026-09-01", "Monthly update — enter August 2026")]
 
 
 async def test_custom_event_crud_roundtrip(auth_client):
@@ -250,6 +334,10 @@ async def test_custom_event_crud_roundtrip(auth_client):
         "label": "Car insurance renewal",
         "detail": None,
         "person_id": None,
+        "amount": None,
+        "direction": "neutral",
+        "recurrence": "none",
+        "until": None,
     }
 
     listed = await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")
@@ -257,11 +345,26 @@ async def test_custom_event_crud_roundtrip(auth_client):
         {
             "date": "2026-09-12",
             "type": "custom",
+            "source": "custom",
+            "key": f"custom:{event_id}:2026-09-12",
+            "entity_ref": str(event_id),
             "label": "Car insurance renewal",
+            "short_label": "Car insurance renewal",
             "detail": None,
+            "amount": None,
+            "direction": "neutral",
+            "basis": "confirmed",
+            "items": [],
             "href": None,
             "id": event_id,
             "person_id": None,
+            "recurrence": None,
+            "until": None,
+            "series_start": None,
+            "done": False,
+            "hidden": False,
+            "note": None,
+            "amount_overridden": False,
         }
     ]
 
@@ -276,6 +379,10 @@ async def test_custom_event_crud_roundtrip(auth_client):
         "label": "Renewal",
         "detail": "moved a day",
         "person_id": None,
+        "amount": None,
+        "direction": "neutral",
+        "recurrence": "none",
+        "until": None,
     }
 
     # Full-replace also CLEARS: an emptied detail box stores as null (spec §9.3).
@@ -350,12 +457,12 @@ async def test_calendar_labels_paydays_when_two_people_have_profiles(auth_client
 
     resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-08-31")
     assert resp.status_code == 200
+    # Both are named — but same-day checks FOLD into one household chip (spec §7); the
+    # per-person constituents ride in `items` (pinned in the folding test below).
     paydays = [e for e in resp.json()["events"] if e["type"] == "payday"]
     assert [(e["date"], e["label"], e["detail"]) for e in paydays] == [
-        ("2026-08-14", "Payday — Me", "Me"),
-        ("2026-08-14", "Payday — Sam", "Sam"),
-        ("2026-08-31", "Payday — Me", "Me"),
-        ("2026-08-31", "Payday — Sam", "Sam"),
+        ("2026-08-14", "Payday — Me & Sam", "2 paychecks"),
+        ("2026-08-31", "Payday — Me & Sam", "2 paychecks"),
     ]
 
 
@@ -435,6 +542,10 @@ async def test_custom_event_person_tag_stamps_the_label(auth_client, db):
         "label": "Dentist",
         "detail": None,
         "person_id": sam.id,
+        "amount": None,
+        "direction": "neutral",
+        "recurrence": "none",
+        "until": None,
     }
     event_id = created.json()["id"]
 
@@ -459,3 +570,494 @@ async def test_custom_event_person_must_exist(auth_client):
     )
     assert ghost.status_code == 422
     assert ghost.json()["detail"] == "unknown person_id: 999"
+
+
+async def test_calendar_prices_vests_from_the_employer_quote(auth_client, db, monkeypatch):
+    freeze_today(monkeypatch)
+    nvda = Security(ticker="NVDA", name="NVDA Inc", holding_type="stock")
+    db.add_all([nvda, AppSetting(key="espp_ticker", value={"value": "NVDA"})])
+    await db.flush()
+    db.add(
+        LatestPrice(
+            security_id=nvda.id,
+            price=Decimal("500.0000"),
+            quoted_at=datetime(2026, 8, 21, 20, tzinfo=UTC),
+            source="yfinance",
+        )
+    )
+    db.add_all(
+        [
+            RsuGrant(
+                kind="new_hire",
+                label="2025 offer",
+                focal_year=None,
+                shares=400,
+                grant_price=Decimal("100"),
+                first_vest_date=date(2026, 3, 18),
+                cliff_pct=Decimal("0.25"),
+                vest_quantum=1,
+            ),
+            RsuGrant(
+                kind="refresh",
+                label="2026 refresh",
+                focal_year=2026,
+                shares=160,
+                grant_price=Decimal("100"),
+                first_vest_date=date(2026, 3, 18),
+                cliff_pct=Decimal("0.25"),
+                vest_quantum=1,
+            ),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    [vest] = [e for e in body["events"] if e["type"] == "rsu_vest"]
+    assert (vest["label"], vest["short_label"], vest["amount"], vest["basis"]) == (
+        "RSU vest — 2 grants",
+        "RSU vest · 2 grants",
+        "17500.00",
+        "estimated",
+    )
+    assert [(i["label"], i["amount"], i["detail"]) for i in vest["items"]] == [
+        ("2025 offer", "12500.00", "25 sh"),
+        ("2026 refresh", "5000.00", "10 sh"),
+    ]
+    assert body["quote_as_of"] == "2026-08-21T20:00:00Z"
+    assert next(s for s in body["sources"] if s["source"] == "rsu") == {
+        "source": "rsu",
+        "status": "ok",
+        "note": "valued at the NVDA quote",
+    }
+
+
+async def test_calendar_folds_two_paydays_and_names_an_omitted_cadence(
+    auth_client, db, monkeypatch
+):
+    freeze_today(monkeypatch)
+    me = Person(name="Me", is_primary=True)
+    sam = Person(name="Sam", is_primary=False)
+    db.add_all([me, sam])
+    await db.flush()
+    db.add_all(
+        [
+            PaycheckProfile(
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("120000"),
+                person_id=me.id,
+            ),
+            PaycheckProfile(
+                effective_date=date(2026, 2, 1),
+                annual_salary=Decimal("90000"),
+                person_id=sam.id,
+            ),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-08-31")).json()
+    paydays = [e for e in body["events"] if e["type"] == "payday"]
+    assert [(e["date"], e["label"], e["short_label"], e["amount"]) for e in paydays] == [
+        ("2026-08-14", "Payday — Me & Sam", "Payday · 2", "8750.00"),
+        ("2026-08-31", "Payday — Me & Sam", "Payday · 2", "8750.00"),
+    ]
+    assert [(i["label"], i["amount"], i["person_id"]) for i in paydays[0]["items"]] == [
+        ("Me", "5000.00", me.id),
+        ("Sam", "3750.00", sam.id),
+    ]
+    assert next(s for s in body["sources"] if s["source"] == "payroll") == {
+        "source": "payroll",
+        "status": "ok",
+        "note": None,
+    }
+
+    # Flip Sam to biweekly: her chips are omitted and the footer says so.
+    sam_profile = (
+        (await db.execute(select(PaycheckProfile).where(PaycheckProfile.person_id == sam.id)))
+        .scalars()
+        .one()
+    )
+    sam_profile.pay_periods_per_year = 26
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-08-31")).json()
+    assert [e["label"] for e in body["events"] if e["type"] == "payday"] == [
+        "Payday — Me",
+        "Payday — Me",
+    ]
+    assert next(s for s in body["sources"] if s["source"] == "payroll") == {
+        "source": "payroll",
+        "status": "partial",
+        "note": "Sam: paid on another cadence — paydays omitted",
+    }
+
+
+async def test_custom_event_money_and_recurrence_round_trip(auth_client):
+    created = await auth_client.post(
+        f"{CALENDAR}/events",
+        json={
+            "date": "2026-01-31",
+            "label": "Rent",
+            "amount": "2400",
+            "direction": "out",
+            "recurrence": "monthly",
+            "until": "2026-04-30",
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert (body["amount"], body["direction"], body["recurrence"], body["until"]) == (
+        "2400.00",
+        "out",
+        "monthly",
+        "2026-04-30",
+    )
+    listed = (await auth_client.get(f"{CALENDAR}?start=2026-02-01&end=2026-05-31")).json()["events"]
+    rent = [e for e in listed if e["type"] == "custom"]
+    assert [
+        (e["date"], e["key"], e["amount"], e["series_start"], e["recurrence"]) for e in rent
+    ] == [
+        ("2026-02-28", f"custom:{body['id']}:2026-02-28", "2400.00", "2026-01-31", "monthly"),
+        ("2026-03-31", f"custom:{body['id']}:2026-03-31", "2400.00", "2026-01-31", "monthly"),
+        ("2026-04-30", f"custom:{body['id']}:2026-04-30", "2400.00", "2026-01-31", "monthly"),
+    ]
+    # Whole-series edit: the PATCH moves every occurrence.
+    patched = await auth_client.patch(
+        f"{CALENDAR}/events/{body['id']}",
+        json={
+            "date": "2026-01-31",
+            "label": "Rent",
+            "amount": "2500",
+            "direction": "out",
+            "recurrence": "monthly",
+            "until": "2026-03-31",
+        },
+    )
+    assert patched.status_code == 200
+    listed = (await auth_client.get(f"{CALENDAR}?start=2026-02-01&end=2026-05-31")).json()["events"]
+    assert [e["amount"] for e in listed if e["type"] == "custom"] == ["2500.00", "2500.00"]
+
+
+async def test_custom_event_money_validation(auth_client):
+    base = {"date": "2026-09-12", "label": "ok"}
+    assert (
+        await auth_client.post(f"{CALENDAR}/events", json={**base, "direction": "sideways"})
+    ).status_code == 422
+    assert (
+        await auth_client.post(f"{CALENDAR}/events", json={**base, "recurrence": "daily"})
+    ).status_code == 422
+    # until without a series
+    assert (
+        await auth_client.post(f"{CALENDAR}/events", json={**base, "until": "2026-12-31"})
+    ).status_code == 422
+    # until before date
+    assert (
+        await auth_client.post(
+            f"{CALENDAR}/events", json={**base, "recurrence": "weekly", "until": "2026-09-01"}
+        )
+    ).status_code == 422
+    too_big = await auth_client.post(f"{CALENDAR}/events", json={**base, "amount": "10000000000"})
+    assert too_big.status_code == 422  # Numeric(12,2) fence via quantize_money
+    # `direction` carries the sign, so a negative amount would render an "out" event as
+    # money coming IN — refused in the parser rather than stored and drawn backwards.
+    negative = await auth_client.post(
+        f"{CALENDAR}/events", json={**base, "amount": "-5", "direction": "out"}
+    )
+    assert negative.status_code == 422
+
+
+async def test_calendar_card_events_and_the_card_health_row(auth_client, db, monkeypatch):
+    freeze_today(monkeypatch)
+    venture = CreditCard(
+        name="Venture X",
+        slug="venture-x",
+        annual_fee=Decimal("395.00"),
+        rewards_currency="miles",
+        point_value_cents=Decimal("1.7"),
+        opened_on=date(2024, 5, 12),
+    )
+    undated = CreditCard(
+        name="SavorOne",
+        slug="savorone",
+        annual_fee=Decimal("0"),
+        rewards_currency="cash",
+        point_value_cents=Decimal("1"),
+        opened_on=None,
+    )
+    archived = CreditCard(
+        name="Old",
+        slug="old",
+        annual_fee=Decimal("95"),
+        rewards_currency="cash",
+        point_value_cents=Decimal("1"),
+        opened_on=date(2020, 1, 15),
+        is_active=False,
+    )
+    db.add_all([venture, undated, archived])
+    await db.flush()
+    counted = CardCredit(
+        card_id=venture.id,
+        label="$300 travel credit",
+        annual_value=Decimal("300"),
+        counts=True,
+        reset_cadence="anniversary",
+    )
+    db.add_all(
+        [
+            counted,
+            # counts=False is the "I never use this" toggle - it earns no calendar event.
+            CardCredit(
+                card_id=venture.id, label="ignored", annual_value=Decimal("50"), counts=False
+            ),
+        ]
+    )
+    await db.flush()
+    venture_id, credit_id = venture.id, counted.id
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-05-01&end=2026-05-31")).json()
+    cards = [e for e in body["events"] if e["source"] == "card"]
+    assert [(e["type"], e["date"], e["key"], e["amount"], e["direction"]) for e in cards] == [
+        ("card_anniversary", "2026-05-12", f"card:{venture_id}:2026-05-12", None, "neutral"),
+        ("card_credit", "2026-05-12", f"card:credit-{credit_id}:2026-05-12", "300.00", "neutral"),
+        ("card_fee", "2026-05-12", f"card:{venture_id}-fee:2026-05-12", "395.00", "out"),
+    ]
+    assert cards[0]["detail"] == "Year 2 with Venture X — falls off 5/24"
+    # The archived card is filtered out; SavorOne has no opened date, so it produces nothing
+    # and is named in the footer instead.
+    assert [s["source"] for s in body["sources"]] == [
+        "rsu",
+        "espp",
+        "dividend",
+        "payroll",
+        "tax",
+        "card",
+        "ritual",
+        "custom",
+    ]
+    assert next(s for s in body["sources"] if s["source"] == "card") == {
+        "source": "card",
+        "status": "partial",
+        "note": "1 card(s) without an opened date — no fee, anniversary or "
+        "anniversary-cadence credit events",
+    }
+
+
+async def test_calendar_tax_amounts_ride_the_withholding_tracker(auth_client, db, monkeypatch):
+    freeze_today(monkeypatch)
+    # Without a 2026 tax year: dates only, and the footer says why.
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    q3 = next(e for e in body["events"] if e["key"] == "tax:2026-q3:2026-09-15")
+    assert (q3["amount"], q3["basis"]) == (None, "scheduled")
+    assert next(s for s in body["sources"] if s["source"] == "tax") == {
+        "source": "tax",
+        "status": "partial",
+        "note": "no 2026 tax year entered — dates only",
+    }
+
+    # A priceable 2026 plus a semi-monthly profile.
+    await seed_priceable_year(db, 2026)
+    db.add(
+        PaycheckProfile(
+            person_id=(await seed_primary(db)).id,
+            effective_date=date(2025, 1, 1),
+            annual_salary=Decimal("240000"),
+            withholding_pct=Decimal("0.05"),
+        )
+    )
+    await db.commit()
+
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    q3 = next(e for e in body["events"] if e["key"] == "tax:2026-q3:2026-09-15")
+    # 5% withholding against a ~15% liability: a shortfall, split across Sep 15 and Jan 15.
+    assert q3["basis"] == "estimated" and Decimal(q3["amount"]) > 0
+    assert q3["detail"].startswith("Shortfall $")
+    assert "current-year leg — $" in q3["detail"]
+    assert next(s for s in body["sources"] if s["source"] == "tax")["status"] == "ok"
+
+
+async def test_calendar_prices_ex_dividends_from_the_latest_stored_per_share(
+    auth_client, db, monkeypatch
+):
+    freeze_today(monkeypatch)
+    nvda = Security(
+        ticker="NVDA", name="NVDA Inc", holding_type="stock", next_ex_div_date=date(2026, 9, 3)
+    )
+    db.add(nvda)
+    await db.flush()
+    db.add(
+        PositionTransaction(
+            security_id=nvda.id,
+            portfolio_account=acct("RH Taxable"),
+            type="buy",
+            shares=Decimal("10"),
+            price=Decimal("100"),
+            sort_index=10,
+        )
+    )
+    db.add_all(
+        [
+            SecurityDividendEvent(
+                security_id=nvda.id, ex_date=date(2026, 3, 4), per_share=Decimal("0.010000")
+            ),
+            # The announcement carries no amount, so the LATEST stored per-share prices it.
+            SecurityDividendEvent(
+                security_id=nvda.id, ex_date=date(2026, 6, 3), per_share=Decimal("0.020000")
+            ),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    [ex] = [e for e in body["events"] if e["type"] == "ex_dividend"]
+    assert (ex["amount"], ex["basis"], ex["detail"]) == (
+        "0.20",
+        "estimated",
+        "NVDA · 10 sh × $0.020000",
+    )
+    assert next(s for s in body["sources"] if s["source"] == "dividend") == {
+        "source": "dividend",
+        "status": "ok",
+        "note": None,
+    }
+
+
+async def test_the_rsu_health_note_names_the_missing_quote_and_the_refused_grant_together(
+    auth_client, db, monkeypatch
+):
+    freeze_today(monkeypatch)
+    db.add(
+        RsuGrant(
+            kind="new_hire",
+            label="2025 offer",
+            focal_year=None,
+            shares=400,
+            grant_price=Decimal("100"),
+            first_vest_date=date(2026, 3, 18),
+            cliff_pct=Decimal("0.25"),
+            vest_quantum=1,
+        )
+    )
+    db.add(
+        RsuGrant(
+            kind="refresh",
+            label="broken",
+            focal_year=None,
+            shares=100,
+            grant_price=Decimal("100"),
+            first_vest_date=date(2026, 9, 16),
+            cliff_pct=Decimal("0.30"),  # rsu_vesting refuses this row
+            vest_quantum=1,
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")).json()
+    # Both gaps, not just the first one found: fixing the ticker would otherwise reveal the
+    # refused grant only on the NEXT load.
+    assert next(s for s in body["sources"] if s["source"] == "rsu") == {
+        "source": "rsu",
+        "status": "partial",
+        "note": "no ESPP/employer ticker configured — vest values unknown; "
+        "1 grant(s) cannot be scheduled",
+    }
+
+
+async def test_one_roster_read_and_one_schedule_call_per_grant_per_get(
+    auth_client, db, monkeypatch
+):
+    """The loaders and the generators are on the same request: a roster read or a vest
+    schedule computed twice is also two chances for the health footer and the events to
+    disagree. No tax year is seeded, so `_tax_facts` bails before the withholding tracker
+    (which reads the roster and schedules grants for its OWN card) and these counts are the
+    calendar loaders' own."""
+    freeze_today(monkeypatch)
+    db.add(
+        RsuGrant(
+            kind="new_hire",
+            label="2025 offer",
+            focal_year=None,
+            shares=400,
+            grant_price=Decimal("100"),
+            first_vest_date=date(2026, 3, 18),
+            cliff_pct=Decimal("0.25"),
+            vest_quantum=1,
+        )
+    )
+    db.add(
+        PaycheckProfile(
+            person_id=(await seed_primary(db)).id,
+            effective_date=date(2026, 1, 1),
+            annual_salary=Decimal("120000"),
+        )
+    )
+    await db.commit()
+
+    roster_reads = 0
+    schedule_calls = 0
+    real_load_people = calendar_api.load_people
+    real_schedule = rsu_vesting.schedule
+
+    async def counting_load_people(db_):
+        nonlocal roster_reads
+        roster_reads += 1
+        return await real_load_people(db_)
+
+    def counting_schedule(grant):
+        nonlocal schedule_calls
+        schedule_calls += 1
+        return real_schedule(grant)
+
+    monkeypatch.setattr(calendar_api, "load_people", counting_load_people)
+    monkeypatch.setattr(rsu_vesting, "schedule", counting_schedule)
+    resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")
+    assert resp.status_code == 200
+    assert (roster_reads, schedule_calls) == (1, 1)
+
+
+async def test_the_apr_15_filing_balance_survives_a_missing_current_year_row(
+    auth_client, db, monkeypatch
+):
+    """Feb 2026 with 2025 entered and 2026 not. The estimated-payment split is unknowable
+    without a current year, but what last year's return owes is a settled fact and still
+    has to land on Apr 15."""
+    monkeypatch.setattr("app.api.calendar.product_today", lambda: FEBRUARY)
+    await seed_priceable_year(db, 2025)  # no paycheck profile: the whole bill is unwithheld
+    await db.commit()
+    body = (await auth_client.get(APRIL)).json()
+    q1 = next(e for e in body["events"] if e["key"] == "tax:2026-q1:2026-04-15")
+    [balance] = MONEY_RE.findall(q1["detail"])
+    assert q1["detail"] == f"files 2025: balance ≈ ${balance}"
+    assert (money(q1["amount"]), q1["basis"]) == (money(balance), "estimated")
+    assert money(q1["amount"]) > 0
+    # The current year really is missing, and the footer still says so.
+    assert next(s for s in body["sources"] if s["source"] == "tax") == {
+        "source": "tax",
+        "status": "partial",
+        "note": "no 2026 tax year entered — dates only",
+    }
+
+
+async def test_apr_15_carries_the_prior_years_balance_beside_this_years_share(
+    auth_client, db, monkeypatch
+):
+    """The prior-year `withholding_estimate` call end to end: with BOTH years entered, Apr
+    15 is this year's Q1 share of the safe-harbor shortfall PLUS last year's balance."""
+    monkeypatch.setattr("app.api.calendar.product_today", lambda: FEBRUARY)
+    await seed_priceable_year(db, 2025)
+    await seed_priceable_year(db, 2026)
+    db.add(
+        PaycheckProfile(
+            person_id=(await seed_primary(db)).id,
+            effective_date=date(2025, 1, 1),
+            annual_salary=Decimal("240000"),
+            withholding_pct=Decimal("0.05"),
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get(APRIL)).json()
+    q1 = next(e for e in body["events"] if e["key"] == "tax:2026-q1:2026-04-15")
+    shortfall, share, balance = (money(m) for m in MONEY_RE.findall(q1["detail"]))
+    assert q1["detail"] == (
+        f"Shortfall ${shortfall:,.2f} to the current-year leg — ${share:,.2f} of it here"
+        f" · files 2025: balance ≈ ${balance:,.2f}"
+    )
+    # In February all four 2026 payment dates are ahead, so Q1 carries a truncated quarter.
+    assert share == (shortfall / 4).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    assert balance > 0
+    assert money(q1["amount"]) == share + balance
+    assert next(s for s in body["sources"] if s["source"] == "tax")["status"] == "ok"

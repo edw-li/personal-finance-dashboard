@@ -10,10 +10,15 @@ import {
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
-import EChart from '../components/EChart'
+import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import PacePanel from '../components/paycheck/PacePanel'
-import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptions'
+import type { ApplySeed } from '../components/paycheck/paycheckScenario'
+import {
+  paycheckSankeyCsv,
+  paycheckSankeyOption,
+} from '../components/paycheck/paycheckSankeyOptions'
+import TryItPanel from '../components/paycheck/TryItPanel'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
@@ -135,31 +140,25 @@ function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: bo
  * check) — the table is the always-correct surface, so this card steps aside with a
  * sentence instead of drawing a lie.
  */
-function FlowPanel({ data, still }: { data: PaycheckBreakdownOut; still: boolean }) {
+function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
   const option = useMemo(() => paycheckSankeyOption(data), [data])
   return (
-    <section className="card">
-      <h2 className="eyebrow">
-        Where each check goes
-        <InfoHint text="The table&apos;s own figures drawn as a flow — gross splits into pre-tax deductions and taxable, taxable into withholding and post-tax, post-tax into contributions and net pay. Amounts match the table exactly." />
-      </h2>
-      {option !== null ? (
-        <>
-          <EChart
-            option={option}
-            height={320}
-            ariaLabel="Sankey flow of one paycheck from gross to net"
-            animateEntrance={!still}
-          />
-          <p className="drill-hint">
-            Gray nodes restate money in transit; colored nodes are where it lands; green
-            is what you keep. Hover a node to trace its flows.
-          </p>
-        </>
-      ) : (
-        <p className="empty-note">This profile&apos;s deductions exceed pay — see the table.</p>
-      )}
-    </section>
+    <ChartCard
+      title="Where each check goes"
+      hint="The table's own figures drawn as a flow — gross splits into pre-tax deductions and taxable, taxable into withholding and post-tax, post-tax into contributions and net pay. Amounts match the table exactly."
+      ariaLabel="Sankey flow of one paycheck from gross to net"
+      option={option}
+      empty="This profile's deductions exceed pay — see the table."
+      exportName="paycheck-flow"
+      csv={() => paycheckSankeyCsv(data)}
+      height={320}
+      footer={
+        <p className="drill-hint">
+          Gray nodes restate money in transit; colored nodes are where it lands; green is
+          what you keep. Hover a node to trace its flows.
+        </p>
+      }
+    />
   )
 }
 
@@ -266,6 +265,7 @@ function ProfilesPanel({
   onSelect,
   onShowCurrent,
   onChanged,
+  initialForm,
 }: {
   profiles: PaycheckProfileOut[]
   /** The person the CHIPS picked, or null for "the default" (the primary, or a household
@@ -284,11 +284,13 @@ function ProfilesPanel({
   onShowCurrent: () => void
   /** `deletedId` is set only by a delete, so the page can drop a selection that just died. */
   onChanged: (deletedId?: number) => void
+  /** Apply from the Try it card: the form opens on these values (a keyed remount, see the page). */
+  initialForm?: ApplySeed
 }) {
   const latest = latestOf(profiles)
   // Seeded from the FIRST payload and never re-seeded: the panel is not remounted on a
   // reload, so a replaced `profiles` array cannot clobber typed work (TaxesPage's editors).
-  const [form, setForm] = useState<ProfileFormState>(() => newProfileForm(latest))
+  const [form, setForm] = useState<ProfileFormState>(() => initialForm ?? newProfileForm(latest))
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
@@ -304,6 +306,15 @@ function ProfilesPanel({
     const next = HSA_COVERAGES.find((coverage) => coverage.value === value)
     if (next !== undefined) setForm((f) => ({ ...f, hsa_coverage: next.value }))
   }
+
+  // A seeded mount brings the date box into view and focuses it (spec §9) — DOM calls only,
+  // no state. Guarded: jsdom has no scrollIntoView.
+  useEffect(() => {
+    if (initialForm === undefined) return
+    const el = document.getElementById('paycheck-effective-date')
+    el?.scrollIntoView?.({ block: 'center' })
+    el?.focus()
+  }, [initialForm])
 
   const startEdit = (profile: PaycheckProfileOut) => {
     setEditingId(profile.id)
@@ -749,6 +760,21 @@ export default function PaycheckPage() {
   >(null)
   // Bumped by a profile write — a new profile can change whose profile is in force.
   const [householdNonce, setHouseholdNonce] = useState(0)
+  // Apply from the Try it card (2026-09-03 planning-sandboxes spec §9): the seed pre-fills the
+  // profile form by REMOUNTING the panel with it (the nonce rides its key) — an explicit user
+  // action, so replacing a half-typed row is the asked-for outcome, and no effect ever
+  // setStates to do it. The form's own Add profile stays the only write.
+  //
+  // `forKey` is the profile panel's key AT THE MOMENT OF THE CLICK. The panel remounts for
+  // reasons of its own — a person chip, the household landing and flipping `switchable` —
+  // and a seed with no owner attached would be handed to whichever form mounted next: one
+  // person's scenario pre-filling another person's new-profile row, scrolled and focused as
+  // if they had asked for it (review I1).
+  const [applySeed, setApplySeed] = useState<{
+    seed: ApplySeed
+    nonce: number
+    forKey: string
+  } | null>(null)
 
   // Two INDEPENDENT loads: a breakdown 404 must not blank the profile table, so each
   // carries its own sequence guard, its own banner and its own busy flag.
@@ -952,6 +978,10 @@ export default function PaycheckPage() {
       setFromCache(true)
       setBreakdown(peeked)
     }
+    // An applied scenario belongs to the person it was modelled for; leaving them drops it
+    // (the same reason the pinned profile is dropped just above). The key check at the mount
+    // below is the fence — this only keeps a parked seed from coming back on a switch home.
+    setApplySeed(null)
     setSelection({ profileId: null, personId })
   }
 
@@ -982,6 +1012,11 @@ export default function PaycheckPage() {
         : profiles.filter((p) => p.person_id === activePersonId),
     [profiles, switchable, activePersonId],
   )
+
+  // The profile panel's identity: the chip's pick, and whether the list is scoped yet (see
+  // the mount below). An Apply seed is only ever handed to the panel it was applied FROM.
+  const profilesKey = `${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`
+  const seedForPanel = applySeed?.forKey === profilesKey ? applySeed : null
 
   // The ONE place this page adds money up, and only because there is no server figure for
   // it in this batch. Legal here where the waterfall's lines are not (rule 9): each leg is
@@ -1019,8 +1054,9 @@ export default function PaycheckPage() {
         // used to live in `.paycheck-person-row` is this row now.
         scopeRow={<ScopeBar owner={{ joint: false, all: false }} />}
         // Nothing is loaded page-wide: the two feeds below own their own lifecycles, so the
-        // frame is only the title row and the scope row.
-        resource={{ status: 'ready' }}
+        // frame is only the title row and the scope row — plus the cached-paint flag, which
+        // every ChartCard under it reads to render still (spec §1).
+        resource={{ status: 'ready', fromCache }}
       >
         {/* TWO OR MORE answers or nothing: one person's net is not a household take-home, and
             printing it as one would be a half-truth (spec §6). It sits OUTSIDE the per-check
@@ -1083,7 +1119,22 @@ export default function PaycheckPage() {
               <PacePanel items={data.pace} />
               {/* Same payload, same busy dim: the flow can never show a different check than
                   the table above it. */}
-              <FlowPanel data={data} still={fromCache} />
+              <FlowPanel data={data} />
+              {/* The sandbox (2026-09-03 planning-sandboxes spec §9), under the flow: it models
+                  the check ABOVE it, so it takes the same payload and the same two selectors
+                  GET /breakdown was asked with. Nothing it does writes. */}
+              <TryItPanel
+                profileId={selection.profileId}
+                personId={selection.personId}
+                breakdown={data}
+                onApply={(seed) =>
+                  setApplySeed((current) => ({
+                    seed,
+                    nonce: (current?.nonce ?? 0) + 1,
+                    forKey: profilesKey,
+                  }))
+                }
+              />
             </>
           )}
         </Feed>
@@ -1112,7 +1163,7 @@ export default function PaycheckPage() {
                household resolves re-seeds from the primary's own latest row; the only
                typing that can be lost is whatever landed in that first instant. */
             <ProfilesPanel
-              key={`${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`}
+              key={`${profilesKey}:${seedForPanel?.nonce ?? 0}`}
               profiles={shownProfiles}
               personId={selection.personId}
               shownId={breakdown?.profile.id ?? null}
@@ -1120,6 +1171,7 @@ export default function PaycheckPage() {
               onSelect={selectProfile}
               onShowCurrent={showCurrent}
               onChanged={onProfilesChanged}
+              initialForm={seedForPanel?.seed}
             />
           )}
         </Feed>

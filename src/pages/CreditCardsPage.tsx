@@ -11,8 +11,7 @@ import { fetchHousehold } from '../api/household'
 import { fetchAccounts } from '../api/netWorth'
 import { fetchCategories, fetchMatrix } from '../api/spending'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
-import EChart from '../components/EChart'
-import InfoHint from '../components/InfoHint'
+import ChartCard from '../components/ChartCard'
 import StatTile from '../components/StatTile'
 import CardDetail from '../components/creditcards/CardDetail'
 import CardsPanel from '../components/creditcards/CardsPanel'
@@ -21,8 +20,12 @@ import RewardsMatrix from '../components/creditcards/RewardsMatrix'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
-import { cardValueChartOption } from '../components/creditcards/cardValueChartOptions'
-import { creditLineChartOption, limitMonths } from '../components/creditcards/creditLineChartOptions'
+import { cardValueChartOption, cardValueCsv } from '../components/creditcards/cardValueChartOptions'
+import {
+  creditLineChartOption,
+  creditLineCsv,
+  limitMonths,
+} from '../components/creditcards/creditLineChartOptions'
 import {
   householdAdvantage,
   optimize,
@@ -285,6 +288,9 @@ export default function CreditCardsPage() {
   )
   const droppable = valueRows.filter((r) => r.net <= 0).map((r) => r.name)
 
+  // The user's legend picks, mirrored back into the option (F9): a revalidation rebuilds it,
+  // and without this every hidden card's line would come back.
+  const [lineLegend, setLineLegend] = useState<Record<string, boolean>>({})
   const lineCards = useMemo(
     () =>
       activeCards
@@ -296,9 +302,12 @@ export default function CreditCardsPage() {
   const lineOption = useMemo(
     () =>
       lineCards.length > 0
-        ? creditLineChartOption(lineCards, lineMonths, { includeTotal: lineCards.length > 1 })
+        ? creditLineChartOption(lineCards, lineMonths, {
+            includeTotal: lineCards.length > 1,
+            selected: lineLegend,
+          })
         : null,
-    [lineCards, lineMonths],
+    [lineCards, lineMonths, lineLegend],
   )
 
   return (
@@ -433,67 +442,45 @@ export default function CreditCardsPage() {
                 )
               )}
 
-              {valueOption && !hasWeights && (
-                <div className="card span-12">
-                  <h2 className="eyebrow">
-                    Is each card worth keeping? (est.)
-                    <InfoHint text="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. Needs at least one weighted category to say anything." />
-                  </h2>
-                  <p className="empty-note">
-                    No spend weights yet, so the optimizer values every card at $0 and nothing
-                    on this page is a verdict. In Categories &amp; weights below, edit each
-                    reward category and either pick its spending category — its trailing
-                    12-month spend becomes the weight, split evenly when several rows share
-                    one — or type an annual spend override. Rows with neither stay out of the
-                    $ math.
-                  </p>
-                </div>
-              )}
-              {valueOption && hasWeights && (
-                <div className="card span-12">
-                  <h2 className="eyebrow">
-                    Is each card worth keeping? (est.)
-                    <InfoHint text="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. A $0 bar means the rest of the lineup already catches that spend." />
-                  </h2>
-                  <EChart
-                    option={valueOption}
-                    height={Math.max(140, valueRows.length * 34 + 70)}
-                    ariaLabel="Horizontal bars of each card's estimated net annual value"
-                    animateEntrance={!fromCache}
-                  />
-                  {droppable.length > 0 && (
+              <ChartCard
+                title="Is each card worth keeping? (est.)"
+                hint="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. A $0 bar means the rest of the lineup already catches that spend. Needs at least one weighted category to say anything."
+                ariaLabel="Horizontal bars of each card's estimated net annual value"
+                option={hasWeights ? valueOption : null}
+                empty={
+                  hasWeights
+                    ? 'No cards to value yet.'
+                    : 'No spend weights yet, so the optimizer values every card at $0 and nothing on this page is a verdict. In Categories & weights below, edit each reward category and either pick its spending category — its trailing 12-month spend becomes the weight, split evenly when several rows share one — or type an annual spend override. Rows with neither stay out of the $ math.'
+                }
+                exportName="card-value"
+                csv={() => cardValueCsv(valueRows)}
+                height={Math.max(140, valueRows.length * 34 + 70)}
+                footer={
+                  hasWeights && droppable.length > 0 ? (
                     <p className="drill-hint">
-                      Droppable on these numbers: {droppable.join(', ')} — zero or negative net value
-                      after fees.
+                      Droppable on these numbers: {droppable.join(', ')} — zero or negative net
+                      value after fees.
                       {unweightedCount > 0 &&
                         ` Excludes ${unweightedCount} unweighted ${
                           unweightedCount === 1 ? 'category' : 'categories'
                         }.`}
                     </p>
-                  )}
-                </div>
-              )}
-
-              <div className="card span-12">
-                <h2 className="eyebrow">
-                  Credit line history
-                  <InfoHint text="Each card's limit as a step line — level between changes, stepping at each dated event — plus the total line across active cards." />
-                </h2>
-                {lineOption ? (
-                  <EChart
-                    option={lineOption}
-                    height={300}
-                    ariaLabel="Step chart of credit limits over time per card, with the total"
-                    animateEntrance={!fromCache}
-                  />
-                ) : (
-                  !loading && (
-                    <div className="empty-note">
-                      No limit history yet — open a card's details and add its opening credit line.
-                    </div>
-                  )
-                )}
-              </div>
+                  ) : undefined
+                }
+              />
+              <ChartCard
+                title="Credit line history"
+                hint="Each card's limit as a step line — level between changes, stepping at each dated event — plus the total line across active cards."
+                ariaLabel="Step chart of credit limits over time per card, with the total"
+                option={lineOption}
+                empty="No limit history yet — open a card's details and add its opening credit line."
+                exportName="credit-lines"
+                csv={() => creditLineCsv(lineCards, lineMonths)}
+                height={300}
+                onLegendChange={(selected) =>
+                  setLineLegend((current) => ({ ...current, ...selected }))
+                }
+              />
 
               {cards !== null && (
                 <CardsPanel

@@ -3,7 +3,11 @@
 // decisions of its own). Number() here is display-only — the server's Decimal strings
 // are parsed once and never handed back to the API (format.ts's rule).
 import type { EChartsOption } from '../../charts/echarts'
+import { LINE, WASH, dateAxis, grid, moneyAxis } from '../../charts/grammar'
+import { legendFor } from '../../charts/legend'
 import { INK, MUTED, PALETTE } from '../../charts/theme'
+import { axisTooltip } from '../../charts/tooltip'
+import type { AxisTooltipParam } from '../../charts/tooltip'
 import type {
   DividendEventOut,
   DividendOut,
@@ -15,7 +19,6 @@ import type { ExportTable } from '../../utils/download'
 import {
   escapeHtml,
   formatCurrency,
-  formatCurrencyCompact,
   formatDate,
   formatShares,
 } from '../../utils/format'
@@ -178,15 +181,8 @@ export function buildEventMarkers(
     })
 }
 
-// Axis-tooltip params subset the formatter reads (the runtime shape for trigger:'axis'
-// is an array of these; echarts types the callback param as a much wider union).
-interface AxisTooltipParam {
-  seriesName?: string
-  marker?: string
-  axisValueLabel?: string
-  value?: unknown
-  data?: unknown
-}
+// The axis-tooltip param subset both formatters read is the grammar's own
+// (charts/tooltip.ts AxisTooltipParam, imported above) — one shape, one definition.
 
 function rowValue(value: unknown): number | null {
   // Line rows carry plain numbers (null on the padded live category); the live
@@ -229,10 +225,21 @@ export function historyTooltipFormatter(params: unknown): string {
   ].join('<br/>')
 }
 
+/** The Events row's tooltip lines: a count first when clustered, then each event's text —
+ *  tickers are server text, so escaped (the annotation callback escapes its own output). */
+export function eventLines(param: AxisTooltipParam): string[] {
+  const events = (param.data as { events?: { text: string }[] } | undefined)?.events ?? []
+  return [
+    ...(events.length > 1 ? [`<strong>${events.length} events</strong>`] : []),
+    ...events.map((event) => escapeHtml(event.text)),
+  ]
+}
+
 export function portfolioHistoryOption(
   history: PortfolioHistory,
   live: LivePoint | null,
   events: ChartEventPoint[] | null = null,
+  { selected }: { selected?: Record<string, boolean> } = {},
 ): EChartsOption | null {
   if (history.dates.length < 2) return null
   const lastDate = history.dates[history.dates.length - 1]
@@ -261,13 +268,12 @@ export function portfolioHistoryOption(
   // basis=slot 2 orange, S&P=slot 3 aqua, contribution benchmark=slot 4 yellow. The wash
   // rides the value line ONLY — the Excel original's three overlapping opaque areas
   // occlude each other (spec: rejected).
+  // LINE carries the 2px/no-symbol/focus posture (§9); WASH is the house visible-axis fill.
   const lineSeries = (name: string, values: (string | null)[], color: string, wash: boolean) => ({
-    type: 'line' as const,
+    ...LINE,
     name,
-    symbol: 'none' as const,
-    lineStyle: { width: 2 },
     color,
-    ...(wash ? { areaStyle: { opacity: 0.12 } } : {}),
+    ...(wash ? WASH : {}),
     data: lineData(values),
   })
 
@@ -277,78 +283,83 @@ export function portfolioHistoryOption(
   const benchmark = history.benchmark ?? []
   const showBenchmark = benchmark.some((v) => v !== null)
 
+  const series = [
+    lineSeries('Portfolio value', history.market_value, PALETTE[0], true),
+    lineSeries('Cost basis', history.cost_basis, PALETTE[1], false),
+    lineSeries('S&P 500 baseline', history.sp500, PALETTE[2], false),
+    // Legend-only disambiguation (spec §4): the two benchmark names must explain
+    // themselves side by side — "baseline" = starting balance only, this = every flow.
+    ...(showBenchmark
+      ? [lineSeries('VOO (your contributions)', benchmark, PALETTE[3], false)]
+      : []),
+    ...(events !== null && events.length > 0
+      ? [
+          {
+            // Plain scatter in MUTED riding the value line — an annotation layer, not
+            // a data hue, and the ripple stays reserved for the live ping (the
+            // net-worth notes-diamond rule). Legend-toggleable, ON by default: no
+            // legend.selected entry ships for it.
+            type: 'scatter' as const,
+            name: EVENTS_SERIES,
+            color: MUTED,
+            symbolSize: 9,
+            itemStyle: { borderColor: INK, borderWidth: 1 },
+            z: 11,
+            data: events,
+          },
+        ]
+      : []),
+    ...(livePt
+      ? [
+          {
+            // The live point wears the SAME blue — same entity, fresher reading; a new
+            // hue would read as a fourth data series. The ripple is what says "live".
+            type: 'effectScatter' as const,
+            name: 'Live',
+            color: PALETTE[0],
+            symbolSize: 9,
+            rippleEffect: { brushType: 'stroke' as const, scale: 3 },
+            data: [[extendAxis ? liveLabel : lastLabel, livePt.value]] as [string, number][],
+            ...(extendAxis
+              ? {
+                  // Dashed connector from the line's end to the ping (dashed =
+                  // provisional). A markLine, not a fifth series: it toggles with
+                  // 'Live' in the legend and stays out of the axis tooltip.
+                  markLine: {
+                    silent: true,
+                    symbol: 'none' as const,
+                    lineStyle: { type: 'dashed' as const, width: 2, color: PALETTE[0] },
+                    label: { show: false },
+                    // A 2D markLine datum is a 2-TUPLE (from, to), not an array —
+                    // without the assertion the literal widens and tsc rejects it.
+                    data: [
+                      [
+                        { coord: [lastLabel, lastValue] },
+                        { coord: [liveLabel, livePt.value] },
+                      ] as [{ coord: [string, number] }, { coord: [string, number] }],
+                    ],
+                  },
+                }
+              : {}),
+          },
+        ]
+      : []),
+  ]
+
   return {
-    grid: { left: 70, right: 16, top: 32, bottom: 28 },
-    legend: { top: 0 },
-    xAxis: { type: 'category', data: categories, boundaryGap: false },
-    yAxis: {
-      // No scale:true — a washed area over a visible axis needs the honest zero baseline.
-      type: 'value',
-      axisLabel: { formatter: (v: number) => formatCurrencyCompact(v) },
-    },
-    tooltip: { trigger: 'axis', formatter: historyTooltipFormatter },
-    series: [
-      lineSeries('Portfolio value', history.market_value, PALETTE[0], true),
-      lineSeries('Cost basis', history.cost_basis, PALETTE[1], false),
-      lineSeries('S&P 500 baseline', history.sp500, PALETTE[2], false),
-      // Legend-only disambiguation (spec §4): the two benchmark names must explain
-      // themselves side by side — "baseline" = starting balance only, this = every flow.
-      ...(showBenchmark
-        ? [lineSeries('VOO (your contributions)', benchmark, PALETTE[3], false)]
-        : []),
-      ...(events !== null && events.length > 0
-        ? [
-            {
-              // Plain scatter in MUTED riding the value line — an annotation layer, not
-              // a data hue, and the ripple stays reserved for the live ping (the
-              // net-worth notes-diamond rule). Legend-toggleable, ON by default: no
-              // legend.selected entry ships for it.
-              type: 'scatter' as const,
-              name: EVENTS_SERIES,
-              color: MUTED,
-              symbolSize: 9,
-              itemStyle: { borderColor: INK, borderWidth: 1 },
-              z: 11,
-              data: events,
-            },
-          ]
-        : []),
-      ...(livePt
-        ? [
-            {
-              // The live point wears the SAME blue — same entity, fresher reading; a new
-              // hue would read as a fourth data series. The ripple is what says "live".
-              type: 'effectScatter' as const,
-              name: 'Live',
-              color: PALETTE[0],
-              symbolSize: 9,
-              rippleEffect: { brushType: 'stroke' as const, scale: 3 },
-              data: [[extendAxis ? liveLabel : lastLabel, livePt.value]] as [string, number][],
-              ...(extendAxis
-                ? {
-                    // Dashed connector from the line's end to the ping (dashed =
-                    // provisional). A markLine, not a fifth series: it toggles with
-                    // 'Live' in the legend and stays out of the axis tooltip.
-                    markLine: {
-                      silent: true,
-                      symbol: 'none' as const,
-                      lineStyle: { type: 'dashed' as const, width: 2, color: PALETTE[0] },
-                      label: { show: false },
-                      // A 2D markLine datum is a 2-TUPLE (from, to), not an array —
-                      // without the assertion the literal widens and tsc rejects it.
-                      data: [
-                        [
-                          { coord: [lastLabel, lastValue] },
-                          { coord: [liveLabel, livePt.value] },
-                        ] as [{ coord: [string, number] }, { coord: [string, number] }],
-                      ],
-                    },
-                  }
-                : {}),
-            },
-          ]
-        : []),
-    ],
+    grid: grid(),
+    legend: legendFor(series.length, selected),
+    xAxis: dateAxis(categories),
+    // No scale:true — a washed area over a visible axis needs the honest zero baseline.
+    yAxis: moneyAxis(),
+    // F7: the Events row expands into its clustered lines instead of printing a y that is
+    // chart geometry, not a figure. historyTooltipFormatter stays exported and tested (C7).
+    tooltip: axisTooltip({
+      unit: 'money',
+      annotationSeries: [EVENTS_SERIES],
+      annotations: eventLines,
+    }),
+    series,
   }
 }
 

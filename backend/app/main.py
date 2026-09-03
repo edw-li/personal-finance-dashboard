@@ -8,6 +8,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api import (
+    activity,
     app_settings,
     assistant,
     auth,
@@ -24,12 +25,17 @@ from app.api import (
     overview,
     paycheck,
     portfolio,
+    prefs,
     prices,
     projection,
     spending,
     system,
     taxes,
 )
+
+# Aliased: the data-health router module and this file's liveness `def health()` below
+# would otherwise share the name, and the last binding wins (2026-09-03 lifecycle L3).
+from app.api import health as health_api
 from app.config import settings
 from app.rate_limit import limiter
 
@@ -81,6 +87,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(import_.router, prefix="/api/v1")
+app.include_router(activity.router, prefix="/api/v1")
 app.include_router(net_worth.router, prefix="/api/v1")
 app.include_router(household.router, prefix="/api/v1")
 app.include_router(spending.router, prefix="/api/v1")
@@ -96,7 +103,9 @@ app.include_router(coverage.router, prefix="/api/v1")
 app.include_router(credit_cards.router, prefix="/api/v1")
 app.include_router(projection.router, prefix="/api/v1")
 app.include_router(app_settings.router, prefix="/api/v1")
+app.include_router(prefs.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
+app.include_router(health_api.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
 app.include_router(overview.router, prefix="/api/v1")
 app.include_router(assistant.router, prefix="/api/v1")

@@ -6,7 +6,10 @@ import type {
   PortfolioHistory,
   TransactionOut,
 } from '../../types/api'
+import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import { MUTED, PALETTE } from '../../charts/theme'
+import { isGrammarTooltip } from '../../charts/tooltip'
+import { tooltipRows } from '../../testing/tooltipRows'
 import {
   buildEventMarkers,
   EVENTS_SERIES,
@@ -35,6 +38,17 @@ const EMPTY: PortfolioHistory = {
   sp500: [],
   benchmark: [],
 }
+
+// Module-level: both the Events describe below and the grammar describe above it read
+// these, and a const declared inside one describe is not in scope for the other.
+const EVENT_POINTS = [
+  {
+    value: ['Aug 3, 2026', 710000.5] as [string, number],
+    symbol: 'triangle' as const,
+    symbolRotate: 0,
+    events: [{ text: 'Buy NVDA — 10 sh · Aug 4, 2026' }],
+  },
+]
 
 // --- option readers (allocationChartOptions.test.ts posture) ---------------------------
 interface SeriesLike {
@@ -163,6 +177,66 @@ describe('portfolioHistoryOption', () => {
         (s) => s.name,
       ),
     ).toEqual(['Portfolio value', 'Cost basis', 'S&P 500 baseline'])
+  })
+})
+
+describe('portfolioHistoryOption — grammar', () => {
+  const read = (option: unknown) =>
+    option as {
+      grid: unknown
+      legend: { type: string; selected?: Record<string, boolean> }
+      xAxis: { boundaryGap?: boolean; axisLabel?: { interval?: number } }
+      yAxis: { axisLabel: { formatter: unknown } }
+      tooltip: { formatter: (p: unknown) => string; axisPointer?: unknown }
+      series: { emphasis?: unknown }[]
+    }
+
+  it('wears the money grid, compact ticks, every-date labels and a plain legend with the page picks', () => {
+    const option = read(
+      portfolioHistoryOption(history(), null, null, { selected: { 'Cost basis': false } }),
+    )
+    expect(option.grid).toEqual(GRID_VARIANTS.default)
+    expect(option.xAxis.boundaryGap).toBe(false)
+    expect(option.xAxis.axisLabel).toEqual({ interval: 0 }) // three points
+    expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
+    expect(option.legend.type).toBe('plain')
+    expect(option.legend.selected).toEqual({ 'Cost basis': false })
+    expect(option.series[0].emphasis).toEqual({ focus: 'series' })
+    expect(read(portfolioHistoryOption(history(), null)).legend.selected).toBeUndefined()
+  })
+
+  it('F7: value rows in series order, null rows dropped, Events expand into escaped lines with a count', () => {
+    const option = read(portfolioHistoryOption(history(), null, EVENT_POINTS))
+    expect(isGrammarTooltip(option.tooltip.formatter)).toBe(true)
+    expect(option.tooltip.axisPointer).toBeUndefined()
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        {
+          seriesName: 'Portfolio value', seriesType: 'line', axisValueLabel: 'Aug 3, 2026',
+          value: 710000.5, color: PALETTE[0],
+        },
+        { seriesName: 'Cost basis', seriesType: 'line', value: null, color: PALETTE[1] },
+        {
+          seriesName: EVENTS_SERIES, seriesType: 'scatter', value: ['Aug 3, 2026', 710000.5],
+          color: MUTED,
+          data: {
+            events: [
+              { text: 'Buy <X> — 10 sh · Aug 4, 2026' },
+              { text: 'Dividend VOO — $12.00 · Aug 5, 2026' },
+            ],
+          },
+        },
+      ]),
+    )
+    expect(parsed.head).toBe('Aug 3, 2026')
+    expect(parsed.rows.map((r) => [r.label, r.value])).toEqual([
+      ['Portfolio value', '$710,000.50'],
+    ])
+    expect(parsed.notes).toEqual([
+      '<strong>2 events</strong>',
+      'Buy &lt;X&gt; — 10 sh · Aug 4, 2026',
+      'Dividend VOO — $12.00 · Aug 5, 2026',
+    ])
   })
 })
 
@@ -423,15 +497,6 @@ describe('buildEventMarkers', () => {
 })
 
 describe('portfolioHistoryOption with events', () => {
-  const EVENT_POINTS = [
-    {
-      value: ['Aug 3, 2026', 710000.5] as [string, number],
-      symbol: 'triangle' as const,
-      symbolRotate: 0,
-      events: [{ text: 'Buy NVDA — 10 sh · Aug 4, 2026' }],
-    },
-  ]
-
   it('appends a MUTED plain-scatter Events series, legend-toggleable and on by default', () => {
     const option = portfolioHistoryOption(history(), null, EVENT_POINTS)
     const series = seriesOf(option!)

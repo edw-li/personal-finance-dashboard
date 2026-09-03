@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from unittest.mock import ANY
 
 from app.models import (
     Account,
@@ -195,8 +196,10 @@ async def test_put_spending_month_upserts_and_net_pay_optional(auth_client, db):
         "unchanged": 0,
         "net_pay_set": True,
         "net_pay_cleared": False,
-        "batch_id": None,
+        # Rows changed, so the PUT logged a change batch (2026-09-03 data-lifecycle spec 9).
+        "batch_id": ANY,
     }
+    assert resp.json()["batch_id"] is not None
     read = (await auth_client.get(put)).json()
     assert read["net_pay"] == "9000.01"  # HALF_UP
     assert {a["category_id"]: a["amount"] for a in read["amounts"]}[food.id] == "123.46"

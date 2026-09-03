@@ -9,7 +9,7 @@ import {
 } from '../../api/creditCards'
 import { fetchMonthBalances, fetchSummary } from '../../api/netWorth'
 import AmountInput from '../AmountInput'
-import EChart from '../EChart'
+import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import { useToast } from '../ToastProvider'
@@ -22,7 +22,7 @@ import type {
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatMonth, formatPct } from '../../utils/format'
 import { currentMonthIso } from '../../utils/months'
-import { creditLineChartOption, limitMonths } from './creditLineChartOptions'
+import { creditLineChartOption, creditLineCsv, limitMonths } from './creditLineChartOptions'
 import type { OptimizerResult } from './rewardsMath'
 import { FeedBanner } from '../shell/Feed'
 import './carddetail.css'
@@ -125,6 +125,9 @@ export default function CardDetail({
       label,
       annual_value: canonicalAmount(amount, { expressions: false }),
       counts: true,
+      // A new credit resets with the calendar year — the common case, and the only one
+      // that lands on the calendar without an opened date on the card.
+      reset_cadence: 'calendar',
     })
       .then(() => {
         setCreditForm({ label: '', annual_value: '' })
@@ -145,6 +148,25 @@ export default function CardDetail({
       label: credit.label,
       annual_value: credit.annual_value,
       counts: !credit.counts,
+      reset_cadence: credit.reset_cadence,
+    })
+      .then(() => onChanged())
+      .catch((err: unknown) => setError(message(err, 'Update failed')))
+      .finally(() => setLocalBusy(false))
+  }
+
+  const toggleCadence = (creditId: number) => {
+    const credit = card.credits.find((c) => c.id === creditId)
+    if (!credit) return
+    setLocalBusy(true)
+    setError(null)
+    // Full-object PATCH (house style): only the cadence changes, everything else travels
+    // back verbatim.
+    updateCardCredit(creditId, {
+      label: credit.label,
+      annual_value: credit.annual_value,
+      counts: credit.counts,
+      reset_cadence: credit.reset_cadence === 'calendar' ? 'anniversary' : 'calendar',
     })
       .then(() => onChanged())
       .catch((err: unknown) => setError(message(err, 'Update failed')))
@@ -169,6 +191,7 @@ export default function CardDetail({
                 label: credit.label,
                 annual_value: credit.annual_value,
                 counts: credit.counts,
+                reset_cadence: credit.reset_cadence,
               })
                 .then(() => onChanged())
                 .catch(() => toast.error(`Could not restore the ${credit.label} credit`))
@@ -296,6 +319,21 @@ export default function CardDetail({
                 <button
                   type="button"
                   className="button"
+                  aria-pressed={credit.reset_cadence === 'anniversary'}
+                  aria-label={`${credit.label} resets on the card anniversary`}
+                  title={
+                    card.opened_on === null && credit.reset_cadence === 'anniversary'
+                      ? "Needs the card's opened date to land on the calendar"
+                      : 'When the credit resets — the calendar dates its reset event by this'
+                  }
+                  disabled={anyBusy}
+                  onClick={() => toggleCadence(credit.id)}
+                >
+                  {credit.reset_cadence === 'anniversary' ? 'Resets on anniversary' : 'Resets Jan 1'}
+                </button>
+                <button
+                  type="button"
+                  className="button"
                   aria-pressed={credit.counts}
                   aria-label={`${credit.label} counts toward the math`}
                   disabled={anyBusy}
@@ -357,20 +395,23 @@ export default function CardDetail({
           )}
         </div>
 
-        <div className="card span-6">
-          <h2 className="eyebrow">
-            Credit line
-            <InfoHint text="Dated limit changes; the newest is the current line. Steps, not slopes — the sparkline holds level between events." />
-          </h2>
-          {sparkOption ? (
-            <EChart
-              option={sparkOption}
-              height={180}
-              ariaLabel={`Step chart of ${card.name}'s credit limit over time`}
-            />
-          ) : (
-            <p className="empty-note">No limit history yet — add the opening line below.</p>
-          )}
+        <ChartCard
+          span={6}
+          title="Credit line"
+          hint="Dated limit changes; the newest is the current line. Steps, not slopes — the line holds level between events."
+          ariaLabel={`Step chart of ${card.name}'s credit limit over time`}
+          option={sparkOption}
+          empty="No limit history yet — add the opening line below."
+          exportName={`${card.slug}-credit-line`}
+          csv={() =>
+            creditLineCsv(
+              [{ name: card.name, events: card.limit_events }],
+              limitMonths([{ name: card.name, events: card.limit_events }], currentMonthIso()),
+            )
+          }
+          height={180}
+          footer={
+            <>
           <table className="data-table limit-table">
             <thead>
               <tr>
@@ -452,7 +493,9 @@ export default function CardDetail({
               latest net-worth snapshot.
             </p>
           )}
-        </div>
+            </>
+          }
+        />
       </div>
     </div>
   )

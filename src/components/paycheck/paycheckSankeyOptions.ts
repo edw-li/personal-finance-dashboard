@@ -5,10 +5,11 @@
 // reconciliation drift between a node's table figure and its links' sum is invisible at
 // link-width scale; the tooltip reads the table figure (charts/sankey.ts factory).
 import type { EChartsOption } from '../../charts/echarts'
-import { SANKEY_MARKS, makeSankeyTooltipFormatter } from '../../charts/sankey'
+import { SANKEY_MARKS, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { MUTED, PALETTE, POSITIVE } from '../../charts/theme'
 import type { PaycheckBreakdownOut } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 
 type FlowKey = Exclude<keyof PaycheckBreakdownOut, 'profile' | 'warnings' | 'monthly_net'>
 
@@ -98,4 +99,15 @@ export function paycheckSankeyOption(data: PaycheckBreakdownOut): EChartsOption 
     tooltip: { trigger: 'item', formatter: makeSankeyTooltipFormatter(nodes, links) },
     series: [{ ...SANKEY_MARKS, data: nodes, links }],
   }
+}
+
+/** The flow as a table (F12): the same nodes and links the chart draws — null option → no rows. */
+export function paycheckSankeyCsv(data: PaycheckBreakdownOut): ExportTable {
+  const option = paycheckSankeyOption(data) as {
+    series?: { data: SankeyNode[]; links: SankeyLink[] }[]
+  } | null
+  const series = option?.series?.[0]
+  return series === undefined
+    ? { headers: ['Kind', 'Source', 'Target', 'Value'], rows: [] }
+    : sankeyCsv(series.data, series.links)
 }

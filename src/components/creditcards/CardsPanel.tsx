@@ -272,6 +272,7 @@ export default function CardsPanel({
                       label: credit.label,
                       annual_value: credit.annual_value,
                       counts: credit.counts,
+                      reset_cadence: credit.reset_cadence,
                     })
                   for (const event of card.limit_events)
                     await createLimitEvent(restored.id, {
@@ -290,6 +291,11 @@ export default function CardsPanel({
       .catch((err: unknown) => setError(message(err, 'Delete failed')))
       .finally(() => setBusy(false))
   }
+
+  // A card with no opened date has no anniversary, so the calendar can date neither its
+  // fee nor an anniversary-cadence credit reset (2026-09-03 calendar spec §6) — the one
+  // stored gap on this page that silently costs events elsewhere, so the roster says so.
+  const undated = cards.filter((card) => card.is_active && card.opened_on === null)
 
   return (
     <section className="card span-12">
@@ -509,6 +515,15 @@ export default function CardsPanel({
             ))}
           </tbody>
         </table>
+      )}
+      {/* Sibling of the ternary, not inside it: `undated` derives from `cards`, so it is
+          empty exactly when the empty-note above is showing. */}
+      {undated.length > 0 && (
+        <p className="drill-hint">
+          {undated.length === 1 ? '1 active card has' : `${undated.length} active cards have`} no
+          opened date — add one ({undated.map((c) => c.name).join(', ')}) so fees, anniversaries
+          and credit resets reach the calendar.
+        </p>
       )}
     </section>
   )

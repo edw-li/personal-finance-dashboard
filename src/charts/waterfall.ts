@@ -5,7 +5,7 @@
 // waterfall and the net-worth "What moved" bridge. Depends on: grammar.ts, tooltip.ts, theme.ts.
 import type { ExportTable } from '../utils/download'
 import { formatCurrency, formatCurrencyCompact } from '../utils/format'
-import { capLabel, roundTo } from './grammar'
+import { capLabel, roundTo, stagger } from './grammar'
 import { INK, SURFACE } from './theme'
 import { itemTooltip } from './tooltip'
 
@@ -84,6 +84,9 @@ export function waterfallSeries(steps: WaterfallStep[]) {
     type: 'bar' as const,
     stack: 'waterfall',
     stackStrategy: 'all' as const,
+    // Series index 1 of the stack (§11): 12ms behind the transparent floor it rides on,
+    // which is only ever felt as the walk starting a frame later.
+    ...stagger(1),
     barMaxWidth: 24,
     itemStyle: { borderColor: SURFACE, borderWidth: 1 },
     emphasis: { itemStyle: { borderColor: INK } },

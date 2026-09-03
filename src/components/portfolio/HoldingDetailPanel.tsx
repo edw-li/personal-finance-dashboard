@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import { fetchPriceHistory } from '../../api/prices'
-import ChartZoomHint from '../ChartZoomHint'
-import EChart from '../EChart'
-import InfoHint from '../InfoHint'
+import ChartCard from '../ChartCard'
+import Segmented from '../shell/Segmented'
 import type { DividendOut, HoldingOut, PricePoint, TransactionOut } from '../../types/api'
 import {
   formatCurrency,
@@ -12,20 +11,18 @@ import {
   formatPct,
   formatShares,
 } from '../../utils/format'
+import { todayIso } from '../../utils/months'
 import { TYPE_LABELS } from './allocationChartOptions'
-import { priceHistoryOption } from './priceChartOptions'
-import { FeedBanner } from '../shell/Feed'
+import { buildEventMarkers } from './historyChartOptions'
+import {
+  PRICE_SPANS,
+  priceHistoryCsv,
+  priceHistoryOption,
+  priceWindowSummary,
+  reachableSpans,
+} from './priceChartOptions'
+import type { SpanDays } from './priceChartOptions'
 import './portfolio.css'
-
-// Fetch windows for the price chart — these move the REQUEST (?days=), not a zoom: the
-// history table accumulates forward from the first refresh, so early on all three return
-// the same ~1 year and diverge as the table grows.
-const SPANS = [
-  { days: 365, label: '1Y' },
-  { days: 1095, label: '3Y' },
-  { days: 3650, label: 'Max' },
-] as const
-type SpanDays = (typeof SPANS)[number]['days']
 
 // Same three-liner as HoldingsTable's private tone() — the tone-rule copies are a known,
 // tracked cleanup (Plan 6 residuals); this file joins the family rather than forking it.
@@ -122,7 +119,35 @@ export default function HoldingDetailPanel({
     () => dividends.filter((d) => d.security_id === holding.security_id),
     [dividends, holding.security_id],
   )
-  const chart = useMemo(() => (points === null ? null : priceHistoryOption(points)), [points])
+  // Dated buys/sells/dividends for THIS security, snapped to the daily bars — the performance
+  // chart's marker grammar over a finer axis (F4).
+  const events = useMemo(
+    () =>
+      points === null
+        ? []
+        : buildEventMarkers(
+            { dates: points.map((p) => p.d), market_value: points.map((p) => p.c) },
+            rows,
+            paid,
+            new Map([[holding.security_id, holding.ticker]]),
+          ),
+    [points, rows, paid, holding.security_id, holding.ticker],
+  )
+  const chart = useMemo(
+    () => (points === null ? null : priceHistoryOption({ points, avgCost: holding.avg_cost, events })),
+    [points, holding.avg_cost, events],
+  )
+  const summary =
+    points === null ? null : priceWindowSummary(points, span.days, todayIso())
+  // Chips the history cannot reach are disabled (F4): a response shorter than it asked for
+  // reveals the whole extent, and every longer span would fetch the same rows again.
+  const reachable = useMemo(
+    () =>
+      points === null
+        ? { 365: true, 1095: true, 3650: true }
+        : reachableSpans(points, span.days, todayIso()),
+    [points, span.days],
+  )
 
   // WHY the XIRR cell is blank, said next to the numbers: the backend computes XIRR only
   // when every transaction carries a date (imported rows carry none), and it never returns
@@ -221,49 +246,67 @@ export default function HoldingDetailPanel({
         </Link>
       </p>
 
-      <div className="panel-title-row">
-        <h3 className="eyebrow">
-          Price history
-          <InfoHint text="Daily closes for this security over the chosen window; manual-priced securities accrue one point per hand entry." />
-        </h3>
-        <div className="segmented" role="group" aria-label="History window">
-          {SPANS.map(({ days, label }) => (
+      <ChartCard
+        title="Price history"
+        hint="Daily closes for this security over the chosen window against your average cost — the wash reads green above it and red below; markers are dated buys, sells and dividends. Manual-priced securities accrue one point per hand entry."
+        ariaLabel={`Line chart of ${ticker}'s daily closing prices against the average cost`}
+        option={chart}
+        empty={`Not enough price history to chart yet${
+          holding.is_manual_priced ? ' — manual pricing adds one point per entry.' : '.'
+        }`}
+        exportName={`${ticker.toLowerCase()}-price-history`}
+        csv={points === null ? undefined : () => priceHistoryCsv(points)}
+        height={260}
+        zoomable
+        busy={busy}
+        // The stale cue only when there IS something stale: a span-change failure leaves the
+        // previous window's chart up, a first load leaves nothing.
+        error={
+          error === null
+            ? null
+            : points === null
+              ? error
+              : `${error} — the chart may be showing the previous window.`
+        }
+        controls={
+          <Segmented
+            variant="toggle"
+            size="sm"
+            ariaLabel="History window"
+            options={PRICE_SPANS.map((s) => ({
+              value: String(s.days),
+              label: s.label,
+              disabled: !reachable[s.days],
+            }))}
+            value={String(span.days)}
+            onChange={(value) => pickSpan(Number(value) as SpanDays)}
+          />
+        }
+        actions={
+          error !== null ? (
             <button
-              key={days}
               type="button"
-              className={span.days === days ? 'active' : ''}
-              aria-pressed={span.days === days}
-              onClick={() => pickSpan(days)}
+              className="button"
+              aria-label="Retry loading price history"
+              onClick={retry}
             >
-              {label}
+              Retry
             </button>
-          ))}
-        </div>
-      </div>
-      {/* Guarded rather than handed a bare expression: the stale cue only when there IS
-          something stale — a span-change failure leaves the previous window's chart up, a
-          first load leaves nothing — and the composed sentence would read "null — …" for a
-          null error. */}
-      {error && (
-        <FeedBanner
-          error={points === null ? error : `${error} — the chart may be showing the previous window.`}
-          retry={retry}
-          retryLabel="Retry loading price history"
-        />
-      )}
-      {points === null ? (
-        busy && <p className="empty-note">Loading price history…</p>
-      ) : chart ? (
-        <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          <EChart option={chart} height={260} />
-          <ChartZoomHint />
-        </div>
-      ) : (
-        <p className="empty-note">
-          Not enough price history to chart yet
-          {holding.is_manual_priced ? ' — manual pricing adds one point per entry.' : '.'}
-        </p>
-      )}
+          ) : undefined
+        }
+        footer={
+          summary === null ? undefined : (
+            <p className="drill-hint">
+              {formatPct(summary.changePct)} over this window ·{' '}
+              {/* 'history since' is a claim about INCEPTION, and only a response short of
+                  the window it asked for earns it; a full one is just a window opening. */}
+              {summary.extentKnown
+                ? `history since ${summary.since}`
+                : `window from ${summary.since}`}
+            </p>
+          )
+        }
+      />
 
       <div className="holding-detail-grid">
         <div>
