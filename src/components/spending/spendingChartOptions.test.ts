@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { tooltipRows } from '../../testing/tooltipRows'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
-import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { SpendingMatrix } from '../../types/api'
 import {
+  HEATMAP_MODES,
   SUSTAINABLE_SPEND,
+  heatmapCsv,
+  heatmapOption,
+  heatmapRows,
   monthPieCsv,
   monthPieOption,
   spendingBarsOption,
@@ -260,5 +264,88 @@ describe('monthPieOption', () => {
       headers: ['Category', 'Amount'],
       rows: [['Rent', '2000.00'], ['Groceries <b>& more</b>', '600.00'], ['Other', '150.00']],
     })
+  })
+})
+
+// Eight months so the vs-average mode has six priors to lean on; Fun is dormant.
+function longMatrix(): SpendingMatrix {
+  const months = Array.from({ length: 8 }, (_, i) => `2026-0${i + 1}-01`)
+  return matrixFixture({
+    months,
+    series: [
+      { category_id: 1, values: ['100.00', '100.00', '100.00', '100.00', '100.00', '100.00', '150.00', null], budgets: months.map(() => null) },
+      { category_id: 2, values: months.map(() => '50.00'), budgets: months.map(() => null) },
+      { category_id: 3, values: months.map((_, i) => (i === 3 ? null : '0.00')), budgets: months.map(() => null) },
+    ],
+    totals: months.map(() => '150.00'), net_pay: months.map(() => '6000.00'), savings_rate: months.map(() => null),
+    four_pct_rule: months.map(() => null), total_budget: months.map(() => null),
+  })
+}
+const LONG_LABELS = Array.from({ length: 8 }, (_, i) => `M${i + 1}`)
+const readHeat = (option: unknown) =>
+  option as {
+    grid: unknown
+    xAxis: { data: string[]; axisLabel: { rotate: number } }
+    yAxis: { data: string[]; inverse: boolean }
+    visualMap: { min: number; max: number; type?: string; inRange: { color: string[] }; text?: string[]; formatter: (v: number) => string }
+    tooltip: { formatter: (p: unknown) => string }
+    series: { type: string; data: [number, number, number][] }[]
+  }
+
+describe('heatmapRows', () => {
+  it('splits the order into visible and dormant rows (every value null or zero)', () => {
+    expect(heatmapRows(longMatrix(), [1, 2, 3], false)).toEqual({ visible: [1, 2], dormant: [3] })
+    expect(heatmapRows(longMatrix(), [1, 2, 3], true)).toEqual({ visible: [1, 2, 3], dormant: [3] })
+  })
+})
+
+describe('heatmapOption', () => {
+  it('Absolute: raw dollars on the shared blue scale — the pre-F1 chart', () => {
+    const option = readHeat(heatmapOption({ matrix: longMatrix(), order: [1, 2], nameById: NAMES, monthLabels: LONG_LABELS, mode: 'absolute' }))
+    expect(option.grid).toEqual(GRID_VARIANTS.heatmap)
+    expect(option.xAxis.axisLabel.rotate).toBe(45)
+    expect(option.yAxis).toMatchObject({ data: ['Rent', 'Groceries <b>& more</b>'], inverse: true })
+    expect(option.visualMap).toMatchObject({ min: 0, max: 150, inRange: { color: [...SEQUENTIAL_BLUE] } })
+    expect(option.visualMap.formatter(1500)).toBe('$1.5K')
+    expect(option.series[0].data).toContainEqual([6, 0, 150])
+    expect(option.series[0].data.some(([c, r]) => c === 7 && r === 0)).toBe(false) // null cell → no cell
+  })
+  it('Row: each row on its own 0 → max scale, legend labelled row max / 0', () => {
+    const option = readHeat(heatmapOption({ matrix: longMatrix(), order: [1, 2], nameById: NAMES, monthLabels: LONG_LABELS, mode: 'row' }))
+    expect(option.visualMap).toMatchObject({ min: 0, max: 1, text: ['row max', '0'] })
+    expect(option.visualMap.formatter(0.5)).toBe('50%')
+    expect(option.series[0].data).toContainEqual([6, 0, 1])
+    expect(option.series[0].data).toContainEqual([0, 0, 100 / 150])
+    expect(option.series[0].data).toContainEqual([0, 1, 1]) // a flat row is all max
+  })
+  it('vs average: ratio to the trailing mean on the diverging scale, orange above, blank until six priors', () => {
+    const option = readHeat(heatmapOption({ matrix: longMatrix(), order: [1, 2], nameById: NAMES, monthLabels: LONG_LABELS, mode: 'vsAverage' }))
+    expect(option.visualMap).toMatchObject({ type: 'continuous', min: -0.5, max: 0.5, text: ['above average', 'below average'] })
+    expect(option.visualMap.inRange.color).toEqual([...DIVERGING].reverse())
+    expect(option.visualMap.formatter(0.25)).toBe('+25%')
+    expect(option.series[0].data).toEqual([[6, 0, 0.5], [6, 1, 0], [7, 1, 0]]) // months 0–5 blank, month 7 of Rent null
+  })
+  it('F7: value first, category · month, and the mode’s reading as the sub-line', () => {
+    const input = { matrix: longMatrix(), order: [1, 2], nameById: NAMES, monthLabels: LONG_LABELS }
+    const abs = tooltipRows(readHeat(heatmapOption({ ...input, mode: 'absolute' })).tooltip.formatter({ value: [6, 0, 150] }))
+    expect([abs.lead, abs.label, abs.sub]).toEqual(['$150.00', 'Rent · M7', undefined])
+    const row = tooltipRows(readHeat(heatmapOption({ ...input, mode: 'row' })).tooltip.formatter({ value: [0, 1, 1] }))
+    expect([row.lead, row.label, row.sub]).toEqual(['$50.00', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt; · M1', '100% of this category’s busiest month'])
+    const vs = tooltipRows(readHeat(heatmapOption({ ...input, mode: 'vsAverage' })).tooltip.formatter({ value: [6, 0, 0.5] }))
+    expect([vs.lead, vs.sub]).toEqual(['$150.00', '+50% vs its trailing 12-month average'])
+  })
+  it('is null with no months or no visible rows; HEATMAP_MODES lists the three controls', () => {
+    expect(heatmapOption({ matrix: matrixFixture({ months: [] }), order: [1], nameById: NAMES, monthLabels: [], mode: 'row' })).toBeNull()
+    expect(heatmapOption({ matrix: longMatrix(), order: [], nameById: NAMES, monthLabels: LONG_LABELS, mode: 'row' })).toBeNull()
+    expect(HEATMAP_MODES.map((m) => m.label)).toEqual(['Absolute', 'Row', 'vs average'])
+  })
+})
+
+describe('heatmapCsv', () => {
+  it('exports the FULL matrix in row order — dormant rows included, blanks for absent months', () => {
+    const csv = heatmapCsv(longMatrix(), [1, 2, 3], NAMES)
+    expect(csv.headers).toEqual(['Category', ...longMatrix().months])
+    expect(csv.rows[0]).toEqual(['Rent', '100.00', '100.00', '100.00', '100.00', '100.00', '100.00', '150.00', ''])
+    expect(csv.rows[2][0]).toBe('Fun')
   })
 })
