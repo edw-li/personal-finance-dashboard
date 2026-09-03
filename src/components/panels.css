@@ -113,8 +113,14 @@
   white-space: nowrap;
 }
 
+/* The hero's cqi cap is LOOSER than the normal tile's 10.5cqi on purpose. Sharing 10.5
+   flattened the hierarchy exactly where it matters: in the 4-column band the tiles sit near
+   their 220px floor, both caps bind, and the hero came out ~1.2rem against a normal 1.1rem —
+   a "hero" nobody could pick out. 12cqi restores the step and still fits the longest value
+   the tile carries (14 chars, "-$1,234,567.89") at 220px in the monospace stack. The normal
+   .stat-value keeps 10.5cqi: it has no headroom to give. */
 .stat-tile-hero .stat-value {
-  font-size: min(clamp(1.5rem, 1rem + 1.1vw, 2.4rem), 10.5cqi);
+  font-size: min(clamp(1.5rem, 1rem + 1.1vw, 2.4rem), 12cqi);
 }
 
 .stat-delta {

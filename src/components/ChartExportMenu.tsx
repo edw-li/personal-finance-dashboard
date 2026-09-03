@@ -1,6 +1,7 @@
-import { SURFACE } from '../charts/theme'
+import { DARK, LIGHT } from '../theme/tokens'
 import { downloadDataUrl, downloadText, toCsv } from '../utils/download'
 import type { ExportTable } from '../utils/download'
+import { useTheme } from './shell/ThemeProvider'
 import './panels.css'
 
 export interface ExportConfig {
@@ -22,6 +23,8 @@ export interface ExportableChart {
  * deliberately NOT echarts' toolbox (Decision log). PNG snapshots the live canvas at 2×
  * on the card surface — the theme paints the canvas transparent, which would export
  * black — and CSV serializes the caller's own table through utils/download's toCsv.
+ * The surface comes from the RESOLVED theme (2026-09-03 shell spec §11): a hard-coded dark
+ * card color would matte a light-theme chart onto near-black and lose every axis label.
  */
 export default function ChartExportMenu({
   config,
@@ -30,11 +33,13 @@ export default function ChartExportMenu({
   config: ExportConfig
   getChart: () => ExportableChart | null
 }) {
+  const { resolved } = useTheme()
   const png = () => {
     const chart = getChart()
     if (chart === null) return // disposed mid-click: nothing to snapshot
+    const surface = resolved === 'light' ? LIGHT.surface : DARK.surface
     downloadDataUrl(
-      chart.getDataURL({ pixelRatio: 2, backgroundColor: SURFACE }),
+      chart.getDataURL({ pixelRatio: 2, backgroundColor: surface }),
       `${config.name}.png`,
     )
   }

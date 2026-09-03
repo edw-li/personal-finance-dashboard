@@ -5,15 +5,19 @@
 // strings and anything not in the map pass through untouched.
 import { DARK, LIGHT, type ThemeTokens } from '../theme/tokens'
 
-// The dark set spends four hexes on TWO token names each, and the light set splits every
-// one of them, so a flat hex→hex map has to elect a winner. Last write wins, and the order
+// The dark set spends four hexes on TWO token names each, so a flat hex→hex map has to
+// elect a winner wherever the light set SPLITS the pair. Last write wins, and the order
 // below elects the meaning that actually reaches an option:
 //   #1e222c  gridLine | surface2   → surface2   grid/axis lines only ever come from the
 //   #262b36  axisLine | border     → border     REGISTERED theme, which is built per
 //                                               palette (buildTheme) and never recolored;
 //                                               surfaces do show up in option-level
 //                                               tooltip/label backgrounds.
-//   #c98500  warn     | palette[3] → palette[3] worn by bars, not by warning chips.
+//   #c98500  warn     | palette[3] → moot       tokens.ts keeps ONE amber per theme, so
+//                                               the light set does not split this pair:
+//                                               both names write #996500 and whichever
+//                                               wins is the same color. (Kept on the list
+//                                               so a future re-split is noticed here.)
 //   #3987e5  seq[6]   | palette[0] → palette[0] as a LONE color (GROUP_COLORS.cash and
 //                                               every "primary series" fill). Inside a
 //                                               sequential RAMP the position wins instead

@@ -139,6 +139,22 @@ describe('EChart export menu', () => {
     expect(downloadDataUrl).toHaveBeenCalledWith('data:image/png;base64,PNG', 'demo.png')
   })
 
+  // The matte follows the RESOLVED theme: a light-theme chart exported on the dark card
+  // color comes back as near-black paper with invisible axis labels.
+  it('PNG mattes on the LIGHT card surface under the light theme', () => {
+    localStorage.setItem('finance.theme', 'light')
+    render(
+      <ThemeProvider>
+        <EChart option={OPTION} exportConfig={{ name: 'demo' }} />
+      </ThemeProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
+    expect(lastChart().getDataURL).toHaveBeenCalledWith({
+      pixelRatio: 2,
+      backgroundColor: LIGHT.surface,
+    })
+  })
+
   it('CSV serializes the caller rows and downloads {name}.csv as UTF-8 text/csv', () => {
     const csv = vi.fn(() => ({ headers: ['Month', 'Total'], rows: [['2026-06-01', 1]] }))
     render(<EChart option={OPTION} exportConfig={{ name: 'demo', csv }} />)

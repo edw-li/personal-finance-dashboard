@@ -1,9 +1,11 @@
-import { NEGATIVE, POSITIVE } from '../../charts/theme'
 import type { PricePoint } from '../../types/api'
 
 // Pure-SVG sparkline: 25 chart instances per table render is why this is NOT echarts
 // (cost + the jsdom canvas limit). Trend-only — no axes, no tooltip (dataviz: sparklines
 // are sanctioned axis-free).
+// The stroke is a CSS custom property, not a token constant (2026-09-03 shell spec §11):
+// SVG presentation attributes accept var(), so the line follows the theme for free —
+// baked hexes would keep the dark green/red on a white card.
 export default function Sparkline({
   points,
   width = 110,
@@ -35,7 +37,12 @@ export default function Sparkline({
       aria-hidden="true"
       focusable="false"
     >
-      <polyline points={coords} fill="none" stroke={rising ? POSITIVE : NEGATIVE} strokeWidth="1.5" />
+      <polyline
+        points={coords}
+        fill="none"
+        stroke={rising ? 'var(--positive)' : 'var(--negative)'}
+        strokeWidth="1.5"
+      />
     </svg>
   )
 }
