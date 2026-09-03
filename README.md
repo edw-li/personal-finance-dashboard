@@ -831,6 +831,31 @@ Before calling it done, close out the security items:
   restore drill end to end (5.5). Cutting over onto an unverified backup is the one failure
   this runbook cannot undo.
 
+## Sandboxes (planning what-ifs)
+
+Three pages carry a sandbox — Paycheck's **Try it**, Taxes' **What if**, Projection's **Scenario**.
+A sandbox's live scenario lives in the page URL as a repeated `whatif=` query parameter, one entry
+per knob or leg in the server's own wire vocabulary: `whatif=trad_401k_pct:0.15`,
+`whatif=sale:7:40:62.50:S` (security 7, 40 shares, $62.50, short-term), `whatif=espp:3`,
+`whatif=qualified_dividends:null`, `whatif=annual_return:0.06`, `whatif=retire:2:2035-06`. The
+URL is the state: copy it and the recipient sees the same scenario; a drag is written
+replace-style, so the back button leaves the page rather than replaying slider positions.
+Unknown entries are dropped on arrival and the URL rewritten without them; the older
+`?whatif=TICKER` and `?whatif-lot=` links still work and are normalized into the new form. On
+Taxes the page's own `?year=` rides alongside (it is the scenario's scope, and the assistant's
+links carry it); the composition card's separate drill is `?comp=`.
+
+**Nothing in a sandbox writes to the database.** Previews go to pure endpoints —
+`POST /paycheck/preview`, `POST /taxes/what-if`, `GET /projection` — through the read-only client
+path, so they never invalidate the page cache; a test (`backend/tests/test_sandbox_purity.py`)
+walks every such route under a flush guard and asserts every table's row count is unchanged, and a
+frontend conformance test asserts no sandbox module imports the mutating client. The only writes
+are the explicit **Apply** actions, which reuse the page's existing forms and endpoints after a
+confirmation: Paycheck pre-fills the profile form (you click its own Add profile), Taxes writes
+input overrides through the inputs editor's PUT, Projection has no Apply. Up to three scenarios
+per page can be pinned in the browser (`localStorage`, knobs only — pins re-run against live data
+on every visit and are never part of a link).
+
 ## Troubleshooting
 
 **Backend unhealthy / compose up fails** — `docker compose -f docker-compose.prod.yml

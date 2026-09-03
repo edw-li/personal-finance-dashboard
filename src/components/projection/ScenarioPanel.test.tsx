@@ -1,9 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSandbox, type SandboxSpec } from '../../sandbox/useSandbox'
+import { useSandbox, type Sandbox, type SandboxSpec } from '../../sandbox/useSandbox'
 import type { PersonOut, ProjectionOut } from '../../types/api'
-import { decodeProjection, encodeProjection, isEmptyProjection, labelForProjection, type ProjectionScenario } from './projectionScenario'
+import { EMPTY_PROJECTION_SCENARIO, decodeProjection, encodeProjection, isEmptyProjection, labelForProjection, type ProjectionScenario } from './projectionScenario'
 import ScenarioPanel from './ScenarioPanel'
 
 const toast = { success: vi.fn(), info: vi.fn(), error: vi.fn() }
@@ -145,6 +146,41 @@ describe('ScenarioPanel', () => {
     fireEvent.blur(grace)
     expect(screen.queryByRole('alert')).toBeNull()
     expect(url()).toBe('/projection')
+  })
+
+  // A hand-built sandbox, so `entries` can be any list the TYPE allows rather than only the
+  // lists this page's own encoder happens to produce, and a harness that SWAPS them in place
+  // — the panel must keep its state across the change, which is the whole question here.
+  const stub = (entries: string[]): Sandbox<ProjectionScenario, ProjectionOut> => ({
+    scenario: EMPTY_PROJECTION_SCENARIO, entries, empty: entries.length === 0, set: vi.fn(),
+    reset: vi.fn(), baseline: echo, result: echo, busy: false, error: null, errorStatus: null,
+    stale: false, pins: [], pin: vi.fn(), unpin: vi.fn(), pinResults: {}, link: '/projection',
+  })
+
+  it('asks the SAME question about a scenario change that the hook does', () => {
+    // The panel's draft reset and useSandbox's run key both mean "are these the same
+    // entries?", and they have to agree. The hook joins on a unit separator precisely
+    // because a bare join is lossy — ['a', '', 'b'] and ['a', 'b'] flatten alike — so a
+    // panel keyed on join('') would hold a half-typed month across a scenario change the
+    // hook already re-ran, and the next blur would write back a month nobody asked for.
+    function Swapper() {
+      const [entries, setEntries] = useState(['retire:2:2035-06', ''])
+      return (
+        <MemoryRouter>
+          <button type="button" onClick={() => setEntries(['retire:2:2035-06'])}>swap</button>
+          <ScenarioPanel sandbox={stub(entries)} baseline={echo} people={people} />
+        </MemoryRouter>
+      )
+    }
+    render(<Swapper />)
+    const grace = screen.getByLabelText('Retires — Grace') as HTMLInputElement
+    grace.type = 'text' // see above: React re-applies type="month" and jsdom empties a partial
+    fireEvent.change(grace, { target: { value: '2035-1' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'swap' }))
+    fireEvent.blur(grace)
+    // The draft went with the scenario: nothing to commit, so nothing to refuse.
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('compares baseline and scenario without a Δ column, and pins as columns', async () => {

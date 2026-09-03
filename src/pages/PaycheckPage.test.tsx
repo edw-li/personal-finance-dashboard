@@ -1044,6 +1044,42 @@ describe('PaycheckPage — shell scope', () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1)
     expect(document.activeElement).not.toBe(document.getElementById('paycheck-effective-date'))
   })
+
+  it('drops an applied seed when the household lands and re-scopes the profile list', async () => {
+    // `forKey`'s OTHER remount reason, and the one the person-chip test cannot reach: the
+    // profiles usually land before the household, so an Apply made in that first instant
+    // belongs to the UNSCOPED panel. When `switchable` flips, the panel remounts and
+    // re-seeds from the primary's own latest row — the seed does not follow it across, and
+    // nothing scrolls or steals focus a second time for a form nobody just asked for.
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    const gate = deferred<HouseholdOut>()
+    vi.mocked(fetchHousehold).mockReturnValue(gate.promise)
+    vi.mocked(fetchProfiles).mockResolvedValue(TWO_PERSON_PROFILES)
+    routeBreakdowns()
+    vi.mocked(previewPaycheck).mockResolvedValue(previewOf(profile2026))
+    renderPage('/paycheck?whatif=trad_401k_pct%3A0.2')
+
+    await screen.findByText('Payroll savings')
+    expect(screen.queryByRole('button', { name: 'Sam' })).toBeNull() // household still in flight
+    fireEvent.click(screen.getByRole('button', { name: /^Save as profile effective / }))
+    expect(((await screen.findAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement).value).toBe('20%')
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+
+    gate.resolve(household({ people: [ME, SAM] }))
+    await screen.findByRole('button', { name: 'Sam' })
+
+    // The carry-forward seed is back: my own latest row, not the 20% modelled a moment ago.
+    await waitFor(() =>
+      expect(((screen.getAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement).value).toBe('13%'),
+    )
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).not.toBe(document.getElementById('paycheck-effective-date'))
+  })
 })
 
 describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {

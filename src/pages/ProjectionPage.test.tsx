@@ -343,6 +343,31 @@ describe('ProjectionPage', () => {
     expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00')
   })
 
+  it('Retry on a REFUSED scenario drops the entries instead of re-sending them', async () => {
+    // Cold cache, a deep link the server refuses, and a derived run that has nothing to
+    // stand on (a database with no snapshots): the frame is the page's only surface, so its
+    // Retry is the only door. Bumping the dataKey would ask the same 422 again forever —
+    // the knob, not the data, is what the server named, so Retry there means "drop it".
+    vi.mocked(fetchProjection).mockImplementation((params) =>
+      params?.annualReturn !== undefined
+        ? Promise.reject(new ApiError('annual_return must be between -0.5 and 0.5', 422))
+        : Promise.reject(new ApiError('no net-worth snapshots yet', 404)),
+    )
+    renderPage('/projection?whatif=annual_return%3A0.06')
+
+    expect(await screen.findByText(/annual_return must be between/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    // The URL is the state, so dropping the refused knob IS the reset — and the run that
+    // follows carries none of it.
+    await waitFor(() => expect(url()).toBe('/projection'))
+    await waitFor(() =>
+      expect(vi.mocked(fetchProjection)).toHaveBeenLastCalledWith({ retirements: [] }),
+    )
+    // What is left is the empty database's own 404, which has its own answer, not a Retry.
+    expect(await screen.findByText(/enter a monthly update/)).toBeTruthy()
+  })
+
   it('holds the frame skeleton — not a bare page — while the FIRST payload is in flight', async () => {
     // A promise that never settles is the cold-load paint held still. Nothing else in this
     // file pins it: every other test lets the mount resolve, so a regression that dropped

@@ -33,6 +33,25 @@ export function isWireDecimal(text: string): boolean {
   return WIRE_DECIMAL.test(text)
 }
 
+/**
+ * The wire spelling of tolerantly-typed text, or null when nothing here can rescue it.
+ *
+ * `canonicalAmount` is deliberately IDEMPOTENT — text already in plain form comes back
+ * VERBATIM — so a box that accepted "+15", "200000." or ".5" hands those three straight on.
+ * All three are spellings `WIRE_DECIMAL` refuses, and the first is one `decimal.ts`'s exact
+ * arithmetic THROWS on (its PLAIN pattern has no "+"). Every control that turns typed text
+ * into a knob normalizes here first, so the URL never learns a spelling the codec would drop
+ * on the next render — and no comparison downstream is ever handed a "+".
+ */
+export function toWireDecimal(raw: string): string | null {
+  let text = raw.trim()
+  if (text.startsWith('+')) text = text.slice(1)
+  if (text.endsWith('.')) text = text.slice(0, -1) // "200000." — a point with nothing after it
+  if (text.startsWith('.')) text = `0${text}` // ".5" — the wire wants the leading zero
+  else if (text.startsWith('-.')) text = `-0${text.slice(1)}`
+  return isWireDecimal(text) ? text : null
+}
+
 /** A positive int4 (the ids' fence — api/paycheck.py's IdQuery bound). */
 export function isPositiveInt(text: string): boolean {
   return /^[1-9]\d{0,9}$/.test(text) && Number(text) <= 2147483647

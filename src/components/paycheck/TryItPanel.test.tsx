@@ -76,13 +76,19 @@ function Url() {
   return <span data-testid="url">{l.pathname + l.search}</span>
 }
 
-/** An in-page navigation into a scenario link — the assistant's deep links, in one button. */
+/** In-page navigations into scenario links — the assistant's deep links, as buttons. TWO of
+ *  them, because a second link is a second arrival and has to behave like one. */
 function DeepLink() {
   const navigate = useNavigate()
   return (
-    <button type="button" onClick={() => navigate('/paycheck?whatif=trad_401k_pct%3A0.15')}>
-      Deep link
-    </button>
+    <>
+      <button type="button" onClick={() => navigate('/paycheck?whatif=trad_401k_pct%3A0.15')}>
+        Deep link
+      </button>
+      <button type="button" onClick={() => navigate('/paycheck?whatif=hsa_per_check%3A250')}>
+        Other deep link
+      </button>
+    </>
   )
 }
 
@@ -231,6 +237,24 @@ describe('TryItPanel', () => {
     // Closing it by hand sticks, even though the URL still holds the knob.
     fireEvent.click(toggle())
     expect(toggle().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('a DIFFERENT scenario link re-opens a card the user closed by hand', async () => {
+    // "Arriving with entries opens the panel and runs immediately" (spec §6) is about the
+    // ENTRIES, not about whether there are any: a latch that only remembers "the URL had
+    // knobs" swallows every link after the first, so the assistant's second answer would
+    // land on a closed card with its scenario invisible in the address bar.
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Deep link' }))
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(toggle())
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Other deep link' }))
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    await waitFor(() =>
+      expect(previewPaycheck).toHaveBeenCalledWith({ profile_id: null, person_id: null, overrides: { hsa_per_check: '250' } }),
+    )
   })
 
   it('a knob back on the profile’s own figure leaves the URL, whichever control moved it', async () => {
