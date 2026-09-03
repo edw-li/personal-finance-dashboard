@@ -270,3 +270,31 @@
      fade is the half that matters. */
   .settings-page .card { transition: outline-color var(--t-page) ease; }
 }
+
+/* Calendar feed card (2026-09-03 calendar spec §11): the once-shown URL is a wide,
+   selectable box — the value is a credential the user has to get out of the page in one
+   piece — and the token table reuses the accounts table's row-actions grammar. The
+   `.feed-table` scoping is not decoration: portfolio.css's bare `.row-actions button`
+   rules are globally bundled and would otherwise leak into this table. */
+.feed-url {
+  width: 100%;
+  text-align: left;
+}
+
+.feed-fresh {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+}
+
+.feed-table .row-actions {
+  display: flex;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.feed-table .row-actions .button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
