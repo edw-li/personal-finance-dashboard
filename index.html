@@ -2,6 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Mirrors ThemeProvider.resolveTheme so a light-theme user never sees a dark flash.
+      try {
+        var t = localStorage.getItem('finance.theme');
+        var light = t === 'light' || (t === 'system' && matchMedia('(prefers-color-scheme: light)').matches);
+        document.documentElement.dataset.theme = light ? 'light' : 'dark';
+        if (localStorage.getItem('finance.density') === 'compact') document.documentElement.dataset.density = 'compact';
+      } catch (e) {}
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex, nofollow" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
