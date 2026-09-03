@@ -894,12 +894,12 @@ describe('PaycheckPage — the flow card', () => {
     expect(screen.queryByTestId('echart')).toBeNull()
   })
 
-  it('names the sankey for assistive tech', async () => {
+  it("names the sankey for assistive tech and offers the card's export row", async () => {
     render(<PaycheckPage />, { wrapper: MemoryRouter })
     await screen.findByText('Where each check goes')
-    expect(
-      document.querySelector('[aria-label="Sankey flow of one paycheck from gross to net"]'),
-    ).not.toBeNull()
+    expect(screen.getByLabelText('Sankey flow of one paycheck from gross to net')).toBeTruthy()
+    // Mounted through ChartCard: PNG/Copy/CSV/Table (F12).
+    expect(screen.getByRole('group', { name: 'Export paycheck-flow' })).toBeTruthy()
   })
 })
 

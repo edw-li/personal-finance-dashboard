@@ -2,15 +2,13 @@ import { useSearchParams } from 'react-router-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
 import { fetchAllTaxSummaries } from '../../api/taxes'
-import EChart from '../EChart'
+import ChartCard from '../ChartCard'
 import type { EChartEventParams } from '../EChart'
-import InfoHint from '../InfoHint'
 import type { TaxSummaryOut } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
-import { taxTrendCsv, trendOption, yearPieOption } from './taxChartOptions'
+import { taxTrendCsv, trendOption, yearPieCsv, yearPieOption } from './taxChartOptions'
 // Only this component's own sheet, like its siblings: the app-wide vocabulary
 // (.card/.eyebrow/.empty-note/.error-banner) is panels.css, which the PAGE imports.
-import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
 
 /**
@@ -57,6 +55,9 @@ export default function CompositionPanel({
       { replace: true },
     )
   }
+  // The user's legend picks, mirrored back into the option (F9): a refetch or a theme swap
+  // rebuilds the option, and without this every hidden jurisdiction would come back.
+  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
   // Two saves in a row are two feeds in flight; only the newest may land or complain.
   const seqRef = useRef(0)
 
@@ -98,8 +99,8 @@ export default function CompositionPanel({
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every
   // render replays the chart on unrelated state flips (AllocationPanel's note).
   const trend = useMemo(
-    () => (chartable === null ? null : trendOption(chartable)),
-    [chartable],
+    () => (chartable === null ? null : trendOption(chartable, { selected: legendSelected })),
+    [chartable, legendSelected],
   )
 
   // The drilled year's summary comes out of THIS panel's all-years feed, so a save that
@@ -130,23 +131,48 @@ export default function CompositionPanel({
   }
 
   return (
-    <section className="card">
-      <div className="tax-chart-header">
-        <h2 className="eyebrow">
-          {detailSummary
-            ? `Tax breakdown — ${detailSummary.year}`
-            : 'Tax composition and effective rate by year'}
-          <InfoHint text="Tax composition per year stacked by jurisdiction, with the overall effective rate on the right axis. Click a year for its breakdown." />
-        </h2>
-        {detailSummary && (
+    <ChartCard
+      title={
+        detailSummary ? `Tax breakdown — ${detailSummary.year}` : 'Tax composition by year'
+      }
+      hint="Tax composition per year stacked by jurisdiction, with the year's effective rate on each cap. Click a year for its breakdown."
+      ariaLabel={
+        detailSummary
+          ? `Donut chart of ${detailSummary.year}’s tax by jurisdiction`
+          : 'Stacked bar chart of tax by jurisdiction per year, with the effective rate on each cap'
+      }
+      option={detailSummary ? detailPie : trend}
+      empty={
+        detailSummary
+          ? `No tax computed for ${detailSummary.year}.`
+          : flaggedYears.length > 0
+            ? 'No comparable years yet — every year with stored inputs is missing bracket tables for its filing status.'
+            : 'No years with stored inputs to compare yet.'
+      }
+      exportName={detailSummary ? `tax-breakdown-${detailSummary.year}` : 'tax-trend'}
+      csv={
+        detailSummary
+          ? () => yearPieCsv(detailSummary)
+          : chartable === null
+            ? undefined
+            : () => taxTrendCsv(chartable)
+      }
+      height={320}
+      busy={years === null && error === null}
+      error={error}
+      onClick={handleTrendClick}
+      onLegendChange={(selected) =>
+        setLegendSelected((current) => ({ ...current, ...selected }))
+      }
+      actions={
+        detailSummary ? (
           <button className="button" onClick={() => setDetailYear(null)}>
             All years
           </button>
-        )}
-      </div>
-      <FeedBanner error={error} />
-      {detailSummary ? (
-        <>
+        ) : undefined
+      }
+      footer={
+        detailSummary ? (
           <p className="drill-hint">
             {/* The SERVER's totals, negatives and all — the pie can only draw the
                 positive slices (yearPieOption's note). */}
@@ -157,39 +183,18 @@ export default function CompositionPanel({
               : formatPct(detailSummary.totals.effective_rate, { signed: false })}{' '}
             — click the chart to go back.
           </p>
-          {detailPie ? (
-            <EChart option={detailPie} height={320} onClick={handleTrendClick} />
-          ) : (
-            <p className="empty-note">No tax computed for {detailSummary.year}.</p>
-          )}
-        </>
-      ) : trend && chartable ? (
-        <>
-          <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
-          {flaggedYears.length > 0 && (
-            <p className="drill-hint">
-              Not charted: {flaggedYears.join(', ')} — no bracket tables for that
-              year&apos;s filing status.
-            </p>
-          )}
-          <EChart
-            option={trend}
-            height={320}
-            onClick={handleTrendClick}
-            exportConfig={{ name: 'tax-trend', csv: () => taxTrendCsv(chartable) }}
-          />
-        </>
-      ) : (
-        !error && (
-          <p className="empty-note">
-            {years === null
-              ? 'Loading…'
-              : flaggedYears.length > 0
-                ? 'No comparable years yet — every year with stored inputs is missing bracket tables for its filing status.'
-                : 'No years with stored inputs to compare yet.'}
-          </p>
+        ) : (
+          <>
+            <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
+            {flaggedYears.length > 0 && (
+              <p className="drill-hint">
+                Not charted: {flaggedYears.join(', ')} — no bracket tables for that
+                year&apos;s filing status.
+              </p>
+            )}
+          </>
         )
-      )}
-    </section>
+      }
+    />
   )
 }

@@ -404,7 +404,7 @@ export default function WhatIfPanel({
 
   return (
     <section className="card">
-      <div className="tax-chart-header">
+      <div className="chart-card-header">
         <h2 className="eyebrow">
           What if — {year}
           <InfoHint text="Model prospective sales or input changes against this year&apos;s stored return — nothing is saved." />

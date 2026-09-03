@@ -1,11 +1,11 @@
 import { useMemo } from 'react'
 import { FILING_STATUS_LABELS, jurisdictionLabel } from '../../api/taxes'
-import EChart from '../EChart'
+import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import StatTile from '../StatTile'
 import type { FilingStatus, TaxSummaryOut } from '../../types/api'
 import { formatCurrency, formatPct } from '../../utils/format'
-import { waterfallOption } from './taxChartOptions'
+import { waterfallCsv, waterfallOption } from './taxChartOptions'
 // Only this component's own sheet, like its two siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.empty-note/.error-banner) is panels.css, which the PAGE
 // imports — and StatTile brings it along regardless.
@@ -174,20 +174,16 @@ export default function SummaryPanel({
           </div>
         </div>
       ) : (
-        <div className="tax-chart-block">
-          <h3 className="eyebrow">
-            Where {summary.year}&apos;s gross income went
-            <InfoHint text="Gross income walked down to take-home — each floating bar is one jurisdiction&apos;s bite." />
-          </h3>
-          {waterfall ? (
-            <EChart option={waterfall} height={320} />
-          ) : (
-            <p className="empty-note">
-              Nothing to chart yet — this year computes to zero until its inputs are filled
-              in below.
-            </p>
-          )}
-        </div>
+        <ChartCard
+          title={`Where ${summary.year}'s gross income went`}
+          hint="Gross income walked down to take-home — each floating bar is one jurisdiction's bite."
+          ariaLabel="Waterfall chart walking gross income down through each tax to take-home pay"
+          option={waterfall}
+          empty="Nothing to chart yet — this year computes to zero until its inputs are filled in below."
+          exportName={`tax-waterfall-${summary.year}`}
+          csv={() => waterfallCsv(summary)}
+          height={320}
+        />
       )}
     </section>
   )
