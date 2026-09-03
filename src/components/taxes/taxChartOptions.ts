@@ -7,14 +7,20 @@
 // here and never hand a float back to the API (src/utils/format.ts's rule, and the same
 // posture as src/utils/spending.ts).
 import type { EChartsOption } from '../../charts/echarts'
+import { grid, moneyAxis, monthAxis, roundTo } from '../../charts/grammar'
 import {
   INK,
-  MUTED,
   OTHER_SERIES_COLOR,
   POSITIVE,
   SEQUENTIAL_BLUE,
   SURFACE,
 } from '../../charts/theme'
+import {
+  waterfallCsv as stepsCsv,
+  waterfallSeries,
+  waterfallSteps,
+  waterfallTooltip,
+} from '../../charts/waterfall'
 import type { TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
@@ -37,13 +43,14 @@ export const TAX_LABELS = [
 // the sequential ramp is the compliant form (AllocationPanel's convention). The ramp
 // encodes POSITION in the fixed order above — not magnitude — which is why the two charts
 // can share it: a waterfall step and a stack segment for the same tax wear one color.
-// Slots start at index 4: below it the ramp drops under the theme's 3:1-on-#171a21 promise
-// (index 1 is 1.8:1), and the lightest slots go to the smallest taxes, whose slivers are
-// the ones that need the contrast.
+// Slots start at index 4 (below it the ramp drops under 3:1 on the surface, and the lightest
+// slots go to the smallest taxes, whose slivers need the contrast) and SKIP index 6: that
+// step is also PALETTE[0], and charts/recolor.ts elects the categorical blue for a lone hex
+// — so under the light theme the middle tax would have jumped out of the ramp.
 export const TAX_COLORS = [
   SEQUENTIAL_BLUE[4],
   SEQUENTIAL_BLUE[5],
-  SEQUENTIAL_BLUE[6],
+  SEQUENTIAL_BLUE[7],
   SEQUENTIAL_BLUE[8],
   SEQUENTIAL_BLUE[9],
   SEQUENTIAL_BLUE[10],
@@ -60,16 +67,6 @@ export const TAX_SERIES_IDS = TAX_LABELS.map((_, i) => `tax-${i}`)
 
 const RATE_SERIES_NAME = 'Effective rate'
 
-// Display-only rounding. The subtraction chain a waterfall needs is float arithmetic
-// (237973.17 − 40782.88 − 15884.46 = 181305.83000000002), and a running remainder is
-// chart GEOMETRY rather than a reported figure — money lands back on cents here so no
-// dust can reach an axis label or a tooltip. A 6dp rate ×100 lands on 4dp for the
-// same reason.
-function roundTo(value: number, places: number): number {
-  const factor = 10 ** places
-  return Math.round(value * factor) / factor
-}
-
 // The seven tax figures of one year, in TAX_LABELS order.
 function taxAmounts(summary: TaxSummaryOut): number[] {
   return [
@@ -84,131 +81,53 @@ function taxAmounts(summary: TaxSummaryOut): number[] {
   ]
 }
 
-interface WaterfallStep {
-  label: string
-  /** The signed figure this step reports — what the tooltip and the bar label say. */
-  amount: number
-  /** Floor of the floating segment (the invisible placeholder bar). */
-  base: number
-  /** Height of the visible segment: |amount|, so a negative tax still draws. */
-  height: number
-  color: string
-  /** What is left after this step; null on the two full-height totals bars. */
-  remaining: number | null
-}
-
-/**
- * Classic invisible-placeholder waterfall: Gross and Take-home stand on the floor, and
- * each tax floats on the remainder LEFT after it is taken, so the eye walks the money
- * down from gross income to what actually arrives.
- *
- * Returns null for a year with nothing in it (a freshly created year whose inputs are all
- * missing computes to zeros) — the caller renders an empty note, the house pattern for a
- * builder with nothing to draw (SpendingPage's `barsOption` guard).
- */
-export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
+/** The year's walk as steps — shared by the option and its CSV so the two cannot disagree. */
+function taxWaterfallSteps(summary: TaxSummaryOut) {
   const gross = Number(summary.totals.gross_income)
   const takeHome = Number(summary.totals.take_home)
   const taxes = taxAmounts(summary)
   if (gross === 0 && takeHome === 0 && taxes.every((tax) => tax === 0)) return null
+  return waterfallSteps(
+    { label: 'Gross', amount: gross, color: OTHER_SERIES_COLOR },
+    taxes
+      .map((tax, i) => ({ label: TAX_LABELS[i], amount: tax, delta: -tax, color: TAX_COLORS[i] }))
+      // NIIT is the one ADDITIVE line (2026-08-31): a year it does not touch keeps its eight
+      // familiar bars instead of gaining a $0 step. The six sheet jurisdictions always draw,
+      // zero or not — their absence would read as missing data.
+      .filter((step) => step.label !== 'NIIT' || step.amount !== 0),
+    // The closing bar is the SERVER's take-home, not the chain's last remainder: the engine
+    // owns that number (global rule 9), and the chain landing on it is the invariant.
+    { label: 'Take-home', amount: takeHome, color: POSITIVE },
+  )
+}
 
-  const steps: WaterfallStep[] = [
-    { label: 'Gross', amount: gross, base: 0, height: gross, color: OTHER_SERIES_COLOR, remaining: null },
-  ]
-  const taxSteps = taxes
-    .map((tax, i) => ({ label: TAX_LABELS[i], tax, color: TAX_COLORS[i] }))
-    // NIIT is the one ADDITIVE line (2026-08-31): a year it does not touch keeps its
-    // eight familiar bars instead of gaining a $0 step. The six sheet jurisdictions
-    // always draw, zero or not — their absence would read as missing data.
-    .filter((step) => step.label !== 'NIIT' || step.tax !== 0)
-  let remainder = gross
-  taxSteps.forEach(({ label, tax, color }) => {
-    const after = roundTo(remainder - tax, 2)
-    steps.push({
-      label,
-      amount: tax,
-      // State tax can come out NEGATIVE (exemption credits exceed the walk), which steps
-      // the remainder back UP: the segment then spans [before, after] instead. Taking the
-      // lower end as the floor and |amount| as the height draws it correctly either way,
-      // and reduces to "floor = the remainder after" for every non-negative tax.
-      base: Math.min(remainder, after),
-      height: Math.abs(roundTo(tax, 2)),
-      color,
-      remaining: after,
-    })
-    remainder = after
-  })
-  // The closing bar is the SERVER's take-home, not the chain's last remainder: the engine
-  // owns that number (global rule 9), and the chain landing on it is the invariant.
-  steps.push({
-    label: 'Take-home', amount: takeHome, base: 0, height: takeHome, color: POSITIVE,
-    remaining: null,
-  })
-
+/**
+ * Classic invisible-placeholder waterfall (charts/waterfall.ts): Gross and Take-home stand on
+ * the floor, each tax floats on the remainder LEFT after it, so the eye walks the money down
+ * from gross income to what actually arrives. Null for a year with nothing in it (a freshly
+ * created year whose inputs are all missing computes to zeros) — the card renders its empty
+ * sentence.
+ */
+export function waterfallOption(summary: TaxSummaryOut): EChartsOption | null {
+  const steps = taxWaterfallSteps(summary)
+  if (steps === null) return null
   return {
-    grid: { left: 72, right: 24, top: 36, bottom: 28 },
-    tooltip: {
-      // Item trigger, not axis: an axis tooltip would announce the invisible placeholder
-      // beside the real bar. Every string below is this file's own constant or a formatted
-      // server number — no user text reaches the HTML (SpendingPage's escapeHtml rule has
-      // nothing to escape here).
-      formatter: (params) => {
-        const p = Array.isArray(params) ? params[0] : params
-        const step = steps[p.dataIndex ?? 0]
-        if (!step) return ''
-        const head = `${step.label}<br/><strong>${formatCurrency(step.amount)}</strong>`
-        return step.remaining === null
-          ? head
-          : `${head}<br/>Left: ${formatCurrency(step.remaining)}`
-      },
-    },
-    xAxis: {
-      type: 'category',
-      data: steps.map((s) => s.label),
-      // Eight or nine steps: every one of them is labelled or the walk cannot be read.
-      axisLabel: { interval: 0 },
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-    },
-    series: [
-      {
-        name: 'placeholder',
-        type: 'bar',
-        stack: 'waterfall',
-        // 'all', not echarts' default 'samesign': samesign un-floats a segment whose base has
-        // gone negative (total_tax > gross, a mid-data-entry year), flattening the walk.
-        stackStrategy: 'all',
-        // Silent + transparent: it exists only to lift the visible segment off the floor.
-        silent: true,
-        itemStyle: { color: 'transparent' },
-        emphasis: { itemStyle: { color: 'transparent' } },
-        tooltip: { show: false },
-        data: steps.map((s) => s.base),
-      },
-      {
-        name: 'Amount',
-        type: 'bar',
-        stack: 'waterfall',
-        stackStrategy: 'all', // both halves of one stack must agree — see the placeholder's note.
-        barMaxWidth: 46,
-        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-        emphasis: { itemStyle: { borderColor: INK } },
-        // Direct labels: a waterfall is read step by step, and hover-only numbers make
-        // that a hunt (and say nothing on a touch screen).
-        label: {
-          show: true,
-          position: 'top',
-          color: MUTED,
-          fontSize: 11,
-          formatter: (p: { dataIndex: number }) =>
-            formatCurrencyCompact(steps[p.dataIndex]?.amount ?? 0),
-        },
-        data: steps.map((s) => ({ value: s.height, itemStyle: { color: s.color } })),
-      },
-    ],
+    grid: grid(),
+    tooltip: waterfallTooltip(steps),
+    // Eight or nine steps: every one labelled or the walk cannot be read (≤ 12 → interval 0).
+    xAxis: monthAxis(
+      steps.map((s) => s.label),
+      { gap: true },
+    ),
+    yAxis: moneyAxis(),
+    series: waterfallSeries(steps),
   }
+}
+
+/** The walk as a table (F12): step, the signed figure it reports, what is left after it. */
+export function waterfallCsv(summary: TaxSummaryOut): ExportTable {
+  const steps = taxWaterfallSteps(summary)
+  return steps === null ? { headers: ['Step', 'Amount', 'Remaining'], rows: [] } : stepsCsv(steps)
 }
 
 /**

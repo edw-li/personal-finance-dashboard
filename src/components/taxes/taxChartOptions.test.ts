@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { OTHER_SERIES_COLOR, POSITIVE, SEQUENTIAL_BLUE } from '../../charts/theme'
+import { GRID_VARIANTS } from '../../charts/grammar'
+import { OTHER_SERIES_COLOR, PALETTE, POSITIVE, SEQUENTIAL_BLUE } from '../../charts/theme'
+import { isGrammarTooltip } from '../../charts/tooltip'
+import { tooltipRows } from '../../testing/tooltipRows'
 import type { TaxSummaryOut } from '../../types/api'
 import {
   TAX_COLORS,
@@ -10,6 +13,7 @@ import {
   marginalLadderOption,
   taxTrendCsv,
   trendOption,
+  waterfallCsv,
   waterfallOption,
   yearPieOption,
 } from './taxChartOptions'
@@ -325,6 +329,34 @@ describe('waterfallOption', () => {
     expect((placeholder.data as number[])[7]).toBe(Number(summary.totals.take_home))
   })
 
+  it('rides the shared waterfall helper: 24px bars, money grid, item tooltip value-first with the remainder', () => {
+    const option = waterfallOption(summaryFixture(2024))!
+    const [placeholder, visible] = seriesOf(option) as (SeriesLike & {
+      barMaxWidth?: number
+      silent?: boolean
+    })[]
+    expect(placeholder.silent).toBe(true)
+    expect(visible.barMaxWidth).toBe(24) // F13, was 46
+    expect((option as { grid: unknown }).grid).toEqual(GRID_VARIANTS.default)
+    const format = (option as { tooltip: { formatter: (p: unknown) => string } }).tooltip.formatter
+    expect(isGrammarTooltip(format)).toBe(true)
+    const federal = tooltipRows(format({ dataIndex: 1 }))
+    expect(federal.lead).toBe('$40,782.88')
+    expect(federal.label).toBe('Federal')
+    expect(federal.sub).toBe('Left: $197,190.29')
+    const gross = tooltipRows(format({ dataIndex: 0 }))
+    expect(gross.lead).toBe('$237,973.17')
+    expect(gross.sub).toBeUndefined()
+    expect(format({ dataIndex: 99 })).toBe('')
+  })
+
+  it('exports the walk as a table', () => {
+    expect(waterfallCsv(summaryFixture(2024)).headers).toEqual(['Step', 'Amount', 'Remaining'])
+    expect(waterfallCsv(summaryFixture(2024)).rows[1]).toEqual(['Federal', '40782.88', '197190.29'])
+    expect(waterfallCsv(summaryFixture(2024)).rows[0]).toEqual(['Gross', '237973.17', ''])
+    expect(waterfallCsv(emptySummary(2026)).rows).toEqual([])
+  })
+
   it('returns null for a year with nothing in it', () => {
     expect(waterfallOption(emptySummary(2026))).toBeNull()
   })
@@ -341,6 +373,11 @@ describe('TAX_COLORS', () => {
     // lets a waterfall step and a stack segment for the same tax wear one color — and it
     // puts the lightest slots on the smallest taxes, whose slivers need the contrast.
     expect(slots.slice(1).every((slot, i) => slot > slots[i])).toBe(true)
+  })
+
+  it('never uses the step that doubles as PALETTE[0] (the light recolor would pull it out of the ramp)', () => {
+    expect(TAX_COLORS).not.toContain(PALETTE[0])
+    expect(TAX_COLORS[2]).toBe(SEQUENTIAL_BLUE[7])
   })
 })
 
