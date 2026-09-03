@@ -97,6 +97,8 @@ app.include_router(paycheck.router, prefix="/api/v1")
 app.include_router(limits.router, prefix="/api/v1")
 app.include_router(comp.router, prefix="/api/v1")
 app.include_router(calendar.router, prefix="/api/v1")
+# Unauthenticated by design: the feed token in the URL is the credential (calendar spec §11).
+app.include_router(calendar.feed_router, prefix="/api/v1")
 app.include_router(coverage.router, prefix="/api/v1")
 app.include_router(credit_cards.router, prefix="/api/v1")
 app.include_router(projection.router, prefix="/api/v1")
