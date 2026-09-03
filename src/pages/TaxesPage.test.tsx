@@ -1028,6 +1028,10 @@ describe('TaxesPage', () => {
     fireEvent.click(trendChart())
     expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
     expect(screen.getByText('No tax computed for 2023.')).toBeTruthy()
+    // The footer's totals line ends "— click the chart to go back", which is an
+    // instruction to click something that is not drawn; the button is the way back and
+    // the actions row already offers it.
+    expect(screen.queryByText(/click the chart to go back/i)).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'All years' }))
     await waitFor(() => expect(trendCategories()).toBe('2023'))
@@ -1640,6 +1644,11 @@ describe('filing status (2026-08-26 design §6)', () => {
       await screen.findByText(/every year with stored inputs is missing bracket tables/i),
     ).toBeTruthy()
     expect(screen.queryByText(/no years with stored inputs/i)).toBeNull()
+    // "Click a year's bar to expand its tax breakdown" is an affordance for bars that
+    // were never drawn. The note that EXPLAINS the emptiness stays — that is what a
+    // reader wants under an empty sentence.
+    expect(screen.queryByText(/Click a year.s bar to expand/i)).toBeNull()
+    expect(screen.getByText(/Not charted: 2024/)).toBeTruthy()
   })
 })
 

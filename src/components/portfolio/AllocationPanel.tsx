@@ -72,10 +72,15 @@ export default function AllocationPanel({
           const ticker = (params as unknown as { data?: { ticker?: string | null } }).data?.ticker
           if (ticker) onSelectTicker(ticker)
         }}
+        // A colour key for cells that were not drawn is a key to nothing, so it leaves
+        // with them (the same rule the paycheck flow's node legend and the tax drill-in's
+        // way-back prose follow since C7).
         footer={
-          <p className="drill-hint">
-            Orange = loss, blue = gain; the deeper the tone, the larger the move (to ±50%).
-          </p>
+          treemap === null ? undefined : (
+            <p className="drill-hint">
+              Orange = loss, blue = gain; the deeper the tone, the larger the move (to ±50%).
+            </p>
+          )
         }
       />
       <ChartCard
