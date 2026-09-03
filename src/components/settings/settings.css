@@ -228,3 +228,14 @@
 .portfolio-accounts-table select.field-input {
   min-width: 9rem;
 }
+
+/* --- appearance card (2026-09-03 shell spec §11) --- */
+
+/* A labelled control that is NOT an <input>: the eyebrow sits above its Segmented group,
+   which is a <div role="group">, so the pairing cannot ride on the form sheets' label rule. */
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+}
