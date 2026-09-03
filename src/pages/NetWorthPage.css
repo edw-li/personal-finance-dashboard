@@ -16,20 +16,6 @@
   flex-wrap: wrap;
 }
 
-/* Page-level ownership scope. It sits ABOVE the tiles because it scopes them too — a
-   control that changes the hero number must not be buried in a card header. */
-.networth-owner-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
-}
-
-.networth-owner-row .eyebrow {
-  margin: 0;
-}
-
 /* D5: the per-owner split of the latest snapshot, under the KPI row. Typography borrowed
    from the withholding card's facts list — the house shape for a few labelled figures. */
 .networth-owner-strip {
@@ -49,4 +35,17 @@
 .networth-owner-strip dd {
   margin: 2px 0 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* The drill chips' slot hue. It rides a swatch rather than the chip's border, because the
+   chips are a shared Segmented now and only their LABEL is the page's to compose. Reads
+   the CSS slot token, not PALETTE: index.css repoints --chart-N per theme, so the dot
+   tracks a light/dark switch that a baked hex would ignore. */
+.networth-drill-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 0.4rem;
+  border-radius: 999px;
+  vertical-align: baseline;
 }
