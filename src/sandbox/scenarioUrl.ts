@@ -39,9 +39,15 @@ export function isWireDecimal(text: string): boolean {
  * `canonicalAmount` is deliberately IDEMPOTENT — text already in plain form comes back
  * VERBATIM — so a box that accepted "+15", "200000." or ".5" hands those three straight on.
  * All three are spellings `WIRE_DECIMAL` refuses, and the first is one `decimal.ts`'s exact
- * arithmetic THROWS on (its PLAIN pattern has no "+"). Every control that turns typed text
- * into a knob normalizes here first, so the URL never learns a spelling the codec would drop
- * on the next render — and no comparison downstream is ever handed a "+".
+ * arithmetic THROWS on (its PLAIN pattern has no "+").
+ *
+ * NOT every control routes through here, and that is deliberate. SliderBox normalizes (it
+ * has a slider to keep in step, so rescuing the spelling is kinder than refusing it), and
+ * TryItPanel's `wireOf` adds a per-knob fence on top. The taxes what-if's TYPED boxes do
+ * the opposite: they gate on `isWireDecimal` after `canonicalAmount` and REFUSE "+15",
+ * ".5" and "15." outright, each with its own sentence, rather than silently rewriting what
+ * the user typed. Either way the URL never learns a spelling the codec would drop on the
+ * next render, and no comparison downstream is ever handed a "+".
  */
 export function toWireDecimal(raw: string): string | null {
   let text = raw.trim()
