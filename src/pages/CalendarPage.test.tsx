@@ -157,7 +157,8 @@ describe('CalendarPage', () => {
   it('spaces the sections with the house card-grid wrapper', async () => {
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
-    expect(document.querySelector('.card-grid.loading-dim')).not.toBeNull()
+    // The frame owns the dim wrapper now; the page still spaces its sections with card-grid.
+    expect(document.querySelector('.loading-dim > .card-grid')).not.toBeNull()
   })
 
   it('renders the accessible date-grouped list for the shown month', async () => {
@@ -225,8 +226,33 @@ describe('CalendarPage', () => {
       </MemoryRouter>,
     )
     await screen.findByText(/calendar down/)
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading the calendar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await screen.findAllByText('RSU vest — 2025 offer')
+  })
+
+  it('ghosts the first window with the frame skeleton instead of a Loading… line', () => {
+    vi.mocked(fetchCalendar).mockReturnValue(new Promise(() => {}))
+    render(
+      <MemoryRouter>
+        <ToastProvider>
+          <CalendarPage />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+    expect(document.querySelector('.page-skeleton')).not.toBeNull()
+    expect(document.querySelector('p.empty-note.loading-fallback')).toBeNull()
+  })
+
+  it('keeps the month on screen and carries the frame stale line when a reload fails', async () => {
+    renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+
+    vi.mocked(fetchCalendar).mockRejectedValueOnce(new ApiError('calendar down', 500))
+    fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
+
+    expect(await screen.findByText(/Showing earlier data — calendar down/)).toBeTruthy()
+    expect(document.querySelector('.cal-grid')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
   })
 
   it('exports the fetched window through downloadIcs', async () => {
@@ -431,7 +457,7 @@ describe('CalendarPage — snapshot cache (2026-08-27 spec §1)', () => {
     renderPending()
     const texts = Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent)
     expect(texts).toContain('RSU vest — 2025 offer')
-    expect(screen.queryByText('Loading…')).toBeNull()
+    expect(document.querySelector('.page-skeleton')).toBeNull()
     const [start, end] = windowFor(MONTH)
     expect(fetchCalendar).toHaveBeenCalledWith(start, end)
   })

@@ -16,7 +16,8 @@ import {
   projectionOption,
 } from '../components/projection/projectionChartOptions'
 import StatTile from '../components/StatTile'
-import PageSkeleton from '../components/PageSkeleton'
+import { FeedBanner } from '../components/shell/Feed'
+import PageFrame from '../components/shell/PageFrame'
 import type { HouseholdOut, NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
@@ -360,333 +361,326 @@ export default function ProjectionPage() {
 
   return (
     <div className="page projection-page">
-      <div className="page-header">
-        <h1>Projection</h1>
-        <div className="spacer" />
-      </div>
-
-      {error !== null && !missing && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          <button className="button" aria-label="Retry the projection" onClick={recalculate}>
-            Retry
-          </button>
-        </div>
-      )}
-
-      {missing ? (
-        <section className="card">
-          <h2 className="eyebrow">Projected investable balance</h2>
-          {/* The server's sentence, plus where to go next: the projection stands on the
-              latest net-worth snapshot, and a fresh database has none. */}
-          <p className="empty-note">
-            {error} — <Link to="/update">enter a monthly update</Link> to start one.
-          </p>
-        </section>
-      ) : (
-        data && (
-          <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-            <div className="kpi-row">
-              <StatTile
-                label="FI target"
-                value={data.fi_target === null ? '—' : formatCurrency(data.fi_target)}
-                delta={
-                  data.fi_target === null
-                    ? undefined
-                    : `annual spend ÷ ${formatPct(data.swr_pct, { signed: false })} SWR`
-                }
-                tone="neutral"
-                hint="Annual spend ÷ withdrawal rate — the balance at which withdrawals could cover spending."
-              />
-              <StatTile
-                label="FI ratio"
-                value={
-                  data.fi_ratio === null ? '—' : formatPct(data.fi_ratio, { signed: false })
-                }
-                hint="Investable balance as a share of the FI target."
-              />
-              <StatTile
-                label="Investable balance"
-                value={formatCurrency(data.starting_balance)}
-                delta={`as of ${formatMonth(data.base_month)}`}
-                tone="neutral"
-                hint="Pre-tax + post-tax + taxable + equity from the latest snapshot — cash and liabilities excluded."
-              />
-              <StatTile
-                label="Projected FI date"
-                value={data.fi_month === null ? '—' : formatMonth(data.fi_month)}
-                delta={
-                  data.coast_fi_month === null
-                    ? undefined
-                    : `growth alone: ${formatMonth(data.coast_fi_month)}`
-                }
-                tone="neutral"
-                hint="First month the projected balance reaches the target; &quot;growth alone&quot; repeats it with contributions off."
-              />
-              <StatTile
-                label="FI probability"
-                value={
-                  data.fi_probability === null
-                    ? '—'
-                    : formatPct(data.fi_probability, { signed: false })
-                }
-                delta={
-                  // The gate stays p50 (the fan's presence); p10/p90 append around it —
-                  // a stale backend that predates either simply names fewer percentiles.
-                  data.fi_month_p50 === null
-                    ? undefined
-                    : `${
-                        data.fi_month_p10 === null
-                          ? ''
-                          : `p10 ${formatMonth(data.fi_month_p10)} · `
-                      }p50 ${formatMonth(data.fi_month_p50)}${
-                        data.fi_month_p90 === null
-                          ? ''
-                          : ` · p90 ${formatMonth(data.fi_month_p90)}`
-                      }`
-                }
-                tone="neutral"
-                hint="Share of 500 simulated paths reaching the target within the horizon, with optimistic (p10), median (p50) and pessimistic (p90) dates."
-              />
-            </div>
-
-            {data.warnings.length > 0 && (
-              // Advisory, never an error banner: the model ran — these are the honest
-              // asterisks on what it ran with (the paycheck warnings register).
-              <div className="projection-warnings">
-                {data.warnings.map((warning) => (
-                  <p key={warning}>{warning}</p>
-                ))}
+      <PageFrame
+        title="Projection"
+        resource={{
+          // `missing` is not a failure to recover from: it renders its own empty state as
+          // READY children, so the frame offers no alert and no Retry for it.
+          status: missing ? 'ready' : data === null ? (error !== null ? 'error' : 'loading') : 'ready',
+          error: missing ? null : error,
+          busy,
+          fromCache,
+          retry: recalculate,
+        }}
+        skeleton={{ tiles: 5, cards: [{ span: 12, height: 340 }] }}
+      >
+        {missing ? (
+          <section className="card">
+            <h2 className="eyebrow">Projected investable balance</h2>
+            {/* The server's sentence, plus where to go next: the projection stands on the
+                latest net-worth snapshot, and a fresh database has none. */}
+            <p className="empty-note">
+              {error} — <Link to="/update">enter a monthly update</Link> to start one.
+            </p>
+          </section>
+        ) : (
+          data && (
+            <>
+              <div className="kpi-row">
+                <StatTile
+                  label="FI target"
+                  value={data.fi_target === null ? '—' : formatCurrency(data.fi_target)}
+                  delta={
+                    data.fi_target === null
+                      ? undefined
+                      : `annual spend ÷ ${formatPct(data.swr_pct, { signed: false })} SWR`
+                  }
+                  tone="neutral"
+                  hint="Annual spend ÷ withdrawal rate — the balance at which withdrawals could cover spending."
+                />
+                <StatTile
+                  label="FI ratio"
+                  value={
+                    data.fi_ratio === null ? '—' : formatPct(data.fi_ratio, { signed: false })
+                  }
+                  hint="Investable balance as a share of the FI target."
+                />
+                <StatTile
+                  label="Investable balance"
+                  value={formatCurrency(data.starting_balance)}
+                  delta={`as of ${formatMonth(data.base_month)}`}
+                  tone="neutral"
+                  hint="Pre-tax + post-tax + taxable + equity from the latest snapshot — cash and liabilities excluded."
+                />
+                <StatTile
+                  label="Projected FI date"
+                  value={data.fi_month === null ? '—' : formatMonth(data.fi_month)}
+                  delta={
+                    data.coast_fi_month === null
+                      ? undefined
+                      : `growth alone: ${formatMonth(data.coast_fi_month)}`
+                  }
+                  tone="neutral"
+                  hint="First month the projected balance reaches the target; &quot;growth alone&quot; repeats it with contributions off."
+                />
+                <StatTile
+                  label="FI probability"
+                  value={
+                    data.fi_probability === null
+                      ? '—'
+                      : formatPct(data.fi_probability, { signed: false })
+                  }
+                  delta={
+                    // The gate stays p50 (the fan's presence); p10/p90 append around it —
+                    // a stale backend that predates either simply names fewer percentiles.
+                    data.fi_month_p50 === null
+                      ? undefined
+                      : `${
+                          data.fi_month_p10 === null
+                            ? ''
+                            : `p10 ${formatMonth(data.fi_month_p10)} · `
+                        }p50 ${formatMonth(data.fi_month_p50)}${
+                          data.fi_month_p90 === null
+                            ? ''
+                            : ` · p90 ${formatMonth(data.fi_month_p90)}`
+                        }`
+                  }
+                  tone="neutral"
+                  hint="Share of 500 simulated paths reaching the target within the horizon, with optimistic (p10), median (p50) and pessimistic (p90) dates."
+                />
               </div>
-            )}
 
-            <section className="card projection-chart-card">
-              <div className="projection-chart-header">
-                <h2 className="eyebrow">
-                  Net worth over time (projected)
-                  <InfoHint text="Every snapshot as dots with a quadratic best-fit extended forward — momentum, not a plan. Log axis: equal steps are equal multiples." />
-                </h2>
-                <div className="segmented" role="group" aria-label="Trend span">
-                  {TREND_SPANS.map((span) => (
-                    <button
-                      key={span}
-                      type="button"
-                      className={trendYears === span ? 'active' : ''}
-                      aria-pressed={trendYears === span}
-                      onClick={() => setTrendYears(span)}
-                    >
-                      {span}Y
-                    </button>
+              {data.warnings.length > 0 && (
+                // Advisory, never an error banner: the model ran — these are the honest
+                // asterisks on what it ran with (the paycheck warnings register).
+                <div className="projection-warnings">
+                  {data.warnings.map((warning) => (
+                    <p key={warning}>{warning}</p>
                   ))}
                 </div>
-              </div>
-              {historyError !== null ? (
-                // Advisory, never the page banner: the rest of the page runs without it.
-                <p className="empty-note">{historyError}</p>
-              ) : history === null ? (
-                <p className="empty-note">Loading net-worth history…</p>
-              ) : nwChart === null ? (
-                <p className="empty-note">Not enough monthly snapshots to chart yet.</p>
-              ) : (
-                <>
-                  <EChart
-                    option={nwChart}
-                    height={340}
-                    ariaLabel={`Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`}
-                    animateEntrance={!fromCache}
-                  />
-                  <ChartZoomHint />
-                  <p className="drill-hint">
-                    {fit === null
-                      ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
-                      : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples.`}
-                  </p>
-                </>
               )}
-            </section>
 
-            <section className="card projection-chart-card">
-              <h2 className="eyebrow">
-                Projected investable balance
-                <InfoHint text="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes." />
-              </h2>
-              {chart && data ? (
-                <>
-                  <EChart
-                    option={chart}
-                    height={340}
-                    ariaLabel={`Projected investable balance over the next ${data.years} years`}
-                    exportConfig={{ name: 'projection', csv: () => projectionCsv(data) }}
-                    animateEntrance={!fromCache}
-                  />
-                  <ChartZoomHint />
-                </>
-              ) : (
-                <p className="empty-note">Nothing to chart at this horizon.</p>
-              )}
-              <p className="drill-hint">
-                Deterministic compounding at one assumed return — a planning sketch, not a
-                forecast. The chart reads in today&apos;s dollars by default (inflation is
-                modelled); set inflation to 0 to read nominal dollars. The growth-only line
-                is the same balance with contributions turned off. With a volatility, bands
-                are percentiles across 500 simulated lognormal-return paths — seed-stable,
-                so identical knobs redraw identical bands.
-              </p>
-            </section>
+              <section className="card projection-chart-card">
+                <div className="projection-chart-header">
+                  <h2 className="eyebrow">
+                    Net worth over time (projected)
+                    <InfoHint text="Every snapshot as dots with a quadratic best-fit extended forward — momentum, not a plan. Log axis: equal steps are equal multiples." />
+                  </h2>
+                  <div className="segmented" role="group" aria-label="Trend span">
+                    {TREND_SPANS.map((span) => (
+                      <button
+                        key={span}
+                        type="button"
+                        className={trendYears === span ? 'active' : ''}
+                        aria-pressed={trendYears === span}
+                        onClick={() => setTrendYears(span)}
+                      >
+                        {span}Y
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {historyError !== null ? (
+                  // Advisory, never the page banner: the rest of the page runs without it.
+                  <p className="empty-note">{historyError}</p>
+                ) : history === null ? (
+                  <p className="empty-note">Loading net-worth history…</p>
+                ) : nwChart === null ? (
+                  <p className="empty-note">Not enough monthly snapshots to chart yet.</p>
+                ) : (
+                  <>
+                    <EChart
+                      option={nwChart}
+                      height={340}
+                      ariaLabel={`Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`}
+                      animateEntrance={!fromCache}
+                    />
+                    <ChartZoomHint />
+                    <p className="drill-hint">
+                      {fit === null
+                        ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
+                        : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples.`}
+                    </p>
+                  </>
+                )}
+              </section>
 
-            <section className="card">
-              <h2 className="eyebrow">
-                Assumptions
-                <InfoHint text="Every knob the projection runs on. Blank boxes restore their defaults or re-derive from your data on Recalculate." />
-              </h2>
-              <p className="drill-hint">
-                Blank DERIVED boxes re-derive on Recalculate (a blank Retires box instead
-                means that person never retires): contribution from the trailing 12
-                months of (net pay − spend) plus the payroll deductions that land in your
-                own accounts — 401(k), ESPP and HSA — from each person&apos;s paycheck
-                profile in force (RSU vests are not included; raise the box to model
-                them), annual spend from the trailing spend, the withdrawal rate from
-                Settings, and the three assumptions from their defaults (15 / 3 / 3).
-                Percents are percents (5 = 5%). Volatility turns on the bands; inflation
-                converts everything to today&apos;s dollars; contribution growth models
-                raises. 0 turns the fan off (volatility) or reads nominal dollars
-                (inflation).
-              </p>
-              <form
-                className="projection-form"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  recalculate()
-                }}
-              >
-                <label>
-                  Annual return (%/yr)
-                  <input
-                    className="field-input"
-                    inputMode="decimal"
-                    value={knobs.annualReturn}
-                    onChange={(e) => setKnob('annualReturn')(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Monthly contribution
-                  <input
-                    className="field-input"
-                    inputMode="decimal"
-                    value={knobs.monthlyContribution}
-                    onChange={(e) => setKnob('monthlyContribution')(e.target.value)}
-                  />
-                  {/* The echo's own arithmetic, so a derived figure is never a bare number
-                      the reader has to trust: cash savings + payroll deductions, per
-                      person. Absent when the knob was typed (nothing to explain) and on a
-                      backend older than the breakdown. */}
-                  {data?.contribution_breakdown && (
-                    <span className="projection-derived">
-                      derived: {formatCurrency(data.contribution_breakdown.cash)} cash savings +{' '}
-                      {formatCurrency(data.contribution_breakdown.payroll)} payroll deductions
-                      {data.contribution_breakdown.by_person.length > 0 &&
-                        ` (${data.contribution_breakdown.by_person
-                          .map((row) => `${row.name} ${formatCurrency(row.monthly)}`)
-                          .join(' · ')})`}
-                    </span>
-                  )}
-                </label>
-                <label>
-                  Annual spend
-                  <input
-                    className="field-input"
-                    inputMode="decimal"
-                    value={knobs.annualSpend}
-                    onChange={(e) => setKnob('annualSpend')(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Withdrawal rate (%/yr)
-                  <input
-                    className="field-input"
-                    inputMode="decimal"
-                    value={knobs.swr}
-                    onChange={(e) => setKnob('swr')(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Volatility (%/yr)
-                  <input
-                    className="field-input"
-                    inputMode="decimal"
-                    value={knobs.volatility}
-                    onChange={(e) => setKnob('volatility')(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Inflation (%/yr)
-                  <input
-                    className="field-input"
-                    inputMode="decimal"
-                    value={knobs.inflation}
-                    onChange={(e) => setKnob('inflation')(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Contribution growth (%/yr)
-                  <input
-                    className="field-input"
-                    inputMode="decimal"
-                    value={knobs.contributionGrowth}
-                    onChange={(e) => setKnob('contributionGrowth')(e.target.value)}
-                  />
-                </label>
-                <label>
-                  Horizon (years)
-                  <input
-                    className="field-input"
-                    inputMode="numeric"
-                    value={knobs.years}
-                    onChange={(e) => setKnob('years')(e.target.value)}
-                  />
-                </label>
-                {people.map((person) => (
-                  <label key={person.id}>
-                    Retires — {person.name}
+              <section className="card projection-chart-card">
+                <h2 className="eyebrow">
+                  Projected investable balance
+                  <InfoHint text="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes." />
+                </h2>
+                {chart && data ? (
+                  <>
+                    <EChart
+                      option={chart}
+                      height={340}
+                      ariaLabel={`Projected investable balance over the next ${data.years} years`}
+                      exportConfig={{ name: 'projection', csv: () => projectionCsv(data) }}
+                      animateEntrance={!fromCache}
+                    />
+                    <ChartZoomHint />
+                  </>
+                ) : (
+                  <p className="empty-note">Nothing to chart at this horizon.</p>
+                )}
+                <p className="drill-hint">
+                  Deterministic compounding at one assumed return — a planning sketch, not a
+                  forecast. The chart reads in today&apos;s dollars by default (inflation is
+                  modelled); set inflation to 0 to read nominal dollars. The growth-only line
+                  is the same balance with contributions turned off. With a volatility, bands
+                  are percentiles across 500 simulated lognormal-return paths — seed-stable,
+                  so identical knobs redraw identical bands.
+                </p>
+              </section>
+
+              <section className="card">
+                <h2 className="eyebrow">
+                  Assumptions
+                  <InfoHint text="Every knob the projection runs on. Blank boxes restore their defaults or re-derive from your data on Recalculate." />
+                </h2>
+                <p className="drill-hint">
+                  Blank DERIVED boxes re-derive on Recalculate (a blank Retires box instead
+                  means that person never retires): contribution from the trailing 12
+                  months of (net pay − spend) plus the payroll deductions that land in your
+                  own accounts — 401(k), ESPP and HSA — from each person&apos;s paycheck
+                  profile in force (RSU vests are not included; raise the box to model
+                  them), annual spend from the trailing spend, the withdrawal rate from
+                  Settings, and the three assumptions from their defaults (15 / 3 / 3).
+                  Percents are percents (5 = 5%). Volatility turns on the bands; inflation
+                  converts everything to today&apos;s dollars; contribution growth models
+                  raises. 0 turns the fan off (volatility) or reads nominal dollars
+                  (inflation).
+                </p>
+                <form
+                  className="projection-form"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    recalculate()
+                  }}
+                >
+                  <label>
+                    Annual return (%/yr)
                     <input
-                      type="month"
                       className="field-input"
-                      value={retireMonths[person.id] ?? ''}
-                      onChange={(e) => setRetireMonth(person.id)(e.target.value)}
+                      inputMode="decimal"
+                      value={knobs.annualReturn}
+                      onChange={(e) => setKnob('annualReturn')(e.target.value)}
                     />
                   </label>
-                ))}
-                <div className="projection-actions">
-                  <button type="submit" className="button button-primary" disabled={busy}>
-                    {busy ? 'Projecting…' : 'Recalculate'}
-                  </button>
-                </div>
-              </form>
-              {people.length > 0 && (
-                <p className="drill-hint">
-                  A retirement month drops that person&apos;s CURRENT monthly take-home
-                  and payroll deductions — the paycheck profile in force today, not a
-                  projection of it — out of the contribution stream from that month on;
-                  whatever is left keeps escalating
-                  at the contribution-growth rate — so a far-off retirement&apos;s cost is
-                  slightly understated, since the drop never gets that person&apos;s share
-                  of the modelled raises. Spending stays a household figure, so the FI
-                  target does not move. Blank means that person works for the whole
-                  horizon.
-                </p>
-              )}
-              {formError && (
-                <div className="error-banner" role="alert">
-                  {formError}
-                </div>
-              )}
-            </section>
-          </div>
-        )
-      )}
-      {data === null && !missing && busy && (
-        <PageSkeleton tiles={5} cards={[{ span: 12, height: 340 }]} />
-      )}
+                  <label>
+                    Monthly contribution
+                    <input
+                      className="field-input"
+                      inputMode="decimal"
+                      value={knobs.monthlyContribution}
+                      onChange={(e) => setKnob('monthlyContribution')(e.target.value)}
+                    />
+                    {/* The echo's own arithmetic, so a derived figure is never a bare number
+                        the reader has to trust: cash savings + payroll deductions, per
+                        person. Absent when the knob was typed (nothing to explain) and on a
+                        backend older than the breakdown. */}
+                    {data?.contribution_breakdown && (
+                      <span className="projection-derived">
+                        derived: {formatCurrency(data.contribution_breakdown.cash)} cash savings +{' '}
+                        {formatCurrency(data.contribution_breakdown.payroll)} payroll deductions
+                        {data.contribution_breakdown.by_person.length > 0 &&
+                          ` (${data.contribution_breakdown.by_person
+                            .map((row) => `${row.name} ${formatCurrency(row.monthly)}`)
+                            .join(' · ')})`}
+                      </span>
+                    )}
+                  </label>
+                  <label>
+                    Annual spend
+                    <input
+                      className="field-input"
+                      inputMode="decimal"
+                      value={knobs.annualSpend}
+                      onChange={(e) => setKnob('annualSpend')(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Withdrawal rate (%/yr)
+                    <input
+                      className="field-input"
+                      inputMode="decimal"
+                      value={knobs.swr}
+                      onChange={(e) => setKnob('swr')(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Volatility (%/yr)
+                    <input
+                      className="field-input"
+                      inputMode="decimal"
+                      value={knobs.volatility}
+                      onChange={(e) => setKnob('volatility')(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Inflation (%/yr)
+                    <input
+                      className="field-input"
+                      inputMode="decimal"
+                      value={knobs.inflation}
+                      onChange={(e) => setKnob('inflation')(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Contribution growth (%/yr)
+                    <input
+                      className="field-input"
+                      inputMode="decimal"
+                      value={knobs.contributionGrowth}
+                      onChange={(e) => setKnob('contributionGrowth')(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Horizon (years)
+                    <input
+                      className="field-input"
+                      inputMode="numeric"
+                      value={knobs.years}
+                      onChange={(e) => setKnob('years')(e.target.value)}
+                    />
+                  </label>
+                  {people.map((person) => (
+                    <label key={person.id}>
+                      Retires — {person.name}
+                      <input
+                        type="month"
+                        className="field-input"
+                        value={retireMonths[person.id] ?? ''}
+                        onChange={(e) => setRetireMonth(person.id)(e.target.value)}
+                      />
+                    </label>
+                  ))}
+                  <div className="projection-actions">
+                    <button type="submit" className="button button-primary" disabled={busy}>
+                      {busy ? 'Projecting…' : 'Recalculate'}
+                    </button>
+                  </div>
+                </form>
+                {people.length > 0 && (
+                  <p className="drill-hint">
+                    A retirement month drops that person&apos;s CURRENT monthly take-home
+                    and payroll deductions — the paycheck profile in force today, not a
+                    projection of it — out of the contribution stream from that month on;
+                    whatever is left keeps escalating
+                    at the contribution-growth rate — so a far-off retirement&apos;s cost is
+                    slightly understated, since the drop never gets that person&apos;s share
+                    of the modelled raises. Spending stays a household figure, so the FI
+                    target does not move. Blank means that person works for the whole
+                    horizon.
+                  </p>
+                )}
+                <FeedBanner error={formError} />
+              </section>
+            </>
+          )
+        )}
+      </PageFrame>
     </div>
   )
 }

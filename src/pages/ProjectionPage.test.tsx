@@ -278,6 +278,20 @@ describe('ProjectionPage', () => {
     expect(screen.queryByRole('alert')).toBeNull() // an empty database is not an error
   })
 
+  it('hands a first-load failure to the frame: one alert, one plain Retry that refetches', async () => {
+    // The page-specific aria-label is retired with the hand-rolled banner — the frame's
+    // alert is the only one, and its button is named Retry everywhere (shell spec §5).
+    vi.mocked(fetchProjection).mockRejectedValueOnce(new ApiError('projection down', 500))
+    renderPage()
+
+    expect(await screen.findByText(/projection down/)).toBeTruthy()
+    expect(screen.getByRole('alert')).toBeTruthy()
+    expect(screen.queryByLabelText('Retry the projection')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('$1,500,000.00')).toBeTruthy() // the FI-target tile
+  })
+
   it('renders the model warnings verbatim', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(
       projectionOut({
