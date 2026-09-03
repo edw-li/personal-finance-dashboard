@@ -13,10 +13,12 @@ import AmountInput from '../components/AmountInput'
 import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import PacePanel from '../components/paycheck/PacePanel'
+import type { ApplySeed } from '../components/paycheck/paycheckScenario'
 import {
   paycheckSankeyCsv,
   paycheckSankeyOption,
 } from '../components/paycheck/paycheckSankeyOptions'
+import TryItPanel from '../components/paycheck/TryItPanel'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
@@ -263,6 +265,7 @@ function ProfilesPanel({
   onSelect,
   onShowCurrent,
   onChanged,
+  initialForm,
 }: {
   profiles: PaycheckProfileOut[]
   /** The person the CHIPS picked, or null for "the default" (the primary, or a household
@@ -281,11 +284,13 @@ function ProfilesPanel({
   onShowCurrent: () => void
   /** `deletedId` is set only by a delete, so the page can drop a selection that just died. */
   onChanged: (deletedId?: number) => void
+  /** Apply from the Try it card: the form opens on these values (a keyed remount, see the page). */
+  initialForm?: ApplySeed
 }) {
   const latest = latestOf(profiles)
   // Seeded from the FIRST payload and never re-seeded: the panel is not remounted on a
   // reload, so a replaced `profiles` array cannot clobber typed work (TaxesPage's editors).
-  const [form, setForm] = useState<ProfileFormState>(() => newProfileForm(latest))
+  const [form, setForm] = useState<ProfileFormState>(() => initialForm ?? newProfileForm(latest))
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Single-flight across the panel (SecuritiesPanel's busy flag).
@@ -301,6 +306,15 @@ function ProfilesPanel({
     const next = HSA_COVERAGES.find((coverage) => coverage.value === value)
     if (next !== undefined) setForm((f) => ({ ...f, hsa_coverage: next.value }))
   }
+
+  // A seeded mount brings the date box into view and focuses it (spec §9) — DOM calls only,
+  // no state. Guarded: jsdom has no scrollIntoView.
+  useEffect(() => {
+    if (initialForm === undefined) return
+    const el = document.getElementById('paycheck-effective-date')
+    el?.scrollIntoView?.({ block: 'center' })
+    el?.focus()
+  }, [initialForm])
 
   const startEdit = (profile: PaycheckProfileOut) => {
     setEditingId(profile.id)
@@ -746,6 +760,21 @@ export default function PaycheckPage() {
   >(null)
   // Bumped by a profile write — a new profile can change whose profile is in force.
   const [householdNonce, setHouseholdNonce] = useState(0)
+  // Apply from the Try it card (2026-09-03 planning-sandboxes spec §9): the seed pre-fills the
+  // profile form by REMOUNTING the panel with it (the nonce rides its key) — an explicit user
+  // action, so replacing a half-typed row is the asked-for outcome, and no effect ever
+  // setStates to do it. The form's own Add profile stays the only write.
+  //
+  // `forKey` is the profile panel's key AT THE MOMENT OF THE CLICK. The panel remounts for
+  // reasons of its own — a person chip, the household landing and flipping `switchable` —
+  // and a seed with no owner attached would be handed to whichever form mounted next: one
+  // person's scenario pre-filling another person's new-profile row, scrolled and focused as
+  // if they had asked for it (review I1).
+  const [applySeed, setApplySeed] = useState<{
+    seed: ApplySeed
+    nonce: number
+    forKey: string
+  } | null>(null)
 
   // Two INDEPENDENT loads: a breakdown 404 must not blank the profile table, so each
   // carries its own sequence guard, its own banner and its own busy flag.
@@ -949,6 +978,10 @@ export default function PaycheckPage() {
       setFromCache(true)
       setBreakdown(peeked)
     }
+    // An applied scenario belongs to the person it was modelled for; leaving them drops it
+    // (the same reason the pinned profile is dropped just above). The key check at the mount
+    // below is the fence — this only keeps a parked seed from coming back on a switch home.
+    setApplySeed(null)
     setSelection({ profileId: null, personId })
   }
 
@@ -979,6 +1012,11 @@ export default function PaycheckPage() {
         : profiles.filter((p) => p.person_id === activePersonId),
     [profiles, switchable, activePersonId],
   )
+
+  // The profile panel's identity: the chip's pick, and whether the list is scoped yet (see
+  // the mount below). An Apply seed is only ever handed to the panel it was applied FROM.
+  const profilesKey = `${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`
+  const seedForPanel = applySeed?.forKey === profilesKey ? applySeed : null
 
   // The ONE place this page adds money up, and only because there is no server figure for
   // it in this batch. Legal here where the waterfall's lines are not (rule 9): each leg is
@@ -1082,6 +1120,21 @@ export default function PaycheckPage() {
               {/* Same payload, same busy dim: the flow can never show a different check than
                   the table above it. */}
               <FlowPanel data={data} />
+              {/* The sandbox (2026-09-03 planning-sandboxes spec §9), under the flow: it models
+                  the check ABOVE it, so it takes the same payload and the same two selectors
+                  GET /breakdown was asked with. Nothing it does writes. */}
+              <TryItPanel
+                profileId={selection.profileId}
+                personId={selection.personId}
+                breakdown={data}
+                onApply={(seed) =>
+                  setApplySeed((current) => ({
+                    seed,
+                    nonce: (current?.nonce ?? 0) + 1,
+                    forKey: profilesKey,
+                  }))
+                }
+              />
             </>
           )}
         </Feed>
@@ -1110,7 +1163,7 @@ export default function PaycheckPage() {
                household resolves re-seeds from the primary's own latest row; the only
                typing that can be lost is whatever landed in that first instant. */
             <ProfilesPanel
-              key={`${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`}
+              key={`${profilesKey}:${seedForPanel?.nonce ?? 0}`}
               profiles={shownProfiles}
               personId={selection.personId}
               shownId={breakdown?.profile.id ?? null}
@@ -1118,6 +1171,7 @@ export default function PaycheckPage() {
               onSelect={selectProfile}
               onShowCurrent={showCurrent}
               onChanged={onProfilesChanged}
+              initialForm={seedForPanel?.seed}
             />
           )}
         </Feed>
