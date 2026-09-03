@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import {
   BAND_SERIES,
+  MEDIAN_SERIES,
   PROJECTION_SERIES,
 } from '../components/projection/projectionChartOptions'
 import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
@@ -21,20 +22,32 @@ vi.mock('../components/EChart', async () => {
   return {
     default: ({
       option,
+      ariaLabel,
       animateEntrance = true,
+      onLegendChange,
     }: {
       option: {
         xAxis?: { data?: unknown[] }
+        yAxis?: { type?: string }
+        legend?: { selected?: unknown }
         series?: {
           name?: string
           markLine?: { data?: { xAxis?: string; label?: { formatter?: string } }[] }
         }[]
       }
+      ariaLabel?: string
       animateEntrance?: boolean
+      onLegendChange?: (selected: Record<string, boolean>) => void
     }) =>
       createElement('div', {
         'data-testid': 'echart',
+        'aria-label': ariaLabel,
         'data-categories': (option.xAxis?.data ?? []).join(','),
+        // Linear vs Log (F3) and the picks the page feeds back in (§9).
+        'data-y-type': String(option.yAxis?.type ?? ''),
+        'data-legend-selected': JSON.stringify(option.legend?.selected ?? null),
+        // Stands in for echarts' legendselectchanged, which jsdom can never fire.
+        onMouseEnter: () => onLegendChange?.({ 'Growth only': false }),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
         // Series names are the option capture: WHICH curves a payload puts on the chart
@@ -554,7 +567,9 @@ describe('ProjectionPage', () => {
       'mc-base',
       BAND_SERIES[0],
       BAND_SERIES[1],
-      `${BAND_SERIES[0]}-upper`,
+      // The upper outer wash shares its half's NAME (F3), then the median hairline.
+      BAND_SERIES[0],
+      MEDIAN_SERIES,
       ...PROJECTION_SERIES,
     ])
   })
@@ -571,6 +586,42 @@ describe('ProjectionPage', () => {
   // actually reaches the DOM, and this page carries both shapes — a tile label and two
   // chart-card headings. The authored words ride in aria-label, which is what a screen
   // reader hears; the bubble itself renders the same words when the hint opens.
+  it('mounts both charts through ChartCard with house labels, export rows and the trend-span / axis-scale controls', async () => {
+    renderPage()
+    await screen.findByText('Projected investable balance')
+    expect(screen.getByLabelText(/Projected investable balance over the next/)).toBeTruthy()
+    expect(screen.getByLabelText(/Net worth history with a fitted trend/)).toBeTruthy()
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(2)
+    expect(screen.getByRole('group', { name: 'Trend span' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Axis scale' })).toBeTruthy()
+    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(2)
+  })
+
+  it('Log flips the fan’s axis and the pick survives a recalculation', async () => {
+    renderPage()
+    await screen.findByText('Projected investable balance')
+    const fan = () =>
+      screen
+        .getByLabelText(/Projected investable balance over the next/)
+        .closest('.chart-card')!
+        .querySelector('[data-testid="echart"]')!
+    expect(fan().getAttribute('data-y-type')).toBe('value')
+    fireEvent.click(screen.getByRole('button', { name: 'Log' }))
+    expect(fan().getAttribute('data-y-type')).toBe('log')
+  })
+
+  it('legend picks persist through an option rebuild', async () => {
+    renderPage()
+    await screen.findByText('Projected investable balance')
+    const fan = screen
+      .getByLabelText(/Projected investable balance over the next/)
+      .closest('.chart-card')!
+      .querySelector('[data-testid="echart"]')!
+    fireEvent.mouseEnter(fan) // stands in for legendselectchanged
+    fireEvent.click(screen.getByRole('button', { name: 'Log' })) // rebuilds the option
+    expect(JSON.parse(fan.getAttribute('data-legend-selected')!)).toEqual({ 'Growth only': false })
+  })
+
   it('hangs a hint on the FI-target tile and on both chart headings', async () => {
     renderPage()
     await screen.findByText('$1,500,000.00')
