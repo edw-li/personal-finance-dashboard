@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from './echarts'
-import { quiesceRipples } from './motion'
+import { MOTION, quiesceRipples } from './motion'
 
 // No component is RENDERED here (echarts does not draw in jsdom — house law); this pins
 // the pure transform EChart.tsx applies under prefers-reduced-motion.
@@ -74,5 +74,16 @@ describe('quiesceRipples', () => {
     ])
     quiesceRipples(input)
     expect(seriesOf(input)[0].rippleEffect).toEqual({ brushType: 'stroke', scale: 3 })
+  })
+})
+
+describe('MOTION', () => {
+  it('is the house clock: 450ms cubicOut entrance, 300ms cubicInOut update', () => {
+    expect(MOTION).toEqual({
+      animationDuration: 450,
+      animationEasing: 'cubicOut',
+      animationDurationUpdate: 300,
+      animationEasingUpdate: 'cubicInOut',
+    })
   })
 })

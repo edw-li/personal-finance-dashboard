@@ -6,6 +6,7 @@
 // the CVD-safety mechanism — never reorder, never cycle past 8, never invent a hue outside
 // tokens.ts.
 import { DARK, type ThemeTokens } from '../theme/tokens'
+import { MOTION } from './motion'
 import type { AccountGroup } from '../types/api'
 
 export const PALETTE = DARK.palette
@@ -60,6 +61,8 @@ const FONT_FAMILY = "system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif
  *  charts/echarts.ts (`registerThemeVersion`). */
 export function buildTheme(t: ThemeTokens) {
   return {
+    // The house clock (chart spec §11): entrance 450ms cubicOut, update 300ms cubicInOut.
+    ...MOTION,
     color: [...t.palette],
     backgroundColor: 'transparent',
     textStyle: { color: t.muted, fontFamily: FONT_FAMILY },
@@ -82,6 +85,9 @@ export function buildTheme(t: ThemeTokens) {
       itemHeight: 8,
     },
     tooltip: {
+      // The grammar's tooltip rows (charts/tooltip.ts) are styled by panels.css under this
+      // class; a theme-level className means even a non-grammar tooltip inherits the box.
+      className: 'chart-tip',
       backgroundColor: t.surface2,
       borderColor: t.axisLine,
       borderWidth: 1,

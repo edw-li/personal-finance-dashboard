@@ -53,7 +53,12 @@ vi.mock('../charts/echarts', () => {
   }
 })
 // Identity pass-through: quiesceRipples is reduced-motion armor, not this file's subject.
-vi.mock('../charts/motion', () => ({ quiesceRipples: (option: unknown) => option }))
+// MOTION comes through as the real block — charts/theme.ts spreads it into every built
+// theme, so a mock that omitted it would spread `undefined` and break registration.
+vi.mock('../charts/motion', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../charts/motion')>()),
+  quiesceRipples: (option: unknown) => option,
+}))
 vi.mock('../utils/download', () => ({
   toCsv: vi.fn(() => 'CSV-BODY'),
   downloadDataUrl: vi.fn(),

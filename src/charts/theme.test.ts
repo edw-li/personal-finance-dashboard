@@ -28,6 +28,16 @@ describe('chart theme bridge', () => {
     expect(light.valueAxis.splitLine.lineStyle.color).toBe(LIGHT.gridLine)
   })
 
+  it('carries the house motion block and the tooltip class into every theme', () => {
+    for (const theme of [buildTheme(DARK), buildTheme(LIGHT)]) {
+      expect(theme.animationDuration).toBe(450)
+      expect(theme.animationEasing).toBe('cubicOut')
+      expect(theme.animationDurationUpdate).toBe(300)
+      expect(theme.animationEasingUpdate).toBe('cubicInOut')
+      expect(theme.tooltip.className).toBe('chart-tip')
+    }
+  })
+
   it('registers the RESOLVED palette under the versioned name it returns', () => {
     const name = registerThemeVersion('light', 3)
     expect(name).toBe('finance-3')
