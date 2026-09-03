@@ -608,7 +608,8 @@ describe('SettingsPage — xlsx import', () => {
     expect(vi.mocked(importXlsx).mock.calls[0]).toEqual([file, true])
 
     expect(await screen.findByText('Dry run — nothing was written.')).toBeTruthy()
-    expect(screen.getByText('Spending')).toBeTruthy()
+    // By role: the Appearance card's Landing page select carries a 'Spending' option too.
+    expect(screen.getByRole('heading', { name: 'Spending' })).toBeTruthy()
     expect(screen.getByText('transaction')).toBeTruthy()
     // A header row, unlike the plan's headerless skeleton: the glyphs alone say nothing
     // about which of the importer's four verbs a number belongs to.
@@ -629,7 +630,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(screen.getByText('2024-03-05 new: Gas 51.00')).toBeTruthy()
     // All nine sheets come back on every report; the eight that changed nothing are not
     // headings — a wall of empty sections would bury the one that did.
-    expect(screen.queryByText('Paycheck')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Paycheck' })).toBeNull()
     expect(screen.queryByText(APPLIED_NOTE)).toBeNull()
   })
 
@@ -645,7 +646,7 @@ describe('SettingsPage — xlsx import', () => {
 
     // The fourth arm of the has-content filter: a sheet can change nothing countable and
     // still have something to show. Dropped, its preview lines would vanish silently.
-    expect(await screen.findByText('Paycheck')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Paycheck' })).toBeTruthy()
     // No "(+n more)" when nothing was dropped — the cap is news only when it bit.
     expect(screen.getByText('1 sample changes')).toBeTruthy()
     expect(screen.getByText('2024-06-14 gross 12500.00 -> 12750.00')).toBeTruthy()
