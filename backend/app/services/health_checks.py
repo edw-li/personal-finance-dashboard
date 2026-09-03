@@ -5,7 +5,7 @@ month in `months`, `snapshot_now`). `now` is injected so the rules are clock-tes
 Thresholds are twins of src/utils/staleness.ts; test_health_checks pins them."""
 
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,7 +132,12 @@ async def check_coverage_gaps(
 
 
 async def check_stale_quotes(db: AsyncSession, *, now: datetime) -> HealthCheckOut:
-    cutoff = now - timedelta(days=STALE_QUOTE_DAYS)
+    # DATES, not instants: staleness.ts truncates quoted_at to its bar DAY and compares it
+    # against today's UTC midnight, so an instant cutoff would have this card and the
+    # holdings table disagree about the same row for a day (a Friday bar reading stale here
+    # on Monday evening). `quoted_at < midnight(today - 4d)` is exactly the twin's
+    # `today - bar_date > 4 days`, because date(q) < D iff q < midnight(D).
+    cutoff = datetime.combine(now.date() - timedelta(days=STALE_QUOTE_DAYS), time.min, tzinfo=UTC)
     tickers = list(
         (
             await db.execute(

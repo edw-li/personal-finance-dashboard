@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 from app.models import (
@@ -133,6 +133,40 @@ async def test_stale_quotes_counts_active_auto_priced_securities_only(db):
     check = await check_stale_quotes(db, now=NOW)
     assert check.severity == "warn" and check.count == 1
     assert "BBB" in check.detail and check.fix.to == "/portfolio"
+
+
+async def test_stale_quotes_compares_bar_dates_like_the_frontend_twin(db):
+    # staleness.ts: stale iff today's UTC midnight - the bar DATE > 4 days. A bar exactly
+    # four days back is fresh on both screens; five days back is stale on both. An instant
+    # cutoff (now - 4d) would call the four-day bar stale here and fresh in the holdings
+    # table for the rest of the day.
+    edge = Security(ticker="EDGE", name="Edge", holding_type="stock")
+    over = Security(ticker="OVER", name="Over", holding_type="stock")
+    db.add_all([edge, over])
+    await db.flush()
+    midnight = datetime.combine(NOW.date(), time.min, tzinfo=UTC)
+    db.add(
+        LatestPrice(
+            security_id=edge.id,
+            price=Decimal("1"),
+            quoted_at=midnight - timedelta(days=STALE_QUOTE_DAYS),
+            source="yfinance",
+        )
+    )
+    await db.commit()
+    assert (await check_stale_quotes(db, now=NOW)).severity == "ok"
+    db.add(
+        LatestPrice(
+            security_id=over.id,
+            price=Decimal("1"),
+            quoted_at=midnight - timedelta(days=STALE_QUOTE_DAYS + 1),
+            source="yfinance",
+        )
+    )
+    await db.commit()
+    check = await check_stale_quotes(db, now=NOW)
+    assert check.severity == "warn" and check.count == 1
+    assert "OVER" in check.detail and "EDGE" not in check.detail
 
 
 async def test_identical_snapshot_is_an_info_with_a_link_to_the_latest_month(db):
