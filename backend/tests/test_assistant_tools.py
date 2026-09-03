@@ -65,3 +65,30 @@ async def test_run_tax_whatif_compacts_the_engine_answer(db):
     # An empty scenario still answers: baseline == scenario, delta zeros.
     assert set(result) >= {"year", "baseline_totals", "scenario_totals", "delta", "warnings"}
     assert json.dumps(result)  # fully jsonable
+
+
+async def test_run_tax_whatif_carries_a_sandbox_link_in_the_page_grammar(db):
+    """The seam (spec §12): the compact result names the URL the drawer can open — the SAME
+    scenario the tool just ran, in the whatif grammar, so the user lands on the live panel."""
+    from app.seed import seed_tax_definitions
+
+    db.add(TaxYear(year=2026))
+    await seed_tax_definitions(db)
+    await db.commit()
+    result = await execute_tool(
+        db,
+        "run_tax_whatif",
+        {"year": 2026, "overrides": {"qualified_dividends": "2500", "interest_total": None}},
+    )
+    assert "error" not in result, result
+    assert (
+        result["sandbox_url"]
+        == "/taxes?whatif=interest_total%3Anull&whatif=qualified_dividends%3A2500"
+    )
+
+
+async def test_run_tax_whatif_empty_scenario_links_to_the_bare_page(db):
+    db.add(TaxYear(year=2026))
+    await db.commit()
+    result = await execute_tool(db, "run_tax_whatif", {"year": 2026, "overrides": {}})
+    assert result["sandbox_url"] == "/taxes"

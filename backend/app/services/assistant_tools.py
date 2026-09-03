@@ -141,6 +141,7 @@ async def _get_month_detail(db: AsyncSession, args: dict) -> dict:
 async def _run_tax_whatif(db: AsyncSession, args: dict) -> dict:
     from app.api.taxes import what_if
     from app.schemas.taxes import WhatIfIn
+    from app.services.sandbox_links import sandbox_link, whatif_entries
 
     try:
         body = WhatIfIn(
@@ -168,6 +169,9 @@ async def _run_tax_whatif(db: AsyncSession, args: dict) -> dict:
                 "sale_details": out.sale_details,
                 "espp_sale_details": out.espp_sale_details,
                 "warnings": out.warnings,
+                # The seam (spec §12): where the drawer can open THIS scenario live. Encoded
+                # from the validated body, so the link models exactly what was modelled.
+                "sandbox_url": sandbox_link("taxes", whatif_entries(body)),
             }
         )
     )
