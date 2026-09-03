@@ -6,31 +6,44 @@ vi.mock('../../api/household', () => ({ fetchHousehold: vi.fn() }))
 vi.mock('../../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 import { fetchCoverage } from '../../api/coverage'
 import { fetchHousehold } from '../../api/household'
-import { clearSnapshots } from '../../api/snapshotCache'
-import ScopeBar from './ScopeBar'
+import { clearSnapshots, getSnapshot, setSnapshot } from '../../api/snapshotCache'
+import ScopeBar, { HOUSEHOLD_SNAPSHOT } from './ScopeBar'
 
 function Url() {
   const l = useLocation()
   return <span data-testid="url">{l.pathname + l.search}</span>
 }
 
-function mount(props: Parameters<typeof ScopeBar>[0], entry = '/net-worth') {
-  return render(
+function tree(props: Parameters<typeof ScopeBar>[0], entry: string) {
+  return (
     <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="*" element={<><ScopeBar {...props} /><Url /></>} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
+}
+
+function mount(props: Parameters<typeof ScopeBar>[0], entry = '/net-worth') {
+  const result = render(tree(props, entry))
+  return {
+    ...result,
+    /** Re-render the same page with new ScopeBar props (the wizard bumping `revalidate`). */
+    rescope: (next: Parameters<typeof ScopeBar>[0]) => result.rerender(tree(next, entry)),
+  }
+}
+
+// The primary is deliberately the HIGHER id, so a household that comes back in id order still
+// has to be re-sorted primary-first for the chips to read Edward, Grace.
+const HOUSEHOLD = {
+  people: [{ id: 1, name: 'Grace', is_primary: false }, { id: 2, name: 'Edward', is_primary: true }],
+  marriage_date: null,
 }
 
 beforeEach(() => {
   localStorage.clear()
   clearSnapshots()
-  vi.mocked(fetchHousehold).mockResolvedValue({
-    people: [{ id: 1, name: 'Edward', is_primary: true }, { id: 2, name: 'Grace', is_primary: false }],
-    marriage_date: null,
-  })
+  vi.mocked(fetchHousehold).mockResolvedValue(HOUSEHOLD)
   vi.mocked(fetchCoverage).mockResolvedValue({
     balances: ['2026-07-01', '2026-08-01', '2026-09-01'],
     spending: ['2026-07-01'],
@@ -49,18 +62,49 @@ describe('ScopeBar', () => {
     expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('button', { name: 'Joint' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Grace' }))
-    await waitFor(() => expect(screen.getByTestId('url').textContent).toBe('/net-worth?owner=2'))
+    await waitFor(() => expect(screen.getByTestId('url').textContent).toBe('/net-worth?owner=1'))
   })
 
-  it('hides Joint when asked, and the whole owner control for one person', async () => {
+  it('hides Joint when asked', async () => {
     mount({ owner: { joint: false } })
     await screen.findByRole('button', { name: 'Grace' })
     expect(screen.queryByRole('button', { name: 'Joint' })).toBeNull()
-    cleanup()
-    vi.mocked(fetchHousehold).mockResolvedValue({ people: [{ id: 1, name: 'Edward', is_primary: true }], marriage_date: null })
+  })
+
+  it('paints the seeded household, then swaps in the revalidated one and writes it back', async () => {
+    setSnapshot(HOUSEHOLD_SNAPSHOT, HOUSEHOLD)
+    const alone = { people: [{ id: 2, name: 'Edward', is_primary: true }], marriage_date: null }
+    vi.mocked(fetchHousehold).mockResolvedValue(alone)
     mount({ owner: true })
-    await waitFor(() => expect(vi.mocked(fetchHousehold)).toHaveBeenCalledTimes(2))
-    expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
+    // Seeded: the chips are there in the first paint, before any fetch resolves.
+    expect(screen.getByRole('group', { name: 'Whose' })).toBeTruthy()
+    // Revalidated: one person is no choice at all, so the whole control goes away...
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull())
+    // ...and the fresh payload is written back, so the next page seeds from the truth.
+    expect(getSnapshot(HOUSEHOLD_SNAPSHOT)).toEqual(alone)
+  })
+
+  it('keeps the seeded chips when the household fetch fails', async () => {
+    setSnapshot(HOUSEHOLD_SNAPSHOT, HOUSEHOLD)
+    vi.mocked(fetchHousehold).mockRejectedValue(new Error('offline'))
+    mount({ owner: true })
+    await waitFor(() => expect(fetchHousehold).toHaveBeenCalled())
+    expect(screen.getByRole('group', { name: 'Whose' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Grace' })).toBeTruthy()
+  })
+
+  it('re-runs both fetches when the revalidate key changes', async () => {
+    const props = (revalidate: number) => ({
+      owner: true,
+      month: { mode: 'view' as const, anchor: '2026-09-01' },
+      revalidate,
+    })
+    const view = mount(props(0))
+    await waitFor(() => expect(fetchHousehold).toHaveBeenCalledTimes(1))
+    expect(fetchCoverage).toHaveBeenCalledTimes(1)
+    view.rescope(props(1))
+    await waitFor(() => expect(fetchCoverage).toHaveBeenCalledTimes(2))
+    expect(fetchHousehold).toHaveBeenCalledTimes(2)
   })
 
   it('hides All when asked and shows a null scope as the primary person', async () => {
@@ -70,7 +114,15 @@ describe('ScopeBar', () => {
     expect(screen.queryByRole('button', { name: 'Joint' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Edward' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Grace' }))
-    await waitFor(() => expect(screen.getByTestId('url').textContent).toBe('/net-worth?owner=2'))
+    await waitFor(() => expect(screen.getByTestId('url').textContent).toBe('/net-worth?owner=1'))
+  })
+
+  it('presses the first chip for an owner this page offers no chip for', async () => {
+    // ?owner=joint on a page whose owner set has no Joint chip: without the fallback the group
+    // would render with nothing pressed at all.
+    mount({ owner: { joint: false } }, '/net-worth?owner=joint')
+    await screen.findByRole('button', { name: 'Grace' })
+    expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('range chips write the URL and default to 1Y', () => {
@@ -89,6 +141,33 @@ describe('ScopeBar', () => {
     expect(screen.getByTestId('url').textContent).toBe('/net-worth?month=2026-07')
     fireEvent.click(await screen.findByRole('button', { name: 'Back to latest' }))
     expect(screen.getByTestId('url').textContent).toBe('/net-worth')
+  })
+
+  it('month (view): no Back to latest without a month, nor on the latest covered one', async () => {
+    mount({ month: { mode: 'view', anchor: '2026-09-01' } })
+    // Sep has balances but no spending in the fixture; waiting on that label proves coverage landed.
+    const sep = await screen.findByRole('button', { name: /^Sep 2026 — balances entered, spending missing/ })
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+    fireEvent.click(sep)
+    expect(screen.getByTestId('url').textContent).toBe('/net-worth?month=2026-09')
+    expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
+  })
+
+  it('month (view): the page\'s figures and Edit link reach the ribbon', async () => {
+    mount(
+      {
+        month: {
+          mode: 'view',
+          anchor: '2026-09-01',
+          editHref: (m) => `/update?month=${m}`,
+          figures: { '2026-07-01': '$1.2M' },
+        },
+      },
+      '/net-worth?month=2026-07',
+    )
+    const edit = await screen.findByRole('link', { name: /Edit Jul 2026/ })
+    expect(edit.getAttribute('href')).toBe('/update?month=2026-07-01')
+    expect(screen.getByRole('button', { name: /^Jul 2026 — \$1\.2M — / })).toBeTruthy()
   })
 
   it('month (edit): the ribbon navigates to the wizard', async () => {

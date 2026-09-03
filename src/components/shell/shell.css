@@ -396,11 +396,21 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem 1.25rem;
-  width: 100%;
+  /* Grows to fill its row rather than claiming the full width: the wizard puts its Start
+     button on the same line, and a 100% bar would push it off. min-width: 0 lets the ribbon
+     shrink instead of overflowing the flex line. */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .scope-bar-group {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+/* panels.css gives .eyebrow a bottom margin for panel headers; on this one row the label sits
+   beside its control, so the bar carries its own reset instead of leaning on PageFrame's. */
+.scope-bar-group .eyebrow {
+  margin: 0;
 }
