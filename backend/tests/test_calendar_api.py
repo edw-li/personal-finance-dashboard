@@ -1,12 +1,13 @@
 """Endpoint tests: loading + validation + the GET-never-rejects law. Composition RULES
-are pinned in test_calendar_events.py — here each type appears once to prove its loader
-(the fold's held-filter, the sold-lot filter, the cadence gate, the snapshot probe)."""
+are pinned in tests/calendar/ — here each type appears once to prove its loader (the
+fold's held-filter, the sold-lot filter, the cadence gate, the snapshot probe)."""
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
 
+from app.api import calendar as calendar_api
 from app.models import (
     AppSetting,
     CardCredit,
@@ -26,6 +27,7 @@ from app.models import (
     TaxYear,
 )
 from app.seed import seed_tax_definitions
+from app.services import rsu_vesting
 from tests.portfolio_factories import acct
 
 CALENDAR = "/api/v1/calendar"
@@ -715,6 +717,12 @@ async def test_custom_event_money_validation(auth_client):
     ).status_code == 422
     too_big = await auth_client.post(f"{CALENDAR}/events", json={**base, "amount": "10000000000"})
     assert too_big.status_code == 422  # Numeric(12,2) fence via quantize_money
+    # `direction` carries the sign, so a negative amount would render an "out" event as
+    # money coming IN — refused in the parser rather than stored and drawn backwards.
+    negative = await auth_client.post(
+        f"{CALENDAR}/events", json={**base, "amount": "-5", "direction": "out"}
+    )
+    assert negative.status_code == 422
 
 
 async def test_calendar_card_events_and_the_card_health_row(auth_client, db, monkeypatch):
@@ -890,3 +898,93 @@ async def test_calendar_prices_ex_dividends_from_the_latest_stored_per_share(
         "status": "ok",
         "note": None,
     }
+
+
+async def test_the_rsu_health_note_names_the_missing_quote_and_the_refused_grant_together(
+    auth_client, db, monkeypatch
+):
+    freeze_today(monkeypatch)
+    db.add(
+        RsuGrant(
+            kind="new_hire",
+            label="2025 offer",
+            focal_year=None,
+            shares=400,
+            grant_price=Decimal("100"),
+            first_vest_date=date(2026, 3, 18),
+            cliff_pct=Decimal("0.25"),
+            vest_quantum=1,
+        )
+    )
+    db.add(
+        RsuGrant(
+            kind="refresh",
+            label="broken",
+            focal_year=None,
+            shares=100,
+            grant_price=Decimal("100"),
+            first_vest_date=date(2026, 9, 16),
+            cliff_pct=Decimal("0.30"),  # rsu_vesting refuses this row
+            vest_quantum=1,
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")).json()
+    # Both gaps, not just the first one found: fixing the ticker would otherwise reveal the
+    # refused grant only on the NEXT load.
+    assert next(s for s in body["sources"] if s["source"] == "rsu") == {
+        "source": "rsu",
+        "status": "partial",
+        "note": "no ESPP/employer ticker configured — vest values unknown; "
+        "1 grant(s) cannot be scheduled",
+    }
+
+
+async def test_one_roster_read_and_one_schedule_call_per_grant_per_get(
+    auth_client, db, monkeypatch
+):
+    """The loaders and the generators are on the same request: a roster read or a vest
+    schedule computed twice is also two chances for the health footer and the events to
+    disagree."""
+    freeze_today(monkeypatch)
+    db.add(
+        RsuGrant(
+            kind="new_hire",
+            label="2025 offer",
+            focal_year=None,
+            shares=400,
+            grant_price=Decimal("100"),
+            first_vest_date=date(2026, 3, 18),
+            cliff_pct=Decimal("0.25"),
+            vest_quantum=1,
+        )
+    )
+    db.add(
+        PaycheckProfile(
+            person_id=(await seed_primary(db)).id,
+            effective_date=date(2026, 1, 1),
+            annual_salary=Decimal("120000"),
+        )
+    )
+    await db.commit()
+
+    roster_reads = 0
+    schedule_calls = 0
+    real_load_people = calendar_api.load_people
+    real_schedule = rsu_vesting.schedule
+
+    async def counting_load_people(db_):
+        nonlocal roster_reads
+        roster_reads += 1
+        return await real_load_people(db_)
+
+    def counting_schedule(grant):
+        nonlocal schedule_calls
+        schedule_calls += 1
+        return real_schedule(grant)
+
+    monkeypatch.setattr(calendar_api, "load_people", counting_load_people)
+    monkeypatch.setattr(rsu_vesting, "schedule", counting_schedule)
+    resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")
+    assert resp.status_code == 200
+    assert (roster_reads, schedule_calls) == (1, 1)

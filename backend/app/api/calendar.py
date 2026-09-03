@@ -48,13 +48,13 @@ from app.schemas.calendar import (
     OverrideOut,
     SourceHealthOut,
 )
-from app.services import rsu_vesting
 from app.services.business_days import next_business_day
 from app.services.calendar import Sources, compose
 from app.services.calendar.generators.cards import CardCreditFacts, CardFacts
 from app.services.calendar.generators.custom import CustomRow
 from app.services.calendar.generators.dividends import ExDividend
 from app.services.calendar.generators.payroll import PaydaySource
+from app.services.calendar.generators.rsu import resolve as resolve_vests
 from app.services.calendar.generators.taxes import TaxFacts
 from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
@@ -143,21 +143,13 @@ async def _held_ex_dividends(db: AsyncSession) -> list[ExDividend]:
     return held
 
 
-def _schedulable(grant: RsuGrant) -> bool:
-    try:
-        rsu_vesting.schedule(grant)
-    except (ValueError, OverflowError):
-        return False
-    return True
-
-
 async def _payday_sources(
-    db: AsyncSession, today: date
+    db: AsyncSession, today: date, people: list[Person]
 ) -> tuple[list[PaydaySource], SourceHealthOut]:
     """Paydays follow the profile IN FORCE for EACH person (2026-08-27 spec §4.4), not "the
     newest row": the latest row effective today or earlier, else the earliest future one —
-    paycheck.py's `_default_profile` rule, resolved in ONE ordered pass."""
-    people = await load_people(db)
+    paycheck.py's `_default_profile` rule, resolved in ONE ordered pass. `people` is the
+    caller's ONE roster read — the custom-event stamps need the same names."""
     primary = primary_person(people)
     in_force: dict[int | None, PaycheckProfile] = {}
     for profile in (
@@ -337,6 +329,10 @@ async def _load_sources(
     """Every generator input as plain values, plus the health footer and the quote stamp.
     Health rows come out in SOURCE_FAMILIES order — `card` between tax and ritual."""
     health: list[SourceHealthOut] = []
+    # ONE roster read for the whole response: the payday owners and the custom-event
+    # person stamps are the same people, and two reads are two chances to disagree.
+    people = await load_people(db)
+    names = {person.id: person.name for person in people}
 
     grants = list(
         (
@@ -344,23 +340,23 @@ async def _load_sources(
         ).scalars()
     )
     ticker, quote, quoted_at = await _espp_quote(db)
-    unschedulable = [grant.label for grant in grants if not _schedulable(grant)]
+    # The ONE schedule pass; `vest_schedules` below hands it to the generator.
+    vest_schedules, unschedulable = resolve_vests(grants)
+    # BOTH gaps, not the first one found: fixing the ticker must not then reveal a refused
+    # grant for the first time on the next load.
+    gaps: list[str] = []
+    if quote is None:
+        gaps.append(
+            "no ESPP/employer ticker configured — vest values unknown"
+            if ticker is None
+            else f"no current {ticker} price — vest values unknown"
+        )
+    if unschedulable:
+        gaps.append(f"{len(unschedulable)} grant(s) cannot be scheduled")
     if not grants:
         health.append(_health("rsu", "off", "no RSU grants entered"))
-    elif quote is None:
-        health.append(
-            _health(
-                "rsu",
-                "partial",
-                "no ESPP/employer ticker configured — vest values unknown"
-                if ticker is None
-                else f"no current {ticker} price — vest values unknown",
-            )
-        )
-    elif unschedulable:
-        health.append(
-            _health("rsu", "partial", f"{len(unschedulable)} grant(s) cannot be scheduled")
-        )
+    elif gaps:
+        health.append(_health("rsu", "partial", "; ".join(gaps)))
     else:
         health.append(_health("rsu", "ok", f"valued at the {ticker} quote"))
 
@@ -415,7 +411,7 @@ async def _load_sources(
     else:
         health.append(_health("dividend", "ok"))
 
-    payday_sources, payroll_health = await _payday_sources(db, today)
+    payday_sources, payroll_health = await _payday_sources(db, today, people)
     health.append(payroll_health)
 
     tax_facts, tax_health = await _tax_facts(db, window, today)
@@ -427,12 +423,12 @@ async def _load_sources(
     entered_months = set((await db.execute(select(NetWorthSnapshot.month))).scalars().all())
     health.append(_health("ritual", "ok", f"reminder on day {due_day} of each month"))
 
-    names = {person.id: person.name for person in await load_people(db)}
     custom_rows = await _custom_rows(db, window, names)
     health.append(_health("custom", "ok"))
 
     sources = Sources(
         grants=grants,
+        vest_schedules=vest_schedules,
         quote=quote,
         stored_periods=stored_periods,
         offerings=offerings,

@@ -37,7 +37,13 @@ def expand(rule: str, start: date, until: date | None, window: Window) -> list[d
     n = max(0, (window.start - start).days // 7) if rule == "weekly" else 0
     out: list[date] = []
     while True:
-        occurrence = _nth(rule, start, n)
+        try:
+            occurrence = _nth(rule, start, n)
+        except (OverflowError, ValueError):
+            # The step left `date`'s range (a window touching Dec 9999). There is nothing
+            # beyond it to emit, and a stored row must never 500 a read — api/calendar.py's
+            # GET-never-rejects law. `rule` was validated above, so this is the range only.
+            return out
         if occurrence > last:
             return out
         if occurrence >= window.start:

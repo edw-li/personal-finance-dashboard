@@ -87,7 +87,9 @@ class CustomEventIn(BaseModel):
     # NULL = household. The bound mirrors the accounts router's: a garbage 10-digit value
     # 422s in the parser rather than reaching the FK.
     person_id: int | None = Field(default=None, ge=1, le=2_147_483_647)
-    amount: Decimal | None = None
+    # `direction` carries the sign (in / out / neutral), so the figure is a MAGNITUDE: a
+    # negative one would draw an "out" event as money arriving.
+    amount: Decimal | None = Field(default=None, ge=0)
     direction: Direction = "neutral"
     recurrence: Recurrence = "none"
     until: date | None = None
@@ -135,7 +137,9 @@ class OverrideIn(BaseModel):
     done: bool
     hidden: bool
     note: str | None = Field(default=None, max_length=300)
-    amount: Decimal | None = None
+    # A magnitude, like CustomEventIn's: the generated event owns the direction, and "your
+    # figure" replaces the estimate without flipping which way the money goes.
+    amount: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("note")
     @classmethod

@@ -30,6 +30,9 @@ class Sources:
     the withholding tracker) — see api/calendar.py's `_card_facts` / `_tax_facts`."""
 
     grants: list = field(default_factory=list)  # grant-shaped rows (rsu_vesting.schedule)
+    # generators.rsu.resolve's parallel list, when the ROUTER already resolved the
+    # schedules for its health footer; None = let the generator resolve them.
+    vest_schedules: list | None = None
     quote: Decimal | None = None  # latest employer quote; None = vests unpriced
     stored_periods: list[StoredPeriod] = field(default_factory=list)
     offerings: list[OfferingInfo] = field(default_factory=list)
@@ -52,7 +55,9 @@ def compose(
 ) -> list[Event]:
     """Every event in the window, folded, overlaid, sorted by (date, type, label)."""
     events: list[Event] = []
-    events += rsu.vest_events(sources.grants, window, quote=sources.quote)
+    events += rsu.vest_events(
+        sources.grants, window, quote=sources.quote, schedules=sources.vest_schedules
+    )
     events += espp.espp_events(
         sources.stored_periods, sources.offerings, sources.unsold_lots, window
     )
