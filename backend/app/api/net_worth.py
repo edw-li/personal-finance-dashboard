@@ -267,10 +267,27 @@ async def timeseries(
 @router.get("/summary", response_model=SummaryOut)
 async def summary(
     owner: OwnerQuery = None,
+    # Annotated + a plain None default, like OwnerQuery above and NOT `= Query(default=None)`:
+    # assistant_context calls this function directly, and a params.Query left sitting in the
+    # default would sail past `is None` and reach the 404 formatter as a non-date.
+    month: Annotated[date | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
 ) -> SummaryOut:
+    """The latest month by default; `month=YYYY-MM-01` views that snapshot (which may be the
+    latest) with ITS month-over-month delta (against the snapshot immediately before it), for
+    the ribbon's click-to-view (2026-09-03 shell spec §7). The charts are unaffected — they
+    span all months."""
+    if month is not None:
+        # 422 like /months/{month}: a mid-month value must not read as "no snapshot for 2026-02".
+        require_first_of_month(month)
     snapshots, accounts, balances = await load_balance_matrix(db, _owner_filter(owner))
-    if not snapshots:
+    if month is None:
+        index = len(snapshots) - 1  # -1 on an empty book
+    else:
+        index = next((i for i, snap in enumerate(snapshots) if snap.month == month), -1)
+        if index == -1:
+            raise HTTPException(status_code=404, detail=f"no snapshot for {month:%Y-%m}")
+    if index == -1:
         return SummaryOut(
             month=None,
             net_worth=None,
@@ -279,31 +296,31 @@ async def summary(
             groups=[],
             owner_totals=[],
         )
-    latest = snapshots[-1]
-    previous = snapshots[-2] if len(snapshots) > 1 else None
-    latest_nw = net_worth_for(latest.id, accounts, balances)
-    latest_groups = group_totals_for(latest.id, accounts, balances)
+    viewed = snapshots[index]
+    previous = snapshots[index - 1] if index > 0 else None
+    viewed_nw = net_worth_for(viewed.id, accounts, balances)
+    viewed_groups = group_totals_for(viewed.id, accounts, balances)
     prev_nw = net_worth_for(previous.id, accounts, balances) if previous else None
     prev_groups = group_totals_for(previous.id, accounts, balances) if previous else None
-    latest_owners = owner_totals_for(latest.id, accounts, balances)
+    viewed_owners = owner_totals_for(viewed.id, accounts, balances)
     owner_rows = await _owner_rows(db, accounts)
     return SummaryOut(
-        month=latest.month,
-        net_worth=latest_nw,
-        mom_delta=None if prev_nw is None else latest_nw - prev_nw,
-        mom_pct=mom_pct(latest_nw, prev_nw),
+        month=viewed.month,
+        net_worth=viewed_nw,
+        mom_delta=None if prev_nw is None else viewed_nw - prev_nw,
+        mom_pct=mom_pct(viewed_nw, prev_nw),
         groups=[
             GroupSummary(
                 group=group,
-                total=latest_groups[group],
+                total=viewed_groups[group],
                 mom_delta=None
                 if prev_groups is None
-                else latest_groups[group] - prev_groups[group],
+                else viewed_groups[group] - prev_groups[group],
             )
             for group in ACCOUNT_GROUPS
         ],
         owner_totals=[
-            OwnerTotal(person_id=person_id, name=name, total=latest_owners.get(person_id, ZERO))
+            OwnerTotal(person_id=person_id, name=name, total=viewed_owners.get(person_id, ZERO))
             for person_id, name in owner_rows
         ],
     )

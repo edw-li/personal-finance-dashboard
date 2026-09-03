@@ -644,3 +644,116 @@ async def test_owner_series_on_a_peopleless_database_is_one_joint_row(auth_clien
     assert body["owner_series"] == [
         {"person_id": None, "name": None, "values": ["900.00", "1120.00", "1500.00"]}
     ]
+
+
+async def test_summary_month_param_returns_that_month_and_its_own_delta(auth_client, db):
+    # Three months: 100 → 130 → 200 in one taxable account. The steps differ on purpose, so
+    # the viewed month's delta cannot be mistaken for the latest month's.
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(acct)
+    await db.flush()
+    snaps = [NetWorthSnapshot(month=date(2026, m, 1)) for m in (1, 2, 3)]
+    db.add_all(snaps)
+    await db.flush()
+    for snap, amount in zip(snaps, ("100.00", "130.00", "200.00"), strict=True):
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal(amount)))
+    await db.commit()
+
+    latest = (await auth_client.get("/api/v1/net-worth/summary")).json()
+    assert latest["month"] == "2026-03-01"
+    assert latest["net_worth"] == "200.00"
+    assert latest["mom_delta"] == "70.00"
+
+    viewed = (await auth_client.get("/api/v1/net-worth/summary?month=2026-02-01")).json()
+    assert viewed["month"] == "2026-02-01"
+    assert viewed["net_worth"] == "130.00"
+    assert viewed["mom_delta"] == "30.00"  # against January, not March
+    assert viewed["mom_pct"] == "0.300000"  # 30/100, 6dp HALF_UP
+
+    first = (await auth_client.get("/api/v1/net-worth/summary?month=2026-01-01")).json()
+    assert first["mom_delta"] is None  # nothing before the first month
+
+
+async def test_summary_month_param_404s_for_a_month_with_no_snapshot(auth_client, db):
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    snap = NetWorthSnapshot(month=date(2026, 1, 1))
+    db.add_all([acct, snap])
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal("1.00")))
+    await db.commit()
+    resp = await auth_client.get("/api/v1/net-worth/summary?month=2025-12-01")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "no snapshot for 2025-12"
+
+
+async def test_summary_month_param_422s_on_a_mid_month_value(auth_client, db):
+    """A mid-month value is malformed input, not an uncovered month: 422 like
+    /months/{month}, never a 404 that reads as "February has no snapshot"."""
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    snap = NetWorthSnapshot(month=date(2026, 2, 1))
+    db.add_all([acct, snap])
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal("100.00")))
+    await db.commit()
+    resp = await auth_client.get("/api/v1/net-worth/summary?month=2026-02-15")
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "month must be the first of the month (YYYY-MM-01)"
+
+
+async def test_summary_month_param_deltas_against_the_previous_snapshot_across_a_gap(
+    auth_client, db
+):
+    # Jan / Mar / Jun, 100 → 130 → 200: "previous" is the previous SNAPSHOT, not the
+    # previous calendar month, so June compares against March.
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(acct)
+    await db.flush()
+    snaps = [NetWorthSnapshot(month=date(2026, m, 1)) for m in (1, 3, 6)]
+    db.add_all(snaps)
+    await db.flush()
+    for snap, amount in zip(snaps, ("100.00", "130.00", "200.00"), strict=True):
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal(amount)))
+    await db.commit()
+
+    june = (await auth_client.get("/api/v1/net-worth/summary?month=2026-06-01")).json()
+    assert june["net_worth"] == "200.00"
+    assert june["mom_delta"] == "70.00"
+    assert june["mom_pct"] == "0.538462"  # 70/130, 6dp HALF_UP
+
+    march = (await auth_client.get("/api/v1/net-worth/summary?month=2026-03-01")).json()
+    assert march["mom_delta"] == "30.00"
+
+    # February falls inside the gap — a real first-of-month with no snapshot behind it.
+    gap = await auth_client.get("/api/v1/net-worth/summary?month=2026-02-01")
+    assert gap.status_code == 404
+    assert gap.json()["detail"] == "no snapshot for 2026-02"
+
+
+async def test_summary_owner_and_month_scope_both_the_view_and_its_delta(auth_client, db):
+    me, _partner = await _seed_owned_timeseries(db)
+
+    july = (
+        await auth_client.get(f"/api/v1/net-worth/summary?owner={me.id}&month=2026-07-01")
+    ).json()
+    assert july["month"] == "2026-07-01"
+    assert july["net_worth"] == "170.00"  # mine 100 + joint 70, not the household's 1170
+    assert july["mom_delta"] is None  # July is the first month in the book
+    assert july["owner_totals"] == [
+        {"person_id": me.id, "name": "Me", "total": "100.00"},
+        {"person_id": None, "name": None, "total": "70.00"},
+    ]
+    assert july["groups"]  # a viewed month still carries its group breakdown
+
+    august = (
+        await auth_client.get(f"/api/v1/net-worth/summary?owner={me.id}&month=2026-08-01")
+    ).json()
+    assert august["net_worth"] == "230.00"
+    assert august["mom_delta"] == "60.00"  # 230 - 170: BOTH months owner-scoped
+
+
+async def test_summary_month_param_404s_on_an_empty_book(auth_client):
+    # No snapshots at all: the month filter still 404s rather than returning the empty
+    # summary, which would silently answer a question about a month that isn't there.
+    resp = await auth_client.get("/api/v1/net-worth/summary?month=2026-01-01")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "no snapshot for 2026-01"
