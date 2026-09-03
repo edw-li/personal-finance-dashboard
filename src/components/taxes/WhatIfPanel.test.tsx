@@ -23,6 +23,16 @@ import { fetchLimits } from '../../api/limits'
 import { fetchHoldings } from '../../api/portfolio'
 import { runWhatIf } from '../../api/whatif'
 
+// The Δ bar rides a real ChartCard; only the canvas underneath is stood in for, so the
+// card's own chrome — the aria sentence it forwards (F11), the empty state — is exercised.
+vi.mock('../EChart', async () => {
+  const { createElement } = await import('react')
+  return {
+    default: ({ ariaLabel }: { ariaLabel?: string }) =>
+      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel }),
+  }
+})
+
 // The sandbox grammar's pin row and the hook both toast; nothing here asserts on them, but
 // a real provider would have to be mounted around every render.
 const toast = { success: vi.fn(), info: vi.fn(), error: vi.fn() }
@@ -382,6 +392,34 @@ describe('WhatIfPanel', () => {
     expect(within(takeHome).getAllByRole('cell').map((c) => c.textContent)).toEqual(['Take-home', '$376,543.22', '$372,222.22', '-$4,321.00'])
     expect(screen.getByText('LTCG: Brokerage Gain/Loss — $12,000.00 → $30,500.00')).toBeTruthy()
     expect(screen.getByText('$1,250.00')).toBeTruthy()
+    // WHERE it moved, beside how much: the per-jurisdiction Δ bar, through the one chart
+    // mount the chart spec allows.
+    expect(
+      screen.getByLabelText('Change in tax by jurisdiction, scenario minus baseline'),
+    ).toBeTruthy()
+  })
+
+  it('says nothing moved rather than drawing seven bars of zero', async () => {
+    vi.mocked(runWhatIf).mockResolvedValue(
+      resultFixture({
+        delta: {
+          total_tax: '0.00',
+          take_home: '0.00',
+          federal_tax: '0.00',
+          state_tax: '0.00',
+          medicare_tax: '0.00',
+          social_security_tax: '0.00',
+          disability_tax: '0.00',
+          capital_gains_tax: '0.00',
+          effective_rate: null,
+        },
+      }),
+    )
+    mount('/taxes?whatif=sale%3A7%3A40')
+    expect(
+      await screen.findByText('Nothing moved — every jurisdiction computes to the stored year.'),
+    ).toBeTruthy()
+    expect(screen.queryByTestId('echart')).toBeNull()
   })
 
   it('an absent NIIT block prints the em dash', async () => {

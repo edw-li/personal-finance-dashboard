@@ -17,6 +17,7 @@ import {
   stagger,
 } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
+import { divergingVisualMap } from '../../charts/scales'
 import {
   INK,
   OTHER_SERIES_COLOR,
@@ -31,7 +32,7 @@ import {
   waterfallSteps,
   waterfallTooltip,
 } from '../../charts/waterfall'
-import type { TaxSummaryOut } from '../../types/api'
+import type { TaxSummaryOut, WhatIfDelta } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatPct } from '../../utils/format'
 import type { LadderSegment } from './marginal'
@@ -412,5 +413,51 @@ export function ladderCsv(rows: LadderRow[]): ExportTable {
         segment.ceiling === null ? '' : segment.ceiling.toFixed(2),
       ]),
     ),
+  }
+}
+
+/** The seven tax lines the what-if compares, in the compare table's own order — so the bar
+ *  and the rows below it read top to bottom the same way. */
+const DELTA_LINES: readonly [string, (delta: WhatIfDelta) => string | null | undefined][] = [
+  ['Federal', (d) => d.federal_tax],
+  ['State', (d) => d.state_tax],
+  ['NIIT', (d) => d.niit_tax],
+  ['Medicare', (d) => d.medicare_tax],
+  ['Social Security', (d) => d.social_security_tax],
+  ['Disability', (d) => d.disability_tax],
+  ['Capital gains', (d) => d.capital_gains_tax],
+]
+
+/**
+ * The what-if's Δ by jurisdiction (2026-09-03 planning-sandboxes spec §10): one horizontal
+ * bar per tax line, scenario minus baseline, diverging around zero — less tax reads left.
+ * Null when nothing moved at all, which is the card's empty sentence rather than seven bars
+ * of zero pretending to be an answer.
+ *
+ * An ABSENT niit_tax (a payload from before lane B, or a year with no NIIT block either
+ * side) is drawn as no movement, not as a gap: the line exists, and it did not move.
+ */
+export function whatIfDeltaBarOption(delta: WhatIfDelta): EChartsOption | null {
+  const values = DELTA_LINES.map(([, read]) => {
+    const raw = read(delta)
+    return raw === null || raw === undefined ? 0 : Number(raw)
+  })
+  if (values.every((v) => v === 0)) return null
+  // Symmetric on the LARGEST move, so a bar's length means the same thing on either arm.
+  const span = Math.max(...values.map(Math.abs))
+  return {
+    grid: grid('horizontal'),
+    // Item trigger: an axis tooltip would announce the whole ladder for one hover, and each
+    // bar is a separate answer.
+    tooltip: itemTooltip<{ name?: unknown; value?: unknown }>({
+      body: (p) =>
+        typeof p.value === 'number' ? { value: p.value, label: `${String(p.name)} Δ` } : null,
+    }),
+    xAxis: moneyAxis(),
+    // inverse, so Federal reads on TOP the way the compare rows below order them.
+    yAxis: { type: 'category', data: DELTA_LINES.map(([label]) => label), inverse: true },
+    // The colour IS the sign here, so it comes from the scale rather than a per-bar hex.
+    visualMap: divergingVisualMap({ span, formatter: formatCurrency }),
+    series: [{ type: 'bar' as const, ...BAR_MARKS, data: values }],
   }
 }

@@ -30,9 +30,11 @@ import { isPlainDecimal } from '../../utils/percent'
 import { toneOf } from '../../utils/tone'
 import type { Tone } from '../../utils/tone'
 import AmountInput from '../AmountInput'
+import ChartCard from '../ChartCard'
 import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
 import StatTile from '../StatTile'
+import { whatIfDeltaBarOption } from './taxChartOptions'
 import {
   COMPARE_ROWS,
   decodeTax,
@@ -390,6 +392,18 @@ export default function WhatIfPanel({
                 hint="Overall effective rate, baseline → scenario."
               />
             </div>
+            {/* The three tiles say how much moved; this says WHERE. One bar per tax line,
+                diverging around zero so the arms mean the same thing, and null — the card's
+                own empty sentence — when nothing moved at all. */}
+            <ChartCard
+              title="Δ by jurisdiction"
+              hint="Each tax line's scenario minus baseline — bars to the left are less tax."
+              ariaLabel="Change in tax by jurisdiction, scenario minus baseline"
+              option={whatIfDeltaBarOption(result.delta)}
+              empty="Nothing moved — every jurisdiction computes to the stored year."
+              exportName="whatif-delta"
+              height={220}
+            />
             <CompareTable<TaxSummaryOut>
               rows={COMPARE_ROWS}
               baseline={result.baseline}

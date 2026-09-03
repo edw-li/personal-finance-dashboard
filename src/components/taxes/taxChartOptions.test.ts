@@ -10,7 +10,7 @@ import {
 } from '../../charts/theme'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
-import type { TaxSummaryOut } from '../../types/api'
+import type { TaxSummaryOut, WhatIfDelta } from '../../types/api'
 import {
   TAX_COLORS,
   TAX_LABELS,
@@ -22,6 +22,7 @@ import {
   trendOption,
   waterfallCsv,
   waterfallOption,
+  whatIfDeltaBarOption,
   yearPieCsv,
   yearPieOption,
 } from './taxChartOptions'
@@ -754,5 +755,59 @@ describe('marginalLadderOption', () => {
         },
       ]),
     ).toBeNull()
+  })
+})
+
+describe('whatIfDeltaBarOption', () => {
+  const delta = (over: Partial<WhatIfDelta> = {}): WhatIfDelta => ({
+    total_tax: '0.00',
+    take_home: '0.00',
+    federal_tax: '0.00',
+    state_tax: '0.00',
+    medicare_tax: '0.00',
+    social_security_tax: '0.00',
+    disability_tax: '0.00',
+    capital_gains_tax: '0.00',
+    effective_rate: null,
+    ...over,
+  })
+
+  it('draws one bar per jurisdiction delta, diverging around zero, through the grammar tooltip', () => {
+    const option = whatIfDeltaBarOption(
+      delta({
+        total_tax: '-5488.69',
+        take_home: '5488.69',
+        federal_tax: '-3000.00',
+        state_tax: '-2413.10',
+        niit_tax: '-75.59',
+      }),
+    )!
+    expect((option.yAxis as { data: string[] }).data).toEqual([
+      'Federal',
+      'State',
+      'NIIT',
+      'Medicare',
+      'Social Security',
+      'Disability',
+      'Capital gains',
+    ])
+    const series = (option.series as { data: number[] }[])[0]
+    expect(series.data).toEqual([-3000, -2413.1, -75.59, 0, 0, 0, 0])
+    // Symmetric around zero on the LARGEST move, so the arms mean the same thing.
+    expect(option.visualMap).toMatchObject({ min: -3000, max: 3000 })
+    // The grammar's, by identity — a hand-rolled formatter is a conformance failure.
+    expect((option.xAxis as { axisLabel: { formatter: unknown } }).axisLabel.formatter).toBe(
+      compactMoney,
+    )
+    expect(isGrammarTooltip((option.tooltip as { formatter?: unknown }).formatter)).toBe(true)
+  })
+
+  it('treats an absent NIIT as no movement rather than a gap in the ladder', () => {
+    const option = whatIfDeltaBarOption(delta({ federal_tax: '-100.00', niit_tax: null }))!
+    expect((option.series as { data: number[] }[])[0].data[2]).toBe(0)
+  })
+
+  it('returns null when every delta is zero', () => {
+    expect(whatIfDeltaBarOption(delta())).toBeNull()
   })
 })
