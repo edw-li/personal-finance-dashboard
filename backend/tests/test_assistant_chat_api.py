@@ -1234,3 +1234,91 @@ async def test_preview_lists_sections(auth_client):
     assert r.status_code == 200
     names = [s["name"] for s in r.json()["sections"]]
     assert "household" in names
+
+
+async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db):
+    """spec §12: the tool_result frame gains `link` when the tool answered with a sandbox_url,
+    so the drawer can render "Open 2026 in What-if →" under the chip -- the year included,
+    being the scope the scenario is only true within. Tools without one emit no key."""
+    from app.models import TaxYear
+    from app.seed import seed_tax_definitions
+
+    db.add(TaxYear(year=2026))
+    await seed_tax_definitions(db)
+    await db.commit()
+
+    calls = {"n": 0}
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            chunk = _tool_call_chunk(
+                "call_1",
+                "run_tax_whatif",
+                {"year": 2026, "overrides": {"qualified_dividends": "2500"}},
+            )
+            return httpx.Response(
+                200,
+                text=_openai_stream([chunk, _finish("tool_calls")]),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            text=_openai_stream([_delta("done"), _finish()]),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", _transport(responder))
+    events = _events(
+        await _collect(
+            stream_chat(
+                model_key="kimi-k3",
+                messages=[{"role": "user", "content": "what if I had 2500 of dividends?"}],
+                context={"route": "/taxes", "search": {}, "view": {"year": 2026}},
+            )
+        )
+    )
+    assert [e for e, _ in events] == ["tool_start", "tool_result", "token", "done"]
+    assert events[1][1] == {
+        "name": "run_tax_whatif",
+        "summary": "ok",
+        "link": {
+            "to": "/taxes?year=2026&whatif=qualified_dividends%3A2500",
+            "label": "Open 2026 in What-if →",
+        },
+    }
+
+
+async def test_tool_result_without_a_sandbox_url_has_no_link_key(monkeypatch):
+    calls = {"n": 0}
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(
+                200,
+                text=_openai_stream(
+                    [
+                        _tool_call_chunk("call_1", "get_page_data", {"page": "/calendar"}),
+                        _finish("tool_calls"),
+                    ]
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            text=_openai_stream([_delta("ok"), _finish()]),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    monkeypatch.setattr(assistant_models, "TRANSPORT_OVERRIDE", _transport(responder))
+    events = _events(
+        await _collect(
+            stream_chat(
+                model_key="kimi-k3",
+                messages=[{"role": "user", "content": "q"}],
+                context={"route": "/", "search": {}, "view": {}},
+            )
+        )
+    )
+    assert events[1][1] == {"name": "get_page_data", "summary": "ok"}

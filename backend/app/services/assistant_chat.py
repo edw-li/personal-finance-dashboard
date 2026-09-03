@@ -24,6 +24,7 @@ from app.services.assistant_models import (
     resolve_catalog_id,
 )
 from app.services.assistant_tools import TOOL_SCHEMAS, execute_tool
+from app.services.sandbox_links import tool_link
 
 logger = logging.getLogger(__name__)
 
@@ -367,13 +368,22 @@ async def _converse(
                     await db.rollback()
                 except Exception:  # pragma: no cover - a session too broken to reset
                     logger.exception("assistant: rollback after tool error failed")
-            yield sse(
-                "tool_result",
-                {
-                    "name": call["name"],
-                    "summary": "error" if "error" in result else "ok",
-                },
-            )
+            # Named apart from the round loop's own `payload` (the _narrate_wait binding
+            # above) so one long generator does not carry two live meanings for the name.
+            tool_payload: dict = {
+                "name": call["name"],
+                "summary": "error" if "error" in result else "ok",
+            }
+            # The sandbox seam (2026-09-03 planning-sandboxes spec §12): a tool that computed
+            # a scenario names where the drawer can open it live. tool_link matches the path
+            # against SANDBOX_PATHS and mints the label; anything that is not one of the three
+            # sandbox paths yields no link at all, and the client allow-lists it again.
+            sandbox_url = result.get("sandbox_url")
+            if isinstance(sandbox_url, str):
+                link = tool_link(sandbox_url)
+                if link is not None:
+                    tool_payload["link"] = link
+            yield sse("tool_result", tool_payload)
             messages.append(
                 {
                     "role": "tool",

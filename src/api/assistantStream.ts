@@ -44,10 +44,26 @@ export interface AssistantErrorEvent {
  *  them. */
 export type ChatOutcome = 'done' | 'error' | 'interrupted' | 'aborted'
 
+/** Where a tool's answer can be opened live (2026-09-03 planning-sandboxes spec 12).
+ *  The server only mints these for the three sandbox paths, and the drawer allow-lists
+ *  the destination again before rendering an anchor: a link is a navigation the reader
+ *  did not ask for, so neither side takes the other's word for where it goes. */
+export interface ToolLink {
+  to: string
+  label: string
+}
+
+export interface ToolResultEvent {
+  name: string
+  summary: string
+  /** Absent -- not `undefined` -- for the tools that computed no scenario. */
+  link?: ToolLink
+}
+
 export interface AssistantHandlers {
   onNotice?: (notice: { kind: string; from: string; to: string }) => void
   onToolStart?: (tool: { name: string; summary: string }) => void
-  onToolResult?: (tool: { name: string; summary: string }) => void
+  onToolResult?: (tool: ToolResultEvent) => void
   /** One line of honest progress ("Reading your spending…") while there is nothing else to
    *  show. Optional, like the tool pair: a server that never emits `status` simply leaves
    *  the caller on whatever it put up itself. */
@@ -119,7 +135,8 @@ function dispatchFrame(frame: SseFrame, handlers: AssistantHandlers): 'done' | '
       handlers.onToolStart?.(payload as { name: string; summary: string })
       return null
     case 'tool_result':
-      handlers.onToolResult?.(payload as { name: string; summary: string })
+      // Passed through whole, `link` included: this module is the wire, not the policy.
+      handlers.onToolResult?.(payload as ToolResultEvent)
       return null
     case 'token': {
       // The server owns this shape, but a missing/null text would throw INSIDE this

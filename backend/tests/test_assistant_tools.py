@@ -65,3 +65,48 @@ async def test_run_tax_whatif_compacts_the_engine_answer(db):
     # An empty scenario still answers: baseline == scenario, delta zeros.
     assert set(result) >= {"year", "baseline_totals", "scenario_totals", "delta", "warnings"}
     assert json.dumps(result)  # fully jsonable
+
+
+async def test_run_tax_whatif_carries_a_sandbox_link_in_the_page_grammar(db):
+    """The seam (spec §12): the compact result names the URL the drawer can open — the SAME
+    scenario the tool just ran, in the whatif grammar, so the user lands on the live panel."""
+    from app.seed import seed_tax_definitions
+
+    db.add(TaxYear(year=2026))
+    await seed_tax_definitions(db)
+    await db.commit()
+    result = await execute_tool(
+        db,
+        "run_tax_whatif",
+        {"year": 2026, "overrides": {"qualified_dividends": "2500", "interest_total": None}},
+    )
+    assert "error" not in result, result
+    # The year leads the query: a what-if is only true within the year it was run
+    # against, so a link that dropped it would open the panel on the wrong one.
+    assert result["sandbox_url"] == (
+        "/taxes?year=2026&whatif=interest_total%3Anull&whatif=qualified_dividends%3A2500"
+    )
+
+
+async def test_run_tax_whatif_empty_scenario_links_to_the_bare_page(db):
+    db.add(TaxYear(year=2026))
+    await db.commit()
+    result = await execute_tool(db, "run_tax_whatif", {"year": 2026, "overrides": {}})
+    assert result["sandbox_url"] == "/taxes?year=2026"
+
+
+def test_capped_result_keeps_the_sandbox_link_it_truncates_around():
+    """A scenario big enough to blow the cap is exactly the one whose numbers the reader
+    has to go and look at. Dropping the link with the bulk would leave the biggest what-ifs
+    as a bare "ask narrower" with no way in."""
+    from app.services.assistant_tools import TOOL_RESULT_CHAR_CAP, _capped
+
+    rows = ["x" * 100] * (TOOL_RESULT_CHAR_CAP // 50)
+    out = _capped({"sandbox_url": "/taxes?year=2026", "rows": rows})
+    assert out["truncated"] is True
+    assert "rows" not in out  # the bulk really is gone
+    assert out["sandbox_url"] == "/taxes?year=2026"
+    # A tool that named no scenario gains no key from the truncation.
+    assert "sandbox_url" not in _capped({"rows": rows})
+    # And a result under the cap is handed back untouched.
+    assert _capped({"a": 1}) == {"a": 1}

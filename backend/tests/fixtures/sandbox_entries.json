@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Encoder/decoder parity pins for the sandbox `whatif` URL grammar (2026-09-03 planning-sandboxes spec §6, §12). Read by src/sandbox/scenarioUrl.test.ts and backend/tests/test_sandbox_links.py; both must produce `url` from `entries` byte for byte.",
+  "note": "Encoder/decoder parity pins for the sandbox `whatif` URL grammar (2026-09-03 planning-sandboxes spec §6, §12). `cases` is the entries-only set, read by src/sandbox/scenarioUrl.test.ts, src/components/projection/projectionScenario.test.ts and backend/tests/test_sandbox_links.py; all three must produce `url` from `entries` byte for byte. `year_cases` pins the Taxes page's URL-backed year scope, which belongs to the PAGE rather than to the entries codec (the server mints it, TaxesPage honours it) and so is kept out of the set that codec is measured against.",
   "cases": [
     {
       "page": "taxes",
@@ -29,6 +29,20 @@
       "page": "taxes",
       "entries": [],
       "url": "/taxes"
+    }
+  ],
+  "year_cases": [
+    {
+      "page": "taxes",
+      "year": 2025,
+      "entries": ["qualified_dividends:2500"],
+      "url": "/taxes?year=2025&whatif=qualified_dividends%3A2500"
+    },
+    {
+      "page": "taxes",
+      "year": 2026,
+      "entries": [],
+      "url": "/taxes?year=2026"
     }
   ]
 }
