@@ -37,8 +37,9 @@
 .refresh-failure button:disabled { opacity: 0.5; cursor: not-allowed; }
 .refresh-failure button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* Same declarations as portfolio.css's .toggle-row button: the tab row is page furniture,
-   the toggle row is AllocationPanel's, and neither stylesheet reaches into the other. */
+/* The page's own tab row. portfolio.css used to carry a twin (.toggle-row button, for
+   AllocationPanel's donut dimension); that control and its rules are gone, so this is now
+   the only copy of these declarations. */
 .tab-row { display: flex; gap: 8px; margin: 16px 0 8px; }
 .tab-row button { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 4px 12px; cursor: pointer; }
 .tab-row button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); }

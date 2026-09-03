@@ -1,12 +1,5 @@
 /* chip-row/chip moved to panels.css — the net-worth drill-down picker uses them too. */
 
-.spending-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
 .yearly-scroll {
   overflow-x: auto;
 }

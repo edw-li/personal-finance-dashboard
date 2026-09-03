@@ -7,16 +7,6 @@
 
 /* --- summary panel --- */
 
-/* Header row of the trend card: the drill-in's "All years" button rides beside the title
-   (SpendingPage's .spending-chart-header — a copy by design; the two stylesheets are
-   scoped to different screens and neither reaches into the other). */
-.tax-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
 .tax-chart-block {
   margin-top: 1.1rem;
 }
@@ -221,8 +211,8 @@
 /* --- what-if panel --- */
 
 /* One leg per row, in TaxesPage.css's .new-year-form row treatment — copied by design, not
-   reached into: the two stylesheets are scoped to different screens (the .tax-chart-header
-   note above). No new spacing system; the gaps are this file's own. */
+   reached into: the two stylesheets are scoped to different screens (the note at the top
+   of this file). No new spacing system; the gaps are this file's own. */
 .whatif-form {
   display: flex;
   align-items: center;
@@ -293,7 +283,7 @@
    server's own warnings. `.hint` is the app's word for them, and this is the TAXES page's copy
    of the declaration — a deliberate near-twin of portfolio.css's and CompPage.css's, because
    those stylesheets travel with their own screens and this one must not depend on either
-   happening to be in the bundle (the .tax-chart-header note at the top of this file). */
+   happening to be in the bundle (the note at the top of this file). */
 .withholding-panel .hint {
   color: var(--muted);
   font-size: 0.75rem;

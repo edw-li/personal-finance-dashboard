@@ -410,7 +410,7 @@
 }
 
 /* ── Chart export menu (2026-08-25 spec §2a) ───────────────────────── */
-/* RangeChips' segmented grammar with a ⤓ glyph, tucked against the card's right edge
+/* The .segmented grammar with a ⤓ glyph, tucked against the card's right edge
    just above the canvas — deliberately NOT echarts' toolbox (spec Decision log). */
 
 .chart-export {
@@ -551,8 +551,9 @@
 }
 
 /* ── Chart card (chart grammar spec §6) ────────────────────────────── */
-/* The one chart mount. Replaces the per-page header copies (networth/spending/tax/projection
-   -chart-header, .panel-title-row) — those rules are retired in the morning, not tonight. */
+/* The one chart mount. It replaced the per-page header copies (networth/spending/tax/
+   projection -chart-header), which are now deleted; .panel-title-row survives only as
+   PortfolioPage's Holdings header — a table, not a chart. */
 
 .chart-card-header {
   display: flex;
