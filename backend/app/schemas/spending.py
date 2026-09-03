@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -59,6 +60,9 @@ class SpendingUpsertResult(BaseModel):
     # True only when an explicit null actually deleted a cashflow row; a null on a
     # month that had none is a harmless no-op, so it reports False.
     net_pay_cleared: bool = False
+    # The change batch this save wrote (2026-09-03 data-lifecycle spec §9) — None until the
+    # router records one, and None when nothing changed (an all-unchanged PUT logs nothing).
+    batch_id: UUID | None = None
 
 
 class CategorySeries(BaseModel):
