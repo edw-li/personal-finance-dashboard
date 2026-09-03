@@ -120,3 +120,33 @@ describe('assistantSession', () => {
     })
   })
 })
+
+describe('rehydrating a tool chip link', () => {
+  // `link: null` survives a JSON round trip where `undefined` cannot, and it is an
+  // object, so the drawer's `link !== undefined` guard lets it through to
+  // isNavLink(link.to) -- which throws, taking the whole transcript render with it.
+  it('drops an item whose tool link is null, keeping the well-formed ones', () => {
+    sessionStorage.setItem(
+      'assistant:transcript',
+      JSON.stringify([
+        {
+          role: 'assistant',
+          content: 'good',
+          tools: [{ name: 't', summary: 'ok', done: true, link: { to: '/taxes', label: 'Open' } }],
+        },
+        { role: 'assistant', content: 'no tools at all' },
+        {
+          role: 'assistant',
+          content: 'corrupt',
+          tools: [{ name: 't', summary: 'ok', done: true, link: null }],
+        },
+        { role: 'assistant', content: 'also corrupt', tools: [{ link: { label: 'no to' } }] },
+        { role: 'assistant', content: 'tools not an array', tools: 'nope' },
+      ]),
+    )
+    expect(readAssistantTranscript().map((i) => i.content)).toEqual([
+      'good',
+      'no tools at all',
+    ])
+  })
+})

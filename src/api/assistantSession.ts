@@ -71,13 +71,30 @@ let sessionEnded = false
 /** Bounds sessionStorage; the server caps messages per request separately (last 20). */
 export const TRANSCRIPT_CAP = 40
 
+// A tool chip's link is dereferenced twice on render (`isNavLink(link.to)`, then the
+// anchor), so a `to` that is not a string throws inside the chip. `link: null` is the
+// realistic way that happens: JSON has no undefined, so anything that ever wrote a null
+// — a hand-edited entry, an older shape — comes back as one, and `null` is an object,
+// which a bare `!== undefined` check waves through.
+function hasRenderableLink(tool: unknown): boolean {
+  if (typeof tool !== 'object' || tool === null) return false
+  const link: unknown = (tool as TranscriptTool).link
+  if (link === undefined) return true
+  return (
+    typeof link === 'object' && link !== null && typeof (link as { to: unknown }).to === 'string'
+  )
+}
+
 // A shape check, not a validator (readDraft's posture): anything the drawer will later
-// dereference — role and content — must be there, because a hand-edited or half-written
-// entry would otherwise crash the render rather than the read.
+// dereference — role, content, and a tool chip's link — must be there, because a
+// hand-edited or half-written entry would otherwise crash the render rather than the read.
 function isTranscriptItem(value: unknown): value is TranscriptItem {
   if (typeof value !== 'object' || value === null) return false
   const item = value as TranscriptItem
-  return (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string'
+  if (item.role !== 'user' && item.role !== 'assistant') return false
+  if (typeof item.content !== 'string') return false
+  if (item.tools === undefined) return true
+  return Array.isArray(item.tools) && item.tools.every(hasRenderableLink)
 }
 
 export function readAssistantTranscript(): TranscriptItem[] {

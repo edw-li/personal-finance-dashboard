@@ -1238,7 +1238,8 @@ async def test_preview_lists_sections(auth_client):
 
 async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db):
     """spec §12: the tool_result frame gains `link` when the tool answered with a sandbox_url,
-    so the drawer can render "Open in What-if →" under the chip. Tools without one emit no key."""
+    so the drawer can render "Open 2026 in What-if →" under the chip -- the year included,
+    being the scope the scenario is only true within. Tools without one emit no key."""
     from app.models import TaxYear
     from app.seed import seed_tax_definitions
 
@@ -1282,8 +1283,8 @@ async def test_tool_result_carries_a_sandbox_link_for_a_what_if(monkeypatch, db)
         "name": "run_tax_whatif",
         "summary": "ok",
         "link": {
-            "to": "/taxes?whatif=qualified_dividends%3A2500",
-            "label": "Open in What-if →",
+            "to": "/taxes?year=2026&whatif=qualified_dividends%3A2500",
+            "label": "Open 2026 in What-if →",
         },
     }
 

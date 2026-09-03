@@ -24,6 +24,7 @@ from app.services.assistant_models import (
     resolve_catalog_id,
 )
 from app.services.assistant_tools import TOOL_SCHEMAS, execute_tool
+from app.services.sandbox_links import tool_link
 
 logger = logging.getLogger(__name__)
 
@@ -374,11 +375,14 @@ async def _converse(
                 "summary": "error" if "error" in result else "ok",
             }
             # The sandbox seam (2026-09-03 planning-sandboxes spec §12): a tool that computed
-            # a scenario names where the drawer can open it live. Only sandbox_links.py mints
-            # these, so the path is allow-listed by construction; the client checks again.
+            # a scenario names where the drawer can open it live. tool_link matches the path
+            # against SANDBOX_PATHS and mints the label; anything that is not one of the three
+            # sandbox paths yields no link at all, and the client allow-lists it again.
             sandbox_url = result.get("sandbox_url")
-            if isinstance(sandbox_url, str) and sandbox_url.startswith("/"):
-                tool_payload["link"] = {"to": sandbox_url, "label": "Open in What-if →"}
+            if isinstance(sandbox_url, str):
+                link = tool_link(sandbox_url)
+                if link is not None:
+                    tool_payload["link"] = link
             yield sse("tool_result", tool_payload)
             messages.append(
                 {

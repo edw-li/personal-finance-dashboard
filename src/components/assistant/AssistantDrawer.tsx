@@ -26,6 +26,7 @@ import type {
   AssistantSettingsOut,
 } from '../../types/api'
 import { NAV_ITEMS } from '../navItems'
+import { isNavLink } from './navLink'
 import { renderMarkdown } from './markdown'
 import { INSIGHT_PRESETS, samplesFor } from './samples'
 import { ASSISTANT_OPEN_EVENT, readAssistantView, useAssistantViewVersion } from './viewState'
@@ -59,18 +60,6 @@ function modelLabel(key: string, models: AssistantModelsOut | null): string {
 
 function pageLabel(route: string): string {
   return NAV_ITEMS.find((item) => item.to === route)?.label ?? route
-}
-
-// Only the app's own destinations are ever rendered as anchors (the 2026-09-02 audit's
-// allow-list rule). The server already allow-lists the three sandbox paths, but a link
-// arrives here through a model's tool call, and one loop of that is exactly where an
-// off-site or javascript: destination would be smuggled in. Checked on the PATH alone,
-// so the query -- the scenario itself -- stays free-form; `//host` is rejected because
-// a protocol-relative URL starts with a slash yet leaves the origin.
-const NAV_PATHS = new Set(NAV_ITEMS.map((item) => item.to))
-export function isNavLink(to: string): boolean {
-  if (!to.startsWith('/') || to.startsWith('//')) return false
-  return NAV_PATHS.has(to.split('?')[0])
 }
 
 /** Keeps the selection inside the catalog: a key the server has since retired — persisted

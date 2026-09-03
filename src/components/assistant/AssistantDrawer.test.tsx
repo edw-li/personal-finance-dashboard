@@ -228,8 +228,8 @@ describe('AssistantDrawer', () => {
           name: 'run_tax_whatif',
           summary: 'ok',
           link: {
-            to: '/taxes?whatif=qualified_dividends%3A2500',
-            label: 'Open in What-if →',
+            to: '/taxes?year=2026&whatif=qualified_dividends%3A2500',
+            label: 'Open 2026 in What-if →',
           },
         })
         h.onToolStart?.({ name: 'get_page_data', summary: 'page=/calendar' })
@@ -248,8 +248,8 @@ describe('AssistantDrawer', () => {
     fireEvent.change(input, { target: { value: 'what if?' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(screen.getByText(/Dividends of/)).toBeTruthy())
-    const link = screen.getByRole('link', { name: 'Open in What-if →' })
-    expect(link.getAttribute('href')).toBe('/taxes?whatif=qualified_dividends%3A2500')
+    const link = screen.getByRole('link', { name: 'Open 2026 in What-if →' })
+    expect(link.getAttribute('href')).toBe('/taxes?year=2026&whatif=qualified_dividends%3A2500')
     // The off-site one is refused outright -- no anchor, however the label reads.
     expect(screen.queryByRole('link', { name: 'Open' })).toBeNull()
   })

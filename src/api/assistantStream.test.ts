@@ -160,7 +160,7 @@ describe('streamChat', () => {
   it('passes a tool_result link through to onToolResult untouched', async () => {
     stubFetch(async () =>
       sseResponse([
-        'event: tool_result\ndata: {"name":"run_tax_whatif","summary":"ok","link":{"to":"/taxes?whatif=qualified_dividends%3A2500","label":"Open in What-if →"}}\n\n',
+        'event: tool_result\ndata: {"name":"run_tax_whatif","summary":"ok","link":{"to":"/taxes?year=2026&whatif=qualified_dividends%3A2500","label":"Open 2026 in What-if →"}}\n\n',
         'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
       ]),
     )
@@ -170,7 +170,7 @@ describe('streamChat', () => {
       {
         name: 'run_tax_whatif',
         summary: 'ok',
-        link: { to: '/taxes?whatif=qualified_dividends%3A2500', label: 'Open in What-if →' },
+        link: { to: '/taxes?year=2026&whatif=qualified_dividends%3A2500', label: 'Open 2026 in What-if →' },
       },
     ])
     // Present as a KEY, not merely equal: the drawer renders on `tool.link !== undefined`,
