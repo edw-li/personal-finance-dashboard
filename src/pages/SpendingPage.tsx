@@ -4,7 +4,7 @@ import { PencilLine } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
-import EChart from '../components/EChart'
+import ChartCard from '../components/ChartCard'
 import type { EChartEventParams, EChartsInstance } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import PageFrame from '../components/shell/PageFrame'
@@ -12,37 +12,35 @@ import ScopeBar from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import { useArrivalValue } from '../components/useArrivalParam'
-import ChartZoomHint from '../components/ChartZoomHint'
+import Segmented from '../components/shell/Segmented'
 import BudgetPanel from '../components/spending/BudgetPanel'
-import { budgetStepSeries } from '../components/spending/budgetChartOptions'
 import {
-  spendingBarsTooltipFormatter,
+  HEATMAP_MODES,
+  categorySmallMultiplesOption,
+  categoryTrendCsv,
+  categoryTrendOption,
+  heatmapCsv,
+  heatmapOption,
+  heatmapRows,
+  monthPieCsv,
+  monthPieOption,
+  savingsRateCsv,
+  savingsRateOption,
+  smallMultiplesHeight,
+  spendingBarsOption,
   spendingCsv,
 } from '../components/spending/spendingChartOptions'
+import type { HeatmapMode } from '../components/spending/spendingChartOptions'
 import {
   spendingFlowPeriod,
+  spendingSankeyCsv,
   spendingSankeyOption,
 } from '../components/spending/spendingSankeyOptions'
-import type { EChartsOption } from '../charts/echarts'
-import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
+import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
-import {
-  INK,
-  MUTED,
-  OTHER_SERIES_COLOR,
-  PALETTE,
-  SEQUENTIAL_BLUE,
-  SURFACE,
-} from '../charts/theme'
 import type { SpendingMatrix, SpendingYearly } from '../types/api'
-import {
-  escapeHtml,
-  formatCurrency,
-  formatCurrencyCompact,
-  formatMonth,
-  formatPct,
-} from '../utils/format'
-import { buildMonthSlices, hasVsBudget, monthMovers } from '../utils/spending'
+import { formatCurrency, formatMonth, formatPct } from '../utils/format'
+import { hasVsBudget, monthMovers } from '../utils/spending'
 import '../components/panels.css'
 import './SpendingPage.css'
 
@@ -146,6 +144,13 @@ export default function SpendingPage() {
   // movers' rule below); Year re-slices the SAME looked-at month's year from the rollup
   // — both datasources are already on the page, so the toggle never refetches.
   const [flowMode, setFlowMode] = useState<'month' | 'year'>('month')
+  // F1: the heatmap's reading of its own cells, and whether the categories that never spent
+  // a cent take up rows. Card-local — neither belongs in the shared URL scope.
+  const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('row')
+  const [showDormant, setShowDormant] = useState(false)
+  // The trends card's two readings: up to three picks compared on one axis, or EVERY
+  // category as its own tiny line (small multiples — one option, one mount).
+  const [trendView, setTrendView] = useState<'compare' | 'all'>('compare')
   // Instance handle for the bars chart so heatmap hover can dispatch highlights into it.
   const barsChartRef = useRef<EChartsInstance | null>(null)
 
@@ -217,105 +222,13 @@ export default function SpendingPage() {
     [matrix, range],
   )
 
-  const barsOption = useMemo<EChartsOption | null>(() => {
-    if (!matrix || matrix.months.length === 0) return null
-    const topSet = new Set(topIds)
-    const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
-    // A6 (2026-08-31 tier-1): absent ≠ zero. Nulls flow THROUGH to the series — echarts
-    // gaps the bar — so a month with no spending entered draws nothing instead of a $0
-    // stack whose tooltip lists every category at $0.00. Other sums the folded rows'
-    // non-null values and is itself null when none exist that month.
-    const otherPerMonth = matrix.months.map((_, i) =>
-      matrix.series.reduce<number | null>((acc, s) => {
-        if (topSet.has(s.category_id)) return acc
-        const v = s.values[i]
-        if (v === null) return acc
-        return (acc ?? 0) + Number(v)
-      }, null),
-    )
-    return {
-      dataZoom: rangeZoom(matrix.months, range),
-      grid: { left: 70, right: 24, top: 40, bottom: 28 },
-      // 'Total budget' ships DESELECTED: it wears the same dashed-MUTED grammar as the
-      // 4% line (one reference-line language), so both on at once would be ambiguous;
-      // the legend chip is the summon. Mirrored picks spread OVER the default, so a
-      // deliberate summon now survives option rebuilds (2026-08-25 spec §2e).
-      legend: { top: 0, selected: { 'Total budget': false, ...legendSelected } },
-      tooltip: {
-        trigger: 'axis',
-        // Category rows carry (share of month) and a bold Total; the net-pay/4%/budget
-        // reference lines list after it, excluded from the sum (2026-08-25 spec §2b).
-        // Padded nulls now drop instead of printing '—' rows — the house formatter rule.
-        formatter: spendingBarsTooltipFormatter([
-          ...topIds.map((id) => nameById.get(id) ?? String(id)),
-          'Other',
-        ]),
-      },
-      xAxis: { type: 'category', data: monthLabels },
-      yAxis: {
-        type: 'value',
-        axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-      },
-      series: [
-        // Stable ids: the drill-in pie morphs from/to these series (universalTransition
-        // keys on id across notMerge setOption calls). Emphasis border mirrors the
-        // heatmap's hover language — heatmap-cell hover highlights the matching segment.
-        ...topIds.map((id, slot) => ({
-          id: `cat-${id}`,
-          name: nameById.get(id) ?? String(id),
-          type: 'bar' as const,
-          stack: 'spend',
-          barMaxWidth: 22,
-          color: PALETTE[slot],
-          itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-          emphasis: { itemStyle: { borderColor: INK } },
-          universalTransition: true,
-          // A6: null passes through — a gap, never a fabricated $0 segment.
-          data: (valuesById.get(id) ?? []).map((v) => (v === null ? null : Number(v))),
-        })),
-        {
-          id: 'other',
-          name: 'Other',
-          type: 'bar' as const,
-          stack: 'spend',
-          barMaxWidth: 22,
-          color: OTHER_SERIES_COLOR,
-          itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-          emphasis: { itemStyle: { borderColor: INK } },
-          universalTransition: true,
-          data: otherPerMonth,
-        },
-        {
-          id: 'net-pay',
-          name: 'Net pay',
-          type: 'line' as const,
-          symbol: 'none' as const,
-          lineStyle: { width: 2 },
-          color: INK,
-          z: 10,
-          connectNulls: false,
-          data: matrix.net_pay.map((v) => (v === null ? null : Number(v))),
-        },
-        {
-          id: 'four-pct',
-          name: '4% rule',
-          type: 'line' as const,
-          symbol: 'none' as const,
-          // Dashed is reserved for thresholds — this IS the threshold line.
-          lineStyle: { width: 2, type: 'dashed' as const },
-          color: MUTED,
-          z: 9,
-          connectNulls: false,
-          data: matrix.four_pct_rule.map((v) => (v === null ? null : Number(v))),
-        },
-        // LAST in the array on purpose: the heatmap-hover highlight indexes the bar stack
-        // POSITIONALLY (seriesIndex), so nothing may be inserted ahead of it.
-        ...(matrix.total_budget.some((v) => v !== null)
-          ? [budgetStepSeries('Total budget', matrix.total_budget)]
-          : []),
-      ],
-    }
-  }, [matrix, topIds, monthLabels, nameById, range, legendSelected])
+  const barsOption = useMemo(
+    () =>
+      matrix === null
+        ? null
+        : spendingBarsOption({ matrix, topIds, nameById, monthLabels, range, selected: legendSelected }),
+    [matrix, topIds, nameById, monthLabels, range, legendSelected],
+  )
 
   const detailIndex = useMemo(
     () => (matrix && detailMonth ? matrix.months.indexOf(detailMonth) : -1),
@@ -324,44 +237,10 @@ export default function SpendingPage() {
   const activeDetail = detailIndex >= 0
   const detailLabel = activeDetail && matrix ? formatMonth(matrix.months[detailIndex]) : null
 
-  const monthDetailOption = useMemo<EChartsOption | null>(() => {
-    if (!matrix || detailIndex < 0) return null
-    const slices = buildMonthSlices(matrix, topIds, detailIndex)
-    if (slices.length === 0) return null
-    return {
-      tooltip: {
-        // HTML formatter: category names are user text — escapeHtml is mandatory.
-        formatter: (params) => {
-          const p = Array.isArray(params) ? params[0] : params
-          return (
-            `<strong>${formatCurrency(p.value as number)}</strong> · ` +
-            `${(p.percent ?? 0).toFixed(1)}%<br/>${escapeHtml(p.name ?? '')}`
-          )
-        },
-      },
-      series: [
-        {
-          id: 'month-pie',
-          type: 'pie' as const,
-          radius: ['42%', '70%'],
-          itemStyle: { borderColor: SURFACE, borderWidth: 2 },
-          label: { color: INK, formatter: '{b}  {d}%' },
-          emphasis: { itemStyle: { borderColor: INK } },
-          // Morph the month's bar segments into slices and back out on exit; falls back
-          // to a plain swap under reduced motion (EChart forces animation off).
-          universalTransition: {
-            enabled: true,
-            seriesKey: [...topIds.map((id) => `cat-${id}`), 'other'],
-          },
-          data: slices.map((s) => ({
-            name: s.name,
-            value: s.value,
-            itemStyle: { color: s.slot === null ? OTHER_SERIES_COLOR : PALETTE[s.slot] },
-          })),
-        },
-      ],
-    }
-  }, [matrix, detailIndex, topIds])
+  const monthDetailOption = useMemo(
+    () => (matrix === null ? null : monthPieOption(matrix, topIds, detailIndex)),
+    [matrix, topIds, detailIndex],
+  )
 
   // The page's FOCUSED month: the drilled month when the pie is open, the latest month
   // otherwise. The movers, the flow card and the Budget card all read it, so drilling a
@@ -395,6 +274,16 @@ export default function SpendingPage() {
     }
   }
 
+  // The heatmap's rows: the page's all-time order minus dormant categories unless asked
+  // for. `visible` is what both the option and the hover -> bar mapping index by.
+  const heatRows = useMemo(
+    () =>
+      matrix === null
+        ? { visible: [] as number[], dormant: [] as number[] }
+        : heatmapRows(matrix, heatmapOrder, showDormant),
+    [matrix, heatmapOrder, showDormant],
+  )
+
   // Heatmap cell -> the EXACT bar segment it corresponds to: the category's own series
   // when it made the top fold, the "Other" stack segment when folded. seriesIndex is
   // positional in barsOption.series — kept in lockstep by both deriving from topIds.
@@ -402,7 +291,7 @@ export default function SpendingPage() {
     if (!matrix || activeDetail || params.seriesType !== 'heatmap') return
     if (!Array.isArray(params.value)) return
     const [col, row] = params.value as [number, number, number]
-    const categoryId = heatmapOrder[row]
+    const categoryId = heatRows.visible[row]
     if (categoryId === undefined) return
     const top = topIds.indexOf(categoryId)
     barsChartRef.current?.dispatchAction({
@@ -421,151 +310,35 @@ export default function SpendingPage() {
     })
   }
 
-  const heatmapOption = useMemo<EChartsOption | null>(() => {
-    if (!matrix || matrix.months.length === 0) return null
-    const order = heatmapOrder // biggest at top
-    const rowIndex = new Map(order.map((id, i) => [id, i]))
-    const cells: [number, number, number][] = []
-    let max = 0
-    for (const s of matrix.series) {
-      const row = rowIndex.get(s.category_id)
-      if (row === undefined) continue
-      s.values.forEach((v, col) => {
-        if (v === null) return
-        const n = Number(v)
-        max = Math.max(max, n)
-        cells.push([col, row, n])
-      })
-    }
-    return {
-      // bottom must clear BOTH the 45°-rotated month labels (~48px) and the visualMap
-      // bar parked at bottom: 0 (~30px) — 64 made them overlap.
-      grid: { left: 130, right: 24, top: 8, bottom: 96 },
-      tooltip: {
-        // HTML formatter: category names are user text — escapeHtml is mandatory.
-        formatter: (params) => {
-          // `TopLevelFormatterParams` is `CallbackDataParams | CallbackDataParams[]`;
-          // item-trigger only ever passes the single form, but narrowing the union
-          // (rather than asserting past it) keeps the assertion down to the one
-          // property whose declared type already admits an array of values.
-          const p = Array.isArray(params) ? params[0] : params
-          const [col, row, value] = p.value as [number, number, number]
-          const name = nameById.get(order[row]) ?? ''
-          return `<strong>${formatCurrency(value)}</strong><br/>${escapeHtml(name)} · ${escapeHtml(monthLabels[col] ?? '')}`
-        },
-      },
-      xAxis: { type: 'category', data: monthLabels, axisLabel: { rotate: 45 } },
-      yAxis: {
-        type: 'category',
-        data: order.map((id) => nameById.get(id) ?? String(id)),
-        inverse: true,
-        axisLabel: { width: 118, overflow: 'truncate' as const },
-      },
-      visualMap: {
-        min: 0,
-        max: Math.max(max, 1),
-        calculable: false,
-        orient: 'horizontal',
-        left: 'center',
-        bottom: 0,
-        inRange: { color: [...SEQUENTIAL_BLUE] },
-        textStyle: { color: MUTED },
-        formatter: (value) => formatCurrencyCompact(value as number),
-      },
-      series: [
-        {
-          type: 'heatmap' as const,
-          data: cells,
-          itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-          emphasis: { itemStyle: { borderColor: INK, borderWidth: 1 } },
-        },
-      ],
-    }
-  }, [matrix, heatmapOrder, monthLabels, nameById])
+  const heatmapOpt = useMemo(
+    () =>
+      matrix === null
+        ? null
+        : heatmapOption({ matrix, order: heatRows.visible, nameById, monthLabels, mode: heatmapMode }),
+    [matrix, heatRows, nameById, monthLabels, heatmapMode],
+  )
 
-  const savingsOption = useMemo<EChartsOption | null>(() => {
-    if (!matrix || matrix.months.length === 0) return null
-    return {
-      dataZoom: rangeZoom(matrix.months, range), // the page's one window (see `range`)
-      grid: { left: 60, right: 24, top: 16, bottom: 28 },
-      tooltip: {
-        trigger: 'axis',
-        // True value in the tooltip even when the line is clamped out of frame.
-        valueFormatter: (value) =>
-          value === null || value === undefined
-            ? '—'
-            : formatPct(value as number, { signed: false }),
-      },
-      xAxis: { type: 'category', data: monthLabels, boundaryGap: false },
-      yAxis: {
-        type: 'value',
-        // A7 (2026-08-31 tier-1): the ceiling stays +100% (rates above 1 are impossible),
-        // but the FLOOR expands to the data — a −180% month must render inside the frame,
-        // not silently leave it. floor() lands the min on a whole −100% gridline step; the
-        // Math.min(-1, …) keeps at least the −100% floor when the data never goes there.
-        min: (extent: { min: number }) => Math.min(-1, Math.floor(extent.min)),
-        max: (extent: { max: number }) => Math.min(Math.max(extent.max, 0.1), 1),
-        axisLabel: { formatter: (value: number) => formatPct(value, { signed: false }) },
-      },
-      series: [
-        {
-          name: 'Savings rate (actual)',
-          type: 'line' as const,
-          symbol: 'none' as const,
-          lineStyle: { width: 2 },
-          color: PALETTE[0],
-          connectNulls: false,
-          markLine: {
-            silent: true,
-            symbol: 'none',
-            lineStyle: { color: MUTED, width: 1, type: 'solid' as const },
-            label: { show: false },
-            data: [{ yAxis: 0 }],
-          },
-          data: matrix.savings_rate.map((v) => (v === null ? null : Number(v))),
-        },
-      ],
-    }
-  }, [matrix, monthLabels, range])
+  const savingsOption = useMemo(
+    () => (matrix === null ? null : savingsRateOption({ matrix, monthLabels, range })),
+    [matrix, monthLabels, range],
+  )
 
-  const trendOption = useMemo<EChartsOption | null>(() => {
-    if (!matrix || matrix.months.length === 0 || trend.length === 0) return null
-    const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
-    return {
-      dataZoom: rangeZoom(matrix.months, range), // the page's one window (see `range`)
-      grid: { left: 70, right: 24, top: 40, bottom: 28 },
-      legend: { top: 0, selected: legendSelected },
-      tooltip: {
-        trigger: 'axis',
-        valueFormatter: (value) =>
-          value === null || value === undefined ? '—' : formatCurrency(value as number),
-      },
-      xAxis: { type: 'category', data: monthLabels, boundaryGap: false },
-      yAxis: {
-        type: 'value',
-        axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-      },
-      series: [
-        ...trend.map(({ categoryId, slot }) => ({
-          name: nameById.get(categoryId) ?? String(categoryId),
-          type: 'line' as const,
-          symbol: 'none' as const,
-          lineStyle: { width: 2 },
-          color: PALETTE[slot],
-          connectNulls: false,
-          data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
-        })),
-        // A picked category's budget as a dashed MUTED step (spec §4.3) — named
-        // "{category} budget" so the axis tooltip disambiguates when several show.
-        ...trend.flatMap(({ categoryId }) => {
-          const s = matrix.series.find((x) => x.category_id === categoryId)
-          if (!s || !s.budgets.some((v) => v !== null)) return []
-          const name = nameById.get(categoryId) ?? String(categoryId)
-          return [budgetStepSeries(`${name} budget`, s.budgets)]
-        }),
-      ],
-    }
-  }, [matrix, trend, monthLabels, nameById, range, legendSelected])
+  const trendOpt = useMemo(
+    () =>
+      matrix === null
+        ? null
+        : categoryTrendOption({ matrix, trend, nameById, monthLabels, range, selected: legendSelected }),
+    [matrix, trend, nameById, monthLabels, range, legendSelected],
+  )
+
+  // Every category's shape at once — the same all-time order the heatmap rows use.
+  const smallMultiples = useMemo(
+    () =>
+      matrix === null
+        ? null
+        : categorySmallMultiplesOption({ matrix, order: heatmapOrder, nameById, monthLabels }),
+    [matrix, heatmapOrder, nameById, monthLabels],
+  )
 
   const toggleTrend = (categoryId: number) => {
     setTrend((current) => {
@@ -578,10 +351,13 @@ export default function SpendingPage() {
     })
   }
 
-  // KPI row: latest data month + trailing-12 average + latest savings rate.
+  // KPI row: the VIEWED month (the drilled one while the pie is open, the latest month
+  // otherwise — focusIndex, the movers' and the flow card's own rule) + the trailing-12
+  // average ending there. Drilling a month must move the whole page's answer together: a
+  // header still reading the latest month beside cards reading June was the 2026-09-04
+  // smoke's one lie.
   const kpis = useMemo(() => {
-    if (!matrix || matrix.months.length === 0) return null
-    const last = matrix.months.length - 1
+    if (!matrix || matrix.months.length === 0 || focusIndex < 0) return null
     // A6: a month no category reported (cashflow-only) is ABSENT, not a $0 month — it
     // must not dilute the average. totals[] itself carries "0.00" for such months (the
     // server sums over an empty set), so enteredness is judged on the SERIES — the same
@@ -589,20 +365,20 @@ export default function SpendingPage() {
     const entered = matrix.months.map((_, i) => matrix.series.some((s) => s.values[i] !== null))
     const window = matrix.totals
       .map((total, i) => ({ total: Number(total), entered: entered[i] }))
-      .slice(-12)
+      .slice(Math.max(0, focusIndex - 11), focusIndex + 1)
       .filter((cell) => cell.entered)
     const average =
       window.length === 0
         ? null
         : window.reduce((acc, cell) => acc + cell.total, 0) / window.length
     return {
-      month: matrix.months[last],
-      total: matrix.totals[last],
+      month: matrix.months[focusIndex],
+      total: matrix.totals[focusIndex],
       average,
-      savings: matrix.savings_rate[last],
-      netPay: matrix.net_pay[last],
+      savings: matrix.savings_rate[focusIndex],
+      netPay: matrix.net_pay[focusIndex],
     }
-  }, [matrix])
+  }, [matrix, focusIndex])
 
   // What each ribbon chip PRINTS. Which months are entered is the ScopeBar's own business
   // (it reads /coverage for the two-tone chips); this page contributes only the figure —
@@ -661,46 +437,73 @@ export default function SpendingPage() {
             <StatTile
               label={`Spend — ${formatMonth(kpis.month)}`}
               value={formatCurrency(kpis.total)}
-              hint="The latest entered month's total across all categories."
+              hint="The viewed month's total across all categories — the drilled month when one is open, otherwise the latest entered month."
             />
             <StatTile
               label="12-month average"
               value={formatCurrency(kpis.average)}
-              hint="Mean monthly spend over the last 12 entered months, including the latest."
+              hint="Mean monthly spend over the 12 entered months ending with the viewed one."
             />
             <StatTile
               label="Savings rate (actual)"
               value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
-              hint="(net pay − spend) ÷ net pay for the latest month."
+              hint="(net pay − spend) ÷ net pay for the viewed month."
             />
             <StatTile
               label="Net pay"
               value={formatCurrency(kpis.netPay)}
-              hint="Take-home pay entered for the latest month."
+              hint="Take-home pay entered for the viewed month."
             />
           </div>
         )}
 
         <div className="card-grid">
-          <div className="card span-12">
-            <div className="spending-chart-header">
-              <h2 className="eyebrow">
-                {detailLabel
-                  ? `Spending breakdown — ${detailLabel}`
-                  : `Monthly spend vs net pay — top ${TOP_N} categories + other`}
-                <InfoHint text="Top categories stacked per month under your net-pay line; the dashed line is what your investable assets could sustainably fund each month. Click a bar for that month's breakdown." />
-              </h2>
-              {/* The drill-in's way back. It stays here beside the pie it undoes, where the
-                  eye already is — the scope row's "Back to latest" chip clears the same
-                  selection from the other end. */}
-              {activeDetail ? (
+          <ChartCard
+            title={
+              detailLabel
+                ? `Spending breakdown — ${detailLabel}`
+                : `Monthly spend vs net pay — top ${TOP_N} categories + other`
+            }
+            hint="Top categories stacked per month under your net-pay line; the dashed Sustainable spend line is what your investable assets could fund each month at your safe withdrawal rate (Settings). Click a bar for that month's breakdown."
+            ariaLabel={
+              detailLabel
+                ? `Donut chart of ${detailLabel}'s spending by category`
+                : 'Stacked bar chart of monthly spending by category under the net-pay line'
+            }
+            option={activeDetail ? monthDetailOption : barsOption}
+            empty={
+              activeDetail
+                ? `No spending recorded for ${detailLabel}.`
+                : 'No spending recorded yet — enter a month to begin.'
+            }
+            exportName={activeDetail ? `spending-${detailMonth}` : 'spending'}
+            csv={
+              matrix === null
+                ? undefined
+                : activeDetail
+                  ? () => monthPieCsv(matrix, topIds, detailIndex)
+                  : () => spendingCsv(matrix, topIds, nameById)
+            }
+            height={340}
+            zoomable={!activeDetail}
+            group={activeDetail ? undefined : 'spending'}
+            onClick={handleSpendChartClick}
+            instanceRef={barsChartRef}
+            onLegendChange={onLegendChange}
+            onDataZoom={onZoomWindow}
+            zoomWindow={activeDetail ? undefined : zoomWindow}
+            actions={
+              /* The drill-in's way back. It stays here beside the pie it undoes, where the
+                 eye already is — the scope row's "Back to latest" chip clears the same
+                 selection from the other end. */
+              activeDetail ? (
                 <button className="button" onClick={() => setDetailMonth(null)}>
                   All months
                 </button>
-              ) : null}
-            </div>
-            {activeDetail && matrix ? (
-              <>
+              ) : undefined
+            }
+            footer={
+              activeDetail && matrix ? (
                 <p className="drill-hint">
                   Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
                   {formatCurrency(matrix.net_pay[detailIndex])} · Savings{' '}
@@ -709,41 +512,11 @@ export default function SpendingPage() {
                     : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
                   — click the chart to go back.
                 </p>
-                {monthDetailOption ? (
-                  <EChart
-                    option={monthDetailOption}
-                    height={340}
-                    onClick={handleSpendChartClick}
-                    instanceRef={barsChartRef}
-                    animateEntrance={!fromCache}
-                  />
-                ) : (
-                  <div className="empty-note">No spending recorded for {detailLabel}.</div>
-                )}
-              </>
-            ) : barsOption && matrix ? (
-              <>
+              ) : (
                 <p className="drill-hint">Click a month's bar to expand its breakdown.</p>
-                <EChart
-                  option={barsOption}
-                  height={340}
-                  onClick={handleSpendChartClick}
-                  instanceRef={barsChartRef}
-                  onLegendChange={onLegendChange}
-                  onDataZoom={onZoomWindow}
-                  zoomWindow={zoomWindow}
-                  exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
-                  animateEntrance={!fromCache}
-                />
-                <ChartZoomHint />
-              </>
-            ) : (
-              !loading &&
-              !error && (
-                <div className="empty-note">No spending recorded yet — enter a month to begin.</div>
               )
-            )}
-          </div>
+            }
+          />
 
           {movers.length > 0 && (
             <div className="card span-12">
@@ -783,47 +556,39 @@ export default function SpendingPage() {
           )}
 
           {flowPeriod && (
-            <div className="card span-12">
-              <div className="spending-chart-header">
-                <h2 className="eyebrow">
-                  Where {flowPeriod.label} went
-                  <InfoHint text="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a red Drawdown source covering the overspend." />
-                </h2>
-                <div className="segmented" role="group" aria-label="Flow window">
-                  {(['month', 'year'] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={flowMode === mode ? 'active' : ''}
-                      aria-pressed={flowMode === mode}
-                      onClick={() => setFlowMode(mode)}
-                    >
-                      {mode === 'month' ? 'Month' : 'Year'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {flowOption ? (
-                <>
-                  <EChart
-                    option={flowOption}
-                    height={320}
-                    ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
-                    animateEntrance={!fromCache}
-                  />
-                  <p className="drill-hint">
-                    Hover a node to trace its flows; drill a month on the top chart and this
-                    card follows it.
-                  </p>
-                </>
-              ) : (
-                <div className="empty-note">
-                  {flowPeriod.netPay === null
-                    ? `Enter net pay for ${flowPeriod.label} to see the flow.`
-                    : `No flow to draw for ${flowPeriod.label}.`}
-                </div>
-              )}
-            </div>
+            <ChartCard
+              title={`Where ${flowPeriod.label} went`}
+              hint="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a red Drawdown source covering the overspend."
+              ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
+              option={flowOption}
+              empty={
+                flowPeriod.netPay === null
+                  ? `Enter net pay for ${flowPeriod.label} to see the flow.`
+                  : `No flow to draw for ${flowPeriod.label}.`
+              }
+              exportName={`spending-flow-${flowPeriod.label.replace(/\s+/g, '-').toLowerCase()}`}
+              csv={() => spendingSankeyCsv(flowPeriod)}
+              height={320}
+              controls={
+                <Segmented
+                  variant="toggle"
+                  size="sm"
+                  ariaLabel="Flow window"
+                  options={[
+                    { value: 'month', label: 'Month' },
+                    { value: 'year', label: 'Year' },
+                  ]}
+                  value={flowMode}
+                  onChange={setFlowMode}
+                />
+              }
+              footer={
+                <p className="drill-hint">
+                  Hover a node to trace its flows; drill a month on the top chart and this
+                  card follows it.
+                </p>
+              }
+            />
           )}
 
           {/* onBudgetsChanged = the page's refetch: a saved budget re-draws the meters, the
@@ -835,89 +600,141 @@ export default function SpendingPage() {
           {/* Long-run half, summary before detail (2026-08-31 audit): the range-windowed
               pair reads right after the budgets that feed the trends chart's step lines;
               the never-windowed full-history pair (heatmap, yearly) closes the page. */}
-          <div className="card span-6">
-            <h2 className="eyebrow">
-              Savings rate (actual)
-              <InfoHint text="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent." />
-            </h2>
-            {savingsOption && (
-              <>
-                <EChart
-                  option={savingsOption}
-                  height={260}
-                  onDataZoom={onZoomWindow}
-                  zoomWindow={zoomWindow}
-                  animateEntrance={!fromCache}
-                />
-                <ChartZoomHint />
-              </>
-            )}
-            <p className="drill-hint">
-              (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
-              planned rate, so values differ by design.
-            </p>
-          </div>
+          <ChartCard
+            span={6}
+            title="Savings rate (actual)"
+            hint="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent."
+            ariaLabel="Line chart of the monthly savings rate around a zero baseline"
+            option={savingsOption}
+            empty="No months entered yet."
+            exportName="savings-rate"
+            csv={matrix === null ? undefined : () => savingsRateCsv(matrix)}
+            height={260}
+            zoomable
+            group="spending"
+            onDataZoom={onZoomWindow}
+            zoomWindow={zoomWindow}
+            footer={
+              <p className="drill-hint">
+                (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
+                planned rate, so values differ by design.
+              </p>
+            }
+          />
 
-          <div className="card span-6">
-            <h2 className="eyebrow">
-              Category trends
-              <InfoHint text="Single-category history — pick up to 3 to compare." />
-            </h2>
-            <div className="chip-row">
-              {matrix?.categories.map((category) => {
-                const active = trend.find((t) => t.categoryId === category.id)
-                // Slot hue goes on the BORDER, never the text (text stays --text via
-                // .chip.active) — series color marks identity beside text, not in it.
-                // The DOM swatch reads the CSS slot, not PALETTE: index.css repoints
-                // --chart-N per theme, so the chip border tracks a light/dark switch that a
-                // baked dark hex would ignore. Slots are 0-based, the tokens are 1-based.
-                return (
-                  <button
-                    key={category.id}
-                    type="button"
-                    className={active ? 'chip active' : 'chip'}
-                    style={active ? { borderColor: `var(--chart-${active.slot + 1})` } : undefined}
-                    aria-pressed={!!active}
-                    onClick={() => toggleTrend(category.id)}
-                  >
-                    {category.name}
-                  </button>
-                )
-              })}
-            </div>
-            {trendOption ? (
-              <>
-                <EChart
-                  option={trendOption}
-                  height={220}
-                  onLegendChange={onLegendChange}
-                  onDataZoom={onZoomWindow}
-                  zoomWindow={zoomWindow}
-                  animateEntrance={!fromCache}
-                />
-                <ChartZoomHint />
-              </>
-            ) : (
-              <div className="empty-note">Pick up to {MAX_TREND} categories.</div>
-            )}
-          </div>
-
-          <div className="card span-12">
-            <h2 className="eyebrow">
-              Month × category heatmap
-              <InfoHint text="Spend per category per month on one shared scale — darker is more. Rows are ordered by all-time total." />
-            </h2>
-            {heatmapOption && (
-              <EChart
-                option={heatmapOption}
-                height={Math.max(332, (matrix?.categories.length ?? 0) * 24 + 142)}
-                ariaLabel="Heatmap of spend per category per month — darker is more"
-                onHover={handleHeatmapHover}
-                onHoverEnd={handleHeatmapHoverEnd}
-                animateEntrance={!fromCache}
+          <ChartCard
+            span={6}
+            title="Category trends"
+            hint="Single-category history — pick up to 3 to compare; a picked category's budget rides along as a dashed step. All categories draws every one as its own tiny line, each on its own scale: the reading is shape, not size."
+            ariaLabel={
+              trendView === 'all'
+                ? 'Small multiples: every spending category’s monthly history as its own tiny line'
+                : 'Line chart of the selected categories’ monthly spend with their budgets'
+            }
+            option={trendView === 'all' ? smallMultiples : trendOpt}
+            empty={
+              trendView === 'all' ? 'No months entered yet.' : `Pick up to ${MAX_TREND} categories.`
+            }
+            exportName="category-trends"
+            csv={
+              matrix === null
+                ? undefined
+                : trendView === 'all'
+                  ? () =>
+                      categoryTrendCsv(
+                        matrix,
+                        heatmapOrder.map((categoryId, slot) => ({ categoryId, slot })),
+                        nameById,
+                      )
+                  : () => categoryTrendCsv(matrix, trend, nameById)
+            }
+            height={trendView === 'all' ? smallMultiplesHeight(heatmapOrder.length) : 220}
+            // Small multiples carry no dataZoom and no shared axis: the window controls and
+            // the sibling group belong to the single-axis reading only.
+            zoomable={trendView === 'compare'}
+            group={trendView === 'compare' ? 'spending' : undefined}
+            onLegendChange={onLegendChange}
+            onDataZoom={trendView === 'compare' ? onZoomWindow : undefined}
+            zoomWindow={trendView === 'compare' ? zoomWindow : undefined}
+            controls={
+              <Segmented
+                variant="toggle"
+                size="sm"
+                ariaLabel="Trend view"
+                options={[
+                  { value: 'compare', label: 'Compare' },
+                  // "All categories", not "All": the scope row's range chips already own
+                  // the word All on this page.
+                  { value: 'all', label: 'All categories' },
+                ]}
+                value={trendView}
+                onChange={setTrendView}
               />
-            )}
-          </div>
+            }
+            footer={
+              trendView === 'all' ? undefined : (
+              <div className="chip-row">
+                {matrix?.categories.map((category) => {
+                  const active = trend.find((t) => t.categoryId === category.id)
+                  // Slot hue goes on the BORDER, never the text (text stays --text via
+                  // .chip.active) — series color marks identity beside text, not in it.
+                  // The DOM swatch reads the CSS slot, not PALETTE: index.css repoints
+                  // --chart-N per theme, so the chip border tracks a light/dark switch that a
+                  // baked dark hex would ignore. Slots are 0-based, the tokens are 1-based.
+                  return (
+                    <button
+                      key={category.id}
+                      type="button"
+                      className={active ? 'chip active' : 'chip'}
+                      style={
+                        active ? { borderColor: `var(--chart-${active.slot + 1})` } : undefined
+                      }
+                      aria-pressed={!!active}
+                      onClick={() => toggleTrend(category.id)}
+                    >
+                      {category.name}
+                    </button>
+                  )
+                })}
+              </div>
+              )
+            }
+          />
+
+          <ChartCard
+            title="Month × category heatmap"
+            hint="Row: each category on its own 0 → max scale. vs average: orange = above its trailing 12-month average, blue = below (blank until six prior months exist). Absolute: one shared dollar scale. Rows are ordered by all-time total; categories that never spent are hidden until asked for."
+            ariaLabel="Heatmap of spend per category per month"
+            option={heatmapOpt}
+            empty="No months entered yet."
+            exportName="spending-heatmap"
+            csv={matrix === null ? undefined : () => heatmapCsv(matrix, heatmapOrder, nameById)}
+            height={Math.max(332, heatRows.visible.length * 24 + 142)}
+            onHover={handleHeatmapHover}
+            onHoverEnd={handleHeatmapHoverEnd}
+            controls={
+              <Segmented
+                variant="toggle"
+                size="sm"
+                ariaLabel="Heatmap scale"
+                options={HEATMAP_MODES}
+                value={heatmapMode}
+                onChange={setHeatmapMode}
+              />
+            }
+            actions={
+              heatRows.dormant.length > 0 ? (
+                <button
+                  type="button"
+                  className="button"
+                  aria-pressed={showDormant}
+                  onClick={() => setShowDormant((open) => !open)}
+                >
+                  {showDormant ? 'Hide' : 'Show'} {heatRows.dormant.length} dormant
+                </button>
+              ) : undefined
+            }
+          />
 
           <div className="card span-12">
             <h2 className="eyebrow">

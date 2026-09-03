@@ -5,6 +5,7 @@ import type { SpendingMatrix, SpendingYearly } from '../../types/api'
 import {
   buildYearSlices,
   spendingFlowPeriod,
+  spendingSankeyCsv,
   spendingSankeyOption,
 } from './spendingSankeyOptions'
 
@@ -285,5 +286,11 @@ describe('spendingSankeyOption — deficit and degenerate periods', () => {
       target: 'Net pay (spending)',
       value: 2000,
     })
+  })
+})
+
+describe('spendingSankeyCsv', () => {
+  it('exports the drawn nodes and links (F12) — the figures the tooltip echoes', () => {
+    expect(spendingSankeyCsv(july()).rows).toContainEqual(['link', 'Net pay', 'Saved', '3420.00'])
   })
 })

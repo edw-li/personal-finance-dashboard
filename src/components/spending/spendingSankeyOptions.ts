@@ -6,10 +6,11 @@
 // (buildMonthSlices / buildYearSlices), so a category wears the exact hue its stacked-bar
 // segment wears — same entity, same color everywhere, gray "Other" fold included.
 import type { EChartsOption } from '../../charts/echarts'
-import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter } from '../../charts/sankey'
+import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import { MUTED, NEGATIVE, OTHER_SERIES_COLOR, PALETTE, POSITIVE } from '../../charts/theme'
 import type { CategoryOut, SpendingMatrix, SpendingYearly, YearRollup } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import { formatMonth } from '../../utils/format'
 import { buildMonthSlices } from '../../utils/spending'
 import type { MonthSlice } from '../../utils/spending'
@@ -181,4 +182,11 @@ export function spendingSankeyOption(period: SpendingFlowPeriod): EChartsOption 
     tooltip: { trigger: 'item', formatter: makeSankeyTooltipFormatter(nodes, links) },
     series: [{ ...SANKEY_MARKS, data: nodes, links }],
   }
+}
+
+/** The flow as a table (F12). Built from the same nodes and links the chart draws. */
+export function spendingSankeyCsv(period: SpendingFlowPeriod): ExportTable {
+  const option = spendingSankeyOption(period) as { series?: { data: SankeyNode[]; links: SankeyLink[] }[] } | null
+  const series = option?.series?.[0]
+  return series === undefined ? { headers: ['Kind', 'Source', 'Target', 'Value'], rows: [] } : sankeyCsv(series.data, series.links)
 }
