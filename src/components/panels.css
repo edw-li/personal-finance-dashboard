@@ -33,13 +33,13 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 1.1rem 1.25rem 1.25rem;
+  padding: var(--density-card-pad);
   min-width: 0;
 }
 
 .card-grid {
   display: grid;
-  gap: 1rem;
+  gap: var(--density-grid-gap);
   grid-template-columns: repeat(12, 1fr);
 }
 
@@ -67,8 +67,8 @@
 
 .kpi-row {
   display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--density-grid-gap);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   margin-bottom: 1rem;
 }
 
@@ -182,7 +182,7 @@
 }
 
 .data-table td {
-  padding: 0.45rem 0.6rem;
+  padding: var(--density-cell-pad);
   border-bottom: 1px solid var(--surface-2);
 }
 
