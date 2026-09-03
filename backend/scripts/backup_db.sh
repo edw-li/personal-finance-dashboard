@@ -93,16 +93,33 @@ VERIFIED=false
 VERIFY_ERROR=""
 VERIFIED_AT=""
 
-live_counts() {  # $1 = database -> "t1=n1 t2=n2 t3=n3"
+# A scratch database outlives a killed run otherwise: only the happy paths below drop it, ERR
+# already belongs to record_failure, and a cron job meets SIGTERM on every deploy and reboot.
+cleanup_verify() {
+  if [ -n "${VERIFY_ERR_FILE:-}" ]; then rm -f "$VERIFY_ERR_FILE"; fi
+  PGPASSWORD="${POSTGRES_PASSWORD:-}" dropdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" \
+    --if-exists "$VERIFY_DB" >/dev/null 2>&1 || true
+}
+trap 'cleanup_verify; exit 130' INT
+trap 'cleanup_verify; exit 143' TERM
+
+live_counts() {  # $1 = database -> "t1=n1 t2=n2 t3=n3"; NON-ZERO if any count is unreadable
   local db="$1" out="" t n
   for t in $VERIFY_TABLES; do
-    n="$(PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$db" -Atc "SELECT count(*) FROM ${t}" 2>/dev/null || echo '?')"
+    n="$(PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$db" -Atc "SELECT count(*) FROM ${t}" 2>/dev/null)" || return 1
+    # A failed psql used to become the literal `?`, and `t=?` on BOTH sides compared equal:
+    # the run recorded verified:true having verified nothing, with `"monthly_spending": ?` in
+    # the marker — jsonb the INSERT then rejects, losing the whole backup_status row. Only
+    # digits are a count; anything else fails verification with a reason.
+    case "$n" in
+      "" | *[!0-9]*) return 1 ;;
+    esac
     out="${out}${out:+ }${t}=${n}"
   done
-  echo "$out"
+  printf '%s\n' "$out"
 }
 
-counts_json() {  # "t=n t=n" -> {"t": n, ...}
+counts_json() {  # "t=n t=n" -> {"t": n, ...}; live_counts guarantees every n is a number
   local json="" pair
   for pair in $1; do
     json="${json}${json:+, }\"${pair%%=*}\": ${pair#*=}"
@@ -122,7 +139,13 @@ decrypt_dump() {  # the SQL text of $DUMP_FILE on stdout, whichever flavor was w
   fi
 }
 
-LIVE_COUNTS="$(live_counts "$DB_NAME")"
+# Captured BEFORE the dump, so the comparison is against the state pg_dump sees. Unreadable
+# counts are not fatal — the backup still runs; only the verify verdict changes.
+LIVE_COUNTS=""
+if ! LIVE_COUNTS="$(live_counts "$DB_NAME")"; then
+  LIVE_COUNTS=""
+  VERIFY_ERROR="live row counts unreadable on ${DB_NAME}"
+fi
 
 echo "[$(date)] Starting backup of database '${DB_NAME}'..."
 
@@ -193,11 +216,16 @@ PYEOF
 # Every step lives inside an `if`, so set -e and the ERR trap never fire from here: a verify
 # failure keeps ok:true for the upload (the dump IS in the bucket), records verified:false
 # with the reason, and lets the run end with exit 0 so retention still ran.
-VERIFY_ERR_FILE="/tmp/verify_err_$$"
-if PGPASSWORD="${POSTGRES_PASSWORD}" createdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$VERIFY_DB" 2>"$VERIFY_ERR_FILE"; then
+# mktemp, not a name built from the PID under /tmp: that name is predictable, and on a shared
+# box a pre-planted symlink at it turns this redirect into a write wherever it points.
+VERIFY_ERR_FILE="$(mktemp)"
+if [ -z "$LIVE_COUNTS" ]; then
+  echo "[$(date)] Skipping verify: ${VERIFY_ERROR}"
+elif PGPASSWORD="${POSTGRES_PASSWORD}" createdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$VERIFY_DB" 2>"$VERIFY_ERR_FILE"; then
   if decrypt_dump | PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -q >/dev/null 2>"$VERIFY_ERR_FILE"; then
-    RESTORED_COUNTS="$(live_counts "$VERIFY_DB")"
-    if [ "$RESTORED_COUNTS" = "$LIVE_COUNTS" ]; then
+    if ! RESTORED_COUNTS="$(live_counts "$VERIFY_DB")"; then
+      VERIFY_ERROR="row counts unreadable in ${VERIFY_DB} after the restore"
+    elif [ "$RESTORED_COUNTS" = "$LIVE_COUNTS" ]; then
       VERIFIED=true
       VERIFIED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       echo "[$(date)] Verify OK: ${RESTORED_COUNTS}"

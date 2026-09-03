@@ -453,7 +453,9 @@ sudo -u postgres psql -c "ALTER ROLE finance CREATEDB;"
 
 Without it every run records `verified: false` with `createdb failed …` and the Data health
 card says so; the upload itself is unaffected. A verify failure never fails the run
-(retention still sweeps, exit 0).
+(retention still sweeps, exit 0). Counts that cannot be read — an unreachable database, a
+renamed table — record `verified: false` with the reason instead of comparing two unknowns
+and calling them equal.
 
 ### 5.4 Schedule
 
@@ -476,16 +478,24 @@ own restore, verifies every table against the ZIP, and drops the scratch:
 ```bash
 # On the box, inside the backend image (it has the app and its driver; host Postgres via host-gateway):
 docker compose -f docker-compose.prod.yml run --rm \
-  -e DB_HOST=host.docker.internal -e DB_PORT=5432 \
   -v /path/to/finance-export-YYYYMMDD-HHMMSS.zip:/tmp/snap.zip:ro \
   backend bash scripts/restore_drill.sh /tmp/snap.zip
 # On a dev box, from the repo root (Postgres on 5433):
 DB_PORT=5433 PYTHON=backend/.venv/Scripts/python.exe bash backend/scripts/restore_drill.sh path/to/finance-export-….zip
 ```
 
-Expected: `PASS: 35 tables identical` and `[drill] PASS`, exit 0. The nightly files live on the
-`finance-data` volume (`docker volume inspect personal-finance-dashboard_finance-data` for the
-host path); the same ZIP restores from the UI — Restore card → Dry run → type the date →
+The container recipe passes no database settings on purpose: the service's own `DATABASE_URL`
+already carries host, port, user and password, and the drill reads them from it. (It has to —
+compose passes no `POSTGRES_USER`/`POSTGRES_PASSWORD` to the backend and `backend/.dockerignore`
+keeps `.env` out of the image, so anything else falls back to the `finance:finance` default and
+cannot connect.) Outside the container `DB_HOST`/`DB_PORT`/`POSTGRES_*` from the project-root
+`.env` still win, and a relative `PYTHON` like the one above is fine — the drill makes it
+absolute before it changes directory.
+
+Expected: `PASS: 35 tables identical` and `[drill] PASS`, exit 0. The drill drops its scratch
+database and its temporary data directory on the way out, whichever way it exits. The nightly files
+live on the `finance-data` volume (`docker volume inspect personal-finance-dashboard_finance-data`
+for the host path); the same ZIP restores from the UI — Restore card → Dry run → type the date →
 Restore — with a pre-restore point written first.
 
 **The nightly dump (disaster recovery — schema-agnostic, survives any app state).**

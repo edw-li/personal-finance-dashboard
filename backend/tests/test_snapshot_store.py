@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import func, select
 
 from app.models import Account, ChangeLog, LifecycleRun
@@ -142,3 +143,35 @@ async def test_run_snapshot_job_writes_and_purges(db):
     assert await run_snapshot_job(db, now=NOW, trigger="scheduled") is True
     assert len(list(snapshots_dir().iterdir())) == 1
     assert (await db.execute(select(func.count()).select_from(ChangeLog))).scalar_one() == 0
+
+
+def test_list_snapshots_ignores_a_symlink(tmp_path):
+    """is_file() FOLLOWS symlinks, so a link named like a snapshot would be listed, sized and
+    offered for restore from wherever it points — outside the data volume. Prod is Linux;
+    Windows needs Developer Mode to create one, hence the skip rather than a silent pass."""
+    directory = snapshots_dir()
+    directory.mkdir(parents=True)
+    real = tmp_path / "elsewhere.zip"
+    real.write_bytes(b"not on the volume")
+    link = directory / "finance-export-20260904-233000.zip"
+    try:
+        link.symlink_to(real)
+    except OSError as exc:  # pragma: no cover - privilege-dependent
+        pytest.skip(f"cannot create symlinks here: {exc}")
+    assert list_snapshots(None) == []
+
+
+async def test_run_snapshot_job_swallows_a_failure_to_record_the_failure(db, monkeypatch, caplog):
+    """The failure path runs when the database is unreachable, so its own commit fails for
+    the same reason. Raising there would escape into APScheduler instead of returning False."""
+
+    async def explode(_db):
+        raise OSError("read-only file system")
+
+    async def commit_explode():
+        raise RuntimeError("connection was closed")
+
+    monkeypatch.setattr("app.services.snapshot_store.build_snapshot_zip", explode)
+    monkeypatch.setattr(db, "commit", commit_explode)
+    assert await run_snapshot_job(db, now=NOW, trigger="scheduled") is False
+    assert "could not record the failed snapshot run" in caplog.text

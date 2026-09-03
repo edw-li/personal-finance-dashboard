@@ -9,6 +9,7 @@ a missing volume on prod (until the compose redeploy) shows in Activity and the 
 check rather than in a traceback nobody reads."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import zipfile
@@ -59,7 +60,10 @@ def list_snapshots(server_head: str | None) -> list[SnapshotEntryOut]:
     entries: list[SnapshotEntryOut] = []
     for path in directory.iterdir():
         stamp = snapshot_stamp(path.name)
-        if stamp is None or not path.is_file():
+        # is_symlink first: is_file() FOLLOWS the link, so a symlink dropped into the
+        # snapshots directory would be read, sized and offered for restore from wherever it
+        # points — off the data volume entirely. Only real files on the volume are snapshots.
+        if stamp is None or path.is_symlink() or not path.is_file():
             continue
         readable, head = _head_of(path)
         entries.append(
@@ -133,16 +137,25 @@ async def run_snapshot_job(db: AsyncSession, *, now: datetime, trigger: str) -> 
     except Exception as exc:
         await db.rollback()
         logger.exception("nightly snapshot failed")
-        db.add(
-            LifecycleRun(
-                kind="snapshot",
-                ok=False,
-                actor=None,
-                error=f"{type(exc).__name__}: {exc}"[:ERROR_SNIPPET_LEN],
-                report={"trigger": trigger},
+        try:
+            db.add(
+                LifecycleRun(
+                    kind="snapshot",
+                    ok=False,
+                    actor=None,
+                    error=f"{type(exc).__name__}: {exc}"[:ERROR_SNIPPET_LEN],
+                    report={"trigger": trigger},
+                )
             )
-        )
-        await db.commit()
+            await db.commit()
+        except Exception:
+            # A database the job cannot reach is exactly when this path runs, and the
+            # bookkeeping write fails for the same reason the snapshot did. Raising here
+            # would escape into APScheduler, which logs a job error and drops the return
+            # value — the caller's False (and the log line above) is the better report.
+            logger.exception("could not record the failed snapshot run")
+            with contextlib.suppress(Exception):
+                await db.rollback()
         return False
     logger.info(
         "%s snapshot %s written (%d bytes); %d change-log rows purged",
