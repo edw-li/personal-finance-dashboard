@@ -11,7 +11,7 @@ import { fetchMatrix, fetchYearly } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
 import { fetchAllTaxSummaries, fetchTaxYears } from '../api/taxes'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
-import EChart from '../components/EChart'
+import ChartCard from '../components/ChartCard'
 import type { EChartEventParams } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { eventKey } from '../components/calendar/calendarView'
@@ -20,13 +20,19 @@ import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import { UP_NEXT_WINDOW_DAYS, upNextItems } from '../components/overview/upNext'
 import { ytdStats } from '../components/overview/ytd'
 import {
+  netWorthTrendCsv,
   netWorthTrendOption,
   pickTaxSummary,
   RECENT_SPEND_MONTHS,
+  recentSpendCsv,
   recentSpendOption,
   spendStats,
 } from '../components/overview/overviewChartOptions'
-import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
+import {
+  liveFromHoldings,
+  portfolioHistoryCsv,
+  portfolioHistoryOption,
+} from '../components/portfolio/historyChartOptions'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
@@ -534,66 +540,54 @@ export default function OverviewPage() {
               </section>
             )}
             <div className="card-grid">
-              <section className="card span-12">
-                <h2 className="eyebrow">
-                  Net worth trend
-                  <InfoHint text="Net worth at every monthly snapshot — the series the Net Worth page breaks down by group." />
-                </h2>
-                <NavLink className="drill-hint" to="/net-worth">
-                  Open net worth →
-                </NavLink>
-                {nwTrend ? (
-                  <EChart
-                    option={nwTrend}
-                    height={220}
-                    ariaLabel="Line chart of net worth at every monthly snapshot"
-                    onClick={() => navigate('/net-worth')}
-                    animateEntrance={!fromCache}
-                  />
-                ) : (
-                  <p className="empty-note">No snapshots yet.</p>
-                )}
-              </section>
-              <section className="card span-12">
-                <h2 className="eyebrow">
-                  Portfolio performance
-                  <InfoHint text={performanceHint} />
-                </h2>
-                <NavLink className="drill-hint" to="/portfolio">
-                  Open portfolio →
-                </NavLink>
-                {perf ? (
-                  <EChart
-                    option={perf}
-                    height={280}
-                    ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
-                    onClick={() => navigate('/portfolio')}
-                    animateEntrance={!fromCache}
-                  />
-                ) : (
-                  <p className="empty-note">No performance history yet.</p>
-                )}
-              </section>
-              <section className="card span-12">
-                <h2 className="eyebrow">
-                  Recent spending
-                  <InfoHint text="Total spend for each of the last 12 entered months." />
-                </h2>
-                <NavLink className="drill-hint" to="/spending">
-                  Open spending →
-                </NavLink>
-                {bars ? (
-                  <EChart
-                    option={bars}
-                    height={240}
-                    ariaLabel="Bar chart of total spending for each of the last 12 entered months"
-                    onClick={openSpendingMonth}
-                    animateEntrance={!fromCache}
-                  />
-                ) : (
-                  <p className="empty-note">No spending months yet.</p>
-                )}
-              </section>
+              <ChartCard
+                title="Net worth trend"
+                hint="Net worth at every monthly snapshot — the series the Net Worth page breaks down by group."
+                ariaLabel="Line chart of net worth at every monthly snapshot"
+                option={nwTrend}
+                empty="No snapshots yet."
+                exportName="net-worth-trend"
+                csv={() => netWorthTrendCsv(data.ts)}
+                height={220}
+                onClick={() => navigate('/net-worth')}
+                footer={
+                  <NavLink className="drill-hint" to="/net-worth">
+                    Open net worth →
+                  </NavLink>
+                }
+              />
+              <ChartCard
+                title="Portfolio performance"
+                hint={performanceHint}
+                ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
+                option={perf}
+                empty="No performance history yet."
+                exportName="portfolio-performance"
+                csv={() => portfolioHistoryCsv(data.history)}
+                height={280}
+                onClick={() => navigate('/portfolio')}
+                footer={
+                  <NavLink className="drill-hint" to="/portfolio">
+                    Open portfolio →
+                  </NavLink>
+                }
+              />
+              <ChartCard
+                title="Recent spending"
+                hint="Total spend for each of the last 12 entered months, with their average as the dashed line."
+                ariaLabel="Bar chart of total spending for each of the last 12 entered months, with the 12-month average"
+                option={bars}
+                empty="No spending months yet."
+                exportName="recent-spending"
+                csv={() => recentSpendCsv(data.matrix)}
+                height={240}
+                onClick={openSpendingMonth}
+                footer={
+                  <NavLink className="drill-hint" to="/spending">
+                    Open spending →
+                  </NavLink>
+                }
+              />
               <MoneyFlowCard
                 flow={flow}
                 failed={flowFailed}
