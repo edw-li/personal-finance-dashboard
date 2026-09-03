@@ -17,6 +17,8 @@ import {
   stripPersonSuffix,
 } from '../components/calendar/calendarView'
 import EventDetails from '../components/calendar/EventDetails'
+import { FeedBanner } from '../components/shell/Feed'
+import PageFrame from '../components/shell/PageFrame'
 import { useToast } from '../components/ToastProvider'
 import { useArrivalParam } from '../components/useArrivalParam'
 import type { CalendarEvent, PersonOut } from '../types/api'
@@ -287,243 +289,240 @@ export default function CalendarPage() {
 
   return (
     <div className="page calendar-page">
-      <header className="page-header">
-        <h1>Calendar</h1>
-        <div className="spacer" />
-        <button type="button" className="button" ref={addEventBtnRef} onClick={openAddForm}>
-          Add event
-        </button>
-        <button
-          type="button"
-          className="button"
-          disabled={events === null || events.length === 0}
-          onClick={() => events !== null && downloadIcs(events)}
-        >
-          Add to calendar (.ics)
-        </button>
-      </header>
-      {error && (
-        <div className="error-banner" role="alert">
-          {events === null ? error : `${error} — the page may be showing earlier data.`}{' '}
-          <button className="button" aria-label="Retry loading the calendar" onClick={reload}>
-            Retry
-          </button>
-        </div>
-      )}
-      {events === null ? (
-        busy && <p className="empty-note loading-fallback">Loading…</p>
-      ) : (
-        <div className={`card-grid loading-dim${busy ? ' is-loading' : ''}`}>
-          {form !== null && (
-            <section className="card span-12">
-              <h2 className="eyebrow">{form.mode === 'add' ? 'Add event' : 'Edit event'}</h2>
-              {formError && (
-                <div className="error-banner" role="alert">
-                  {formError}
-                </div>
-              )}
-              <div className="cal-form">
-                <label className="cal-form-field">
-                  Date
-                  <input
-                    type="date"
-                    className="field-input cal-form-input"
-                    value={fDate}
-                    onChange={(e) => setFDate(e.target.value)}
-                  />
-                </label>
-                <label className="cal-form-field">
-                  Title
-                  <input
-                    className="field-input cal-form-input"
-                    value={fLabel}
-                    maxLength={120}
-                    onChange={(e) => setFLabel(e.target.value)}
-                  />
-                </label>
-                <label className="cal-form-field cal-form-note">
-                  Note (optional)
-                  <input
-                    className="field-input cal-form-input"
-                    value={fDetail}
-                    maxLength={300}
-                    onChange={(e) => setFDetail(e.target.value)}
-                  />
-                </label>
-                {orderedPeople.length > 1 && (
+      <PageFrame
+        title="Calendar"
+        actions={
+          <>
+            <button type="button" className="button" ref={addEventBtnRef} onClick={openAddForm}>
+              Add event
+            </button>
+            <button
+              type="button"
+              className="button"
+              disabled={events === null || events.length === 0}
+              onClick={() => events !== null && downloadIcs(events)}
+            >
+              Add to calendar (.ics)
+            </button>
+          </>
+        }
+        resource={{
+          status: events === null ? (error !== null ? 'error' : 'loading') : 'ready',
+          error,
+          busy,
+          retry: reload,
+        }}
+        skeleton={{ tiles: 0, cards: [{ span: 12, height: 420 }] }}
+      >
+        {events !== null && (
+          <div className="card-grid">
+            {form !== null && (
+              <section className="card span-12">
+                <h2 className="eyebrow">{form.mode === 'add' ? 'Add event' : 'Edit event'}</h2>
+                <FeedBanner error={formError} />
+                <div className="cal-form">
                   <label className="cal-form-field">
-                    Person
-                    <select
+                    Date
+                    <input
+                      type="date"
                       className="field-input cal-form-input"
-                      value={fPerson}
-                      onChange={(e) => setFPerson(e.target.value)}
-                    >
-                      <option value="">Household</option>
-                      {orderedPeople.map((person) => (
-                        <option key={person.id} value={String(person.id)}>
-                          {person.name}
-                        </option>
-                      ))}
-                    </select>
+                      value={fDate}
+                      onChange={(e) => setFDate(e.target.value)}
+                    />
                   </label>
-                )}
+                  <label className="cal-form-field">
+                    Title
+                    <input
+                      className="field-input cal-form-input"
+                      value={fLabel}
+                      maxLength={120}
+                      onChange={(e) => setFLabel(e.target.value)}
+                    />
+                  </label>
+                  <label className="cal-form-field cal-form-note">
+                    Note (optional)
+                    <input
+                      className="field-input cal-form-input"
+                      value={fDetail}
+                      maxLength={300}
+                      onChange={(e) => setFDetail(e.target.value)}
+                    />
+                  </label>
+                  {orderedPeople.length > 1 && (
+                    <label className="cal-form-field">
+                      Person
+                      <select
+                        className="field-input cal-form-input"
+                        value={fPerson}
+                        onChange={(e) => setFPerson(e.target.value)}
+                      >
+                        <option value="">Household</option>
+                        {orderedPeople.map((person) => (
+                          <option key={person.id} value={String(person.id)}>
+                            {person.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    disabled={saving || fLabel.trim() === '' || fDate === ''}
+                    onClick={saveForm}
+                  >
+                    {form.mode === 'add' ? 'Save event' : 'Save changes'}
+                  </button>
+                  <button type="button" className="button" onClick={() => setForm(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </section>
+            )}
+            <section className="card span-12">
+              <div className="cal-controls">
                 <button
                   type="button"
-                  className="button button-primary"
-                  disabled={saving || fLabel.trim() === '' || fDate === ''}
-                  onClick={saveForm}
+                  className="button"
+                  aria-label="Previous month"
+                  onClick={() => showMonth(addMonths(month, -1))}
                 >
-                  {form.mode === 'add' ? 'Save event' : 'Save changes'}
+                  ‹
                 </button>
-                <button type="button" className="button" onClick={() => setForm(null)}>
-                  Cancel
+                <button type="button" className="button" onClick={() => showMonth(currentMonthIso())}>
+                  Today
                 </button>
+                <button
+                  type="button"
+                  className="button"
+                  aria-label="Next month"
+                  onClick={() => showMonth(addMonths(month, 1))}
+                >
+                  ›
+                </button>
+                <h2 className="cal-title">{formatMonth(month)}</h2>
               </div>
-            </section>
-          )}
-          <section className="card span-12">
-            <div className="cal-controls">
-              <button
-                type="button"
-                className="button"
-                aria-label="Previous month"
-                onClick={() => showMonth(addMonths(month, -1))}
-              >
-                ‹
-              </button>
-              <button type="button" className="button" onClick={() => showMonth(currentMonthIso())}>
-                Today
-              </button>
-              <button
-                type="button"
-                className="button"
-                aria-label="Next month"
-                onClick={() => showMonth(addMonths(month, 1))}
-              >
-                ›
-              </button>
-              <h2 className="cal-title">{formatMonth(month)}</h2>
-            </div>
-            {/* Plain divs, no grid role: the date-grouped list below is the accessible
-                (and mobile) rendering — spec §6. */}
-            <div className="cal-grid">
-              {DOW.map((dow) => (
-                <div key={dow} className="cal-dow">
-                  {dow}
-                </div>
-              ))}
-              {weeks.flat().map((day, dayIndex) => {
-                const outside = day.slice(0, 7) !== month.slice(0, 7)
-                return (
-                  <div
-                    key={day}
-                    className={`cal-day${outside ? ' cal-day-outside' : ''}${
-                      day === today ? ' cal-day-today' : ''
-                    }`}
-                  >
-                    <div className="cal-day-number">{Number(day.slice(8, 10))}</div>
-                    {(byDate.get(day) ?? []).map((event) => {
-                      const key = eventKey(event)
-                      const isOpen = open?.surface === 'grid' && open.key === key
-                      return (
-                        <div key={key} className="cal-chip-slot">
-                          <button
-                            type="button"
-                            className="cal-chip"
-                            aria-expanded={isOpen}
-                            aria-haspopup="dialog"
-                            style={{ borderLeftColor: EVENT_COLORS[event.type] }}
-                            onClick={(e) => toggleEvent(event, 'grid', e.currentTarget)}
-                          >
-                            {event.label}
-                          </button>
-                          {isOpen && (
-                            <div
-                              ref={popoverRef}
-                              role="dialog"
-                              aria-label={event.label}
-                              tabIndex={-1}
-                              className={`cal-popover${
-                                dayIndex % 7 >= 5 ? ' cal-popover-right' : ''
-                              }`}
-                            >
-                              {details(event)}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
+              {/* Plain divs, no grid role: the date-grouped list below is the accessible
+                  (and mobile) rendering — spec §6. */}
+              <div className="cal-grid">
+                {DOW.map((dow) => (
+                  <div key={dow} className="cal-dow">
+                    {dow}
                   </div>
-                )
-              })}
-            </div>
-            <div className="cal-legend">
-              {EVENT_TYPE_ORDER.map((type) => (
-                <span key={type} className="cal-legend-item">
-                  <span
-                    className="cal-legend-dot"
-                    style={{ backgroundColor: EVENT_COLORS[type] }}
-                    aria-hidden="true"
-                  />
-                  {EVENT_TYPE_LABELS[type]}
-                </span>
-              ))}
-            </div>
-            {/* The worded notes the spec requires in the legend (§5 payday row, §3.2
-                data honesty): omissions and confirmed-only are said, not implied. */}
-            <p className="drill-hint">
-              Paydays appear only for semi-monthly (24 checks/yr) paycheck profiles — other
-              cadences are omitted rather than guessed, and each chip carries the
-              person&apos;s name once more than one person has a profile. Your own events
-              carry a name the same way when you tag one. Ex-dividend dates are confirmed
-              announcements only: stocks typically publish 2–6 weeks ahead, ETFs often just
-              days ahead, so a quiet stretch may simply be unannounced.
-            </p>
-            {events.length === 0 && (
-              <p className="empty-note">
-                No events in this window — vests, purchases and paydays appear once grants,
-                periods and a paycheck profile are entered. Add your own with Add event.
-              </p>
-            )}
-          </section>
-          <section className="card span-12">
-            <h2 className="eyebrow">{formatMonth(month)} — list</h2>
-            {listGroups.length === 0 ? (
-              <p className="empty-note">Nothing this month.</p>
-            ) : (
-              <ul className="cal-list">
-                {listGroups.map(([day, dayEvents]) => (
-                  <li key={day}>
-                    <span className="cal-list-date">{formatDate(day)}</span>
-                    <ul>
-                      {dayEvents.map((event) => {
+                ))}
+                {weeks.flat().map((day, dayIndex) => {
+                  const outside = day.slice(0, 7) !== month.slice(0, 7)
+                  return (
+                    <div
+                      key={day}
+                      className={`cal-day${outside ? ' cal-day-outside' : ''}${
+                        day === today ? ' cal-day-today' : ''
+                      }`}
+                    >
+                      <div className="cal-day-number">{Number(day.slice(8, 10))}</div>
+                      {(byDate.get(day) ?? []).map((event) => {
                         const key = eventKey(event)
-                        const isOpen = open?.surface === 'list' && open.key === key
+                        const isOpen = open?.surface === 'grid' && open.key === key
                         return (
-                          <li key={key}>
+                          <div key={key} className="cal-chip-slot">
                             <button
                               type="button"
-                              className="row-toggle cal-list-item"
+                              className="cal-chip"
                               aria-expanded={isOpen}
-                              onClick={(e) => toggleEvent(event, 'list', e.currentTarget)}
+                              aria-haspopup="dialog"
+                              style={{ borderLeftColor: EVENT_COLORS[event.type] }}
+                              onClick={(e) => toggleEvent(event, 'grid', e.currentTarget)}
                             >
                               {event.label}
-                              {event.detail !== null && event.detail !== event.label && (
-                                <span className="cal-list-detail"> — {event.detail}</span>
-                              )}
                             </button>
-                            {isOpen && <div className="cal-list-expansion">{details(event)}</div>}
-                          </li>
+                            {isOpen && (
+                              <div
+                                ref={popoverRef}
+                                role="dialog"
+                                aria-label={event.label}
+                                tabIndex={-1}
+                                className={`cal-popover${
+                                  dayIndex % 7 >= 5 ? ' cal-popover-right' : ''
+                                }`}
+                              >
+                                {details(event)}
+                              </div>
+                            )}
+                          </div>
                         )
                       })}
-                    </ul>
-                  </li>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="cal-legend">
+                {EVENT_TYPE_ORDER.map((type) => (
+                  <span key={type} className="cal-legend-item">
+                    <span
+                      className="cal-legend-dot"
+                      style={{ backgroundColor: EVENT_COLORS[type] }}
+                      aria-hidden="true"
+                    />
+                    {EVENT_TYPE_LABELS[type]}
+                  </span>
                 ))}
-              </ul>
-            )}
-          </section>
-        </div>
-      )}
+              </div>
+              {/* The worded notes the spec requires in the legend (§5 payday row, §3.2
+                  data honesty): omissions and confirmed-only are said, not implied. */}
+              <p className="drill-hint">
+                Paydays appear only for semi-monthly (24 checks/yr) paycheck profiles — other
+                cadences are omitted rather than guessed, and each chip carries the
+                person&apos;s name once more than one person has a profile. Your own events
+                carry a name the same way when you tag one. Ex-dividend dates are confirmed
+                announcements only: stocks typically publish 2–6 weeks ahead, ETFs often just
+                days ahead, so a quiet stretch may simply be unannounced.
+              </p>
+              {events.length === 0 && (
+                <p className="empty-note">
+                  No events in this window — vests, purchases and paydays appear once grants,
+                  periods and a paycheck profile are entered. Add your own with Add event.
+                </p>
+              )}
+            </section>
+            <section className="card span-12">
+              <h2 className="eyebrow">{formatMonth(month)} — list</h2>
+              {listGroups.length === 0 ? (
+                <p className="empty-note">Nothing this month.</p>
+              ) : (
+                <ul className="cal-list">
+                  {listGroups.map(([day, dayEvents]) => (
+                    <li key={day}>
+                      <span className="cal-list-date">{formatDate(day)}</span>
+                      <ul>
+                        {dayEvents.map((event) => {
+                          const key = eventKey(event)
+                          const isOpen = open?.surface === 'list' && open.key === key
+                          return (
+                            <li key={key}>
+                              <button
+                                type="button"
+                                className="row-toggle cal-list-item"
+                                aria-expanded={isOpen}
+                                onClick={(e) => toggleEvent(event, 'list', e.currentTarget)}
+                              >
+                                {event.label}
+                                {event.detail !== null && event.detail !== event.label && (
+                                  <span className="cal-list-detail"> — {event.detail}</span>
+                                )}
+                              </button>
+                              {isOpen && <div className="cal-list-expansion">{details(event)}</div>}
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </div>
+        )}
+      </PageFrame>
     </div>
   )
 }
