@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { spendingBarsTooltipFormatter, spendingCsv } from './spendingChartOptions'
+import { tooltipRows } from '../../testing/tooltipRows'
+import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
+import { INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import type { SpendingMatrix } from '../../types/api'
+import {
+  SUSTAINABLE_SPEND,
+  spendingBarsOption,
+  spendingBarsTooltipFormatter,
+  spendingCsv,
+} from './spendingChartOptions'
 
 const format = spendingBarsTooltipFormatter(['Rent', '<b>Fun</b>', 'Other'])
 
@@ -89,5 +98,133 @@ describe('spendingCsv', () => {
     expect(spendingCsv(matrix, [1], new Map([[1, 'Rent']])).rows).toEqual([
       ['2026-08-01', '', '0.00', '0.00', '6000.00'],
     ])
+  })
+})
+
+// ── The grammar builders (charts C3) ─────────────────────────────────────────────────────
+
+export function matrixFixture(over: Partial<SpendingMatrix> = {}): SpendingMatrix {
+  return {
+    months: ['2026-06-01', '2026-07-01'],
+    categories: [
+      { id: 1, name: 'Rent', slug: 'rent', sort_order: 0, is_active: true },
+      { id: 2, name: 'Groceries <b>& more</b>', slug: 'groceries', sort_order: 1, is_active: true },
+      { id: 3, name: 'Fun', slug: 'fun', sort_order: 2, is_active: true },
+    ],
+    series: [
+      { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, null] },
+      { category_id: 2, values: ['600.00', null], budgets: ['500.00', '500.00'] },
+      { category_id: 3, values: ['150.00', null], budgets: [null, null] },
+    ],
+    totals: ['2750.00', '2000.00'],
+    net_pay: ['6000.00', '6000.00'],
+    savings_rate: ['0.541666667', null],
+    four_pct_rule: ['4100.50', '4100.50'],
+    total_budget: ['500.00', '500.00'],
+    ...over,
+  }
+}
+
+const NAMES = new Map([[1, 'Rent'], [2, 'Groceries <b>& more</b>'], [3, 'Fun']])
+const LABELS = ['Jun 2026', 'Jul 2026']
+const barsInput = (matrix = matrixFixture(), selected = {}) => ({
+  matrix, topIds: [1, 2], nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' as const }, selected,
+})
+
+interface SeriesLike {
+  id?: string
+  name?: string
+  type?: string
+  stack?: string
+  color?: string
+  z?: number
+  step?: string
+  barMaxWidth?: number
+  itemStyle?: unknown
+  emphasis?: unknown
+  lineStyle?: { type?: string }
+  animationDelay?: () => number
+  data?: unknown[]
+}
+const read = (option: unknown) =>
+  option as {
+    grid: unknown
+    legend: { type: string; selected: Record<string, boolean> }
+    xAxis: { data: string[]; boundaryGap?: boolean; axisLabel?: unknown }
+    yAxis: { axisLabel: { formatter: unknown } }
+    tooltip: { formatter: (p: unknown) => string; axisPointer?: { type: string } }
+    series: SeriesLike[]
+  }
+
+describe('spendingBarsOption', () => {
+  it('lifts the page option: slotted category stacks + Other, the INK net-pay line, the dashed sustainable-spend reference, the budget step LAST', () => {
+    const option = read(spendingBarsOption(barsInput()))
+    expect(option.series.map((s) => s.id)).toEqual(['cat-1', 'cat-2', 'other', 'net-pay', 'sustainable-spend', 'budget-Total budget'])
+    expect(option.series.map((s) => s.name)).toEqual(['Rent', 'Groceries <b>& more</b>', 'Other', 'Net pay', SUSTAINABLE_SPEND, 'Total budget'])
+    expect(SUSTAINABLE_SPEND).toBe('Sustainable spend')
+    expect(option.series[0]).toMatchObject({ type: 'bar', stack: 'spend', barMaxWidth: 22, color: PALETTE[0], universalTransition: true })
+    expect(option.series[0].itemStyle).toEqual({ borderColor: SURFACE, borderWidth: 1 })
+    expect(option.series[0].emphasis).toEqual({ focus: 'series', itemStyle: { borderColor: INK } })
+    expect(option.series[2].color).toBe(OTHER_SERIES_COLOR)
+    // §11 stagger: a FUNCTION delay per stack member, 12ms apart.
+    expect(option.series[0].animationDelay?.()).toBe(0)
+    expect(option.series[2].animationDelay?.()).toBe(24)
+    expect(option.series[3]).toMatchObject({ type: 'line', color: INK, z: 10, connectNulls: false })
+    expect(option.series[4]).toMatchObject({ type: 'line', color: MUTED, z: 9, lineStyle: { width: 2, type: 'dashed' } })
+    expect(option.series[5]).toMatchObject({ step: 'end', color: MUTED, lineStyle: { width: 2, type: 'dashed' } })
+    expect(option.series[5].data).toEqual([500, 500])
+  })
+
+  it('A6 stays: nulls pass through the stacks and Other is null when nothing folded that month', () => {
+    const [rent, groceries, other] = read(spendingBarsOption(barsInput())).series
+    expect(rent.data).toEqual([2000, 2000])
+    expect(groceries.data).toEqual([600, null])
+    expect(other.data).toEqual([150, null])
+  })
+
+  it('omits the budget step when no month has a total budget', () => {
+    const option = read(spendingBarsOption(barsInput(matrixFixture({ total_budget: [null, null] }))))
+    expect(option.series.map((s) => s.id)).not.toContain('budget-Total budget')
+  })
+
+  it('grid, axes, legend: money grid, every month labelled, compact money ticks, Total budget deselected under the page picks', () => {
+    const option = read(spendingBarsOption(barsInput(matrixFixture(), { 'Net pay': false })))
+    expect(option.grid).toEqual(GRID_VARIANTS.default)
+    expect(option.xAxis).toEqual({ type: 'category', data: LABELS, axisLabel: { interval: 0 } })
+    expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
+    expect(option.legend.type).toBe('plain')
+    expect(option.legend.selected).toEqual({ 'Total budget': false, 'Net pay': false })
+  })
+
+  it('F7: shares per category, a Total, then the net-pay row, then the muted references; absent months say so', () => {
+    const option = read(spendingBarsOption(barsInput()))
+    expect(option.tooltip.axisPointer).toEqual({ type: 'shadow' })
+    const parsed = tooltipRows(option.tooltip.formatter([
+      { seriesName: 'Groceries <b>& more</b>', seriesType: 'bar', axisValueLabel: 'Jun 2026', dataIndex: 0, value: 600, color: PALETTE[1] },
+      { seriesName: 'Rent', seriesType: 'bar', value: 2000, color: PALETTE[0] },
+      { seriesName: 'Other', seriesType: 'bar', value: 150, color: OTHER_SERIES_COLOR },
+      { seriesName: 'Net pay', seriesType: 'line', value: 6000, color: INK },
+      { seriesName: SUSTAINABLE_SPEND, seriesType: 'line', value: 4100.5, color: MUTED },
+      { seriesName: 'Total budget', seriesType: 'line', value: 500, color: MUTED },
+    ]))
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', 'Rent', '$2,000.00 (72.7%)'],
+      ['row', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt;', '$600.00 (21.8%)'],
+      ['row', 'Other', '$150.00 (5.5%)'],
+      ['total', 'Total', '$2,750.00'],
+      ['row', 'Net pay', '$6,000.00'],
+      ['ref', SUSTAINABLE_SPEND, '$4,100.50'],
+      ['ref', 'Total budget', '$500.00'],
+    ])
+    const absent = tooltipRows(option.tooltip.formatter([
+      { seriesName: 'Rent', seriesType: 'bar', axisValueLabel: 'Aug 2026', value: null },
+      { seriesName: 'Net pay', seriesType: 'line', value: 6000, color: INK },
+    ]))
+    expect(absent.notes).toEqual(['no spending entered'])
+    expect(absent.rows.map((r) => r.label)).toEqual(['Net pay'])
+  })
+
+  it('returns null with no months', () => {
+    expect(spendingBarsOption(barsInput(matrixFixture({ months: [], totals: [], net_pay: [], four_pct_rule: [], total_budget: [], savings_rate: [] })))).toBeNull()
   })
 })

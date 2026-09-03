@@ -2,6 +2,14 @@
 // fetching, no theme decisions of their own (budgetChartOptions.ts's posture). The
 // option itself stays in SpendingPage (it reads page state); only the parts worth
 // unit-testing live here. Number() is display-only (format.ts's rule).
+import type { EChartsOption } from '../../charts/echarts'
+import { BAR_MARKS, LINE, grid, moneyAxis, monthAxis, stagger } from '../../charts/grammar'
+import { legendFor } from '../../charts/legend'
+import { budgetReference, referenceLine } from '../../charts/reference'
+import { INK, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
+import { rangeZoom } from '../../charts/timeZoom'
+import type { RangeState } from '../../charts/timeZoom'
+import { axisTooltip } from '../../charts/tooltip'
 import type { SpendingMatrix } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { escapeHtml, formatCurrency } from '../../utils/format'
@@ -93,5 +101,105 @@ export function spendingCsv(
       matrix.totals[i],
       matrix.net_pay[i] ?? '',
     ]),
+  }
+}
+
+/** F13: the "4% rule" line renamed — it is what the investable assets could fund each month
+ *  at the safe withdrawal rate (Settings), and "4%" was a number the setting can change. */
+export const SUSTAINABLE_SPEND = 'Sustainable spend'
+
+export interface SpendingBarsInput {
+  matrix: SpendingMatrix
+  /** All-time-total order — index IS the palette slot AND the bar seriesIndex. */
+  topIds: number[]
+  nameById: Map<number, string>
+  monthLabels: string[]
+  range: RangeState
+  selected: Record<string, boolean>
+}
+
+/**
+ * Top-N category stacks + Other under the INK net-pay line, the dashed sustainable-spend
+ * reference and (when any month has one) the total-budget step. Lifted from SpendingPage's
+ * `barsOption`; the series ORDER is load-bearing — the heatmap hover highlights bar segments
+ * by positional seriesIndex, so nothing may be inserted ahead of the budget step.
+ */
+export function spendingBarsOption({
+  matrix, topIds, nameById, monthLabels, range, selected,
+}: SpendingBarsInput): EChartsOption | null {
+  if (matrix.months.length === 0) return null
+  const topSet = new Set(topIds)
+  const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+  // A6: absent ≠ zero. Nulls flow THROUGH to the series so an unentered month gaps the bar;
+  // Other sums the folded rows' non-null values and is itself null when none exist.
+  const otherPerMonth = matrix.months.map((_, i) =>
+    matrix.series.reduce<number | null>((acc, s) => {
+      if (topSet.has(s.category_id)) return acc
+      const v = s.values[i]
+      return v === null ? acc : (acc ?? 0) + Number(v)
+    }, null),
+  )
+  const name = (id: number) => nameById.get(id) ?? String(id)
+  const categoryNames = [...topIds.map(name), 'Other']
+  const hasBudget = matrix.total_budget.some((v) => v !== null)
+  const series = [
+    // Stable ids: the drill-in pie morphs from/to these (universalTransition keys on id).
+    ...topIds.map((id, slot) => ({
+      id: `cat-${id}`,
+      name: name(id),
+      type: 'bar' as const,
+      stack: 'spend',
+      ...BAR_MARKS,
+      ...stagger(slot),
+      color: PALETTE[slot],
+      universalTransition: true,
+      data: (valuesById.get(id) ?? []).map((v) => (v === null ? null : Number(v))),
+    })),
+    {
+      id: 'other',
+      name: 'Other',
+      type: 'bar' as const,
+      stack: 'spend',
+      ...BAR_MARKS,
+      ...stagger(topIds.length),
+      color: OTHER_SERIES_COLOR,
+      universalTransition: true,
+      data: otherPerMonth,
+    },
+    {
+      ...LINE,
+      id: 'net-pay',
+      name: 'Net pay',
+      color: INK,
+      z: 10,
+      connectNulls: false,
+      data: matrix.net_pay.map((v) => (v === null ? null : Number(v))),
+    },
+    referenceLine(
+      SUSTAINABLE_SPEND,
+      matrix.four_pct_rule.map((v) => (v === null ? null : Number(v))),
+      { id: 'sustainable-spend' },
+    ),
+    // LAST on purpose (the positional highlight — see above).
+    ...(hasBudget ? [budgetReference('Total budget', matrix.total_budget)] : []),
+  ]
+  return {
+    dataZoom: rangeZoom(matrix.months, range),
+    grid: grid(),
+    // 'Total budget' ships DESELECTED: it wears the same dashed grammar as the sustainable
+    // line, so both on at once would be ambiguous; the legend chip is the summon. Mirrored
+    // picks spread OVER the default so a deliberate summon survives rebuilds.
+    legend: legendFor(series.length, { 'Total budget': false, ...selected }),
+    tooltip: axisTooltip({
+      unit: 'money',
+      groups: categoryNames,
+      shareOf: true,
+      references: [SUSTAINABLE_SPEND, 'Total budget'],
+      absentText: 'no spending entered',
+      pointer: 'shadow',
+    }),
+    xAxis: monthAxis(monthLabels, { gap: true }),
+    yAxis: moneyAxis(),
+    series,
   }
 }
