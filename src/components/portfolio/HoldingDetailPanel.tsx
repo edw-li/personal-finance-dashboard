@@ -14,6 +14,7 @@ import {
 } from '../../utils/format'
 import { TYPE_LABELS } from './allocationChartOptions'
 import { priceHistoryOption } from './priceChartOptions'
+import { FeedBanner } from '../shell/Feed'
 import './portfolio.css'
 
 // Fetch windows for the price chart — these move the REQUEST (?days=), not a zoom: the
@@ -239,15 +240,16 @@ export default function HoldingDetailPanel({
           ))}
         </div>
       </div>
+      {/* Guarded rather than handed a bare expression: the stale cue only when there IS
+          something stale — a span-change failure leaves the previous window's chart up, a
+          first load leaves nothing — and the composed sentence would read "null — …" for a
+          null error. */}
       {error && (
-        <div className="error-banner" role="alert">
-          {/* The stale cue only when there IS something stale: a span-change failure
-              leaves the previous window's chart up, a first load leaves nothing. */}
-          {points === null ? error : `${error} — the chart may be showing the previous window.`}{' '}
-          <button className="button" aria-label="Retry loading price history" onClick={retry}>
-            Retry
-          </button>
-        </div>
+        <FeedBanner
+          error={points === null ? error : `${error} — the chart may be showing the previous window.`}
+          retry={retry}
+          retryLabel="Retry loading price history"
+        />
       )}
       {points === null ? (
         busy && <p className="empty-note">Loading price history…</p>

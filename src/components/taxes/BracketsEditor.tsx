@@ -21,6 +21,7 @@ import type {
 import { canonicalAmount, parseAmount, quantize } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
+import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
 
 // The six jurisdictions' human names live in src/api/taxes.ts beside JURISDICTIONS, so this
@@ -369,11 +370,7 @@ export default function BracketsEditor({
           </button>
         ))}
       </div>
-      {tabError && (
-        <div className="error-banner" role="alert">
-          {tabError}
-        </div>
-      )}
+      <FeedBanner error={tabError} />
       {activeStatus !== 'single' && isEmpty && (
         <div className="bracket-clone">
           <p className="drill-hint">
@@ -407,11 +404,7 @@ export default function BracketsEditor({
               {label(name)} brackets
               {badgeFor(name)}
             </h3>
-            {message && (
-              <div className="error-banner" role="alert">
-                {message}
-              </div>
-            )}
+            <FeedBanner error={message} />
             {rows.length === 0 ? (
               <p className="empty-note">No brackets for {label(name)}.</p>
             ) : (

@@ -7,6 +7,7 @@ import InfoHint from '../InfoHint'
 import type { HoldingType, SecurityOut } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate } from '../../utils/format'
+import { FeedBanner } from '../shell/Feed'
 import './portfolio.css'
 
 const HOLDING_TYPES: HoldingType[] = ['etf', 'mutual_fund', 'stock', 'private']
@@ -168,7 +169,7 @@ export default function SecuritiesPanel({
         dividend and ex-div date are rewritten by every price refresh for auto-priced
         securities — edit the dividend only on manual-priced ones.
       </p>
-      {error && <div className="error-banner" role="alert">{error}</div>}
+      <FeedBanner error={error} />
       <form
         className="entry-form"
         onSubmit={(e) => {

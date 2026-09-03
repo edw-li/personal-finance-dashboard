@@ -10,6 +10,7 @@ import { formatCurrency, formatPct } from '../../utils/format'
 import { taxTrendCsv, trendOption, yearPieOption } from './taxChartOptions'
 // Only this component's own sheet, like its siblings: the app-wide vocabulary
 // (.card/.eyebrow/.empty-note/.error-banner) is panels.css, which the PAGE imports.
+import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
 
 /**
@@ -143,11 +144,7 @@ export default function CompositionPanel({
           </button>
         )}
       </div>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       {detailSummary ? (
         <>
           <p className="drill-hint">

@@ -11,6 +11,7 @@ import { useToast } from '../ToastProvider'
 import type { SecurityOut, TransactionOut, TransactionType } from '../../types/api'
 import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
+import { FeedBanner } from '../shell/Feed'
 import './portfolio.css'
 
 interface FormState {
@@ -260,7 +261,7 @@ export default function TransactionsPanel({
         importer: a re-import reverts edits to them and resurrects deletions. Rows added
         here are never touched by imports.
       </p>
-      {error && <div className="error-banner" role="alert">{error}</div>}
+      <FeedBanner error={error} />
       {kept && (
         // role=status: the cue appears in the same beat the focus jumps into the shares
         // box, so a screen-reader user would otherwise never learn why the form is still

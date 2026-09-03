@@ -23,6 +23,7 @@ import type { Tone } from '../../utils/tone'
 // This component's own sheet, like its three siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.data-table/.error-banner/.empty-note) is panels.css, which the
 // PAGE imports — and StatTile brings it along regardless.
+import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
 
 // The API's own ceiling (schemas/taxes.py: WhatIfIn.sales / .espp_sales max_length=20).
@@ -427,14 +428,7 @@ export default function WhatIfPanel({
             Long/short is your call: imported transactions carry no dates, so the app
             cannot verify a holding period. Nothing here is stored.
           </p>
-          {feedError !== null && (
-            <div className="error-banner" role="alert">
-              {feedError}{' '}
-              <button type="button" className="button" onClick={retryFeeds}>
-                Retry
-              </button>
-            </div>
-          )}
+          <FeedBanner error={feedError} retry={retryFeeds} />
           {/* Both feeds land together (one Promise.all) or neither does, so one null is the
               whole "still waiting" question — and a pair that FAILED leaves the banner above
               as the card's only content: there is nothing to build a leg out of, and a form
@@ -641,11 +635,7 @@ export default function WhatIfPanel({
                 </span>
               </div>
 
-              {error !== null && (
-                <div className="error-banner" role="alert">
-                  {error}
-                </div>
-              )}
+              <FeedBanner error={error} />
 
               {result !== null && (
                 <div className="whatif-result">

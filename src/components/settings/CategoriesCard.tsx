@@ -9,6 +9,7 @@ import {
 import type { CategoryOut } from '../../types/api'
 import InfoHint from '../InfoHint'
 import { useToast } from '../ToastProvider'
+import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
 
@@ -116,14 +117,7 @@ export default function CategoriesCard() {
         Spending categories
         <InfoHint text="The spending matrix's rows. Retire keeps a category out of the wizard without losing its history; delete only works while a category has no monthly rows. The slug never changes — it is the workbook importer's key." />
       </h2>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          <button className="button" onClick={load}>
-            Retry
-          </button>
-        </div>
-      )}
+      <FeedBanner error={error} retry={load} />
       {!loaded && error === null && <p className="empty-note">Loading…</p>}
       {loaded && (
         <>

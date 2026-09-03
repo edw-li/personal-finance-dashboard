@@ -5,6 +5,7 @@ import type { LimitsOut } from '../../types/api'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
 import { useToast } from '../ToastProvider'
+import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
 
@@ -148,14 +149,7 @@ export default function LimitsCard() {
           </button>
         ))}
       </div>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          <button className="button" onClick={() => load(year)}>
-            Retry
-          </button>
-        </div>
-      )}
+      <FeedBanner error={error} retry={() => load(year)} />
       {items === null && error === null && <p className="empty-note">Loading…</p>}
       {items !== null && (
         <form

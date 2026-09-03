@@ -7,6 +7,7 @@ import { formatCurrency, formatMonth } from '../../utils/format'
 import { budgetProgress } from '../../utils/spending'
 import AmountInput from '../AmountInput'
 import InfoHint from '../InfoHint'
+import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './budgets.css'
 
@@ -193,11 +194,7 @@ export default function BudgetPanel({
         Budgets — {formatMonth(month)}
         <InfoHint text="Each budgeted category's spend against its budget for the focused month. Budgets are effective-dated: a change applies from its month forward and never rewrites history. With no transaction feed there is no mid-month pacing — meters describe completed months and the live wizard entry." />
       </h2>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       {budgeted.length > 0 ? (
         <>
           <p className="drill-hint" role="status">

@@ -13,6 +13,7 @@ import type { CategoryOut, CreditCardOut, RewardCategoryOut } from '../../types/
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { autoWeightSharers } from './rewardsMath'
+import { FeedBanner } from '../shell/Feed'
 import './categories.css'
 
 // The workbook's Credit Card Matrix rows — the empty-state seed (spec §4).
@@ -285,11 +286,7 @@ export default function CategoriesPanel({
         Categories &amp; weights
         <InfoHint text="Matrix rows. Weight = estimated annual spend: blank uses the mapped spending category's trailing-12-month figure; a typed amount overrides it. Pin forces the 'use which card' answer for a row." />
       </h2>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       {categories.length === 0 && (
         <p className="empty-note">
           No categories yet.{' '}

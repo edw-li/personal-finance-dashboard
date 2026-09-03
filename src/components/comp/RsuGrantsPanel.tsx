@@ -7,6 +7,7 @@ import { useToast } from '../ToastProvider'
 import type { RsuGrantCreate, RsuGrantOut, SeedCandidateOut } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
+import { FeedBanner } from '../shell/Feed'
 
 type GrantKind = RsuGrantOut['kind']
 
@@ -304,11 +305,7 @@ export default function RsuGrantsPanel({
         vest trues up). The focal year is only a tag that lines a grant up with its comp
         event.
       </p>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       {seedCandidates.length > 0 && (
         <>
           <p className="drill-hint">

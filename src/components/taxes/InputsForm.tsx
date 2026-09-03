@@ -14,6 +14,7 @@ import type {
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { classifyPaste, matchLabel } from '../../utils/paste'
+import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
 
 // The three sections the seed ships (tax_keys.SECTIONS). A section added later still
@@ -377,11 +378,7 @@ export default function InputsForm({
           are stored against the primary person.
         </p>
       )}
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       {/* One entry scope for every cell the server sent: Enter/ArrowDown walks the column
           across section boundaries, and from the last cell lands on Save — so Enter here
           ADVANCES rather than submitting, and Ctrl+Enter is what saves (spec §3.4). */}

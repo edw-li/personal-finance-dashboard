@@ -19,6 +19,7 @@ import type {
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency, formatDate } from '../../utils/format'
+import { FeedBanner } from '../shell/Feed'
 import './roster.css'
 
 const CURRENCIES: RewardsCurrency[] = ['cash', 'points', 'miles']
@@ -296,11 +297,7 @@ export default function CardsPanel({
         Card roster
         <InfoHint text="One row per real card account. Archived cards keep their history but leave the matrix and the math. Dashboard-only: workbook imports never touch cards." />
       </h2>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       <form
         className="roster-form"
         onSubmit={(e) => {

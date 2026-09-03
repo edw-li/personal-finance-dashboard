@@ -3,6 +3,7 @@ import { ApiError } from '../../api/client'
 import { createPerson, fetchHousehold, putMarriageDate, updatePerson } from '../../api/household'
 import type { PersonOut } from '../../types/api'
 import InfoHint from '../InfoHint'
+import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
 
@@ -118,14 +119,7 @@ export default function HouseholdCard({
         Household
         <InfoHint text="Who this dashboard tracks. Accounts point at these people; an account with no owner is joint. The primary member can be renamed but never changed or removed." />
       </h2>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          <button className="button" onClick={load}>
-            Retry
-          </button>
-        </div>
-      )}
+      <FeedBanner error={error} retry={load} />
       {!loaded && error === null && <p className="empty-note">Loading…</p>}
       {loaded && (
         <>

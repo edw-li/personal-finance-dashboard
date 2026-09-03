@@ -11,6 +11,7 @@ import { canonicalAmount } from '../../utils/amount'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { todayIso } from '../../utils/months'
 import { incomeStats, monthlyIncomeCsv, monthlyIncomeOption } from './dividendChartOptions'
+import { FeedBanner } from '../shell/Feed'
 import './portfolio.css'
 
 interface FormState {
@@ -230,7 +231,7 @@ export default function DividendsPanel({
           )}
         </>
       )}
-      {error && <div className="error-banner" role="alert">{error}</div>}
+      <FeedBanner error={error} />
       {kept && (
         // role=status: the cue appears in the same beat the focus jumps into the amount
         // box, so a screen-reader user would otherwise never learn why the form is still

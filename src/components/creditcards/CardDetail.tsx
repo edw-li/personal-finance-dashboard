@@ -24,6 +24,7 @@ import { formatCurrency, formatDate, formatMonth, formatPct } from '../../utils/
 import { currentMonthIso } from '../../utils/months'
 import { creditLineChartOption, limitMonths } from './creditLineChartOptions'
 import type { OptimizerResult } from './rewardsMath'
+import { FeedBanner } from '../shell/Feed'
 import './carddetail.css'
 
 function message(err: unknown, fallback: string): string {
@@ -242,11 +243,7 @@ export default function CardDetail({
         <div className="spacer" />
       </div>
 
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
 
       <div className="chip-row">
         <span className="chip">Holder: {card.primary_holder ?? '—'}</span>

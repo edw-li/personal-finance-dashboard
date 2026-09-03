@@ -11,6 +11,7 @@ import type {
 } from '../../types/api'
 import InfoHint from '../InfoHint'
 import { useToast } from '../ToastProvider'
+import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
 
@@ -206,14 +207,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         Accounts
         <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key." />
       </h2>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          <button className="button" onClick={load}>
-            Retry
-          </button>
-        </div>
-      )}
+      <FeedBanner error={error} retry={load} />
       {!loaded && error === null && <p className="empty-note">Loading…</p>}
       {loaded && (
         <>
@@ -401,14 +395,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         Portfolio accounts
         <InfoHint text="The account labels your transactions and dividends are filed under. Owner blank = joint; a person's Portfolio view is their own labels plus the joint ones. Labels are fixed here — they are the positions' identity." />
       </h3>
-      {portfolioError && (
-        <div className="error-banner" role="alert">
-          {portfolioError}{' '}
-          <button className="button" onClick={loadPortfolio}>
-            Retry
-          </button>
-        </div>
-      )}
+      <FeedBanner error={portfolioError} retry={loadPortfolio} />
       {!portfolioLoaded && portfolioError === null && (
         <p className="empty-note">Loading portfolio accounts…</p>
       )}

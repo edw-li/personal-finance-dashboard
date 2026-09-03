@@ -7,6 +7,7 @@ import {
 } from '../../api/assistant'
 import type { AssistantModelsOut, AssistantSettingsOut } from '../../types/api'
 import InfoHint from '../InfoHint'
+import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
 
@@ -128,14 +129,7 @@ export default function AssistantCard() {
         Assistant
         <InfoHint text="The ✦ assistant is powered by NVIDIA's API catalog under your key. .env's NVIDIA_API_KEY is the baseline; a key saved here overrides it." />
       </h2>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          <button className="button" onClick={load}>
-            Retry
-          </button>
-        </div>
-      )}
+      <FeedBanner error={error} retry={load} />
       {settings === null && error === null && <p className="empty-note">Loading…</p>}
       {settings !== null && key !== null && (
         <form
@@ -215,11 +209,7 @@ export default function AssistantCard() {
               Saved.
             </p>
           )}
-          {probeError && (
-            <div className="error-banner" role="alert">
-              {probeError}
-            </div>
-          )}
+          <FeedBanner error={probeError} />
           {probe !== null && (
             <div role="status">
               <p className="settings-note">

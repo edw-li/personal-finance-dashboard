@@ -5,6 +5,7 @@ import type { BackupRun, RefreshRun, SystemStatus } from '../../types/api'
 import { formatBytes, formatDateTime } from '../../utils/format'
 import { backupAge } from '../../utils/staleness'
 import InfoHint from '../InfoHint'
+import { FeedBanner } from '../shell/Feed'
 import '../panels.css'
 import './settings.css'
 
@@ -175,25 +176,14 @@ export default function SystemCard() {
         System
         <InfoHint text="Operational status: the last price refresh and its schedule, the nightly backup marker recorded by the backup script, and the database's size and migration head." />
       </h2>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          <button
-            className="button"
-            onClick={() => {
-              setLoading(true)
-              load()
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-      {downloadError && (
-        <div className="error-banner" role="alert">
-          {downloadError}
-        </div>
-      )}
+      <FeedBanner
+        error={error}
+        retry={() => {
+          setLoading(true)
+          load()
+        }}
+      />
+      <FeedBanner error={downloadError} />
       {status === null
         ? loading && <p className="empty-note">Loading…</p>
         : !error && (

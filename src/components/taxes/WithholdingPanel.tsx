@@ -9,6 +9,7 @@ import type { Tone } from '../../utils/tone'
 // This component's own sheet, like its siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.error-banner/.empty-note/.drill-hint) is panels.css, which the
 // PAGE imports — and StatTile brings it along regardless.
+import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
 
 /**
@@ -215,21 +216,17 @@ export default function WithholdingPanel({
         Will I owe? — {year}
         <InfoHint text="Estimated all-in withholding — salary checks plus RSU vests — against the tax engine&apos;s liability for this year. An estimate, not advice." />
       </h2>
+      {/* Guarded rather than handed a bare expression: the stale cue only when there IS
+          something stale (CompPage's rule), and the composed sentence would read "null — …"
+          for a null error. */}
       {error !== null && (
-        <div className="error-banner" role="alert">
-          {/* The stale cue only when there IS something stale (CompPage's rule). */}
-          {withholding === null ? error : `${error} — may be showing earlier figures.`}{' '}
-          <button
-            type="button"
-            className="button"
-            // Named, because the PAGE has a Retry of its own (the year-list banner) and two
-            // buttons called "Retry" are two doors a screen reader cannot tell apart.
-            aria-label="Retry loading the withholding estimate"
-            onClick={retry}
-          >
-            Retry
-          </button>
-        </div>
+        <FeedBanner
+          error={withholding === null ? error : `${error} — may be showing earlier figures.`}
+          retry={retry}
+          // Named, because the PAGE has a Retry of its own (the year-list banner) and two
+          // buttons called "Retry" are two doors a screen reader cannot tell apart.
+          retryLabel="Retry loading the withholding estimate"
+        />
       )}
       {withholding === null ? (
         // A first load that FAILED leaves the banner above as the whole card: "Loading…"
@@ -433,11 +430,7 @@ export default function WithholdingPanel({
 
           {/* The write's OWN failure line: the estimate above it came back and is still
               true, so this never becomes the card's error banner. */}
-          {applyError !== null && (
-            <div className="error-banner" role="alert">
-              {applyError}
-            </div>
-          )}
+          <FeedBanner error={applyError} />
 
           {/* What the estimate ASSUMED, in the order it bites: the check grid, the FICA
               stacking, and the quote the future half rides — the balance above moves with the

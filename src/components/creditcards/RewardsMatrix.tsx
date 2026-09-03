@@ -10,6 +10,7 @@ import type {
 import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { effectiveRate, type OptimizerResult } from './rewardsMath'
+import { FeedBanner } from '../shell/Feed'
 import './matrix.css'
 
 type View = 'multiplier' | 'effective'
@@ -207,11 +208,7 @@ export default function RewardsMatrix({
         )}
       </div>
 
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
 
       <div className="matrix-scroll">
         <table className="data-table rewards-matrix">
