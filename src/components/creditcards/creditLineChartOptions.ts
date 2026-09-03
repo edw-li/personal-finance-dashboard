@@ -9,8 +9,13 @@
 // STRINGS (pydantic v2) and the chart parses each one ONCE here, never handing a float back
 // to the API (src/utils/format.ts's rule, and the same posture as taxChartOptions.ts).
 import type { EChartsOption } from '../../charts/echarts'
-import { INK, OTHER_SERIES_COLOR, PALETTE } from '../../charts/theme'
-import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
+import { slotColor } from '../../charts/entities'
+import { LINE, grid, moneyAxis, monthAxis } from '../../charts/grammar'
+import { legendFor } from '../../charts/legend'
+import { INK } from '../../charts/theme'
+import { axisTooltip } from '../../charts/tooltip'
+import type { ExportTable } from '../../utils/download'
+import { formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 
 export interface LimitHistoryCard {
@@ -61,15 +66,10 @@ export function resolvedLimits(card: LimitHistoryCard, months: string[]): (numbe
   return values
 }
 
-/** Per-card step lines + optional INK Total. PALETTE slots are fixed by array
- *  position; a 9th+ card wears OTHER_SERIES_COLOR (never cycle past 8 — theme law). */
-export function creditLineChartOption(
-  cards: LimitHistoryCard[],
-  months: string[],
-  { includeTotal }: { includeTotal: boolean },
-): EChartsOption {
-  const perCard = cards.map((card) => resolvedLimits(card, months))
-  const total = months.map((_, i) => {
+/** The total line across the cards that exist in each month; null before the first one
+ *  does (a total of nothing is not zero). Shared by the option and its CSV. */
+function totalLine(perCard: (number | null)[][], months: string[]): (number | null)[] {
+  return months.map((_, i) => {
     let sum = 0
     let any = false
     for (const values of perCard) {
@@ -80,48 +80,58 @@ export function creditLineChartOption(
     }
     return any ? sum : null
   })
+}
+
+/** Per-card step lines + optional INK Total. PALETTE slots are fixed by array
+ *  position; a 9th+ card wears OTHER_SERIES_COLOR (never cycle past 8 — theme law). */
+export function creditLineChartOption(
+  cards: LimitHistoryCard[],
+  months: string[],
+  { includeTotal, selected }: { includeTotal: boolean; selected?: Record<string, boolean> },
+): EChartsOption {
+  const perCard = cards.map((card) => resolvedLimits(card, months))
+  const series = [
+    ...cards.map((card, i) => ({
+      ...LINE,
+      name: card.name,
+      step: 'end' as const, // limits change discretely — steps, not slopes
+      color: slotColor(i),
+      connectNulls: false,
+      data: perCard[i],
+    })),
+    ...(includeTotal
+      ? [
+          {
+            ...LINE,
+            name: 'Total line',
+            step: 'end' as const,
+            color: INK,
+            z: 10,
+            connectNulls: false,
+            data: totalLine(perCard, months),
+          },
+        ]
+      : []),
+  ]
   return {
-    grid: { left: 70, right: 24, top: 40, bottom: 28 },
-    legend: { top: 0 },
-    tooltip: {
-      trigger: 'axis',
-      // One unit for every series, so the single valueFormatter covers them all
-      // (compChartOptions' trajectory). Card names reach the tooltip as SERIES NAMES,
-      // which echarts renders as text — no HTML formatter here, nothing to escape.
-      valueFormatter: (value) =>
-        value === null || value === undefined ? '—' : formatCurrency(value as number),
-    },
-    xAxis: { type: 'category', data: months.map(formatMonth) },
-    yAxis: {
-      type: 'value',
-      axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-    },
-    series: [
-      ...cards.map((card, i) => ({
-        name: card.name,
-        type: 'line' as const,
-        step: 'end' as const, // limits change discretely — steps, not slopes
-        symbol: 'none' as const,
-        lineStyle: { width: 2 },
-        color: i < PALETTE.length ? PALETTE[i] : OTHER_SERIES_COLOR,
-        connectNulls: false,
-        data: perCard[i],
-      })),
-      ...(includeTotal
-        ? [
-            {
-              name: 'Total line',
-              type: 'line' as const,
-              step: 'end' as const,
-              symbol: 'none' as const,
-              lineStyle: { width: 2 },
-              color: INK,
-              z: 10,
-              connectNulls: false,
-              data: total,
-            },
-          ]
-        : []),
-    ],
+    grid: grid(),
+    legend: legendFor(series.length, selected),
+    // One unit for every series, and card names reach the rows as SERIES NAMES — the
+    // grammar escapes each of them (charts/tooltip.ts).
+    tooltip: axisTooltip({ unit: 'money' }),
+    xAxis: monthAxis(months.map(formatMonth), { gap: true }),
+    yAxis: moneyAxis(),
+    series,
+  }
+}
+
+/** The history as a table (F12): month × card + the total, blank before a card exists. */
+export function creditLineCsv(cards: LimitHistoryCard[], months: string[]): ExportTable {
+  const perCard = cards.map((card) => resolvedLimits(card, months))
+  const total = totalLine(perCard, months)
+  const cell = (v: number | null) => (v === null ? '' : v.toFixed(2))
+  return {
+    headers: ['Month', ...cards.map((c) => c.name), 'Total'],
+    rows: months.map((m, i) => [m, ...perCard.map((values) => cell(values[i])), cell(total[i])]),
   }
 }

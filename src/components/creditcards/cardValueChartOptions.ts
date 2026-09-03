@@ -6,8 +6,12 @@
 // POSITIVE bar, and anything that does not clear its fee reads NEGATIVE (droppable). The
 // zero line is drawn explicitly so a bar's side of it is readable without hunting the axis.
 import type { EChartsOption } from '../../charts/echarts'
-import { MUTED, NEGATIVE, POSITIVE } from '../../charts/theme'
-import { escapeHtml, formatCurrency } from '../../utils/format'
+import { BAR_MARKS, grid, moneyAxis } from '../../charts/grammar'
+import { zeroLine } from '../../charts/markLine'
+import { NEGATIVE, POSITIVE } from '../../charts/theme'
+import { itemTooltip } from '../../charts/tooltip'
+import type { ExportTable } from '../../utils/download'
+import { formatCurrency } from '../../utils/format'
 
 export interface CardValueDatum {
   name: string
@@ -21,21 +25,23 @@ export interface CardValueDatum {
  *  pass rows sorted net-descending; height = max(140, rows×34 + 70). */
 export function cardValueChartOption(rows: CardValueDatum[]): EChartsOption {
   return {
-    grid: { left: 130, right: 40, top: 8, bottom: 28 },
-    tooltip: {
-      // HTML formatter — card names are user text: escapeHtml is mandatory.
-      formatter: (params) => {
-        const p = Array.isArray(params) ? params[0] : params
-        const row = rows[p.dataIndex ?? 0]
-        if (!row) return ''
-        return (
-          `<strong>${escapeHtml(row.name)}</strong><br/>` +
-          `${formatCurrency(row.marginal)} marginal + ${formatCurrency(row.credits)} credits` +
-          ` − ${formatCurrency(row.fee)} fee = <strong>${formatCurrency(row.net)}</strong>/yr`
-        )
+    grid: grid('horizontal'),
+    tooltip: itemTooltip<{ dataIndex?: number }>({
+      // Card names are user text — itemTooltip escapes every label and sub-line it renders.
+      body: (p) => {
+        const row = rows[p.dataIndex ?? -1]
+        if (row === undefined) return null
+        return {
+          value: row.net,
+          label: row.name,
+          sub:
+            `${formatCurrency(row.marginal)} marginal + ${formatCurrency(row.credits)} credits` +
+            ` − ${formatCurrency(row.fee)} fee, per year`,
+        }
       },
-    },
-    xAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatCurrency(v) } },
+    }),
+    // Compact ticks (F13): the axis is a scale, the tooltip carries the exact figure.
+    xAxis: moneyAxis(),
     yAxis: {
       type: 'category',
       data: rows.map((r) => r.name),
@@ -45,19 +51,29 @@ export function cardValueChartOption(rows: CardValueDatum[]): EChartsOption {
     series: [
       {
         type: 'bar' as const,
-        barMaxWidth: 22,
+        ...BAR_MARKS,
+        // Sign colours per item: keeping is POSITIVE, anything that does not clear its fee
+        // reads NEGATIVE (droppable) — the reserved status use spec §12 allows.
         data: rows.map((r) => ({
           value: r.net,
           itemStyle: { color: r.net > 0 ? POSITIVE : NEGATIVE },
         })),
-        markLine: {
-          silent: true,
-          symbol: 'none',
-          lineStyle: { color: MUTED, width: 1, type: 'solid' as const },
-          label: { show: false },
-          data: [{ xAxis: 0 }],
-        },
+        markLine: zeroLine('x'),
       },
     ],
+  }
+}
+
+/** The lineup as a table (F12): the three inputs and the net each bar draws. */
+export function cardValueCsv(rows: CardValueDatum[]): ExportTable {
+  return {
+    headers: ['Card', 'Marginal', 'Credits', 'Fee', 'Net'],
+    rows: rows.map((r) => [
+      r.name,
+      r.marginal.toFixed(2),
+      r.credits.toFixed(2),
+      r.fee.toFixed(2),
+      r.net.toFixed(2),
+    ]),
   }
 }
