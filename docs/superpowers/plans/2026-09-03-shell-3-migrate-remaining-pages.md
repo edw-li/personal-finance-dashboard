@@ -974,7 +974,9 @@ git commit -m "feat(shell): Projection and Calendar render through PageFrame"
 - Modify: `src/pages/SettingsPage.tsx`, `src/pages/SettingsPage.test.tsx`
 - Modify: `src/pages/NotFoundPage.tsx` (+ its test if one exists)
 
-Today Settings (≈ lines 247–275): `.page-header`; `{error && banner with Retry (setLoading(true); load())}`; `loading && !loadedOnce && <p className="empty-note">Loading…</p>`; `loadedOnce && <div className="card-grid loading-dim…">` with card-level banners (≈ 320, 407, 467). Plan 1a mounted `AppearanceCard` and Plan 1c added card ids/hash highlight — leave them exactly as they are.
+Today Settings (≈ lines 247–275): `.page-header`; `{error && banner with Retry (setLoading(true); load())}`; `loading && !loadedOnce && <p className="empty-note">Loading…</p>`; `loadedOnce && <div className="card-grid loading-dim…">` with card-level banners (≈ 320, 407, 467). Plan 1a mounted `AppearanceCard` (inside the `loadedOnce` gate) and Plan 1c added card ids/hash highlight — keep the ids and the highlight; MOVE the Appearance card out of the gate (see below).
+
+Settings is a page of independent feeds, and the Appearance card needs no network: treat the frame as ready as soon as the first load has settled either way — `status: loadedOnce || error !== null ? 'ready' : 'loading'` with `error`/`retry` passed so the frame's stale line carries Retry after a failed GET — keep the fetch-backed cards behind an inner `{loadedOnce && …}` (this preserves the existing "not worth offering an upload card that can only fail" tests), and mount `<AppearanceCard />` OUTSIDE that inner gate so theme switching (and the palette's `#appearance` jump) survives an unreachable API. Add a test: "keeps the Appearance card when the settings load failed".
 
 - [ ] **Step 1: Migrate Settings**
 
@@ -983,7 +985,9 @@ Today Settings (≈ lines 247–275): `.page-header`; `{error && banner with Ret
       <PageFrame
         title="Settings"
         resource={{
-          status: loadedOnce ? 'ready' : error !== null ? 'error' : 'loading',
+          // Ready once the first load settled either way: the Appearance card needs no network,
+          // and after a failed GET the frame's stale line carries Retry above it.
+          status: loadedOnce || error !== null ? 'ready' : 'loading',
           error,
           busy: loading && loadedOnce,
           retry: () => {
@@ -993,9 +997,12 @@ Today Settings (≈ lines 247–275): `.page-header`; `{error && banner with Ret
         }}
         skeleton={{ tiles: 0, cards: [{ span: 12, height: 200 }, { span: 6, height: 260 }, { span: 6, height: 260 }] }}
       >
-        {loadedOnce && (
-          <div className="card-grid">…unchanged, with each card-level `error-banner` div replaced by `<FeedBanner error={…} />`…</div>
-        )}
+        <div className="card-grid">
+          {loadedOnce && (
+            <>…the fetch-backed cards, unchanged, with each card-level `error-banner` div replaced by `<FeedBanner error={…} />`…</>
+          )}
+          <AppearanceCard />
+        </div>
       </PageFrame>
     </div>
 ```
