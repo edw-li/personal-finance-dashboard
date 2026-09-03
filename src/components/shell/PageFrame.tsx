@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import PageSkeleton from '../PageSkeleton'
 import '../panels.css'
 import './shell.css'
@@ -22,10 +22,8 @@ export interface PageResource {
   retry?: () => void
 }
 
-export interface PageSkeletonSpec {
-  tiles?: number
-  cards?: { span: 4 | 6 | 8 | 12; height?: number }[]
-}
+/** Derived from the skeleton itself, so the two can never drift apart. */
+export type PageSkeletonSpec = ComponentProps<typeof PageSkeleton>
 
 interface PageFrameContextValue {
   fromCache: boolean
@@ -63,27 +61,34 @@ export default function PageFrame({
 }) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [stuck, setStuck] = useState(false)
+  // Inline `scopeRow` JSX is a new object on every parent render; keying the effect on its
+  // mere presence avoids a disconnect/observe cycle per render.
+  const hasScopeRow = scopeRow !== undefined
 
   // The sentinel sits one pixel above the sticky row; once it scrolls out, the row is
   // pinned. Guarded for jsdom and old browsers: without the observer the row simply never
   // shows its hairline.
   useEffect(() => {
     const el = sentinelRef.current
-    if (!el || scopeRow === undefined || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry) setStuck(!entry.isIntersecting)
+    if (!el || !hasScopeRow || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver((entries) => {
+      // A batched callback carries several entries; only the newest describes now.
+      const last = entries[entries.length - 1]
+      if (last) setStuck(!last.isIntersecting)
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [scopeRow])
+  }, [hasScopeRow])
 
   const hasData = resource.status === 'ready'
   const showSkeleton = resource.status === 'loading'
   const showErrorOnly = resource.status === 'error'
   const staleError = hasData && resource.error ? resource.error : null
+  // A fresh object here would re-render every chart reading the context on each render.
+  const context = useMemo(() => ({ fromCache: resource.fromCache === true }), [resource.fromCache])
 
   return (
-    <PageFrameContext.Provider value={{ fromCache: resource.fromCache === true }}>
+    <PageFrameContext.Provider value={context}>
       <header className="page-frame-header">
         <h1>{title}</h1>
         {actions !== undefined && <div className="page-frame-actions">{actions}</div>}

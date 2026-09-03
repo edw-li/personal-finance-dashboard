@@ -2,20 +2,27 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PageFrame, { usePageFrame } from './PageFrame'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  // Every test here stubs IntersectionObserver; restore it so a stub can never leak.
+  vi.unstubAllGlobals()
+})
 
 // jsdom has no IntersectionObserver; PageFrame must degrade to "never stuck".
 type IOCallback = (entries: { isIntersecting: boolean }[]) => void
 let observers: IOCallback[] = []
+let disconnects: ReturnType<typeof vi.fn>[] = []
 beforeEach(() => {
   observers = []
+  disconnects = []
   vi.stubGlobal(
     'IntersectionObserver',
-    vi.fn((cb: IOCallback) => ({
-      observe: () => observers.push(cb),
-      disconnect: () => {},
-      unobserve: () => {},
-    })),
+    vi.fn((cb: IOCallback) => {
+      // One disconnect spy per constructed observer, so tests can count teardowns.
+      const disconnect = vi.fn()
+      disconnects.push(disconnect)
+      return { observe: () => observers.push(cb), disconnect, unobserve: () => {} }
+    }),
   )
 })
 
@@ -107,5 +114,64 @@ describe('PageFrame', () => {
     expect(row.classList.contains('is-stuck')).toBe(true)
     act(() => observers.forEach((cb) => cb([{ isIntersecting: true }])))
     expect(row.classList.contains('is-stuck')).toBe(false)
+  })
+
+  it('a batched observer callback reads the newest entry, not the oldest', () => {
+    render(
+      <PageFrame title="Net worth" scopeRow={<span>scope</span>} resource={{ status: 'ready' }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    const row = document.querySelector('.page-frame-scope') as HTMLElement
+    act(() => observers.forEach((cb) => cb([{ isIntersecting: true }, { isIntersecting: false }])))
+    expect(row.classList.contains('is-stuck')).toBe(true)
+  })
+
+  it('observes the sentinel once per scope row and disconnects on unmount', () => {
+    const view = render(
+      <PageFrame title="Net worth" scopeRow={<span>scope</span>} resource={{ status: 'ready' }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    expect(disconnects).toHaveLength(1)
+    // scopeRow is inline JSX — a new object on every parent render. Keying the effect on
+    // its presence keeps one observer alive instead of churning one per render.
+    view.rerender(
+      <PageFrame
+        title="Net worth"
+        scopeRow={<span>scope</span>}
+        resource={{ status: 'ready', busy: true }}
+      >
+        <p>body</p>
+      </PageFrame>,
+    )
+    expect(disconnects).toHaveLength(1)
+    expect(disconnects[0]).not.toHaveBeenCalled()
+    view.unmount()
+    expect(disconnects[0]).toHaveBeenCalledTimes(1)
+  })
+
+  it('without IntersectionObserver the scope row still renders and is never stuck', () => {
+    vi.stubGlobal('IntersectionObserver', undefined)
+    expect(() =>
+      render(
+        <PageFrame title="Net worth" scopeRow={<span>scope</span>} resource={{ status: 'ready' }}>
+          <p>body</p>
+        </PageFrame>,
+      ),
+    ).not.toThrow()
+    expect(screen.getByText('scope')).toBeTruthy()
+    // The only casualty is the hairline; the row itself is still there.
+    expect(document.querySelector('.page-frame-scope')).toBeTruthy()
+    expect(document.querySelector('.page-frame-scope.is-stuck')).toBeNull()
+  })
+
+  it('the stale line is a status region, so it is announced without stealing focus', () => {
+    render(
+      <PageFrame title="Spending" resource={{ status: 'ready', error: 'offline' }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    expect(screen.getByText(/Showing earlier data — offline/).getAttribute('role')).toBe('status')
   })
 })

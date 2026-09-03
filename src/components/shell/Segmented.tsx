@@ -1,4 +1,10 @@
+import { useId } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
+// panels.css first, shell.css second: both files define `.segmented` rules at the same
+// specificity, so source order decides the winner. Pinning the order here (rather than
+// relying on whatever the importing page happens to load first) makes the control
+// self-sufficient — its variant rules always land on top of the legacy base.
+import '../panels.css'
 import './shell.css'
 
 // The ONE "pick one of N" control (2026-09-03 shell spec §8). Four visual variants, each
@@ -16,28 +22,42 @@ export interface SegmentedOption<V extends string> {
 }
 
 type SegmentedProps<V extends string> = {
-  variant: SegmentedVariant
   options: readonly SegmentedOption<V>[]
   ariaLabel: string
   size?: 'sm' | 'md'
   /** tabs only: the id of the panel each tab controls, by value. */
   panelIds?: Partial<Record<V, string>>
 } & (
-  | { multiple?: false; value: V; onChange: (next: V) => void }
-  | { multiple: true; value: readonly V[]; onChange: (next: V[]) => void }
+  | { variant: SegmentedVariant; multiple?: false; value: V; onChange: (next: V) => void }
+  // A tablist has exactly one selected tab, so `variant: 'tabs'` with `multiple` is not a
+  // valid ARIA combination — the type excludes it rather than leaving it to review.
+  | {
+      variant: Exclude<SegmentedVariant, 'tabs'>
+      multiple: true
+      value: readonly V[]
+      onChange: (next: V[]) => void
+    }
 )
 
 export default function Segmented<V extends string>(props: SegmentedProps<V>) {
   const { variant, options, ariaLabel, size = 'md', panelIds } = props
+  // Ids come from useId, not the label: two groups can legitimately share a label on one
+  // page, and a value may contain characters an id cannot.
+  const idBase = useId()
+  const tabId = (value: V) => `${idBase}-tab-${encodeURIComponent(value)}`
+
   const isOn = (value: V): boolean =>
     props.multiple ? props.value.includes(value) : props.value === value
 
   const select = (value: V) => {
     if (props.multiple) {
       const current = props.value
-      props.onChange(
-        current.includes(value) ? current.filter((v) => v !== value) : [...current, value],
-      )
+      const next = current.includes(value)
+        ? current.filter((v) => v !== value)
+        : [...current, value]
+      // Consumers get a canonical order (the options' own) rather than click order, so
+      // URL params and equality checks stay stable.
+      props.onChange(options.filter((o) => next.includes(o.value)).map((o) => o.value))
     } else {
       props.onChange(value)
     }
@@ -55,8 +75,15 @@ export default function Segmented<V extends string>(props: SegmentedProps<V>) {
     const step = event.key === 'ArrowRight' ? 1 : -1
     const next = enabled[(position + step + enabled.length) % enabled.length]
     props.onChange(next.value)
-    document.getElementById(tabId(ariaLabel, next.value))?.focus()
+    document.getElementById(tabId(next.value))?.focus()
   }
+
+  // Roving tabindex needs exactly one tab in the page's tab order. The selected tab claims
+  // it, but when it is disabled — or when `value` is stale and matches no option — the
+  // first enabled tab takes over, so the tablist can never fall out of reach.
+  const focusable =
+    options.find((o) => !o.disabled && isOn(o.value))?.value ??
+    options.find((o) => !o.disabled)?.value
 
   const role = variant === 'tabs' ? 'tablist' : 'group'
   const className = ['segmented', `segmented-${variant}`, size === 'sm' ? 'segmented-sm' : '']
@@ -71,7 +98,7 @@ export default function Segmented<V extends string>(props: SegmentedProps<V>) {
         // of the props, so each branch passes it directly.
         const common = {
           type: 'button' as const,
-          className: on ? 'active' : '',
+          className: on ? 'active' : undefined,
           disabled: option.disabled,
           title: option.title,
           onClick: () => select(option.value),
@@ -81,11 +108,11 @@ export default function Segmented<V extends string>(props: SegmentedProps<V>) {
             <button
               key={option.value}
               {...common}
-              id={tabId(ariaLabel, option.value)}
+              id={tabId(option.value)}
               role="tab"
               aria-selected={on}
               aria-controls={panelIds?.[option.value]}
-              tabIndex={on ? 0 : -1}
+              tabIndex={option.value === focusable ? 0 : -1}
               onKeyDown={(event) => onTabKey(event, index)}
             >
               {option.label}
@@ -107,8 +134,4 @@ export default function Segmented<V extends string>(props: SegmentedProps<V>) {
       })}
     </div>
   )
-}
-
-function tabId(group: string, value: string): string {
-  return `tab-${group.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${value}`
 }

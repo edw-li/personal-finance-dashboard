@@ -94,4 +94,77 @@ describe('Segmented', () => {
     fireEvent.click(b)
     expect(onChange).not.toHaveBeenCalled()
   })
+
+  it('chips with multiple: the new array comes back in options order, not click order', () => {
+    // Consumers (and their URL serialisers) get one canonical order regardless of which
+    // chip the user happened to hit first.
+    const onChange = vi.fn()
+    render(
+      <Segmented
+        variant="chips"
+        ariaLabel="Accounts"
+        multiple
+        options={[{ value: 'a', label: 'Checking' }, { value: 'b', label: 'HYSA' }]}
+        value={['b']}
+        onChange={onChange}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Checking' }))
+    expect(onChange).toHaveBeenCalledWith(['a', 'b'])
+  })
+
+  it('tabs: ArrowRight skips a disabled tab and focus follows to the tab it lands on', () => {
+    const onChange = vi.fn()
+    render(
+      <Segmented
+        variant="tabs"
+        ariaLabel="Records"
+        options={[
+          { value: 'tx', label: 'Transactions' },
+          { value: 'div', label: 'Dividends', disabled: true },
+          { value: 'lots', label: 'Lots' },
+        ]}
+        value="tx"
+        onChange={onChange}
+      />,
+    )
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Transactions' }), { key: 'ArrowRight' })
+    expect(onChange).toHaveBeenCalledWith('lots')
+    // Roving tabindex means selection alone is invisible: the browser focus has to land on
+    // the tab the arrow key chose, or the keyboard user has no idea where they are.
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: 'Lots' }))
+  })
+
+  it('tabs: a value matching no option still leaves the first enabled tab reachable', () => {
+    // A stale scope (deleted account, renamed range) used to make every tab tabIndex=-1,
+    // dropping the whole tablist out of the tab order.
+    const options: { value: string; label: string; disabled?: boolean }[] = [
+      { value: 'a', label: 'A', disabled: true },
+      { value: 'b', label: 'B' },
+      { value: 'c', label: 'C' },
+    ]
+    render(
+      <Segmented variant="tabs" ariaLabel="Stale" options={options} value="gone" onChange={vi.fn()} />,
+    )
+    expect(screen.getByRole('tab', { name: 'A' }).getAttribute('tabindex')).toBe('-1')
+    expect(screen.getByRole('tab', { name: 'B' }).getAttribute('tabindex')).toBe('0')
+    expect(screen.getByRole('tab', { name: 'C' }).getAttribute('tabindex')).toBe('-1')
+  })
+
+  it('tabs: ids are unique across same-labelled groups and safe for values with spaces', () => {
+    const options = [
+      { value: 'this year', label: 'This year' },
+      { value: 'last year', label: 'Last year' },
+    ] as const
+    render(
+      <>
+        <Segmented variant="tabs" ariaLabel="Window" options={options} value="this year" onChange={vi.fn()} />
+        <Segmented variant="tabs" ariaLabel="Window" options={options} value="this year" onChange={vi.fn()} />
+      </>,
+    )
+    const ids = screen.getAllByRole('tab').map((tab) => tab.id)
+    expect(ids).toHaveLength(4)
+    expect(new Set(ids).size).toBe(4) // two groups sharing a label must not share ids
+    expect(ids.every((id) => id.length > 0 && !/\s/.test(id))).toBe(true)
+  })
 })
