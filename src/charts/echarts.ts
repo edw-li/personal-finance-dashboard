@@ -45,7 +45,10 @@ import type {
   VisualMapComponentOption,
 } from 'echarts/components'
 import type { ComposeOption } from 'echarts/core'
-import { FINANCE_THEME } from './theme'
+import { DARK, LIGHT } from '../theme/tokens'
+import { FINANCE_THEME, buildTheme } from './theme'
+// `import type` on purpose: a value import would pull React into this lazy chart chunk.
+import type { ResolvedTheme } from '../components/shell/ThemeProvider'
 
 echarts.use([
   BarChart,
@@ -74,6 +77,19 @@ echarts.use([
 ])
 
 echarts.registerTheme('finance', FINANCE_THEME)
+
+/** 'finance' for the initial paint, 'finance-<n>' after the n-th palette change. */
+export function themeName(version: number): string {
+  return version === 0 ? 'finance' : `finance-${version}`
+}
+
+/** Registers the theme for a resolved palette under its versioned name and returns the
+ *  name. Idempotent per name; ECharts overwrites a re-registration. */
+export function registerThemeVersion(resolved: ResolvedTheme, version: number): string {
+  const name = themeName(version)
+  echarts.registerTheme(name, buildTheme(resolved === 'light' ? LIGHT : DARK))
+  return name
+}
 
 export type EChartsOption = ComposeOption<
   | BarSeriesOption
