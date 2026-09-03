@@ -123,7 +123,7 @@ export default function AssistantCard() {
   const key = settings?.key ?? null
 
   return (
-    <section className="card span-6" role="region" aria-label="Assistant">
+    <section className="card span-6" id="assistant" role="region" aria-label="Assistant">
       <h2 className="eyebrow">
         Assistant
         <InfoHint text="The ✦ assistant is powered by NVIDIA's API catalog under your key. .env's NVIDIA_API_KEY is the baseline; a key saved here overrides it." />

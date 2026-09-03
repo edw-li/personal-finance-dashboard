@@ -36,7 +36,7 @@ import TransactionsPanel from '../components/portfolio/TransactionsPanel'
 import RangeChips from '../components/RangeChips'
 import PageSkeleton from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
-import { useArrivalParam } from '../components/useArrivalParam'
+import { useArrivalParam, useArrivalValue } from '../components/useArrivalParam'
 import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type {
@@ -158,7 +158,35 @@ export default function PortfolioPage() {
   // can fire the navigate while this page is ALREADY mounted, where an initializer
   // never re-runs. The param is consumed (stripped) after applying; the tab strip
   // itself never writes the URL.
-  useArrivalParam('tab', TAB_ARRIVALS, setTab)
+  // Finished action (2026-09-03 shell spec §9): the tab alone left the ledger below the
+  // fold. The arrival only RAISES a flag — the records strip does not exist yet when a
+  // cold navigation consumes the param (the first payload has not landed), so the scroll
+  // and the focus wait for the commit that finally renders it.
+  const pendingRecordsArrival = useRef(false)
+  const recordsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const arriveOnTab = useCallback((value: Tab) => {
+    setTab(value)
+    pendingRecordsArrival.current = true
+  }, [])
+  useArrivalParam('tab', TAB_ARRIVALS, arriveOnTab)
+  // Unkeyed on purpose (the palette's latest-handler idiom): the strip can appear on any
+  // commit — a cold fetch, a scope flip — and this is the cheapest way to catch the first
+  // one. The flag is cleared before the work is scheduled, so it runs exactly once.
+  useEffect(() => {
+    if (!pendingRecordsArrival.current) return
+    const strip = document.getElementById('portfolio-records')
+    if (!strip) return
+    pendingRecordsArrival.current = false
+    // setTimeout 0 rather than this effect's body: Layout's navigation hand-off focuses
+    // <main> from the PARENT effect that runs right after this one, and it would take the
+    // caret straight back out of the form.
+    recordsTimer.current = setTimeout(() => {
+      // Optional-call, like HoldingDetailPanel: jsdom has no scrollIntoView.
+      strip.scrollIntoView?.({ block: 'start' })
+      strip.querySelector<HTMLElement>('form input, form select')?.focus()
+    }, 0)
+  })
+  useEffect(() => () => clearTimeout(recordsTimer.current), [])
   // Performance-chart window; object identity so a re-click of the active chip snaps a
   // ctrl+wheel wander back to the preset (NetWorthPage's `range`) — and it now carries
   // any manual window mirrored back from the chart's datazoom event (spec §2e).
@@ -178,6 +206,11 @@ export default function PortfolioPage() {
   // that resorts the table cannot mis-target, and a ticker that vanished simply finds no
   // holding and the panel folds away: SpendingPage's detailMonth posture).
   const [detailTicker, setDetailTicker] = useState<string | null>(null)
+  // ?ticker=NVDA — the palette's holding entries land straight in the drill (spec §9).
+  // Uppercased because tickers are stored that way; one that no longer exists simply
+  // finds no holding and the panel folds away, the drill's existing posture.
+  const arriveOnTicker = useCallback((value: string) => setDetailTicker(value.toUpperCase()), [])
+  useArrivalValue('ticker', arriveOnTicker)
   // The page's ownership scope: null = the whole household (and NO owner param at all, so
   // the requests stay byte-identical to the pre-ownership ones). It scopes the tiles, the
   // holdings table, the allocation charts and the three record tabs — which is why the
@@ -700,35 +733,39 @@ export default function PortfolioPage() {
             )}
           </section>
           <AllocationPanel industry={industry} byType={byType} byAccount={byAccount} />
-          {/* group, not tablist: these buttons toggle panels below rather than owning
-              tabpanels, and the aria-labels keep "Dividends" from colliding with the
-              holdings table's sort header of the same name. */}
-          <div className="tab-row" role="group" aria-label="Portfolio records">
-            {(['transactions', 'dividends', 'securities', 'realized'] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                aria-label={`Show ${t}`}
-                aria-pressed={tab === t}
-                onClick={() => setTab(t)}
-              >
-                {t[0].toUpperCase() + t.slice(1)}
-              </button>
-            ))}
+          {/* The ?tab= arrival's scroll-and-focus target: the strip alone would leave the
+              panel it selects (and that panel's form) off-screen below it. */}
+          <div id="portfolio-records">
+            {/* group, not tablist: these buttons toggle panels below rather than owning
+                tabpanels, and the aria-labels keep "Dividends" from colliding with the
+                holdings table's sort header of the same name. */}
+            <div className="tab-row" role="group" aria-label="Portfolio records">
+              {(['transactions', 'dividends', 'securities', 'realized'] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  aria-label={`Show ${t}`}
+                  aria-pressed={tab === t}
+                  onClick={() => setTab(t)}
+                >
+                  {t[0].toUpperCase() + t.slice(1)}
+                </button>
+              ))}
+            </div>
+            {tab === 'transactions' && (
+              <TransactionsPanel securities={securities} transactions={transactions} onChanged={reload} />
+            )}
+            {tab === 'dividends' && (
+              <DividendsPanel
+                securities={securities}
+                dividends={dividends}
+                annualIncome={totals?.annual_income ?? null}
+                onChanged={reload}
+              />
+            )}
+            {tab === 'securities' && <SecuritiesPanel securities={securities} onChanged={reload} />}
+            {tab === 'realized' && realized && <RealizedPanel realized={realized} />}
           </div>
-          {tab === 'transactions' && (
-            <TransactionsPanel securities={securities} transactions={transactions} onChanged={reload} />
-          )}
-          {tab === 'dividends' && (
-            <DividendsPanel
-              securities={securities}
-              dividends={dividends}
-              annualIncome={totals?.annual_income ?? null}
-              onChanged={reload}
-            />
-          )}
-          {tab === 'securities' && <SecuritiesPanel securities={securities} onChanged={reload} />}
-          {tab === 'realized' && realized && <RealizedPanel realized={realized} />}
         </div>
       ) : null}
     </div>

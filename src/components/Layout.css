@@ -26,6 +26,37 @@
   font-weight: 700;
 }
 
+/* The palette's sidebar affordance (2026-09-03 shell spec §9). Sits between the title and
+   the nav so it reads as a search field without being one — the caret belongs to the
+   palette's own input. */
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0.25rem 0.6rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-search span { flex: 1; }
+
+.sidebar-search kbd {
+  font-family: inherit;
+  font-size: 0.68rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+.sidebar-search:hover { color: var(--text); border-color: var(--muted); }
+
 .sidebar nav {
   display: flex;
   flex-direction: column;

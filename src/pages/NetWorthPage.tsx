@@ -13,6 +13,7 @@ import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import { useArrivalValue } from '../components/useArrivalParam'
 import {
   NOTES_SERIES,
   marriageMarkLine,
@@ -128,6 +129,22 @@ export default function NetWorthPage() {
   // Seed the drill-down once per visit so the card is never an empty box by default;
   // a deliberate clear-all afterwards must stay cleared across refetches.
   const seededDrillRef = useRef(cached !== undefined && cached.ts.months.length > 0)
+  // ?drill=<slug> — the palette's account entries pick that account's series (spec §9).
+  // Matched on the SLUG the API also hands the palette, never on a name: a rename must
+  // not break a deep link. An account outside the current scope simply finds nothing and
+  // the drill is left alone, rather than showing an empty chart.
+  const arriveOnDrill = useCallback(
+    (slug: string) => {
+      // Nothing to resolve the slug against yet — hold the param and answer again when
+      // the payload lands (useArrivalValue's "not yet" contract).
+      if (!data) return false
+      const account = data.accounts.find((a) => a.slug === slug)
+      if (account) setDrill([{ accountId: account.id, slot: 0 }])
+      return true
+    },
+    [data],
+  )
+  useArrivalValue('drill', arriveOnDrill)
   // Ribbon coverage is captured ONLY from monthly responses — the quarterly fetch
   // filters months server-side and must not make covered months read as missing.
   const [coverageMonths, setCoverageMonths] = useState<string[]>(cached ? cached.ts.months : [])

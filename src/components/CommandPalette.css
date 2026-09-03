@@ -77,6 +77,21 @@
   font-size: 0.85rem;
 }
 
+/* Kind headers (2026-09-03 shell spec §9): the grouped list is one listbox, so the
+   headers are aria-hidden presentation and only the leaves are options. */
+.palette-group > ul { list-style: none; margin: 0; padding: 0; }
+
+.palette-group-title {
+  padding: 0.35rem 0.9rem 0.15rem;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The entity second line (a ticker's company, an account's group) — same row, quieter. */
+.palette-sub { color: var(--muted); font-size: 0.8em; }
+
 /* Motion grammar (2026-08-27 spec §4). */
 @media (prefers-reduced-motion: no-preference) {
   .palette-option {

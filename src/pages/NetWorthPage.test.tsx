@@ -118,13 +118,33 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function renderPage() {
+function renderPage(entry = '/net-worth') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
       <NetWorthPage />
     </MemoryRouter>,
   )
 }
+
+// The palette's account entries deep-link by SLUG (2026-09-03 shell spec §9). findAll:
+// each account is a drill chip AND a table row, and both mirror the same selection.
+it('drills the account named by ?drill=<slug>, waiting for the payload to arrive', async () => {
+  renderPage('/net-worth?drill=joint-savings')
+  // Joint Savings (80) loses the biggest-account seed to My Checking (150), so a pressed
+  // chip can only come from the arrival — which had to survive until the fetch resolved.
+  expect(
+    (await screen.findAllByRole('button', { name: 'Joint Savings', pressed: true })).length,
+  ).toBeGreaterThan(0)
+  expect(screen.queryAllByRole('button', { name: 'My Checking', pressed: true })).toHaveLength(0)
+})
+
+it('ignores a ?drill= slug no account answers to', async () => {
+  renderPage('/net-worth?drill=not-an-account')
+  // The seed stands rather than an empty drill card: an unresolvable slug is not a command.
+  expect(
+    (await screen.findAllByRole('button', { name: 'My Checking', pressed: true })).length,
+  ).toBeGreaterThan(0)
+})
 
 it('hides the owner controls entirely for a one-person household', async () => {
   vi.mocked(fetchHousehold).mockResolvedValue(household({ people: [ME] }))

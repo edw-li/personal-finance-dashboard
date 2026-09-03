@@ -113,7 +113,7 @@ export default function HouseholdCard({
   }
 
   return (
-    <section className="card span-6">
+    <section className="card span-6" id="household">
       <h2 className="eyebrow">
         Household
         <InfoHint text="Who this dashboard tracks. Accounts point at these people; an account with no owner is joint. The primary member can be renamed but never changed or removed." />

@@ -1,4 +1,4 @@
-import { LogOut } from 'lucide-react'
+import { LogOut, Search } from 'lucide-react'
 import { Suspense, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigationType } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
@@ -6,9 +6,16 @@ import AssistantDrawer from './assistant/AssistantDrawer'
 import CommandPalette from './CommandPalette'
 import './Layout.css'
 import { NAV_SECTIONS } from './navItems'
+import { requestPaletteOpen } from './paletteBus'
 import RouteBoundary from './RouteBoundary'
 import { prefetchRoute, warmAllRoutes } from './routeChunks'
 import { usePageTitle } from './usePageTitle'
+
+// Module scope, read once: the host OS does not change mid-session, and the sidebar's
+// kbd hint must name the modifier the reader actually presses. navigator.platform is
+// deprecated but is still the only synchronous read of it; a wrong guess costs the hint's
+// accuracy, nothing more.
+const isMac = navigator.platform.startsWith('Mac')
 
 export default function Layout() {
   const { logout } = useAuth()
@@ -91,6 +98,16 @@ export default function Layout() {
       </a>
       <aside className="sidebar">
         <div className="sidebar-title">Finance</div>
+        {/* The palette's only visible affordance (2026-09-03 shell spec §9): Ctrl/Cmd+K was
+            undiscoverable, so the sidebar says it out loud. A button, not an input — the
+            real search box is the palette's own, and two boxes would fight for the caret.
+            It asks through the bus rather than a context: the palette is mounted once,
+            below, and a context would re-render the whole shell on every keystroke. */}
+        <button type="button" className="sidebar-search" onClick={requestPaletteOpen}>
+          <Search size={14} aria-hidden="true" />
+          <span>Search or jump…</span>
+          <kbd aria-label={isMac ? 'Command K' : 'Control K'}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
+        </button>
         <nav aria-label="Primary">
           {NAV_SECTIONS.map((section, index) => (
             <div className="nav-section" key={section.heading ?? `ungrouped-${index}`}>

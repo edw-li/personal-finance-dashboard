@@ -228,3 +228,18 @@
 .portfolio-accounts-table select.field-input {
   min-width: 9rem;
 }
+
+/* Anchored arrival from the palette (2026-09-03 shell spec §9): a 1.2 s ring that says
+   "this is the card you asked for" on a page of ten. An outline, not a background, so it
+   reads the same on every card variant and costs no layout. */
+.card.is-highlighted {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Declared on the BASE card, or the ring would vanish instantly when the class comes
+     off — the fade is the half that matters. Scoped to this page: only its cards are ever
+     highlighted, and .card is app-wide vocabulary that must not grow a global transition. */
+  .settings-page .card { transition: outline-color var(--t-page) ease; }
+}

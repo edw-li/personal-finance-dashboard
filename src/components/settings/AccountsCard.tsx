@@ -201,7 +201,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const primaryName = people.find((p) => p.is_primary)?.name ?? 'the primary person'
 
   return (
-    <section className="card span-12">
+    <section className="card span-12" id="accounts">
       <h2 className="eyebrow">
         Accounts
         <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key." />

@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
@@ -260,9 +261,18 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+// A router, always: the page reads location.hash to answer the palette's anchored arrivals
+// (/settings#limits), and the app never renders it outside one.
+const renderPage = () =>
+  render(
+    <MemoryRouter initialEntries={['/settings']}>
+      <SettingsPage />
+    </MemoryRouter>,
+  )
+
 describe('SettingsPage — app settings', () => {
   it('seeds the boxes from the stored settings, percent-shifted for display', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Withdrawal rate (% / year)')
 
     // The column stores a fraction; the box speaks percent. Number() trims the stored
@@ -282,7 +292,7 @@ describe('SettingsPage — app settings', () => {
   })
 
   it('PUTs the full form with the rate shifted back, and notes the hot-applied schedule', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('ESPP ticker')
 
     type(swrBox(), '3.75')
@@ -306,7 +316,7 @@ describe('SettingsPage — app settings', () => {
   })
 
   it('sends espp_ticker: null EXPLICITLY when the ticker box is emptied', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('ESPP ticker')
 
     type(tickerBox(), '   ')
@@ -327,7 +337,7 @@ describe('SettingsPage — app settings', () => {
 
   it('re-saves the inclusive top of the range: 100 % goes back as the fraction 1', async () => {
     vi.mocked(fetchAppSettings).mockResolvedValue({ ...SETTINGS, swr_pct: '1.000000' })
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Withdrawal rate (% / year)')
 
     // The stored fraction 1 IS 100 %, and the client gate is `n > 100` — inclusive. A row
@@ -346,7 +356,7 @@ describe('SettingsPage — app settings', () => {
       espp_ticker: 'MSFT',
       price_refresh_cron: '30 14 * * mon-fri',
     })
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('ESPP ticker')
 
     type(swrBox(), '3.7500')
@@ -364,7 +374,7 @@ describe('SettingsPage — app settings', () => {
   })
 
   it('refuses exponent text in the rate box, client-side', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Withdrawal rate (% / year)')
 
     // Exponent AND out of range (1e3 is 1000): the two gates disagree about this one box,
@@ -387,7 +397,7 @@ describe('SettingsPage — app settings', () => {
   })
 
   it('refuses a rate outside 0–100 without spending a request', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Withdrawal rate (% / year)')
 
     type(swrBox(), '150')
@@ -402,7 +412,7 @@ describe('SettingsPage — app settings', () => {
   it('renders a PUT rejection verbatim in the form-level error slot', async () => {
     const detail = 'ticker must be 1-20 characters of A-Z, 0-9, dot or dash, starting alphanumeric'
     vi.mocked(putAppSettings).mockRejectedValue(new ApiError(detail, 422))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('ESPP ticker')
 
     type(tickerBox(), '$$$')
@@ -418,7 +428,7 @@ describe('SettingsPage — app settings', () => {
     vi.mocked(fetchAppSettings)
       .mockRejectedValueOnce(new ApiError('settings unavailable', 503))
       .mockResolvedValue(SETTINGS)
-    render(<SettingsPage />)
+    renderPage()
 
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // A FIRST load that failed knows nothing about the stored settings, and a form seeded
@@ -435,7 +445,7 @@ describe('SettingsPage — app settings', () => {
 
 describe('SettingsPage — password', () => {
   it('refuses a new/confirm mismatch without spending a request', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Current password')
 
     fillPasswords('old-pw', 'new-pw-12345', 'new-pw-12346')
@@ -446,7 +456,7 @@ describe('SettingsPage — password', () => {
   })
 
   it('changes the password, clears all three boxes and says so', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Current password')
 
     fillPasswords('old-pw', 'new-pw-12345', 'new-pw-12345')
@@ -470,7 +480,7 @@ describe('SettingsPage — password', () => {
 
   it('renders a rejected password change verbatim and keeps the boxes', async () => {
     vi.mocked(changePassword).mockRejectedValue(new ApiError('Current password is incorrect', 400))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Current password')
 
     fillPasswords('wrong-pw', 'new-pw-12345', 'new-pw-12345')
@@ -488,7 +498,7 @@ describe('SettingsPage — password', () => {
     const change = deferred<void>()
     vi.mocked(putAppSettings).mockReturnValue(put.promise)
     vi.mocked(changePassword).mockReturnValue(change.promise)
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Current password')
 
     fireEvent.click(saveButton())
@@ -514,7 +524,7 @@ describe('SettingsPage — password', () => {
 describe('SettingsPage — xlsx import', () => {
   it('offers no import card at all when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    render(<SettingsPage />)
+    renderPage()
 
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // The card shares the two forms' `loadedOnce` gate on purpose: a settings GET that
@@ -526,7 +536,7 @@ describe('SettingsPage — xlsx import', () => {
 
   it('arms Dry run with a chosen file, and Apply only with a clean dry-run report', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     expect(dryButton().disabled).toBe(true)
@@ -544,7 +554,7 @@ describe('SettingsPage — xlsx import', () => {
 
   it('dry-runs the chosen file and renders the per-sheet diff', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     const file = xlsx()
@@ -586,7 +596,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx).mockResolvedValue(
       makeReport({ paycheck: { samples: ['2024-06-14 gross 12500.00 -> 12750.00'] } }),
     )
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -606,7 +616,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx).mockResolvedValue(
       makeReport({ taxes: { errors: ['2024: bracket rows overlap at 100000'] } }),
     )
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -622,7 +632,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx).mockResolvedValue(
       makeReport({ crypto: { errors: ['row 3: unknown symbol "XBT"'] } }),
     )
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -639,7 +649,7 @@ describe('SettingsPage — xlsx import', () => {
 
   it('drops the report when another file is picked', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -657,7 +667,7 @@ describe('SettingsPage — xlsx import', () => {
   it('spends no request when the clobber warning is declined', async () => {
     vi.mocked(importXlsx).mockResolvedValue(makeReport(SPENDING_DIFF))
     confirmSpy.mockReturnValue(false)
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -675,7 +685,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx)
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF, true))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     const file = xlsx()
@@ -700,7 +710,7 @@ describe('SettingsPage — xlsx import', () => {
 
   it('renders a refused upload verbatim in the card error slot', async () => {
     vi.mocked(importXlsx).mockRejectedValue(new ApiError('File too large (max 15 MB)', 413))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -726,7 +736,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx)
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
       .mockRejectedValueOnce(new ApiError('import failed: database is locked', 500))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -751,7 +761,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(importXlsx)
       .mockResolvedValueOnce(makeReport(SPENDING_DIFF))
       .mockRejectedValueOnce(new ApiError('import failed: sheet "Spending" is missing', 400))
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -775,7 +785,7 @@ describe('SettingsPage — xlsx import', () => {
   it('shuts every import door while a request is in flight', async () => {
     const run = deferred<ImportReport>()
     vi.mocked(importXlsx).mockReturnValue(run.promise)
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByLabelText('Workbook (.xlsx)')
 
     pick(xlsx())
@@ -800,13 +810,13 @@ describe('SettingsPage — xlsx import', () => {
 
 describe('SettingsPage — system card', () => {
   it('mounts the System card alongside the forms', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByText('No refresh recorded yet')
     expect(screen.getByText('No backup recorded')).toBeDefined()
   })
 
   it('pairs data-out with data-in: System follows Import and precedes the forms (2026-08-31 audit)', async () => {
-    render(<SettingsPage />)
+    renderPage()
     await screen.findByText('No refresh recorded yet')
     const importH = screen.getByRole('heading', { name: /Import workbook/ })
     const system = screen.getByRole('heading', { name: /System/ })
@@ -817,7 +827,7 @@ describe('SettingsPage — system card', () => {
 
 describe('SettingsPage — household, accounts and categories cards', () => {
   it('mounts the three management cards and feeds the roster its people', async () => {
-    render(<SettingsPage />)
+    renderPage()
 
     expect(await screen.findByText('Household')).toBeTruthy()
     expect(screen.getByText('Accounts')).toBeTruthy()
@@ -838,7 +848,7 @@ describe('SettingsPage — household, accounts and categories cards', () => {
 
   it('offers none of the three cards when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    render(<SettingsPage />)
+    renderPage()
 
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // They share the import card's `loadedOnce` gate: a settings GET that failed means the
@@ -852,7 +862,7 @@ describe('SettingsPage — household, accounts and categories cards', () => {
 
 describe('SettingsPage — assistant card', () => {
   it('mounts the Assistant card last, behind the same loadedOnce gate', async () => {
-    render(<SettingsPage />)
+    renderPage()
 
     const assistant = await screen.findByRole('region', { name: 'Assistant' })
     // Last on the page on purpose: it configures a side feature, not the dashboard's own
@@ -863,10 +873,57 @@ describe('SettingsPage — assistant card', () => {
 
   it('offers no Assistant card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
-    render(<SettingsPage />)
+    renderPage()
 
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Assistant' })).toBeNull()
     expect(vi.mocked(fetchAssistantSettings)).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsPage — anchored arrival from the palette', () => {
+  it('scrolls the addressed card into view and rings it for a moment', async () => {
+    // jsdom implements no scrollIntoView (HoldingDetailPanel carries the same note), so
+    // this stub is both why the call is safe and how the scroll is observed.
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    try {
+      render(
+        <MemoryRouter initialEntries={['/settings#limits']}>
+          <SettingsPage />
+        </MemoryRouter>,
+      )
+      // waitFor from the first tick rather than findBy-then-assert: the ring lives for
+      // 1.2 s of WALL clock, and a slow load would otherwise let it expire unobserved.
+      // The cards exist only once the first load resolves — the effect waits for that,
+      // which is the whole reason the browser's own hash handling cannot do this job.
+      await waitFor(() =>
+        expect(
+          document.getElementById('limits')?.classList.contains('is-highlighted'),
+        ).toBe(true),
+      )
+      expect(scrollIntoView).toHaveBeenCalled()
+
+      // …and the ring is a moment, not a permanent state.
+      await waitFor(
+        () =>
+          expect(
+            document.getElementById('limits')?.classList.contains('is-highlighted'),
+          ).toBe(false),
+        { timeout: 2500 },
+      )
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
+  it('leaves every card unrung when the URL carries no anchor', async () => {
+    renderPage()
+    const limits = await screen.findByRole('region', { name: 'Contribution limits' })
+    expect(limits.classList.contains('is-highlighted')).toBe(false)
   })
 })

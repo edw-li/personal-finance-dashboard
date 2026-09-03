@@ -10,6 +10,7 @@ import InfoHint from '../components/InfoHint'
 import MonthRibbon from '../components/MonthRibbon'
 import RangeChips from '../components/RangeChips'
 import StatTile from '../components/StatTile'
+import { useArrivalValue } from '../components/useArrivalParam'
 import ChartZoomHint from '../components/ChartZoomHint'
 import BudgetPanel from '../components/spending/BudgetPanel'
 import { budgetStepSeries } from '../components/spending/budgetChartOptions'
@@ -92,6 +93,21 @@ export default function SpendingPage() {
   const [trend, setTrend] = useState<{ categoryId: number; slot: number }[]>(() =>
     cached ? defaultTrend(cached.matrix) : [],
   )
+  // ?trend=<slug> — the palette's category entries pick that category's trend (spec §9).
+  // Matched on the SLUG the API also hands the palette, never on a name: a rename must not
+  // break a deep link. A retired category simply finds nothing and the trend is left alone.
+  const arriveOnTrend = useCallback(
+    (slug: string) => {
+      // Nothing to resolve the slug against yet — hold the param and answer again when
+      // the matrix lands (useArrivalValue's "not yet" contract).
+      if (!matrix) return false
+      const category = matrix.categories.find((c) => c.slug === slug)
+      if (category) setTrend([{ categoryId: category.id, slot: 0 }])
+      return true
+    },
+    [matrix],
+  )
+  useArrivalValue('trend', arriveOnTrend)
   // false once a revalidation actually CHANGES the data — charts may animate again.
   const [fromCache, setFromCache] = useState(cached !== undefined)
   // Month drill-in: the ISO month whose breakdown pie replaces the bars chart — READ

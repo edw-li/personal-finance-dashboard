@@ -1,6 +1,10 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fetchCreditCards } from '../api/creditCards'
+import { fetchAccounts } from '../api/netWorth'
+import { fetchSecurities } from '../api/portfolio'
+import { fetchCategories } from '../api/spending'
 import Layout from './Layout'
 import { prefetchRoute, warmAllRoutes } from './routeChunks'
 
@@ -32,6 +36,15 @@ vi.mock('../api/assistant', () => ({
   fetchAssistantModels: (...a: unknown[]) => fetchAssistantModels(...a),
   fetchContextPreview: (...a: unknown[]) => fetchContextPreview(...a),
 }))
+
+// Same rule for the palette's entity lists: opening it (three tests below do) loads
+// tickers, accounts, categories and cards, and no shell test may reach fetch. The empty
+// resolutions are seeded per test, not in the factories: this file's afterEach restores
+// every mock, which would strip a factory-set implementation after the first test.
+vi.mock('../api/portfolio', () => ({ fetchSecurities: vi.fn() }))
+vi.mock('../api/netWorth', () => ({ fetchAccounts: vi.fn() }))
+vi.mock('../api/spending', () => ({ fetchCategories: vi.fn() }))
+vi.mock('../api/creditCards', () => ({ fetchCreditCards: vi.fn() }))
 
 function renderShell(initialPath = '/') {
   return render(
@@ -125,9 +138,16 @@ beforeEach(() => {
     ],
   })
   fetchContextPreview.mockReset().mockResolvedValue({ sections: [] })
+  vi.mocked(fetchSecurities).mockResolvedValue([])
+  vi.mocked(fetchAccounts).mockResolvedValue([])
+  vi.mocked(fetchCategories).mockResolvedValue([])
+  vi.mocked(fetchCreditCards).mockResolvedValue([])
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // The palette's entity fetches (mocked above) settle after the assertions do; flushing
+  // them here keeps their setState inside act().
+  await act(async () => {})
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -282,6 +302,15 @@ describe('Layout — assistant mount', () => {
     expect(screen.queryByRole('complementary', { name: 'Assistant' })).toBeNull()
     expect(document.activeElement).toBe(document.body)
     expect(fetchAssistantSettings).not.toHaveBeenCalled()
+  })
+
+  // The palette's discoverability, and the bus that carries the ask: the row is in the
+  // sidebar, the palette is mounted next to <main>, and neither imports the other.
+  it('offers a visible search row that opens the palette', () => {
+    renderShell()
+    expect(screen.queryByRole('combobox', { name: 'Command palette' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Search or jump/ }))
+    expect(screen.getByRole('combobox', { name: 'Command palette' })).toBeTruthy()
   })
 
   // The whole F7 wiring end to end: the palette asks the bus, the drawer Layout mounted

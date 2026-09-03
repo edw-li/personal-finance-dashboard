@@ -71,7 +71,7 @@ import {
   fetchSecurities,
   fetchTransactions,
 } from '../api/portfolio'
-import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
+import { fetchPriceHistory, fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
 import { formatDate } from '../utils/format'
 
 const ME = { id: 1, name: 'Me', is_primary: true }
@@ -235,6 +235,9 @@ beforeEach(() => {
   vi.mocked(fetchHistory).mockResolvedValue(HISTORY)
   vi.mocked(fetchRealized).mockResolvedValue(REALIZED)
   vi.mocked(fetchRefreshStatus).mockResolvedValue(STATUS)
+  // The drill-in detail panel's own fetch — reached whenever a holding is opened, which
+  // the ?ticker= arrival now does straight from the URL.
+  vi.mocked(fetchPriceHistory).mockResolvedValue({ ticker: 'VOO', points: [] })
   vi.mocked(fetchHousehold).mockResolvedValue(household())
 })
 
@@ -243,13 +246,50 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function renderPage() {
+function renderPage(entry = '/portfolio') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
       <PortfolioPage />
     </MemoryRouter>,
   )
 }
+
+// The palette's holding entries deep-link by TICKER (2026-09-03 shell spec §9).
+it('opens the holding named by ?ticker= straight into its detail', async () => {
+  renderPage('/portfolio?ticker=voo')
+  // Uppercased on the way in: tickers are stored that way, and a deep link typed by hand
+  // must not miss on case alone.
+  expect(await screen.findByRole('heading', { name: /Holdings — VOO/ })).toBeTruthy()
+})
+
+it('leaves the table up for a ?ticker= nobody holds', async () => {
+  renderPage('/portfolio?ticker=ZZZZ')
+  // The detail resolves to no holding and folds away — the drill's existing posture.
+  expect(await screen.findByRole('heading', { name: 'Holdings' })).toBeTruthy()
+})
+
+it('?tab= scrolls the records strip in and focuses its first field', async () => {
+  // jsdom implements no scrollIntoView (HoldingDetailPanel carries the same note).
+  const scrollIntoView = vi.fn()
+  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    value: scrollIntoView,
+    configurable: true,
+    writable: true,
+  })
+  try {
+    renderPage('/portfolio?tab=dividends')
+    // The panel the tab selects mounts first; the scroll and focus ride a setTimeout 0
+    // behind it, which is why this waits rather than asserting straight away.
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(document.getElementById('portfolio-records')?.contains(document.activeElement)).toBe(
+        true,
+      ),
+    )
+  } finally {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  }
+})
 
 // Scoped to the Owner group on purpose: the performance card carries RangeChips with an
 // "All" of its own (NetWorthPage.test.tsx's lesson).
