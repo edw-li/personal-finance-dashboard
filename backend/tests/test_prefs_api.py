@@ -84,10 +84,14 @@ async def test_unregistered_rows_are_not_served(auth_client, db, seeded_user):
 
 
 async def test_preferences_ride_the_export(auth_client, seeded_user):
+    # Read before the export, like test_restore's actor id: the snapshot builder opens its
+    # REPEATABLE READ transaction with a rollback, which expires every instance loaded on
+    # this (test-shared) session — a lazy refresh afterwards raises MissingGreenlet.
+    user_id = seeded_user.id
     await auth_client.patch(PREFS, json={"theme": "light"})
     resp = await auth_client.get("/api/v1/export/snapshot")
     archive = zipfile.ZipFile(io.BytesIO(resp.content))
     nested = json.loads(archive.read("finance-export.json"))
     rows = nested["tables"]["user_preferences"]
     assert len(rows) == 1 and rows[0]["key"] == "theme" and rows[0]["value"] == "light"
-    assert rows[0]["user_id"] == seeded_user.id
+    assert rows[0]["user_id"] == user_id
