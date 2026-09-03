@@ -5,6 +5,8 @@
 # Optional encryption (2026-08-31 spec §B3): set BACKUP_PASSPHRASE in .env to pipe the
 # gzip through symmetric gpg (AES256) and upload .sql.gz.gpg; unset keeps plaintext
 # dumps and prints a one-line warning per run.
+# Verify phase (2026-09-03 data-lifecycle spec §8): the uploaded dump is restored into a
+# scratch database and three row counts compared; the marker records verified/verify_error.
 # Config comes from the project-root .env (see README "Nightly backups").
 set -euo pipefail
 
@@ -81,6 +83,47 @@ record_failure() {
 }
 trap 'record_failure $LINENO' ERR
 
+# ── Verify phase helpers (2026-09-03 data-lifecycle spec §8) ─────────────────────────
+# Three row counts from the live database at dump time, compared after restoring the
+# uploaded dump into a scratch database. The role needs CREATEDB once (README 5.3):
+#   sudo -u postgres psql -c "ALTER ROLE finance CREATEDB;"
+VERIFY_TABLES="net_worth_snapshots monthly_spending position_transactions"
+VERIFY_DB="${DB_NAME}_verify_$$"
+VERIFIED=false
+VERIFY_ERROR=""
+VERIFIED_AT=""
+
+live_counts() {  # $1 = database -> "t1=n1 t2=n2 t3=n3"
+  local db="$1" out="" t n
+  for t in $VERIFY_TABLES; do
+    n="$(PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$db" -Atc "SELECT count(*) FROM ${t}" 2>/dev/null || echo '?')"
+    out="${out}${out:+ }${t}=${n}"
+  done
+  echo "$out"
+}
+
+counts_json() {  # "t=n t=n" -> {"t": n, ...}
+  local json="" pair
+  for pair in $1; do
+    json="${json}${json:+, }\"${pair%%=*}\": ${pair#*=}"
+  done
+  echo "{${json}}"
+}
+
+sanitize() {  # the first 300 bytes of a file as one JSON/SQL-safe line
+  head -c 300 "$1" | tr -d "\"'\\\\" | tr '\n' ' '
+}
+
+decrypt_dump() {  # the SQL text of $DUMP_FILE on stdout, whichever flavor was written
+  if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
+    gpg --decrypt --batch --quiet --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" "$DUMP_FILE" | gunzip
+  else
+    gunzip -c "$DUMP_FILE"
+  fi
+}
+
+LIVE_COUNTS="$(live_counts "$DB_NAME")"
+
 echo "[$(date)] Starting backup of database '${DB_NAME}'..."
 
 # Dump, compress, and (when configured) encrypt. --pinentry-mode loopback is required to
@@ -146,16 +189,47 @@ for expired_key in expired_keys:
         print(f"Could not delete expired backup: {expired_key}")
 PYEOF
 
-# Record the successful upload for the dashboard's System card (2026-08-25 spec §3 +
-# 2026-08-31 spec §B3): upsert app_settings['backup_status'] as a FLAT JSON object — the
-# {"value": ...} envelope is a Python readers' convention, and the reader
-# (app/api/system.py) expects exactly this shape — and append this run to
-# app_settings['backup_runs'] in the same step. Best-effort BY DESIGN: the backup itself
-# already succeeded, so a marker failure only warns — the `|| echo` keeps `set -e` (and
-# the ERR trap: && / || chains are exempt from it) from turning bookkeeping into a
-# failed backup.
+# ── Verify phase: restore the uploaded dump into a scratch database and compare counts ──
+# Every step lives inside an `if`, so set -e and the ERR trap never fire from here: a verify
+# failure keeps ok:true for the upload (the dump IS in the bucket), records verified:false
+# with the reason, and lets the run end with exit 0 so retention still ran.
+VERIFY_ERR_FILE="/tmp/verify_err_$$"
+if PGPASSWORD="${POSTGRES_PASSWORD}" createdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$VERIFY_DB" 2>"$VERIFY_ERR_FILE"; then
+  if decrypt_dump | PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -q >/dev/null 2>"$VERIFY_ERR_FILE"; then
+    RESTORED_COUNTS="$(live_counts "$VERIFY_DB")"
+    if [ "$RESTORED_COUNTS" = "$LIVE_COUNTS" ]; then
+      VERIFIED=true
+      VERIFIED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "[$(date)] Verify OK: ${RESTORED_COUNTS}"
+    else
+      VERIFY_ERROR="row count mismatch: live ${LIVE_COUNTS} vs restored ${RESTORED_COUNTS}"
+    fi
+  else
+    VERIFY_ERROR="restore into ${VERIFY_DB} failed: $(sanitize "$VERIFY_ERR_FILE")"
+  fi
+  PGPASSWORD="${POSTGRES_PASSWORD}" dropdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" --if-exists "$VERIFY_DB" \
+    || echo "[$(date)] WARN: could not drop ${VERIFY_DB}"
+else
+  VERIFY_ERROR="createdb failed (grant CREATEDB to ${DB_USER}, README 5.3): $(sanitize "$VERIFY_ERR_FILE")"
+fi
+rm -f "$VERIFY_ERR_FILE"
+[ "$VERIFIED" = true ] || echo "[$(date)] WARN: backup NOT verified — ${VERIFY_ERROR}"
+
+# Record the run for the dashboard (2026-08-25 spec §3 + 2026-08-31 §B3 + 2026-09-03 §8):
+# upsert app_settings['backup_status'] as a FLAT JSON object — the {"value": ...} envelope is
+# a Python readers' convention — and append this run to app_settings['backup_runs']. The
+# verify fields are Optional in BackupStatusOut, so a marker from an older script still
+# parses. Best-effort BY DESIGN: the backup itself already succeeded, so a marker failure
+# only warns — the `|| echo` keeps set -e (and the ERR trap) out of bookkeeping.
 RUN_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-BACKUP_MARKER="{\"last_success_at\": \"${RUN_AT}\", \"object_key\": \"${OBJECT_KEY}\", \"size\": \"${DUMP_SIZE}\"}"
+DUMP_BYTES="$(stat -c%s "$DUMP_FILE" 2>/dev/null || stat -f%z "$DUMP_FILE")"
+if [ -n "${BACKUP_PASSPHRASE:-}" ]; then ENCRYPTED=true; else ENCRYPTED=false; fi
+if [ "$VERIFIED" = true ]; then
+  VERIFY_FIELDS="\"verified\": true, \"verified_at\": \"${VERIFIED_AT}\", \"row_counts\": $(counts_json "$LIVE_COUNTS")"
+else
+  VERIFY_FIELDS="\"verified\": false, \"verify_error\": \"${VERIFY_ERROR}\""
+fi
+BACKUP_MARKER="{\"last_success_at\": \"${RUN_AT}\", \"object_key\": \"${OBJECT_KEY}\", \"size\": \"${DUMP_SIZE}\", \"size_bytes\": ${DUMP_BYTES}, \"encrypted\": ${ENCRYPTED}, \"retention_days\": ${RETENTION_DAYS}, ${VERIFY_FIELDS}}"
 {
   PGPASSWORD="${POSTGRES_PASSWORD}" psql \
     -h "$DB_HOST" \
@@ -165,7 +239,7 @@ BACKUP_MARKER="{\"last_success_at\": \"${RUN_AT}\", \"object_key\": \"${OBJECT_K
     -v ON_ERROR_STOP=1 \
     -q \
     -c "INSERT INTO app_settings (key, value) VALUES ('backup_status', '${BACKUP_MARKER}'::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" \
-  && append_backup_run "{\"at\": \"${RUN_AT}\", \"ok\": true, \"object\": \"${OBJECT_KEY}\"}"
+  && append_backup_run "{\"at\": \"${RUN_AT}\", \"ok\": true, \"object\": \"${OBJECT_KEY}\", \"verified\": ${VERIFIED}}"
 } || echo "[$(date)] WARN: could not record backup_status/backup_runs in app_settings — the backup itself succeeded"
 
 # Clean up local dump
