@@ -100,6 +100,28 @@ describe('SliderBox', () => {
     expect(onChange).toHaveBeenLastCalledWith('255', false)
   })
 
+  it('announces the knob in the box’s vocabulary, not the raw fraction', () => {
+    mount()
+    // Without this a screen reader reads the range's number: "0.15" for fifteen percent.
+    expect(range().getAttribute('aria-valuetext')).toBe('15%')
+    fireEvent.change(range(), { target: { value: '0.155' } })
+    expect(range().getAttribute('aria-valuetext')).toBe('15.5%')
+    cleanup()
+    mount({ kind: 'money', value: '250', actual: '100.00', min: '0', max: '500', step: '5' })
+    expect(range().getAttribute('aria-valuetext')).toBe('$250.00')
+  })
+
+  it('points the box at its own error message while one is showing', () => {
+    mount()
+    expect(box().getAttribute('aria-describedby')).toBeNull()
+    fireEvent.focus(box())
+    fireEvent.change(box(), { target: { value: '60' } })
+    fireEvent.blur(box())
+    const alert = screen.getByRole('alert')
+    expect(alert.id).not.toBe('')
+    expect(box().getAttribute('aria-describedby')).toBe(alert.id)
+  })
+
   it('snapToStep uses the step’s own decimals', () => {
     expect(snapToStep('0.15500000000000003', '0.005')).toBe('0.155')
     expect(snapToStep('255.00000001', '5')).toBe('255')

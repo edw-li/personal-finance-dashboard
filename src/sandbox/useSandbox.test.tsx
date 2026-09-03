@@ -72,8 +72,19 @@ function Probe({ dataKey = 'k1', enabled = true }: { dataKey?: string; enabled?:
       <span data-testid="link">{sb.link}</span>
       <button onClick={() => sb.set({ a: '1' })}>drag1</button>
       <button onClick={() => sb.set({ a: '2' })}>drag2</button>
+      {/* The pointer-up after a drag whose tick already landed: the same value, committed. */}
+      <button onClick={() => sb.set({ a: '1' }, { immediate: true })}>release1</button>
       <button onClick={() => sb.set({ a: '3' }, { immediate: true })}>commit3</button>
       <button onClick={() => sb.set((s) => ({ ...s, b: '9' }), { immediate: true, drop: ['whatif-lot'] })}>b9</button>
+      {/* Two writers in ONE tick — a preset chip that sets two knobs through separate calls. */}
+      <button
+        onClick={() => {
+          sb.set({ a: '4' }, { immediate: true })
+          sb.set({ b: '8' }, { immediate: true })
+        }}
+      >
+        twoSets
+      </button>
       <button onClick={sb.reset}>reset</button>
       <button onClick={() => sb.pin()}>pin</button>
       <button onClick={() => sb.pin('Named')}>pinNamed</button>
@@ -89,6 +100,45 @@ function mount(entry = '/paycheck', props: { dataKey?: string; enabled?: boolean
     </MemoryRouter>,
   )
 }
+
+// A ONE-SIDED page (Projection): the payload carries no baseline, so the hook has to run the
+// empty scenario itself — on mount when the arrival is empty, and separately once per dataKey
+// when it is not. `initialBaseline` is the page's own cached empty run.
+interface OneProps {
+  dataKey?: string
+  initialBaseline?: R | null
+  onBaseline?: (baseline: R) => void
+}
+function OneSided({ dataKey = 'k1', initialBaseline = null, onBaseline }: OneProps) {
+  const spec: SandboxSpec<S, R> = {
+    page: 'projection',
+    decode,
+    encode,
+    isEmpty,
+    preview,
+    dataKey,
+    initialBaseline,
+    onBaseline,
+  }
+  const sb = useSandbox(spec)
+  return (
+    <div>
+      <span data-testid="result">{sb.result === null ? 'null' : `${sb.result.scenario.a}|${sb.result.scenario.b}`}</span>
+      <span data-testid="baseline">{sb.baseline === null ? 'null' : sb.baseline.baseline.a}</span>
+    </div>
+  )
+}
+
+function mountOne(entry = '/projection', props: OneProps = {}) {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <OneSided {...props} />
+    </MemoryRouter>,
+  )
+}
+
+/** The page's cached empty run — distinguishable from anything `answer` produces. */
+const SEED: R = { baseline: { a: '99' }, scenario: { a: 'seed', b: null } }
 
 const text = (id: string) => screen.getByTestId(id).textContent
 const click = (name: string) => act(() => screen.getByText(name).click())
@@ -162,6 +212,57 @@ describe('useSandbox', () => {
     expect(text('url')).toBe('/paycheck?year=2026&whatif=a%3A3&whatif=b%3A9')
     await settle()
     expect(preview).toHaveBeenLastCalledWith({ a: '3', b: '9' })
+  })
+
+  it('spends ONE request on a drag, its tick and the release that follows', async () => {
+    mount()
+    await settle()
+    expect(preview).toHaveBeenCalledTimes(1) // the mount run
+    click('drag1')
+    await tick(250)
+    await settle()
+    expect(text('url')).toBe('/paycheck?whatif=a%3A1')
+    expect(preview).toHaveBeenCalledTimes(2)
+    // Pointer-up commits the value the tick already wrote. The URL does not change and the
+    // last run did not fail, so there is nothing to ask (spec §17: one request per window).
+    click('release1')
+    await settle()
+    expect(preview).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-commits the same URL only to retry a run that failed', async () => {
+    mount()
+    await settle()
+    click('commit3')
+    await settle()
+    expect(preview).toHaveBeenCalledTimes(2)
+    click('commit3') // identical URL after a SUCCESS: nothing to ask again
+    await settle()
+    expect(preview).toHaveBeenCalledTimes(2)
+    preview.mockRejectedValueOnce(new ApiError('lot 4 already sold', 409))
+    click('b9')
+    await settle()
+    expect(preview).toHaveBeenCalledTimes(3)
+    click('b9') // identical URL after a FAILURE: the natural retry
+    await settle()
+    expect(preview).toHaveBeenCalledTimes(4)
+    expect(text('flags')).toBe('false|false|||false')
+  })
+
+  it('drops an EMPTY whatif entry on arrival — an empty entry is not the absence of one', async () => {
+    mount('/paycheck?whatif=&whatif=a%3A5')
+    await settle()
+    expect(text('url')).toBe('/paycheck?whatif=a%3A5')
+    expect(preview).toHaveBeenCalledTimes(1)
+  })
+
+  it('composes two immediate sets made in ONE tick instead of losing the first', async () => {
+    mount()
+    await settle()
+    click('twoSets')
+    expect(text('url')).toBe('/paycheck?whatif=a%3A4&whatif=b%3A8')
+    await settle()
+    expect(preview).toHaveBeenLastCalledWith({ a: '4', b: '8' })
   })
 
   it('is busy while a run is in flight and stale until the newer run lands', async () => {
@@ -264,6 +365,69 @@ describe('useSandbox', () => {
     mount('/paycheck?owner=2&whatif=a%3A5')
     await settle()
     expect(text('link')).toBe('/paycheck?owner=2&whatif=a%3A5')
+  })
+
+  describe('one-sided pages (no baselineOf)', () => {
+    it('runs the empty scenario alongside a non-empty arrival — once per dataKey', async () => {
+      const { rerender } = mountOne('/projection?whatif=a%3A5')
+      await settle()
+      expect(preview).toHaveBeenCalledTimes(2)
+      expect(preview).toHaveBeenCalledWith({ a: '5' })
+      expect(preview).toHaveBeenCalledWith({})
+      expect(text('result')).toBe('5|null')
+      expect(text('baseline')).toBe('0')
+      // A re-render on the SAME dataKey asks for neither again.
+      rerender(
+        <MemoryRouter initialEntries={['/projection?whatif=a%3A5']}>
+          <OneSided dataKey="k1" />
+        </MemoryRouter>,
+      )
+      await settle()
+      expect(preview).toHaveBeenCalledTimes(2)
+      // New data underneath: both the live run and the baseline are asked again.
+      rerender(
+        <MemoryRouter initialEntries={['/projection?whatif=a%3A5']}>
+          <OneSided dataKey="k2" />
+        </MemoryRouter>,
+      )
+      await settle()
+      expect(preview).toHaveBeenCalledTimes(4)
+      expect(preview).toHaveBeenCalledWith({})
+    })
+
+    it('an empty arrival needs no second run — the mount run IS the baseline', async () => {
+      mountOne('/projection')
+      await settle()
+      expect(preview).toHaveBeenCalledTimes(1)
+      expect(text('baseline')).toBe('0')
+      expect(text('result')).toBe('null|null')
+    })
+
+    it('initialBaseline seeds the result only when the arrival is empty', async () => {
+      mountOne('/projection', { initialBaseline: SEED })
+      expect(text('baseline')).toBe('99')
+      expect(text('result')).toBe('seed|null') // painted before the first request resolves
+      cleanup()
+      mountOne('/projection?whatif=a%3A5', { initialBaseline: SEED })
+      expect(text('baseline')).toBe('99') // the baseline is still good…
+      expect(text('result')).toBe('null') // …but it is not this scenario's answer
+      await settle()
+      expect(text('result')).toBe('5|null')
+    })
+
+    it('onBaseline fires once, from whichever run produced the empty answer', async () => {
+      const onBaseline = vi.fn()
+      mountOne('/projection', { onBaseline })
+      await settle()
+      expect(onBaseline).toHaveBeenCalledTimes(1)
+      expect(onBaseline).toHaveBeenCalledWith(answer({}))
+      cleanup()
+      onBaseline.mockReset()
+      mountOne('/projection?whatif=a%3A5', { onBaseline })
+      await settle()
+      expect(onBaseline).toHaveBeenCalledTimes(1)
+      expect(onBaseline).toHaveBeenCalledWith(answer({}))
+    })
   })
 
   describe('pins', () => {

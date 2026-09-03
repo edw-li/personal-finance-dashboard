@@ -127,6 +127,9 @@ export default function SliderBox({
           id={`${id}-range`}
           type="range"
           aria-label={`${label} slider`}
+          // A range announces its raw number, which for a percent knob is the FRACTION
+          // ("0.15") and for money is unformatted. Say it in the box's own vocabulary.
+          aria-valuetext={display(sliderValue)}
           min={Number(min)}
           max={Number(max)}
           step={Number(step)}
@@ -154,6 +157,9 @@ export default function SliderBox({
           id={`${id}-box`}
           kind={kind}
           aria-label={label}
+          // The alert below names the box; without the link a screen reader hears "invalid"
+          // with no sentence, because the alert is not the input's accessible description.
+          aria-describedby={boxError !== null ? `${id}-error` : undefined}
           value={draft ?? (value === '' ? '' : toBox(value))}
           placeholder={actual === null ? undefined : toBox(actual)}
           disabled={disabled}
@@ -177,7 +183,7 @@ export default function SliderBox({
         )}
       </div>
       {boxError !== null && (
-        <p className="sandbox-field-error" role="alert">
+        <p id={`${id}-error`} className="sandbox-field-error" role="alert">
           {boxError}
         </p>
       )}

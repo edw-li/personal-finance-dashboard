@@ -67,7 +67,12 @@ export interface Sandbox<S extends object, R> {
 }
 
 export const DEFAULT_DEBOUNCE_MS = 250
-const SEP = ''
+// The key separator has to be a character no entry can contain, or joining is lossy:
+// `['a:1', '', 'b:2']` and `['a:1', 'b:2']` share the empty join, so `?whatif=&whatif=a:5`
+// would compare EQUAL to its own canonical form and the arrival rewrite would never drop the
+// empty entry. US (unit separator) cannot appear in a decoded query value that survived the
+// grammar's parsers, so it is the fence.
+const SEP = '\u001f'
 
 function messageOf(err: unknown): string {
   return err instanceof ApiError ? err.message : 'The scenario could not be computed'
@@ -96,24 +101,13 @@ export function useSandbox<S extends object, R>(spec: SandboxSpec<S, R>): Sandbo
   const canonical = useMemo(() => encode(scenario), [encode, scenario])
   const canonicalKey = canonical.join(SEP)
   const empty = isEmpty(scenario)
-  // Bumped by every write that leaves the sandbox (see `flush`). A COMMIT is a request to
-  // ask again, and re-committing the same knobs — the natural retry after "lot 4 already
-  // sold" — writes a URL identical to the one already up, which by itself would say nothing.
+  // The RETRY counter (see `flush`): re-committing knobs that already failed writes a URL
+  // identical to the one already up — "lot 4 already sold", asked again — which by itself
+  // would say nothing. It is bumped ONLY for that; a commit onto a healthy run is a no-op,
+  // or a drag would pay twice for the tick and the pointer-up that follows it.
   const [commits, setCommits] = useState(0)
   // A run is identified by WHAT it modelled, WHICH data it modelled against, and which ask.
   const runKey = `${dataKey}${SEP}${commits}${SEP}${canonicalKey}`
-
-  // The latest spec and params, readable from timers and promise callbacks. Synced in an
-  // effect, not during render (react-hooks 7's refs rule); declared FIRST so every effect
-  // below sees this render's values.
-  const specRef = useRef(spec)
-  const paramsRef = useRef(searchParams)
-  const scenarioRef = useRef(scenario)
-  useEffect(() => {
-    specRef.current = spec
-    paramsRef.current = searchParams
-    scenarioRef.current = scenario
-  })
 
   const [run, setRun] = useState<RunState<R>>(() => {
     const seeded = spec.baselineOf === undefined ? (spec.initialBaseline ?? null) : null
@@ -129,6 +123,24 @@ export function useSandbox<S extends object, R>(spec: SandboxSpec<S, R>): Sandbo
     }
   })
 
+  // The latest spec, params and run verdict, readable from timers and promise callbacks.
+  // Synced in an effect, not during render (react-hooks 7's refs rule); declared FIRST so
+  // every effect below sees this render's values.
+  const specRef = useRef(spec)
+  const paramsRef = useRef(searchParams)
+  const scenarioRef = useRef(scenario)
+  const entriesKeyRef = useRef(entriesKey)
+  // Did the run the URL currently names END IN A FAILURE? That is the only thing a commit
+  // onto an unchanged URL can be asking for — see `flush`.
+  const failedRef = useRef(false)
+  useEffect(() => {
+    specRef.current = spec
+    paramsRef.current = searchParams
+    scenarioRef.current = scenario
+    entriesKeyRef.current = entriesKey
+    failedRef.current = run.errorKey === runKey
+  })
+
   // ── Arrival normalization (useArrivalParam's rule): unknown kinds and unparsable values
   // are dropped and the URL rewritten without them, replace-style; a canonical URL is left
   // alone, so this cannot loop (encode∘decode is identity — the grammar tests pin it).
@@ -140,7 +152,13 @@ export function useSandbox<S extends object, R>(spec: SandboxSpec<S, R>): Sandbo
   // ── Debounced writes. `pendingRef` is the scenario the user is heading for; the URL only
   // learns it at the tick (Safari throttles replaceState — one write per gesture, not per
   // pixel). Successive drags compose on the pending value, not on the URL's.
-  const pendingRef = useRef<string[] | null>(null)
+  //
+  // It survives the flush, exactly as useScope's does: `setSearchParams` does not update
+  // `scenario` until react-router re-renders, so a second `set` in the SAME tick that started
+  // from `scenarioRef` would compute its patch against the pre-write knobs and replace the
+  // first write instead of adding to it. `base` is the URL the pending value was computed
+  // from, `next` is what that URL will become.
+  const pendingRef = useRef<{ base: string; next: string[] } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
     () => () => {
@@ -149,31 +167,51 @@ export function useSandbox<S extends object, R>(spec: SandboxSpec<S, R>): Sandbo
     [],
   )
 
+  // Landed (the entries are what we wrote) or superseded (they moved elsewhere): either way
+  // the ref is no longer ahead of the URL. Only "still at the base" means in flight — which
+  // includes the debounce window, where nothing has been written yet.
+  useEffect(() => {
+    const pending = pendingRef.current
+    if (pending !== null && entriesKey !== pending.base) pendingRef.current = null
+  }, [entriesKey])
+
   const flush = useCallback(
     (drop: string[] = []) => {
       if (timerRef.current !== null) clearTimeout(timerRef.current)
       timerRef.current = null
-      const next = pendingRef.current
+      const pending = pendingRef.current
+      if (pending === null) return
+      const params = withEntries(paramsRef.current, pending.next, drop)
+      if (params.toString() !== paramsRef.current.toString()) {
+        // The URL says the scenario changed; the pending value stays parked until it lands.
+        setSearchParams(params, { replace: true })
+        return
+      }
+      // The address bar ALREADY reads this way, so the write would say nothing. Nothing is
+      // ahead of the URL now — park nothing, or the landing effect above (keyed on
+      // `entriesKey`) would never see it change and would hold a stale value for the page's
+      // life. Then ask again only if there is something to retry: a run that FAILED, which is
+      // what re-committing after "lot 4 already sold" means. Bumping unconditionally would
+      // make every drag → tick → release spend a second identical request (spec §17).
       pendingRef.current = null
-      if (next === null) return
-      const params = withEntries(paramsRef.current, next, drop)
-      // Exactly ONE of these fires, so a commit is always exactly one new run: the URL says
-      // the scenario changed, or — when the address bar already reads this way, which is what
-      // re-committing after "lot 4 already sold" looks like — the counter says "ask again".
-      // (They cannot be batched into one render: react-router 7 routes its own update through
-      // startTransition, so a second state change here would land in a separate commit.)
-      if (params.toString() === paramsRef.current.toString()) setCommits((n) => n + 1)
-      else setSearchParams(params, { replace: true })
+      if (failedRef.current) setCommits((n) => n + 1)
     },
     [setSearchParams],
   )
 
+  /**
+   * Patch the live scenario. ONE URL writer per tick: several `set` calls in the same tick
+   * compose (each sees the previous one's pending entries), but a page that also writes the
+   * search string itself — `setScope`, a drill param — must not do so in the same tick, since
+   * whichever `setSearchParams` runs last wins outright. Sequence those through a handler.
+   */
   const set = useCallback<Sandbox<S, R>['set']>(
     (patch, opts) => {
       const s = specRef.current
-      const base = pendingRef.current !== null ? s.decode(pendingRef.current) : scenarioRef.current
+      const pending = pendingRef.current
+      const base = pending !== null ? s.decode(pending.next) : scenarioRef.current
       const next = typeof patch === 'function' ? patch(base) : { ...base, ...patch }
-      pendingRef.current = s.encode(next)
+      pendingRef.current = { base: pending?.base ?? entriesKeyRef.current, next: s.encode(next) }
       if (opts?.immediate) {
         flush(opts.drop)
         return
@@ -301,7 +339,7 @@ export function useSandbox<S extends object, R>(spec: SandboxSpec<S, R>): Sandbo
   const pin = useCallback(
     (label?: string) => {
       const s = specRef.current
-      const live = pendingRef.current ?? s.encode(scenarioRef.current)
+      const live = pendingRef.current?.next ?? s.encode(scenarioRef.current)
       if (s.isEmpty(s.decode(live))) return
       if (pins.length >= PIN_LIMIT) {
         toast.info('Unpin one first')
