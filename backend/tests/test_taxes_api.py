@@ -786,6 +786,7 @@ async def test_what_if_empty_scenario_echoes_baseline(auth_client, definitions):
         "social_security_tax": "0.00",
         "disability_tax": "0.00",
         "capital_gains_tax": "0.00",
+        "niit_tax": "0.00",
         "effective_rate": "0.000000",
     }
     assert body["changed_inputs"] == []
@@ -818,6 +819,12 @@ async def test_what_if_override_crosses_the_niit_threshold(auth_client, definiti
     assert Decimal(body["delta"]["total_tax"]) == Decimal(
         body["scenario"]["totals"]["total_tax"]
     ) - Decimal(body["baseline"]["totals"]["total_tax"])
+    # C5's NIIT move now has its own delta line (2026-09-03 planning-sandboxes spec §13):
+    # scenario NIIT 0.00 − baseline 75.59, the two summaries' subtraction and nothing else.
+    assert body["delta"]["niit_tax"] == "-75.59"
+    assert Decimal(body["delta"]["niit_tax"]) == Decimal(body["scenario"]["niit"]["tax"]) - Decimal(
+        body["baseline"]["niit"]["tax"]
+    )
 
 
 async def test_what_if_long_sale_moves_ltcg_and_delta(auth_client, db, definitions):
@@ -1111,6 +1118,24 @@ async def test_what_if_writes_nothing(auth_client, db, definitions):
     assert (lot.sold_date, lot.sold_price) == (None, None)
     years = (await db.execute(select(func.count()).select_from(TaxYear))).scalar_one()
     assert years == 1
+
+
+def test_what_if_delta_without_a_niit_line_still_validates():
+    """Additive: the assistant's compact result and stored older payloads carry no niit_tax."""
+    from app.schemas.taxes import WhatIfDelta
+
+    delta = WhatIfDelta(
+        total_tax=Decimal("0.00"),
+        take_home=Decimal("0.00"),
+        federal_tax=Decimal("0.00"),
+        state_tax=Decimal("0.00"),
+        medicare_tax=Decimal("0.00"),
+        social_security_tax=Decimal("0.00"),
+        disability_tax=Decimal("0.00"),
+        capital_gains_tax=Decimal("0.00"),
+        effective_rate=None,
+    )
+    assert delta.niit_tax is None
 
 
 async def test_taxes_endpoints_require_auth(client):

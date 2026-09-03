@@ -230,6 +230,10 @@ class WhatIfDelta(BaseModel):
     social_security_tax: Decimal
     disability_tax: Decimal
     capital_gains_tax: Decimal
+    # NIIT (2026-09-03 planning-sandboxes spec §13): scenario.niit.tax − baseline.niit.tax
+    # when both summaries carry a NIIT block, else None. Additive and defaulted, so the
+    # assistant's compact result and older payloads keep validating.
+    niit_tax: Decimal | None = None
     effective_rate: Decimal | None  # fraction delta; None when either side is None
 
 

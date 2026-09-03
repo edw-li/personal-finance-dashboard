@@ -1539,6 +1539,11 @@ async def what_if(body: WhatIfIn, db: AsyncSession = Depends(get_db)) -> WhatIfO
         social_security_tax=scenario.social_security.tax - baseline.social_security.tax,
         disability_tax=scenario.disability.tax - baseline.disability.tax,
         capital_gains_tax=scenario.capital_gains.tax - baseline.capital_gains.tax,
+        niit_tax=(
+            None
+            if scenario.niit is None or baseline.niit is None
+            else scenario.niit.tax - baseline.niit.tax
+        ),
         effective_rate=rate_delta(scenario.totals.effective_rate, baseline.totals.effective_rate),
     )
     return WhatIfOut(
