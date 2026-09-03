@@ -597,3 +597,132 @@
 .row-click:hover {
   background: var(--surface-2);
 }
+
+/* ── Chart card (chart grammar spec §6) ────────────────────────────── */
+/* The one chart mount. Replaces the per-page header copies (networth/spending/tax/projection
+   -chart-header, .panel-title-row) — those rules are retired in the morning, not tonight. */
+
+.chart-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.chart-card-header .eyebrow {
+  margin: 0;
+}
+
+.chart-card-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* A card-local advisory (a failed refetch with the previous window still drawn). */
+.chart-card-error {
+  margin: 0 0 0.5rem;
+  color: var(--warn);
+  font-size: 0.8rem;
+}
+
+.chart-card-skeleton {
+  border-radius: 8px;
+}
+
+/* ── Tooltip rows (chart grammar spec §7) ──────────────────────────── */
+/* echarts owns the tooltip box (surface, border, shadow from the theme); these rules lay out
+   the grammar's rows inside it. Swatches are painted by CSS variables in the markup, so they
+   follow the theme. */
+
+.chart-tip-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.chart-tip-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 8px;
+  line-height: 1.5;
+}
+
+.chart-tip-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  justify-self: center;
+}
+
+.chart-tip-swatch.is-line {
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.chart-tip-swatch.is-wash {
+  opacity: 0.3;
+}
+
+.chart-tip-swatch.is-blank {
+  background: transparent;
+}
+
+.chart-tip-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.chart-tip-total {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+}
+
+.chart-tip-ref {
+  color: var(--muted);
+}
+
+.chart-tip-ref .chart-tip-value {
+  font-weight: 400;
+}
+
+.chart-tip-note,
+.chart-tip-foot {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.chart-tip-lead {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tip-sub {
+  color: var(--muted);
+}
+
+/* ── Table twin (chart grammar spec §14) ───────────────────────────── */
+
+.chart-table {
+  margin-top: 0.75rem;
+}
+
+.chart-table summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.chart-table-scroll {
+  margin-top: 0.5rem;
+  max-height: 320px;
+  overflow: auto;
+}
