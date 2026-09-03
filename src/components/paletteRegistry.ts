@@ -39,10 +39,10 @@ const GROUP_ORDER: PaletteGroup['title'][] = [
 export const GROUP_CAP = 6
 
 /** Settings cards reachable as anchored destinations; ids match the cards' `id` attributes.
- *  `appearance` is the one entry whose card is not in this branch: it is the theme lane's
- *  `AppearanceCard` (id="appearance"), so the anchor only lands once that lane merges —
- *  until then /settings#appearance opens the page with no ring, which is the same
- *  no-op the browser gives any unknown hash. */
+ *  `activity` and `health` are the two entries whose cards are not in this branch: they are
+ *  the lifecycle lane's Activity and Data-health cards, so those anchors only land once that
+ *  lane merges — until then /settings#activity opens the page with no ring, which is the
+ *  same no-op the browser gives any unknown hash. */
 export const SETTINGS_SECTIONS: { id: string; label: string; keywords: string[] }[] = [
   { id: 'import', label: 'Import workbook', keywords: ['xlsx', 'spreadsheet', 'upload', 'dry run'] },
   {
@@ -70,6 +70,27 @@ export const SETTINGS_SECTIONS: { id: string; label: string; keywords: string[] 
   },
   { id: 'assistant', label: 'Assistant', keywords: ['ai', 'api key', 'model', 'nvidia'] },
   { id: 'appearance', label: 'Appearance', keywords: ['theme', 'dark', 'light', 'density', 'compact'] },
+  // Data lifecycle (2026-09-03 spec §3): the four cards land as anchored sections too.
+  {
+    id: 'backups',
+    label: 'Backups & snapshots',
+    keywords: ['snapshot now', 'nightly', 'download', 'verified', 'dump', 'volume'],
+  },
+  {
+    id: 'restore',
+    label: 'Restore a snapshot',
+    keywords: ['dry run', 'roll back', 'undo everything', 'zip', 'restore point'],
+  },
+  {
+    id: 'activity',
+    label: 'Activity',
+    keywords: ['undo', 'change log', 'history', 'who changed', 'report', 'runs'],
+  },
+  {
+    id: 'health',
+    label: 'Data health',
+    keywords: ['checks', 'zero month', 'stale quotes', 'coverage', 'repair', 'phantom'],
+  },
 ]
 
 export interface RegistryRunners {

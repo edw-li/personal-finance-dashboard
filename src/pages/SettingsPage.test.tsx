@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
@@ -82,6 +82,16 @@ vi.mock('../api/limits', async (importOriginal) => ({
   putLimits: vi.fn(),
   cloneLimits: vi.fn(),
 }))
+// The Backups and Restore cards (2026-09-03 data-lifecycle spec §7–§8) each own a fetch of
+// the stored snapshots; unmocked they would hit the network from every test in this file.
+vi.mock('../api/lifecycle', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/lifecycle')>()),
+  fetchSnapshots: vi.fn(),
+  createSnapshot: vi.fn(),
+  restoreUpload: vi.fn(),
+  restoreStored: vi.fn(),
+}))
+import { fetchSnapshots } from '../api/lifecycle'
 import { fetchAssistantSettings } from '../api/assistant'
 import { changePassword } from '../api/auth'
 import { fetchHousehold } from '../api/household'
@@ -213,8 +223,11 @@ const fileBox = () => screen.getByLabelText('Workbook (.xlsx)') as HTMLInputElem
 // Prefix-stable like the two above, so the in-flight labels ('Dry run…', 'Applying…')
 // answer to the same query as the idle ones. Dry run is anchored at both ends for the same
 // reason as pwButton: the card's ⓘ hint aria-label also opens "Dry run …".
+// Scoped to the import card: the Restore card below (2026-09-03 data-lifecycle spec §7)
+// carries a Dry run button of its own, so a page-wide query now finds two.
+const importCard = () => document.getElementById('import') as HTMLElement
 const dryButton = () =>
-  screen.getByRole('button', { name: /^dry run…?$/i }) as HTMLButtonElement
+  within(importCard()).getByRole('button', { name: /^dry run…?$/i }) as HTMLButtonElement
 const applyButton = () => screen.getByRole('button', { name: /^appl/i }) as HTMLButtonElement
 // jsdom has no file picker: the change event carries the File list itself.
 const pick = (file: File) => fireEvent.change(fileBox(), { target: { files: [file] } })
@@ -242,6 +255,9 @@ beforeEach(() => {
   vi.mocked(changePassword).mockResolvedValue(undefined)
   vi.mocked(importXlsx).mockResolvedValue(makeReport())
   vi.mocked(fetchSystemStatus).mockResolvedValue(SYSTEM)
+  // Empty volume: the Backups card settles into its own empty note without adding a row,
+  // a link or a banner to any of this file's queries.
+  vi.mocked(fetchSnapshots).mockResolvedValue([])
   vi.mocked(fetchHousehold).mockResolvedValue({ people: [ME], marriage_date: null })
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING])
   vi.mocked(fetchPortfolioAccounts).mockResolvedValue([])
@@ -863,6 +879,26 @@ describe('SettingsPage — system card', () => {
     const system = screen.getByRole('heading', { name: /System/ })
     const appSettings = screen.getByRole('heading', { name: /App settings/ })
     expectInDocumentOrder(importH, system, appSettings)
+  })
+})
+
+describe('SettingsPage — backups and restore cards', () => {
+  it('mounts Backups & snapshots then Restore directly after the System card', async () => {
+    renderPage()
+    const backups = await screen.findByRole('region', { name: 'Backups & snapshots' })
+    const restore = screen.getByRole('region', { name: 'Restore' })
+    const system = screen.getByRole('heading', { name: /^System/ }).closest('section')
+    expect(system?.nextElementSibling).toBe(backups)
+    expect(backups.nextElementSibling).toBe(restore)
+    await waitFor(() => expect(vi.mocked(fetchSnapshots)).toHaveBeenCalledTimes(2))
+  })
+
+  it('offers neither card when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    renderPage()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Restore' })).toBeNull()
+    expect(vi.mocked(fetchSnapshots)).not.toHaveBeenCalled()
   })
 })
 

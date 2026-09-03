@@ -8,10 +8,12 @@ import InfoHint from '../components/InfoHint'
 import AccountsCard from '../components/settings/AccountsCard'
 import AppearanceCard from '../components/settings/AppearanceCard'
 import AssistantCard from '../components/settings/AssistantCard'
+import BackupsCard from '../components/settings/BackupsCard'
 import CategoriesCard from '../components/settings/CategoriesCard'
 import HouseholdCard from '../components/settings/HouseholdCard'
 import ImportReportView from '../components/settings/ImportReportView'
 import LimitsCard from '../components/settings/LimitsCard'
+import RestoreCard from '../components/settings/RestoreCard'
 import SystemCard from '../components/settings/SystemCard'
 import { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
@@ -385,6 +387,12 @@ export default function SettingsPage() {
                   page as pure status. Own fetch/error (SystemCard), same loadedOnce gate as
                   everything here: a settings GET that failed means the API is unreachable. */}
               <SystemCard />
+
+              {/* Backups & snapshots, then Restore (2026-09-03 data-lifecycle spec §7–§8): the
+                  stored nightly files beside the marker that describes the host's dump, and the
+                  way back from either. Own fetches, the page's loadedOnce gate. */}
+              <BackupsCard />
+              <RestoreCard />
 
               <section className="card span-6" id="app-settings">
                 <h2 className="eyebrow">
