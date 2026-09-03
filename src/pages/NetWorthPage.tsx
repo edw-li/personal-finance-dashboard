@@ -104,6 +104,9 @@ export default function NetWorthPage() {
   // charts and the accounts table. Local state, mirroring the URL, exists only so the
   // peek-and-reset sequence below runs exactly once per change.
   const [owner, setOwner] = useState<OwnerScope>(scope.owner)
+  // Same job for the VIEWED month: a ribbon click swaps the table to that column instantly
+  // while the summary is still in flight, so the dim is what admits the tiles are behind.
+  const [seenMonth, setSeenMonth] = useState<string | null>(scope.month)
   // What the assistant must answer against: the scope and grain ON SCREEN (2026-09-01
   // spec §6). `owner` is stringified because the scope is a person id OR the literal
   // 'joint' — one type on the wire beats a union.
@@ -204,6 +207,13 @@ export default function NetWorthPage() {
       if (peeked.ts.months.length > 0) setDrill(defaultDrill(peeked.ts))
     }
     setOwner(scope.owner)
+  }
+
+  if (scope.month !== seenMonth) {
+    // Month only: the drill holds account ids, and those do not change with the month.
+    setSeenMonth(scope.month)
+    setLoading(true)
+    setError(null)
   }
 
   if (scope.range !== range.preset) {

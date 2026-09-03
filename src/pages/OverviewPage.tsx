@@ -236,6 +236,24 @@ export default function OverviewPage() {
       })
   }, [owner, snapshotKey])
 
+  // Adopting an owner change, adjust-during-render (CategoriesPanel's precedent, and the
+  // shape Net worth uses): the effect below must not refetch silently — the body dims, and
+  // an already-seen scope paints instantly and revalidates underneath. `shownRef` stays out
+  // of this: a ref write belongs in a promise continuation, and leaving it on the previous
+  // scope only costs one extra repaint when the live payload lands. It sits HERE, after
+  // load(), because a render-phase setState ahead of that useCallback costs the React
+  // Compiler its stable-setter inference (react-hooks/preserve-manual-memoization).
+  const [seenOwner, setSeenOwner] = useState<OwnerScope>(owner)
+  if (owner !== seenOwner) {
+    setSeenOwner(owner)
+    setBusy(true)
+    const peeked = getSnapshot<OverviewData>(snapshotKey)
+    if (peeked !== undefined) {
+      setFromCache(true)
+      setData(peeked)
+    }
+  }
+
   useEffect(() => {
     load()
   }, [load])

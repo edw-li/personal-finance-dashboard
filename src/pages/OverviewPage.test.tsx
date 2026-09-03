@@ -1312,6 +1312,36 @@ describe('OverviewPage — shell frame and owner scope', () => {
     await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
   })
 
+  it('dims the body while the new scope is in flight', async () => {
+    serve()
+    const { container } = renderPage()
+    await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+
+    pendAllSnapshotFetches()
+    fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
+    // Nothing warm for that scope yet: the previous payload stays up, under the dim, rather
+    // than the refetch running silently behind unchanged numbers.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
+  })
+
+  it('paints an already-seen scope from the cache the moment the chip flips', async () => {
+    const payload = serve()
+    const { container } = renderPage()
+    await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
+
+    setSnapshot('overview:2', {
+      ...snapshotOf(payload),
+      holdings: holdingsOut({ totals: { ...holdingsOut().totals, market_value: '99.00' } }),
+    })
+    pendAllSnapshotFetches()
+    fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
+    // Instant, before any fetch resolves — and still revalidating underneath.
+    expect(valueOf(tileFor('Portfolio'))).toBe('$99.00')
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  })
+
   it('says so on the two cards an owner scope cannot reach, and nothing when it is All', async () => {
     serve()
     renderPage('/?owner=2')

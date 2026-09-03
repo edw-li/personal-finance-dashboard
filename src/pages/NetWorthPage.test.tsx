@@ -475,6 +475,29 @@ describe('NetWorthPage — shell scope', () => {
     ).toBeTruthy()
   })
 
+  it('dims the body while the viewed month\u2019s summary is in flight', async () => {
+    const { container } = renderPage('/net-worth')
+    await screen.findByRole('heading', { level: 1, name: 'Net worth' })
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+
+    vi.mocked(fetchTimeseries).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
+    fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
+    // The table swaps to July's column at once; the tiles still belong to the old month, so
+    // the dim is what says so.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  })
+
+  it('defaults the page-level range to 1Y', async () => {
+    renderPage('/net-worth')
+    expect(
+      (await screen.findByRole('button', { name: '1Y' })).getAttribute('aria-pressed'),
+    ).toBe('true')
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toContain('range=1y'),
+    )
+  })
+
   it('renders no bespoke header, owner row, or range chips of its own', async () => {
     renderPage('/net-worth')
     await screen.findByRole('heading', { level: 1, name: 'Net worth' })
