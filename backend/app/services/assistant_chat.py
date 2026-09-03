@@ -367,13 +367,19 @@ async def _converse(
                     await db.rollback()
                 except Exception:  # pragma: no cover - a session too broken to reset
                     logger.exception("assistant: rollback after tool error failed")
-            yield sse(
-                "tool_result",
-                {
-                    "name": call["name"],
-                    "summary": "error" if "error" in result else "ok",
-                },
-            )
+            # Named apart from the round loop's own `payload` (the _narrate_wait binding
+            # above) so one long generator does not carry two live meanings for the name.
+            tool_payload: dict = {
+                "name": call["name"],
+                "summary": "error" if "error" in result else "ok",
+            }
+            # The sandbox seam (2026-09-03 planning-sandboxes spec §12): a tool that computed
+            # a scenario names where the drawer can open it live. Only sandbox_links.py mints
+            # these, so the path is allow-listed by construction; the client checks again.
+            sandbox_url = result.get("sandbox_url")
+            if isinstance(sandbox_url, str) and sandbox_url.startswith("/"):
+                tool_payload["link"] = {"to": sandbox_url, "label": "Open in What-if →"}
+            yield sse("tool_result", tool_payload)
             messages.append(
                 {
                     "role": "tool",
