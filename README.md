@@ -261,6 +261,14 @@ Fill in every value:
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
+The frontend image has no git and no `.git` directory (`.dockerignore` excludes it), so the
+build hash in the sidebar footer reads `dev` unless you hand it the commit — worth doing, so
+a bug report names the build it came from:
+
+```bash
+BUILD_HASH=$(git rev-parse --short HEAD) docker compose -f docker-compose.prod.yml up -d --build
+```
+
 First build takes a few minutes (the images build natively on aarch64 — CI only builds
 amd64, so this build is the real gate). Compose waits for the backend healthcheck —
 which requires migrations and the admin seed to have succeeded — before starting nginx.

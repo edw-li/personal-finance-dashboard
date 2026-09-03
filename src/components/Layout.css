@@ -149,13 +149,34 @@
 
 /* The shell boundary's own fallback (2026-09-03 shell spec §12): it replaces the WHOLE
    layout, not a page body, so it centers itself in the viewport instead of sitting at the
-   top of a column that no longer exists. Gap, because it carries two buttons. */
+   top of a column that no longer exists. Gap, because it carries two buttons; wrap, because
+   the manual-copy textarea below joins them when the clipboard is unavailable. */
 .shell-fallback {
   min-height: 40vh;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
+}
+
+/* The fallback for the fallback: shown when the clipboard is missing (plain HTTP) or refused,
+   so the payload can still be selected by hand. Its own styling for the same reason the
+   buttons have theirs — panels.css may never have loaded in this state. */
+.shell-fallback-details {
+  flex-basis: 100%;
+  max-width: 46rem;
+  margin: 0.5rem auto 0;
+  height: 9rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  text-align: left;
+  white-space: pre;
 }
 
 /* Skip link (polish §5): parked above the viewport until keyboard focus arrives. */

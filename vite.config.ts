@@ -9,7 +9,13 @@ import { configDefaults } from 'vitest/config'
 // and shown in the sidebar footer: the one string that tells two open tabs apart and turns
 // a bug report into a diff. Any failure — no git, no repo, a tarball checkout — is a
 // "dev" build, never a broken build: the hash is diagnostics, not a dependency.
+//
+// BUILD_HASH wins over the git probe because the Docker build has neither git nor the repo
+// (.dockerignore excludes .git), so the probe there ALWAYS falls through to "dev" — the one
+// place the hash matters most. The Dockerfile takes it as a build arg and exports it here.
 function buildHash(): string {
+  const injected = process.env.BUILD_HASH?.trim()
+  if (injected) return injected
   try {
     return (
       execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
@@ -23,6 +29,9 @@ function buildHash(): string {
 
 export default defineConfig({
   plugins: [react()],
+  // Evaluated ONCE, when the config loads: a dev server keeps the hash it booted with, so
+  // commits made mid-session only show up after a restart. Builds are one-shot, so prod is
+  // always exact.
   define: { __BUILD_HASH__: JSON.stringify(buildHash()) },
   build: {
     // The echarts subset is one indivisible LAZY chunk, reached only from the chart

@@ -7,10 +7,22 @@ import type { SystemStatus } from '../../types/api'
 import { useTheme } from './ThemeProvider'
 import './shell.css'
 
-// Shared with Layout's ShellErrorBoundary, which reads the last answer back out of the
-// snapshot cache for Copy details — the footer is the only fetcher, so the boundary can
-// name the environment and the alembic head without a request of its own.
+// The footer is the only fetcher of /system/status in the shell, so it publishes what it
+// learned twice, for two different lifetimes:
+//
+//   SYSTEM_SNAPSHOT — the page-snapshot cache, which api() wipes after ANY non-GET and
+//   logout wipes entirely. Right for seeding the pill on a remount inside one session.
+//
+//   `last` — module state, wiped by nothing but a reload. Right for the error boundary's
+//   Copy details: a snapshot read would go blank the first time the user saved anything,
+//   and the session where they save things is exactly the session where they hit a bug.
 export const SYSTEM_SNAPSHOT = 'shell:system'
+let last: SystemStatus | null = null
+
+/** The last /system/status this tab saw, for Layout's ShellErrorBoundary diagnostics. */
+export function getLastSystemStatus(): SystemStatus | null {
+  return last
+}
 
 // Identity and environment at the bottom of the sidebar (2026-09-03 shell spec §12): who is
 // signed in, which deployment this is, which build — so two tabs (dev vs prod) can never be
@@ -18,28 +30,43 @@ export const SYSTEM_SNAPSHOT = 'shell:system'
 export default function SidebarFooter({ buildHash }: { buildHash: string }) {
   const { email, logout } = useAuth()
   const { resolved, setTheme } = useTheme()
-  // Seeded from the cache so a remount (logout/login, a StrictMode double-mount) shows the
-  // pill immediately instead of blinking it back in; the fetch below revalidates anyway.
+  // Seeded from the cache so a remount WITHIN a session (a StrictMode double-mount, a shell
+  // re-render) shows the pill immediately instead of blinking it back in. Not after a
+  // logout/login — logout clears the snapshots by design, since they are session data — and
+  // the fetch below revalidates either way.
   const [status, setStatus] = useState<SystemStatus | null>(
     () => getSnapshot<SystemStatus>(SYSTEM_SNAPSHOT) ?? null,
   )
   useEffect(() => {
+    // A response that lands after this footer unmounted must not be written into it. React 18
+    // stopped warning about that, which makes the flag a correctness note rather than a
+    // console fix: the publishes above it are tab-wide and stay unconditional.
+    let live = true
     fetchSystemStatus()
       .then((data) => {
+        last = data
         setSnapshot(SYSTEM_SNAPSHOT, data)
-        setStatus(data)
+        if (live) setStatus(data)
       })
       // A status the server would not answer leaves the pill hidden — an unlabeled footer
-      // is honest, a stale or guessed environment label is not.
-      .catch(() => setStatus((current) => current))
+      // is honest, a stale or guessed environment label is not. Nothing to do, but the
+      // handler must exist: an unhandled rejection in the shell is noise in every console.
+      .catch(() => {})
+    return () => {
+      live = false
+    }
   }, [])
 
   const next = resolved === 'dark' ? 'light' : 'dark'
   return (
     <div className="sidebar-footer">
-      <div className="sidebar-footer-row">
-        {email && <span className="sidebar-footer-email" title={email}>{email}</span>}
-      </div>
+      {/* The row, not just the address, is conditional: an email-less footer (the context
+          still loading) would otherwise keep an empty row's gap above the pill. */}
+      {email && (
+        <div className="sidebar-footer-row">
+          <span className="sidebar-footer-email" title={email}>{email}</span>
+        </div>
+      )}
       <div className="sidebar-footer-row">
         {status !== null && (
           <span className={`sidebar-footer-pill${status.environment === 'dev' ? ' is-dev' : ''}`}>
