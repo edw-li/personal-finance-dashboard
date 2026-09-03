@@ -6,6 +6,7 @@ import { MONTH_TOKEN } from '../../sandbox/scenarioUrl'
 import SliderBox from '../../sandbox/SliderBox'
 import type { Sandbox } from '../../sandbox/useSandbox'
 import type { PersonOut, ProjectionOut } from '../../types/api'
+import { formatCurrency } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
 import {
   COMPARE_ROWS,
@@ -62,6 +63,7 @@ export default function ScenarioPanel({
   const [open, setOpen] = useState(true)
   const [monthError, setMonthError] = useState<string | null>(null)
   const derived = derivedOf(baseline)
+  const breakdown = baseline?.contribution_breakdown ?? null
   const { scenario } = sandbox
 
   const knob = (key: ProjectionKnob) => (next: string, commit: boolean) =>
@@ -116,21 +118,39 @@ export default function ScenarioPanel({
         />
       }
     >
-      {ORDER.map((key) => (
-        <SliderBox
-          key={key}
-          id={`scenario-${key}`}
-          label={LABELS[key]}
-          hint={HINTS[key]}
-          kind={SLIDER[key].kind}
-          value={scenario.knobs[key] ?? ''}
-          actual={derived[key]}
-          min={SLIDER[key].min}
-          max={SLIDER[key].max}
-          step={SLIDER[key].step}
-          onChange={knob(key)}
-        />
-      ))}
+      {ORDER.map((key) => {
+        const slider = (
+          <SliderBox
+            key={key}
+            id={`scenario-${key}`}
+            label={LABELS[key]}
+            hint={HINTS[key]}
+            kind={SLIDER[key].kind}
+            value={scenario.knobs[key] ?? ''}
+            actual={derived[key]}
+            min={SLIDER[key].min}
+            max={SLIDER[key].max}
+            step={SLIDER[key].step}
+            onChange={knob(key)}
+          />
+        )
+        // The echo's own arithmetic under the contribution knob, so a derived figure is
+        // never a bare number the reader has to trust: cash savings + payroll deductions,
+        // per person. Absent on a backend older than the breakdown, and whenever the
+        // derived run computed the contribution from nothing.
+        if (key !== 'monthly_contribution' || breakdown === null) return slider
+        return (
+          <div key={key} className="slider-box">
+            {slider}
+            <span className="projection-derived">
+              derived: {formatCurrency(breakdown.cash)} cash savings +{' '}
+              {formatCurrency(breakdown.payroll)} payroll deductions
+              {breakdown.by_person.length > 0 &&
+                ` (${breakdown.by_person.map((row) => `${row.name} ${formatCurrency(row.monthly)}`).join(' · ')})`}
+            </span>
+          </div>
+        )
+      })}
       {people.map((person) => (
         <div key={person.id} className="slider-box">
           <div className="slider-box-head">
@@ -147,13 +167,23 @@ export default function ScenarioPanel({
         </div>
       ))}
       <FeedBanner error={monthError} />
+      {people.length > 0 && (
+        // Named only where the boxes are: a roster-less database has no retirement to explain.
+        <p className="drill-hint">
+          A retirement month drops that person&apos;s CURRENT monthly take-home and payroll
+          deductions — the paycheck profile in force today, not a projection of it — out of the
+          contribution stream from that month on; whatever is left keeps escalating at the
+          contribution-growth rate, so a far-off retirement&apos;s cost is slightly understated,
+          since the drop never gets that person&apos;s share of the modelled raises. Spending stays
+          a household figure, so the FI target does not move. Blank means that person works for the
+          whole horizon.
+        </p>
+      )}
       <p className="drill-hint">
-        Percents are percents (5 = 5%). A retirement month drops that person&apos;s CURRENT monthly
-        take-home and payroll deductions — the paycheck profile in force today — out of the
-        contribution stream from that month on; blank means they work for the whole horizon. The
-        Monte Carlo seed is fixed, so scenarios are seed-stable: identical knobs redraw identical
-        bands, and two scenarios differ only by their knobs, never by sampling noise. The withdrawal
-        rate&apos;s stored value lives in <Link to="/settings">Settings</Link>.
+        Percents are percents (5 = 5%). The Monte Carlo seed is fixed, so scenarios are seed-stable:
+        identical knobs redraw identical bands, and two scenarios differ only by their knobs, never
+        by sampling noise. The withdrawal rate&apos;s stored value lives in{' '}
+        <Link to="/settings">Settings</Link>.
       </p>
     </SandboxPanel>
   )

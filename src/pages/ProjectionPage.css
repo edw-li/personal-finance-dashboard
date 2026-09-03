@@ -66,3 +66,14 @@
   line-height: 1.4;
   color: var(--muted);
 }
+
+/* The same caption where the knob now lives — inside ScenarioPanel's sandbox controls
+   (2026-09-03 planning-sandboxes spec §11). The .projection-form copy above is retired
+   with the form itself. */
+.sandbox-controls .projection-derived {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--muted);
+}

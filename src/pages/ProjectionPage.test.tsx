@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import {
@@ -66,6 +66,9 @@ vi.mock('../api/netWorth', async (importOriginal) => ({
   fetchTimeseries: vi.fn(),
 }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
+// The sandbox's pin row toasts at the limit; the page never sees the provider in a test.
+const toast = { success: vi.fn(), info: vi.fn(), error: vi.fn() }
+vi.mock('../components/ToastProvider', () => ({ useToast: () => toast }))
 import { fetchHousehold } from '../api/household'
 import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
@@ -159,21 +162,51 @@ function household(people = [
   return { people, marriage_date: null }
 }
 
-function renderPage() {
+// The URL IS the scenario state (2026-09-03 planning-sandboxes spec §6), so every test
+// can read back what a knob wrote — and arrive with a scenario already in the address bar.
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{location.pathname + location.search}</span>
+}
+
+function renderPage(entry = '/projection') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
+      <LocationProbe />
       <ProjectionPage />
     </MemoryRouter>,
   )
 }
 
-// A hint's aria-label is a label (and a name) too, so the three knobs whose words the tile
-// hints repeat — annual spend, withdrawal rate, horizon — are addressed by their EXACT label
-// rather than a substring, and the Recalculate button by an anchored name. Same controls.
-const box = (label: RegExp | string) => screen.getByLabelText(label) as HTMLInputElement
+const url = () => screen.getByTestId('location').textContent
 
-// A tile is addressed through its label (OverviewPage's idiom).
-const tileFor = (label: string) => screen.getByText(label).closest('.stat-tile') as HTMLElement
+// EXACT labels, never substrings: a hint's aria-label is a label too, and a SliderBox's
+// range carries the knob's words with a " slider" suffix — /volatility/i would name two
+// controls at once. `selector` picks the box out of its own <label>, which also labels the
+// ⓘ button nested inside it. The box is the AmountInput beside the track.
+const box = (label: string) =>
+  screen.getByLabelText(label, { selector: 'input' }) as HTMLInputElement
+
+// A SliderBox commits on blur (its own test pins the protocol): focus, type in the box's
+// own vocabulary — percents are percents — then blur. That is one URL write.
+function typeKnob(label: string, value: string) {
+  const input = box(label)
+  fireEvent.focus(input)
+  fireEvent.change(input, { target: { value } })
+  fireEvent.blur(input)
+}
+
+// The payload has landed: the frame swapped its skeleton for the page, whose tail is the
+// knobs card. Every earlier "wait for a figure" anchor is now ambiguous — the compare table
+// prints the same headline figures as the tiles.
+const loaded = () => screen.findByRole('button', { name: 'Hide knobs' })
+
+// A tile is addressed through its label (OverviewPage's idiom), inside the tile row: the
+// compare table repeats those labels down its first column.
+const tileFor = (label: string) =>
+  within(document.querySelector('.kpi-row') as HTMLElement)
+    .getByText(label)
+    .closest('.stat-tile') as HTMLElement
 const valueOf = (tile: HTMLElement) => tile.querySelector('.stat-value')?.textContent ?? ''
 const deltaOf = (tile: HTMLElement) => tile.querySelector('.stat-delta')?.textContent ?? null
 // DOM order is card order: [0] is the net-worth trend, [1] the investable chart.
@@ -181,6 +214,7 @@ const seriesOf = (chart: Element) => (chart.getAttribute('data-series') ?? '').s
 
 beforeEach(() => {
   clearSnapshots()
+  localStorage.clear() // pins live in finance.sandbox.projection
   vi.mocked(fetchProjection).mockResolvedValue(projectionOut())
   vi.mocked(fetchTimeseries).mockResolvedValue(timeseries())
   vi.mocked(fetchHousehold).mockResolvedValue(household())
@@ -194,12 +228,13 @@ afterEach(() => {
 describe('ProjectionPage', () => {
   it('states the FI figures from the echo and names their derivations', async () => {
     renderPage()
-    await screen.findByText('$1,500,000.00') // FI target
+    await loaded()
 
-    expect(screen.getByText('6.7%')).toBeTruthy() // fi_ratio, formatPct 1dp
-    expect(screen.getByText('$100,000.00')).toBeTruthy()
-    expect(screen.getByText('as of Aug 2026')).toBeTruthy()
-    expect(screen.getByText('Oct 2055')).toBeTruthy() // projected FI date
+    expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00')
+    expect(valueOf(tileFor('FI ratio'))).toBe('6.7%') // fi_ratio, formatPct 1dp
+    expect(valueOf(tileFor('Investable balance'))).toBe('$100,000.00')
+    expect(deltaOf(tileFor('Investable balance'))).toBe('as of Aug 2026')
+    expect(valueOf(tileFor('Projected FI date'))).toBe('Oct 2055')
     expect(await screen.findAllByTestId('echart')).toHaveLength(2)
   })
 
@@ -228,54 +263,53 @@ describe('ProjectionPage', () => {
       projectionOut({ monthly_contribution: '1000.00', contribution_breakdown: null }),
     )
     renderPage()
-    await waitFor(() => expect(box(/monthly contribution/i).value).toBe('1000.00'))
+    // The echo is the PLACEHOLDER now: a typed knob is the one that fills the box.
+    await waitFor(() => expect(box('Monthly contribution').placeholder).toBe('1000.00'))
     expect(screen.queryByText(/derived:/)).toBeNull()
   })
 
-  it('seeds the knobs from the echo, percent-shifted into the boxes vocabulary', async () => {
+  it('shows the echo as each knob’s derived caption and placeholder', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
-    expect(box(/monthly contribution/i).value).toBe('4000.00')
-    expect(box('Annual spend').value).toBe('60000.00')
-    expect(box('Withdrawal rate (%/yr)').value).toBe('4')
-    expect(box('Horizon (years)').value).toBe('30')
+    await loaded()
+    await waitFor(() => expect(box('Annual return').placeholder).toBe('5'))
+    expect(box('Monthly contribution').placeholder).toBe('4000.00')
+    expect(box('Annual spend').placeholder).toBe('60000.00')
+    expect(box('Withdrawal rate').placeholder).toBe('4')
+    expect(box('Horizon (years)').placeholder).toBe('30')
+    // Blank means derived: the badge says so, and the caption resets the knob to it.
+    expect(screen.getByRole('button', { name: 'actual 5%' })).toBeTruthy()
+    expect(screen.getAllByText('derived')).toHaveLength(8)
   })
 
-  it('recalculates with fraction-shifted knobs and hands blanks through as omissions', async () => {
+  it('writes a typed knob to the URL as a fraction and fetches it; blank knobs stay omitted', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
-    fireEvent.change(box(/annual return/i), { target: { value: '7' } })
-    fireEvent.change(box('Annual spend'), { target: { value: '' } }) // re-derive server-side
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+    typeKnob('Annual return', '6')
 
-    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
-    expect(fetchProjection).toHaveBeenLastCalledWith({
-      annualReturn: '0.07',
-      monthlyContribution: '4000.00',
-      annualSpend: '',
-      swr: '0.04',
-      // Seeded like every other knob (2026-08-20 revision), so the echoed defaults ride
-      // back out as explicit fractions; a CLEARED box is what asks for the default again.
-      volatility: '0.15',
-      inflation: '0.03',
-      contributionGrowth: '0.03',
-      years: '30',
-      retirements: [],
-    })
+    // ONE knob in the URL, one knob in the query: the seven blanks are still the server's
+    // to derive, and the link IS the request.
+    await waitFor(() =>
+      expect(vi.mocked(fetchProjection)).toHaveBeenLastCalledWith({
+        annualReturn: '0.06',
+        retirements: [],
+      }),
+    )
+    expect(url()).toBe('/projection?whatif=annual_return%3A0.06')
   })
 
   it('refuses an out-of-range withdrawal rate in the box vocabulary, spending no request', async () => {
     renderPage()
-    await waitFor(() => expect(box('Withdrawal rate (%/yr)').value).toBe('4'))
+    await loaded()
 
-    fireEvent.change(box('Withdrawal rate (%/yr)'), { target: { value: '150' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+    // The fence is the SliderBox's track (SLIDER.swr), worded in the box's percents.
+    typeKnob('Withdrawal rate', '150')
 
-    expect(
-      screen.getByText('Withdrawal rate % must be greater than 0 and at most 100'),
-    ).toBeTruthy()
-    expect(fetchProjection).toHaveBeenCalledTimes(1) // the mount load only
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Withdrawal rate must be between 0.1% and 10%',
+    )
+    expect(fetchProjection).toHaveBeenCalledTimes(1) // the derived run only
+    expect(url()).toBe('/projection')
   })
 
   it('answers a fresh database with the wizard, not an error', async () => {
@@ -301,8 +335,11 @@ describe('ProjectionPage', () => {
     expect(screen.getByRole('alert')).toBeTruthy()
     expect(screen.queryByLabelText('Retry the projection')).toBeNull()
 
+    // The frame's Retry bumps the sandbox's dataKey — the live scenario, the baseline and
+    // every pin run again.
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    expect(await screen.findByText('$1,500,000.00')).toBeTruthy() // the FI-target tile
+    await loaded()
+    expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00')
   })
 
   it('holds the frame skeleton — not a bare page — while the FIRST payload is in flight', async () => {
@@ -349,16 +386,17 @@ describe('ProjectionPage', () => {
     renderPage()
 
     expect(await screen.findByText('history unavailable')).toBeTruthy()
-    expect(await screen.findByText('$1,500,000.00')).toBeTruthy() // tiles still stand
+    await loaded()
+    expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00') // tiles still stand
     expect(screen.getAllByTestId('echart')).toHaveLength(1) // the investable chart
     expect(screen.queryByRole('alert')).toBeNull() // advisory note, not the page banner
   })
 
-  it('does not refetch the history on Recalculate', async () => {
+  it('does not refetch the history when a knob moves', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+    typeKnob('Annual return', '6')
 
     await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
     expect(fetchTimeseries).toHaveBeenCalledTimes(1)
@@ -414,10 +452,9 @@ describe('ProjectionPage', () => {
 
   it('keeps the trend span fixed while the Horizon knob reshapes the chart below', async () => {
     renderPage()
-    await waitFor(() => expect(box('Horizon (years)').value).toBe('30'))
+    await loaded()
 
-    fireEvent.change(box('Horizon (years)'), { target: { value: '1' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+    typeKnob('Horizon (years)', '10')
 
     await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
     expect(
@@ -440,97 +477,90 @@ describe('ProjectionPage', () => {
     expect(screen.getAllByTestId('echart')).toHaveLength(1)
   })
 
-  it('seeds the three assumption boxes from the echo like every other knob', async () => {
+  it('shows the three assumption echoes as placeholders like every other knob', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
-    // Filled VALUES, not placeholders (2026-08-20 user revision): the echo is the seed
-    // for all eight knobs, percent-shifted — so the box always names what the server
-    // actually ran.
-    expect(box(/volatility/i).value).toBe('15')
-    expect(box(/inflation/i).value).toBe('3')
-    expect(box(/contribution growth/i).value).toBe('3')
+    // Placeholders, because blank now MEANS derived and says so in the URL's absence — the
+    // box still names what the server actually ran (2026-09-03 spec §11).
+    await waitFor(() => expect(box('Volatility').placeholder).toBe('15'))
+    expect(box('Inflation').placeholder).toBe('3')
+    expect(box('Contribution growth').placeholder).toBe('3')
   })
 
   it('leaves the assumption boxes blank when a stale backend echoes null', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(staleEchoes())
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
-    // A null echo names NOTHING — seeding a default the server never applied would be a
-    // lie about what is on the chart.
-    expect(box(/volatility/i).value).toBe('')
-    expect(box(/inflation/i).value).toBe('')
-    expect(box(/contribution growth/i).value).toBe('')
+    // A null echo names NOTHING — no placeholder, and "not set" rather than "derived":
+    // promising a default the server never applied would lie about what is on the chart.
+    await waitFor(() => expect(screen.getAllByText('not set')).toHaveLength(3))
+    for (const label of ['Volatility', 'Inflation', 'Contribution growth']) {
+      expect(box(label).value).toBe('')
+      expect(box(label).placeholder).toBe('')
+    }
   })
 
-  it('says in both hints that the defaults are what blank runs', async () => {
+  it('says in both hints that blank is what the server derives', async () => {
     renderPage()
-    await screen.findByText('$1,500,000.00')
+    await loaded()
 
     expect(
       screen.getByText(/reads in today's dollars by default \(inflation is modelled\)/),
     ).toBeTruthy()
-    expect(
-      screen.getByText(/the three assumptions from their defaults \(15 \/ 3 \/ 3\)/),
-    ).toBeTruthy()
+    // The knobs card's own hint rides in the ⓘ's aria-label (shell spec §5).
+    expect(screen.getByLabelText(/Blank knobs are derived from your data/)).toBeTruthy()
   })
 
-  it('recalculates with the Monte Carlo knobs shifted back to fractions', async () => {
+  it('runs the Monte Carlo knobs shifted back to fractions', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
-    fireEvent.change(box(/volatility/i), { target: { value: '15' } })
-    fireEvent.change(box(/inflation/i), { target: { value: '3' } })
-    fireEvent.change(box(/contribution growth/i), { target: { value: '2' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+    typeKnob('Volatility', '20')
 
-    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
-    expect(fetchProjection).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        volatility: '0.15',
-        inflation: '0.03',
-        contributionGrowth: '0.02',
-      }),
+    await waitFor(() =>
+      expect(fetchProjection).toHaveBeenLastCalledWith(
+        expect.objectContaining({ volatility: '0.2' }),
+      ),
     )
   })
 
   it('sends a typed zero volatility — the fan’s off switch, not a refusal', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
-    fireEvent.change(box(/volatility/i), { target: { value: '0' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+    typeKnob('Volatility', '0')
 
-    // 0 is INSIDE the fence now, and a typed 0 is a value, not a blank: it must reach the
-    // server, where it means "run no simulation".
-    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
-    expect(fetchProjection).toHaveBeenLastCalledWith(expect.objectContaining({ volatility: '0' }))
+    // 0 is INSIDE the fence, and a typed 0 is a value, not a blank: it must reach the
+    // server (where it means "run no simulation") and the URL, or a link would lose it.
+    await waitFor(() =>
+      expect(fetchProjection).toHaveBeenLastCalledWith(expect.objectContaining({ volatility: '0' })),
+    )
+    expect(url()).toContain('whatif=volatility%3A0')
   })
 
   it('fences volatility above 100 in the box vocabulary, spending no request', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
-    fireEvent.change(box(/volatility/i), { target: { value: '150' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
+    typeKnob('Volatility', '150')
 
-    expect(screen.getByText('Volatility % must be between 0 and 100')).toBeTruthy()
-    expect(fetchProjection).toHaveBeenCalledTimes(1) // the mount load only
+    expect(screen.getByRole('alert').textContent).toBe('Volatility must be between 0% and 100%')
+    expect(fetchProjection).toHaveBeenCalledTimes(1) // the derived run only
   })
 
   it('fences inflation and contribution growth in the same percent vocabulary', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
-    fireEvent.change(box(/inflation/i), { target: { value: '30' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
-    expect(screen.getByText('Inflation % must be between -10 and 25')).toBeTruthy()
+    typeKnob('Inflation', '30')
+    expect(screen.getByRole('alert').textContent).toBe('Inflation must be between -10% and 25%')
 
-    fireEvent.change(box(/inflation/i), { target: { value: '3' } }) // deflation is legal…
-    fireEvent.change(box(/contribution growth/i), { target: { value: '-1' } }) // …a raise cut is not
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
-    expect(screen.getByText('Contribution growth % must be between 0 and 25')).toBeTruthy()
+    typeKnob('Contribution growth', '-1') // a raise cut is not modelled
+    expect(
+      screen.getAllByRole('alert').map((a) => a.textContent),
+    ).toContain('Contribution growth must be between 0% and 25%')
 
     expect(fetchProjection).toHaveBeenCalledTimes(1)
   })
@@ -538,7 +568,7 @@ describe('ProjectionPage', () => {
   it('dashes the FI probability tile when the fan is switched off', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(fanOff())
     renderPage()
-    await screen.findByText('$1,500,000.00')
+    await loaded()
 
     const tile = tileFor('FI probability')
     expect(valueOf(tile)).toBe('—')
@@ -548,7 +578,7 @@ describe('ProjectionPage', () => {
   it('states the FI probability with its p10, p50 and p90 months', async () => {
     renderPage()
 
-    await screen.findByText('$1,500,000.00')
+    await loaded()
     const tile = tileFor('FI probability')
     expect(valueOf(tile)).toBe('62.0%')
     expect(deltaOf(tile)).toBe('p10 Jan 2050 · p50 Oct 2055 · p90 Mar 2061')
@@ -557,7 +587,7 @@ describe('ProjectionPage', () => {
   it('leaves p10 out when a stale backend omits it', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_month_p10: null }))
     renderPage()
-    await screen.findByText('$1,500,000.00')
+    await loaded()
     expect(deltaOf(tileFor('FI probability'))).toBe('p50 Oct 2055 · p90 Mar 2061')
   })
 
@@ -625,9 +655,19 @@ describe('ProjectionPage', () => {
     expect(JSON.parse(fan.getAttribute('data-legend-selected')!)).toEqual({ 'Growth only': false })
   })
 
+  it('pins the live scenario and draws it as a series on the investable chart', async () => {
+    renderPage('/projection?whatif=annual_return%3A0.06')
+    await loaded()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin this scenario' }))
+
+    const chart = await screen.findByLabelText(/Projected investable balance over the next/)
+    await waitFor(() => expect(seriesOf(chart)).toContain('Return 6%'))
+  })
+
   it('hangs a hint on the FI-target tile and on both chart headings', async () => {
     renderPage()
-    await screen.findByText('$1,500,000.00')
+    await loaded()
 
     const fiHint = tileFor('FI target').querySelector('.stat-label button.info-hint')
     expect(fiHint?.getAttribute('aria-label')).toMatch(/^Annual spend ÷ withdrawal rate/)
@@ -641,7 +681,7 @@ describe('ProjectionPage', () => {
 })
 
 describe('ProjectionPage — snapshot cache (2026-08-27 spec §1)', () => {
-  it('paints tiles, both charts AND the seeded knobs before any fetch resolves', () => {
+  it('paints tiles, both charts AND the derived knobs before any fetch resolves', () => {
     setSnapshot('projection:default', projectionOut())
     setSnapshot('projection:history', timeseries())
     // Never-resolving fetches: whatever is on screen came from the seeds alone.
@@ -652,10 +692,10 @@ describe('ProjectionPage — snapshot cache (2026-08-27 spec §1)', () => {
     // Both cards are up: the trend chart needs the history seed, the projection the other.
     expect(screen.getAllByTestId('echart')).toHaveLength(2)
     expect(screen.queryByText('Loading net-worth history…')).toBeNull()
-    // The knob boxes carry the echo of the CACHED run, not blanks.
-    expect(box(/annual return/i).value).toBe('5')
-    expect(box(/volatility/i).value).toBe('15')
-    expect(box('Horizon (years)').value).toBe('30')
+    // The knob boxes carry the echo of the CACHED run: it seeds the sandbox's baseline.
+    expect(box('Annual return').placeholder).toBe('5')
+    expect(box('Volatility').placeholder).toBe('15')
+    expect(box('Horizon (years)').placeholder).toBe('30')
     // A cached paint renders both charts still, and the revalidation still went out.
     expect(
       screen.getAllByTestId('echart').every((el) => el.getAttribute('data-animate') === 'false'),
@@ -686,14 +726,13 @@ describe('ProjectionPage — snapshot cache (2026-08-27 spec §1)', () => {
     ).toBe(true)
   })
 
-  it('never caches a knob-driven recalculate under the default key', async () => {
+  it('never caches a knob-driven run under the default key', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
     const cachedDefault = getSnapshot<ProjectionOut>('projection:default')
     expect(cachedDefault).toEqual(projectionOut())
     vi.mocked(fetchProjection).mockResolvedValue(projectionOut({ fi_target: '9000000.00' }))
-    fireEvent.change(box(/annual return/i), { target: { value: '7' } })
-    fireEvent.click(screen.getByRole('button', { name: /^Recalculate$/ }))
+    typeKnob('Annual return', '7')
     await waitFor(() => expect(valueOf(tileFor('FI target'))).toBe('$9,000,000.00'))
     // The default key still holds the MOUNT run — a knob run is user-parameterized.
     expect(getSnapshot<ProjectionOut>('projection:default')).toEqual(cachedDefault)
@@ -703,7 +742,7 @@ describe('ProjectionPage — snapshot cache (2026-08-27 spec §1)', () => {
 describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', () => {
   it('offers one Retires knob per household person, blank by default', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
     expect(box('Retires — Me').value).toBe('')
     expect(box('Retires — Alex').value).toBe('')
@@ -714,7 +753,7 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
   it('renders one knob for a single-person household — same grammar, new capability', async () => {
     vi.mocked(fetchHousehold).mockResolvedValue(household([{ id: 1, name: 'Me', is_primary: true }]))
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
     expect(box('Retires — Me')).toBeTruthy()
     expect(screen.queryByLabelText('Retires — Alex')).toBeNull()
@@ -723,7 +762,7 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
   it('renders no retirement knobs on a roster-less database', async () => {
     vi.mocked(fetchHousehold).mockResolvedValue(household([]))
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
     expect(screen.queryByLabelText(/^Retires/)).toBeNull()
     expect(screen.queryByText(/Blank means that person works/)).toBeNull()
@@ -733,27 +772,29 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     vi.mocked(fetchHousehold).mockRejectedValue(new ApiError('household unavailable', 500))
     renderPage()
 
-    expect(await screen.findByText('$1,500,000.00')).toBeTruthy() // tiles still stand
+    await loaded()
+    expect(valueOf(tileFor('FI target'))).toBe('$1,500,000.00') // tiles still stand
     expect(screen.queryByLabelText(/^Retires/)).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull() // an affordance, never the page banner
   })
 
   it('sends a filled month as a retirement and leaves the blanks out', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
     fireEvent.change(box('Retires — Alex'), { target: { value: '2035-06' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
-    await waitFor(() => expect(fetchProjection).toHaveBeenCalledTimes(2))
-    expect(fetchProjection).toHaveBeenLastCalledWith(
-      expect.objectContaining({ retirements: [{ personId: 2, month: '2035-06' }] }),
+    await waitFor(() =>
+      expect(fetchProjection).toHaveBeenLastCalledWith(
+        expect.objectContaining({ retirements: [{ personId: 2, month: '2035-06' }] }),
+      ),
     )
+    expect(url()).toBe('/projection?whatif=retire%3A2%3A2035-06')
   })
 
   it('refuses a malformed month in the box vocabulary, spending no request', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
     // A browser WITHOUT a month picker renders type="month" as a plain text box and hands
     // the typed characters straight through — that is the case this fence exists for. This
@@ -762,10 +803,10 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     const monthBox = box('Retires — Alex')
     monthBox.type = 'text'
     fireEvent.change(monthBox, { target: { value: '2035-13' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
     expect(screen.getByText("Alex's retirement month must look like YYYY-MM")).toBeTruthy()
-    expect(fetchProjection).toHaveBeenCalledTimes(1) // the mount load only
+    expect(fetchProjection).toHaveBeenCalledTimes(1) // the derived run only
+    expect(url()).toBe('/projection')
   })
 
   it('draws a dashed rule per echoed retirement, labelled by name', async () => {
@@ -787,23 +828,26 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
 
   it('renders the server refusal verbatim — nothing invented, nothing translated', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
     vi.mocked(fetchProjection).mockRejectedValue(
       new ApiError('Alex has no paycheck profile in force — nothing to drop', 422),
     )
 
     fireEvent.change(box('Retires — Alex'), { target: { value: '2035-06' } })
-    fireEvent.click(screen.getByRole('button', { name: /^recalculate$/i }))
 
-    expect(
-      await screen.findByText(/Alex has no paycheck profile in force — nothing to drop/),
-    ).toBeTruthy()
-    expect(screen.getByRole('alert')).toBeTruthy() // a refusal IS the page banner
+    // Twice over, and both are the server's own sentence: the frame's stale line above the
+    // page (the earlier figures are still on screen) and the knobs card's own alert.
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/Alex has no paycheck profile in force — nothing to drop/).length,
+      ).toBeGreaterThan(0),
+    )
+    expect(screen.getByRole('alert')).toBeTruthy() // a refusal IS an alert
   })
 
   it('names the approximation the drop actually is', async () => {
     renderPage()
-    await waitFor(() => expect(box(/annual return/i).value).toBe('5'))
+    await loaded()
 
     expect(screen.getByText(/CURRENT monthly take-home/)).toBeTruthy()
     expect(screen.getByText(/Spending stays a household figure/)).toBeTruthy()
