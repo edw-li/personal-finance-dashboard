@@ -221,6 +221,12 @@ export default function CalendarPage() {
       label: fLabel.trim(),
       detail: detail === '' ? null : detail,
       person_id: fPerson === '' ? null : Number(fPerson),
+      // v2 money/recurrence fields — the form does not show them yet (Lane C wires them),
+      // and a full-replace PATCH must send the whole shape.
+      amount: null,
+      direction: 'neutral' as const,
+      recurrence: 'none' as const,
+      until: null,
     }
     const call =
       form.mode === 'add' ? createCustomEvent(body) : updateCustomEvent(form.id, body)
@@ -259,6 +265,10 @@ export default function CalendarPage() {
                 label: rawLabel(event),
                 detail: event.detail,
                 person_id: event.person_id,
+                amount: event.amount,
+                direction: event.direction,
+                recurrence: event.recurrence ?? 'none',
+                until: event.until,
               })
                 .then(() => {
                   setBusy(true)

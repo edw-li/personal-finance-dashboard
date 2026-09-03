@@ -20,6 +20,7 @@ import type {
   TaxSummaryOut,
   TaxYearOut,
 } from '../types/api'
+import { calendarEvent } from '../testing/calendarFixtures'
 import { formatDate, formatMonth } from '../utils/format'
 import { addMonths, currentMonthIso, todayIso } from '../utils/months'
 import OverviewPage from './OverviewPage'
@@ -320,15 +321,13 @@ const HOUSEHOLD = {
 }
 
 function upNextEvents(count = 6): CalendarEvent[] {
-  return Array.from({ length: count }, (_, i) => ({
-    date: daysAgo(-(i + 1)),
-    type: 'payday' as const,
-    label: `Upcoming event ${i + 1}`,
-    detail: null,
-    href: '/paycheck',
-    id: null,
-    person_id: null,
-  }))
+  return Array.from({ length: count }, (_, i) =>
+    calendarEvent({
+      date: daysAgo(-(i + 1)),
+      type: 'payday',
+      label: `Upcoming event ${i + 1}`,
+    }),
+  )
 }
 
 interface Payload {
@@ -380,7 +379,11 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchYearly).mockResolvedValue(payload.yearly)
   vi.mocked(fetchDividends).mockResolvedValue(payload.dividends)
   vi.mocked(fetchSystemStatus).mockResolvedValue(payload.system)
-  vi.mocked(fetchCalendar).mockResolvedValue({ events: upNextEvents() })
+  vi.mocked(fetchCalendar).mockResolvedValue({
+    events: upNextEvents(),
+    sources: [],
+    quote_as_of: null,
+  })
   vi.mocked(fetchMoneyFlow).mockResolvedValue(payload.flow)
   return payload
 }
@@ -1023,16 +1026,10 @@ it('renders the next five calendar events as links, and only five', async () => 
 it('renders a custom event as a plain row — no page to open (spec §9.2)', async () => {
   serve()
   vi.mocked(fetchCalendar).mockResolvedValue({
+    sources: [],
+    quote_as_of: null,
     events: [
-      {
-        date: daysAgo(-1),
-        type: 'custom',
-        label: 'Car insurance',
-        detail: null,
-        href: null,
-        id: 41,
-        person_id: null,
-      },
+      calendarEvent({ date: daysAgo(-1), type: 'custom', label: 'Car insurance', id: 41 }),
       ...upNextEvents(2),
     ],
   })

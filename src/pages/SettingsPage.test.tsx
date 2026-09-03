@@ -111,6 +111,7 @@ const SETTINGS: AppSettingsOut = {
   swr_pct: '0.045000',
   espp_ticker: 'NVDA',
   price_refresh_cron: '10 13 * * mon-fri',
+  calendar_update_due_day: 1,
 }
 
 // Quiet system payload — the card's rendering details are pinned in SystemCard.test.tsx;
@@ -355,6 +356,7 @@ describe('SettingsPage — app settings', () => {
       swr_pct: '0.037500',
       espp_ticker: 'MSFT',
       price_refresh_cron: '30 14 * * mon-fri',
+      calendar_update_due_day: 1,
     })
     renderPage()
     await screen.findByLabelText('ESPP ticker')

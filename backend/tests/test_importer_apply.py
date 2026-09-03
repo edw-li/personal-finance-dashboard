@@ -21,6 +21,8 @@ from app.importer.report import SheetReport
 from app.models import (
     Account,
     AccountBalance,
+    CalendarEventOverride,
+    CalendarFeedToken,
     CardCredit,
     CategoryBudget,
     ContributionLimit,
@@ -43,7 +45,9 @@ from app.models import (
     Security,
     SecurityDividendEvent,
     SpendingCategory,
+    User,
 )
+from app.security import hash_password
 from tests.portfolio_factories import acct
 from tests.workbook_builder import (
     build_workbook,
@@ -1627,3 +1631,60 @@ async def test_importer_never_writes_dividend_events_or_clears_the_sync_marker(d
     ).scalar_one()
     assert refreshed.name == "Acme ETF"  # the import DID move the parent row…
     assert refreshed.dividend_events_floor == date(2023, 10, 23)  # …and left the marker
+
+
+def override_row(row: CalendarEventOverride) -> tuple:
+    return tuple(getattr(row, column.key) for column in CalendarEventOverride.__table__.columns)
+
+
+async def test_importer_never_writes_calendar_event_overrides(db):
+    """calendar_event_overrides is dashboard-only (2026-09-03 calendar spec §13, the
+    custom_events posture): a re-import must neither create, update nor delete a row."""
+    from app.importer.service import run_import
+
+    db.add(CalendarEventOverride(event_key="tax:2026-q3:2026-09-15", hidden=True, note="kept"))
+    await db.commit()
+    before = {
+        row.id: override_row(row)
+        for row in (await db.execute(select(CalendarEventOverride))).scalars()
+    }
+    assert len(before) == 1
+    for _ in range(2):
+        report = await run_import(build_workbook(), db, dry_run=False)
+        assert report.applied is True
+    after = {
+        row.id: override_row(row)
+        for row in (
+            await db.execute(
+                select(CalendarEventOverride).execution_options(populate_existing=True)
+            )
+        ).scalars()
+    }
+    assert after == before
+    assert all("calendar_event_overrides" not in sheet.entities for sheet in report.sheets.values())
+
+
+async def test_importer_never_writes_calendar_feed_tokens(db):
+    """calendar_feed_tokens is dashboard-only (2026-09-03 calendar spec §11): same pin."""
+    from app.importer.service import run_import
+
+    user = User(email="pin@example.com", password_hash=hash_password("correct-horse"))
+    db.add(user)
+    await db.flush()
+    db.add(CalendarFeedToken(user_id=user.id, token_hash="b" * 64, label="phone"))
+    await db.commit()
+    before = {
+        row.id: (row.user_id, row.token_hash, row.label, row.created_at, row.last_used_at)
+        for row in (await db.execute(select(CalendarFeedToken))).scalars()
+    }
+    for _ in range(2):
+        report = await run_import(build_workbook(), db, dry_run=False)
+        assert report.applied is True
+    after = {
+        row.id: (row.user_id, row.token_hash, row.label, row.created_at, row.last_used_at)
+        for row in (
+            await db.execute(select(CalendarFeedToken).execution_options(populate_existing=True))
+        ).scalars()
+    }
+    assert after == before
+    assert all("calendar_feed_tokens" not in sheet.entities for sheet in report.sheets.values())

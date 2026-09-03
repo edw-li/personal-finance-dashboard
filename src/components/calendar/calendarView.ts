@@ -20,6 +20,10 @@ export const EVENT_COLORS: Record<CalendarEventType, string> = {
   // User-entered rows: the palette caps chart slots at 8 (fixed order IS the CVD
   // mechanism), so custom wears the theme's muted gray — "entered, not derived".
   custom: 'var(--muted)',
+  // The three card types share the card family's slot until Lane C colors by SOURCE.
+  card_fee: 'var(--chart-7)',
+  card_credit: 'var(--chart-7)',
+  card_anniversary: 'var(--chart-7)',
 }
 
 export const EVENT_TYPE_LABELS: Record<CalendarEventType, string> = {
@@ -32,6 +36,9 @@ export const EVENT_TYPE_LABELS: Record<CalendarEventType, string> = {
   tax_deadline: 'Tax deadline',
   update_due: 'Monthly update due',
   custom: 'Custom',
+  card_fee: 'Card annual fee',
+  card_credit: 'Card credit resets',
+  card_anniversary: 'Card anniversary',
 }
 
 // Legend order — one place, so the legend and any future filter row agree.
@@ -44,6 +51,9 @@ export const EVENT_TYPE_ORDER: CalendarEventType[] = [
   'offering_start',
   'tax_deadline',
   'update_due',
+  'card_fee',
+  'card_credit',
+  'card_anniversary',
   'custom',
 ]
 
@@ -56,6 +66,7 @@ export const HREF_LABELS: Record<string, string> = {
   '/paycheck': 'Paycheck',
   '/taxes': 'Taxes',
   '/update': 'Monthly update',
+  '/credit-cards': 'Credit cards',
 }
 
 export function hrefLabel(href: string): string {

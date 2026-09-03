@@ -1,17 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { calendarEvent } from '../../testing/calendarFixtures'
 import type { CalendarEvent } from '../../types/api'
 import { UP_NEXT_LIMIT, UP_NEXT_WINDOW_DAYS, upNextItems } from './upNext'
 
 function ev(date: string): CalendarEvent {
-  return {
-    date,
-    type: 'payday',
-    label: `Event ${date}`,
-    detail: null,
-    href: '/paycheck',
-    id: null,
-    person_id: null,
-  }
+  return calendarEvent({ date, type: 'payday', label: `Event ${date}` })
 }
 
 describe('upNextItems', () => {
