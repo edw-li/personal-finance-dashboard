@@ -211,9 +211,12 @@ export function matchEntries(
     )
   }
   return entries
-    .map((entry) => ({ entry, score: scoreEntry(trimmed, entry) }))
-    .filter((x): x is { entry: PaletteEntry; score: number } => x.score !== null)
-    .sort((a, b) => b.score - a.score)
+    .map((entry, index) => ({ entry, index, score: scoreEntry(trimmed, entry) }))
+    .filter((x): x is { entry: PaletteEntry; index: number; score: number } => x.score !== null)
+    // The tie-break is spelled out rather than left to sort's stability: equal scores mean
+    // "the registry already decided", i.e. actions before pages before sections — so
+    // "assistant" runs Ask assistant instead of jumping to the Settings card of the same name.
+    .sort((a, b) => b.score - a.score || a.index - b.index)
     .map((x) => x.entry)
 }
 

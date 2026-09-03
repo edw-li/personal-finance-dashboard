@@ -12,6 +12,13 @@ describe('paletteRegistry', () => {
     expect(hits[0].label).toBe('Comp')
   })
 
+  // The noun and the verb collide: "Assistant" is a Settings card and "Ask assistant" is
+  // the action that opens the drawer. Both score the same, so registry order decides — and
+  // it puts actions first, because typing a thing's name means "do it", not "configure it".
+  it('prefers the Ask assistant action over the Settings card of the same name', () => {
+    expect(matchEntries('assistant', entries)[0].id).toBe('action:ask-assistant')
+  })
+
   it('offers Settings sections as anchored destinations', () => {
     const hit = matchEntries('password', entries).find((e) => e.kind === 'section')
     expect(hit?.to).toBe('/settings#password')

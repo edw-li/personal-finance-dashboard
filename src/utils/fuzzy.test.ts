@@ -17,6 +17,14 @@ describe('fuzzyScore', () => {
     expect(fuzzyScore('ab', 'absolute')!).toBeGreaterThan(fuzzyScore('ab', 'a big')!)
   })
 
+  it('aligns from any word head, not just the leftmost greedy pass', () => {
+    // The leftmost pass gives "As"k the a-s and leaves "assistant" to be picked apart, so
+    // the palette's own "Ask assistant" action used to score BELOW the plain Settings card
+    // named "Assistant". Starting at the second word finds the whole word intact, so the
+    // longer label that literally contains the query is never the weaker match.
+    expect(fuzzyScore('assistant', 'Ask assistant')).toBe(fuzzyScore('assistant', 'Assistant'))
+  })
+
   it('lets the empty query match everything at zero', () => {
     expect(fuzzyScore('', 'Anything')).toBe(0)
   })

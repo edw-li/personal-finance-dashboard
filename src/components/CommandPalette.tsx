@@ -160,13 +160,14 @@ export default function CommandPalette() {
   const flat = groups.flatMap((g) => g.items)
   // Two different jobs, spec §9. The DISPLAY is a stable map — kind headers in the house
   // order (Actions · Pages · Settings · entities) so the list never reshuffles under the
-  // reader's eyes. Enter is "do the thing I typed", which is the best-SCORING match
-  // wherever the grouping happened to file it: "rsu" means Comp even though the update
-  // wizard heads the Actions group above it. So the highlight starts on `matches[0]`,
-  // which groupMatches re-buckets by reference (never copies) and always keeps at the
-  // head of its own group — so it is always present in `flat`. An empty query has nothing
-  // typed to be "best" about: recents already lead, so row one leads with them.
-  const defaultIndex = query.trim() === '' ? 0 : Math.max(0, flat.indexOf(matches[0]))
+  // reader's eyes. Enter is "do the thing I typed", which is the top-RANKED match wherever
+  // the grouping happened to file it: "rsu" means Comp even though the update wizard heads
+  // the Actions group above it. So the highlight starts on `matches[0]`, which groupMatches
+  // re-buckets by reference (never copies) and always keeps at the head of its own group —
+  // so it is always present in `flat`. This holds for the empty query too: recents lead the
+  // RANKING, not the display, so `matches[0]` is the most recent entry while the display
+  // still files it under its own kind. Row zero of Actions would be a different thing.
+  const defaultIndex = Math.max(0, flat.indexOf(matches[0]))
   const activeIndex = flat.length === 0 ? -1 : Math.min(active ?? defaultIndex, flat.length - 1)
 
   const execute = (item: PaletteEntry) => {

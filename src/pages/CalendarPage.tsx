@@ -197,8 +197,7 @@ export default function CalendarPage() {
 
   // ?add=1 — the palette's "Add custom event" action opens the form on arrival, rather
   // than dropping the reader on a month grid with a button to find (2026-09-03 spec §9).
-  const arriveOnAdd = useCallback(() => openAddForm(), [openAddForm])
-  useArrivalParam('add', ADD_ARRIVALS, arriveOnAdd)
+  useArrivalParam('add', ADD_ARRIVALS, openAddForm)
 
   const startEdit = (event: CalendarEvent) => {
     if (event.id === null) return

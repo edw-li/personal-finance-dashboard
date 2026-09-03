@@ -305,5 +305,13 @@ describe('CommandPalette', () => {
     // Empty query: recents float to the front of the full list, and the grouping then cuts
     // each kind to six — so Calendar heads Pages instead of Overview.
     expect(within(group('Pages')).getAllByRole('option')[0].textContent).toContain('Calendar')
+    // The highlight follows the RANKING, not the display: recents lead the ranking, so
+    // Enter on an untouched palette repeats the last thing — it does not run row zero of
+    // whichever group happens to be printed first (Actions).
+    fireEvent.keyDown(combo(), { key: 'Enter' })
+    expect(screen.getByTestId('pathname').textContent).toBe('/calendar')
+    // Row zero of Actions is "Refresh prices", which would both fire a live POST and
+    // redirect to /portfolio — the loudest possible wrong answer to a bare Enter.
+    expect(refreshPrices).not.toHaveBeenCalled()
   })
 })
