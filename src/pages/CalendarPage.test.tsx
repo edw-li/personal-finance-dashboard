@@ -404,6 +404,23 @@ describe('CalendarPage', () => {
     expect(screen.getByText('Deleted Car insurance')).toBeTruthy()
   })
 
+  it('reports a FAILED delete as a toast, leaving the frame alert down', async () => {
+    // The month's payload landed and is still true — the write is what failed. Raising the
+    // page error here would have swapped a correct calendar for an alert.
+    vi.mocked(deleteCustomEvent).mockRejectedValue(new ApiError('event is not custom', 400))
+    const { container } = renderPage()
+    await screen.findAllByText('RSU vest — 2025 offer')
+    fireEvent.click(chipFor('Car insurance'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByText('event is not custom')).toBeTruthy()
+    expect(container.querySelector('.error-banner')).toBeNull()
+    // ...and the row is still on the grid, since nothing was deleted.
+    expect(screen.getAllByText('Car insurance').length).toBeGreaterThan(0)
+    // A failed write is not a reason to refetch: only the mount load has run.
+    expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(1)
+  })
+
   it('Undo re-creates the deleted custom event and refetches', async () => {
     vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
     vi.mocked(createCustomEvent).mockResolvedValue({

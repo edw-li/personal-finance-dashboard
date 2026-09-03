@@ -243,6 +243,18 @@ export default function NetWorthPage() {
           lastOwnerRef.current = owner
           seededDrillRef.current = false
         }
+        // Ahead of the skip for the same reason: the render that adopted the new scope
+        // CLEARED the drill, so a scope whose payload happens to equal what is on screen
+        // would otherwise return below and leave the card reading "No accounts selected."
+        // until a manual pick. The functional form is what keeps a deliberate clear-all
+        // cleared — it only fills a selection that is already empty.
+        if (!seededDrillRef.current && ts.months.length > 0) {
+          seededDrillRef.current = true
+          const seed = defaultDrill(ts)
+          if (seed.length > 0) {
+            setDrill((current) => (current.length > 0 ? current : seed))
+          }
+        }
         // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
         // against the RENDERED snapshot, never the cache (see `shown`).
         if (shown.current !== null && JSON.stringify(shown.current) === JSON.stringify(snapshot))
@@ -251,13 +263,6 @@ export default function NetWorthPage() {
         setFromCache(false)
         setData(ts)
         setSummary(sum)
-        if (!seededDrillRef.current && ts.months.length > 0) {
-          seededDrillRef.current = true
-          const seed = defaultDrill(ts)
-          if (seed.length > 0) {
-            setDrill((current) => (current.length > 0 ? current : seed))
-          }
-        }
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Failed to load net worth data')

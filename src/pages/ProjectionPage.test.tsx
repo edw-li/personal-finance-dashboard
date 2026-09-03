@@ -292,6 +292,19 @@ describe('ProjectionPage', () => {
     expect(await screen.findByText('$1,500,000.00')).toBeTruthy() // the FI-target tile
   })
 
+  it('holds the frame skeleton — not a bare page — while the FIRST payload is in flight', async () => {
+    // A promise that never settles is the cold-load paint held still. Nothing else in this
+    // file pins it: every other test lets the mount resolve, so a regression that dropped
+    // the ghost layout (an empty <main> until the fan lands) would go unnoticed here.
+    vi.mocked(fetchProjection).mockReturnValue(new Promise(() => {}))
+    const { container } = renderPage()
+
+    await waitFor(() => expect(container.querySelector('.page-skeleton')).not.toBeNull())
+    // A pending load is not a failure, and the ghost stands INSTEAD of the real content.
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryAllByTestId('echart')).toHaveLength(0)
+  })
+
   it('renders the model warnings verbatim', async () => {
     vi.mocked(fetchProjection).mockResolvedValue(
       projectionOut({

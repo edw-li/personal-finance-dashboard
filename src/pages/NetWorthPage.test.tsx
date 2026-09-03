@@ -392,6 +392,27 @@ it('restores the household view after visiting an owner with no data', async () 
   expect((await screen.findAllByText('My Checking')).length).toBeGreaterThan(0)
 })
 
+// The drill seed runs AHEAD of the identical-payload skip: the render that adopts a new
+// scope clears the drill (its account ids need not exist in the next scope), and a scope
+// whose payload happens to equal what is on screen used to return before the seed could
+// refill it — leaving the card reading "No accounts selected." until a manual pick.
+it('re-seeds the drill for a new scope whose payload is IDENTICAL to the one on screen', async () => {
+  // Every owner answers with the same fixture here (the beforeEach mocks) — which is the trap.
+  renderPage()
+  expect(
+    (await screen.findAllByRole('button', { name: 'My Checking', pressed: true })).length,
+  ).toBeGreaterThan(0)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Me' }))
+  await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', ME.id))
+  await waitFor(() =>
+    expect(
+      screen.getAllByRole('button', { name: 'My Checking', pressed: true }).length,
+    ).toBeGreaterThan(0),
+  )
+  expect(screen.queryByText('No accounts selected.')).toBeNull()
+})
+
 // ── Legend collision (2026-08-31 tier-1 A2) ───────────────────────────────────────────────
 // One merged legend map let an account literally named "Cash" toggle the stacked chart's
 // Cash GROUP off from the drill chart — silently hiding the group and shrinking the

@@ -270,7 +270,10 @@ export default function CalendarPage() {
         })
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Could not delete the event.')
+        // A toast, not the page's error: the month on screen came back fine and is still
+        // true, so raising the frame's alert would blame the calendar for a write that
+        // failed. The Undo path a few lines up already reports itself this way.
+        toast.error(err instanceof ApiError ? err.message : 'Could not delete the event.')
       })
       .finally(() => setDeleting(false))
   }
