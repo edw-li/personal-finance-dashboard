@@ -322,3 +322,39 @@ describe('netWorthDrillOption', () => {
     })
   })
 })
+
+import { netWorthBridgeCsv, netWorthBridgeOption } from './netWorthChartOptions'
+import { OTHER_SERIES_COLOR } from '../../charts/theme'
+
+describe('netWorthBridgeOption', () => {
+  it('walks from the prior month to the viewed month, one step per group that moved, landing on the month’s net worth', () => {
+    const option = netWorthBridgeOption(ts(), 2) as unknown as {
+      xAxis: { data: string[] }
+      series: { data: unknown[] }[]
+      tooltip: { formatter: (p: unknown) => string }
+    }
+    // Jul → Aug: cash +10, pre-tax +10, taxable +10, liabilities +10 (−40 → −30); the three
+    // zero groups are omitted — a $0 step is a label with no bar.
+    expect(option.xAxis.data).toEqual(['Jul 2026', 'Cash', 'Pre-tax', 'Taxable', 'Liabilities', 'Aug 2026'])
+    const [placeholder, amount] = option.series
+    expect(placeholder.data).toEqual([0, 590, 600, 610, 620, 0])
+    expect((amount.data as { value: number; itemStyle: { color: string } }[]).map((d) => d.value)).toEqual([590, 10, 10, 10, 10, 630])
+    expect((amount.data as { itemStyle: { color: string } }[])[1].itemStyle.color).toBe(GROUP_COLORS.cash)
+    expect((amount.data as { itemStyle: { color: string } }[])[0].itemStyle.color).toBe(OTHER_SERIES_COLOR)
+    const parsed = tooltipRows(option.tooltip.formatter({ dataIndex: 1 }))
+    expect([parsed.lead, parsed.label, parsed.sub]).toEqual(['$10.00', 'Cash', 'Left: $600.00'])
+  })
+  it('draws a fall as a step down', () => {
+    const down = ts({ group_totals: { ...ts().group_totals, taxable: ['300.00', '310.00', '250.00'] }, net_worth: ['550.00', '590.00', '560.00'] })
+    const [placeholder, amount] = (netWorthBridgeOption(down, 2) as unknown as { series: { data: unknown[] }[] }).series
+    // Taxable −60: the segment spans [560+…]: base is the LOWER remainder.
+    expect(placeholder.data).toEqual([0, 590, 600, 550, 550, 0])
+    expect((amount.data as { value: number }[]).map((d) => d.value)).toEqual([590, 10, 10, 60, 10, 560])
+  })
+  it('is null for the first month (nothing to bridge from) and exports the steps', () => {
+    expect(netWorthBridgeOption(ts(), 0)).toBeNull()
+    expect(netWorthBridgeOption(ts(), -1)).toBeNull()
+    expect(netWorthBridgeCsv(ts(), 2).rows[1]).toEqual(['Cash', '10.00', '600.00'])
+    expect(netWorthBridgeCsv(ts(), 0).rows).toEqual([])
+  })
+})
