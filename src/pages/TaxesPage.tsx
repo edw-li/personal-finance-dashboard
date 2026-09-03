@@ -148,7 +148,14 @@ export default function TaxesPage() {
   // state belongs to a load that actually came back (PortfolioPage's null-holdings rule).
   const [loadedOnce, setLoadedOnce] = useState(cachedYears !== undefined)
   const [busy, setBusy] = useState(true) // the selected year's three payloads
+  // Two buckets, because they mean two different things on screen: `error` is about the
+  // year LIST (the page's own lifecycle — a first-load failure IS the page, a later one
+  // rides the frame's "showing earlier data" line), while `yearError` is about the selected
+  // year and the actions taken on it — a detail load, a filing-status PATCH, a totals
+  // refresh, a delete. Those are not staleness; they are refusals, and they keep the
+  // assertive banner beside the year they belong to.
   const [error, setError] = useState<string | null>(null)
+  const [yearError, setYearError] = useState<string | null>(null)
   const [newYear, setNewYear] = useState(() =>
     cachedYears !== undefined
       ? String(cachedLatest ? cachedLatest.year + 1 : new Date().getFullYear())
@@ -281,7 +288,7 @@ export default function TaxesPage() {
         if (seq !== seqRef.current) return
         // Drop the previous year's data: left on screen it would read as this year's.
         setDetail(null)
-        setError(err instanceof ApiError ? err.message : `Failed to load tax year ${year}`)
+        setYearError(err instanceof ApiError ? err.message : `Failed to load tax year ${year}`)
       })
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
@@ -293,6 +300,7 @@ export default function TaxesPage() {
   const loadYear = (year: number) => {
     setBusy(true)
     setError(null)
+    setYearError(null)
     // A create error is about the form above, and the form's own state moved on the moment
     // the user navigated — leaving the sentence there would answer a question nobody asked.
     setCreateError(null)
@@ -330,6 +338,7 @@ export default function TaxesPage() {
     const year = selectedYear
     setStatusSaving(true)
     setError(null)
+    setYearError(null)
     patchTaxYear(year, { filing_status: next })
       .then((row) => {
         // The echo is authoritative, and replacing the row HERE means the selector follows
@@ -344,7 +353,7 @@ export default function TaxesPage() {
       .catch((err: unknown) => {
         // A 422 (an unknown status) or a 404 (the year went away) lands here verbatim. The
         // selection is untouched, so the control still reads the row the server has.
-        setError(
+        setYearError(
           err instanceof ApiError ? err.message : `Failed to set the filing status for ${year}`,
         )
       })
@@ -371,7 +380,7 @@ export default function TaxesPage() {
       })
       .catch((err: unknown) => {
         if (seq !== summarySeqRef.current) return
-        setError(err instanceof ApiError ? err.message : 'Failed to refresh the totals')
+        setYearError(err instanceof ApiError ? err.message : 'Failed to refresh the totals')
       })
   }
 
@@ -497,6 +506,7 @@ export default function TaxesPage() {
     currentYearRef.current = null
     setBusy(true)
     setError(null)
+    setYearError(null)
     // An editor save that is still in flight and COMMITS after this request recreates the
     // year server-side (both PUTs `_ensure_year`; a deletion is not a tombstone). Accepted
     // single-user TOCTOU class: the next list load shows the year again, and the user
@@ -530,7 +540,7 @@ export default function TaxesPage() {
         currentYearRef.current = year
         // A 404 (someone deleted it first) lands here verbatim. The selection is untouched,
         // so Retry still means "reload the year I am looking at".
-        setError(err instanceof ApiError ? err.message : `Failed to delete tax year ${year}`)
+        setYearError(err instanceof ApiError ? err.message : `Failed to delete tax year ${year}`)
       })
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
@@ -540,6 +550,7 @@ export default function TaxesPage() {
   const retry = () => {
     if (!confirmDiscard()) return
     setError(null)
+    setYearError(null)
     if (selectedYear === null) {
       setLoading(true)
       setBusy(true)
@@ -690,9 +701,15 @@ export default function TaxesPage() {
           <FeedBanner error={createError} />
         </section>
 
+        {/* The selected year's own failures — a load, a status flip, a totals refresh, a
+            delete — stay an assertive banner beside the year they are about, never the
+            frame's "showing earlier data" line, which is the year LIST's grammar. */}
+        <FeedBanner error={yearError} retry={retry} />
         <Feed
           data={detail}
-          busy={busy}
+          // A seeded-empty revisit has no year to ghost for: the list answers instantly
+          // from the snapshot and there is nothing under the new-year form.
+          busy={busy && years.length > 0}
           staleNoun="the year"
           skeleton={{ height: 320, label: 'Loading the year…' }}
           // Only a delete gets here: every other path either selects a year or has no years

@@ -581,7 +581,7 @@ describe('TaxesPage', () => {
     // A BRACKETS save moves the totals; that refresh failing is what puts a Retry on
     // screen without touching the inputs form.
     fireEvent.click(screen.getByRole('button', { name: 'Save Federal brackets' }))
-    expect(await screen.findByText(/totals unavailable/)).toBeTruthy()
+    expect(await screen.findByText('totals unavailable')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(confirmSpy).toHaveBeenCalledWith('Discard unsaved changes for 2024?')
@@ -1149,7 +1149,7 @@ describe('TaxesPage', () => {
     await screen.findByLabelText('Annual Salary')
 
     fireEvent.click(deleteYearButton())
-    expect(await screen.findByText(/tax year 2024 not found/)).toBeTruthy()
+    expect(await screen.findByText('tax year 2024 not found')).toBeTruthy()
     // Nothing was dropped: the list was never reloaded and the year is still the page's.
     expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: '2024' }).getAttribute('aria-pressed')).toBe('true')
@@ -1439,12 +1439,28 @@ describe('filing status (2026-08-26 design §6)', () => {
     fireEvent.click(statusButton('Married filing separately'))
     expect(
       await screen.findByText(
-        /filing_status must be one of single, married_joint, married_separate/,
+        'filing_status must be one of single, married_joint, married_separate',
       ),
     ).toBeTruthy()
     // Nothing was reloaded, and the control still reads the row the server has.
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
     expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps a status refusal an ALERT beside the year, not the frame stale line', async () => {
+    vi.mocked(patchTaxYear).mockRejectedValue(new ApiError('filing_status is not settable', 422))
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(statusButton('Married filing jointly'))
+
+    // The PATCH changed nothing, so "Showing earlier data" — the year LIST's grammar —
+    // would be a lie about it. The year's own bucket keeps the assertive banner.
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain('filing_status is not settable')
+    expect(screen.queryByText(/showing earlier data/i)).toBeNull()
+    // ...and the year it is about is still on screen behind it.
+    expect(salary().value).toBe('$200,000.00')
   })
 
   it('stands the California community-property caveat under MFS only', async () => {
