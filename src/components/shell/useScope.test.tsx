@@ -45,6 +45,14 @@ function Probe({ uses, childWritesMonth = false }: { uses: ScopeUses; childWrite
       >
         owner 2 twice
       </button>
+      <button
+        onClick={() => {
+          setScope({ owner: 2 })
+          setScope({ owner: null })
+        }}
+      >
+        owner 2 then back
+      </button>
       {childWritesMonth ? <MonthOnMount setScope={setScope} /> : null}
     </div>
   )
@@ -165,5 +173,18 @@ describe('useScope', () => {
     // No phantom pending write is left behind, so the next declared key still normalizes.
     view.setUses({ owner: true, range: true })
     expect(url()).toBe('/net-worth?owner=2&range=1y')
+  })
+
+  it('a same-tick revert to the current URL does not wedge later normalization', () => {
+    const view = mount('/net-worth?owner=all', { owner: true })
+    // Two real writes that cancel out: the second still has to go out to override the first,
+    // but it lands the URL back on the string it arrived with.
+    act(() => screen.getByText('owner 2 then back').click())
+    expect(url()).toBe('/net-worth?owner=all')
+    expect(scope()).toBe('null|1y|null')
+
+    // The URL never moved, so a pending write based on it could never clear itself.
+    view.setUses({ owner: true, range: true })
+    expect(url()).toBe('/net-worth?owner=all&range=1y')
   })
 })

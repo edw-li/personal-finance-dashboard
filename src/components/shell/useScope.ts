@@ -181,7 +181,13 @@ export function useScope(uses: ScopeUses = {}): {
       // pending write whose base equals the URL, which would never clear and would wedge
       // normalization for the life of the page.
       if (next.toString() === seed.toString()) return
-      pendingRef.current = { base: searchParams.toString(), next }
+      // A same-tick revert (pick, then pick back) lands on the string the URL already has. The
+      // write still has to go out to override the one in flight, but parking it would leave a
+      // pending entry whose base IS the URL: react-router hands back the same params object for
+      // an unchanged search string, so the clear effect never re-runs and normalization would
+      // stay gated for the life of the page. Nothing is ahead of the URL here — drop it instead.
+      pendingRef.current =
+        next.toString() === searchParams.toString() ? null : { base: searchParams.toString(), next }
       setSearchParams(next, { replace: true })
     },
     [searchParams, setSearchParams],
