@@ -1,7 +1,8 @@
 /* Page-scoped rules ONLY (TaxesPage.css / SettingsPage.css structure). The app-wide
-   vocabulary (.page, .page-header, .spacer, .card, .card-grid, .span-4, .span-8, .span-12,
-   .eyebrow, .kpi-row, .stat-tile, .button, .error-banner, .empty-note, .drill-hint,
-   .loading-dim) lives in panels.css and is not redefined here.
+   vocabulary (.page, .card, .card-grid, .span-4, .span-8, .span-12, .eyebrow, .kpi-row,
+   .stat-tile, .button, .error-banner, .empty-note, .drill-hint, .loading-dim) lives in
+   panels.css and is not redefined here; the title row, the scope row, the skeleton and the
+   stale line all belong to PageFrame and are styled in components/shell/shell.css.
 
    The card headings are .eyebrow rather than portfolio.css's visually identical
    .panel-title: that stylesheet travels with the portfolio page, and this one must not
