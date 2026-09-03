@@ -1,6 +1,7 @@
 // THE color source of truth for both palettes (2026-09-03 shell spec §11). index.css carries
-// static copies for first paint and tokens.test.ts keeps them equal; charts/theme.ts builds
-// the ECharts theme from here; charts/recolor.ts maps DARK → LIGHT inside options.
+// static copies for first paint and tokens.test.ts keeps them equal; the chart bridge
+// (charts/theme.ts, charts/recolor.ts) reads these slots — theme.ts derives the registered
+// ECharts theme from them, recolor.ts maps DARK → LIGHT inside built options.
 // Dark values are the pre-existing ones (index.css + charts/theme.ts), unchanged except
 // `otherSeries`, raised from #4a5060 (2.16:1) to meet 3:1 on the surface.
 
@@ -12,6 +13,10 @@ export interface ThemeTokens {
   text: string
   muted: string
   accent: string
+  /** Ink for text/glyphs painted ON `accent` (primary buttons, the skip link) — the one
+   *  token that must invert between themes: near-black on the dark theme's bright accent,
+   *  white on the light theme's deep one (tokens.test.ts holds both to 4.5:1). */
+  onAccent: string
   positive: string
   negative: string
   warn: string
@@ -32,6 +37,7 @@ export const DARK: ThemeTokens = {
   text: '#e6e9ef',
   muted: '#8b93a3',
   accent: '#4f8cff',
+  onAccent: '#0b0e14',
   positive: '#3fb968',
   negative: '#e05252',
   warn: '#c98500',
@@ -46,10 +52,17 @@ export const DARK: ThemeTokens = {
 }
 
 // Cool neutral (approved 2026-09-03): pale blue-gray page, white cards, the same hue
-// family darkened until each slot clears 3:1 on white. `accent` and `positive` are one
-// notch darker than the mockup's #3b7dd8 (4.11:1) and #1f8f4e (4.12:1): both are worn by
-// SMALL text — links, deltas — so the spec's 4.5:1 acceptance floor binds, not 3:1
-// (tokens.test.ts). Hue and saturation are unchanged; only lightness moved.
+// family darkened until every slot clears its floor. The floor is read against BOTH
+// text-bearing backgrounds — the white card AND the pale page (--bg #f2f5f9, the weaker of
+// the two) — because deltas, links and advisories sit on bare page as often as they sit on
+// a card (tokens.test.ts). Small text carries the spec's 4.5:1, chart slots 3:1.
+// That two-background floor is why the three small-text tones sit one notch below the
+// mockup's #3b7dd8 / #1f8f4e / #a86400, which cleared 4.5:1 on white alone:
+// accent #296dcc (4.62 on --bg, 5.06 on white), positive #1b7e44 (4.67 / 5.10),
+// warn #996500 (4.56 / 4.98). accent and positive keep the hue and saturation of the tone
+// they replace (215.0°, 144.8°) — only lightness moved. warn IS palette[3], one amber per
+// theme exactly as in DARK, and #996500 is back on the palette amber's 39.7° hue that the
+// retired #a86400 (35.7°) had drifted off; the chart slot moved with it.
 export const LIGHT: ThemeTokens = {
   bg: '#f2f5f9',
   surface: '#ffffff',
@@ -57,14 +70,15 @@ export const LIGHT: ThemeTokens = {
   border: '#e1e7ef',
   text: '#141a24',
   muted: '#5f6b7a',
-  accent: '#2d73d5',
-  positive: '#1d8649',
+  accent: '#296dcc',
+  onAccent: '#ffffff',
+  positive: '#1b7e44',
   negative: '#c73a3a',
-  warn: '#a86400',
+  warn: '#996500',
   gridLine: '#e6ebf2',
   axisLine: '#d5dce6',
   otherSeries: '#7f8a9c',
-  palette: ['#2f6fdc', '#c94f1e', '#15895f', '#a86f00', '#c2436f', '#1f7a1f', '#6f63d6', '#c94848'],
+  palette: ['#2f6fdc', '#c94f1e', '#15895f', '#996500', '#c2436f', '#1f7a1f', '#6f63d6', '#c94848'],
   sequential: [
     '#e8f0fb', '#d3e2f7', '#bcd3f2', '#a3c2ec', '#89b0e6', '#6f9ddf',
     '#5589d6', '#3f76cb', '#2f65b8', '#255399', '#1d427c', '#153260',
@@ -72,7 +86,7 @@ export const LIGHT: ThemeTokens = {
 }
 
 /** The CSS custom-property declarations a palette expands to — the shape index.css must
- *  carry verbatim (tokens.test.ts). Order is stable so the test can diff by set. */
+ *  carry verbatim (tokens.test.ts diffs value-by-value, last declaration wins). */
 export function cssDeclarations(t: ThemeTokens): string[] {
   return [
     `--bg: ${t.bg};`,
@@ -82,6 +96,7 @@ export function cssDeclarations(t: ThemeTokens): string[] {
     `--text: ${t.text};`,
     `--muted: ${t.muted};`,
     `--accent: ${t.accent};`,
+    `--on-accent: ${t.onAccent};`,
     `--positive: ${t.positive};`,
     `--negative: ${t.negative};`,
     `--warn: ${t.warn};`,
@@ -97,9 +112,14 @@ function channel(hex: string, offset: number): number {
   return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
 }
 
+/** Only full #rrggbb is accepted. Shorthand (#abc), named colors and rgba() would each
+ *  parse to NaN and silently sail through the contrast floors, so they throw here. */
+const HEX6 = /^#[0-9a-f]{6}$/i
+
 /** WCAG 2.x relative luminance of a #rrggbb color. */
 export function luminance(hex: string): number {
-  const h = hex.replace('#', '')
+  if (!HEX6.test(hex)) throw new Error(`luminance() needs a #rrggbb color, got: ${hex}`)
+  const h = hex.slice(1)
   return 0.2126 * channel(h, 0) + 0.7152 * channel(h, 2) + 0.0722 * channel(h, 4)
 }
 

@@ -84,6 +84,8 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 0.9rem 1.1rem 1rem;
+  /* The query container .stat-value sizes against — see its comment. */
+  container-type: inline-size;
 }
 
 .stat-label {
@@ -95,20 +97,24 @@
   margin-bottom: 0.45rem;
 }
 
-/* Clamped so a $1,000,000.00 hero never overflows its tile in a split-screen window
-   (2026-09-02 audit: "$799,395.!" at 1180px); tabular numerals keep count-ups steady. */
+/* Sized from the TILE, not the viewport. .kpi-row is repeat(auto-fit, minmax(220px, 1fr)),
+   so tile width sawtooths as the window grows — a purely vw-scaled value stayed large
+   through the narrow phase and an 11-13 character amount wrapped mid-number ("$799,395.1"
+   over "2" around 1200-1450px). The cqi term is the last resort: past the point where the
+   number would no longer fit, the font shrinks with its own tile. The number itself never
+   breaks — nowrap forbids it, so a too-long value overflows visibly rather than lying about
+   its digits; tabular numerals keep count-ups steady. */
 .stat-value {
   font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
-  font-size: clamp(1.1rem, 0.9rem + 0.5vw, 1.45rem);
+  font-size: min(clamp(1.1rem, 0.9rem + 0.5vw, 1.45rem), 10.5cqi);
   font-weight: 600;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
-  min-width: 0;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .stat-tile-hero .stat-value {
-  font-size: clamp(1.5rem, 1rem + 1.1vw, 2.4rem);
+  font-size: min(clamp(1.5rem, 1rem + 1.1vw, 2.4rem), 10.5cqi);
 }
 
 .stat-delta {
@@ -182,7 +188,8 @@
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--muted);
-  padding: 0.5rem 0.6rem;
+  /* Same track as td: a literal padding here misaligned .num headers in compact. */
+  padding: var(--density-cell-pad);
   border-bottom: 1px solid var(--border);
 }
 
@@ -242,7 +249,7 @@
 .button-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0b0e14;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
