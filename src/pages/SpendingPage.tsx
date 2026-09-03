@@ -850,12 +850,15 @@ export default function SpendingPage() {
               const active = trend.find((t) => t.categoryId === category.id)
               // Slot hue goes on the BORDER, never the text (text stays --text via
               // .chip.active) — series color marks identity beside text, not in it.
+              // The DOM swatch reads the CSS slot, not PALETTE: index.css repoints
+              // --chart-N per theme, so the chip border tracks a light/dark switch that a
+              // baked dark hex would ignore. Slots are 0-based, the tokens are 1-based.
               return (
                 <button
                   key={category.id}
                   type="button"
                   className={active ? 'chip active' : 'chip'}
-                  style={active ? { borderColor: PALETTE[active.slot] } : undefined}
+                  style={active ? { borderColor: `var(--chart-${active.slot + 1})` } : undefined}
                   aria-pressed={!!active}
                   onClick={() => toggleTrend(category.id)}
                 >

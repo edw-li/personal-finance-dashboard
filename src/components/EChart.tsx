@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react'
-import { echarts } from '../charts/echarts'
+import { echarts, registerThemeVersion } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
 import { quiesceRipples } from '../charts/motion'
+import { lightFromDark, recolorOption } from '../charts/recolor'
 import type { ZoomWindow } from '../charts/timeZoom'
 import ChartExportMenu from './ChartExportMenu'
 import type { ExportConfig } from './ChartExportMenu'
+import { useTheme } from './shell/ThemeProvider'
 
 export type EChartsInstance = ReturnType<typeof echarts.init>
 
@@ -72,6 +74,7 @@ export default function EChart({
    *  six wired options hold this today (verified 2026-08-27). */
   zoomWindow?: ZoomWindow
 }) {
+  const { resolved, version: themeVersion } = useTheme()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<EChartsInstance | null>(null)
   // Fingerprint of the last APPLIED option minus its dataZoom (the zoom fast path's
@@ -99,7 +102,14 @@ export default function EChart({
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const chart = echarts.init(el, 'finance')
+    // Chrome (axes, legend, tooltip) comes from the REGISTERED theme, so a palette change
+    // has to re-init. Register unconditionally rather than trusting that version 0 still
+    // means the dark 'finance' theme echarts.ts registered at import: registration is one
+    // map write, and doing it here makes every init self-contained — the name handed to
+    // init() always holds the palette this render resolved, with no cross-module invariant
+    // to keep. Series colors are handled by recolorOption in the effect below, not here.
+    const name = registerThemeVersion(resolved, themeVersion)
+    const chart = echarts.init(el, name)
     chart.on('click', (params) => onClickRef.current?.(params as EChartEventParams))
     chart.on('mouseover', (params) => onHoverRef.current?.(params as EChartEventParams))
     // mouseout fires per-item; globalout covers fast exits that skip it — without it a
@@ -134,12 +144,16 @@ export default function EChart({
       lastStrippedRef.current = null
       if (instanceRef) instanceRef.current = null
     }
-  }, [instanceRef])
+  }, [instanceRef, resolved, themeVersion])
 
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
-    const stripped = JSON.stringify({ ...option, dataZoom: undefined })
+    // The theme rides in the fingerprint so a palette change is never mistaken for a
+    // zoom-only change (which would skip the rebuild and leave the old colors painted).
+    // Second line of defence only: the init effect's lastStrippedRef reset already denies
+    // the fast path its "equal to the last applied option" precondition after a rebuild.
+    const stripped = JSON.stringify({ ...option, dataZoom: undefined, __theme: resolved })
     // Zoom-only fast path (spec Addendum §A2): same option apart from the window → an
     // animated dataZoom ACTION morphs the series on the live instance; the notMerge
     // rebuild below is what used to make the chips snap. Skipped under reduced motion
@@ -175,7 +189,11 @@ export default function EChart({
     // animateEntrance suppresses the ENTRANCE only (animationDuration: 0) — update
     // animation must survive a cached paint, or the zoom morphs above and Projection's
     // trend-span toggles would snap until the first changed revalidation (Addendum §A2).
-    const base = REDUCED_MOTION ? quiesceRipples(option) : option
+    // Light theme: swap every dark token hex in the finished option for its light twin.
+    // Builders stay theme-blind (charts/recolor.ts). Dark is the identity.
+    const themed =
+      resolved === 'light' ? (recolorOption(option, lightFromDark) as EChartsOption) : option
+    const base = REDUCED_MOTION ? quiesceRipples(themed) : themed
     chart.setOption(
       {
         ...base,
@@ -188,7 +206,15 @@ export default function EChart({
       { notMerge: true },
     )
     lastStrippedRef.current = stripped
-  }, [option, animateEntrance, zoomWindow])
+    // `resolved` and `themeVersion` mirror the init effect's theme deps: that effect
+    // disposes and rebuilds the instance on a palette change, and a rebuilt chart holds NO
+    // option, so this effect must re-run in the same commit (effects fire in declaration
+    // order) to repaint it. Dropping either dep leaves a blank canvas whenever the option
+    // object itself is stable across the switch — which is the normal case, since pages
+    // useMemo their options. `themeVersion` cannot move without `resolved` today
+    // (ThemeProvider bumps it only when the palette changes); it is listed because the
+    // init effect keys on it, and the two must not drift.
+  }, [option, animateEntrance, zoomWindow, resolved, themeVersion])
 
   return (
     <>

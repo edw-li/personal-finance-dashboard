@@ -42,7 +42,7 @@
 .nav-heading {
   margin: 0.35rem 0 0.1rem;
   padding: 0 0.75rem;
-  font-size: 0.625rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -148,7 +148,7 @@
   padding: 0.5rem 0.9rem;
   border-radius: 8px;
   background: var(--accent);
-  color: #0b0e14;
+  color: var(--on-accent);
   font-weight: 600;
   transform: translateY(-200%);
 }

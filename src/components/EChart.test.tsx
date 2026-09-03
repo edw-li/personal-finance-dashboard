@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EChartsOption } from '../charts/echarts'
 import { SURFACE } from '../charts/theme'
+import { DARK, LIGHT } from '../theme/tokens'
 
 interface FakeChartLike {
   handlers: Record<string, (params?: unknown) => void>
@@ -28,14 +29,26 @@ vi.mock('../charts/echarts', () => {
     }
   }
   const instances: FakeChart[] = []
+  // The real name scheme, duplicated here so the fake registrar answers like the module it
+  // stands in for; a constant return would let a version-0 name reach init() under any
+  // version and the assertions below could not tell them apart.
+  const themeName = (v: number) => (v === 0 ? 'finance' : `finance-${v}`)
   return {
     echarts: {
-      init: () => {
+      init: vi.fn(() => {
         const chart = new FakeChart()
         instances.push(chart)
         return chart
-      },
+      }),
     },
+    // The theme bridge: the real pair registers an echarts theme and hands back its name.
+    // Registration itself is charts/theme.test.ts's subject; here the NAME is what EChart
+    // consumes, so the fake derives it from the version exactly as the real one does and
+    // the tests below assert the ARGUMENTS (which palette, which version) as well.
+    registerThemeVersion: vi.fn((_resolved: 'dark' | 'light', version: number) =>
+      themeName(version),
+    ),
+    themeName,
     __instances: instances,
   }
 })
@@ -49,6 +62,7 @@ vi.mock('../utils/download', () => ({
 
 import EChart from './EChart'
 import * as chartsModule from '../charts/echarts'
+import ThemeProvider, { useTheme } from './shell/ThemeProvider'
 import { downloadDataUrl, downloadText, toCsv } from '../utils/download'
 
 const instances = (chartsModule as unknown as { __instances: FakeChartLike[] }).__instances
@@ -76,6 +90,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.clearAllMocks()
   instances.length = 0
+  // ThemeProvider seeds itself from localStorage — a light-theme case must not leak into
+  // the file's other tests, which all assume the dark default.
+  localStorage.clear()
 })
 
 describe('EChart aria facade', () => {
@@ -127,6 +144,22 @@ describe('EChart export menu', () => {
       backgroundColor: SURFACE,
     })
     expect(downloadDataUrl).toHaveBeenCalledWith('data:image/png;base64,PNG', 'demo.png')
+  })
+
+  // The matte follows the RESOLVED theme: a light-theme chart exported on the dark card
+  // color comes back as near-black paper with invisible axis labels.
+  it('PNG mattes on the LIGHT card surface under the light theme', () => {
+    localStorage.setItem('finance.theme', 'light')
+    render(
+      <ThemeProvider>
+        <EChart option={OPTION} exportConfig={{ name: 'demo' }} />
+      </ThemeProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
+    expect(lastChart().getDataURL).toHaveBeenCalledWith({
+      pixelRatio: 2,
+      backgroundColor: LIGHT.surface,
+    })
   })
 
   it('CSV serializes the caller rows and downloads {name}.csv as UTF-8 text/csv', () => {
@@ -283,5 +316,111 @@ describe('zoomWindow fast path', () => {
     )
     expect(chart.setOption).toHaveBeenCalledTimes(2)
     expect(chart.dispatchAction).not.toHaveBeenCalled()
+  })
+})
+
+describe('EChart — theme bridge', () => {
+  const init = vi.mocked(chartsModule.echarts.init)
+  const registerThemeVersion = vi.mocked(chartsModule.registerThemeVersion)
+  // ONE object across every render on purpose. A fresh literal per render would re-run the
+  // option effect on identity alone, and the "was the rebuilt chart repainted?" assertion
+  // below would pass even with the theme deps dropped — pages useMemo their options, so
+  // stable identity across a palette switch is the real-world case.
+  const THEMED: EChartsOption = {
+    series: [{ type: 'bar', itemStyle: { color: DARK.positive } }],
+  }
+
+  it('re-initializes on a palette change: versioned name, one repaint, handlers rebound', async () => {
+    localStorage.clear()
+    init.mockClear()
+    const onClick = vi.fn()
+    function Harness() {
+      const { setTheme } = useTheme()
+      return (
+        <>
+          <button onClick={() => setTheme('light')}>go light</button>
+          <EChart option={THEMED} onClick={onClick} />
+        </>
+      )
+    }
+    render(
+      <ThemeProvider>
+        <Harness />
+      </ThemeProvider>,
+    )
+    expect(init).toHaveBeenCalledTimes(1)
+    expect(init.mock.calls[0][1]).toBe('finance')
+    expect(registerThemeVersion).toHaveBeenCalledWith('dark', 0)
+    const first = lastChart()
+
+    act(() => screen.getByText('go light').click())
+    await waitFor(() => expect(init).toHaveBeenCalledTimes(2))
+    // Palette AND version, not just the resulting name: registering DARK under
+    // 'finance-1' would hand the light card dark axis lines and init() would not notice.
+    expect(registerThemeVersion).toHaveBeenCalledWith('light', 1)
+    expect(init.mock.calls[1][1]).toBe('finance-1')
+
+    const second = lastChart()
+    expect(second).not.toBe(first)
+    // A fresh echarts instance holds NO option, so the rebuilt chart must be repainted in
+    // the same commit — this is what fails if `resolved`/`themeVersion` leave the option
+    // effect's deps (count 0: blank canvas after every theme switch).
+    expect(second.setOption).toHaveBeenCalledTimes(1)
+    const applied = second.setOption.mock.calls[0][0] as {
+      series: { itemStyle: { color: string } }[]
+    }
+    expect(applied.series[0].itemStyle.color).toBe(LIGHT.positive)
+    // Listeners live on the disposed instance, so the new one binds its own full set...
+    expect(Object.keys(second.handlers).sort()).toEqual([
+      'click',
+      'datazoom',
+      'globalout',
+      'legendselectchanged',
+      'mouseout',
+      'mouseover',
+    ])
+    // ...and they reach the current props, not a closure captured before the rebuild.
+    second.handlers['click']({ name: 'Cash' })
+    expect(onClick).toHaveBeenCalledWith({ name: 'Cash' })
+  })
+
+  // Registration is unconditional, so version 0 registers too — and under a persisted light
+  // theme it must register LIGHT. Painting that user dark axis lines and near-white legend
+  // text on a white card is the bug this case exists to prevent.
+  it('registers the resolved palette at version 0 when that palette is light', () => {
+    localStorage.setItem('finance.theme', 'light')
+    render(
+      <ThemeProvider>
+        <EChart option={{ series: [] }} />
+      </ThemeProvider>,
+    )
+    expect(registerThemeVersion).toHaveBeenCalledWith('light', 0)
+  })
+
+  it('recolors dark token hexes in the option under the light theme', async () => {
+    localStorage.setItem('finance.theme', 'light')
+    render(
+      <ThemeProvider>
+        <EChart option={{ series: [{ type: 'bar', itemStyle: { color: DARK.positive } }] }} />
+      </ThemeProvider>,
+    )
+    const instance = lastChart()
+    await waitFor(() => expect(instance.setOption).toHaveBeenCalled())
+    const applied = instance.setOption.mock.calls.at(-1)?.[0] as {
+      series: { itemStyle: { color: string } }[]
+    }
+    expect(applied.series[0].itemStyle.color).toBe(LIGHT.positive)
+  })
+
+  it('leaves the option untouched under the dark theme (dark is the identity)', () => {
+    render(
+      <ThemeProvider>
+        <EChart option={{ series: [{ type: 'bar', itemStyle: { color: DARK.positive } }] }} />
+      </ThemeProvider>,
+    )
+    const applied = lastChart().setOption.mock.calls.at(-1)?.[0] as {
+      series: { itemStyle: { color: string } }[]
+    }
+    expect(applied.series[0].itemStyle.color).toBe(DARK.positive)
   })
 })

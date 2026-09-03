@@ -5,6 +5,7 @@ import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
 import AccountsCard from '../components/settings/AccountsCard'
+import AppearanceCard from '../components/settings/AppearanceCard'
 import AssistantCard from '../components/settings/AssistantCard'
 import CategoriesCard from '../components/settings/CategoriesCard'
 import HouseholdCard from '../components/settings/HouseholdCard'
@@ -480,6 +481,14 @@ export default function SettingsPage() {
               </p>
             </form>
           </section>
+
+          {/* Theme and density (2026-09-03 shell spec §11). Sits above the management cards
+              because it is browser-local and instant — the one card here that owns no fetch
+              and no error state of its own. It still renders inside the page's `loadedOnce`
+              gate with everything else, which is the accepted cost of one grid: a settings
+              GET that failed hides the whole page, appearance included. The command palette
+              jumps straight to its #appearance anchor. */}
+          <AppearanceCard />
 
           {/* The three management cards (2026-08-26 spec §6). Each owns its own fetch and
               error state (SystemCard's posture) and shares the forms' `loadedOnce` gate:

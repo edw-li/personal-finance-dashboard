@@ -2,6 +2,7 @@
   /* Native widgets (date pickers, scrollbars, form autofill) follow the app's darkness
      instead of flashing white chrome into it. */
   color-scheme: dark;
+  /* Tokens mirror src/theme/tokens.ts DARK — tokens.test.ts fails on any drift. */
   --bg: #0f1115;
   --surface: #171a21;
   --surface-2: #1e222c;
@@ -9,18 +10,69 @@
   --text: #e6e9ef;
   --muted: #8b93a3;
   --accent: #4f8cff;
+  /* Ink painted ON --accent (primary buttons, skip link) — inverts between themes. */
+  --on-accent: #0b0e14;
   --positive: #3fb968;
   --negative: #e05252;
-  /* PALETTE[3] amber — the app's advisory/staleness register, promoted from six
-     duplicated per-sheet literals (2026-08-25 polish §1). The CANVAS copies stay
-     literal (charts/theme.ts PALETTE[3] and everything derived from it): a CSS custom
-     property cannot reach an ECharts canvas. */
+  /* --chart-4 amber, doubling as the advisory/staleness register. */
   --warn: #c98500;
+  --grid-line: #1e222c;
+  --axis-line: #262b36;
+  --other-series: #6b7382;
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
   /* Motion tokens (2026-08-27 spec §4). Consumed only inside
      prefers-reduced-motion: no-preference blocks — under `reduce` nothing reads them. */
   --t-fast: 120ms;
   --t-page: 180ms;
+  /* Density: comfortable is the pre-2026-09 geometry; compact scales the root font and the
+     card/table padding (shell spec §11). */
+  --density-card-pad: 1.1rem 1.25rem 1.25rem;
+  --density-cell-pad: 0.45rem 0.6rem;
+  --density-grid-gap: 1rem;
   font-family: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Tokens mirror src/theme/tokens.ts LIGHT — tokens.test.ts fails on any drift. */
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f2f5f9;
+  --surface: #ffffff;
+  --surface-2: #f7f9fc;
+  --border: #e1e7ef;
+  --text: #141a24;
+  --muted: #5f6b7a;
+  --accent: #296dcc;
+  --on-accent: #ffffff;
+  --positive: #1b7e44;
+  --negative: #c73a3a;
+  --warn: #996500;
+  --grid-line: #e6ebf2;
+  --axis-line: #d5dce6;
+  --other-series: #7f8a9c;
+  --chart-1: #2f6fdc;
+  --chart-2: #c94f1e;
+  --chart-3: #15895f;
+  --chart-4: #996500;
+  --chart-5: #c2436f;
+  --chart-6: #1f7a1f;
+  --chart-7: #6f63d6;
+  --chart-8: #c94848;
+}
+
+/* Pinned to the ROOT element: every rem below scales off this font-size, so the block
+   only does its job on <html> (ThemeProvider and the anti-flash script both set it there). */
+:root[data-density="compact"] {
+  font-size: 90%;
+  --density-card-pad: 0.85rem 1rem 1rem;
+  --density-cell-pad: 0.3rem 0.45rem;
+  --density-grid-gap: 0.75rem;
 }
 
 * {

@@ -814,6 +814,30 @@ describe('SettingsPage — system card', () => {
   })
 })
 
+describe('SettingsPage — appearance card', () => {
+  it('mounts the Appearance card directly after the Password card', async () => {
+    render(<SettingsPage />)
+
+    const appearance = await screen.findByRole('region', { name: 'Appearance' })
+    // DIRECTLY after, not merely somewhere below: appearance closes the pair of cards about
+    // this browser and this login, ahead of the management cards that own fetches of their
+    // own. It owns no fetch, so nothing but the page's loadedOnce gate holds it back.
+    const password = screen.getByRole('heading', { name: /^Password/ }).closest('section')
+    expect(password).not.toBeNull()
+    expect(password?.nextElementSibling).toBe(appearance)
+  })
+
+  it('offers no Appearance card when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    render(<SettingsPage />)
+
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    // One grid, one gate: the accepted cost of putting a fetch-less card in the same column
+    // as the ones that need the API (SettingsPage.tsx says so at the call site).
+    expect(screen.queryByRole('region', { name: 'Appearance' })).toBeNull()
+  })
+})
+
 describe('SettingsPage — household, accounts and categories cards', () => {
   it('mounts the three management cards and feeds the roster its people', async () => {
     render(<SettingsPage />)
