@@ -262,7 +262,34 @@ class SnapshotZip:
     counts: dict[str, int]
 
 
+# PostgreSQL spells the isolation level the export needs; issued as raw SQL because it must
+# be the transaction's FIRST statement, which no SQLAlchemy execution option can promise on a
+# session the caller already owns.
+REPEATABLE_READ = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+
+
+async def _begin_repeatable_read(db: AsyncSession) -> None:
+    """Give the export ONE database state to read.
+
+    build_snapshot_zip runs ~35 SELECTs. Under PostgreSQL's default READ COMMITTED each one
+    takes its own snapshot, so a restore or an import committing halfway through hands back a
+    ZIP whose earlier tables are pre-restore and whose later tables are post-restore — an
+    archive that never existed, offered to a future restore as if it had. REPEATABLE READ
+    fixes the view at the first read below.
+
+    `SET TRANSACTION` only takes as the first statement of a transaction, so any transaction
+    the caller left open has to end first. The export writes nothing, which is what makes the
+    rollback safe — but it is a CONTRACT on the callers: hand build_snapshot_zip no pending
+    changes, and read anything already loaded (a `user.email` for an actor) BEFORE the call,
+    because a rollback expires the session's ORM objects and a re-load from sync attribute
+    access is a MissingGreenlet, not a query.
+    """
+    await db.rollback()  # a no-op when nothing is open (SQLAlchemy autobegin)
+    await db.execute(text(REPEATABLE_READ))
+
+
 async def build_snapshot_zip(db: AsyncSession) -> SnapshotZip:
+    await _begin_repeatable_read(db)
     exported_at = datetime.now(UTC)
     head = await alembic_head(db)
     counts: dict[str, int] = {}
@@ -370,7 +397,8 @@ async def write_restore_point(db: AsyncSession, *, actor: str | None) -> Restore
     `restore_point` run (spec §7 step 1, §9 imports). COMMITS its own run row before
     returning: a restore or import that then fails and rolls back must still leave the
     point listed. File IO rides to_thread — blocking writes on the event loop are the
-    ASYNC rules' whole complaint."""
+    ASYNC rules' whole complaint. Call it BEFORE the restore's own writes: the export owns
+    its transaction (see _begin_repeatable_read) and rolls back whatever it finds open."""
     snap = await build_snapshot_zip(db)
     name = f"pre-restore-{snap.exported_at:%Y%m%d-%H%M%S-%f}.zip"
     path = await asyncio.to_thread(

@@ -122,3 +122,29 @@ def test_is_scheduler_running_tracks_the_module_handle(monkeypatch):
     assert is_scheduler_running() is True
     monkeypatch.setattr("app.services.scheduler._scheduler", _Handle(False))
     assert is_scheduler_running() is False
+
+
+def test_snapshot_trigger_fires_nightly_at_2330_pt():
+    from app.services.scheduler import SNAPSHOT_CRON, SNAPSHOT_JOB_ID, build_snapshot_trigger
+
+    assert SNAPSHOT_CRON == "30 23 * * *" and SNAPSHOT_JOB_ID == "snapshot_nightly"
+    trigger = build_snapshot_trigger()
+    tz = ZoneInfo(SCHEDULER_TIMEZONE)
+    anchor = datetime(2026, 9, 4, 9, 0, tzinfo=tz)
+    first = trigger.get_next_fire_time(None, anchor)
+    assert (first.hour, first.minute, first.date()) == (23, 30, date(2026, 9, 4))
+    # Every day, weekends included — a Saturday fires too.
+    saturday = datetime(2026, 9, 5, 9, 0, tzinfo=tz)
+    assert trigger.get_next_fire_time(None, saturday).date() == date(2026, 9, 5)
+
+
+def test_snapshot_catch_up_uses_the_shared_missed_run_rule():
+    from app.services.scheduler import build_snapshot_trigger
+
+    trigger = build_snapshot_trigger()
+    tz = ZoneInfo(SCHEDULER_TIMEZONE)
+    after_fire = datetime(2026, 9, 4, 23, 45, tzinfo=tz)
+    before_fire = datetime(2026, 9, 4, 9, 0, tzinfo=tz)
+    assert missed_todays_run(trigger, None, after_fire) is True
+    assert missed_todays_run(trigger, datetime(2026, 9, 4, 23, 31, tzinfo=tz), after_fire) is False
+    assert missed_todays_run(trigger, None, before_fire) is False
