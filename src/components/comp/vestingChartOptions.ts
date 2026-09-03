@@ -6,24 +6,29 @@
 // to cents, so the chart parses the strings ONCE here and never hands a float back to the API
 // (src/utils/format.ts's rule).
 import type { EChartsOption } from '../../charts/echarts'
-import { INK, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import { BAR_MARKS, grid, moneyAxis, monthAxis, roundTo, stagger } from '../../charts/grammar'
+import { legendFor } from '../../charts/legend'
+import { annotationRules, todayRule } from '../../charts/markLine'
+import { OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import { axisTooltip } from '../../charts/tooltip'
+import type { AxisTooltipParam } from '../../charts/tooltip'
 import type { RsuGrantOut, VestOut } from '../../types/api'
-import {
-  escapeHtml,
-  formatCurrency,
-  formatCurrencyCompact,
-  formatDate,
-} from '../../utils/format'
+import type { ExportTable } from '../../utils/download'
+import { escapeHtml, formatCurrency, formatDate } from '../../utils/format'
 
 /** The name the ninth grant and everything after it stacks under. */
 export const OTHER_GRANT_LABEL = 'Other'
 
-// Axis-tooltip params subset the formatter reads (historyChartOptions' posture).
-interface AxisTooltipParam {
-  seriesName?: string
-  marker?: string
-  axisValueLabel?: string
-  value?: unknown
+/** Tone-on-tone hatching for bars valued at today's quote rather than a stored close (F6):
+ *  45° lines in the card surface over the grant's own colour — a token hex, so the light
+ *  recolor and the conformance colour rule both hold. */
+export const ESTIMATE_HATCH = {
+  symbol: 'rect' as const,
+  symbolSize: 1,
+  dashArrayX: [1, 0],
+  dashArrayY: [2, 4],
+  rotation: -Math.PI / 4,
+  color: SURFACE,
 }
 
 /**
@@ -57,14 +62,6 @@ export function vestingTooltipFormatter(params: unknown): string {
 // this (AllocationPanel / SpendingPage's "Other").
 const MAX_GRANT_SLOTS = PALETTE.length
 
-// Display-only rounding, for the ONE derived quantity on this chart. `shares x quote` is float
-// arithmetic (38 x 183.2508 = 6963.530399999999) and a stack segment is chart GEOMETRY rather
-// than a reported figure, so it lands back on cents here (compChartOptions' `roundTo`).
-function roundTo(value: number, places: number): number {
-  const factor = 10 ** places
-  return Math.round(value * factor) / factor
-}
-
 /**
  * What one tranche contributes to its stack, or null when it must not draw at all.
  *
@@ -83,6 +80,22 @@ function contribution(vest: VestOut, latestPrice: string | null): number | null 
   return vest.shares * Number(latestPrice)
 }
 
+/** The strip's two figures: past tranches at their stored closes, future ones at the quote. */
+export function vestingTotals(
+  vests: VestOut[],
+  latestPrice: string | null,
+): { vested: number; unvested: number | null } {
+  const vested = roundTo(
+    vests.filter((v) => v.is_past && v.value !== null).reduce((sum, v) => sum + Number(v.value), 0),
+    2,
+  )
+  const futureShares = vests.filter((v) => !v.is_past).reduce((sum, v) => sum + v.shares, 0)
+  return {
+    vested,
+    unvested: latestPrice === null ? null : roundTo(futureShares * Number(latestPrice), 2),
+  }
+}
+
 /**
  * One stacked bar per vest DATE, one segment per grant — the whole vesting calendar, past
  * tranches at what they were worth and future ones at what today's quote would make them.
@@ -99,6 +112,7 @@ export function vestingChartOption(
   vests: VestOut[],
   grants: RsuGrantOut[],
   latestPrice: string | null,
+  { todayIso, selected }: { todayIso: string; selected?: Record<string, boolean> },
 ): EChartsOption | null {
   if (vests.length < 2) return null
 
@@ -153,30 +167,68 @@ export function vestingChartOption(
     folded && slot === MAX_GRANT_SLOTS ? OTHER_GRANT_LABEL : grants[slot].label,
   )
 
+  // A future column is priced at TODAY's quote, not at a close it never had: it hatches, and
+  // its tooltip rows say "(est.)" (F6).
+  const futureDates = new Set(drawable.filter(({ vest }) => !vest.is_past).map(({ vest }) => vest.vest_date))
+  const today = annotationRules([todayRule(dates, todayIso, formatDate)])
+
   return {
-    grid: { left: 70, right: 24, top: 40, bottom: 28 },
-    legend: { top: 0 },
-    tooltip: {
-      trigger: 'axis',
-      // A full formatter, because the hover carries the stack's TOTAL as its last row —
-      // which means building HTML, which means escapeHtml on the user-text grant labels
-      // (vestingTooltipFormatter's note).
-      formatter: vestingTooltipFormatter,
-    },
-    xAxis: { type: 'category', data: dates.map((date) => formatDate(date)) },
-    yAxis: {
-      type: 'value',
-      axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-    },
+    grid: grid(),
+    legend: legendFor(slotCount, selected),
+    tooltip: axisTooltip({
+      unit: 'money',
+      groups: names,
+      pointer: 'shadow',
+      // A future column's rows are estimates at today's quote; the item carries the flag.
+      rowSuffix: (param) => {
+        const item = param.data as { estimate?: boolean } | number | null | undefined
+        return typeof item === 'object' && item !== null && item.estimate === true ? '(est.)' : null
+      },
+    }),
+    xAxis: monthAxis(
+      dates.map((date) => formatDate(date)),
+      { gap: true },
+    ),
+    yAxis: moneyAxis(),
     series: rows.map((data, slot) => ({
       name: names[slot],
       type: 'bar' as const,
       stack: 'vest',
-      barMaxWidth: 22,
+      ...BAR_MARKS,
+      ...stagger(slot),
       color: folded && slot === MAX_GRANT_SLOTS ? OTHER_SERIES_COLOR : PALETTE[slot],
-      itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-      emphasis: { itemStyle: { borderColor: INK } },
-      data: data.map((value) => roundTo(value, 2)),
+      // The Today rule rides the first series only — one rule, not one per grant.
+      ...(slot === 0 && today ? { markLine: today } : {}),
+      data: data.map((value, column) =>
+        futureDates.has(dates[column])
+          ? { value: roundTo(value, 2), itemStyle: { decal: ESTIMATE_HATCH }, estimate: true }
+          : roundTo(value, 2),
+      ),
     })),
+  }
+}
+
+/** Every drawable tranche (F12): past at its stored value, future at the quote, flagged. */
+export function vestingCsv(
+  vests: VestOut[],
+  grants: RsuGrantOut[],
+  latestPrice: string | null,
+): ExportTable {
+  const known = new Set(grants.map((g) => g.id))
+  return {
+    headers: ['Vest date', 'Grant', 'Shares', 'Value', 'Estimate'],
+    rows: vests
+      .filter((v) => known.has(v.grant_id))
+      .map((v) => [
+        v.vest_date,
+        v.label,
+        v.shares,
+        v.is_past
+          ? (v.value ?? '')
+          : latestPrice === null
+            ? ''
+            : roundTo(v.shares * Number(latestPrice), 2).toFixed(2),
+        v.is_past ? 'no' : 'yes',
+      ]),
   }
 }
