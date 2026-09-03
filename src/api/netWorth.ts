@@ -52,9 +52,14 @@ export function fetchTimeseries(
   return api<NetWorthTimeseries>(`/net-worth/timeseries?granularity=${granularity}${scope}`)
 }
 
-export function fetchSummary(owner: OwnerScope = null): Promise<NetWorthSummary> {
-  const scope = owner === null ? '' : `?owner=${owner}`
-  return api<NetWorthSummary>(`/net-worth/summary${scope}`)
+/** Latest month by default; `month` (a first-of-month ISO date) views that snapshot with its
+ *  own month-over-month delta — the ribbon's click-to-view (2026-09-03 shell spec §7). */
+export function fetchSummary(owner: OwnerScope = null, month?: string): Promise<NetWorthSummary> {
+  const params = new URLSearchParams()
+  if (owner !== null) params.set('owner', String(owner))
+  if (month !== undefined) params.set('month', month)
+  const query = params.toString()
+  return api<NetWorthSummary>(`/net-worth/summary${query === '' ? '' : `?${query}`}`)
 }
 
 export function fetchMonthBalances(month: string): Promise<MonthBalances> {

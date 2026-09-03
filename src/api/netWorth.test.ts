@@ -36,3 +36,11 @@ it('sends the joint literal, and it is the summary query string on its own', asy
   await fetchTimeseries('monthly', 'joint')
   expect(path()).toBe('/net-worth/timeseries?granularity=monthly&owner=joint')
 })
+
+it('sends owner and month together, month as a first-of-month ISO date', async () => {
+  await fetchSummary('joint', '2026-02-01')
+  expect(path()).toBe('/net-worth/summary?owner=joint&month=2026-02-01')
+  vi.clearAllMocks()
+  await fetchSummary(null, '2026-02-01')
+  expect(path()).toBe('/net-worth/summary?month=2026-02-01')
+})

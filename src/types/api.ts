@@ -100,6 +100,14 @@ export interface NetWorthSummary {
   owner_totals: OwnerTotal[]
 }
 
+/** Which months each hand-entered feed covers — ascending first-of-month ISO dates
+ *  (GET /coverage, 2026-09-03 shell spec §7). */
+export interface CoverageOut {
+  balances: string[]
+  spending: string[]
+  net_pay: string[]
+}
+
 export interface MonthBalances {
   month: string
   exists: boolean
