@@ -16,16 +16,21 @@ itself a batch (source='undo') plus an `undo` run whose report links `undid`, wh
 "already undone" and the listing's `undone_by` are answered.
 """
 
+import json
+import logging
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 from fastapi import Depends, Request
+from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.database import get_db
-from app.models import ChangeLog, User
-from app.services.snapshot import json_cell, json_row
+from app.database import Base, get_db
+from app.models import ChangeLog, LifecycleRun, User
+from app.services.snapshot import json_cell, json_row, parse_cell
+
+logger = logging.getLogger(__name__)
 
 CHANGE_BATCH_HEADER = "X-Change-Batch"
 CHANGE_SOURCE_HEADER = "X-Change-Source"
@@ -142,3 +147,106 @@ async def change_batch(
     auth dependency and this one share a single lookup."""
     claimed = request.headers.get(CHANGE_SOURCE_HEADER, "ui").strip().lower()
     return ChangeBatch(db, source=claimed if claimed in HEADER_SOURCES else "ui", actor=user.email)
+
+
+class UndoRefused(Exception):
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+def _pk_key(table_name: str, pk: dict[str, object]) -> tuple[str, str]:
+    return table_name, json.dumps(pk, sort_keys=True, separators=(",", ":"))
+
+
+async def undone_by(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, UUID]:
+    """batch -> the undo batch that reversed it, read from the `undo` runs' reports."""
+    if not batch_ids:
+        return {}
+    wanted = {str(batch_id): batch_id for batch_id in batch_ids}
+    rows = (
+        await db.execute(
+            select(LifecycleRun.report, LifecycleRun.batch_id).where(
+                LifecycleRun.kind == "undo", LifecycleRun.ok.is_(True)
+            )
+        )
+    ).all()
+    out: dict[UUID, UUID] = {}
+    for report, undo_batch in rows:
+        undid = (report or {}).get("undid")
+        if isinstance(undid, str) and undid in wanted and undo_batch is not None:
+            out[wanted[undid]] = undo_batch
+    return out
+
+
+async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> UUID:
+    """Replay a batch's inverses in reverse order, in one transaction (spec §9): insert →
+    delete, update → set `before`, delete → insert `before`. Refuses (409) a summary-only
+    or non-undoable-source batch, an already-undone batch, and a batch whose rows a later
+    batch touched. Records the replay as a new source='undo' batch plus an `undo` run.
+    Expunges the session afterwards: Core statements bypass the identity map."""
+    rows = list(
+        (
+            await db.execute(
+                select(ChangeLog).where(ChangeLog.batch_id == batch_id).order_by(ChangeLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise UndoRefused(404, "No such change")
+    row_level = [row for row in rows if row.op != "batch"]
+    if rows[0].source not in UNDOABLE_SOURCES or not row_level:
+        raise UndoRefused(409, SUMMARY_REFUSAL)
+    if batch_id in await undone_by(db, [batch_id]):
+        raise UndoRefused(409, ALREADY_UNDONE)
+    keys = {_pk_key(row.table_name, row.pk) for row in row_level}
+    later = (
+        await db.execute(
+            select(ChangeLog).where(
+                ChangeLog.id > rows[-1].id,
+                ChangeLog.table_name.in_({row.table_name for row in row_level}),
+                ChangeLog.op != "batch",
+            )
+        )
+    ).scalars()
+    if any(_pk_key(row.table_name, row.pk) in keys for row in later):
+        raise UndoRefused(409, OVERLAP_REFUSAL)
+
+    undo = ChangeBatch(db, source="undo", actor=actor)
+    undo.label = f"Undid: {rows[0].label}"
+    undo.month = rows[0].month
+    for row in reversed(row_level):
+        table = Base.metadata.tables[row.table_name]
+        where = and_(
+            *[table.c[key] == parse_cell(table.c[key], value) for key, value in row.pk.items()]
+        )
+        before = {
+            key: parse_cell(table.c[key], value)
+            for key, value in (row.before or {}).items()
+            if key in table.c
+        }
+        if row.op == "insert":
+            await db.execute(delete(table).where(where))
+            undo.record(row.table_name, row.pk, row.after, None, month=row.month)
+        elif row.op == "update":
+            await db.execute(update(table).where(where).values(before))
+            undo.record(row.table_name, row.pk, row.after, row.before, month=row.month)
+        else:
+            await db.execute(insert(table).values(before))
+            undo.record(row.table_name, row.pk, None, row.before, month=row.month)
+    db.add(
+        LifecycleRun(
+            kind="undo",
+            ok=True,
+            actor=actor,
+            batch_id=undo.id,
+            report={"undid": str(batch_id), "label": rows[0].label},
+        )
+    )
+    new_id = await undo.commit()
+    db.expunge_all()
+    logger.info("undid batch %s as %s", batch_id, new_id)
+    return new_id  # type: ignore[return-value]  # never None: row_level is non-empty
