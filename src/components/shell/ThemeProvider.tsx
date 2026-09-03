@@ -13,21 +13,35 @@ import type { ReactNode } from 'react'
 // localStorage now, the Data-lifecycle spec's server prefs later. `version` is the chart
 // bridge's signal — EChart re-initializes with a versioned theme whenever the RESOLVED
 // palette changes, and only then (density and a same-palette choice do not redraw charts).
+// How it is used: mount <ThemeProvider> once around the app, then `useTheme()` anywhere for
+// the current values plus `setTheme(system|dark|light)` and `setDensity(comfortable|compact)`.
 export type ThemeChoice = 'system' | 'dark' | 'light'
 export type ResolvedTheme = 'dark' | 'light'
 export type Density = 'comfortable' | 'compact'
 
+// index.html's inline script repeats these literally; ThemeProvider.test pins them.
 export const THEME_KEY = 'finance.theme'
 export const DENSITY_KEY = 'finance.density'
-const LIGHT_QUERY = '(prefers-color-scheme: light)'
+export const LIGHT_QUERY = '(prefers-color-scheme: light)'
 
-interface ThemeState {
+export interface ThemeState {
   theme: ThemeChoice
   resolved: ResolvedTheme
   density: Density
   version: number
   setTheme: (next: ThemeChoice) => void
   setDensity: (next: Density) => void
+}
+
+// One instance (ToastProvider's NOOP precedent): bare-rendered consumers that key effects on
+// `setTheme` or on the object itself must not re-run every render.
+const BARE: ThemeState = {
+  theme: 'dark',
+  resolved: 'dark',
+  density: 'comfortable',
+  version: 0,
+  setTheme: () => {},
+  setDensity: () => {},
 }
 
 const ThemeContext = createContext<ThemeState | null>(null)
@@ -70,7 +84,8 @@ function persist(key: string, value: string): void {
 export default function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeChoice>(readChoice)
   const [density, setDensityState] = useState<Density>(readDensity)
-  const [resolved, setResolved] = useState<ResolvedTheme>(() => resolveTheme(readChoice()))
+  // Resolves the choice already read above — one storage read, not two.
+  const [resolved, setResolved] = useState<ResolvedTheme>(() => resolveTheme(theme))
   const [version, setVersion] = useState(0)
 
   // Stamp the document. Effects, not render: the DOM outside React's tree is a side effect.
@@ -124,17 +139,8 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
 
-/** Safe outside a provider (tests render pages bare): dark, comfortable, version 0. */
+/** Safe outside a provider (tests render pages bare): dark, comfortable, version 0 — and
+ *  always the same BARE object, so identity-keyed effects stay put. */
 export function useTheme(): ThemeState {
-  const ctx = useContext(ThemeContext)
-  return (
-    ctx ?? {
-      theme: 'dark',
-      resolved: 'dark',
-      density: 'comfortable',
-      version: 0,
-      setTheme: () => {},
-      setDensity: () => {},
-    }
-  )
+  return useContext(ThemeContext) ?? BARE
 }

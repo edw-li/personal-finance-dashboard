@@ -1,6 +1,9 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { StrictMode } from 'react'
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import ThemeProvider, { useTheme } from './ThemeProvider'
+import ThemeProvider, { DENSITY_KEY, LIGHT_QUERY, THEME_KEY, useTheme } from './ThemeProvider'
 
 function Probe() {
   const { theme, resolved, density, version, setTheme, setDensity } = useTheme()
@@ -61,6 +64,12 @@ describe('ThemeProvider', () => {
     expect(localStorage.getItem('finance.theme')).toBe('light')
   })
 
+  it('bumps the version exactly once under StrictMode (updater double-invocation guard)', () => {
+    render(<StrictMode><ThemeProvider><Probe /></ThemeProvider></StrictMode>)
+    act(() => screen.getByText('light').click())
+    expect(state()).toBe('light|light|comfortable|1')
+  })
+
   it('reads a stored choice on mount', () => {
     localStorage.setItem('finance.theme', 'light')
     localStorage.setItem('finance.density', 'compact')
@@ -80,6 +89,21 @@ describe('ThemeProvider', () => {
     expect(state()).toBe('dark|dark|comfortable|2')
   })
 
+  it('switching to system while the OS prefers light resolves light straight away', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+    prefersLight = true
+    act(() => screen.getByText('system').click())
+    expect(state()).toBe('system|light|comfortable|1')
+  })
+
+  it('drops the OS listener when the choice leaves system', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+    act(() => screen.getByText('system').click())
+    expect(listeners).toHaveLength(1)
+    act(() => screen.getByText('dark').click())
+    expect(listeners).toHaveLength(0)
+  })
+
   it('density persists and does not touch the chart version', () => {
     render(<ThemeProvider><Probe /></ThemeProvider>)
     act(() => screen.getByText('compact').click())
@@ -92,5 +116,27 @@ describe('ThemeProvider', () => {
     localStorage.setItem('finance.density', 'huge')
     render(<ThemeProvider><Probe /></ThemeProvider>)
     expect(state()).toBe('dark|dark|comfortable|0')
+  })
+
+  it('falls back to one stable object outside a provider', () => {
+    render(<Probe />)
+    expect(state()).toBe('dark|dark|comfortable|0')
+
+    // Identity matters: a consumer keying an effect on the object or on `setTheme` would
+    // re-run every render if the hook allocated a fresh fallback.
+    const { result, rerender } = renderHook(() => useTheme())
+    const first = result.current
+    rerender()
+    expect(result.current).toBe(first)
+    expect(result.current.setTheme).toBe(first.setTheme)
+  })
+
+  it('index.html anti-flash script uses the same keys, query and attributes (no drift)', () => {
+    const html = readFileSync(path.resolve(__dirname, '../../../index.html'), 'utf8')
+    expect(html).toContain(`'${THEME_KEY}'`)
+    expect(html).toContain(`'${DENSITY_KEY}'`)
+    expect(html).toContain(LIGHT_QUERY)
+    expect(html).toContain('dataset.theme')
+    expect(html).toContain('dataset.density')
   })
 })
