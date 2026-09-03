@@ -82,10 +82,21 @@ vi.mock('../api/limits', async (importOriginal) => ({
   putLimits: vi.fn(),
   cloneLimits: vi.fn(),
 }))
+// The Health and Activity cards (2026-09-03 data-lifecycle spec §9, §11) each own a fetch;
+// unmocked they would hit the network from every test in this file.
+vi.mock('../api/lifecycle', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/lifecycle')>()),
+  fetchActivity: vi.fn(),
+  fetchActivityRun: vi.fn(),
+  undoBatch: vi.fn(),
+  fetchHealth: vi.fn(),
+  createSnapshot: vi.fn(),
+}))
 import { fetchAssistantSettings } from '../api/assistant'
 import { changePassword } from '../api/auth'
 import { fetchHousehold } from '../api/household'
 import { importXlsx } from '../api/importer'
+import { fetchActivity, fetchHealth } from '../api/lifecycle'
 import { fetchLimits } from '../api/limits'
 import { fetchAccounts } from '../api/netWorth'
 import { fetchPortfolioAccounts } from '../api/portfolio'
@@ -253,6 +264,9 @@ beforeEach(() => {
     key: { configured: true, source: 'env' },
     default_model: 'kimi-k3',
   })
+  // Empty answers: neither card adds a row, a banner or a button to this file's queries.
+  vi.mocked(fetchActivity).mockResolvedValue({ entries: [], next_before: null })
+  vi.mocked(fetchHealth).mockResolvedValue({ checked_at: '2026-09-04T09:00:00+00:00', checks: [] })
   confirmSpy.mockReturnValue(true)
 })
 
@@ -948,6 +962,27 @@ describe('SettingsPage — assistant card', () => {
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Assistant' })).toBeNull()
     expect(vi.mocked(fetchAssistantSettings)).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsPage — health and activity cards', () => {
+  it('mounts Data health then Activity directly before the App settings card', async () => {
+    renderPage()
+    const health = await screen.findByRole('region', { name: 'Data health' })
+    const activity = screen.getByRole('region', { name: 'Activity' })
+    const appSettings = document.getElementById('app-settings')
+    expect(health.nextElementSibling).toBe(activity)
+    expect(activity.nextElementSibling).toBe(appSettings)
+    await waitFor(() => expect(vi.mocked(fetchHealth)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(fetchActivity)).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers neither card when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    renderPage()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Data health' })).toBeNull()
+    expect(vi.mocked(fetchHealth)).not.toHaveBeenCalled()
   })
 })
 

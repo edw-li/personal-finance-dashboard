@@ -6,9 +6,11 @@ import { importXlsx } from '../api/importer'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import InfoHint from '../components/InfoHint'
 import AccountsCard from '../components/settings/AccountsCard'
+import ActivityCard from '../components/settings/ActivityCard'
 import AppearanceCard from '../components/settings/AppearanceCard'
 import AssistantCard from '../components/settings/AssistantCard'
 import CategoriesCard from '../components/settings/CategoriesCard'
+import HealthCard from '../components/settings/HealthCard'
 import HouseholdCard from '../components/settings/HouseholdCard'
 import ImportReportView from '../components/settings/ImportReportView'
 import LimitsCard from '../components/settings/LimitsCard'
@@ -385,6 +387,12 @@ export default function SettingsPage() {
                   page as pure status. Own fetch/error (SystemCard), same loadedOnce gate as
                   everything here: a settings GET that failed means the API is unreachable. */}
               <SystemCard />
+
+              {/* Data health, then Activity (2026-09-03 data-lifecycle spec §9, §11): what is
+                  wrong with the data and what changed it — beside the backup cards, ahead of
+                  the forms. Own fetches, the page's loadedOnce gate. */}
+              <HealthCard />
+              <ActivityCard />
 
               <section className="card span-6" id="app-settings">
                 <h2 className="eyebrow">
