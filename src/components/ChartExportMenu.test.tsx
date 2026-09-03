@@ -8,21 +8,44 @@ vi.mock('../charts/exportImage', () => ({
 }))
 
 import ChartExportMenu from './ChartExportMenu'
+import ThemeProvider from './shell/ThemeProvider'
 import ToastProvider from './ToastProvider'
+import { DARK, LIGHT } from '../theme/tokens'
 import { captionedPng, dataUrlToBlob } from '../charts/exportImage'
 import { downloadDataUrl, downloadText } from '../utils/download'
 
 const chart = { getDataURL: vi.fn(() => 'data:image/png;base64,RAW') }
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); localStorage.clear() })
 
 describe('ChartExportMenu', () => {
-  it('legacy config (no title): PNG downloads the raw snapshot synchronously', () => {
-    render(<ChartExportMenu config={{ name: 'demo' }} getChart={() => chart} />)
+  it('snapshots at 2x on the resolved card surface', () => {
+    render(<ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} />)
     fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
-    expect(downloadDataUrl).toHaveBeenCalledWith('data:image/png;base64,RAW', 'demo.png')
-    expect(captionedPng).not.toHaveBeenCalled()
-    expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull() // Copy needs a title too
+    expect(chart.getDataURL).toHaveBeenCalledWith({ pixelRatio: 2, backgroundColor: DARK.surface })
+  })
+
+  // The matte follows the RESOLVED theme: a light-theme chart exported on the dark card
+  // color comes back as near-black paper with invisible axis labels.
+  it('mattes on the LIGHT card surface under the light theme', () => {
+    localStorage.setItem('finance.theme', 'light')
+    render(
+      <ThemeProvider>
+        <ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} />
+      </ThemeProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
+    expect(chart.getDataURL).toHaveBeenCalledWith({ pixelRatio: 2, backgroundColor: LIGHT.surface })
+  })
+
+  it('offers CSV only when a csv fn is supplied', () => {
+    const { unmount } = render(<ChartExportMenu config={{ name: 'demo', title: 'Demo' }} getChart={() => chart} />)
+    expect(screen.getByRole('group', { name: 'Export demo' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'PNG' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'CSV' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Table' })).toBeNull()
+    unmount()
+    render(<ChartExportMenu config={{ name: 'demo', title: 'Demo', csv: () => ({ headers: [], rows: [] }) }} getChart={() => chart} />)
+    expect(screen.getByRole('button', { name: 'CSV' })).toBeTruthy()
   })
 
   it('captioned PNG: composites title, caption and the export date on the resolved surface', async () => {

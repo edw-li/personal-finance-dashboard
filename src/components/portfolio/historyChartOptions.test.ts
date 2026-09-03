@@ -13,7 +13,6 @@ import { tooltipRows } from '../../testing/tooltipRows'
 import {
   buildEventMarkers,
   EVENTS_SERIES,
-  historyTooltipFormatter,
   liveFromHoldings,
   portfolioHistoryCsv,
   portfolioHistoryOption,
@@ -255,81 +254,6 @@ describe('liveFromHoldings', () => {
   })
 })
 
-describe('historyTooltipFormatter', () => {
-  it('skips null rows (the padded live category) and formats currency', () => {
-    const html = historyTooltipFormatter([
-      { seriesName: 'Portfolio value', marker: '<i/>', axisValueLabel: 'Aug 14, 2026', value: null },
-      { seriesName: 'Live', marker: '<i/>', axisValueLabel: 'Aug 14, 2026', value: ['Aug 14, 2026', 723456.78] },
-    ])
-    expect(html).toContain('Aug 14, 2026')
-    expect(html).toContain('Live')
-    expect(html).toContain('$723,456.78')
-    expect(html).not.toContain('Portfolio value')
-  })
-
-  it('returns an empty string when every row is null', () => {
-    expect(historyTooltipFormatter([{ value: null }])).toBe('')
-  })
-
-  it('prints every finite row on a shared category, and accepts a non-array param', () => {
-    // Same-day park: the value line and the Live ping both sit on the last category, so
-    // BOTH rows are finite and both must print (the null-skipping must not over-filter).
-    const parked = historyTooltipFormatter([
-      {
-        seriesName: 'Portfolio value',
-        marker: '<i/>',
-        axisValueLabel: 'Aug 10, 2026',
-        value: 718422.07,
-      },
-      {
-        seriesName: 'Live',
-        marker: '<i/>',
-        axisValueLabel: 'Aug 10, 2026',
-        value: ['Aug 10, 2026', 720000],
-      },
-    ])
-    expect(parked).toContain('Portfolio value')
-    expect(parked).toContain('$718,422.07')
-    expect(parked).toContain('Live')
-    expect(parked).toContain('$720,000.00')
-    // echarts hands a lone object (not an array) to an axis formatter with one row.
-    expect(
-      historyTooltipFormatter({
-        seriesName: 'Portfolio value',
-        marker: '<i/>',
-        axisValueLabel: 'Aug 10, 2026',
-        value: 718422.07,
-      }),
-    ).toContain('$718,422.07')
-  })
-
-  it('skips the benchmark null row on the padded live category', () => {
-    const html = historyTooltipFormatter([
-      {
-        seriesName: 'VOO (your contributions)',
-        marker: '<i/>',
-        axisValueLabel: 'Aug 14, 2026',
-        value: null,
-      },
-      {
-        seriesName: 'Live',
-        marker: '<i/>',
-        axisValueLabel: 'Aug 14, 2026',
-        value: ['Aug 14, 2026', 723456.78],
-      },
-    ])
-    expect(html).toContain('Live')
-    expect(html).not.toContain('VOO (your contributions)')
-  })
-
-  it('bolds the date header like every other formatter', () => {
-    const html = historyTooltipFormatter([
-      { seriesName: 'Portfolio value', marker: '<i/>', axisValueLabel: 'Aug 10, 2026', value: 1 },
-    ])
-    expect(html).toContain('<strong>Aug 10, 2026</strong>')
-  })
-})
-
 // --- event markers (2026-08-25 spec §2c) --------------------------------------------
 
 const TICKERS = new Map([
@@ -517,47 +441,6 @@ describe('portfolioHistoryOption with events', () => {
   it('draws no Events series for an empty or omitted list (Overview keeps the two-arg call)', () => {
     expect(seriesOf(portfolioHistoryOption(history(), null, [])!)).toHaveLength(4)
     expect(seriesOf(portfolioHistoryOption(history(), null)!)).toHaveLength(4)
-  })
-})
-
-describe('historyTooltipFormatter — the Events branch', () => {
-  it('lists each clustered event (count first), escaped, never as a money row', () => {
-    const html = historyTooltipFormatter([
-      { seriesName: 'Portfolio value', marker: '<i/>', axisValueLabel: 'Aug 3, 2026', value: 710000.5 },
-      {
-        seriesName: EVENTS_SERIES,
-        marker: '<i/>',
-        axisValueLabel: 'Aug 3, 2026',
-        value: ['Aug 3, 2026', 710000.5],
-        data: {
-          events: [
-            { text: 'Buy <X> — 10 sh · Aug 4, 2026' },
-            { text: 'Dividend VOO — $12.00 · Aug 5, 2026' },
-          ],
-        },
-      },
-    ])
-    expect(html).toContain('<strong>Aug 3, 2026</strong>')
-    expect(html).toContain('<strong>2 events</strong>')
-    expect(html).toContain('Buy &lt;X&gt; — 10 sh · Aug 4, 2026') // tickers are server text
-    expect(html).toContain('Dividend VOO — $12.00 · Aug 5, 2026')
-    // The marker's y is chart geometry (it rides the value line) — never a money row.
-    expect(html).not.toContain(`${EVENTS_SERIES}&nbsp;`)
-  })
-
-  it('drops the count line for a lone event and stands alone on the live category', () => {
-    const html = historyTooltipFormatter([
-      {
-        seriesName: EVENTS_SERIES,
-        marker: '',
-        axisValueLabel: 'Aug 10, 2026',
-        value: ['Aug 10, 2026', 718422.07],
-        data: { events: [{ text: 'Buy NVDA — 10 sh · Aug 10, 2026' }] },
-      },
-    ])
-    expect(html).toContain('<strong>Aug 10, 2026</strong>')
-    expect(html).toContain('Buy NVDA — 10 sh · Aug 10, 2026')
-    expect(html).not.toContain('events</strong>')
   })
 })
 

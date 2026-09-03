@@ -4,8 +4,6 @@ import type { EChartsOption } from '../charts/echarts'
 import { quiesceRipples } from '../charts/motion'
 import { lightFromDark, recolorOption } from '../charts/recolor'
 import type { ZoomWindow } from '../charts/timeZoom'
-import ChartExportMenu from './ChartExportMenu'
-import type { ExportConfig } from './ChartExportMenu'
 import { useChartDecals } from './useChartDecals'
 import { useReducedMotion } from './useReducedMotion'
 import { useTheme } from './shell/ThemeProvider'
@@ -31,7 +29,6 @@ export default function EChart({
   instanceRef,
   onLegendChange,
   onDataZoom,
-  exportConfig,
   animateEntrance = true,
   zoomWindow,
   group,
@@ -56,8 +53,6 @@ export default function EChart({
   onLegendChange?: (selected: Record<string, boolean>) => void
   /** Mirrors a ctrl+wheel/drag-pan window into page state, as category-axis indices. */
   onDataZoom?: (window: { startValue: number; endValue: number }) => void
-  /** Mounts the house ⤓ export menu above the canvas (2026-08-25 spec §2a). */
-  exportConfig?: ExportConfig
   /** false = paint the option already-drawn (cached revisits must not replay the
    *  entrance dance — 2026-08-27 spec §1). Default true. Merged after the page's
    *  option, exactly like the reduced-motion force. */
@@ -248,18 +243,13 @@ export default function EChart({
   }, [option, animateEntrance, zoomWindow, resolved, themeVersion, reducedMotion, decals])
 
   return (
-    <>
-      {exportConfig && (
-        <ChartExportMenu config={exportConfig} getChart={() => chartRef.current} />
-      )}
-      <div
-        ref={containerRef}
-        // Unconditional: `ariaLabel` is required, so the role can never name an unlabelled
-        // image (the hedge it replaced only existed while the prop was optional).
-        role="img"
-        aria-label={ariaLabel}
-        style={{ height, width: '100%' }}
-      />
-    </>
+    <div
+      ref={containerRef}
+      // Unconditional: `ariaLabel` is required, so the role can never name an unlabelled
+      // image (the hedge it replaced only existed while the prop was optional).
+      role="img"
+      aria-label={ariaLabel}
+      style={{ height, width: '100%' }}
+    />
   )
 }

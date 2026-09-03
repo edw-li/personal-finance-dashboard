@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { budgetStepSeries } from '../components/spending/budgetChartOptions'
 import { budgetReference, referenceLine } from './reference'
 import { MUTED } from './theme'
 
@@ -19,9 +18,20 @@ describe('referenceLine', () => {
     expect('id' in referenceLine('x', [])).toBe(false)
     expect('step' in referenceLine('x', [])).toBe(false)
   })
-  it('budgetReference absorbs budgetStepSeries byte for byte', () => {
-    expect(budgetReference('Food budget', ['400.00', null, '350.00'])).toEqual(
-      budgetStepSeries('Food budget', ['400.00', null, '350.00']),
-    )
+  // Was "absorbs budgetStepSeries byte for byte" until that module was retired; the shape it
+  // pinned is spelled out here so budgetReference keeps a direct case of its own.
+  it('budgetReference is the step-end budget series: id, numbers, nulls kept', () => {
+    expect(budgetReference('Food budget', ['400.00', null, '350.00'])).toEqual({
+      id: 'budget-Food budget',
+      name: 'Food budget',
+      type: 'line',
+      symbol: 'none',
+      step: 'end',
+      lineStyle: { width: 2, type: 'dashed' },
+      color: MUTED,
+      z: 9,
+      connectNulls: false,
+      data: [400, null, 350],
+    })
   })
 })

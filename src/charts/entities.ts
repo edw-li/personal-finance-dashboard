@@ -28,13 +28,3 @@ export function personSlot(
 export function slotColor(slot: number): string {
   return slot < PALETTE.length ? PALETTE[slot] : OTHER_SERIES_COLOR
 }
-
-/** The gray every folded tail wears (Other categories, the ninth grant, the fourth donut slice). */
-export const foldColor = OTHER_SERIES_COLOR
-
-/** Drill/trend picks take the lowest free slot so removing one never repaints the survivors. */
-export function lowestFreeSlot(used: Iterable<number>, max: number = PALETTE.length): number | null {
-  const taken = new Set(used)
-  for (let slot = 0; slot < max; slot += 1) if (!taken.has(slot)) return slot
-  return null
-}

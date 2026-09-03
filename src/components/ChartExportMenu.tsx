@@ -14,10 +14,9 @@ export interface ExportConfig {
   /** Rows supplied by the CALLER from data already in scope — never introspected from echarts
    *  options (2026-08-25 spec Decision log). Invoked lazily, on click. */
   csv?: () => ExportTable
-  /** The card's title (chart spec §14). Present → the PNG carries a caption strip and Copy is
-   *  offered; absent → the legacy raw snapshot (EChart's own exportConfig, until every mount
-   *  is on ChartCard). */
-  title?: string
+  /** The card's title (chart spec §14) — the PNG carries a caption strip and Copy is
+   *  offered. Required since every mount goes through ChartCard, whose own title is. */
+  title: string
   /** "as of Aug 14, 2026" — the strip's second line. */
   caption?: string
 }
@@ -31,7 +30,7 @@ export interface ExportableChart {
 /**
  * The house ⤓ menu: PNG · Copy · CSV · Table. PNG snapshots the live canvas at 2× on the
  * resolved card surface (the theme paints the canvas transparent, which would export black)
- * and, with a title, composites the caption strip. Copy writes a PNG ClipboardItem; where the
+ * composites the caption strip. Copy writes a PNG ClipboardItem; where the
  * browser has none (Firefox by default) or refuses, the PNG downloads and a toast says so.
  * Table is the card's data-table toggle (ChartCard owns the state).
  */
@@ -55,25 +54,18 @@ export default function ChartExportMenu({
     return chart === null ? null : chart.getDataURL({ pixelRatio: 2, backgroundColor: tokens.surface })
   }
   const captioned = async (raw: string): Promise<string> =>
-    config.title === undefined
-      ? raw
-      : captionedPng(raw, {
-          title: config.title,
-          caption: config.caption,
-          exportedOn: formatDate(todayIso()),
-          surface: tokens.surface,
-          ink: tokens.text,
-          muted: tokens.muted,
-        })
+    captionedPng(raw, {
+      title: config.title,
+      caption: config.caption,
+      exportedOn: formatDate(todayIso()),
+      surface: tokens.surface,
+      ink: tokens.text,
+      muted: tokens.muted,
+    })
 
   const png = () => {
     const raw = snapshot()
     if (raw === null) return // disposed mid-click: nothing to snapshot
-    // Legacy configs stay synchronous — the pre-grammar behaviour, byte for byte.
-    if (config.title === undefined) {
-      downloadDataUrl(raw, `${config.name}.png`)
-      return
-    }
     void captioned(raw)
       // Decoration must NEVER fail an export (exportImage.ts's own contract). It already
       // returns the raw URL where the canvas cannot draw, but the image DECODE rejects —
@@ -107,9 +99,7 @@ export default function ChartExportMenu({
       <span className="chart-export-glyph" aria-hidden="true">⤓</span>
       <div className="segmented">
         <button type="button" onClick={png}>PNG</button>
-        {config.title !== undefined && (
-          <button type="button" onClick={() => void copy()}>Copy</button>
-        )}
+        <button type="button" onClick={() => void copy()}>Copy</button>
         {csv && (
           <button
             type="button"

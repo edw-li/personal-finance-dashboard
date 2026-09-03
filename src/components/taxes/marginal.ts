@@ -8,6 +8,10 @@
 // are inclusive FLOORS (the API validates ascending order with thresholds[0] == 0), a
 // threshold belongs to the bracket BELOW it, and non-positive income is not taxed. Every
 // function below assumes ascending order — toBrackets is the only door in and sorts.
+// Display-only cents rounding: the walk is float arithmetic, and a marginal figure must
+// land back on cents before formatCurrency sees it. The shared helper (spec §18) rather
+// than a fourth copy — charts/grammar.ts is pure math and format, no echarts.
+import { roundTo } from '../../charts/grammar'
 import type { TaxBracketOut } from '../../types/api'
 
 export interface Bracket {
@@ -26,13 +30,6 @@ export interface LadderSegment {
 
 /** The sentence's step: "your next $1,000". */
 export const MARGINAL_STEP = 1000
-
-// Display-only cents rounding (taxChartOptions' roundTo): the walk is float arithmetic,
-// and a marginal figure must land back on cents before formatCurrency sees it.
-function roundTo(value: number, places: number): number {
-  const factor = 10 ** places
-  return Math.round(value * factor) / factor
-}
 
 /** Wire rows → sorted numeric brackets. bracket_index is ignored — order comes from the
  *  thresholds, defensively (the server's own posture). */

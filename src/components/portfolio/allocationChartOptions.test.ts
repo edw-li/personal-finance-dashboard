@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { DIVERGING, INK, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
+import { DIVERGING, INK, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { AllocationResponse, HoldingOut } from '../../types/api'
 import {
@@ -12,7 +12,6 @@ import {
   heatTreemapCsv,
   heatTreemapOption,
   positiveSlices,
-  treemapOption,
 } from './allocationChartOptions'
 
 // Wire shape of GET /portfolio/allocation?by=… — pydantic v2 serializes Decimal as strings,
@@ -99,7 +98,7 @@ describe('donutOption', () => {
     ])
   })
 
-  it('drops oversold and empty slices from both area-encoded forms', () => {
+  it('drops oversold and empty slices from the donut', () => {
     // A short position has a NEGATIVE market value and cannot be drawn as an area; the
     // holdings table still shows the row with its warning (Task 4 review M5).
     const data = allocation([
@@ -109,7 +108,6 @@ describe('donutOption', () => {
     ])
     expect(positiveSlices(data).map((s) => s.key)).toEqual(['etf'])
     expect(slicesOf(donutOption(data, false)).map((s) => s.name)).toEqual(['etf'])
-    expect(slicesOf(treemapOption(data)).map((s) => s.name)).toEqual(['etf'])
   })
 
   it('reads the type keys as English only when the dimension is type', () => {
@@ -143,60 +141,6 @@ describe('donutOption', () => {
     expect(tooltipRows(tooltipFormatterOf(option)({ name: '<b>ETF</b>', value: 3000 })).label).toBe(
       '&lt;b&gt;ETF&lt;/b&gt;',
     )
-    expect(tooltipFormatterOf(treemapOption(allocation([
-      ['<b>x</b>', '3000.00'],
-      ['plain', '1000.00'],
-    ])))({
-      name: '<b>x</b>',
-      value: 3000,
-    })).toBe('<strong>$3,000.00</strong> · 75.0%<br/>&lt;b&gt;x&lt;/b&gt;')
-  })
-})
-
-function labelFormatterOf(
-  option: EChartsOption,
-): (params: { name: string; value: number }) => string {
-  return (
-    option as unknown as {
-      series: { label: { formatter: (p: { name: string; value: number }) => string } }[]
-    }
-  ).series[0].label.formatter
-}
-
-describe('treemapOption', () => {
-  it('suppresses the implicit root node — the gaps between cells are not data', () => {
-    // Hovering the 2px gapWidth strips hits the flat data's virtual parent, whose params
-    // carry an empty name and the whole book's value: ": $773.2K" answered every hover
-    // near a border until this guard.
-    const option = treemapOption(allocation([['a', '600.00'], ['b', '200.00']]))
-    expect(tooltipFormatterOf(option)({ name: '', value: 800 })).toBe('')
-  })
-
-  it('labels every cell with its name, compact value and share of the drawn total', () => {
-    const option = treemapOption(allocation([['Software', '600.00'], ['Retail', '200.00']]))
-    const label = labelFormatterOf(option)
-    expect(label({ name: 'Software', value: 600 })).toBe('Software\n$600 · 75.0%')
-    expect(label({ name: 'Retail', value: 200 })).toBe('Retail\n$200 · 25.0%')
-  })
-
-  it('flips the label ink at ramp index 6, where the blue gets light', () => {
-    // idx = 3 + round(8 × value/max): 1000 → 11 (the ramp top), 313 → 6, 312 → 5. The
-    // boundary is the contrast promise — #fff on SEQUENTIAL_BLUE[11] is 1.32:1, so the
-    // light half of the ramp takes the dark SURFACE label and the dark half takes INK.
-    const data = slicesOf(
-      treemapOption(
-        allocation([
-          ['big', '1000.00'],
-          ['edge', '313.00'],
-          ['under', '312.00'],
-        ]),
-      ),
-    )
-    expect(data.map((s) => s.itemStyle?.color)).toEqual([
-      SEQUENTIAL_BLUE[11], SEQUENTIAL_BLUE[6], SEQUENTIAL_BLUE[5],
-    ])
-    expect(data.map((s) => s.label?.color)).toEqual([SURFACE, SURFACE, INK])
-    expect(data.map((s) => s.value)).toEqual([1000, 313, 312])
   })
 })
 

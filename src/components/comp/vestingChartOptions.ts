@@ -11,10 +11,9 @@ import { legendFor } from '../../charts/legend'
 import { annotationRules, todayRule } from '../../charts/markLine'
 import { OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { axisTooltip } from '../../charts/tooltip'
-import type { AxisTooltipParam } from '../../charts/tooltip'
 import type { RsuGrantOut, VestOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { escapeHtml, formatCurrency, formatDate } from '../../utils/format'
+import { formatDate } from '../../utils/format'
 
 /** The name the ninth grant and everything after it stacks under. */
 export const OTHER_GRANT_LABEL = 'Other'
@@ -29,31 +28,6 @@ export const ESTIMATE_HATCH = {
   dashArrayY: [2, 4],
   rotation: -Math.PI / 4,
   color: SURFACE,
-}
-
-/**
- * Exported for tests. Per-grant rows plus the TOTAL the stack adds up to (2026-08-21 user
- * request: the bar's combined value, on hover — per-bar labels would collide at quarterly
- * density). A full formatter builds HTML, and grant LABELS are user text, so escapeHtml is
- * mandatory on every series name (SpendingPage's rule); echarts' own `marker` spans and our
- * formatted figures are the only other markup.
- */
-export function vestingTooltipFormatter(params: unknown): string {
-  const list = (Array.isArray(params) ? params : [params]) as AxisTooltipParam[]
-  const rows = list.filter(
-    (p): p is AxisTooltipParam & { value: number } =>
-      typeof p.value === 'number' && Number.isFinite(p.value),
-  )
-  if (rows.length === 0) return ''
-  const lines = rows.map(
-    (p) => `${p.marker ?? ''}${escapeHtml(p.seriesName ?? '')}: ${formatCurrency(p.value)}`,
-  )
-  const total = rows.reduce((sum, p) => sum + p.value, 0)
-  return [
-    `<strong>${escapeHtml(rows[0].axisValueLabel ?? '')}</strong>`,
-    ...lines,
-    `<strong>Total: ${formatCurrency(total)}</strong>`,
-  ].join('<br/>')
 }
 
 // The palette's fixed order IS the CVD-safety mechanism (charts/theme.ts): eight slots, never

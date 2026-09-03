@@ -1,7 +1,6 @@
 // Reference SERIES (chart spec §10): a comparison with its own data — the sustainable-spend
 // line, budgets, the FI target, averages. Dashed MUTED 2px, no symbols, above the data
 // (z 9), gaps kept. Dashed is reserved for thresholds and events; data is solid.
-// Absorbs spending/budgetChartOptions.budgetStepSeries (`budgetReference`).
 // Depends on: charts/theme.ts (MUTED).
 import { MUTED } from './theme'
 

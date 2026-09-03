@@ -1,7 +1,6 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EChartsOption } from '../charts/echarts'
-import { SURFACE } from '../charts/theme'
 import { DARK, LIGHT } from '../theme/tokens'
 
 interface FakeChartLike {
@@ -62,16 +61,10 @@ vi.mock('../charts/motion', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../charts/motion')>()),
   quiesceRipples: (option: unknown) => option,
 }))
-vi.mock('../utils/download', () => ({
-  toCsv: vi.fn(() => 'CSV-BODY'),
-  downloadDataUrl: vi.fn(),
-  downloadText: vi.fn(),
-}))
 
 import EChart from './EChart'
 import * as chartsModule from '../charts/echarts'
 import ThemeProvider, { useTheme } from './shell/ThemeProvider'
-import { downloadDataUrl, downloadText, toCsv } from '../utils/download'
 
 const instances = (chartsModule as unknown as { __instances: FakeChartLike[] }).__instances
 
@@ -127,68 +120,6 @@ describe('EChart aria facade', () => {
     )
     const div = container.firstElementChild as HTMLElement
     expect(div.getAttribute('role')).toBe('img')
-  })
-})
-
-describe('EChart export menu', () => {
-  it('renders no menu without exportConfig', () => {
-    render(<EChart ariaLabel="test chart" option={OPTION} />)
-    expect(screen.queryByRole('group', { name: /Export/ })).toBeNull()
-  })
-
-  it('offers PNG always and CSV only when a csv fn is supplied', () => {
-    const { unmount } = render(<EChart
-      ariaLabel="test chart"
-      option={OPTION}
-      exportConfig={{ name: 'demo' }}
-    />)
-    expect(screen.getByRole('group', { name: 'Export demo' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'PNG' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'CSV' })).toBeNull()
-    unmount()
-    render(
-      <EChart
-        ariaLabel="test chart"
-        option={OPTION}
-        exportConfig={{ name: 'demo', csv: () => ({ headers: [], rows: [] }) }}
-      />,
-    )
-    expect(screen.getByRole('button', { name: 'CSV' })).toBeTruthy()
-  })
-
-  it('PNG snapshots at 2x on the card surface and downloads {name}.png', () => {
-    render(<EChart ariaLabel="test chart" option={OPTION} exportConfig={{ name: 'demo' }} />)
-    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
-    expect(lastChart().getDataURL).toHaveBeenCalledWith({
-      pixelRatio: 2,
-      backgroundColor: SURFACE,
-    })
-    expect(downloadDataUrl).toHaveBeenCalledWith('data:image/png;base64,PNG', 'demo.png')
-  })
-
-  // The matte follows the RESOLVED theme: a light-theme chart exported on the dark card
-  // color comes back as near-black paper with invisible axis labels.
-  it('PNG mattes on the LIGHT card surface under the light theme', () => {
-    localStorage.setItem('finance.theme', 'light')
-    render(
-      <ThemeProvider>
-        <EChart ariaLabel="test chart" option={OPTION} exportConfig={{ name: 'demo' }} />
-      </ThemeProvider>,
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
-    expect(lastChart().getDataURL).toHaveBeenCalledWith({
-      pixelRatio: 2,
-      backgroundColor: LIGHT.surface,
-    })
-  })
-
-  it('CSV serializes the caller rows and downloads {name}.csv as UTF-8 text/csv', () => {
-    const csv = vi.fn(() => ({ headers: ['Month', 'Total'], rows: [['2026-06-01', 1]] }))
-    render(<EChart ariaLabel="test chart" option={OPTION} exportConfig={{ name: 'demo', csv }} />)
-    fireEvent.click(screen.getByRole('button', { name: 'CSV' }))
-    expect(csv).toHaveBeenCalledTimes(1) // lazy: rows built on click, never on render
-    expect(toCsv).toHaveBeenCalledWith(['Month', 'Total'], [['2026-06-01', 1]])
-    expect(downloadText).toHaveBeenCalledWith('CSV-BODY', 'demo.csv', 'text/csv;charset=utf-8')
   })
 })
 
