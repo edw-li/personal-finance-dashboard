@@ -24,6 +24,9 @@ desktop.ini
 # Tooling leftovers
 vite.config.ts.timestamp-*
 
+# Data volume on a dev box: nightly snapshots and restore points (data-lifecycle spec §8)
+backend/data/
+
 # Worktrees
 .worktrees/
 

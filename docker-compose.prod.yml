@@ -13,6 +13,11 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
       # Optional — no :? guard: the app boots fully without the assistant.
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      # Nightly logical snapshots + restore points (data-lifecycle spec §8) live on a
+      # named volume so they survive a rebuild; the app writes, never the host cron.
+      DATA_DIR: /data
+    volumes:
+      - finance-data:/data
     healthcheck:
       # Boot runs alembic upgrade + seed before uvicorn listens; start_period
       # covers that window. A failed migration keeps the service unhealthy, so
@@ -39,3 +44,6 @@ services:
       - "443:443"
     volumes:
       - /etc/ssl/finance:/etc/ssl/finance:ro
+
+volumes:
+  finance-data:
