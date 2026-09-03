@@ -372,6 +372,54 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+describe('TaxesPage — frame', () => {
+  it('renders its title row through PageFrame, not a hand-rolled page header', async () => {
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Taxes' })).toBeTruthy()
+    // The shell owns the title row now — the page's own header markup is gone.
+    expect(document.querySelector('.page-header')).toBeNull()
+    expect(document.querySelector('.page-frame-header')).toBeTruthy()
+  })
+
+  it('paints the frame ghost — two cards, NO tile row — while the year LIST is in flight', () => {
+    // Never answers: the first list load is the page's own lifecycle, and it is the only
+    // thing this page ever paints a full-page ghost for.
+    vi.mocked(fetchTaxYears).mockReturnValue(new Promise(() => {}))
+    renderPage()
+
+    expect(screen.getByText('Loading…')).toBeTruthy()
+    // tiles: 0 — this page has no KPI row to ghost, so it must not draw one.
+    expect(document.querySelector('.page-skeleton .kpi-row')).toBeNull()
+    expect(document.querySelectorAll('.page-skeleton .card')).toHaveLength(2)
+    // ...and the body is not up yet: a year list nobody has seen has no chips and no form.
+    expect(screen.queryByLabelText('New year')).toBeNull()
+  })
+
+  it('dims the year being loaded without taking the chips that switch it out of reach', async () => {
+    const pending = deferred<TaxInputsOut>()
+    vi.mocked(fetchTaxInputs)
+      .mockResolvedValueOnce(inputsFor(2024))
+      .mockReturnValueOnce(pending.promise)
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(2))
+
+    // The editors fade — and .taxes-page's own pointer-events rule rides that class, so
+    // they stop taking keystrokes the arriving payload is about to replace...
+    expect(screen.getByLabelText('Annual Salary').closest('.loading-dim.is-loading')).toBeTruthy()
+    // ...while the chips that switch years, and the new-year box, stay live. A page-wide
+    // dim would put both behind pointer-events: none for the length of every load.
+    expect(
+      screen.getByRole('button', { name: '2024' }).closest('.loading-dim.is-loading'),
+    ).toBeNull()
+    expect(screen.getByLabelText('New year').closest('.loading-dim.is-loading')).toBeNull()
+  })
+})
+
 describe('TaxesPage', () => {
   it('renders a chip per tax year and loads the latest', async () => {
     renderPage()
@@ -451,7 +499,8 @@ describe('TaxesPage', () => {
 
     // The clone SUCCEEDED, so this failure belongs to the main banner — the one with a
     // Retry. Under the create form the only affordance left is a Create that now 409s.
-    expect(await screen.findByText('years unavailable')).toBeTruthy()
+    // Years ARE on screen (the optimistic chip), so this is the frame's stale line.
+    expect(await screen.findByText(/years unavailable/)).toBeTruthy()
     // And the year exists, so the page is on it: optimistically, with placeholder counts.
     const chip = await screen.findByRole('button', { name: '2025' })
     expect(chip.getAttribute('aria-pressed')).toBe('true')
@@ -460,11 +509,11 @@ describe('TaxesPage', () => {
     // 2025's payloads arriving must NOT clear the banner underneath them — the two
     // requests are in flight together, and only one of them failed.
     expect(await screen.findByText('$123,456.78')).toBeTruthy()
-    expect(screen.getByText('years unavailable')).toBeTruthy()
+    expect(screen.getByText(/years unavailable/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(vi.mocked(fetchTaxYears)).toHaveBeenCalledTimes(3))
-    await waitFor(() => expect(screen.queryByText('years unavailable')).toBeNull())
+    await waitFor(() => expect(screen.queryByText(/years unavailable/)).toBeNull())
     // Reconciled: the server's counts replace the placeholder.
     expect(screen.getByRole('button', { name: '2025' }).getAttribute('title')).toBe(
       '0 inputs · 42 brackets',
@@ -475,7 +524,10 @@ describe('TaxesPage', () => {
     vi.mocked(fetchTaxYears).mockRejectedValueOnce(new ApiError('years unavailable', 503))
     renderPage()
 
+    // No years, so the failure is the FRAME's: an assertive banner and nothing behind it.
     expect(await screen.findByText('years unavailable')).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain('years unavailable')
+    expect(screen.queryByLabelText('New year')).toBeNull()
     // A load that never came back knows nothing about whether the database is empty.
     expect(screen.queryByText(/no tax years yet/i)).toBeNull()
 
@@ -1393,6 +1445,22 @@ describe('filing status (2026-08-26 design §6)', () => {
     // Nothing was reloaded, and the control still reads the row the server has.
     expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledTimes(1)
     expect(statusButton('Single').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps a status refusal an ALERT beside the year, not the frame stale line', async () => {
+    vi.mocked(patchTaxYear).mockRejectedValue(new ApiError('filing_status is not settable', 422))
+    renderPage()
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(statusButton('Married filing jointly'))
+
+    // The PATCH changed nothing, so "Showing earlier data" — the year LIST's grammar —
+    // would be a lie about it. The year's own bucket keeps the assertive banner.
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain('filing_status is not settable')
+    expect(screen.queryByText(/showing earlier data/i)).toBeNull()
+    // ...and the year it is about is still on screen behind it.
+    expect(salary().value).toBe('$200,000.00')
   })
 
   it('stands the California community-property caveat under MFS only', async () => {

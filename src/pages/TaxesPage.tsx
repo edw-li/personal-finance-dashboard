@@ -16,7 +16,8 @@ import {
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { useAssistantView } from '../components/assistant/viewState'
 import InfoHint from '../components/InfoHint'
-import PageSkeleton from '../components/PageSkeleton'
+import Feed, { FeedBanner } from '../components/shell/Feed'
+import PageFrame from '../components/shell/PageFrame'
 import BracketsEditor from '../components/taxes/BracketsEditor'
 import CompositionPanel from '../components/taxes/CompositionPanel'
 import InputsForm from '../components/taxes/InputsForm'
@@ -147,7 +148,14 @@ export default function TaxesPage() {
   // state belongs to a load that actually came back (PortfolioPage's null-holdings rule).
   const [loadedOnce, setLoadedOnce] = useState(cachedYears !== undefined)
   const [busy, setBusy] = useState(true) // the selected year's three payloads
+  // Two buckets, because they mean two different things on screen: `error` is about the
+  // year LIST (the page's own lifecycle — a first-load failure IS the page, a later one
+  // rides the frame's "showing earlier data" line), while `yearError` is about the selected
+  // year and the actions taken on it — a detail load, a filing-status PATCH, a totals
+  // refresh, a delete. Those are not staleness; they are refusals, and they keep the
+  // assertive banner beside the year they belong to.
   const [error, setError] = useState<string | null>(null)
+  const [yearError, setYearError] = useState<string | null>(null)
   const [newYear, setNewYear] = useState(() =>
     cachedYears !== undefined
       ? String(cachedLatest ? cachedLatest.year + 1 : new Date().getFullYear())
@@ -280,7 +288,7 @@ export default function TaxesPage() {
         if (seq !== seqRef.current) return
         // Drop the previous year's data: left on screen it would read as this year's.
         setDetail(null)
-        setError(err instanceof ApiError ? err.message : `Failed to load tax year ${year}`)
+        setYearError(err instanceof ApiError ? err.message : `Failed to load tax year ${year}`)
       })
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
@@ -292,6 +300,7 @@ export default function TaxesPage() {
   const loadYear = (year: number) => {
     setBusy(true)
     setError(null)
+    setYearError(null)
     // A create error is about the form above, and the form's own state moved on the moment
     // the user navigated — leaving the sentence there would answer a question nobody asked.
     setCreateError(null)
@@ -329,6 +338,7 @@ export default function TaxesPage() {
     const year = selectedYear
     setStatusSaving(true)
     setError(null)
+    setYearError(null)
     patchTaxYear(year, { filing_status: next })
       .then((row) => {
         // The echo is authoritative, and replacing the row HERE means the selector follows
@@ -343,7 +353,7 @@ export default function TaxesPage() {
       .catch((err: unknown) => {
         // A 422 (an unknown status) or a 404 (the year went away) lands here verbatim. The
         // selection is untouched, so the control still reads the row the server has.
-        setError(
+        setYearError(
           err instanceof ApiError ? err.message : `Failed to set the filing status for ${year}`,
         )
       })
@@ -370,7 +380,7 @@ export default function TaxesPage() {
       })
       .catch((err: unknown) => {
         if (seq !== summarySeqRef.current) return
-        setError(err instanceof ApiError ? err.message : 'Failed to refresh the totals')
+        setYearError(err instanceof ApiError ? err.message : 'Failed to refresh the totals')
       })
   }
 
@@ -496,6 +506,7 @@ export default function TaxesPage() {
     currentYearRef.current = null
     setBusy(true)
     setError(null)
+    setYearError(null)
     // An editor save that is still in flight and COMMITS after this request recreates the
     // year server-side (both PUTs `_ensure_year`; a deletion is not a tombstone). Accepted
     // single-user TOCTOU class: the next list load shows the year again, and the user
@@ -529,7 +540,7 @@ export default function TaxesPage() {
         currentYearRef.current = year
         // A 404 (someone deleted it first) lands here verbatim. The selection is untouched,
         // so Retry still means "reload the year I am looking at".
-        setError(err instanceof ApiError ? err.message : `Failed to delete tax year ${year}`)
+        setYearError(err instanceof ApiError ? err.message : `Failed to delete tax year ${year}`)
       })
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
@@ -539,6 +550,7 @@ export default function TaxesPage() {
   const retry = () => {
     if (!confirmDiscard()) return
     setError(null)
+    setYearError(null)
     if (selectedYear === null) {
       setLoading(true)
       setBusy(true)
@@ -555,216 +567,229 @@ export default function TaxesPage() {
 
   return (
     <div className="page taxes-page">
-      <div className="page-header">
-        <h1>Taxes</h1>
-        <div className="spacer" />
-      </div>
-
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          {/* A first-load failure leaves no year selected — retry the list itself, or the
-              page dead-ends at the banner. */}
-          <button className="button" onClick={retry}>
-            Retry
-          </button>
-        </div>
-      )}
-
-      <section className="card">
-        <h2 className="eyebrow">
-          Tax year
-          <InfoHint text="One column of inputs and bracket tables per year. Creating a year copies the newest year&apos;s brackets." />
-        </h2>
-        {years.length > 0 && (
-          <div className="chip-row">
-            {years.map((y) => (
-              <button
-                key={y.year}
-                type="button"
-                className={y.year === selectedYear ? 'chip active' : 'chip'}
-                aria-pressed={y.year === selectedYear}
-                title={`${y.input_count} inputs · ${y.bracket_count} brackets`}
-                onClick={() => selectYear(y.year)}
-              >
-                {y.year}
-              </button>
-            ))}
-          </div>
-        )}
-        {/* The status of the SELECTED year, not another year to pick: its own row under the
-            chips, in the app-wide segmented treatment (RangeChips' .segmented, declared once
-            in panels.css). */}
-        {selectedYear !== null && (
-          <div className="filing-status-row">
-            <span className="filing-status-label">Filing status</span>
-            <InfoHint text="Which bracket tables the engine walks for this year, and whether the per-person inputs below split into two columns. Every year starts as Single." />
-            <div className="segmented" role="group" aria-label="Filing status">
-              {FILING_STATUSES.map((status) => (
+      <PageFrame
+        title="Taxes"
+        resource={{
+          // The years LIST is this page's lifecycle; a year's detail is the feed below it.
+          // A first-load failure leaves no year selected and nothing to look at, so it is
+          // the frame's own error state — with the Retry that reloads the list itself, or
+          // the page dead-ends at the banner. With years already on screen the same message
+          // rides the frame's stale line instead, over a body that still works.
+          status: loading ? 'loading' : error !== null && years.length === 0 ? 'error' : 'ready',
+          error,
+          // Deliberately NO frame-level `busy`: the year detail is the only thing a load
+          // moves, and this page's own `.taxes-page .loading-dim.is-loading` sets
+          // pointer-events: none — a page-wide dim would take the year chips and the
+          // new-year box out of reach for the length of every year load. The Feed below
+          // owns the dim, over exactly the editors that rule was written for.
+          retry,
+        }}
+        // No KPI row on this page, so the ghost must not draw one: the two cards are the
+        // totals strip and the panel under it.
+        skeleton={{
+          tiles: 0,
+          cards: [
+            { span: 12, height: 90 },
+            { span: 12, height: 320 },
+          ],
+        }}
+      >
+        <section className="card">
+          <h2 className="eyebrow">
+            Tax year
+            <InfoHint text="One column of inputs and bracket tables per year. Creating a year copies the newest year&apos;s brackets." />
+          </h2>
+          {years.length > 0 && (
+            <div className="chip-row">
+              {years.map((y) => (
                 <button
-                  key={status}
+                  key={y.year}
                   type="button"
-                  className={status === filingStatus ? 'active' : ''}
-                  aria-pressed={status === filingStatus}
-                  disabled={statusSaving || busy}
-                  onClick={() => changeFilingStatus(status)}
+                  className={y.year === selectedYear ? 'chip active' : 'chip'}
+                  aria-pressed={y.year === selectedYear}
+                  title={`${y.input_count} inputs · ${y.bracket_count} brackets`}
+                  onClick={() => selectYear(y.year)}
                 >
-                  {FILING_STATUS_LABELS[status]}
+                  {y.year}
                 </button>
               ))}
             </div>
-          </div>
-        )}
-        {/* Standing, never dismissible: MFS brackets without Form-8958 community-income
-            splitting are wrong in California, and the sentence has to sit wherever the
-            number does (audit §3.2, design decision log "MFS"). */}
-        {selectedYear !== null && filingStatus === 'married_separate' && (
-          <p className="filing-status-caveat" role="note">
-            California is a community-property state; true MFS requires 50/50
-            community-income splitting (Form 8958), which this calculator does not model.
-          </p>
-        )}
-        {/* loadedOnce, not !loading: a FIRST load that failed knows nothing about whether
-            there are years, and "No tax years yet" under an error banner reads as an
-            answer. */}
-        {loadedOnce && years.length === 0 && (
-          <p className="empty-note">No tax years yet — create one to start.</p>
-        )}
-        <form
-          className="new-year-form"
-          // The bounds are enforced (and worded) by createYear. Left to the browser, the
-          // message is a native bubble that differs per engine and blocks submit before
-          // this page ever sees it.
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault()
-            createYear()
-          }}
-        >
-          <label htmlFor="new-tax-year">New year</label>
-          <input
-            id="new-tax-year"
-            className="field-input"
-            type="number"
-            inputMode="numeric"
-            min={YEAR_MIN}
-            max={YEAR_MAX}
-            value={newYear}
-            onChange={(e) => {
-              setNewYear(e.target.value)
-              // The sentence below describes the year that WAS in the box.
-              setCreateError(null)
-            }}
-          />
-          <button type="submit" className="button" disabled={creating || loading}>
-            {creating ? 'Creating…' : 'Create year'}
-          </button>
-          {/* The other end of this row's job — Create makes the year in the box, Delete
-              throws away the SELECTED one — and the one control row that renders even with
-              no years, so its shut state is visible rather than absent. type="button", so
-              the form's submit stays the create path's alone. */}
-          <button
-            type="button"
-            className="button"
-            disabled={selectedYear === null || busy || creating}
-            onClick={deleteYear}
-          >
-            Delete year…
-          </button>
-          <span className="drill-hint">
-            Copies the newest year&apos;s bracket tables; the values are then edited below.
-          </span>
-        </form>
-        {createError && (
-          <div className="error-banner" role="alert">
-            {createError}
-          </div>
-        )}
-      </section>
-
-      {(loading || (busy && detail === null && years.length > 0)) && (
-        <PageSkeleton
-          cards={[
-            { span: 12, height: 90 },
-            { span: 12, height: 320 },
-          ]}
-        />
-      )}
-
-      {/* Only a delete gets here: every other path either selects a year or has no years to
-          select. Without it the page ends at the form with nothing saying the chips above
-          are waiting for a click. Mutually exclusive with the note above, by !busy. */}
-      {!loading && !busy && selection === null && years.length > 0 && (
-        <p className="empty-note">Select a tax year above.</p>
-      )}
-
-      {detail !== null && (
-        <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          {/* Year-scoped answers read contiguously (2026-08-31 audit): totals, then the
-              withholding outlook, the marginal ladder and the sandbox; the all-years
-              composition trend closes the answers half below, and entry comes last. */}
-          <SummaryPanel summary={detail.summary} filingStatus={filingStatus} />
-          {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
-              be stored and summarizable, and this card still cannot be drawn for it) — asked
-              here rather than spending a request on the refusal. Keyed by year like the
-              what-if card, so a switch INTO this year mounts it fresh rather than leaving
-              another year's estimate under this heading. */}
-          {detail.summary.year === new Date().getFullYear() && (
-            <WithholdingPanel
-              key={`withholding-${detail.summary.year}`}
-              year={detail.summary.year}
-              storedVestW2={vestW2Stored(detail.inputs)}
-              inputsDirty={inputsDirty}
-              onVestApplied={onVestApplied}
-            />
           )}
-          {/* D3 (2026-08-31): client-side ladder over the SAME two payloads the panels
-              around it read — the summary and the year's own status' tables. Not keyed:
-              both props are per-year payloads the load effect already replaces whole. */}
-          <MarginalPanel summary={detail.summary} brackets={detail.brackets} />
-          {/* Keyed by year for the editors' own reason: a real switch remounts it, so the
-              typed legs and any scenario on screen go with the year they were run against
-              (a stale scenario under a new year's heading would lie), while a same-year
-              reload leaves half-typed legs alone. It owns its two feeds and loads them
-              lazily on first open, so the remount costs nothing until the card is used.
-              The seeds are handed to EVERY mount, this year's or the next one's: they are a
-              property of the URL, not of the year, and the panel pins them at its own mount
-              — so a year switch re-seeds the same leg against the year now on screen, which
-              is what a link that says "model selling VTI" means. */}
-          <WhatIfPanel
-            key={`whatif-${detail.summary.year}`}
-            year={detail.summary.year}
-            initialTicker={whatIfTicker}
-            initialLotId={whatIfLotId}
-            definitions={overrideDefinitions(detail.inputs)}
-          />
-          {/* Deliberately NOT keyed: this panel's feed is the all-years trend, which a
-              year switch does not move — remounting it would spend a request to redraw
-              the same chart. It closes the answers half; entry follows. */}
-          <CompositionPanel refreshKey={trendRefresh} />
-          {/* Keyed by the payloads' own identity (see inputsKey/bracketsKey), not by load:
-              a real year or status switch remounts the editors — 2023's typed rows must not
-              carry into 2024, and a one-column year's cell ids are not a two-column year's —
-              while a same-year same-status reload (Retry, or the refresh after a save) leaves
-              them mounted. Their state seeds from useState initializers, so the replaced
-              props cannot clobber typed work either.
-              :epoch — remounts on an EXTERNAL inputs write (D4 Apply), never on the form's
-              own save. */}
-          <InputsForm
-            key={`${inputsKey(detail.inputs)}:${inputsEpoch}`}
-            inputs={detail.inputs}
-            onSaved={onInputsSaved}
-            onDirtyChange={setInputsDirty}
-          />
-          <BracketsEditor
-            key={bracketsKey(detail.brackets)}
-            brackets={detail.brackets}
-            yearStatus={filingStatus}
-            onSaved={onBracketsSaved}
-            onDirtyChange={setBracketsDirty}
-          />
-        </div>
-      )}
+          {/* The status of the SELECTED year, not another year to pick: its own row under the
+              chips, in the app-wide segmented treatment (RangeChips' .segmented, declared once
+              in panels.css). */}
+          {selectedYear !== null && (
+            <div className="filing-status-row">
+              <span className="filing-status-label">Filing status</span>
+              <InfoHint text="Which bracket tables the engine walks for this year, and whether the per-person inputs below split into two columns. Every year starts as Single." />
+              <div className="segmented" role="group" aria-label="Filing status">
+                {FILING_STATUSES.map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    className={status === filingStatus ? 'active' : ''}
+                    aria-pressed={status === filingStatus}
+                    disabled={statusSaving || busy}
+                    onClick={() => changeFilingStatus(status)}
+                  >
+                    {FILING_STATUS_LABELS[status]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Standing, never dismissible: MFS brackets without Form-8958 community-income
+              splitting are wrong in California, and the sentence has to sit wherever the
+              number does (audit §3.2, design decision log "MFS"). */}
+          {selectedYear !== null && filingStatus === 'married_separate' && (
+            <p className="filing-status-caveat" role="note">
+              California is a community-property state; true MFS requires 50/50
+              community-income splitting (Form 8958), which this calculator does not model.
+            </p>
+          )}
+          {/* loadedOnce, not !loading: a FIRST load that failed knows nothing about whether
+              there are years, and "No tax years yet" under an error banner reads as an
+              answer. */}
+          {loadedOnce && years.length === 0 && (
+            <p className="empty-note">No tax years yet — create one to start.</p>
+          )}
+          <form
+            className="new-year-form"
+            // The bounds are enforced (and worded) by createYear. Left to the browser, the
+            // message is a native bubble that differs per engine and blocks submit before
+            // this page ever sees it.
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault()
+              createYear()
+            }}
+          >
+            <label htmlFor="new-tax-year">New year</label>
+            <input
+              id="new-tax-year"
+              className="field-input"
+              type="number"
+              inputMode="numeric"
+              min={YEAR_MIN}
+              max={YEAR_MAX}
+              value={newYear}
+              onChange={(e) => {
+                setNewYear(e.target.value)
+                // The sentence below describes the year that WAS in the box.
+                setCreateError(null)
+              }}
+            />
+            <button type="submit" className="button" disabled={creating || loading}>
+              {creating ? 'Creating…' : 'Create year'}
+            </button>
+            {/* The other end of this row's job — Create makes the year in the box, Delete
+                throws away the SELECTED one — and the one control row that renders even with
+                no years, so its shut state is visible rather than absent. type="button", so
+                the form's submit stays the create path's alone. */}
+            <button
+              type="button"
+              className="button"
+              disabled={selectedYear === null || busy || creating}
+              onClick={deleteYear}
+            >
+              Delete year…
+            </button>
+            <span className="drill-hint">
+              Copies the newest year&apos;s bracket tables; the values are then edited below.
+            </span>
+          </form>
+          <FeedBanner error={createError} />
+        </section>
+
+        {/* The selected year's own failures — a load, a status flip, a totals refresh, a
+            delete — stay an assertive banner beside the year they are about, never the
+            frame's "showing earlier data" line, which is the year LIST's grammar. */}
+        <FeedBanner error={yearError} retry={retry} />
+        <Feed
+          data={detail}
+          // A seeded-empty revisit has no year to ghost for: the list answers instantly
+          // from the snapshot and there is nothing under the new-year form.
+          busy={busy && years.length > 0}
+          staleNoun="the year"
+          skeleton={{ height: 320, label: 'Loading the year…' }}
+          // Only a delete gets here: every other path either selects a year or has no years
+          // to select. Without it the page ends at the form with nothing saying the chips
+          // above are waiting for a click.
+          empty={
+            selection === null && years.length > 0 ? (
+              <p className="empty-note">Select a tax year above.</p>
+            ) : undefined
+          }
+        >
+          {(d) => (
+            <>
+              {/* Year-scoped answers read contiguously (2026-08-31 audit): totals, then the
+                  withholding outlook, the marginal ladder and the sandbox; the all-years
+                  composition trend closes the answers half below, and entry comes last. */}
+              <SummaryPanel summary={d.summary} filingStatus={filingStatus} />
+              {/* The CURRENT year only, mirroring the endpoint's own 422 (a settled year may well
+                  be stored and summarizable, and this card still cannot be drawn for it) — asked
+                  here rather than spending a request on the refusal. Keyed by year like the
+                  what-if card, so a switch INTO this year mounts it fresh rather than leaving
+                  another year's estimate under this heading. */}
+              {d.summary.year === new Date().getFullYear() && (
+                <WithholdingPanel
+                  key={`withholding-${d.summary.year}`}
+                  year={d.summary.year}
+                  storedVestW2={vestW2Stored(d.inputs)}
+                  inputsDirty={inputsDirty}
+                  onVestApplied={onVestApplied}
+                />
+              )}
+              {/* D3 (2026-08-31): client-side ladder over the SAME two payloads the panels
+                  around it read — the summary and the year's own status' tables. Not keyed:
+                  both props are per-year payloads the load effect already replaces whole. */}
+              <MarginalPanel summary={d.summary} brackets={d.brackets} />
+              {/* Keyed by year for the editors' own reason: a real switch remounts it, so the
+                  typed legs and any scenario on screen go with the year they were run against
+                  (a stale scenario under a new year's heading would lie), while a same-year
+                  reload leaves half-typed legs alone. It owns its two feeds and loads them
+                  lazily on first open, so the remount costs nothing until the card is used.
+                  The seeds are handed to EVERY mount, this year's or the next one's: they are a
+                  property of the URL, not of the year, and the panel pins them at its own mount
+                  — so a year switch re-seeds the same leg against the year now on screen, which
+                  is what a link that says "model selling VTI" means. */}
+              <WhatIfPanel
+                key={`whatif-${d.summary.year}`}
+                year={d.summary.year}
+                initialTicker={whatIfTicker}
+                initialLotId={whatIfLotId}
+                definitions={overrideDefinitions(d.inputs)}
+              />
+              {/* Deliberately NOT keyed: this panel's feed is the all-years trend, which a
+                  year switch does not move — remounting it would spend a request to redraw
+                  the same chart. It closes the answers half; entry follows. */}
+              <CompositionPanel refreshKey={trendRefresh} />
+              {/* Keyed by the payloads' own identity (see inputsKey/bracketsKey), not by load:
+                  a real year or status switch remounts the editors — 2023's typed rows must not
+                  carry into 2024, and a one-column year's cell ids are not a two-column year's —
+                  while a same-year same-status reload (Retry, or the refresh after a save) leaves
+                  them mounted. Their state seeds from useState initializers, so the replaced
+                  props cannot clobber typed work either.
+                  :epoch — remounts on an EXTERNAL inputs write (D4 Apply), never on the form's
+                  own save. */}
+              <InputsForm
+                key={`${inputsKey(d.inputs)}:${inputsEpoch}`}
+                inputs={d.inputs}
+                onSaved={onInputsSaved}
+                onDirtyChange={setInputsDirty}
+              />
+              <BracketsEditor
+                key={bracketsKey(d.brackets)}
+                brackets={d.brackets}
+                yearStatus={filingStatus}
+                onSaved={onBracketsSaved}
+                onDirtyChange={setBracketsDirty}
+              />
+            </>
+          )}
+        </Feed>
+      </PageFrame>
     </div>
   )
 }
