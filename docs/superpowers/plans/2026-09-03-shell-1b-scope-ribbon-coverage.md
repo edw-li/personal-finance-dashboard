@@ -1215,6 +1215,10 @@ export interface ScopeBarProps {
    *  All and shows a null scope as the primary person — for pages that are always about
    *  ONE person (Paycheck). */
   owner?: boolean | { joint: boolean; all?: boolean }
+  /** Page-specific explanation of what a person's view means HERE — the sentence the page used
+   *  to print beside its own owner row. Rendered as an InfoHint right after the owner control,
+   *  and only when that control renders. */
+  ownerHint?: string
   range?: boolean
   month?: MonthScopeProps
   /** Any value; when it changes the household and coverage fetches re-run. Pages that write

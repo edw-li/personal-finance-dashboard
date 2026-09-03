@@ -7,6 +7,7 @@ import { getSnapshot, setSnapshot } from '../../api/snapshotCache'
 import type { RangePreset } from '../../charts/timeZoom'
 import type { CoverageOut, HouseholdOut } from '../../types/api'
 import { currentMonthIso } from '../../utils/months'
+import InfoHint from '../InfoHint'
 import MonthRibbon, { type RibbonCoverage } from './MonthRibbon'
 import Segmented from './Segmented'
 import { ownerToParam, useScope } from './useScope'
@@ -48,6 +49,12 @@ export interface ScopeBarProps {
    *  All and shows a null scope as the primary person — for pages that are always about
    *  ONE person (Paycheck). */
   owner?: boolean | { joint: boolean; all?: boolean }
+  /** Page-specific explanation of what a person's view means HERE — the same sentence the
+   *  page used to print beside its own owner row (Net worth: a person is their own accounts
+   *  plus the joint ones). Rendered as an InfoHint right after the owner control, and only
+   *  when that control renders: a one-person household is asked no whose-view question, so
+   *  it is offered no answer either. */
+  ownerHint?: string
   range?: boolean
   month?: MonthScopeProps
   /** Any value; when it changes the household and coverage fetches re-run. The wizard bumps it
@@ -70,7 +77,7 @@ function ownerFromValue(value: string): OwnerScope {
   return Number(value)
 }
 
-export default function ScopeBar({ owner, range, month, revalidate }: ScopeBarProps) {
+export default function ScopeBar({ owner, ownerHint, range, month, revalidate }: ScopeBarProps) {
   const navigate = useNavigate()
   const { scope, setScope } = useScope({
     owner: owner !== undefined && owner !== false,
@@ -184,6 +191,7 @@ export default function ScopeBar({ owner, range, month, revalidate }: ScopeBarPr
             value={ownerChipValue}
             onChange={(value) => setScope({ owner: ownerFromValue(value) })}
           />
+          {ownerHint !== undefined && <InfoHint text={ownerHint} />}
         </div>
       )}
       {range && (

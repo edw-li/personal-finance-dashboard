@@ -40,6 +40,11 @@ const HOUSEHOLD = {
   marriage_date: null,
 }
 
+const ALONE = { people: [{ id: 2, name: 'Edward', is_primary: true }], marriage_date: null }
+
+// A page's own sentence about what "whose" means there — the bar prints it, it does not own it.
+const OWNER_HINT = "A person's view is their own accounts plus the joint ones."
+
 beforeEach(() => {
   localStorage.clear()
   clearSnapshots()
@@ -123,6 +128,29 @@ describe('ScopeBar', () => {
     mount({ owner: { joint: false } }, '/net-worth?owner=joint')
     await screen.findByRole('button', { name: 'Grace' })
     expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it("prints the page's owner hint beside the chips, and only when the page sends one", async () => {
+    const { container, rescope } = mount({ owner: true, ownerHint: OWNER_HINT })
+    await screen.findByRole('button', { name: 'Grace' })
+    // Beside the chips, not loose in the bar: the sentence explains THAT control.
+    const hint = container.querySelector('.scope-bar-group button.info-hint')
+    expect(hint).toBeTruthy()
+    expect(hint?.getAttribute('aria-label')).toBe(OWNER_HINT)
+    // Same chips, no sentence: pages that have nothing extra to say get no dangling glyph.
+    rescope({ owner: true })
+    expect(screen.getByRole('group', { name: 'Whose' })).toBeTruthy()
+    expect(container.querySelector('button.info-hint')).toBeNull()
+  })
+
+  it('drops the owner hint with the chips for a one-person household', async () => {
+    setSnapshot(HOUSEHOLD_SNAPSHOT, ALONE)
+    vi.mocked(fetchHousehold).mockResolvedValue(ALONE)
+    const { container } = mount({ owner: true, ownerHint: OWNER_HINT })
+    await waitFor(() => expect(fetchHousehold).toHaveBeenCalled())
+    // Nobody is asked whose view this is, so nobody is told what the answer would mean.
+    expect(container.querySelector('.scope-bar')).toBeNull()
+    expect(container.querySelector('button.info-hint')).toBeNull()
   })
 
   it('range chips write the URL and default to 1Y', () => {
