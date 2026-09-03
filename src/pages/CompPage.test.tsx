@@ -9,6 +9,7 @@ import type {
   VestOut,
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
+import { TC_CHART_LABEL } from '../components/comp/compChartOptions'
 import CompPage from './CompPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
 import ToastProvider from '../components/ToastProvider'
@@ -33,13 +34,17 @@ vi.mock('../components/EChart', async () => {
   return {
     default: ({
       option,
+      ariaLabel,
       animateEntrance = true,
     }: {
       option: { xAxis?: { data?: unknown[] } }
+      ariaLabel?: string
       animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
+        // The house sentence each ChartCard mount carries (F11) — what getByLabelText finds.
+        'aria-label': ariaLabel,
         'data-categories': (option.xAxis?.data ?? []).join(','),
         // A cached paint must render still (2026-08-27 spec §1).
         'data-animate': String(animateEntrance),
@@ -807,6 +812,18 @@ describe('CompPage — vesting schedule', () => {
     render(<CompPage />)
     const nextVest = await screen.findByText('Next vest')
     expectInDocumentOrder(nextVest, screen.getByText('Focal history'))
+  })
+
+  it('mounts the TC trajectory and the vesting calendar through ChartCard', async () => {
+    render(<CompPage />)
+    await screen.findByText(TC_CHART_LABEL)
+
+    expect(screen.getByLabelText(/Stacked bar chart of base salary and unvested equity value/)).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Export total-comp' })).toBeTruthy()
+    expect(screen.getByLabelText(/Stacked bar chart of vest value per vest date/)).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Export vesting-calendar' })).toBeTruthy()
+    expect(screen.getByText(/Vested \$[\d,.]+ · Unvested \$[\d,.]+ \(est\.\)/)).toBeTruthy()
+    expect(screen.getByText('Hatched = at today’s quote')).toBeTruthy()
   })
 
   it('draws the vesting calendar beside the trajectory, on the vest dates', async () => {

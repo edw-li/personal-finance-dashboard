@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
-import EChart from '../EChart'
-import InfoHint from '../InfoHint'
+import ChartCard from '../ChartCard'
 import StatTile from '../StatTile'
 import type { VestDayOut, VestingScheduleOut, VestOut } from '../../types/api'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
-import { vestingChartOption } from './vestingChartOptions'
+import { todayIso } from '../../utils/months'
+import { vestingChartOption, vestingCsv, vestingTotals } from './vestingChartOptions'
 
 /**
  * One vest date's rows: the summary row (the server's `vest_days` grouping, rendered
@@ -159,14 +159,23 @@ export function VestingTiles({ schedule }: { schedule: VestingScheduleOut }) {
  * with the one beside it).
  */
 export default function VestingSchedulePanel({ schedule }: { schedule: VestingScheduleOut }) {
+  // The legend picks the panel mirrors back into the option (§9), and the calendar itself.
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every render
   // would replay the chart on unrelated state flips (AllocationPanel's note).
+  const [legend, setLegend] = useState<Record<string, boolean>>({})
   const calendar = useMemo(
-    () => vestingChartOption(schedule.vests, schedule.grants, schedule.latest_price),
-    [schedule],
+    () =>
+      vestingChartOption(schedule.vests, schedule.grants, schedule.latest_price, {
+        todayIso: todayIso(),
+        selected: legend,
+      }),
+    [schedule, legend],
   )
 
   const { ticker, latest_price: latestPrice } = schedule
+  // The strip's two figures (F6): what has vested at its own closes, what is still ahead at
+  // today's quote.
+  const totals = vestingTotals(schedule.vests, latestPrice)
   // The heading's hint says what the strip's tiles say — quoteSourceOf is the one wording.
   const quoteSource = quoteSourceOf(ticker)
   // The first DATE still ahead — the row the "next" badge belongs on. The feed is
@@ -202,75 +211,88 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
   )
 
   return (
-    <section className="card">
-      <h2 className="eyebrow">
-        Vesting schedule
-        <InfoHint
-          text={`Every future vest from your grants — quarterly on the 3rd Wednesday; values at ${quoteSource}.`}
-        />
-      </h2>
-      {/* The quote the future half of this card was priced against. The date is rendered, not
-          judged: freshness math on an instant flags a Friday bar early on Monday (Plan 4's
-          "the UI compares dates only"), and nothing here has a staleness rule to enforce. */}
-      {ticker === null ? (
-        <p className="drill-hint">
-          No employer ticker configured — set the espp_ticker setting to value these vests.
-        </p>
-      ) : latestPrice === null ? (
-        <p className="drill-hint">
-          {`${ticker} — no live quote; the future half of this card is unvalued.`}
-        </p>
-      ) : (
-        <p className="drill-hint">
-          {`${ticker} · ${formatCurrency(latestPrice)} · as of ${formatDate(schedule.quoted_at)}`}
-        </p>
-      )}
-      {schedule.grants.length === 0 ? (
+    <ChartCard
+      title="Vesting schedule"
+      hint={`Every vest from your grants — quarterly on the 3rd Wednesday. Past dates at their own close, future dates at ${quoteSource} (hatched, marked est.); the dashed rule is today.`}
+      ariaLabel="Stacked bar chart of vest value per vest date by grant, future dates at today’s quote"
+      option={schedule.grants.length === 0 ? null : calendar}
+      empty={
+        schedule.grants.length === 0
+          ? 'No grants yet — add one above to see the schedule.'
+          : 'Nothing priced to draw yet — see the notes below.'
+      }
+      exportName="vesting-calendar"
+      csv={() => vestingCsv(schedule.vests, schedule.grants, latestPrice)}
+      height={260}
+      onLegendChange={(selected) => setLegend((current) => ({ ...current, ...selected }))}
+      footer={
         <>
+          {/* The quote the future half of this card was priced against. The date is rendered,
+              not judged: freshness math on an instant flags a Friday bar early on Monday
+              (Plan 4's "the UI compares dates only"), and nothing here has a staleness rule. */}
+          {ticker === null ? (
+            <p className="drill-hint">
+              No employer ticker configured — set the espp_ticker setting to value these vests.
+            </p>
+          ) : latestPrice === null ? (
+            <p className="drill-hint">
+              {`${ticker} — no live quote; the future half of this card is unvalued.`}
+            </p>
+          ) : (
+            <p className="drill-hint">
+              {`${ticker} · ${formatCurrency(latestPrice)} · as of ${formatDate(schedule.quoted_at)}`}
+            </p>
+          )}
+          {schedule.grants.length > 0 && (
+            <p className="drill-hint">
+              Vested {formatCurrency(totals.vested)} · Unvested{' '}
+              {totals.unvested === null ? '—' : formatCurrency(totals.unvested)} (est.)
+              {' · '}
+              <span>Hatched = at today’s quote</span>
+            </p>
+          )}
           {warningNotes}
-          <p className="empty-note">No grants yet — add one above to see the schedule.</p>
+          {schedule.grants.length > 0 && (
+            <>
+              <p className="drill-hint">
+                One row per vest date, every grant summed (past days at their own close, future
+                days at today&apos;s quote, marked est.). Click a date to expand its per-grant
+                tranches — opening another date folds the first.
+              </p>
+              <div className="vest-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th className="num">Tranches</th>
+                      <th className="num">Shares</th>
+                      <th className="num">Price</th>
+                      <th className="num">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {schedule.vest_days.map((day, index) => (
+                      <DayRows
+                        key={day.vest_date}
+                        day={day}
+                        isNext={index === nextDayIndex}
+                        expanded={expandedDate === day.vest_date}
+                        onToggle={() => toggleDay(day.vest_date)}
+                        tranches={
+                          expandedDate === day.vest_date
+                            ? schedule.vests.filter((vest) => vest.vest_date === day.vest_date)
+                            : []
+                        }
+                        latestPrice={latestPrice}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </>
-      ) : (
-        <>
-          {calendar && <EChart option={calendar} height={260} />}
-          {warningNotes}
-          <p className="drill-hint">
-            One row per vest date, every grant summed (past days at their own close, future
-            days at today&apos;s quote, marked est.). Click a date to expand its per-grant
-            tranches — opening another date folds the first.
-          </p>
-          <div className="vest-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th className="num">Tranches</th>
-                  <th className="num">Shares</th>
-                  <th className="num">Price</th>
-                  <th className="num">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {schedule.vest_days.map((day, index) => (
-                  <DayRows
-                    key={day.vest_date}
-                    day={day}
-                    isNext={index === nextDayIndex}
-                    expanded={expandedDate === day.vest_date}
-                    onToggle={() => toggleDay(day.vest_date)}
-                    tranches={
-                      expandedDate === day.vest_date
-                        ? schedule.vests.filter((vest) => vest.vest_date === day.vest_date)
-                        : []
-                    }
-                    latestPrice={latestPrice}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </section>
+      }
+    />
   )
 }
