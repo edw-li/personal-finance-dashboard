@@ -866,7 +866,43 @@ and re-copy both values.
 - All traffic is TLS-encrypted. The self-signed cert doesn't prove the server's identity
   to a first-time browser (trust-on-first-use) — import it into your trust store, or use
   domain mode (Part 6), to close that gap.
-- The whole app sits behind JWT auth; only `/login` and `/api/v1/health` are public.
+- The whole app sits behind JWT auth. The public surface is `/login`, `/api/v1/health`
+  and `/api/v1/calendar/feed.ics` — the last one carries its own credential in the
+  query string (see **Calendar feed tokens** below).
 - Backups live in a private bucket under scoped S3 credentials, optionally encrypted
   before upload with `gpg --symmetric` — set `BACKUP_PASSPHRASE` in `.env` (see 5.3);
   plaintext dumps print a warning per run.
+
+### Calendar feed tokens
+
+Settings → **Calendar feed** mints subscription links of the form
+`https://<host>/api/v1/calendar/feed.ics?token=<43-char token>`. The token IS the
+credential: anyone holding the URL can read every calendar event and its amounts, with no
+login. Only its sha256 is stored, and the plaintext is shown once at creation — the server
+cannot show it again.
+
+**Keep tokens out of logs.** A credential in a query string is one careless log line from
+being permanent, so the deploy is set up to never write one:
+
+- `backend/start.sh` runs uvicorn with `--no-access-log`. nginx fronts every request, so
+  nothing is lost; error logs and tracebacks are untouched.
+- `nginx.conf` defines a `no_query` log format that logs `$uri` — the path with **no**
+  query string. `$request`, `$request_uri` and `$args` would each leak the token, so do not
+  "tidy" the format back to the stock `combined`.
+
+One gap remains by design: nginx's **error** log prints the full request line, so a 502 or
+an upstream timeout on a feed poll writes that token into `error.log`. Treat any error log
+you copy off the server, paste into an issue, or ship to a log service as containing live
+credentials.
+
+**Rotating a token** — there is no edit, only replace:
+
+1. Settings → Calendar feed → **New feed link**, copy the URL it shows once.
+2. Re-subscribe the calendar app to the new URL (Google: Other calendars → From URL;
+   Apple: File → New Calendar Subscription), then delete the old subscription.
+3. Settings → Calendar feed → **Revoke** on the old link. Revoking is immediate and
+   permanent: the next poll on that URL gets a 404 and the calendar stops updating.
+
+Revoke on any suspicion — a leaked link, a lost phone, a shared screenshot. The `Last used`
+column shows when each link last fetched (bumped at most hourly), which is how you tell a
+link nothing is using from one that is.

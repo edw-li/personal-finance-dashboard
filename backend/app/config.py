@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # tests — conftest pins it).
     snapshot_enabled: bool = True
 
+    # ── Calendar feed (2026-09-03 calendar spec §11) ───────────────────────────────
+    # The site's public origin, e.g. https://finance.example.com — prefixes the page links
+    # inside ICS descriptions so a phone can open them. Unset → bare paths.
+    public_url: str | None = None
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

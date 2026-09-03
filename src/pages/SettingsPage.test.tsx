@@ -97,6 +97,15 @@ vi.mock('../api/lifecycle', async (importOriginal) => ({
   fetchHealth: vi.fn(),
 }))
 import { createSnapshot, fetchSnapshots } from '../api/lifecycle'
+// CalendarFeedCard owns a mount fetch of its own, for the same reason as the cards above:
+// unmocked it would make a real network call from every test here and banner the failure as
+// a second role="alert". Its own behaviour is pinned in CalendarFeedCard.test.tsx.
+vi.mock('../api/calendarFeed', () => ({
+  fetchFeedTokens: vi.fn().mockResolvedValue([]),
+  createFeedToken: vi.fn(),
+  revokeFeedToken: vi.fn(),
+  feedUrl: (token: string) => `http://localhost/api/v1/calendar/feed.ics?token=${token}`,
+}))
 import { fetchAssistantSettings } from '../api/assistant'
 import { changePassword } from '../api/auth'
 import { fetchHousehold } from '../api/household'
@@ -311,7 +320,10 @@ describe('SettingsPage — app settings', () => {
     // The other consequence-bearing hint: an empty box is a real setting (the ESPP page
     // then says so), not a box the user forgot to fill in.
     expect(screen.getByText("Blank = ESPP page shows 'no ticker configured'.")).toBeTruthy()
-    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(1)
+    // TWICE, not once: the Calendar-feed card owns the monthly-update due day, which lives
+    // in this same settings row (2026-09-03 calendar spec §12), so it reads /settings for
+    // itself the way every other card here reads its own endpoint.
+    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2)
     // The balance-suggestions mapping card was removed end to end (spec §5.2 amendment):
     // this page no longer reads accounts or the allocation, and offers no mapping control.
     expect(screen.queryByText(/Balance suggestions/)).toBeNull()
@@ -505,7 +517,9 @@ describe('SettingsPage — app settings', () => {
 
     second.resolve(SETTINGS)
     expect(await screen.findByLabelText('ESPP ticker')).toBeTruthy()
-    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2)
+    // The page's failure, the page's retry, then the Calendar-feed card's own read once
+    // `loadedOnce` finally let the cards mount.
+    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(3)
     expect(swrBox().value).toBe('4.5')
     expect(screen.queryByRole('alert')).toBeNull()
   })
@@ -1158,3 +1172,59 @@ function AnchorProbe({ to }: { to: string }) {
     </button>
   )
 }
+
+describe('SettingsPage — calendar feed card', () => {
+  it('mounts the Calendar feed card with its anchor', async () => {
+    renderPage()
+    expect(await screen.findByRole('region', { name: 'Calendar feed' })).toBeTruthy()
+    // The palette's /settings#calendar destination is this id (paletteRegistry).
+    expect(document.getElementById('calendar')).not.toBeNull()
+  })
+})
+
+describe('SettingsPage — anchored arrival from the palette', () => {
+  it('scrolls the addressed card into view and rings it for a moment', async () => {
+    // jsdom implements no scrollIntoView (HoldingDetailPanel carries the same note), so
+    // this stub is both why the call is safe and how the scroll is observed.
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    try {
+      render(
+        <MemoryRouter initialEntries={['/settings#limits']}>
+          <SettingsPage />
+        </MemoryRouter>,
+      )
+      // waitFor from the first tick rather than findBy-then-assert: the ring lives for
+      // 1.2 s of WALL clock, and a slow load would otherwise let it expire unobserved.
+      // The cards exist only once the first load resolves — the effect waits for that,
+      // which is the whole reason the browser's own hash handling cannot do this job.
+      await waitFor(() =>
+        expect(
+          document.getElementById('limits')?.classList.contains('is-highlighted'),
+        ).toBe(true),
+      )
+      expect(scrollIntoView).toHaveBeenCalled()
+
+      // …and the ring is a moment, not a permanent state.
+      await waitFor(
+        () =>
+          expect(
+            document.getElementById('limits')?.classList.contains('is-highlighted'),
+          ).toBe(false),
+        { timeout: 2500 },
+      )
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
+  it('leaves every card unrung when the URL carries no anchor', async () => {
+    renderPage()
+    const limits = await screen.findByRole('region', { name: 'Contribution limits' })
+    expect(limits.classList.contains('is-highlighted')).toBe(false)
+  })
+})

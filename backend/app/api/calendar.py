@@ -5,15 +5,17 @@ rule lives in services/calendar, driven here as plain values. Regions, in order:
   2. `_compose_for` + GET /calendar
   3. custom events CRUD
   4. overrides PUT/DELETE
-  5. (Lane B appends the ICS export, the token feed and token CRUD AFTER this file's end)
+  5. ICS export, the token feed and token CRUD (Lane B)
 
 GET-never-rejects: every degradable source degrades inside the loaders or compose();
 nothing stored can 500 this."""
 
-from datetime import UTC, date, datetime
+import hashlib
+import secrets
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,9 +23,11 @@ from app.api.app_settings import read_update_due_day
 from app.api.deps import get_current_user
 from app.api.espp import _espp_quote
 from app.api.taxes import withholding_estimate
+from app.config import settings
 from app.database import get_db
 from app.models import (
     CalendarEventOverride,
+    CalendarFeedToken,
     CardCredit,
     CreditCard,
     CustomEvent,
@@ -37,13 +41,18 @@ from app.models import (
     RsuGrant,
     Security,
     SecurityDividendEvent,
+    User,
 )
+from app.rate_limit import FEED_POLL, limiter
 from app.schemas.calendar import (
     CalendarEventOut,
     CalendarItemOut,
     CalendarOut,
     CustomEventIn,
     CustomEventOut,
+    FeedTokenCreated,
+    FeedTokenIn,
+    FeedTokenOut,
     OverrideIn,
     OverrideOut,
     SourceHealthOut,
@@ -56,6 +65,7 @@ from app.services.calendar.generators.dividends import ExDividend
 from app.services.calendar.generators.payroll import PaydaySource
 from app.services.calendar.generators.rsu import resolve as resolve_vests
 from app.services.calendar.generators.taxes import TaxFacts
+from app.services.calendar.ics import render
 from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
 from app.services.espp_calc import OfferingInfo, StoredPeriod
@@ -668,6 +678,140 @@ async def delete_override(
     row = await _find_override(db, key)
     if row is None:
         raise HTTPException(status_code=404, detail="override not found")
+    await db.delete(row)
+    await db.commit()
+    return Response(status_code=204)
+
+
+# --- 5. ICS: the download, the token feed, the tokens (spec §11) — Lane B --------------
+
+ICS_MEDIA_TYPE = "text/calendar"  # Starlette appends "; charset=utf-8" to text/* itself
+ICS_FILENAME = "financial-calendar.ics"
+FEED_BACK_DAYS = 30
+FEED_FORWARD_DAYS = 365
+LAST_USED_BUMP = timedelta(hours=1)
+# token_urlsafe(32) renders 43 characters; the window is wide either side so a future
+# token size still fits. Checked IN THE HANDLER rather than as Query(min_length=...):
+# FastAPI's 422 echoes the offending value straight back to the caller (and into any
+# error log), and a malformed token must be indistinguishable from an unknown one.
+FEED_TOKEN_MIN = 16
+FEED_TOKEN_MAX = 128
+# The one 200 body neither route declares through a response_model.
+ICS_RESPONSES: dict[int | str, dict[str, object]] = {200: {"content": {ICS_MEDIA_TYPE: {}}}}
+
+# The feed router carries NO auth dependency: the token in the URL is the credential, and a
+# calendar app holds nothing else. Included separately by main.py.
+feed_router = APIRouter(prefix="/calendar", tags=["calendar"])
+
+
+def _hash_token(plaintext: str) -> str:
+    return hashlib.sha256(plaintext.encode()).hexdigest()
+
+
+def _ics_response(text: str, extra_headers: dict[str, str]) -> Response:
+    return Response(content=text.encode("utf-8"), media_type=ICS_MEDIA_TYPE, headers=extra_headers)
+
+
+@router.get("/export.ics", responses=ICS_RESPONSES)
+async def export_ics(start: date, end: date, db: AsyncSession = Depends(get_db)) -> Response:
+    """The "Add to calendar (.ics)" download: the same window fence as GET /calendar, the
+    same composer, rendered once."""
+    _validated_span(start, end)
+    events, _health, _quoted_at = await _compose_for(db, start, end, product_today())
+    return _ics_response(
+        render(events, public_url=settings.public_url),
+        {"Content-Disposition": f'attachment; filename="{ICS_FILENAME}"'},
+    )
+
+
+@feed_router.get("/feed.ics", responses=ICS_RESPONSES)
+@limiter.limit(FEED_POLL)
+async def feed_ics(
+    request: Request,
+    token: str = Query(),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """The subscription feed: 30 days back, 365 forward. Unknown or revoked tokens 404 with
+    one sentence — no oracle for token existence. The body's sha256 is the ETag; a matching
+    If-None-Match is a 304 with no body, which is what makes a 12-hour poll cheap."""
+    if not FEED_TOKEN_MIN <= len(token) <= FEED_TOKEN_MAX:
+        raise HTTPException(status_code=404, detail="feed not found")
+    presented_hash = _hash_token(token)
+    row = (
+        await db.execute(
+            select(CalendarFeedToken).where(CalendarFeedToken.token_hash == presented_hash)
+        )
+    ).scalar_one_or_none()
+    # The indexed equality NARROWS, compare_digest DECIDES: the credential verdict must not
+    # rest on the database's collation semantics (a case-insensitive collation would widen
+    # `=`) nor on an early-returning byte compare. Both sides are already hashes of a
+    # 256-bit random token, so no secret is in the timing either way — this keeps it so.
+    if row is None or not secrets.compare_digest(row.token_hash, presented_hash):
+        raise HTTPException(status_code=404, detail="feed not found")
+    now = datetime.now(tz=UTC)
+    # At most one write per hour per token: a calendar app polls on its own schedule and an
+    # UPDATE per poll would make a read endpoint a writer for no extra information.
+    if row.last_used_at is None or now - row.last_used_at >= LAST_USED_BUMP:
+        row.last_used_at = now
+        await db.commit()
+    today = product_today()
+    events, _health, _quoted_at = await _compose_for(
+        db, today - timedelta(days=FEED_BACK_DAYS), today + timedelta(days=FEED_FORWARD_DAYS), today
+    )
+    body = render(events, public_url=settings.public_url).encode("utf-8")
+    etag = f'"{hashlib.sha256(body).hexdigest()}"'
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=3600"}
+    presented_etags = {
+        candidate.strip().removeprefix("W/")
+        for candidate in request.headers.get("if-none-match", "").split(",")
+    }
+    if etag in presented_etags:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type=ICS_MEDIA_TYPE, headers=headers)
+
+
+def _token_out(row: CalendarFeedToken) -> FeedTokenOut:
+    return FeedTokenOut(
+        id=row.id, label=row.label, created_at=row.created_at, last_used_at=row.last_used_at
+    )
+
+
+@router.get("/feed-tokens", response_model=list[FeedTokenOut])
+async def list_feed_tokens(
+    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> list[FeedTokenOut]:
+    rows = (
+        await db.execute(
+            select(CalendarFeedToken)
+            .where(CalendarFeedToken.user_id == user.id)
+            .order_by(CalendarFeedToken.created_at, CalendarFeedToken.id)
+        )
+    ).scalars()
+    return [_token_out(row) for row in rows]
+
+
+@router.post("/feed-tokens", response_model=FeedTokenCreated, status_code=201)
+async def create_feed_token(
+    body: FeedTokenIn, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> FeedTokenCreated:
+    """Mint, store the hash, hand back the plaintext ONCE."""
+    plaintext = secrets.token_urlsafe(32)
+    row = CalendarFeedToken(user_id=user.id, token_hash=_hash_token(plaintext), label=body.label)
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)  # created_at is a server default
+    return FeedTokenCreated(
+        id=row.id, label=row.label, created_at=row.created_at, last_used_at=None, token=plaintext
+    )
+
+
+@router.delete("/feed-tokens/{token_id}", status_code=204)
+async def revoke_feed_token(
+    token_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> Response:
+    row = await db.get(CalendarFeedToken, token_id)
+    if row is None or row.user_id != user.id:
+        raise HTTPException(status_code=404, detail="feed token not found")
     await db.delete(row)
     await db.commit()
     return Response(status_code=204)
