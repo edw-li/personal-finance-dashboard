@@ -163,4 +163,17 @@ describe('shared dark hexes', () => {
     expect(new Set(DARK.palette.map((h) => h.toLowerCase())).size).toBe(DARK.palette.length)
     expect(new Set(LIGHT.palette.map((h) => h.toLowerCase())).size).toBe(LIGHT.palette.length)
   })
+
+  // The diverging tuple joins the map like `sequential`: by POSITION inside an array (the
+  // ramp rule) and as lone colors. tokens.test.ts guarantees no step shares a hex with any
+  // other token, so the tuple never enters the election above.
+  it('maps the diverging ramp by position and as lone colors', () => {
+    expect(recolorOption({ inRange: { color: [...DARK.diverging] } }, lightFromDark)).toEqual({
+      inRange: { color: [...LIGHT.diverging] },
+    })
+    expect(recolorOption(DARK.diverging[0], lightFromDark)).toBe(LIGHT.diverging[0])
+    expect(recolorOption(DARK.diverging[8], lightFromDark)).toBe(LIGHT.diverging[8])
+    expect(DARK.diverging).toHaveLength(LIGHT.diverging.length)
+    expect(new Set(DARK.diverging.map((h) => h.toLowerCase())).size).toBe(DARK.diverging.length)
+  })
 })

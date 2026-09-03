@@ -27,6 +27,16 @@
   --chart-6: #008300;
   --chart-7: #9085e9;
   --chart-8: #e66767;
+  /* Diverging ramp (chart spec §12): orange arm ← neutral → blue arm. Read only by charts. */
+  --diverge-1: #f28b57;
+  --diverge-2: #e57236;
+  --diverge-3: #b85a2a;
+  --diverge-4: #6b4436;
+  --diverge-5: #272c37;
+  --diverge-6: #2b4a7a;
+  --diverge-7: #2f6bb8;
+  --diverge-8: #4a8ee6;
+  --diverge-9: #7fb2f0;
   /* Motion tokens (2026-08-27 spec §4). Consumed only inside
      prefers-reduced-motion: no-preference blocks — under `reduce` nothing reads them. */
   --t-fast: 120ms;
@@ -64,6 +74,15 @@
   --chart-6: #1f7a1f;
   --chart-7: #6f63d6;
   --chart-8: #c94848;
+  --diverge-1: #a63f12;
+  --diverge-2: #c8501f;
+  --diverge-3: #e07a4e;
+  --diverge-4: #f2b899;
+  --diverge-5: #e5eaf1;
+  --diverge-6: #a9c6f0;
+  --diverge-7: #7aa5e4;
+  --diverge-8: #4a7fd0;
+  --diverge-9: #2559a8;
 }
 
 /* Pinned to the ROOT element: every rem below scales off this font-size, so the block

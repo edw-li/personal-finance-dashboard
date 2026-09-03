@@ -38,6 +38,10 @@ export const GROUP_ORDER: AccountGroup[] = [
 // Sequential blue, dark -> light on the dark surface (near-zero recedes to the card).
 export const SEQUENTIAL_BLUE = DARK.sequential
 
+// Diverging, orange ← neutral → blue (chart spec §12). Only charts/scales.ts reads it —
+// builders never index into it directly.
+export const DIVERGING = DARK.diverging
+
 // Neutral gray for the folded "Other" stack — 3.6:1 on the surface (was #4a5060 at 2.16:1).
 export const OTHER_SERIES_COLOR = DARK.otherSeries
 

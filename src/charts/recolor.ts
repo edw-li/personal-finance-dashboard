@@ -58,14 +58,22 @@ const SCALARS: (keyof ThemeTokens)[] = [
 const RAMP = 'ramp:'
 
 // BLOCK ORDER IS THE ELECTION: later writes overwrite earlier ones for a shared hex, so
-// scalars → sequential → palette is exactly what makes palette[0] (not sequential[6]) and
-// palette[3] (not warn) the lone-color winners documented above. Reordering re-elects.
+// scalars → sequential → diverging → palette is exactly what makes palette[0] (not
+// sequential[6]) and palette[3] (not warn) the lone-color winners documented above.
+// Reordering re-elects.
 function pairs(from: ThemeTokens, to: ThemeTokens): Map<string, string> {
   const map = new Map<string, string>()
   for (const key of SCALARS) map.set((from[key] as string).toLowerCase(), to[key] as string)
   from.sequential.forEach((hex, i) => {
     map.set(RAMP + hex.toLowerCase(), to.sequential[i])
     map.set(hex.toLowerCase(), to.sequential[i])
+  })
+  // Diverging steps are distinct from every other token (tokens.test.ts), so their order
+  // in this block is not an election — it is just the same ramp+lone registration the
+  // sequential scale gets, so a visualMap `inRange.color` array recolors by position.
+  from.diverging.forEach((hex, i) => {
+    map.set(RAMP + hex.toLowerCase(), to.diverging[i])
+    map.set(hex.toLowerCase(), to.diverging[i])
   })
   from.palette.forEach((hex, i) => map.set(hex.toLowerCase(), to.palette[i]))
   return map
