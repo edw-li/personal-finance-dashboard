@@ -18,13 +18,15 @@ async def get_current_user(
     if credentials is None:
         raise HTTPException(status_code=401, detail="Not authenticated", headers=AUTH_401_HEADERS)
     try:
-        user_id = decode_access_token(credentials.credentials)
+        user_id, token_version = decode_access_token(credentials.credentials)
     except ValueError:
         raise HTTPException(
             status_code=401, detail="Invalid or expired token", headers=AUTH_401_HEADERS
         ) from None
     user = await db.get(User, user_id)
-    if user is None:
+    # A stale version means a password change ended this session (2026-09-03 shell spec §10);
+    # same opaque 401 as a bad token, so nothing distinguishes the two to a caller.
+    if user is None or user.token_version != token_version:
         raise HTTPException(
             status_code=401, detail="Invalid or expired token", headers=AUTH_401_HEADERS
         )

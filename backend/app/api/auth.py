@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +26,7 @@ async def login(
         password_ok = False
     if not password_ok:
         raise HTTPException(status_code=401, detail="Incorrect email or password")
-    return TokenResponse(access_token=create_access_token(user.id))
+    return TokenResponse(access_token=create_access_token(user.id, user.token_version))
 
 
 @router.get("/me", response_model=MeResponse)
@@ -34,12 +34,19 @@ async def me(user: User = Depends(get_current_user)) -> MeResponse:
     return MeResponse(email=user.email)
 
 
-@router.post("/change-password", status_code=204)
+@router.post("/renew", response_model=TokenResponse)
+async def renew(user: User = Depends(get_current_user)) -> TokenResponse:
+    """A fresh 24 h token for an active session (2026-09-03 shell spec §10). Same version, so
+    a password change elsewhere still ends this session at its next request."""
+    return TokenResponse(access_token=create_access_token(user.id, user.token_version))
+
+
+@router.post("/change-password", response_model=TokenResponse)
 async def change_password(
     body: ChangePasswordRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Response:
+) -> TokenResponse:
     try:
         current_ok = verify_password(body.current_password, user.password_hash)
     except ValueError:
@@ -50,5 +57,8 @@ async def change_password(
         user.password_hash = hash_password(body.new_password)
     except ValueError:
         raise HTTPException(status_code=400, detail="Password must be at most 72 bytes") from None
+    # Every other session's token now carries a stale version and dies at its next request;
+    # this response carries the only live one, so the tab that changed the password stays in.
+    user.token_version += 1
     await db.commit()
-    return Response(status_code=204)
+    return TokenResponse(access_token=create_access_token(user.id, user.token_version))

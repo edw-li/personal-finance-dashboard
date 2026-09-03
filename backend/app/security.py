@@ -16,16 +16,21 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode(), password_hash.encode())
 
 
-def create_access_token(user_id: int) -> str:
+def create_access_token(user_id: int, token_version: int = 0) -> str:
     payload = {
         "sub": str(user_id),
+        "ver": token_version,
         "exp": datetime.now(UTC) + timedelta(hours=settings.access_token_expire_hours),
     }
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
 
 
-def decode_access_token(token: str) -> int:
-    """Return the user id, or raise ValueError for any invalid/expired token."""
+def decode_access_token(token: str) -> tuple[int, int]:
+    """Return (user id, token version), or raise ValueError for any invalid/expired token.
+
+    A token minted before versions existed has no `ver` and reads as 0, so this deploy
+    signs nobody out (2026-09-03 shell spec §10).
+    """
     try:
         # require: PyJWT only enforces exp when the claim is present, so a key-signed token
         # minted without one would never expire. ValueError: int() on a non-numeric sub would
@@ -36,6 +41,6 @@ def decode_access_token(token: str) -> int:
             algorithms=[ALGORITHM],
             options={"require": ["exp", "sub"]},
         )
-        return int(payload["sub"])
+        return int(payload["sub"]), int(payload.get("ver", 0))
     except (jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
         raise ValueError("invalid token") from exc

@@ -15,8 +15,8 @@ def test_password_hash_roundtrip():
 
 
 def test_jwt_roundtrip():
-    token = create_access_token(user_id=1)
-    assert decode_access_token(token) == 1
+    token = create_access_token(user_id=1, token_version=3)
+    assert decode_access_token(token) == (1, 3)
 
 
 def test_jwt_garbage_rejected():
