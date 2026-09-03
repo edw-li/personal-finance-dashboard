@@ -21,8 +21,11 @@ export async function changePassword(
   currentPassword: string,
   newPassword: string,
 ): Promise<void> {
-  await api<void>('/auth/change-password', {
+  const res = await api<TokenResponse>('/auth/change-password', {
     method: 'POST',
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
   })
+  // Every OTHER session was just signed out (token_version bumped); this token is the only
+  // live one, so store it before the next request goes out.
+  setToken(res.access_token)
 }

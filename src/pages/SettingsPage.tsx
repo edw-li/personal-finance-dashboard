@@ -419,7 +419,7 @@ export default function SettingsPage() {
           <section className="card span-6">
             <h2 className="eyebrow">
               Password
-              <InfoHint text="Changes your login password; existing sessions stay signed in until their token expires." />
+              <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
             </h2>
             <form
               className="settings-form"
@@ -473,10 +473,11 @@ export default function SettingsPage() {
                   Password changed.
                 </p>
               )}
-              {/* Honest about what this app does NOT do: tokens are not rotated on a
-                  password change (single-user app, 24 h expiry — declared deferral). */}
+              {/* What the change costs and what it does not: the server bumps token_version,
+                  which kills every token issued before it — including this tab's, which is
+                  why the response hands back a fresh one for changePassword to store. */}
               <p className="settings-note">
-                Existing sessions stay signed in until their token expires (~24 h).
+                Other devices are signed out; this one stays signed in.
               </p>
             </form>
           </section>

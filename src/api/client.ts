@@ -19,6 +19,14 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY)
 }
 
+// Called after every successful authenticated response (the session renewer registers
+// itself here from AuthContext — a direct import would be a cycle, since session.ts uses
+// this module's token helpers).
+let afterResponse: (() => void) | null = null
+export function setAfterResponseHook(hook: (() => void) | null): void {
+  afterResponse = hook
+}
+
 export class ApiError extends Error {
   status: number
 
@@ -77,7 +85,16 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
     clearToken()
     clearSnapshots() // snapshots are session data — they must not outlive the token
     clearAssistantSession() // and a financial chat transcript must not outlive it either
-    window.location.assign('/login')
+    // Return-to-page (2026-09-03 shell spec §10): remember where the user was, say why they
+    // are seeing the login, and let LoginPage bring them back after they sign in. The key is
+    // spelled out rather than imported: RETURN_TO_KEY lives in session.ts, which imports
+    // THIS module's token helpers, so reaching for it here would close a cycle.
+    try {
+      sessionStorage.setItem('finance.returnTo', window.location.pathname + window.location.search)
+    } catch {
+      // storage blocked — they land on the overview instead
+    }
+    window.location.assign('/login?reason=expired')
     throw new ApiError('Session expired', 401)
   }
   if (!res.ok) {
@@ -97,6 +114,9 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
     }
     throw new ApiError(detail, res.status)
   }
+  // Sliding renewal (spec §10) hangs off any successful authenticated response. /auth/*
+  // is excluded so the renew call cannot re-enter itself.
+  if (token !== null && !path.startsWith('/auth/')) afterResponse?.()
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }

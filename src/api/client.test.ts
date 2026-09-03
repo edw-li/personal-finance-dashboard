@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, apiReadOnly, setToken } from './client'
+import { api, ApiError, apiReadOnly, setAfterResponseHook, setToken } from './client'
 import { clearSnapshots, getSnapshot, setSnapshot } from './snapshotCache'
 
 function mockFetchOk(body: unknown = {}) {
@@ -142,7 +142,7 @@ describe('api — snapshot invalidation', () => {
     vi.stubGlobal('location', { ...window.location, assign })
     mockFetchFailure(401, { detail: 'Not authenticated' })
     await expect(api('/things')).rejects.toThrow('Session expired')
-    expect(assign).toHaveBeenCalledWith('/login')
+    expect(assign).toHaveBeenCalledWith('/login?reason=expired')
     expect(getSnapshot('overview')).toBeUndefined()
     expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
     expect(sessionStorage.getItem('assistant:model')).toBeNull()
@@ -163,5 +163,47 @@ describe('apiReadOnly — POST-for-read', () => {
     expect(init.body).toBe('{"context":{}}')
     // The whole point: a compute-read must not cost every page its instant paint.
     expect(getSnapshot('overview')).toEqual({ kept: true })
+  })
+})
+
+describe('session plumbing', () => {
+  // Return-to-page (2026-09-03 shell spec §10): an expiry must not also cost the user the
+  // page they were reading — the login sends them back to it.
+  it('a 401 remembers the current path and sends the user to /login?reason=expired', async () => {
+    const assign = vi.fn()
+    // jsdom refuses real navigation, so the redirect (and the location it reads) is stubbed.
+    vi.stubGlobal('location', {
+      ...window.location,
+      pathname: '/taxes',
+      search: '?year=2026',
+      assign,
+    })
+    setToken('x')
+    mockFetchFailure(401, { detail: 'Not authenticated' })
+    await expect(api('/net-worth/summary')).rejects.toMatchObject({ status: 401 })
+    expect(sessionStorage.getItem('finance.returnTo')).toBe('/taxes?year=2026')
+    expect(assign).toHaveBeenCalledWith('/login?reason=expired')
+  })
+
+  it('runs the after-response hook on successful authenticated calls, not on auth routes', async () => {
+    setToken('x')
+    const hook = vi.fn()
+    setAfterResponseHook(hook)
+    mockFetchOk()
+    await api('/net-worth/summary')
+    expect(hook).toHaveBeenCalledTimes(1)
+    // /auth/renew is itself an authenticated response; hooking it would recurse.
+    await api('/auth/me')
+    expect(hook).toHaveBeenCalledTimes(1)
+    setAfterResponseHook(null)
+  })
+
+  it('leaves the hook alone when there is no token', async () => {
+    const hook = vi.fn()
+    setAfterResponseHook(hook)
+    mockFetchOk()
+    await api('/net-worth/summary')
+    expect(hook).not.toHaveBeenCalled()
+    setAfterResponseHook(null)
   })
 })

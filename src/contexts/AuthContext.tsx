@@ -2,13 +2,18 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import type { ReactNode } from 'react'
 import { beginAssistantSession, clearAssistantSession } from '../api/assistantSession'
 import * as authApi from '../api/auth'
-import { getToken } from '../api/client'
+import { ApiError, getToken, setAfterResponseHook } from '../api/client'
 import { clearSnapshots } from '../api/snapshotCache'
+import { maybeRenew } from '../components/shell/session'
 
 interface AuthState {
   email: string | null
   isAuthenticated: boolean
   isLoading: boolean
+  /** Why the identity check could not be answered — NOT a 401 (client.ts redirects those),
+   *  so always "the server is unreachable". ProtectedRoute shows it with `retry`. */
+  authError: string | null
+  retry: () => void
   login: (email: string, password: string) => Promise<void>
   logout: () => void
 }
@@ -20,6 +25,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Seeded from the token so the tokenless path never needs a synchronous setState in the
   // effect below (eslint-plugin-react-hooks v7 errors on that: react-hooks/set-state-in-effect).
   const [isLoading, setIsLoading] = useState(() => getToken() !== null)
+  const [authError, setAuthError] = useState<string | null>(null)
+  // Trigger only: each Retry bumps it and re-runs the identity check below.
+  const [attempt, setAttempt] = useState(0)
+
+  // Sliding renewal (2026-09-03 shell spec §10). Registered rather than imported by
+  // client.ts: session.ts uses that module's token helpers, so a direct import would cycle.
+  useEffect(() => {
+    setAfterResponseHook(() => {
+      void maybeRenew()
+    })
+    return () => setAfterResponseHook(null)
+  }, [])
 
   useEffect(() => {
     // LOAD-BEARING guard — do not drop: without it, a tokenless mount calls /auth/me,
@@ -28,9 +45,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!getToken()) return
     authApi
       .fetchMe()
-      .then((me) => setEmail(me.email))
-      .catch(() => setEmail(null))
+      .then((me) => {
+        setEmail(me.email)
+        setAuthError(null)
+      })
+      .catch((err: unknown) => {
+        setEmail(null)
+        // A 401 has already been redirected by client.ts; anything else is "can't reach
+        // the server", which ProtectedRoute shows with a Retry instead of a blank page.
+        if (err instanceof ApiError && err.status !== 401) setAuthError(err.message)
+      })
       .finally(() => setIsLoading(false))
+  }, [attempt])
+
+  const retry = useCallback(() => {
+    setIsLoading(true)
+    setAuthError(null)
+    setAttempt((n) => n + 1)
   }, [])
 
   const login = useCallback(async (loginEmail: string, password: string) => {
@@ -52,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ email, isAuthenticated: email !== null, isLoading, login, logout }}
+      value={{ email, isAuthenticated: email !== null, isLoading, authError, retry, login, logout }}
     >
       {children}
     </AuthContext.Provider>

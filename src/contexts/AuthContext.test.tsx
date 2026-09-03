@@ -14,6 +14,13 @@ vi.mock('../api/auth', () => ({
   login: vi.fn(),
   logout: vi.fn(),
 }))
+// Partial: getToken must stay real (these tests drive it through localStorage); only the
+// after-response hook is stubbed, so the renewer's installation is observable.
+vi.mock('../api/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/client')>()),
+  setAfterResponseHook: vi.fn(),
+}))
+import { ApiError, setAfterResponseHook } from '../api/client'
 
 function Probe() {
   const { isAuthenticated, isLoading, login, logout } = useAuth()
@@ -25,6 +32,19 @@ function Probe() {
       </button>
       <button type="button" onClick={logout}>
         Log out
+      </button>
+    </>
+  )
+}
+
+function ErrorProbe() {
+  const { authError, isAuthenticated, retry } = useAuth()
+  return (
+    <>
+      <span data-testid="err">{authError ?? ''}</span>
+      <span data-testid="ok">{String(isAuthenticated)}</span>
+      <button type="button" onClick={retry}>
+        Retry
       </button>
     </>
   )
@@ -122,4 +142,47 @@ it('logout clears the assistant session storage', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
   expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
   expect(sessionStorage.getItem('assistant:model')).toBeNull()
+})
+
+it('exposes a server-unreachable error (not a 401) and retries on demand', async () => {
+  // A 401 has already been redirected by client.ts; anything else means the API could not
+  // be reached, and the user is owed a sentence with a Retry rather than the blank page
+  // ProtectedRoute's `null` return used to be.
+  localStorage.setItem('finance_token', 't')
+  vi.mocked(authApi.fetchMe).mockRejectedValueOnce(
+    new ApiError('Network error — is the server reachable?', 0)
+  )
+  vi.mocked(authApi.fetchMe).mockResolvedValueOnce({ email: 'me@example.com' })
+  render(
+    <AuthProvider>
+      <ErrorProbe />
+    </AuthProvider>
+  )
+  await waitFor(() => expect(screen.getByTestId('err').textContent).toMatch(/reachable/))
+  expect(screen.getByTestId('ok').textContent).toBe('false')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  await waitFor(() => expect(screen.getByTestId('ok').textContent).toBe('true'))
+  expect(screen.getByTestId('err').textContent).toBe('')
+})
+
+it('says nothing on a 401 — client.ts has already sent that session to the login', async () => {
+  localStorage.setItem('finance_token', 't')
+  vi.mocked(authApi.fetchMe).mockRejectedValue(new ApiError('Session expired', 401))
+  render(
+    <AuthProvider>
+      <ErrorProbe />
+    </AuthProvider>
+  )
+  await waitFor(() => expect(vi.mocked(authApi.fetchMe)).toHaveBeenCalled())
+  expect(screen.getByTestId('err').textContent).toBe('')
+})
+
+it('installs the session renewer as the client after-response hook', () => {
+  render(
+    <AuthProvider>
+      <Probe />
+    </AuthProvider>
+  )
+  expect(vi.mocked(setAfterResponseHook)).toHaveBeenCalledWith(expect.any(Function))
 })
