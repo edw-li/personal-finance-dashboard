@@ -13,6 +13,8 @@ describe('grids', () => {
     expect(GRID_VARIANTS.horizontal).toEqual({ left: 130, right: 40, top: 8, bottom: 28 })
     expect(GRID_VARIANTS.heatmap).toEqual({ left: 130, right: 24, top: 8, bottom: 96 })
     expect(GRID_VARIANTS.fan).toEqual({ left: 76, right: 24, top: 40, bottom: 28 })
+    // The fan's left inset with the endLabel variant's right one: room for pin names.
+    expect(GRID_VARIANTS.fanEndLabel).toEqual({ left: 76, right: 84, top: 40, bottom: 28 })
   })
   it('grid() returns a COPY of a variant and defaults to the money grid', () => {
     const g = grid()
@@ -23,6 +25,7 @@ describe('grids', () => {
   it('isGridVariant recognises exactly the named shapes', () => {
     expect(isGridVariant({ left: 70, right: 24, top: 40, bottom: 28 })).toBe(true)
     expect(isGridVariant({ left: 70, right: 16, top: 12, bottom: 28 })).toBe(false) // the old trend literal
+    expect(isGridVariant(GRID_VARIANTS.fanEndLabel)).toBe(true)
     expect(isGridVariant({ left: 70, right: 24, top: 40, bottom: 28, containLabel: true })).toBe(false)
     expect(isGridVariant(undefined)).toBe(false)
   })

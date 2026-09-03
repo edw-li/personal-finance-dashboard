@@ -13,7 +13,7 @@ import {
   ruleAt,
 } from '../../charts/markLine'
 import { referenceLine } from '../../charts/reference'
-import { PALETTE } from '../../charts/theme'
+import { MUTED, PALETTE } from '../../charts/theme'
 import { timeZoom } from '../../charts/timeZoom'
 import { axisTooltip, swatch } from '../../charts/tooltip'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
@@ -150,9 +150,22 @@ export interface ProjectionOptionInput
       >
     > {}
 
+/** A pinned scenario's deterministic line, drawn as a reference series (chart grammar §10):
+ *  dashed MUTED, end-labelled with the pin's name. The fan stays the live scenario's. */
+export interface ProjectionReference {
+  name: string
+  data: string[]
+}
+
+export interface ProjectionExtras {
+  log?: boolean
+  selected?: Record<string, boolean>
+  references?: ProjectionReference[]
+}
+
 export function projectionOption(
   data: ProjectionOptionInput,
-  { log = false, selected }: { log?: boolean; selected?: Record<string, boolean> } = {},
+  { log = false, selected, references: pinned = [] }: ProjectionExtras = {},
 ): EChartsOption | null {
   if (data.months.length < 2) return null
   const target = data.fi_target === null ? null : Number(data.fi_target)
@@ -260,6 +273,15 @@ export function projectionOption(
     return [...range(BAND_SERIES[0], at('p10'), at('p90')), ...range(BAND_SERIES[1], at('p25'), at('p75'))]
   }
 
+  // Pinned scenarios (planning-sandboxes spec §11): each one's deterministic line as a
+  // reference series, end-labelled with the pin's own name so three dashed lines stay
+  // tellable apart without a legend hunt. Same log guard as the data — a pin is on the
+  // same axis, so a non-positive month is its gap too.
+  const references = pinned.map((ref) => ({
+    ...referenceLine(ref.name, onScale(ref.data.map(Number))),
+    endLabel: { show: true, formatter: ref.name, color: MUTED, fontSize: 11 },
+  }))
+
   const series = [
     // Bands first: series order is paint order, and the lines belong on top.
     ...bandSeries,
@@ -285,21 +307,32 @@ export function projectionOption(
             ...(marks.length > 0 ? { markPoint: percentileMarks(marks) } : {}),
           },
         ]),
+    // Last: a pin is a comparison drawn over the answer, never under it.
+    ...references,
   ]
   const legendData = [
     PROJECTION_SERIES[0],
     PROJECTION_SERIES[1],
     ...(target === null ? [] : [PROJECTION_SERIES[2]]),
     ...(bands === null ? [] : [MEDIAN_SERIES, ...BAND_SERIES]),
+    ...references.map((ref) => ref.name),
   ]
   return {
     // ctrl+wheel / drag-pan over a 30-year axis; the horizon knob changes the window.
     dataZoom: timeZoom(data.months, 'all'),
-    grid: grid('fan'),
+    // A NAMED variant either way (conformance checks grids by variant, never by literal):
+    // the fan, or the fan with room for the pin names past the last month.
+    grid: grid(references.length === 0 ? 'fan' : 'fanEndLabel'),
     // Listed explicitly so the invisible base stays OUT; the two outer washes share one name
     // and therefore one entry.
     legend: { ...legendFor(legendData.length, selected), data: legendData },
-    tooltip: axisTooltip({ unit: 'money', references: [PROJECTION_SERIES[2]], footer: bandLines }),
+    // Pins are reference series, so they read as references in the hover too (spec §11):
+    // muted rows under the live scenario's, never mixed in with it.
+    tooltip: axisTooltip({
+      unit: 'money',
+      references: [PROJECTION_SERIES[2], ...references.map((ref) => ref.name)],
+      footer: bandLines,
+    }),
     xAxis: monthAxis(labels),
     yAxis: moneyAxis({ log }),
     series,
