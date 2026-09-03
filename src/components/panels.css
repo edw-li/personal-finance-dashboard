@@ -399,12 +399,17 @@
   border-radius: 4px;
 }
 
-/* InfoHint — the ⓘ beside titles/labels. The bubble is pure CSS from data-tip: shows on
-   hover AND :focus-visible, so keyboard and touch (tap = focus) reach it without JS. The
-   resets matter: eyebrows are uppercase/letterspaced/muted, and the bubble must not
-   inherit any of that. */
-.info-hint {
+/* InfoHint — the ⓘ beside titles/labels. The bubble is a real element now (2026-09-03
+   shell spec §13): hover opens it after a beat, click pins it, and it flips sides at the
+   viewport's right edge, which the old ::after (pinned to `left`) could not do — it clipped
+   on every right-hand card. The resets matter: eyebrows are uppercase/letterspaced/muted,
+   and the bubble must not inherit any of that. */
+.info-hint-wrap {
   position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+.info-hint {
   display: inline-flex;
   align-items: center;
   margin-left: 0.35rem;
@@ -423,20 +428,13 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-.info-hint::after {
-  content: attr(data-tip);
+.info-hint-bubble {
   position: absolute;
   bottom: calc(100% + 6px);
   left: -8px;
   /* The app's bubble layer (shared with the calendar event popover): floats over chart
      canvases and table rows. */
   z-index: 2;
-  /* visibility+opacity rather than display (2026-08-27 spec §5): display cannot be
-     transitioned, and hidden visibility hides from assistive tech exactly as display: none
-     did — the AT contract is unchanged. */
-  display: block;
-  visibility: hidden;
-  opacity: 0;
   width: max-content;
   max-width: 280px;
   padding: 0.5rem 0.65rem;
@@ -452,10 +450,10 @@
   text-align: left;
   white-space: normal;
 }
-.info-hint:hover::after,
-.info-hint:focus-visible::after {
-  visibility: visible;
-  opacity: 1;
+/* Anchored to the RIGHT edge instead, for a hint too close to the viewport's. */
+.info-hint-bubble.is-flipped {
+  left: auto;
+  right: -8px;
 }
 
 /* ── Chart export menu (2026-08-25 spec §2a) ───────────────────────── */
@@ -571,15 +569,6 @@
   /* Press feedback: felt, barely seen. */
   .button:active {
     transform: scale(0.985);
-  }
-
-  /* The bubble fades; visibility rides the same duration so it stays interactable-none
-     while invisible. AT-equivalent to the old display toggle: hidden visibility is
-     hidden from screen readers too. */
-  .info-hint::after {
-    transition:
-      opacity 100ms ease,
-      visibility 100ms;
   }
 
   .row-click {

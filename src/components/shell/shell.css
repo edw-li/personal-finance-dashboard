@@ -240,7 +240,6 @@
 
 /* One focus ring for the shell's own controls, including the nav (which had none). */
 .nav-link:focus-visible,
-.logout-button:focus-visible,
 .sidebar-search:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

@@ -14,6 +14,17 @@ vi.mock('../api/auth', () => ({
   login: vi.fn(),
   logout: vi.fn(),
 }))
+// Partial: getToken must stay real (these tests drive it through localStorage); only the
+// after-response hook is stubbed, so the renewer's installation is observable.
+vi.mock('../api/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/client')>()),
+  setAfterResponseHook: vi.fn(),
+}))
+import { ApiError, setAfterResponseHook } from '../api/client'
+// The renewer is the hook's payload; stubbing it makes "what did AuthContext install?"
+// answerable without a live token or a fetch.
+vi.mock('../components/shell/session', () => ({ maybeRenew: vi.fn() }))
+import { maybeRenew } from '../components/shell/session'
 
 function Probe() {
   const { isAuthenticated, isLoading, login, logout } = useAuth()
@@ -25,6 +36,20 @@ function Probe() {
       </button>
       <button type="button" onClick={logout}>
         Log out
+      </button>
+    </>
+  )
+}
+
+function ErrorProbe() {
+  const { authError, isAuthenticated, isLoading, retry } = useAuth()
+  return (
+    <>
+      <span data-testid="err">{authError ?? ''}</span>
+      <span data-testid="ok">{String(isAuthenticated)}</span>
+      <span data-testid="loading">{String(isLoading)}</span>
+      <button type="button" onClick={retry}>
+        Retry
       </button>
     </>
   )
@@ -122,4 +147,120 @@ it('logout clears the assistant session storage', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
   expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
   expect(sessionStorage.getItem('assistant:model')).toBeNull()
+})
+
+it('exposes a server-unreachable error (not a 401) and retries on demand', async () => {
+  // A 401 has already been redirected by client.ts; anything else means the API could not
+  // be reached, and the user is owed a sentence with a Retry rather than the blank page
+  // ProtectedRoute's `null` return used to be.
+  localStorage.setItem('finance_token', 't')
+  vi.mocked(authApi.fetchMe).mockRejectedValueOnce(
+    new ApiError('Network error — is the server reachable?', 0)
+  )
+  vi.mocked(authApi.fetchMe).mockResolvedValueOnce({ email: 'me@example.com' })
+  render(
+    <AuthProvider>
+      <ErrorProbe />
+    </AuthProvider>
+  )
+  await waitFor(() => expect(screen.getByTestId('err').textContent).toMatch(/reachable/))
+  expect(screen.getByTestId('ok').textContent).toBe('false')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  await waitFor(() => expect(screen.getByTestId('ok').textContent).toBe('true'))
+  expect(screen.getByTestId('err').textContent).toBe('')
+})
+
+it('says nothing on a 401 — client.ts has already sent that session to the login', async () => {
+  localStorage.setItem('finance_token', 't')
+  vi.mocked(authApi.fetchMe).mockRejectedValue(new ApiError('Session expired', 401))
+  render(
+    <AuthProvider>
+      <ErrorProbe />
+    </AuthProvider>
+  )
+  await waitFor(() => expect(vi.mocked(authApi.fetchMe)).toHaveBeenCalled())
+  expect(screen.getByTestId('err').textContent).toBe('')
+})
+
+it('installs the session renewer as the client after-response hook, and takes it back', () => {
+  const { unmount } = render(
+    <AuthProvider>
+      <Probe />
+    </AuthProvider>
+  )
+  expect(vi.mocked(setAfterResponseHook)).toHaveBeenCalledWith(expect.any(Function))
+  // Not just "a function": the hook has to be the renewer, or the sliding session quietly
+  // never slides. Fire what was installed and watch for the renewal it is supposed to make.
+  const installed = vi.mocked(setAfterResponseHook).mock.calls[0][0] as () => void
+  installed()
+  expect(vi.mocked(maybeRenew)).toHaveBeenCalledTimes(1)
+  // And it must come back out: a hook left behind outlives its provider and renews against
+  // a token that provider no longer owns.
+  unmount()
+  expect(vi.mocked(setAfterResponseHook)).toHaveBeenLastCalledWith(null)
+})
+
+// The splash prints authError verbatim, so the sentence has to be finished here.
+it('labels an unreachable server but lets a server that answered speak for itself', async () => {
+  localStorage.setItem('finance_token', 't')
+  vi.mocked(authApi.fetchMe).mockRejectedValueOnce(new ApiError('Request timed out', 0))
+  const { unmount } = render(
+    <AuthProvider>
+      <ErrorProbe />
+    </AuthProvider>
+  )
+  await waitFor(() =>
+    expect(screen.getByTestId('err').textContent).toBe("Can't reach the server — Request timed out")
+  )
+  unmount()
+
+  // A 500 is the opposite failure: the server answered. Blaming the network would send the
+  // user off to reboot a router over a bug in the API.
+  vi.mocked(authApi.fetchMe).mockRejectedValueOnce(new ApiError('Database is on fire', 500))
+  render(
+    <AuthProvider>
+      <ErrorProbe />
+    </AuthProvider>
+  )
+  await waitFor(() => expect(screen.getByTestId('err').textContent).toBe('Database is on fire'))
+})
+
+it('surfaces a throw that never became an ApiError instead of silently signing out', async () => {
+  // Before: anything but an ApiError left authError null with the token still in place, so
+  // ProtectedRoute redirected a perfectly good session to the login with no explanation.
+  localStorage.setItem('finance_token', 't')
+  vi.mocked(authApi.fetchMe).mockRejectedValueOnce(new TypeError('res.json is not a function'))
+  render(
+    <AuthProvider>
+      <ErrorProbe />
+    </AuthProvider>
+  )
+  await waitFor(() =>
+    expect(screen.getByTestId('err').textContent).toBe(
+      "Can't reach the server — res.json is not a function"
+    )
+  )
+  expect(localStorage.getItem('finance_token')).toBe('t') // untouched: this was not a 401
+})
+
+it('retrying with the token already gone settles instead of spinning forever', async () => {
+  // Another tab's 401 (or a manual sign-out) can take the token while this splash is up.
+  // The identity effect bails on its no-token guard, so a Retry that only set isLoading
+  // would leave a spinner turning for as long as the user cared to watch it.
+  localStorage.setItem('finance_token', 't')
+  vi.mocked(authApi.fetchMe).mockRejectedValueOnce(new ApiError('Request timed out', 0))
+  render(
+    <AuthProvider>
+      <ErrorProbe />
+    </AuthProvider>
+  )
+  await waitFor(() => expect(screen.getByTestId('err').textContent).toMatch(/reach the server/))
+  localStorage.removeItem('finance_token')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  // Settled and signed out: ProtectedRoute sends them to the login from here.
+  expect(screen.getByTestId('loading').textContent).toBe('false')
+  expect(screen.getByTestId('err').textContent).toBe('')
+  expect(vi.mocked(authApi.fetchMe)).toHaveBeenCalledTimes(1)
 })

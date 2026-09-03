@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { changePassword } from '../api/auth'
 import { ApiError } from '../api/client'
 import { importXlsx } from '../api/importer'
@@ -96,6 +97,24 @@ export default function SettingsPage() {
     load()
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
+
+  // Anchored arrival from the palette (/settings#limits, 2026-09-03 spec §9): scroll the
+  // card into view and light it for a moment, because a page of ten cards gives no other
+  // sign that the jump landed. Gated on `loading` because the cards only exist once the
+  // first load has resolved — the browser's own hash handling ran long before that and
+  // found nothing. The class is applied imperatively rather than through state: it is
+  // pure decoration on a card this page does not otherwise re-render.
+  const { hash } = useLocation()
+  useEffect(() => {
+    if (!hash || loading) return
+    const el = document.getElementById(hash.slice(1))
+    if (!el) return
+    // Optional-call, like HoldingDetailPanel: jsdom has no scrollIntoView.
+    el.scrollIntoView?.({ block: 'start' })
+    el.classList.add('is-highlighted')
+    const timer = setTimeout(() => el.classList.remove('is-highlighted'), 1200)
+    return () => clearTimeout(timer)
+  }, [hash, loading])
 
   // Every settings keystroke retires both sentences under the form: they describe the
   // values that WERE in the boxes.
@@ -274,7 +293,7 @@ export default function SettingsPage() {
               two forms' `loadedOnce` gate on purpose — a settings GET that failed means the
               API is unreachable, and an upload card that could only fail is not worth
               offering. */}
-          <section className="card span-12">
+          <section className="card span-12" id="import">
             <h2 className="eyebrow">
               Import workbook
               <InfoHint text="Dry run shows the diff without writing. Apply overwrites sheet-owned rows — dividends are never touched; taxes inside sheet-covered years reset to the sheet." />
@@ -345,7 +364,7 @@ export default function SettingsPage() {
               everything here: a settings GET that failed means the API is unreachable. */}
           <SystemCard />
 
-          <section className="card span-6">
+          <section className="card span-6" id="app-settings">
             <h2 className="eyebrow">
               App settings
               <InfoHint text="The withdrawal rate feeds the 4% line and FI target; the ESPP ticker prices lots; the cron schedules price refreshes (applied on save)." />
@@ -417,10 +436,10 @@ export default function SettingsPage() {
             </form>
           </section>
 
-          <section className="card span-6">
+          <section className="card span-6" id="password">
             <h2 className="eyebrow">
               Password
-              <InfoHint text="Changes your login password; existing sessions stay signed in until their token expires." />
+              <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
             </h2>
             <form
               className="settings-form"
@@ -474,10 +493,11 @@ export default function SettingsPage() {
                   Password changed.
                 </p>
               )}
-              {/* Honest about what this app does NOT do: tokens are not rotated on a
-                  password change (single-user app, 24 h expiry — declared deferral). */}
+              {/* What the change costs and what it does not: the server bumps token_version,
+                  which kills every token issued before it — including this tab's, which is
+                  why the response hands back a fresh one for changePassword to store. */}
               <p className="settings-note">
-                Existing sessions stay signed in until their token expires (~24 h).
+                Other devices are signed out; this one stays signed in.
               </p>
             </form>
           </section>

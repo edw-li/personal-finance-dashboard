@@ -1,23 +1,30 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { fetchCreditCards } from '../api/creditCards'
+import { fetchAccounts } from '../api/netWorth'
+import { fetchSecurities } from '../api/portfolio'
 import { refreshPrices } from '../api/prices'
-import { formatMonth } from '../utils/format'
-import { fuzzyScore } from '../utils/fuzzy'
+import { fetchCategories } from '../api/spending'
 import { currentMonthIso } from '../utils/months'
 import { requestAssistantOpen } from './assistant/viewState'
 import './CommandPalette.css'
-import { NAV_ITEMS } from './navItems'
-
-interface PaletteItem {
-  id: string
-  label: string
-  kind: 'Go to' | 'Action'
-  run: () => void
-}
+import { onPaletteOpen } from './paletteBus'
+import {
+  buildEntries,
+  entityEntries,
+  groupMatches,
+  matchEntries,
+  type PaletteEntry,
+} from './paletteRegistry'
+import { useToast } from './ToastProvider'
 
 const RECENT_KEY = 'commandPalette.recent'
 const RECENT_MAX = 8
+
+// The entity lists are small and change rarely; ten minutes is long enough that a sitting
+// costs one round of fetches and short enough that a rename shows up the same afternoon.
+const ENTITY_TTL_MS = 10 * 60 * 1000
 
 function readRecent(): string[] {
   try {
@@ -40,14 +47,21 @@ function pushRecent(id: string): void {
 }
 
 /**
- * Ctrl/Cmd+K overlay (2026-08-25 polish §9): fuzzy jump over the nav registry plus a
- * small action list, combobox ARIA, recents in localStorage. Hand-rolled — no library.
+ * Ctrl/Cmd+K overlay (2026-08-25 polish §9, registry 2026-09-03 shell spec §9): fuzzy jump
+ * over the palette registry — pages with keyword aliases, anchored Settings sections, the
+ * five finished actions and lazily loaded entities — with combobox ARIA, kind-grouped
+ * results and recents in localStorage. Hand-rolled: no library.
  */
 export default function CommandPalette() {
   const navigate = useNavigate()
+  const toast = useToast()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
+  // An OVERRIDE, not the selection: null means "wherever the current query points"
+  // (see `defaultIndex`). Arrows and the pointer set it; a new query clears it.
+  const [active, setActive] = useState<number | null>(null)
+  const [entities, setEntities] = useState<PaletteEntry[]>([])
+  const entitiesLoadedAt = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
 
@@ -55,7 +69,7 @@ export default function CommandPalette() {
     previousFocus.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
     setQuery('')
-    setActive(0)
+    setActive(null)
     setOpen(true)
   }
 
@@ -65,79 +79,104 @@ export default function CommandPalette() {
     previousFocus.current?.focus()
   }
 
-  const items: PaletteItem[] = [
-    ...NAV_ITEMS.map((item) => ({
-      id: `nav:${item.to}`,
-      label: item.label,
-      kind: 'Go to' as const,
-      run: () => navigate(item.to),
-    })),
-    {
-      id: 'action:refresh-prices',
-      label: 'Refresh prices',
-      kind: 'Action' as const,
-      // LAUNCHED, not awaited: a live refresh takes tens of seconds and the portfolio
-      // page's own refresh status reports the run — the palette's job ends at lift-off.
-      // The catch is deliberate: an unhandled rejection from a fire-and-forget POST
-      // would surface as a console error long after the palette is gone.
-      run: () => {
-        refreshPrices().catch(() => {})
-        navigate('/portfolio')
-      },
-    },
-    {
-      id: 'action:enter-update',
-      label: `Enter ${formatMonth(currentMonthIso())} update`,
-      kind: 'Action' as const,
-      run: () => navigate('/update'),
-    },
-    {
-      id: 'action:add-dividend',
-      label: 'Add dividend',
-      kind: 'Action' as const,
-      // ?tab= is an arrival-only deep link PortfolioPage reads once at mount.
-      run: () => navigate('/portfolio?tab=dividends'),
-    },
-    {
-      id: 'action:add-custom-event',
-      label: 'Add custom event',
-      kind: 'Action' as const,
-      run: () => navigate('/calendar'),
-    },
-    {
-      id: 'action:ask-assistant',
-      label: 'Ask assistant',
-      kind: 'Action' as const,
-      // The palette closes first (execute() contract), then the drawer opens and takes
-      // focus itself — the launcher button is not involved, so no focus tug-of-war.
-      run: () => requestAssistantOpen(),
-    },
-  ]
+  // Entities load on the first open and refresh when older than ten minutes — the lists
+  // are small and the palette must open instantly, so the fetch never gates the UI.
+  // allSettled, not all: one unreachable endpoint must cost only its own group.
+  useEffect(() => {
+    if (!open || Date.now() - entitiesLoadedAt.current < ENTITY_TTL_MS) return
+    entitiesLoadedAt.current = Date.now()
+    Promise.allSettled([
+      fetchSecurities(),
+      fetchAccounts(),
+      fetchCategories(),
+      fetchCreditCards(),
+    ]).then(([securities, accounts, categories, cards]) => {
+      setEntities(
+        entityEntries({
+          securities:
+            securities.status === 'fulfilled'
+              ? securities.value
+                  .filter((s) => s.is_active)
+                  .map((s) => ({ ticker: s.ticker, name: s.name }))
+              : [],
+          accounts:
+            accounts.status === 'fulfilled'
+              ? accounts.value
+                  .filter((a) => a.is_active)
+                  .map((a) => ({ slug: a.slug, name: a.name, group: a.group }))
+              : [],
+          categories:
+            categories.status === 'fulfilled'
+              ? categories.value
+                  .filter((c) => c.is_active)
+                  .map((c) => ({ slug: c.slug, name: c.name }))
+              : [],
+          cards:
+            cards.status === 'fulfilled'
+              ? cards.value.filter((c) => c.is_active).map((c) => ({ slug: c.slug, name: c.name }))
+              : [],
+        }),
+      )
+    })
+  }, [open])
 
-  const trimmed = query.trim()
-  let filtered: PaletteItem[]
-  if (trimmed === '') {
-    // Recency floats to the top of the FULL list; the rest keeps registry order
-    // (Array.prototype.sort is stable, and non-recent entries all rank RECENT_MAX).
-    const rank = new Map(readRecent().map((id, index) => [id, index]))
-    filtered = [...items].sort(
-      (a, b) => (rank.get(a.id) ?? RECENT_MAX) - (rank.get(b.id) ?? RECENT_MAX),
-    )
-  } else {
-    filtered = items
-      .map((item) => ({ item, score: fuzzyScore(trimmed, item.label) }))
-      .filter((entry): entry is { item: PaletteItem; score: number } => entry.score !== null)
-      .sort((a, b) => b.score - a.score)
-      .map((entry) => entry.item)
-  }
-  const activeIndex = filtered.length === 0 ? -1 : Math.min(active, filtered.length - 1)
+  const entries = useMemo<PaletteEntry[]>(
+    () => [
+      ...buildEntries({
+        month: currentMonthIso(),
+        run: {
+          // LAUNCHED, not awaited: a live refresh takes tens of seconds. The toasts are
+          // the palette's report — the run started, then how it finished — so the action
+          // no longer ends in silence. The catch is not optional: an unhandled rejection
+          // from a fire-and-forget POST would surface long after the palette is gone.
+          refreshPrices: () => {
+            toast.info('Refreshing prices…')
+            refreshPrices()
+              .then((res) => {
+                const failed = Object.keys(res.failed).length
+                toast.success(
+                  `Prices refreshed — ${res.updated.length} updated${failed ? `, ${failed} failed` : ''}`,
+                )
+              })
+              .catch((err: unknown) =>
+                toast.error(err instanceof Error ? err.message : 'Price refresh failed'),
+              )
+            navigate('/portfolio')
+          },
+          // The palette closes first (execute()'s contract), then the drawer opens and
+          // takes focus itself — the launcher button is not involved, so no focus tug-of-war.
+          askAssistant: () => requestAssistantOpen(),
+        },
+      }),
+      ...entities,
+    ],
+    [entities, navigate, toast],
+  )
 
-  const execute = (item: PaletteItem) => {
+  // Recency floats to the top of the FULL list only; a typed query ranks by score alone.
+  const matches = matchEntries(query, entries, query.trim() === '' ? readRecent() : [])
+  const groups = groupMatches(matches)
+  // The flat order the keyboard walks: group order, then rank inside each group.
+  const flat = groups.flatMap((g) => g.items)
+  // Two different jobs, spec §9. The DISPLAY is a stable map — kind headers in the house
+  // order (Actions · Pages · Settings · entities) so the list never reshuffles under the
+  // reader's eyes. Enter is "do the thing I typed", which is the top-RANKED match wherever
+  // the grouping happened to file it: "rsu" means Comp even though the update wizard heads
+  // the Actions group above it. So the highlight starts on `matches[0]`, which groupMatches
+  // re-buckets by reference (never copies) and always keeps at the head of its own group —
+  // so it is always present in `flat`. This holds for the empty query too: recents lead the
+  // RANKING, not the display, so `matches[0]` is the most recent entry while the display
+  // still files it under its own kind. Row zero of Actions would be a different thing.
+  const defaultIndex = Math.max(0, flat.indexOf(matches[0]))
+  const activeIndex = flat.length === 0 ? -1 : Math.min(active ?? defaultIndex, flat.length - 1)
+
+  const execute = (item: PaletteEntry) => {
     pushRecent(item.id)
     // Close FIRST: the focus restore runs, then the destination's own pathname-change
     // hand-off (Layout's #main focus) takes over.
     closePalette()
-    item.run()
+    if (item.run) item.run()
+    else if (item.to) navigate(item.to)
   }
 
   // Unkeyed on purpose (the EChart latest-handler idiom): the listener re-registers each
@@ -161,6 +200,10 @@ export default function CommandPalette() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  // The sidebar's search row (and anything else that wants the palette) asks through the
+  // bus. Unkeyed for the same latest-handler reason as the hotkey above.
+  useEffect(() => onPaletteOpen(() => openPalette()))
+
   useEffect(() => {
     if (open) inputRef.current?.focus()
   }, [open])
@@ -168,15 +211,13 @@ export default function CommandPalette() {
   const onInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      setActive(() => (filtered.length === 0 ? 0 : (activeIndex + 1) % filtered.length))
+      setActive(() => (flat.length === 0 ? 0 : (activeIndex + 1) % flat.length))
     } else if (event.key === 'ArrowUp') {
       event.preventDefault()
-      setActive(() =>
-        filtered.length === 0 ? 0 : (activeIndex - 1 + filtered.length) % filtered.length,
-      )
+      setActive(() => (flat.length === 0 ? 0 : (activeIndex - 1 + flat.length) % flat.length))
     } else if (event.key === 'Enter') {
       event.preventDefault()
-      if (activeIndex >= 0) execute(filtered[activeIndex])
+      if (activeIndex >= 0) execute(flat[activeIndex])
     } else if (event.key === 'Escape') {
       event.preventDefault()
       closePalette()
@@ -216,40 +257,61 @@ export default function CommandPalette() {
           aria-controls="palette-listbox"
           aria-autocomplete="list"
           aria-activedescendant={
-            activeIndex >= 0 ? `palette-option-${filtered[activeIndex].id}` : undefined
+            activeIndex >= 0 ? `palette-option-${flat[activeIndex].id}` : undefined
           }
           aria-label="Command palette"
           placeholder="Jump to a page or run an action…"
           value={query}
+          // The override is dropped HERE rather than in an effect on `query`: the new
+          // query's own best match must already be highlighted in the very render that
+          // shows its results, or an Enter in the same tick would run the old row.
           onChange={(event) => {
             setQuery(event.target.value)
-            setActive(0)
+            setActive(null)
           }}
           onKeyDown={onInputKeyDown}
         />
-        {filtered.length === 0 ? (
+        {flat.length === 0 ? (
           <p className="palette-empty">No matches.</p>
         ) : (
           <ul className="palette-list" id="palette-listbox" role="listbox" aria-label="Commands">
-            {filtered.map((item, index) => (
-              <li
-                key={item.id}
-                id={`palette-option-${item.id}`}
-                role="option"
-                aria-selected={index === activeIndex}
-                className="palette-option"
-                // mousedown, not click: a click's mousedown would blur the input first,
-                // and the option must run before any focus bookkeeping reacts to that.
-                onMouseDown={(event) => {
-                  event.preventDefault()
-                  execute(item)
-                }}
-                onMouseMove={() => {
-                  if (index !== activeIndex) setActive(index)
-                }}
-              >
-                <span>{item.label}</span>
-                <span className="palette-kind">{item.kind}</span>
+            {groups.map((group) => (
+              // role="presentation" on the wrapper li: only the leaves are options, and a
+              // listbox's own children may not be plain list items.
+              <li key={group.title} role="presentation" className="palette-group">
+                <div className="palette-group-title" aria-hidden="true">
+                  {group.title}
+                </div>
+                <ul role="group" aria-label={group.title}>
+                  {group.items.map((item) => {
+                    const index = flat.indexOf(item)
+                    return (
+                      <li
+                        key={item.id}
+                        id={`palette-option-${item.id}`}
+                        role="option"
+                        aria-selected={index === activeIndex}
+                        className="palette-option"
+                        // mousedown, not click: a click's mousedown would blur the input
+                        // first, and the option must run before any focus bookkeeping
+                        // reacts to that.
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          execute(item)
+                        }}
+                        onMouseMove={() => {
+                          if (index !== activeIndex) setActive(index)
+                        }}
+                      >
+                        <span>
+                          {item.label}
+                          {item.sub && <span className="palette-sub"> {item.sub}</span>}
+                        </span>
+                        <span className="palette-kind">{group.title}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
               </li>
             ))}
           </ul>

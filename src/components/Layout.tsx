@@ -1,17 +1,24 @@
-import { LogOut } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { Suspense, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigationType } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
 import AssistantDrawer from './assistant/AssistantDrawer'
 import CommandPalette from './CommandPalette'
 import './Layout.css'
 import { NAV_SECTIONS } from './navItems'
+import { requestPaletteOpen } from './paletteBus'
 import RouteBoundary from './RouteBoundary'
 import { prefetchRoute, warmAllRoutes } from './routeChunks'
+import ShellErrorBoundary from './shell/ShellErrorBoundary'
+import SidebarFooter, { getLastSystemStatus } from './shell/SidebarFooter'
 import { usePageTitle } from './usePageTitle'
 
+// Module scope, read once: the host OS does not change mid-session, and the sidebar's
+// kbd hint must name the modifier the reader actually presses. navigator.platform is
+// deprecated but is still the only synchronous read of it; a wrong guess costs the hint's
+// accuracy, nothing more.
+const isMac = navigator.platform.startsWith('Mac')
+
 export default function Layout() {
-  const { logout } = useAuth()
   const { pathname, key: locationKey } = useLocation()
   const navigationType = useNavigationType()
   usePageTitle()
@@ -84,73 +91,103 @@ export default function Layout() {
   }, [])
 
   return (
-    <div className="layout">
-      {/* The app's first tabbable: a keyboard user clears the 12-link sidebar in one Tab. */}
-      <a className="skip-link" href="#main">
-        Skip to content
-      </a>
-      <aside className="sidebar">
-        <div className="sidebar-title">Finance</div>
-        <nav aria-label="Primary">
-          {NAV_SECTIONS.map((section, index) => (
-            <div className="nav-section" key={section.heading ?? `ungrouped-${index}`}>
-              {section.heading !== null && (
-                <div className="nav-heading">{section.heading}</div>
-              )}
-              {section.items.map(({ to, label, icon: Icon }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={to === '/'}
-                  className="nav-link"
-                  onMouseEnter={() => prefetchRoute(to)}
-                  onFocus={() => prefetchRoute(to)}
-                >
-                  <Icon size={16} />
-                  <span>{label}</span>
-                </NavLink>
-              ))}
-            </div>
-          ))}
-        </nav>
-        <div className="sidebar-separator" aria-hidden="true" />
-        <button className="logout-button" onClick={logout}>
-          <LogOut size={16} />
-          <span>Log out</span>
-        </button>
-      </aside>
-      {/* tabIndex -1: focusable by the skip link and the navigation hand-off above,
-          never part of the tab order itself. */}
-      <main id="main" tabIndex={-1} className="content" ref={mainRef}>
-        {/* Route chunks resolve here — the sidebar must not unmount while one loads, and a
-            chunk that never arrives must not blank the app (RouteBoundary). The fallback's
-            class is .route-fallback, not panels.css's .empty-note: panels.css reaches the
-            entry chunk only INCIDENTALLY (the assistant drawer below imports it), and a
-            fallback that leans on a neighbor's import staying put is one refactor from
-            rendering unstyled.
+    // Everything below is inside ONE boundary (2026-09-03 shell spec §12): the palette, the
+    // drawer and the sidebar live outside RouteBoundary's reach, so until now a throw in any
+    // of them unmounted the entire app and left a white page a reload could not always fix.
+    // The diagnostics closure reads what the footer already fetched rather than fetching: a
+    // boundary that needs the network to explain itself is a boundary that stays silent.
+    //
+    // resetKey, not key={pathname}: location.key changes on every navigation, and a PROP lets
+    // the boundary clear itself while the palette and the drawer inside it keep their state
+    // (a key would remount them, and the drawer's transcript is per-sitting, not per-page).
+    <ShellErrorBoundary
+      buildHash={__BUILD_HASH__}
+      resetKey={locationKey}
+      getDiagnostics={() => {
+        const status = getLastSystemStatus()
+        if (status === null) return ''
+        // `none (create_all)`, not `null`: a schema built by create_all genuinely has no
+        // alembic head, and "null" in a pasted report reads like the report is broken.
+        const head = status.database.alembic_head ?? 'none (create_all)'
+        return `env=${status.environment} alembic=${head}`
+      }}
+    >
+      <div className="layout">
+        {/* The app's first tabbable: a keyboard user clears the 12-link sidebar in one Tab. */}
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
+        <aside className="sidebar">
+          <div className="sidebar-title">Finance</div>
+          {/* The palette's only visible affordance (2026-09-03 shell spec §9): Ctrl/Cmd+K was
+              undiscoverable, so the sidebar says it out loud. A button, not an input — the
+              real search box is the palette's own, and two boxes would fight for the caret.
+              It asks through the bus rather than a context: the palette is mounted once,
+              below, and a context would re-render the whole shell on every keystroke. */}
+          <button type="button" className="sidebar-search" onClick={requestPaletteOpen}>
+            <Search size={14} aria-hidden="true" />
+            <span>Search or jump…</span>
+            <kbd aria-label={isMac ? 'Command K' : 'Control K'}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
+          </button>
+          <nav aria-label="Primary">
+            {NAV_SECTIONS.map((section, index) => (
+              <div className="nav-section" key={section.heading ?? `ungrouped-${index}`}>
+                {section.heading !== null && (
+                  <div className="nav-heading">{section.heading}</div>
+                )}
+                {section.items.map(({ to, label, icon: Icon }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === '/'}
+                    className="nav-link"
+                    onMouseEnter={() => prefetchRoute(to)}
+                    onFocus={() => prefetchRoute(to)}
+                  >
+                    <Icon size={16} />
+                    <span>{label}</span>
+                  </NavLink>
+                ))}
+              </div>
+            ))}
+          </nav>
+          {/* Identity, deployment and build (2026-09-03 shell spec §12). It carries the old
+              separator's border itself, so the bare Log-out row is gone. */}
+          <SidebarFooter buildHash={__BUILD_HASH__} />
+        </aside>
+        {/* tabIndex -1: focusable by the skip link and the navigation hand-off above,
+            never part of the tab order itself. */}
+        <main id="main" tabIndex={-1} className="content" ref={mainRef}>
+          {/* Route chunks resolve here — the sidebar must not unmount while one loads, and a
+              chunk that never arrives must not blank the app (RouteBoundary). The fallback's
+              class is .route-fallback, not panels.css's .empty-note: panels.css reaches the
+              entry chunk only INCIDENTALLY (the assistant drawer below imports it), and a
+              fallback that leans on a neighbor's import staying put is one refactor from
+              rendering unstyled.
 
-            key={pathname} remounts the boundary on navigation, which is what makes the retry
-            real: React.lazy memoizes the rejected import, so re-rendering the FAILED route
-            just rethrows the cached rejection (status -1) — Reload stays the only fix for the
-            stale-deploy case. A different pathname is a different lazy payload with its own
-            untouched status, so navigating away genuinely re-attempts. Without the key, one
-            transient blip would latch the boundary and lock every other route behind it. */}
-        <RouteBoundary key={pathname}>
-          <Suspense fallback={<p className="route-fallback" role="status">Loading…</p>}>
-            <Outlet />
-          </Suspense>
-        </RouteBoundary>
-      </main>
-      <CommandPalette />
-      {/* Beside the palette, and last for the same reason: both are app-wide overlays that
-          outlive every route, so neither may sit inside <main> where a navigation would
-          unmount it (the drawer's transcript is per-sitting, not per-page).
+              key={pathname} remounts the boundary on navigation, which is what makes the retry
+              real: React.lazy memoizes the rejected import, so re-rendering the FAILED route
+              just rethrows the cached rejection (status -1) — Reload stays the only fix for the
+              stale-deploy case. A different pathname is a different lazy payload with its own
+              untouched status, so navigating away genuinely re-attempts. Without the key, one
+              transient blip would latch the boundary and lock every other route behind it. */}
+          <RouteBoundary key={pathname}>
+            <Suspense fallback={<p className="route-fallback" role="status">Loading…</p>}>
+              <Outlet />
+            </Suspense>
+          </RouteBoundary>
+        </main>
+        <CommandPalette />
+        {/* Beside the palette, and last for the same reason: both are app-wide overlays that
+            outlive every route, so neither may sit inside <main> where a navigation would
+            unmount it (the drawer's transcript is per-sitting, not per-page).
 
-          Imported eagerly, like the palette, and for the same reasons: it must answer on
-          every route (including one whose own chunk is still loading, or has failed), and
-          lazy would put a network fetch — plus a second chunk-failure mode — between the
-          keypress and the drawer taking focus. The bill is ~6.3 kB gz on the entry chunk. */}
-      <AssistantDrawer />
-    </div>
+            Imported eagerly, like the palette, and for the same reasons: it must answer on
+            every route (including one whose own chunk is still loading, or has failed), and
+            lazy would put a network fetch — plus a second chunk-failure mode — between the
+            keypress and the drawer taking focus. The bill is ~6.3 kB gz on the entry chunk. */}
+        <AssistantDrawer />
+      </div>
+    </ShellErrorBoundary>
   )
 }

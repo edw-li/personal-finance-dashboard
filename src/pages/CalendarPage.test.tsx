@@ -79,16 +79,33 @@ function windowFor(monthIso: string): [string, string] {
   return [addMonths(monthIso, -1), addDays(addMonths(monthIso, 2), -1)]
 }
 
-function renderPage(payload: CalendarEvent[] = fixtureEvents()) {
+function renderPage(
+  payload: CalendarEvent[] = fixtureEvents(),
+  entry = '/calendar',
+) {
   vi.mocked(fetchCalendar).mockResolvedValue({ events: payload } satisfies CalendarResponse)
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
       <ToastProvider>
         <CalendarPage />
       </ToastProvider>
     </MemoryRouter>,
   )
 }
+
+// The palette's "Add custom event" action lands here (2026-09-03 shell spec §9): the form
+// is open on arrival rather than a button to hunt for on a month grid.
+it('opens the add form on a ?add=1 arrival', async () => {
+  renderPage(fixtureEvents(), '/calendar?add=1')
+  // The heading, not the button of the same name: only the form carries a heading.
+  expect(await screen.findByRole('heading', { name: 'Add event' })).toBeTruthy()
+})
+
+it('leaves the form closed without the arrival param', async () => {
+  renderPage()
+  await screen.findByRole('button', { name: 'Add event' })
+  expect(screen.queryByRole('heading', { name: 'Add event' })).toBeNull()
+})
 
 function grid(): HTMLElement {
   const node = document.querySelector('.cal-grid')

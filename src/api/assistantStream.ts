@@ -2,9 +2,7 @@
 // EventSource cannot send the Authorization header or a POST body. Deliberately not
 // client.ts's api(): that helper is JSON-only with a 15 s timeout — a streamed answer
 // legitimately runs longer, and its liveness signal is the keepalive comments.
-import { clearSnapshots } from './snapshotCache'
-import { clearAssistantSession } from './assistantSession'
-import { clearToken, getToken } from './client'
+import { expireSession, getToken } from './client'
 import type { AssistantContextIn } from '../types/api'
 
 export interface ChatMessageIn {
@@ -175,11 +173,9 @@ export function streamChat(body: ChatRequest, handlers: AssistantHandlers): Chat
       return 'error'
     }
     if (res.status === 401) {
-      // client.ts's session-expiry contract, replicated for the one path that bypasses it.
-      clearToken()
-      clearSnapshots()
-      clearAssistantSession()
-      window.location.assign('/login')
+      // The shared contract, not a replica: this path bypasses request(), so it calls the
+      // same helper rather than keeping its own drifting copy of what an expiry means.
+      expireSession()
       return 'aborted' // nothing was reported, and the page is already leaving
     }
     if (!res.ok || res.body === null) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, apiReadOnly, setToken } from './client'
+import { api, ApiError, apiReadOnly, expireSession, setAfterResponseHook, setToken } from './client'
 import { clearSnapshots, getSnapshot, setSnapshot } from './snapshotCache'
 
 function mockFetchOk(body: unknown = {}) {
@@ -8,13 +8,13 @@ function mockFetchOk(body: unknown = {}) {
   return spy
 }
 
-function mockFetchFailure(status: number, body: unknown, jsonThrows = false) {
+function mockFetchFailure(status: number, body: unknown, jsonThrows = false, statusText = 'Boom') {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue({
       ok: false,
       status,
-      statusText: 'Boom',
+      statusText,
       json: jsonThrows ? () => Promise.reject(new Error('not json')) : async () => body,
     })
   )
@@ -24,6 +24,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
   localStorage.clear()
   sessionStorage.clear()
+  // Module state, not per-test state: a hook left installed by a failing test would fire
+  // (and its assertions would count) inside every test that ran after it.
+  setAfterResponseHook(null)
 })
 
 it('joins FastAPI 422 validation arrays into one message', async () => {
@@ -45,6 +48,15 @@ it('falls back to statusText on non-JSON error bodies', async () => {
   mockFetchFailure(500, null, true)
   const error = (await api('/anything').catch((e: unknown) => e)) as ApiError
   expect(error.message).toBe('Boom')
+})
+
+// HTTP/2 (and HTTP/3) carry no reason phrase, so `res.statusText` is the EMPTY STRING on
+// every response the production nginx serves — a non-JSON 502 there used to surface as a
+// toast with no words in it at all.
+it('names the status when statusText is empty, as it always is over HTTP/2', async () => {
+  mockFetchFailure(502, null, true, '')
+  const error = (await api('/anything').catch((e: unknown) => e)) as ApiError
+  expect(error.message).toBe('HTTP 502')
 })
 
 it('maps fetch rejections to ApiError instead of raw TypeError', async () => {
@@ -107,7 +119,7 @@ it('rethrows caller-initiated aborts untouched', async () => {
 describe('api — snapshot invalidation', () => {
   beforeEach(() => clearSnapshots())
 
-  it('a successful POST wipes the snapshot cache', async () => {
+  it('a successful POST to an unmapped path wipes the snapshot cache', async () => {
     setSnapshot('overview', { stale: true })
     vi.stubGlobal(
       'fetch',
@@ -121,6 +133,51 @@ describe('api — snapshot invalidation', () => {
     setSnapshot('overview', { stale: true })
     mockFetchFailure(500, { detail: 'boom' })
     await expect(api('/things', { method: 'POST' })).rejects.toThrow()
+    expect(getSnapshot('overview')).toBeUndefined()
+  })
+
+  // Family-scoped invalidation (2026-09-03 shell spec §13). The coarse wipe cost every
+  // OTHER page its instant paint on every save — a spending edit cannot move holdings.
+  it('a PUT to /spending drops spending, overview and projection but keeps portfolio', async () => {
+    setSnapshot('spending', 1)
+    setSnapshot('overview', 1)
+    setSnapshot('projection:default', 1)
+    setSnapshot('shell:coverage', 1)
+    setSnapshot('portfolio:all', 1)
+    mockFetchOk()
+    await api('/spending/months/2026-09-01', { method: 'PUT', body: '{}' })
+    expect(getSnapshot('spending')).toBeUndefined()
+    expect(getSnapshot('overview')).toBeUndefined()
+    expect(getSnapshot('projection:default')).toBeUndefined()
+    // The scope ribbon reads month coverage — a saved month changes it.
+    expect(getSnapshot('shell:coverage')).toBeUndefined()
+    expect(getSnapshot('portfolio:all')).toBe(1)
+  })
+
+  // Prefix matching is on the FAMILY, not on a substring: 'portfolio' must not take
+  // 'projection:default' with it, and 'net-worth' must not spare 'net-worth:monthly:all'.
+  it('a POST to /portfolio drops the portfolio, overview and calendar families only', async () => {
+    setSnapshot('portfolio:all', 1)
+    setSnapshot('overview:flow:auto', 1)
+    setSnapshot('calendar:2026-09-01', 1)
+    setSnapshot('projection:default', 1)
+    setSnapshot('taxes:years', 1)
+    mockFetchOk()
+    await api('/portfolio/transactions', { method: 'POST', body: '{}' })
+    expect(getSnapshot('portfolio:all')).toBeUndefined()
+    expect(getSnapshot('overview:flow:auto')).toBeUndefined()
+    expect(getSnapshot('calendar:2026-09-01')).toBeUndefined()
+    expect(getSnapshot('projection:default')).toBe(1)
+    expect(getSnapshot('taxes:years')).toBe(1)
+  })
+
+  it('an unknown mutation path still wipes everything', async () => {
+    setSnapshot('portfolio:all', 1)
+    setSnapshot('overview', 1)
+    mockFetchOk()
+    // /household, /settings, /import, anything new: correct beats clever.
+    await api('/household/people', { method: 'POST', body: '{}' })
+    expect(getSnapshot('portfolio:all')).toBeUndefined()
     expect(getSnapshot('overview')).toBeUndefined()
   })
 
@@ -142,7 +199,7 @@ describe('api — snapshot invalidation', () => {
     vi.stubGlobal('location', { ...window.location, assign })
     mockFetchFailure(401, { detail: 'Not authenticated' })
     await expect(api('/things')).rejects.toThrow('Session expired')
-    expect(assign).toHaveBeenCalledWith('/login')
+    expect(assign).toHaveBeenCalledWith('/login?reason=expired')
     expect(getSnapshot('overview')).toBeUndefined()
     expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
     expect(sessionStorage.getItem('assistant:model')).toBeNull()
@@ -163,5 +220,71 @@ describe('apiReadOnly — POST-for-read', () => {
     expect(init.body).toBe('{"context":{}}')
     // The whole point: a compute-read must not cost every page its instant paint.
     expect(getSnapshot('overview')).toEqual({ kept: true })
+  })
+})
+
+describe('session plumbing', () => {
+  // Return-to-page (2026-09-03 shell spec §10): an expiry must not also cost the user the
+  // page they were reading — the login sends them back to it.
+  it('a 401 remembers the current path and sends the user to /login?reason=expired', async () => {
+    const assign = vi.fn()
+    // jsdom refuses real navigation, so the redirect (and the location it reads) is stubbed.
+    vi.stubGlobal('location', {
+      ...window.location,
+      pathname: '/taxes',
+      search: '?year=2026',
+      assign,
+    })
+    setToken('x')
+    mockFetchFailure(401, { detail: 'Not authenticated' })
+    await expect(api('/net-worth/summary')).rejects.toMatchObject({ status: 401 })
+    expect(sessionStorage.getItem('finance.returnTo')).toBe('/taxes?year=2026')
+    expect(assign).toHaveBeenCalledWith('/login?reason=expired')
+  })
+
+  // One helper, shared with the assistant's stream (which bypasses request() entirely).
+  it('expireSession clears the session, remembers the page and names the reason', () => {
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, pathname: '/portfolio', search: '', assign })
+    setToken('x')
+    setSnapshot('overview', { stale: true })
+    sessionStorage.setItem('assistant:transcript', '[]')
+    expireSession()
+    expect(localStorage.getItem('finance_token')).toBeNull()
+    expect(getSnapshot('overview')).toBeUndefined()
+    expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
+    expect(sessionStorage.getItem('finance.returnTo')).toBe('/portfolio')
+    expect(assign).toHaveBeenCalledWith('/login?reason=expired')
+  })
+
+  it('runs the after-response hook on successful authenticated calls, not on auth routes', async () => {
+    setToken('x')
+    const hook = vi.fn()
+    setAfterResponseHook(hook)
+    mockFetchOk()
+    await api('/net-worth/summary')
+    expect(hook).toHaveBeenCalledTimes(1)
+    // /auth/renew is itself an authenticated response; hooking it would recurse.
+    await api('/auth/me')
+    expect(hook).toHaveBeenCalledTimes(1)
+  })
+
+  // A renewal is a reward for a working session. A 500 or a 429 proves nothing about the
+  // token, and hanging a renew off one would retry the failure on every response.
+  it('leaves the hook alone on a failed response', async () => {
+    setToken('x')
+    const hook = vi.fn()
+    setAfterResponseHook(hook)
+    mockFetchFailure(500, { detail: 'boom' })
+    await expect(api('/net-worth/summary')).rejects.toThrow('boom')
+    expect(hook).not.toHaveBeenCalled()
+  })
+
+  it('leaves the hook alone when there is no token', async () => {
+    const hook = vi.fn()
+    setAfterResponseHook(hook)
+    mockFetchOk()
+    await api('/net-worth/summary')
+    expect(hook).not.toHaveBeenCalled()
   })
 })

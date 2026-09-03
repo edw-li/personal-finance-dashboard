@@ -246,3 +246,27 @@
 .settings-field > .eyebrow {
   margin: 0;
 }
+
+/* Anchored arrival from the palette (2026-09-03 shell spec §9): a 1.2 s ring that says
+   "this is the card you asked for" on a page of ten. An outline, not a background, so it
+   reads the same on every card variant and costs no layout.
+   The ring is DECLARED on every card of this page, transparent: outline-color can only
+   animate between two colours, and the base .card has no outline at all — so a rule that
+   introduced the whole outline with the class would have nothing to interpolate from and
+   the ring would snap on and off. The class therefore swaps the colour and nothing else.
+   Scoped to .settings-page: only its cards are ever highlighted, and .card is app-wide
+   vocabulary that must not grow an outline (or a transition) everywhere. */
+.settings-page .card {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.settings-page .card.is-highlighted {
+  outline-color: var(--accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* On the BASE card, or the ring would vanish instantly when the class comes off — the
+     fade is the half that matters. */
+  .settings-page .card { transition: outline-color var(--t-page) ease; }
+}

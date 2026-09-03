@@ -23,3 +23,28 @@ export function useArrivalParam<T extends string>(
     // early-returns; a double-apply between renders is idempotent by contract.
   }, [raw, key, allowed, apply, searchParams, setSearchParams])
 }
+
+/** Like useArrivalParam, for values that are DATA rather than an enum (a ticker, an
+ *  account slug): there is no allow-list to check against, so any non-empty value is
+ *  handed to `apply`, which decides.
+ *
+ *  `apply` returns `false` for "I cannot judge this yet" — the page's payload has not
+ *  landed, so there is nothing to resolve the slug against. The param then STAYS in the
+ *  URL and this effect runs again when `apply`'s identity changes with that payload
+ *  (`useCallback([data])`). Anything else — applied, or judged and rejected — consumes
+ *  the value and strips it replace-style, so refresh and Back never replay the command.
+ *  Without the "not yet" answer a deep link would be silently dropped on every cold load,
+ *  which is exactly the case the palette's entity entries produce.
+ *
+ *  `apply` must be identity-stable (useCallback), or the effect would loop. */
+export function useArrivalValue(key: string, apply: (value: string) => boolean | void): void {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const raw = searchParams.get(key)
+  useEffect(() => {
+    if (raw === null) return
+    if (raw.trim() !== '' && apply(raw.trim()) === false) return
+    const next = new URLSearchParams(searchParams)
+    next.delete(key)
+    setSearchParams(next, { replace: true })
+  }, [raw, key, apply, searchParams, setSearchParams])
+}

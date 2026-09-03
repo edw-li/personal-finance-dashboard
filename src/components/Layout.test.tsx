@@ -1,18 +1,31 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearSnapshots } from '../api/snapshotCache'
+import { fetchCreditCards } from '../api/creditCards'
+import { fetchAccounts } from '../api/netWorth'
+import { fetchSecurities } from '../api/portfolio'
+import { fetchCategories } from '../api/spending'
+import { fetchSystemStatus } from '../api/system'
 import Layout from './Layout'
 import { prefetchRoute, warmAllRoutes } from './routeChunks'
 
 // Layout only reads logout off the context; session plumbing is AuthContext.test's job.
+// The throw switch is read at CALL time, not in the hoisted factory, so the shell-boundary
+// tests below can make the SIDEBAR throw — the only part of the shell a test can reach that
+// sits inside ShellErrorBoundary and outside RouteBoundary's per-route reach.
+let sidebarThrows = false
 vi.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({
-    email: 'me@example.com',
-    isAuthenticated: true,
-    isLoading: false,
-    login: vi.fn(),
-    logout: vi.fn(),
-  }),
+  useAuth: () => {
+    if (sidebarThrows) throw new Error('kaboom')
+    return {
+      email: 'me@example.com',
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    }
+  },
 }))
 
 vi.mock('./routeChunks', () => ({
@@ -32,6 +45,19 @@ vi.mock('../api/assistant', () => ({
   fetchAssistantModels: (...a: unknown[]) => fetchAssistantModels(...a),
   fetchContextPreview: (...a: unknown[]) => fetchContextPreview(...a),
 }))
+
+// Same rule for the palette's entity lists: opening it (three tests below do) loads
+// tickers, accounts, categories and cards, and no shell test may reach fetch. The empty
+// resolutions are seeded per test, not in the factories: this file's afterEach restores
+// every mock, which would strip a factory-set implementation after the first test.
+vi.mock('../api/portfolio', () => ({ fetchSecurities: vi.fn() }))
+vi.mock('../api/netWorth', () => ({ fetchAccounts: vi.fn() }))
+vi.mock('../api/spending', () => ({ fetchCategories: vi.fn() }))
+vi.mock('../api/creditCards', () => ({ fetchCreditCards: vi.fn() }))
+
+// The sidebar footer asks /system/status for its environment pill — same rule, no shell
+// test may reach fetch.
+vi.mock('../api/system', () => ({ fetchSystemStatus: vi.fn() }))
 
 function renderShell(initialPath = '/') {
   return render(
@@ -100,11 +126,38 @@ function renderDrillShell() {
   )
 }
 
+// Rendered OUTSIDE <Routes>, so it survives the shell fallback (which replaces the whole
+// layout, nav links included) and can still navigate away from the state that threw.
+function NavProbe() {
+  const navigate = useNavigate()
+  return (
+    <>
+      <button onClick={() => navigate('/spending')}>to spending</button>
+      <button onClick={() => navigate('/')}>to home</button>
+    </>
+  )
+}
+
+function renderProbeShell() {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <NavProbe />
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/" element={<div>home body</div>} />
+          <Route path="/spending" element={<div>spending body</div>} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
 beforeEach(() => {
   // jsdom's scrollTo is a not-implemented stub that logs to the console; the reset
   // assertion wants a spy anyway.
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   sessionStorage.clear()
+  sidebarThrows = false
   // vi.mock factories are hoisted and vi.restoreAllMocks only restores vi.spyOn spies, so
   // these vi.fn()s would otherwise accumulate call history across this file's tests.
   vi.mocked(warmAllRoutes).mockClear()
@@ -125,9 +178,20 @@ beforeEach(() => {
     ],
   })
   fetchContextPreview.mockReset().mockResolvedValue({ sections: [] })
+  vi.mocked(fetchSecurities).mockResolvedValue([])
+  vi.mocked(fetchAccounts).mockResolvedValue([])
+  vi.mocked(fetchCategories).mockResolvedValue([])
+  vi.mocked(fetchCreditCards).mockResolvedValue([])
+  vi.mocked(fetchSystemStatus).mockResolvedValue({
+    environment: 'dev',
+    database: { alembic_head: 'f7d3b2a91c40', size_bytes: 1 },
+  } as never)
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // The palette's entity fetches (mocked above) settle after the assertions do; flushing
+  // them here keeps their setState inside act().
+  await act(async () => {})
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -156,8 +220,9 @@ describe('Layout — sidebar v2', () => {
       'Calendar',
       'Settings',
     ])
-    // The separator sits between Settings and Log out.
-    expect(document.querySelector('.sidebar-separator')).not.toBeNull()
+    // The footer closes the sidebar — it carries the old separator's border, the identity
+    // block and Log out.
+    expect(document.querySelector('.sidebar-footer')).not.toBeNull()
     expect(screen.getByRole('button', { name: /log out/i })).toBeTruthy()
   })
 
@@ -284,6 +349,15 @@ describe('Layout — assistant mount', () => {
     expect(fetchAssistantSettings).not.toHaveBeenCalled()
   })
 
+  // The palette's discoverability, and the bus that carries the ask: the row is in the
+  // sidebar, the palette is mounted next to <main>, and neither imports the other.
+  it('offers a visible search row that opens the palette', () => {
+    renderShell()
+    expect(screen.queryByRole('combobox', { name: 'Command palette' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Search or jump/ }))
+    expect(screen.getByRole('combobox', { name: 'Command palette' })).toBeTruthy()
+  })
+
   // The whole F7 wiring end to end: the palette asks the bus, the drawer Layout mounted
   // answers. Neither knows about the other — this is the only place that proves the two
   // halves meet.
@@ -291,6 +365,9 @@ describe('Layout — assistant mount', () => {
     renderShell()
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
     const combo = screen.getByRole('combobox')
+    // The noun, as a reader would type it. The registry's Settings sections gave "assistant"
+    // a second owner (the Assistant card), and the scorer now aligns from any word head, so
+    // "Ask assistant" ties it and registry order — actions first — settles it (spec §9).
     fireEvent.change(combo, { target: { value: 'assistant' } })
     fireEvent.keyDown(combo, { key: 'Enter' })
     expect(await screen.findByRole('complementary', { name: 'Assistant' })).toBeTruthy()
@@ -312,5 +389,56 @@ describe('Layout — assistant mount', () => {
     })
     expect(document.querySelector('.palette-overlay')).toBeNull()
     expect(screen.getByRole('complementary', { name: 'Assistant' })).toBeTruthy()
+  })
+})
+
+describe('Layout — shell boundary', () => {
+  it('catches a throw from the sidebar and copies diagnostics a snapshot wipe cannot take away', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderShell()
+    // The footer's status has landed — the pill proves it — and then a save wipes the page
+    // snapshots, which is what api() does after ANY non-GET.
+    expect(await screen.findByText('dev')).toBeTruthy()
+    clearSnapshots()
+    sidebarThrows = true
+    fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
+    // RouteBoundary cannot see this one: the sidebar is its sibling, not its child.
+    expect(screen.getByRole('alert').textContent).toMatch(/something went wrong/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy details' }))
+    expect(writeText.mock.calls[0][0]).toContain('env=dev alembic=f7d3b2a91c40')
+  })
+
+  it('names a create_all schema instead of pasting "alembic=null"', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    vi.mocked(fetchSystemStatus).mockResolvedValue({
+      environment: 'dev',
+      database: { alembic_head: null, size_bytes: 1 },
+    } as never)
+    renderShell()
+    expect(await screen.findByText('dev')).toBeTruthy()
+    sidebarThrows = true
+    fireEvent.click(screen.getByRole('link', { name: 'Spending' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy details' }))
+    expect(writeText.mock.calls[0][0]).toContain('alembic=none (create_all)')
+  })
+
+  it('clears the fallback on the next navigation', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    renderProbeShell()
+    expect(await screen.findByText('dev')).toBeTruthy()
+    sidebarThrows = true
+    fireEvent.click(screen.getByRole('button', { name: 'to spending' }))
+    expect(screen.getByRole('alert')).toBeTruthy()
+    // resetKey={location.key}, not key={pathname}: leaving the broken state is enough to get
+    // the shell back, and the palette and drawer inside the boundary are not remounted on
+    // every navigation to buy it.
+    sidebarThrows = false
+    fireEvent.click(screen.getByRole('button', { name: 'to home' }))
+    expect(screen.getByText('home body')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

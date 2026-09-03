@@ -146,6 +146,24 @@ function renderPage(entry = '/spending') {
   )
 }
 
+// The palette's category entries deep-link by SLUG (2026-09-03 shell spec §9).
+it('picks the trend named by ?trend=<slug>, waiting for the matrix, then strips the param', async () => {
+  renderPage('/spending?trend=fun')
+  // Rent is the biggest all-time category and owns the default seed, so a pressed "Fun"
+  // chip can only come from the arrival — which had to survive until the fetch resolved.
+  expect(await screen.findByRole('button', { name: 'Fun', pressed: true })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Rent', pressed: false })).toBeTruthy()
+  // Consumed, not remembered: a refresh or a Back must not replay the command. waitFor
+  // because the router commits its own state in a transition, a beat after the chip.
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/spending'))
+})
+
+it('ignores a ?trend= slug no category answers to', async () => {
+  renderPage('/spending?trend=not-a-category')
+  expect(await screen.findByRole('button', { name: 'Rent', pressed: true })).toBeTruthy()
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/spending'))
+})
+
 beforeEach(() => {
   clearSnapshots()
   vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture())

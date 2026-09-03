@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import {
   createCustomEvent,
@@ -18,6 +18,7 @@ import {
 } from '../components/calendar/calendarView'
 import EventDetails from '../components/calendar/EventDetails'
 import { useToast } from '../components/ToastProvider'
+import { useArrivalParam } from '../components/useArrivalParam'
 import type { CalendarEvent, PersonOut } from '../types/api'
 import { formatDate, formatMonth } from '../utils/format'
 import { downloadIcs } from '../utils/ics'
@@ -43,6 +44,9 @@ function calendarKey(monthIso: string): string {
 
 type OpenState = { key: string; surface: 'grid' | 'list' } | null
 type FormState = { mode: 'add' } | { mode: 'edit'; id: number } | null
+
+// The only value ?add= may carry; anything else is stripped without opening anything.
+const ADD_ARRIVALS = ['1'] as const
 
 export default function CalendarPage() {
   const [month, setMonth] = useState<string>(currentMonthIso())
@@ -179,14 +183,21 @@ export default function CalendarPage() {
       ? event.label
       : stripPersonSuffix(event.label, ownerName.get(event.person_id))
 
-  const openAddForm = () => {
+  // useCallback, and every dependency a stable setter: the arrival hook below re-runs its
+  // strip effect whenever `apply` changes identity, so a fresh function each render would
+  // loop. todayIso() is read at call time, not capture time.
+  const openAddForm = useCallback(() => {
     setForm({ mode: 'add' })
     setFDate(todayIso())
     setFLabel('')
     setFDetail('')
     setFPerson('')
     setFormError(null)
-  }
+  }, [])
+
+  // ?add=1 — the palette's "Add custom event" action opens the form on arrival, rather
+  // than dropping the reader on a month grid with a button to find (2026-09-03 spec §9).
+  useArrivalParam('add', ADD_ARRIVALS, openAddForm)
 
   const startEdit = (event: CalendarEvent) => {
     if (event.id === null) return

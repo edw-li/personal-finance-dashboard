@@ -170,7 +170,7 @@ export default function SystemCard() {
   }, [])
 
   return (
-    <section className="card span-12">
+    <section className="card span-12" id="system">
       <h2 className="eyebrow">
         System
         <InfoHint text="Operational status: the last price refresh and its schedule, the nightly backup marker recorded by the backup script, and the database's size and migration head." />
