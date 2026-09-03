@@ -53,6 +53,15 @@ describe('paletteRegistry', () => {
     expect(grouped.map((g) => g.title).indexOf('Actions')).toBeLessThan(grouped.map((g) => g.title).indexOf('Pages'))
   })
 
+  it('reaches the Calendar feed card as an anchored Settings section', () => {
+    const hit = matchEntries('feed', entries)[0]
+    expect(hit.id).toBe('section:calendar')
+    expect(hit.to).toBe('/settings#calendar')
+    // The page and the card are different destinations, and 'ics' belongs to the page:
+    // typing a thing's name means "open it", not "configure its subscription".
+    expect(matchEntries('ics', entries)[0].to).toBe('/calendar')
+  })
+
   it('an empty query returns everything static, recents first', () => {
     const all = matchEntries('', entries, ['action:add-dividend'])
     expect(all[0].id).toBe('action:add-dividend')

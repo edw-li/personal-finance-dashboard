@@ -68,6 +68,11 @@ export const SETTINGS_SECTIONS: { id: string; label: string; keywords: string[] 
     label: 'Contribution limits',
     keywords: ['401k limit', 'hsa limit', 'espp limit', 'irs'],
   },
+  {
+    id: 'calendar',
+    label: 'Calendar feed',
+    keywords: ['ics', 'subscribe', 'feed', 'token', 'reminder day', 'due day'],
+  },
   { id: 'assistant', label: 'Assistant', keywords: ['ai', 'api key', 'model', 'nvidia'] },
   { id: 'appearance', label: 'Appearance', keywords: ['theme', 'dark', 'light', 'density', 'compact'] },
 ]
