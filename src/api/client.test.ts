@@ -8,13 +8,13 @@ function mockFetchOk(body: unknown = {}) {
   return spy
 }
 
-function mockFetchFailure(status: number, body: unknown, jsonThrows = false) {
+function mockFetchFailure(status: number, body: unknown, jsonThrows = false, statusText = 'Boom') {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue({
       ok: false,
       status,
-      statusText: 'Boom',
+      statusText,
       json: jsonThrows ? () => Promise.reject(new Error('not json')) : async () => body,
     })
   )
@@ -48,6 +48,15 @@ it('falls back to statusText on non-JSON error bodies', async () => {
   mockFetchFailure(500, null, true)
   const error = (await api('/anything').catch((e: unknown) => e)) as ApiError
   expect(error.message).toBe('Boom')
+})
+
+// HTTP/2 (and HTTP/3) carry no reason phrase, so `res.statusText` is the EMPTY STRING on
+// every response the production nginx serves — a non-JSON 502 there used to surface as a
+// toast with no words in it at all.
+it('names the status when statusText is empty, as it always is over HTTP/2', async () => {
+  mockFetchFailure(502, null, true, '')
+  const error = (await api('/anything').catch((e: unknown) => e)) as ApiError
+  expect(error.message).toBe('HTTP 502')
 })
 
 it('maps fetch rejections to ApiError instead of raw TypeError', async () => {
@@ -110,7 +119,7 @@ it('rethrows caller-initiated aborts untouched', async () => {
 describe('api — snapshot invalidation', () => {
   beforeEach(() => clearSnapshots())
 
-  it('a successful POST wipes the snapshot cache', async () => {
+  it('a successful POST to an unmapped path wipes the snapshot cache', async () => {
     setSnapshot('overview', { stale: true })
     vi.stubGlobal(
       'fetch',
@@ -124,6 +133,51 @@ describe('api — snapshot invalidation', () => {
     setSnapshot('overview', { stale: true })
     mockFetchFailure(500, { detail: 'boom' })
     await expect(api('/things', { method: 'POST' })).rejects.toThrow()
+    expect(getSnapshot('overview')).toBeUndefined()
+  })
+
+  // Family-scoped invalidation (2026-09-03 shell spec §13). The coarse wipe cost every
+  // OTHER page its instant paint on every save — a spending edit cannot move holdings.
+  it('a PUT to /spending drops spending, overview and projection but keeps portfolio', async () => {
+    setSnapshot('spending', 1)
+    setSnapshot('overview', 1)
+    setSnapshot('projection:default', 1)
+    setSnapshot('shell:coverage', 1)
+    setSnapshot('portfolio:all', 1)
+    mockFetchOk()
+    await api('/spending/months/2026-09-01', { method: 'PUT', body: '{}' })
+    expect(getSnapshot('spending')).toBeUndefined()
+    expect(getSnapshot('overview')).toBeUndefined()
+    expect(getSnapshot('projection:default')).toBeUndefined()
+    // The scope ribbon reads month coverage — a saved month changes it.
+    expect(getSnapshot('shell:coverage')).toBeUndefined()
+    expect(getSnapshot('portfolio:all')).toBe(1)
+  })
+
+  // Prefix matching is on the FAMILY, not on a substring: 'portfolio' must not take
+  // 'projection:default' with it, and 'net-worth' must not spare 'net-worth:monthly:all'.
+  it('a POST to /portfolio drops the portfolio, overview and calendar families only', async () => {
+    setSnapshot('portfolio:all', 1)
+    setSnapshot('overview:flow:auto', 1)
+    setSnapshot('calendar:2026-09-01', 1)
+    setSnapshot('projection:default', 1)
+    setSnapshot('taxes:years', 1)
+    mockFetchOk()
+    await api('/portfolio/transactions', { method: 'POST', body: '{}' })
+    expect(getSnapshot('portfolio:all')).toBeUndefined()
+    expect(getSnapshot('overview:flow:auto')).toBeUndefined()
+    expect(getSnapshot('calendar:2026-09-01')).toBeUndefined()
+    expect(getSnapshot('projection:default')).toBe(1)
+    expect(getSnapshot('taxes:years')).toBe(1)
+  })
+
+  it('an unknown mutation path still wipes everything', async () => {
+    setSnapshot('portfolio:all', 1)
+    setSnapshot('overview', 1)
+    mockFetchOk()
+    // /household, /settings, /import, anything new: correct beats clever.
+    await api('/household/people', { method: 'POST', body: '{}' })
+    expect(getSnapshot('portfolio:all')).toBeUndefined()
     expect(getSnapshot('overview')).toBeUndefined()
   })
 

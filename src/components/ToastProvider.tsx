@@ -70,7 +70,9 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   const hoverPaused = useRef(false)
   const focusPaused = useRef(false)
   const nextId = useRef(1)
+  // One ref per region: the focus latch has to ask BOTH whether it still holds the caret.
   const regionRef = useRef<HTMLDivElement>(null)
+  const alertRegionRef = useRef<HTMLDivElement>(null)
 
   const remove = useCallback((id: number) => {
     const timer = removalTimers.current.get(id)
@@ -160,74 +162,111 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   // the removal is itself a `toasts` change, so this effect always gets its release pass.
   useEffect(() => {
     if (!focusPaused.current) return
-    const region = regionRef.current
-    if (region !== null && region.contains(document.activeElement)) return
+    const active = document.activeElement
+    // Either region counts: the caret can be parked on an error's Undo while a success
+    // sits in the polite region, and both regions hold the ONE shared clock.
+    if (regionRef.current?.contains(active) === true) return
+    if (alertRegionRef.current?.contains(active) === true) return
     focusPaused.current = false
     if (!hoverPaused.current) for (const toast of toasts) if (!toast.leaving) arm(toast.id)
   }, [toasts, arm])
 
+  // Nothing this provider scheduled may outlive it. An unmount with a dismissal in flight
+  // used to leave a removal ticking; in a full test run it landed after jsdom teardown and
+  // threw "window is not defined", and in the app a route-level remount would fire a
+  // setState into a dead tree. The maps are copied per the ref-in-cleanup rule — they are
+  // created once, but the lint rule cannot know that.
+  useEffect(() => {
+    const pending = timers.current
+    const leaving = removalTimers.current
+    return () => {
+      for (const timer of pending.values()) clearTimeout(timer)
+      for (const timer of leaving.values()) clearTimeout(timer)
+      pending.clear()
+      leaving.clear()
+    }
+  }, [])
+
+  // One row renderer, two regions: the markup is identical, only the live-region wrapper
+  // differs, and a variant must never grow a second copy of the Undo/Dismiss contract.
+  const renderToast = (toast: ToastEntry) => {
+    const action = toast.action
+    return (
+      <div
+        key={toast.id}
+        className={`toast toast-${toast.variant}${toast.leaving ? ' toast-leaving' : ''}`}
+      >
+        <span className="toast-message">{toast.message}</span>
+        {action !== undefined && (
+          <button
+            type="button"
+            className="toast-action"
+            onClick={() => {
+              // Consume FIRST: an action that itself toasts (an undo that fails)
+              // must not race a dismiss aimed at the wrong entry.
+              dismiss(toast.id)
+              // ...and exactly once: the button outlives this click by LEAVE_MS.
+              if (firedActions.current.has(toast.id)) return
+              firedActions.current.add(toast.id)
+              action.onAction()
+            }}
+          >
+            {action.label}
+          </button>
+        )}
+        <button
+          type="button"
+          className="toast-close"
+          aria-label="Dismiss notification"
+          onClick={() => dismiss(toast.id)}
+        >
+          ×
+        </button>
+      </div>
+    )
+  }
+
+  // The same hold/release on both regions: the pointer and the caret pause the ONE clock
+  // wherever they land.
+  const holdRelease = {
+    onMouseEnter: () => {
+      hoverPaused.current = true
+      holdTimers()
+    },
+    onMouseLeave: () => {
+      hoverPaused.current = false
+      releaseTimers()
+    },
+    onFocus: () => {
+      focusPaused.current = true
+      holdTimers()
+    },
+    onBlur: () => {
+      focusPaused.current = false
+      releaseTimers()
+    },
+  }
+
   return (
     <ToastContext.Provider value={api}>
       {children}
-      {/* Always mounted: a live region must exist BEFORE content lands, or screen
-          readers miss the first announcement. */}
+      {/* Always mounted, both of them: a live region must exist BEFORE content lands, or
+          screen readers miss the first announcement. */}
+      <div ref={regionRef} className="toast-region" aria-live="polite" {...holdRelease}>
+        {toasts.filter((toast) => toast.variant !== 'error').map(renderToast)}
+      </div>
+      {/* Failures INTERRUPT (2026-09-03 shell spec §13): role="alert" + assertive, so a
+          save that did not happen is announced out of turn instead of queueing behind a
+          confirmation — and it stacks from the opposite corner, apart from the polite
+          traffic it must not be mistaken for. */}
       <div
-        ref={regionRef}
-        className="toast-region"
-        aria-live="polite"
-        onMouseEnter={() => {
-          hoverPaused.current = true
-          holdTimers()
-        }}
-        onMouseLeave={() => {
-          hoverPaused.current = false
-          releaseTimers()
-        }}
-        onFocus={() => {
-          focusPaused.current = true
-          holdTimers()
-        }}
-        onBlur={() => {
-          focusPaused.current = false
-          releaseTimers()
-        }}
+        ref={alertRegionRef}
+        className="toast-region toast-region-alert"
+        role="alert"
+        aria-live="assertive"
+        {...holdRelease}
       >
-        {toasts.map((toast) => {
-          const action = toast.action
-          return (
-            <div
-              key={toast.id}
-              className={`toast toast-${toast.variant}${toast.leaving ? ' toast-leaving' : ''}`}
-            >
-              <span className="toast-message">{toast.message}</span>
-              {action !== undefined && (
-                <button
-                  type="button"
-                  className="toast-action"
-                  onClick={() => {
-                    // Consume FIRST: an action that itself toasts (an undo that fails)
-                    // must not race a dismiss aimed at the wrong entry.
-                    dismiss(toast.id)
-                    // ...and exactly once: the button outlives this click by LEAVE_MS.
-                    if (firedActions.current.has(toast.id)) return
-                    firedActions.current.add(toast.id)
-                    action.onAction()
-                  }}
-                >
-                  {action.label}
-                </button>
-              )}
-              <button
-                type="button"
-                className="toast-close"
-                aria-label="Dismiss notification"
-                onClick={() => dismiss(toast.id)}
-              >
-                ×
-              </button>
-            </div>
-          )
-        })}
+        {toasts.filter((toast) => toast.variant === 'error').map(renderToast)}
       </div>
     </ToastContext.Provider>
   )

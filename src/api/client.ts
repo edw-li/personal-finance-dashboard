@@ -1,6 +1,6 @@
 import { rememberReturnTo } from '../components/shell/returnTo'
 import { clearAssistantSession } from './assistantSession'
-import { clearSnapshots } from './snapshotCache'
+import { clearSnapshots, clearSnapshotsWhere } from './snapshotCache'
 
 const TOKEN_KEY = 'finance_token'
 
@@ -49,14 +49,51 @@ export class ApiError extends Error {
   }
 }
 
+// Which snapshot-key FAMILIES a mutation can have moved (2026-09-03 shell spec §13). Keys
+// are `<family>` or `<family>:…`, so the map is read as a prefix on the PATH and a family
+// prefix on the KEY. `shell` rides /spending and /net-worth because the scope ribbon caches
+// household + month coverage under it, and both move when a month is saved.
+const MUTATION_FAMILIES: [prefix: string, families: string[]][] = [
+  ['/spending', ['spending', 'overview', 'projection', 'shell']],
+  ['/net-worth', ['networth', 'net-worth', 'overview', 'projection', 'update', 'shell']],
+  ['/portfolio', ['portfolio', 'overview', 'calendar']],
+  ['/prices', ['portfolio', 'overview', 'calendar']],
+  ['/calendar', ['calendar', 'overview']],
+  ['/credit-cards', ['cards', 'credit-cards']],
+  ['/taxes', ['taxes', 'overview']],
+  // Pay, equity and the limits that govern them are ONE dependency web: a comp edit moves
+  // the paycheck, the ESPP contribution, the tax estimate, the projection and the calendar.
+  ['/paycheck', ['paycheck', 'comp', 'espp', 'taxes', 'projection', 'calendar', 'overview']],
+  ['/comp', ['paycheck', 'comp', 'espp', 'taxes', 'projection', 'calendar', 'overview']],
+  ['/espp', ['paycheck', 'comp', 'espp', 'taxes', 'projection', 'calendar', 'overview']],
+  ['/limits', ['paycheck', 'comp', 'espp', 'taxes', 'projection', 'calendar', 'overview']],
+]
+
+/** Targeted invalidation for a mutation's path. A path NOT in the map above — /household,
+ *  /settings, /import, /auth, and anything added later — deliberately falls through to the
+ *  old posture and wipes the whole cache: a new endpoint is stale-by-default, never
+ *  silently wrong, and gets listed here only once someone reasons about its blast radius. */
+export function invalidateForMutation(path: string): void {
+  const hit = MUTATION_FAMILIES.find(([prefix]) => path.startsWith(prefix))
+  if (hit === undefined) {
+    clearSnapshots() // unknown path: correct beats clever
+    return
+  }
+  const families = hit[1]
+  clearSnapshotsWhere((key) =>
+    families.some((family) => key === family || key.startsWith(`${family}:`)),
+  )
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase()
   try {
     return await request<T>(path, options)
   } finally {
-    // Coarse invalidation (2026-08-27 spec §1): ANY non-GET — success or failure, a 500
-    // may still have written — drops every page snapshot. Correct beats clever here.
-    if (method !== 'GET') clearSnapshots()
+    // ANY non-GET — success or failure, a 500 may still have written — drops the families
+    // its path can have moved (2026-08-27 spec §1, narrowed by 2026-09-03 spec §13). The
+    // wipe used to be total, which cost every OTHER page its instant paint on every save.
+    if (method !== 'GET') invalidateForMutation(path)
   }
 }
 
@@ -99,7 +136,9 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
     throw new ApiError('Session expired', 401)
   }
   if (!res.ok) {
-    let detail = res.statusText
+    // HTTP/2 and /3 carry no reason phrase, so `statusText` is '' on every response the
+    // production nginx serves — the status itself is the last-resort message.
+    let detail = res.statusText || `HTTP ${res.status}`
     try {
       // FastAPI errors use {detail} (a string, or an ARRAY for 422 validation errors);
       // slowapi's 429 rate-limit body uses {error}

@@ -1,6 +1,7 @@
-/* Toasts (2026-08-25 polish §8): one polite live region, bottom-right. z-index above the
-   app's bubble layer (2) and the palette overlay (20) — an Undo affordance is never
-   buried under the thing that spawned it. */
+/* Toasts (2026-08-25 polish §8): TWO live regions — polite bottom-right, assertive
+   top-right (2026-09-03 shell spec §13). z-index above the app's bubble layer (2) and the
+   palette overlay (20) — an Undo affordance is never buried under the thing that spawned
+   it. */
 
 /* Shifted LEFT of the assistant launcher (assistant.css: .assistant-launcher, fixed at
    right 1.25rem, 44px wide, z 15). The two share this corner and the toasts win the stack,
@@ -19,6 +20,14 @@
      narrow viewport now that the inset is 76px rather than 16px. 6rem is the inset plus a
      little left breathing room. */
   max-width: min(360px, calc(100vw - 6rem));
+}
+
+/* Failures stack from the OPPOSITE corner: they must not be read as the confirmation the
+   user was expecting in the bottom-right, and the top edge is where the eye lands after a
+   save that did not take. The right inset is inherited, so the two columns line up. */
+.toast-region-alert {
+  bottom: auto;
+  top: 1rem;
 }
 
 .toast {

@@ -1090,8 +1090,11 @@ it('surfaces a non-404 delete failure, stops before the second leg, stays on the
     target: { value: '2026-07' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
-  const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toContain('db exploded')
+  // By TEXT, then by role: the toast provider this wizard renders inside now mounts an
+  // always-present assertive region (role="alert") for failures, so "the alert" is no
+  // longer a unique query — the banner still has to BE one, which is what is asserted.
+  const alert = (await screen.findByText(/db exploded/)).closest('[role="alert"]')
+  expect(alert).not.toBeNull()
   expect(spendingApi.deleteSpendingMonth).not.toHaveBeenCalled()
   expect(screen.getByText(`Monthly update — ${formatMonth('2026-07-01')}`)).toBeDefined()
 })

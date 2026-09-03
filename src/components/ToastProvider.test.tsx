@@ -29,7 +29,12 @@ function renderHost(onUndo?: () => void) {
   )
 }
 
-const region = () => document.querySelector('.toast-region') as HTMLElement
+// Two regions now (2026-09-03 shell spec §13): the polite one carries success/info,
+// and errors get their own assertive one so a screen reader interrupts for a failure
+// instead of queueing it behind a confirmation.
+const region = () =>
+  document.querySelector('.toast-region:not(.toast-region-alert)') as HTMLElement
+const alertRegion = () => document.querySelector('.toast-region-alert') as HTMLElement
 
 // ToastProvider's LEAVE_MS plus a hair. Every dismissal — manual, auto or via an action —
 // now spends this window in the DOM wearing .toast-leaving before the entry is dropped,
@@ -46,13 +51,18 @@ afterEach(() => {
 })
 
 describe('ToastProvider', () => {
-  it('mounts the polite region BEFORE any toast fires, and toasts land inside it', () => {
+  it('mounts BOTH regions BEFORE any toast fires, and a success lands in the polite one', () => {
     renderHost()
     expect(region().getAttribute('aria-live')).toBe('polite')
     expect(region().textContent).toBe('')
+    // Always mounted, both of them: a live region must exist before content lands or the
+    // announcement is missed.
+    expect(alertRegion().getAttribute('aria-live')).toBe('assertive')
+    expect(alertRegion().getAttribute('role')).toBe('alert')
     fireEvent.click(screen.getByText('fire success'))
     expect(region().textContent).toContain('Deleted the NVDA buy')
     expect(region().querySelector('.toast')?.className).toContain('toast-success')
+    expect(alertRegion().textContent).toBe('')
   })
 
   it('auto-dismisses after ~6s', () => {
@@ -153,15 +163,35 @@ describe('ToastProvider', () => {
     expect(screen.getByText('Deleted the NVDA buy')).toBeTruthy()
   })
 
-  it('carries the error variant and a manual dismiss', () => {
+  it('routes an error to the assertive region, with the variant and a manual dismiss', () => {
     renderHost()
     fireEvent.click(screen.getByText('fire error'))
-    expect(document.querySelector('.toast-error')).not.toBeNull()
+    const failure = document.querySelector('.toast-error')
+    expect(failure).not.toBeNull()
+    // A failure INTERRUPTS: it is announced out of turn and it stacks apart from the
+    // polite confirmations, which never speak over anything.
+    expect(screen.getByRole('alert').contains(failure)).toBe(true)
+    expect(region().textContent).toBe('')
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss notification' }))
     act(() => {
       vi.advanceTimersByTime(EXIT_WINDOW_MS)
     })
     expect(screen.queryByText('Save failed')).toBeNull()
+  })
+
+  // Every timer this provider owns has to die WITH it. A dismissal in flight when the tree
+  // unmounts left a ~160 ms removal ticking on; in a full-suite run it landed after jsdom
+  // had been torn down and threw "window is not defined" from a file that had already
+  // passed — invisible to any single-file run.
+  it('clears every pending timer on unmount', () => {
+    const { unmount } = renderHost()
+    fireEvent.click(screen.getByText('fire success')) // an auto-dismiss clock
+    fireEvent.click(screen.getByText('fire error'))
+    // ...and a removal clock, from a toast caught mid-exit.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss notification' })[0])
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('useToast outside a provider is a silent no-op (the test-compat posture)', () => {
