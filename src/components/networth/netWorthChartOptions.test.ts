@@ -102,3 +102,180 @@ describe('marriageMarkLine', () => {
     expect(marriageMarkLine(MONTHS, '2027-01-02')).toBeUndefined()
   })
 })
+
+// ── The three builders lifted out of NetWorthPage (charts C2) ────────────────────────────
+import { tooltipRows } from '../../testing/tooltipRows'
+import { GRID_VARIANTS, compactMoney, percentLabel } from '../../charts/grammar'
+import { GROUP_COLORS, INK, MUTED, PALETTE } from '../../charts/theme'
+import type { NetWorthTimeseries, PersonOut } from '../../types/api'
+import { liabilitiesMaterial, netWorthStackOption } from './netWorthChartOptions'
+
+const PEOPLE: PersonOut[] = [
+  { id: 2, name: 'Sam', is_primary: false },
+  { id: 1, name: 'Me', is_primary: true },
+]
+
+function ts(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries {
+  return {
+    months: ['2026-06-01', '2026-07-01', '2026-08-01'],
+    accounts: [],
+    series: [],
+    group_totals: {
+      cash: ['100.00', '110.00', '120.00'],
+      pre_tax: ['200.00', '210.00', '220.00'],
+      post_tax: ['0.00', '0.00', '0.00'],
+      taxable: ['300.00', '310.00', '320.00'],
+      equity: ['0.00', '0.00', '0.00'],
+      other: ['0.00', '0.00', '0.00'],
+      liability: ['-50.00', '-40.00', '-30.00'],
+    },
+    net_worth: ['550.00', '590.00', '630.00'],
+    mom_pct: [null, '0.072727', '0.067797'],
+    notes: [null, 'sold <em>car</em>', null],
+    owner_series: [
+      { person_id: 1, name: 'Me', values: ['400.00', '430.00', '460.00'] },
+      { person_id: 2, name: 'Sam', values: ['100.00', '110.00', '120.00'] },
+      { person_id: null, name: null, values: ['50.00', '50.00', '50.00'] },
+    ],
+    ...over,
+  }
+}
+
+const base = { people: PEOPLE, marriageDate: null, range: { preset: 'all' as const }, selected: {} }
+
+interface SeriesLike {
+  name?: string
+  type?: string
+  stack?: string
+  color?: string
+  z?: number
+  lineStyle?: { width?: number }
+  areaStyle?: { opacity?: number }
+  emphasis?: { focus?: string }
+  markLine?: unknown
+  data?: unknown[]
+}
+const read = (option: unknown) =>
+  option as {
+    grid: unknown
+    legend: { type: string; selected: Record<string, boolean>; data?: string[] }
+    yAxis: { type: string; min?: (e: { min: number }) => number; axisLabel: { formatter: unknown } }
+    xAxis: { data: string[]; boundaryGap?: boolean; axisLabel?: { interval?: number } }
+    tooltip: { formatter: (p: unknown) => string; axisPointer?: unknown }
+    series: SeriesLike[]
+  }
+
+describe('netWorthStackOption — By group', () => {
+  it('lifts the page option: seven stacked/lined groups, the INK net-worth line, the notes layer', () => {
+    const option = read(netWorthStackOption({ ts: ts(), mode: 'group', ...base }))
+    expect(option.series.map((s) => s.name)).toEqual([
+      'Cash', 'Pre-tax', 'Post-tax', 'Taxable', 'Equity', 'Other', 'Liabilities', 'Net worth', 'Notes',
+    ])
+    expect(option.series.slice(0, 6).every((s) => s.stack === 'assets')).toBe(true)
+    expect(option.series[0].color).toBe(GROUP_COLORS.cash)
+    expect(option.series[0].lineStyle).toEqual({ width: 1 })
+    expect(option.series[0].areaStyle).toEqual({ opacity: 0.5 })
+    expect(option.series[0].emphasis).toEqual({ focus: 'series' }) // §9
+    expect(option.series[6].stack).toBeUndefined()
+    expect(option.series[7]).toMatchObject({ color: INK, z: 10, lineStyle: { width: 2.5 } })
+    expect(option.series[7].data).toEqual([550, 590, 630])
+    expect(option.series[8]).toMatchObject({ type: 'scatter', color: MUTED, z: 11 })
+    expect(option.grid).toEqual(GRID_VARIANTS.endLabel)
+    expect(option.xAxis).toEqual({ type: 'category', data: ['Jun 2026', 'Jul 2026', 'Aug 2026'], boundaryGap: false, axisLabel: { interval: 0 } })
+    expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
+    // Nine named series (six groups + liabilities + net worth + notes) is past the §9
+    // eight-entry ceiling, so the one legend rule pages rather than wraps.
+    expect(option.legend.type).toBe('scroll')
+    expect(option.legend.selected).toEqual({})
+  })
+
+  it('F2: the value axis floors at zero unless the data goes below it', () => {
+    const option = read(netWorthStackOption({ ts: ts(), mode: 'group', ...base }))
+    expect(option.yAxis.min?.({ min: 100 })).toBe(0)
+    expect(option.yAxis.min?.({ min: -5 })).toBe(-5)
+  })
+
+  it('F2: material liabilities draw; immaterial ones leave the legend but keep a tooltip row', () => {
+    // 30 against 660 of assets at the latest month = 4.5% → material (drawn, in the legend).
+    expect(liabilitiesMaterial(ts())).toBe(true)
+    const drawn = read(netWorthStackOption({ ts: ts(), mode: 'group', ...base }))
+    expect(drawn.legend.data).toBeUndefined()
+    expect(drawn.series[6].lineStyle).toEqual({ width: 1 })
+    // 3 against 660 = 0.45% → immaterial: no legend entry, zero-width series, still a row.
+    const thin = ts({ group_totals: { ...ts().group_totals, liability: ['-5.00', '-4.00', '-3.00'] } })
+    expect(liabilitiesMaterial(thin)).toBe(false)
+    const hidden = read(netWorthStackOption({ ts: thin, mode: 'group', ...base }))
+    expect(hidden.legend.data).toEqual(['Cash', 'Pre-tax', 'Post-tax', 'Taxable', 'Equity', 'Other', 'Net worth', 'Notes'])
+    expect(hidden.series[6]).toMatchObject({ name: 'Liabilities', lineStyle: { width: 0 }, areaStyle: { opacity: 0 } })
+    const rows = tooltipRows(hidden.tooltip.formatter([
+      { seriesName: 'Cash', seriesType: 'line', axisValueLabel: 'Aug 2026', value: 120, color: GROUP_COLORS.cash },
+      { seriesName: 'Liabilities', seriesType: 'line', value: -3, color: GROUP_COLORS.liability },
+    ]))
+    expect(rows.rows.map((r) => r.label)).toEqual(['Cash', 'Assets', 'Liabilities'])
+  })
+
+  it('F7: tooltip rows — asset groups by value, an Assets total, then liabilities, net worth and the escaped note', () => {
+    const option = read(netWorthStackOption({ ts: ts(), mode: 'group', ...base }))
+    const html = option.tooltip.formatter([
+      { seriesName: 'Cash', seriesType: 'line', axisValueLabel: 'Jul 2026', dataIndex: 1, value: 110, color: GROUP_COLORS.cash },
+      { seriesName: 'Taxable', seriesType: 'line', value: 310, color: GROUP_COLORS.taxable },
+      { seriesName: 'Liabilities', seriesType: 'line', value: -40, color: GROUP_COLORS.liability },
+      { seriesName: 'Net worth', seriesType: 'line', value: 590, color: INK },
+      { seriesName: 'Notes', seriesType: 'scatter', value: ['Jul 2026', 590], data: { note: 'sold <em>car</em>' } },
+    ])
+    const parsed = tooltipRows(html)
+    expect(parsed.head).toBe('Jul 2026')
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', 'Taxable', '$310.00'],
+      ['row', 'Cash', '$110.00'],
+      ['total', 'Assets', '$420.00'],
+      ['row', 'Liabilities', '-$40.00'],
+      ['row', 'Net worth', '$590.00'],
+    ])
+    expect(parsed.notes).toEqual(['sold &lt;em&gt;car&lt;/em&gt;'])
+    expect(option.tooltip.axisPointer).toBeUndefined() // lines keep the default rule
+  })
+
+  it('anchors the Married rule on the net-worth line', () => {
+    const option = read(netWorthStackOption({ ts: ts(), mode: 'group', ...base, marriageDate: '2026-07-14' }))
+    expect(option.series[7].markLine).toMatchObject({ data: [{ xAxis: 'Jul 2026' }] })
+    expect(option.series.filter((s) => s.markLine !== undefined)).toHaveLength(1)
+  })
+
+  it('returns null with no months', () => {
+    expect(netWorthStackOption({ ts: ts({ months: [], net_worth: [] }), mode: 'group', ...base })).toBeNull()
+  })
+})
+
+describe('netWorthStackOption — By owner and Share %', () => {
+  it('owner mode colours by HOUSEHOLD slot (primary 0, others by id, Joint last), stacked with strategy all', () => {
+    const option = read(netWorthStackOption({ ts: ts(), mode: 'owner', ...base }))
+    expect(option.series.map((s) => s.name)).toEqual(['Me', 'Sam', 'Joint', 'Net worth', 'Notes'])
+    expect(option.series.slice(0, 3).map((s) => s.color)).toEqual([PALETTE[0], PALETTE[1], PALETTE[2]])
+    expect(option.series[0]).toMatchObject({ stack: 'owner', stackStrategy: 'all' })
+    // No Assets subtotal: owner columns already sum to the net-worth row.
+    const rows = tooltipRows(option.tooltip.formatter([
+      { seriesName: 'Me', seriesType: 'line', axisValueLabel: 'Aug 2026', value: 460, color: PALETTE[0] },
+      { seriesName: 'Net worth', seriesType: 'line', value: 630, color: INK },
+    ]))
+    expect(rows.rows.map((r) => r.kind)).toEqual(['row', 'row'])
+  })
+
+  it('share mode stacks each asset group as its share of the month’s assets on a 0–100% axis', () => {
+    const option = read(netWorthStackOption({ ts: ts(), mode: 'share', ...base }))
+    expect(option.series.map((s) => s.name)).toEqual(['Cash', 'Pre-tax', 'Post-tax', 'Taxable', 'Equity', 'Other'])
+    // Jun: cash 100 of 600 assets.
+    expect((option.series[0].data as number[])[0]).toBeCloseTo(100 / 600, 6)
+    expect(option.series[0].stack).toBe('share')
+    expect(option.yAxis.axisLabel.formatter).toBe(percentLabel)
+    expect(option.yAxis.min?.({ min: 0 })).toBe(0)
+    const rows = tooltipRows(option.tooltip.formatter([
+      { seriesName: 'Cash', seriesType: 'line', axisValueLabel: 'Jun 2026', value: 100 / 600, color: GROUP_COLORS.cash },
+      { seriesName: 'Taxable', seriesType: 'line', value: 300 / 600, color: GROUP_COLORS.taxable },
+    ]))
+    expect(rows.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', 'Taxable', '50.0%'],
+      ['row', 'Cash', '16.7%'],
+    ])
+  })
+})
