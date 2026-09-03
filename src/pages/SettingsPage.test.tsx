@@ -265,7 +265,29 @@ const CHECKING: AccountOut = {
   person_id: null,
 }
 
+// jsdom has no ResizeObserver (EChart.test.tsx carries the same note); the anchored arrival
+// watches the page while the cards above it are still growing. The instances are kept so a
+// test can fire one and see what the page does about it.
+type ObserverRecord = { fire: () => void; disconnected: boolean }
+const resizeObservers: ObserverRecord[] = []
+
 beforeEach(() => {
+  resizeObservers.length = 0
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      private readonly record: ObserverRecord
+      constructor(callback: () => void) {
+        this.record = { fire: callback, disconnected: false }
+        resizeObservers.push(this.record)
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {
+        this.record.disconnected = true
+      }
+    },
+  )
   vi.mocked(fetchAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(putAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(changePassword).mockResolvedValue(undefined)
@@ -293,6 +315,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
 
@@ -1098,6 +1121,48 @@ describe('SettingsPage — anchored arrival from the palette', () => {
           ).toBe(false),
         { timeout: 2500 },
       )
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
+  it('takes the page back to the card while the cards above it are still growing', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    try {
+      render(
+        <MemoryRouter initialEntries={['/settings#calendar']}>
+          <SettingsPage />
+        </MemoryRouter>,
+      )
+      await waitFor(() =>
+        expect(document.getElementById('calendar')?.classList.contains('is-highlighted')).toBe(
+          true,
+        ),
+      )
+      const landed = scrollIntoView.mock.calls.length
+      expect(resizeObservers).toHaveLength(1)
+
+      // Every card here fetches its own data and grows as it lands, so the addressed card
+      // slides DOWN after the jump: measured in the browser smoke, #calendar went from 585px
+      // to 1898px — a full viewport below the fold — 400 ms after arriving, leaving the
+      // arrival looking at whatever card ended up there instead.
+      act(() => resizeObservers[0].fire())
+      expect(scrollIntoView.mock.calls.length).toBeGreaterThan(landed)
+
+      // It lets go with the ring: a layout shift minutes later must never yank the page back.
+      await waitFor(
+        () =>
+          expect(document.getElementById('calendar')?.classList.contains('is-highlighted')).toBe(
+            false,
+          ),
+        { timeout: 2500 },
+      )
+      expect(resizeObservers[0].disconnected).toBe(true)
     } finally {
       Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
     }
