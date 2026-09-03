@@ -4,7 +4,9 @@ refresh-status (prices.compose_refresh_status — one source of truth), the sche
 live flag, database facts read with raw SQL, and the backup marker backup_db.sh
 upserts. Every stored shape degrades to None rather than a 500."""
 
-from fastapi import APIRouter, Depends
+import asyncio
+
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +14,9 @@ from app.api.deps import get_current_user
 from app.api.prices import compose_refresh_status
 from app.config import settings
 from app.database import get_db
-from app.models import AppSetting
+from app.models import AppSetting, User
+from app.rate_limit import AUTH_ATTEMPT, limiter
+from app.schemas.lifecycle import SnapshotEntryOut
 from app.schemas.system import (
     BackupRunOut,
     BackupStatusOut,
@@ -23,6 +27,8 @@ from app.schemas.system import (
 )
 from app.services.price_service import REFRESH_RUNS_KEY
 from app.services.scheduler import is_scheduler_running
+from app.services.snapshot import alembic_head
+from app.services.snapshot_store import list_snapshots, write_snapshot
 
 router = APIRouter(prefix="/system", tags=["system"], dependencies=[Depends(get_current_user)])
 
@@ -81,23 +87,36 @@ async def system_status(db: AsyncSession = Depends(get_db)) -> SystemStatusOut:
     size_bytes = (
         await db.execute(text("SELECT pg_database_size(current_database())"))
     ).scalar_one()
-    # to_regclass probe, not try/except: a missing alembic_version is an EXPECTED state
-    # (create_all-built databases — every test run), and a failed SELECT would abort the
-    # session's transaction mid-request, poisoning the reads after it.
-    has_alembic = (
-        await db.execute(text("SELECT to_regclass('alembic_version') IS NOT NULL"))
-    ).scalar_one()
-    alembic_head: str | None = None
-    if has_alembic:
-        head_row = await db.execute(text("SELECT version_num FROM alembic_version"))
-        alembic_head = head_row.scalars().first()
+    # One probe, shared with the export/restore side (services.snapshot.alembic_head).
+    head = await alembic_head(db)
     return SystemStatusOut(
         # model_dump-and-extend, not field-by-field: if RefreshStatusOut ever grows a
         # field, the embedded copy inherits it instead of silently dropping it.
         prices=PricesStatusOut(**prices.model_dump(), scheduler_running=is_scheduler_running()),
-        database=DatabaseStatusOut(size_bytes=size_bytes, alembic_head=alembic_head),
+        database=DatabaseStatusOut(size_bytes=size_bytes, alembic_head=head),
         backup=await _read_backup_status(db),
         backup_runs=await _read_backup_runs(db),
         refresh_runs=await _read_refresh_runs(db),
         environment=settings.environment,
     )
+
+
+@router.get("/snapshots", response_model=list[SnapshotEntryOut])
+async def stored_snapshots(db: AsyncSession = Depends(get_db)) -> list[SnapshotEntryOut]:
+    """The nightly files on the data volume, newest first (2026-09-03 data-lifecycle spec
+    §8). `restorable` = the file's schema head equals this server's."""
+    head = await alembic_head(db)
+    return await asyncio.to_thread(list_snapshots, head)
+
+
+@router.post("/snapshots", response_model=SnapshotEntryOut, status_code=201)
+@limiter.limit(AUTH_ATTEMPT)
+async def snapshot_now(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SnapshotEntryOut:
+    """ "Snapshot now" — the on-demand backup the tier-1 spec declined for want of pg_dump,
+    delivered as the app's own ZIP. Rate-limited like login: a full ZIP is ~200 ms on the
+    real database and nobody needs eleven a minute."""
+    return await write_snapshot(db, actor=user.email, trigger="manual")

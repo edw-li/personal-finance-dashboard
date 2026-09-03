@@ -720,6 +720,9 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
   expect(await screen.findByText(NO_HOLDINGS_NOTE)).toBeTruthy()
   // The treemap and the donut both fall back to their notes rather than empty canvases.
   expect(screen.getAllByText('No priced holdings yet.').length).toBe(2)
+  // …and the heat-treemap's colour legend goes with the cells it describes: "Orange =
+  // loss, blue = gain; the deeper the tone…" under an empty note is a key to nothing.
+  expect(screen.queryByText(/Orange = loss, blue = gain/)).toBeNull()
   // And the performance chart is still up: it is household-wide, and the hint says so.
   expect(screen.getByText(HOUSEHOLD_HINT)).toBeTruthy()
   expect(screen.getAllByTestId('echart').length).toBeGreaterThan(0)

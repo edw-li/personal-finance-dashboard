@@ -439,6 +439,24 @@ in the bucket. The script keeps 30 days of backups — each run deletes both fla
 dump from 30 days prior — and records the run for the Settings System card (the
 `Last backup` marker plus a last-10 trail).
 
+**Verify phase (2026-09-03).** After the upload the script restores the dump it just wrote into
+a scratch database (`finance_verify_<pid>`), compares three row counts
+(`net_worth_snapshots`, `monthly_spending`, `position_transactions`) with the live database's
+at dump time, and drops the scratch. The marker gains `size_bytes`, `encrypted`,
+`retention_days` and `verified` (+ `verified_at`/`row_counts`, or `verify_error`), and the
+System card reads "· encrypted · verified" — "Last backup" now means "the dump restores",
+not "the upload returned". The role needs to create databases, once:
+
+```bash
+sudo -u postgres psql -c "ALTER ROLE finance CREATEDB;"
+```
+
+Without it every run records `verified: false` with `createdb failed …` and the Data health
+card says so; the upload itself is unaffected. A verify failure never fails the run
+(retention still sweeps, exit 0). Counts that cannot be read — an unreachable database, a
+renamed table — record `verified: false` with the reason instead of comparing two unknowns
+and calling them equal.
+
 ### 5.4 Schedule
 
 ```bash
@@ -449,7 +467,38 @@ crontab -e
 0 3 * * * /home/ubuntu/personal-finance-dashboard/backend/scripts/backup_db.sh >> /home/ubuntu/finance-backup.log 2>&1
 ```
 
-### 5.5 Restore drill (do this once now, and after any schema change you care about)
+### 5.5 Restore drills (do them once now, and after any schema change you care about)
+
+Two restore paths exist and both should be proven, not assumed.
+
+**The app's own snapshot (nightly ZIP, `/settings` → Backups & snapshots).** The drill creates a
+scratch database, runs the real migrations on it, restores a snapshot ZIP through the app's
+own restore, verifies every table against the ZIP, and drops the scratch:
+
+```bash
+# On the box, inside the backend image (it has the app and its driver; host Postgres via host-gateway):
+docker compose -f docker-compose.prod.yml run --rm \
+  -v /path/to/finance-export-YYYYMMDD-HHMMSS.zip:/tmp/snap.zip:ro \
+  backend bash scripts/restore_drill.sh /tmp/snap.zip
+# On a dev box, from the repo root (Postgres on 5433):
+DB_PORT=5433 PYTHON=backend/.venv/Scripts/python.exe bash backend/scripts/restore_drill.sh path/to/finance-export-….zip
+```
+
+The container recipe passes no database settings on purpose: the service's own `DATABASE_URL`
+already carries host, port, user and password, and the drill reads them from it. (It has to —
+compose passes no `POSTGRES_USER`/`POSTGRES_PASSWORD` to the backend and `backend/.dockerignore`
+keeps `.env` out of the image, so anything else falls back to the `finance:finance` default and
+cannot connect.) Outside the container `DB_HOST`/`DB_PORT`/`POSTGRES_*` from the project-root
+`.env` still win, and a relative `PYTHON` like the one above is fine — the drill makes it
+absolute before it changes directory.
+
+Expected: `PASS: 35 tables identical` and `[drill] PASS`, exit 0. The drill drops its scratch
+database and its temporary data directory on the way out, whichever way it exits. The nightly files
+live on the `finance-data` volume (`docker volume inspect personal-finance-dashboard_finance-data`
+for the host path); the same ZIP restores from the UI — Restore card → Dry run → type the date →
+Restore — with a pre-restore point written first.
+
+**The nightly dump (disaster recovery — schema-agnostic, survives any app state).**
 
 ```bash
 # Download a backup: bucket → object → Download (or scp it to the server)
@@ -709,6 +758,19 @@ spot-check **/** (Overview), **/taxes** and **/settings**.
 > the redaction), and SSE streaming rides `X-Accel-Buffering: no` + keepalive pings, so
 > `nginx.conf` is untouched.
 
+> **Addendum (2026-09-04, data lifecycle)**: one additive migration — `c3a7e19d5b42`
+> (`change_log`, `lifecycle_runs`, `user_preferences`), chained on `b8e4d17c2a90` and applied
+> at boot like every other; the downgrade drops the three tables and nothing else references
+> them. The deploy needs two one-time steps beyond `up -d --build`: the compose file now
+> mounts the `finance-data` volume at `/data` (`DATA_DIR=/data`) for the nightly snapshots
+> and restore points — created automatically on the first `up`; and the role grant
+> `ALTER ROLE finance CREATEDB;` (5.3) so the backup script's verify phase can run. Until
+> the grant lands, the System card says "not verified — createdb failed" and Data health
+> warns; the dumps themselves are unaffected. The first stored snapshot appears at 23:30 PT
+> (a boot after that hour catches up within seconds); `/settings` gains four cards —
+> Backups & snapshots, Restore, Activity, Data health — and every month save and delete
+> now carries an Undo.
+
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the
 4.4 cache-control check once after the first deploy carrying the split route chunks.
@@ -804,7 +866,43 @@ and re-copy both values.
 - All traffic is TLS-encrypted. The self-signed cert doesn't prove the server's identity
   to a first-time browser (trust-on-first-use) — import it into your trust store, or use
   domain mode (Part 6), to close that gap.
-- The whole app sits behind JWT auth; only `/login` and `/api/v1/health` are public.
+- The whole app sits behind JWT auth. The public surface is `/login`, `/api/v1/health`
+  and `/api/v1/calendar/feed.ics` — the last one carries its own credential in the
+  query string (see **Calendar feed tokens** below).
 - Backups live in a private bucket under scoped S3 credentials, optionally encrypted
   before upload with `gpg --symmetric` — set `BACKUP_PASSPHRASE` in `.env` (see 5.3);
   plaintext dumps print a warning per run.
+
+### Calendar feed tokens
+
+Settings → **Calendar feed** mints subscription links of the form
+`https://<host>/api/v1/calendar/feed.ics?token=<43-char token>`. The token IS the
+credential: anyone holding the URL can read every calendar event and its amounts, with no
+login. Only its sha256 is stored, and the plaintext is shown once at creation — the server
+cannot show it again.
+
+**Keep tokens out of logs.** A credential in a query string is one careless log line from
+being permanent, so the deploy is set up to never write one:
+
+- `backend/start.sh` runs uvicorn with `--no-access-log`. nginx fronts every request, so
+  nothing is lost; error logs and tracebacks are untouched.
+- `nginx.conf` defines a `no_query` log format that logs `$uri` — the path with **no**
+  query string. `$request`, `$request_uri` and `$args` would each leak the token, so do not
+  "tidy" the format back to the stock `combined`.
+
+One gap remains by design: nginx's **error** log prints the full request line, so a 502 or
+an upstream timeout on a feed poll writes that token into `error.log`. Treat any error log
+you copy off the server, paste into an issue, or ship to a log service as containing live
+credentials.
+
+**Rotating a token** — there is no edit, only replace:
+
+1. Settings → Calendar feed → **New feed link**, copy the URL it shows once.
+2. Re-subscribe the calendar app to the new URL (Google: Other calendars → From URL;
+   Apple: File → New Calendar Subscription), then delete the old subscription.
+3. Settings → Calendar feed → **Revoke** on the old link. Revoking is immediate and
+   permanent: the next poll on that URL gets a 404 and the calendar stops updating.
+
+Revoke on any suspicion — a leaked link, a lost phone, a shared screenshot. The `Last used`
+column shows when each link last fetched (bumped at most hourly), which is how you tell a
+link nothing is using from one that is.

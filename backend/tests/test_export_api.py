@@ -9,12 +9,16 @@ import zipfile
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
 from app.database import Base
 from app.models import Account, AccountBalance, AppSetting, NetWorthSnapshot
 from app.services.snapshot import (
     EXCLUDED_TABLES,
     EXPORTED_TABLES,
     REDACTED_ROWS,
+    REPEATABLE_READ,
     build_snapshot_zip,
 )
 
@@ -193,3 +197,50 @@ async def test_service_and_endpoint_build_the_same_archive(auth_client, db):
     assert manifest_a == manifest_b
     assert built.counts["accounts"] == 1 and built.counts["app_settings"] == 1
     assert re.fullmatch(r"finance-export-\d{8}-\d{4}\.zip", built.filename)
+
+
+async def test_the_export_reads_one_database_state_when_a_write_commits_mid_export(db, engine):
+    """The ~35 SELECTs must all see the SAME database. Under READ COMMITTED each takes its
+    own snapshot, so a restore or an import committing halfway through would put its rows in
+    the tables read after it and not in the tables read before it — a ZIP of a state that
+    never existed, offered to a future restore as if it had."""
+    db.add(Account(name="Before", slug="before", group="cash", sort_order=1))
+    await db.commit()
+    statements: list[str] = []
+
+    class MidExportWriter:
+        """A session proxy: build_snapshot_zip only ever calls `execute`, so wrapping it is
+        enough to commit a row from a SECOND connection at a chosen point in the export."""
+
+        def __init__(self) -> None:
+            self.wrote = False
+
+        def __getattr__(self, name):
+            return getattr(db, name)
+
+        async def execute(self, statement, *args, **kwargs):
+            statements.append(str(statement).strip())
+            result = await db.execute(statement, *args, **kwargs)
+            # After the export's FIRST READ — the point where REPEATABLE READ takes its
+            # snapshot, and where a concurrent commit is therefore invisible to every read
+            # that follows, `accounts` included (it is the first exported table).
+            if not self.wrote and statements[-1].upper().startswith("SELECT"):
+                self.wrote = True
+                async with async_sessionmaker(engine)() as other:
+                    other.add(Account(name="During", slug="during", group="cash", sort_order=2))
+                    await other.commit()
+            return result
+
+    built = await build_snapshot_zip(MidExportWriter())
+
+    # The level only takes as the transaction's first statement; a read before it is silently
+    # READ COMMITTED, so pin the position, not just the presence.
+    assert statements[0] == REPEATABLE_READ
+    assert built.counts["accounts"] == 1
+    archive = zipfile.ZipFile(io.BytesIO(built.payload))
+    assert b"During" not in archive.read("csv/accounts.csv")
+    assert json.loads(archive.read("manifest.json"))["tables"]["accounts"] == 1
+    assert len(json.loads(archive.read("finance-export.json"))["tables"]["accounts"]) == 1
+    # ...and the concurrent write really did commit: the export simply could not see it.
+    await db.rollback()
+    assert (await db.execute(select(func.count()).select_from(Account))).scalar_one() == 2

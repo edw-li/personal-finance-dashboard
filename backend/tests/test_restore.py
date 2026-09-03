@@ -333,19 +333,23 @@ async def test_apply_restore_round_trips_every_table_byte_for_byte(db, seeded_us
         if name.startswith("csv/"):
             assert a.read(name) == b.read(name), name
 
-    # The trail: one summary change-log row, one restore run holding the report, plus the
-    # restore point's own run (committed before the transaction).
-    rows = (await db.execute(select(ChangeLog))).scalars().all()
-    assert [(r.op, r.source, r.table_name) for r in rows] == [("batch", "restore", "*")]
-    assert rows[0].after == {
+    # The trail: the restore's summary change-log row is the LAST row (the trail is not part of
+    # the snapshot, so rows the seed's own logged writes left behind survive a restore by
+    # design), one restore run holding the report, plus the restore point's own run
+    # (committed before the transaction).
+    rows = (await db.execute(select(ChangeLog).order_by(ChangeLog.id))).scalars().all()
+    assert [(r.op, r.source, r.table_name) for r in rows][-1] == ("batch", "restore", "*")
+    assert sum(1 for r in rows if r.source == "restore") == 1
+    assert rows[-1].after == {
         "tables": {name: diff.incoming for name, diff in report.tables.items()}
     }
-    assert rows[0].batch_id == report.batch_id
+    assert rows[-1].batch_id == report.batch_id
+    # Runs likewise: the seed's own import run (if any) precedes the restore point and the restore.
     runs = (await db.execute(select(LifecycleRun).order_by(LifecycleRun.id))).scalars().all()
-    assert [r.kind for r in runs] == ["restore_point", "restore"]
-    assert runs[1].id == report.run_id and runs[1].batch_id == report.batch_id
-    assert runs[1].report["restore_point"] == report.restore_point
-    assert runs[1].filename == "finance-export.zip" and runs[1].size_bytes == len(before.payload)
+    assert [r.kind for r in runs][-2:] == ["restore_point", "restore"]
+    assert runs[-1].id == report.run_id and runs[-1].batch_id == report.batch_id
+    assert runs[-1].report["restore_point"] == report.restore_point
+    assert runs[-1].filename == "finance-export.zip" and runs[-1].size_bytes == len(before.payload)
 
 
 async def test_apply_restore_preserves_this_servers_operational_settings(db, seeded_user):
@@ -457,9 +461,12 @@ async def test_apply_restore_rewrites_preferences_fixes_the_self_reference_and_r
 
 
 async def test_apply_restore_keeps_three_restore_points(db, seeded_user):
+    # Read before the export: build_snapshot_zip opens its REPEATABLE READ transaction with a
+    # rollback, which expires every loaded instance (a lazy refresh here would be detached).
+    actor = seeded_user.id
     snap = await build_snapshot_zip(db)
     for _ in range(4):
-        await restore_now(db, snap.payload, seeded_user.id)
+        await restore_now(db, snap.payload, actor)
     assert len(list(restore_points_dir().iterdir())) == 3
     kinds = [
         r.kind for r in (await db.execute(select(LifecycleRun).order_by(LifecycleRun.id))).scalars()

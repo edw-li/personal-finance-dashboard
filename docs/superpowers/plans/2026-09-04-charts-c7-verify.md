@@ -491,3 +491,61 @@ git commit -m "docs(charts): retire-at-the-end-of-the-night list with unused-pro
 
 **Spec coverage:** §14 `ariaLabel` required → Task 1. §6 success criteria (no `<EChart` outside `ChartCard`, no page chart headers, no `empty-note` chart fallbacks) → Task 2. §17 conformance over every builder → Task 3 (the roster names all 22 exported builders' fixtures plus the seven lifted inline options: stack ×2 modes, drill, bridge, bars, pie, heatmap ×2, savings, trends). §17 visual smoke (both themes, 1600 px, tooltip per grammar, heatmap modes, heat-treemap, log fan, console errors fail) → Task 4. §17 real-echarts probes for the four new forms → Task 5. §18 step 3 "delete …" → Task 6 as a list, per the overnight rule. Full suites → Tasks 3 and 7. **Placeholders:** the smoke driver's token-seeding line explicitly says to copy the p4 driver's key; every other step is complete. **Type consistency:** the fixture names in Task 3's roster are exactly the `name` fields the lane plans declare (C1: `grammar-line/stack/heatmap`; C2: `netWorthStack`, `netWorthStackShare`, `netWorthDrill`, `netWorthBridge`, `overviewNetWorthTrend`, `overviewRecentSpend`, `moneyFlow`; C3: `spendingBars`, `spendingMonthPie`, `spendingHeatmapRow`, `spendingHeatmapVsAverage`, `spendingSavings`, `spendingTrends`, `spendingSankey`; C4: `portfolioHistory`, `priceHistory`, `heatTreemap`, `allocationDonut`, `dividendIncome`; C5: `projectionFan`, `projectionLog`, `netWorthProjection`, `vestingCalendar`, `tcTrajectory`; C6: `taxWaterfall`, `taxTrend`, `taxYearPie`, `marginalLadder`, `cardValue`, `creditLine`, `paycheckSankey`).
 
+
+---
+
+## Retire at the end of the night — the deletion pass (C7 Task 6)
+
+**Nothing below was deleted.** Every row was proved unused by the grep beside it, run on
+`charts-c7` after `git merge main` (main @64cf2f6: sandboxes J/P, calendar A/C/D, lifecycle
+L1/L2/F1/F2). Counts are `file: hits`. A row that names a test means the test dies WITH the
+code it pins — deleting the source alone turns a green suite red.
+
+### Modules
+
+| Retire | Proof (grep over `src`) | Verdict |
+|---|---|---|
+| `components/spending/budgetChartOptions.ts` + `budgetChartOptions.test.ts` (absorbed by `charts/reference.ts budgetReference`) | `budgetStepSeries` → `budgetChartOptions.ts:10` (decl), `budgetChartOptions.test.ts` ×3, `charts/reference.test.ts` ×3, `charts/reference.ts:4` (comment) | UNUSED by app code. Delete the module, its test, AND `reference.test.ts`'s "budgetReference absorbs budgetStepSeries byte for byte" case (line 22) — it is the only other importer. Drop the naming comment at `reference.ts:4`. |
+| `components/RangeChips.tsx` (the ScopeBar owns range since shell-1b) | `RangeChips` → `RangeChips.tsx:18` (decl), `pages/TaxesPage.tsx:619` (PROSE, inside a comment about `.segmented`), `charts/timeZoom.test.ts:79` (PROSE) | UNUSED — no importer, and it has no test file of its own. The two hits are comments; reword them when the file goes. |
+
+### Dead exports (each one's tests go with it)
+
+| Retire | Proof | Verdict |
+|---|---|---|
+| `netWorthStackedTooltipFormatter` (`networth/netWorthChartOptions.ts`) | decl + `netWorthChartOptions.test.ts` ×3 | Declared, never called outside its test. |
+| `spendingBarsTooltipFormatter` (`spending/spendingChartOptions.ts`) | decl + `spendingChartOptions.test.ts` ×3 | Same. |
+| `projectionTooltipFormatter` + `BAND_MARKER` (`projection/projectionChartOptions.ts:69, :56`) | 3 hits, ALL inside that file (`:85` is `BAND_MARKER`'s only use, inside the formatter) | Same, and no test pins them — they delete alone. |
+| `vestingTooltipFormatter` (`comp/vestingChartOptions.ts`) | 1 hit in all of `src` — the declaration | Pure orphan. |
+| `treemapOption` (`portfolio/allocationChartOptions.ts:23`, replaced by `heatTreemapOption`) | decl + `:126` (comment "stays exported until C7 retires it") + `allocationChartOptions.test.ts` ×7 | Delete with its seven cases and the comment. |
+| `historyTooltipFormatter` (`portfolio/historyChartOptions.ts:199`) | decl + `:356` comment + `historyChartOptions.test.ts` ×11; prose mentions in `spendingChartOptions.ts:50`, `projectionChartOptions.ts:66` | Unused by app code — the chart's tooltip is `axisTooltip(...)` at `:357`. NOTE the contradiction: `:356` reads "historyTooltipFormatter stays exported and tested (C7)". Decide in the morning: delete both formatter and claim, or keep both. Not a silent choice. |
+| `WATERFALL_CATEGORIES` (`taxes/taxChartOptions.ts`) | decl + `taxChartOptions.test.ts` ×3 | Declared, never used outside its test. |
+| `foldColor`, `lowestFreeSlot` (`charts/entities.ts`) | decls + `entities.test.ts` ×3 / ×6 | C1 helpers no lane reached for. Delete or keep deliberately — they are entity-colour API, not chart chrome. |
+| `GRID_LINE`, `AXIS_LINE` (`charts/theme.ts`) | 1 hit each — the declaration | Palette constants nothing reads (the theme builds its own). Lowest-value row here; keep if the palette is meant to be complete. |
+| `EChart`'s `exportConfig` prop + `ChartExportMenu`'s title-less legacy branch | `exportConfig=` → `EChart.test.tsx` ×5 only; `EChart.tsx:34,60,252`; the branch is documented at `ChartExportMenu.tsx:18` (`title?: string`) | Every mount goes through `ChartCard`, which always passes `title`. Retiring the prop makes `ExportConfig.title` required and deletes the legacy branch + those five test cases. |
+| The private `interface AxisTooltipParam` copies: `networth/netWorthChartOptions.ts:27`, `spending/spendingChartOptions.ts:32`, `projection/projectionChartOptions.ts:46` (the shared one is `charts/tooltip.ts:15`) | `interface AxisTooltipParam` → those three + `charts/tooltip.ts` | Each is used ONLY by that file's retiring formatter (netWorth `:47`, spending `:59,:67`, projection `:73`) — they die with it. `historyChartOptions.ts` already imports the shared type. |
+| The private `roundTo` copy at `components/taxes/marginal.ts:32` | `function roundTo|const roundTo` → `charts/grammar.ts:134` (shared) and `marginal.ts:32` | The last duplicate of the spec's §18 pair. Swap to the shared import. |
+
+### CSS (markup is already gone — these are dead rules)
+
+`grep -rn "…" src --include=*.tsx` finds NO markup for any class below; the one exception is
+`panel-title-row`, kept deliberately.
+
+| File | Rules | Note |
+|---|---|---|
+| `pages/NetWorthPage.css:3, :12` | `.networth-chart-header`, `.networth-chart-controls` | dead |
+| `pages/SpendingPage.css:3` | `.spending-chart-header` | dead |
+| `components/taxes/taxes.css:13` | `.tax-chart-header` | dead; the file's comments at `:11, :224, :296` reference it |
+| `pages/ProjectionPage.css:5, :11` | `.projection-chart-card`, `.projection-chart-header` | dead |
+| `pages/ProjectionPage.css:20, :27, :35, :62` | `.projection-form`, `.projection-form label`, `.projection-actions`, `.projection-form .projection-derived` | dead since sandbox J moved the controls into `SliderBox`/`ScenarioPanel`. **KEEP `.sandbox-controls .projection-derived` (`:73`)** — `ScenarioPanel.tsx:175` renders it. The `:71` comment already says the `.projection-form` copy is retired. |
+| `components/portfolio/portfolio.css:17, :18` | `.allocation-grid` (+ its media query) | dead |
+| `components/portfolio/portfolio.css:62, :63, :93` | `.toggle-row button` rules | dead — `PortfolioPage.css:40` carries its own copy for the page's tab row, and says so |
+| `components/overview/moneyFlow.css:4` | `.money-flow-years` | dead |
+| `components/portfolio/portfolio.css:14` | `.panel-title-row` | **KEEP** — `PortfolioPage.tsx:666` is the Holdings header, a table, not a chart. `mounts.audit.test.ts` allows exactly this one file; delete the allowance if the row ever goes. |
+| `components/panels.css:603` | the comment naming these retirements | delete with them |
+
+### Deliberately NOT retired
+
+`charts/fixtures/grammar-*.fixture.ts` (the harness's negative-space proof), `charts/conformance.ts`
+(`checkConformance` is called by its own suite BY DESIGN), and `ChartZoomHint` — `grep -rn
+"ChartZoomHint" src --include=*.tsx` finds only `ChartCard.tsx:8,43,134` and its own test, i.e.
+the standalone usage the spec wanted gone is ALREADY gone.

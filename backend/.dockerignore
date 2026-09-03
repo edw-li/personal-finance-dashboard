@@ -5,3 +5,6 @@
 tests
 docker-compose.yml
 .env
+# Snapshots and restore points (DATA_DIR): prod mounts the finance-data volume at /data,
+# but a dev box writes backend/data — COPY . . would bake real financial data into the image.
+data/

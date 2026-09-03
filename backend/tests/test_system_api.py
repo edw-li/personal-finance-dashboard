@@ -194,3 +194,74 @@ async def test_system_runs_default_empty_and_degrade_on_garbage(auth_client, db)
     body = (await auth_client.get(STATUS)).json()
     assert body["backup_runs"] == []
     assert body["refresh_runs"] == []
+
+
+SNAPSHOTS = "/api/v1/system/snapshots"
+
+
+async def test_snapshots_require_auth(client):
+    assert (await client.get(SNAPSHOTS)).status_code == 401
+    assert (await client.post(SNAPSHOTS)).status_code == 401
+
+
+async def test_snapshots_list_is_empty_then_lists_what_post_wrote(auth_client, db):
+    assert (await auth_client.get(SNAPSHOTS)).json() == []
+    created = await auth_client.post(SNAPSHOTS)
+    assert created.status_code == 201, created.text
+    entry = created.json()
+    assert entry["name"].startswith("finance-export-") and entry["restorable"] is True
+    assert entry["alembic_head"] is None and entry["size_bytes"] > 0
+    listed = (await auth_client.get(SNAPSHOTS)).json()
+    assert [e["name"] for e in listed] == [entry["name"]]
+    assert listed[0]["restorable"] is True  # same create_all head (None) on both sides
+    from sqlalchemy import select
+
+    from app.models import LifecycleRun
+
+    run = (await db.execute(select(LifecycleRun))).scalar_one()
+    assert (run.kind, run.actor, run.report["trigger"]) == ("snapshot", "me@example.com", "manual")
+
+
+async def test_snapshot_now_is_rate_limited_like_login(auth_client):
+    # AUTH_ATTEMPT is 10/minute; a full ZIP takes ~200 ms on 12.7 MB, and nobody needs more.
+    for _ in range(10):
+        assert (await auth_client.post(SNAPSHOTS)).status_code == 201
+    assert (await auth_client.post(SNAPSHOTS)).status_code == 429
+
+
+async def test_system_backup_marker_carries_the_verify_fields(auth_client, db):
+    db.add(
+        AppSetting(
+            key="backup_status",
+            value={
+                "last_success_at": "2026-09-04T03:00:12Z",
+                "object_key": "backups/finance_2026-09-04.sql.gz.gpg",
+                "size": "108K",
+                "size_bytes": 110592,
+                "encrypted": True,
+                "retention_days": 30,
+                "verified": True,
+                "verified_at": "2026-09-04T03:00:40Z",
+                "row_counts": {
+                    "net_worth_snapshots": 33,
+                    "monthly_spending": 621,
+                    "position_transactions": 210,
+                },
+            },
+        )
+    )
+    db.add(
+        AppSetting(
+            key="backup_runs",
+            value=[{"at": "2026-09-04T03:00:12Z", "ok": True, "object": "k", "verified": True}],
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get(STATUS)).json()
+    assert body["backup"]["verified"] is True and body["backup"]["size_bytes"] == 110592
+    assert (
+        body["backup"]["encrypted"] is True
+        and body["backup"]["row_counts"]["monthly_spending"] == 621
+    )
+    assert body["backup"]["verify_error"] is None
+    assert body["backup_runs"][0]["verified"] is True
