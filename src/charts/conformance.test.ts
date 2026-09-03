@@ -11,6 +11,90 @@ import { axisTooltip } from './tooltip'
 const modules = import.meta.glob<{ default: ChartFixture }>('./fixtures/*.fixture.ts', { eager: true })
 export const fixtures = Object.values(modules).map((m) => m.default)
 
+// Every builder the spec's §1 map names — the 22 exported builders plus the seven lifted
+// inline options — has a fixture, and the roster is written out so a lane cannot silently
+// drop one: the glob above would just stop generating that fixture's cases and stay green.
+// A name missing here is a builder the grammar no longer proves anything about.
+const ROSTER = [
+  // C1 — the harness's own negative-space proofs
+  'grammar-line',
+  'grammar-stack',
+  'grammar-heatmap',
+  // C2 — Net worth + Overview
+  'netWorthStack',
+  'netWorthStackShare',
+  'netWorthDrill',
+  'netWorthBridge',
+  'overviewNetWorthTrend',
+  'overviewRecentSpend',
+  'moneyFlow',
+  // C3 — Spending (spendingSmallMultiples was the one droppable of the night — the plan
+  // let C3 ship without the Compare/All mode. It landed, so it is pinned like the rest.)
+  'spendingBars',
+  'spendingMonthPie',
+  'spendingHeatmapRow',
+  'spendingHeatmapVsAverage',
+  'spendingSavings',
+  'spendingTrends',
+  'spendingSankey',
+  'spendingSmallMultiples',
+  // C4 — Portfolio
+  'portfolioHistory',
+  'priceHistory',
+  'heatTreemap',
+  'allocationDonut',
+  'dividendIncome',
+  // C5 — Projection + Comp/ESPP
+  'projectionFan',
+  'projectionLog',
+  // …and the fan carrying pinned scenarios (sandbox J, planning-sandboxes spec §11): the
+  // reference-line branch of the same builder, which the plain fan fixture never reaches.
+  'projectionPinned',
+  'netWorthProjection',
+  'vestingCalendar',
+  'tcTrajectory',
+  // C6 — Taxes + Credit cards + Paycheck
+  'taxWaterfall',
+  'taxTrend',
+  'taxYearPie',
+  'marginalLadder',
+  'cardValue',
+  'creditLine',
+  'paycheckSankey',
+]
+
+describe('the fixture roster', () => {
+  it('every builder in the spec has a fixture', () => {
+    const names = fixtures.map((f) => f.name)
+    const missing = ROSTER.filter((expected) => !names.includes(expected))
+    expect(missing).toEqual([])
+  })
+
+  it('every fixture builds a non-null option', () => {
+    // The glob's per-fixture case below asserts this too, but only for the fixtures that
+    // EXIST; stated once over the whole set it is the roster's other half — a fixture that
+    // is present but returns null proves nothing either.
+    for (const fixture of fixtures) expect(fixture.build(), `${fixture.name} built null`).not.toBeNull()
+  })
+
+  it('names every fixture that exists — the roster is a two-way pin', () => {
+    // The other direction: a lane that ADDS a fixture must name it here. Without this the
+    // roster slowly stops describing the tree — sandbox J's `projectionPinned` had already
+    // arrived unlisted — and “the roster is the set of builders the grammar proves” stops
+    // being true. Adding the name is the whole fix; the glob generates its cases either way.
+    const names = fixtures.map((f) => f.name)
+    const unlisted = names.filter((name) => !ROSTER.includes(name))
+    expect(unlisted, `add ${unlisted.join(', ')} to ROSTER`).toEqual([])
+  })
+
+  it('names no fixture twice, and every fixture names itself', () => {
+    const names = fixtures.map((f) => f.name)
+    expect(new Set(names).size, `duplicate fixture name in ${names.join(', ')}`).toBe(names.length)
+    expect(names.filter((name) => name.trim() === '')).toEqual([])
+    expect(new Set(ROSTER).size).toBe(ROSTER.length)
+  })
+})
+
 describe('conformance over the fixtures', () => {
   it('finds the three grammar fixtures at least', () => {
     expect(fixtures.map((f) => f.name)).toEqual(expect.arrayContaining(['grammar-line', 'grammar-stack', 'grammar-heatmap']))

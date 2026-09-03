@@ -52,6 +52,20 @@ describe('waterfallSeries', () => {
     expect(amount.data[1]).toEqual({ value: 40782.88, itemStyle: { color: SEQUENTIAL_BLUE[4] } })
     expect(amount.label.formatter({ dataIndex: 1 })).toBe('$40.8K')
   })
+
+  // The stagger belongs to the SHARED builder, not to each caller: the net-worth bridge used
+  // to re-spread `stagger(1)` over the returned series, which meant the tax waterfall's
+  // cascade and the bridge's came from two places and only one of them was pinned. Both now
+  // read it from here, so this is the assertion standing between either chart and a §11
+  // violation — conformance's "a stacked bar without a stagger" rule catches it per fixture,
+  // and this catches it at the source.
+  it('carries the §11 stagger itself, at stack index 1 (both callers rely on it)', () => {
+    const [placeholder, amount] = waterfallSeries(steps())
+    expect(amount.animationDelay()).toBe(12)
+    // The transparent floor is index 0 and enters with no delay — it is never seen, but a
+    // delay on it would push the visible walk a frame further out.
+    expect('animationDelay' in placeholder).toBe(false)
+  })
 })
 
 describe('waterfallTooltip / waterfallCsv', () => {

@@ -914,6 +914,11 @@ describe('PaycheckPage — the flow card', () => {
     // The table (which handles negatives fine) stays; the sankey steps aside (spec §4).
     expect(screen.getByText(/deductions exceed pay — see the table/)).toBeTruthy()
     expect(screen.queryByTestId('echart')).toBeNull()
+    // …and the card's node legend goes with it: "Gray nodes restate money in transit …
+    // Hover a node to trace its flows" under the guard sentence describes a chart that
+    // is not on the page.
+    expect(screen.queryByText(/Gray nodes restate money in transit/)).toBeNull()
+    expect(screen.queryByText(/Hover a node to trace its flows/)).toBeNull()
   })
 
   it("names the sankey for assistive tech and offers the card's export row", async () => {

@@ -53,10 +53,18 @@ export const TAX_LABELS = [
 // the sequential ramp is the compliant form (AllocationPanel's convention). The ramp
 // encodes POSITION in the fixed order above — not magnitude — which is why the two charts
 // can share it: a waterfall step and a stack segment for the same tax wear one color.
-// Slots start at index 4 (below it the ramp drops under 3:1 on the surface, and the lightest
-// slots go to the smallest taxes, whose slivers need the contrast) and SKIP index 6: that
-// step is also PALETTE[0], and charts/recolor.ts elects the categorical blue for a lone hex
-// — so under the light theme the middle tax would have jumped out of the ramp.
+// Slots start at index 4 — where the ramp clears 3:1 on the DARK surface #171a21 — and SKIP
+// index 6: that step is also PALETTE[0], and charts/recolor.ts elects the categorical blue
+// for a lone hex, so under the light theme the middle tax would have jumped out of the ramp.
+// Slot order spends contrast where it is needed: the ramp brightens with index on dark, and
+// TAX_LABELS puts the two LARGEST taxes on the two weakest slots and the slivers (Cap.
+// gains, NIIT) on the strongest.
+//
+// The 3:1 floor at index 4 is a DARK-surface fact only. The light twins run the other way
+// (pale → deep), so slots 0 and 1 arrive at 2.23:1 and 2.78:1 on the light surface — a
+// recorded, tested exception, not an oversight: see "tax slot contrast on both surfaces" in
+// taxChartOptions.test.ts for the arithmetic showing the ramp cannot be re-cut without
+// collapsing its low-mid range, and for the guard that stops the pair from growing.
 export const TAX_COLORS = [
   SEQUENTIAL_BLUE[4],
   SEQUENTIAL_BLUE[5],
@@ -298,7 +306,9 @@ export interface LadderRow {
 
 // Three slots of the ONE hue family (the ≤3-hue law): adjacent segments alternate the two
 // mid tones so their seam reads at a glance, and the bracket the income sits in takes the
-// bright slot. All three sit at/above SEQUENTIAL_BLUE[4], the ramp's documented 3:1 floor.
+// bright slot. All three sit at/above SEQUENTIAL_BLUE[4], the ramp's 3:1 floor ON DARK;
+// base A is the same step as the State tax slot and shares its recorded light-surface
+// exception (2.78:1) — see the TAX_COLORS note above and the contrast test.
 const LADDER_BASE_A = SEQUENTIAL_BLUE[5]
 const LADDER_BASE_B = SEQUENTIAL_BLUE[7]
 const LADDER_CURRENT = SEQUENTIAL_BLUE[10]

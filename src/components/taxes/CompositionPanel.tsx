@@ -171,21 +171,30 @@ export default function CompositionPanel({
           </button>
         ) : undefined
       }
+      // Footer prose that describes INTERACTING with the chart is conditioned on there
+      // being one: under an empty sentence, "click the chart to go back" and "click a
+      // year's bar" point at marks that were never drawn (the All years button is the
+      // way back in the first case). Prose that EXPLAINS the emptiness — the flagged
+      // years — stays, because that is what a reader wants under an empty card.
       footer={
         detailSummary ? (
-          <p className="drill-hint">
-            {/* The SERVER's totals, negatives and all — the pie can only draw the
-                positive slices (yearPieOption's note). */}
-            Total tax {formatCurrency(detailSummary.totals.total_tax)} · Gross{' '}
-            {formatCurrency(detailSummary.totals.gross_income)} · Effective rate{' '}
-            {detailSummary.totals.effective_rate === null
-              ? '—'
-              : formatPct(detailSummary.totals.effective_rate, { signed: false })}{' '}
-            — click the chart to go back.
-          </p>
+          detailPie === null ? undefined : (
+            <p className="drill-hint">
+              {/* The SERVER's totals, negatives and all — the pie can only draw the
+                  positive slices (yearPieOption's note). */}
+              Total tax {formatCurrency(detailSummary.totals.total_tax)} · Gross{' '}
+              {formatCurrency(detailSummary.totals.gross_income)} · Effective rate{' '}
+              {detailSummary.totals.effective_rate === null
+                ? '—'
+                : formatPct(detailSummary.totals.effective_rate, { signed: false })}{' '}
+              — click the chart to go back.
+            </p>
+          )
         ) : (
           <>
-            <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
+            {trend !== null && (
+              <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
+            )}
             {flaggedYears.length > 0 && (
               <p className="drill-hint">
                 Not charted: {flaggedYears.join(', ')} — no bracket tables for that

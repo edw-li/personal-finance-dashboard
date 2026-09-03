@@ -38,10 +38,11 @@ export default function EChart({
 }: {
   option: EChartsOption
   height?: number
-  // A one-sentence description of what the chart SHOWS (deliberate house wording —
-  // ECharts' generated aria is not used; spec §4 item 6). Like every prop here it is
-  // optional and additive: the signature only ever GROWS entries.
-  ariaLabel?: string
+  // A one-sentence description of what the chart SHOWS (deliberate house wording — ECharts'
+  // generated aria is switched off in the decal merge below). REQUIRED since the chart
+  // grammar (2026-09-04, spec §14): ChartCard forwards its own required prop, so a nameless
+  // mount is a compile error, not a review note.
+  ariaLabel: string
   onClick?: (params: EChartEventParams) => void
   onHover?: (params: EChartEventParams) => void
   onHoverEnd?: () => void
@@ -253,9 +254,9 @@ export default function EChart({
       )}
       <div
         ref={containerRef}
-        // role only WITH a label: a bare role="img" would be an unnamed image to a screen
-        // reader — worse than the default (skippable) div.
-        role={ariaLabel === undefined ? undefined : 'img'}
+        // Unconditional: `ariaLabel` is required, so the role can never name an unlabelled
+        // image (the hedge it replaced only existed while the prop was optional).
+        role="img"
         aria-label={ariaLabel}
         style={{ height, width: '100%' }}
       />
