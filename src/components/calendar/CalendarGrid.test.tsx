@@ -9,6 +9,7 @@ import { summarize } from './cashflow'
 afterEach(cleanup)
 
 const SEP15 = '2026-09-15'
+const SEP08 = '2026-09-08'
 const fixtures: CalendarEvent[] = [
   calendarEvent({ date: SEP15, type: 'payday', label: 'Payday', short_label: 'Payday', amount: '6812.44', direction: 'in' }),
   calendarEvent({ date: SEP15, type: 'tax_deadline', label: 'Tax deadline — Q3 estimated payment', short_label: 'Q3 est. tax', amount: '395.00', direction: 'out', basis: 'estimated' }),
@@ -17,6 +18,10 @@ const fixtures: CalendarEvent[] = [
   calendarEvent({ date: SEP15, type: 'espp_qualify', label: 'ESPP lot qualifies — 2024-08-30', short_label: 'ESPP lot qualifies' }),
   calendarEvent({ date: '2026-09-16', type: 'rsu_vest', label: 'RSU vest — 4 grants', short_label: 'RSU vest · 4 grants', amount: '41200.00', direction: 'in', basis: 'estimated' }),
   calendarEvent({ date: '2026-09-02', type: 'update_due', label: 'Monthly update — enter August 2026', short_label: 'Monthly update', done: true }),
+  // Sep 8 holds EXACTLY three: the cap's boundary, where "+N more" must NOT appear.
+  calendarEvent({ date: SEP08, type: 'custom', label: 'Vet', id: 4 }),
+  calendarEvent({ date: SEP08, type: 'payday', label: 'Payday', short_label: 'Payday', amount: '6812.44', direction: 'in' }),
+  calendarEvent({ date: SEP08, type: 'ex_dividend', label: 'Ex-dividend — SCHD', short_label: 'Ex-div SCHD' }),
 ]
 
 function mount(over: Partial<Parameters<typeof CalendarGrid>[0]> = {}) {
@@ -82,6 +87,10 @@ describe('CalendarGrid', () => {
     // A one-event day shows it in full, with no overflow button.
     expect(cell('2026-09-16').querySelectorAll('button.cal-chip')).toHaveLength(1)
     expect(cell('2026-09-16').querySelector('button.cal-more')).toBeNull()
+    // CHIP_CAP is a CAP, not a threshold: exactly three still fit as three chips, and
+    // spending a slot on "+1 more" to hide one event would be a worse trade.
+    expect(cell(SEP08).querySelectorAll('button.cal-chip')).toHaveLength(3)
+    expect(cell(SEP08).querySelector('button.cal-more')).toBeNull()
   })
 
   it('renders chip text, title, source color and the done strike-through', () => {

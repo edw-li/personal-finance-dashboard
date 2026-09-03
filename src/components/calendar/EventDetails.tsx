@@ -79,8 +79,11 @@ export default function EventDetails({
       </div>
       {event.items.length > 0 && (
         <ul className="cal-event-items">
-          {event.items.map((item) => (
-            <li key={`${item.label}-${item.person_id ?? ''}`}>
+          {event.items.map((item, index) => (
+            // The INDEX leads the key: two grants can legitimately share a label and an
+            // owner (the same refresh granted twice in a year), and a duplicate key would
+            // drop one of the rows.
+            <li key={`${index}-${item.label}-${item.person_id ?? ''}`}>
               {item.label}
               <span className="num">{item.amount === null ? '—' : formatCurrency(item.amount)}</span>
               {item.detail !== null && ` · ${item.detail}`}

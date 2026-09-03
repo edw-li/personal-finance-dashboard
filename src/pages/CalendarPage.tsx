@@ -113,6 +113,10 @@ export default function CalendarPage() {
     return today.slice(0, 7) === month.slice(0, 7) ? today : month
   })
   const [focusTick, setFocusTick] = useState(0)
+  // Bumped whenever the form is opened, so the caret lands in it rather than wherever the
+  // button that opened it used to be (the drawer's "Add event on …" unmounts with it).
+  const [formTick, setFormTick] = useState(0)
+  const formDateRef = useRef<HTMLInputElement | null>(null)
   const [form, setForm] = useState<FormState>(null)
   const [fields, setFields] = useState<Fields>(EMPTY_FIELDS)
   // Its own fetch, outside the per-month snapshot: the roster does not change with the
@@ -195,6 +199,14 @@ export default function CalendarPage() {
     setScope({ month: next === currentMonthIso() ? null : next })
   }
 
+  // `view` is the page's own param, not the shell's scope, so it is written straight
+  // through instead of via setScope. That means it seeds from the RENDER's searchParams,
+  // OUTSIDE useScope's pending-write coalescing — safe only because nothing here writes the
+  // URL twice in one tick: ‹ › / Today / Jump and this toggle are separate discrete clicks
+  // (React flushes each write before the next can be dispatched), and useScope's arrival
+  // normalization settles on the first commit, before any of them. A future control that
+  // wrote month AND view together would have to go through setScope, or it would drop the
+  // month it did not know about.
   const setView = (next: ViewMode) => {
     const params = new URLSearchParams(searchParams)
     if (next === 'list') params.set('view', 'list')
@@ -282,7 +294,14 @@ export default function CalendarPage() {
     setFormError(null)
     setOpenKey(null)
     setDrawerDay(null)
+    setFormTick((tick) => tick + 1)
   }, [])
+
+  // A DOM call, no state: the form's first field is mounted by the time this runs, and
+  // tick 0 is the initial render, where there is no form and nothing to steal focus from.
+  useEffect(() => {
+    if (formTick > 0) formDateRef.current?.focus()
+  }, [formTick])
 
   // ?add=1 (the palette) opens the form; ?add=1&date=YYYY-MM-DD prefills it and views that
   // day's month. Both params are consumed in ONE replace, and the month this jumps to rides
@@ -524,6 +543,7 @@ export default function CalendarPage() {
                       Date
                       <input
                         type="date"
+                        ref={formDateRef}
                         className="field-input cal-form-input"
                         value={fields.date}
                         onChange={(e) => field('date')(e.target.value)}
@@ -707,10 +727,10 @@ export default function CalendarPage() {
           day={drawerDay}
           events={sortForCell(byDate.get(drawerDay) ?? [])}
           onClose={closeDrawer}
-          onAddOnDay={(day) => {
-            closeDrawer()
-            openAddForm(day)
-          }}
+          // NOT closeDrawer(): its focusTick pulls the caret back to the grid cell, and the
+          // whole point of this button is to land in the form. openAddForm already clears
+          // the drawer, and its own tick puts focus on the date field.
+          onAddOnDay={openAddForm}
           renderDetails={renderDetails}
         />
       )}

@@ -192,6 +192,18 @@ describe('CalendarPage — month, views, grid', () => {
     expect(screen.getByRole('dialog', { name: `${formatDate(DAY_16)} — 1 event` })).toBeTruthy()
   })
 
+  it('"Add event on {day}" leaves the drawer for the FORM, not back onto the grid', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(cell(DAY_15).querySelector('button.cal-more') as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: `Add event on ${formatDate(DAY_15)}` }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    const date = screen.getByLabelText('Date') as HTMLInputElement
+    expect(date.value).toBe(DAY_15)
+    // The drawer's Escape hands focus back to the cell; this button must not.
+    expect(document.activeElement).toBe(date)
+  })
+
   it('exports the fetched window (Plan E swaps this onto the server renderer)', async () => {
     renderPage()
     await screen.findByRole('grid')
@@ -343,6 +355,19 @@ describe('CalendarPage — form, arrivals, land-on-save', () => {
       person_id: null,
       ...v2Body,
     })
+  })
+
+  // The delete path reports the same way an override does (v1's deliberate choice, kept):
+  // a DELETE that failed did not make the month on screen untrue, so the frame's stale line
+  // would be blaming the calendar for someone else's failure.
+  it('a failed delete toasts and leaves the frame alone', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    vi.mocked(deleteCustomEvent).mockRejectedValueOnce(new ApiError('delete refused', 409))
+    fireEvent.click(chipIn(DAY_15, 'Car insurance'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect((await screen.findByText('delete refused')).closest('.toast-error')).toBeTruthy()
+    expect(document.querySelector('.page-frame-stale')).toBeNull()
   })
 
   // Plan A review finding: Undo re-POSTed the CLICKED occurrence's date, which re-anchored a

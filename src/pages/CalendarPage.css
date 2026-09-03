@@ -4,6 +4,10 @@
 .cal-controls {
   display: flex;
   align-items: center;
+  /* Wraps rather than overflows: at 360px the month title and the Grid/List toggle cannot
+     share a line with ‹ Today › and the month input, and a sticky row that scrolls
+     sideways is worse than one that is two lines tall. */
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
 }
