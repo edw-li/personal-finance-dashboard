@@ -1,7 +1,17 @@
-// Pure tooltip + CSV helpers for the spending stacked-bars chart — no React, no
-// fetching, no theme decisions of their own (budgetChartOptions.ts's posture). The
-// option itself stays in SpendingPage (it reads page state); only the parts worth
-// unit-testing live here. Number() is display-only (format.ts's rule).
+// EVERY /spending chart option, and the export table that twins each one — no React, no
+// fetching, no theme decisions of its own (the *ChartOptions law). Each builder is a pure
+// function of the page's already-derived inputs (matrix, topIds, nameById, monthLabels,
+// range, legend picks, the heatmap's row order and mode) and composes only the grammar in
+// src/charts (grid/axes, LINE/BAR_MARKS, legendFor, referenceLine, the visualMap scales,
+// axisTooltip/itemTooltip), so charts/conformance.ts can check it structurally:
+//   spendingBarsOption   + spendingCsv       — the stacked months under the net-pay line
+//   monthPieOption       + monthPieCsv       — the drill-in month, morphing from the bars
+//   heatmapRows / heatmapOption + heatmapCsv — month x category in three readings (F1)
+//   savingsRateOption    + savingsRateCsv    — (net pay - spend) / net pay per month
+//   categoryTrendOption  + categoryTrendCsv  — up to three picks with their budget steps
+//   categorySmallMultiplesOption             — every category as its own tiny line
+// The flow sankey keeps its own file (spendingSankeyOptions.ts). SpendingPage now holds
+// state and ChartCard mounts only. Number() is display-only (format.ts's rule).
 import type { EChartsOption } from '../../charts/echarts'
 import { slotColor } from '../../charts/entities'
 import { BAR_MARKS, LINE, compactMoney, grid, moneyAxis, monthAxis, pctAxis, stagger } from '../../charts/grammar'
@@ -27,10 +37,14 @@ interface AxisTooltipParam {
 }
 
 /**
- * The stacked bars' axis tooltip (2026-08-25 spec §2b, the vestingChartOptions Total-row
- * pattern): each CATEGORY row carries its (xx%) share of the month's category total, a
- * bold Total row closes the categories, and the reference lines — net pay, the 4% rule,
- * budget steps — list AFTER it, excluded from the sum: they are comparisons, not spend.
+ * RETIRED — C7 removes it. The stacked bars' pre-grammar axis tooltip; spendingBarsOption
+ * now builds the same rows through axisTooltip (charts/tooltip.ts), which owns the order,
+ * the escaping and the branding. Kept only so its pins keep passing until C7's sweep.
+ *
+ * (2026-08-25 spec §2b, the vestingChartOptions Total-row pattern): each CATEGORY row
+ * carries its (xx%) share of the month's category total, a bold Total row closes the
+ * categories, and the reference lines — net pay, the sustainable-spend line, budget steps
+ * — list AFTER it, excluded from the sum: they are comparisons, not spend.
  * Shares are computed over the rows actually under the pointer, so legend-hidden
  * categories leave percentages that still add to 100. Padded nulls (net pay's gaps) are
  * dropped, historyTooltipFormatter's rule. Category names are USER TEXT — escapeHtml on
