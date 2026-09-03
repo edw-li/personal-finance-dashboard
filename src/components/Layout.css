@@ -44,7 +44,15 @@
   text-align: left;
 }
 
-.sidebar-search span { flex: 1; }
+/* One line always: the pill is 210px wide minus the kbd, and a wrapped "Search or
+   jump…" read as two rows in the two-theme smoke. Ellipsis rather than wrap. */
+.sidebar-search span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .sidebar-search kbd {
   font-family: inherit;
