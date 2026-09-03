@@ -18,6 +18,9 @@ import CardDetail from '../components/creditcards/CardDetail'
 import CardsPanel from '../components/creditcards/CardsPanel'
 import CategoriesPanel from '../components/creditcards/CategoriesPanel'
 import RewardsMatrix from '../components/creditcards/RewardsMatrix'
+import PageFrame from '../components/shell/PageFrame'
+import ScopeBar from '../components/shell/ScopeBar'
+import { useScope } from '../components/shell/useScope'
 import { cardValueChartOption } from '../components/creditcards/cardValueChartOptions'
 import { creditLineChartOption, limitMonths } from '../components/creditcards/creditLineChartOptions'
 import {
@@ -30,7 +33,6 @@ import {
   toMathCategories,
   toMathRates,
 } from '../components/creditcards/rewardsMath'
-import type { OwnerScope } from '../api/netWorth'
 import type {
   AccountOut,
   CategoryOut,
@@ -77,8 +79,11 @@ export default function CreditCardsPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [fromCache, setFromCache] = useState(cached !== undefined)
-  // null = the whole household, and that scope is byte-identical to the pre-ownership page.
-  const [owner, setOwner] = useState<OwnerScope>(null)
+  // Owner comes from the shared URL scope (2026-09-03 spec §6), never page-local state: the
+  // chip the user picked on Net worth is still the chip here. null = the whole household, and
+  // that scope is byte-identical to the pre-ownership page.
+  const { scope } = useScope({ owner: true })
+  const owner = scope.owner
 
   // The roster rides its OWN fetch, outside the six-call snapshot: it changes once a year,
   // and folding it into the snapshot would invalidate every cached cards payload
@@ -224,15 +229,6 @@ export default function CreditCardsPage() {
     () => new Map(orderedPeople.map((p) => [p.id, p.name])),
     [orderedPeople],
   )
-  // One person means there is nothing to choose between: no chips (NetWorthPage's rule).
-  const ownerScopes: { scope: OwnerScope; label: string }[] =
-    orderedPeople.length > 1
-      ? [
-          { scope: null, label: 'All' },
-          ...orderedPeople.map((p) => ({ scope: p.id as OwnerScope, label: p.name })),
-          { scope: 'joint' as OwnerScope, label: 'Joint' },
-        ]
-      : []
 
   const closeDetail = (cardId: number) => {
     setCardParam(null)
@@ -304,230 +300,220 @@ export default function CreditCardsPage() {
 
   return (
     <div className="page credit-cards-page">
-      <div className="page-header">
-        <h1>Credit cards</h1>
-        <div className="spacer" />
-        <button
-          className="button button-primary"
-          onClick={() => document.getElementById('card-name')?.focus()}
-        >
-          + Add card
-        </button>
-      </div>
-
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
+      <PageFrame
+        title="Credit cards"
+        actions={
           <button
-            className="button"
-            onClick={() => {
-              beginLoad()
-              load()
-            }}
+            className="button button-primary"
+            onClick={() => document.getElementById('card-name')?.focus()}
           >
-            Retry
+            + Add card
           </button>
-        </div>
-      )}
-
-      {activeCard ? (
-        <CardDetail
-          key={activeCard.id}
-          card={activeCard}
-          result={result}
-          rates={rates ?? []}
-          categories={categories ?? []}
-          accounts={accounts}
-          busy={busy}
-          weighted={hasWeights}
-          onClose={() => closeDetail(activeCard.id)}
-          onChanged={load}
-        />
-      ) : (
-        <>
-          {ownerScopes.length > 0 && (
-            <div className="cards-owner-row">
-              <span className="eyebrow">Whose card</span>
-              <div className="segmented" role="group" aria-label="Owner">
-                {ownerScopes.map(({ scope, label }) => (
-                  <button
-                    key={label}
-                    type="button"
-                    className={owner === scope ? 'active' : ''}
-                    aria-pressed={owner === scope}
-                    onClick={() => setOwner(scope)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+        }
+        scopeRow={
+          <>
+            <ScopeBar owner />
+            {/* What "whose" MEANS here is page-specific, so the hint rides beside the shared
+                control rather than inside it — and only when there is a choice to explain. */}
+            {orderedPeople.length > 1 && (
               <InfoHint text="A person's view is their own cards plus the joint ones — either of you can hold a joint card. Joint shows only the shared cards. The matrix, the tiles and the credit-line chart follow this; the roster below always lists every card, since it is where ownership is edited." />
-            </div>
-          )}
-
-          {kpis && (
-            <div className="kpi-row">
-              <StatTile
-                label="Total credit line"
-                value={formatCurrency(kpis.totalLine)}
-                hint="Sum of every active card's current limit."
-              />
-              {/* A dash, not "$0.00/yr", until at least one category has a weight — a
-                  zero here would be the absence of setup wearing the costume of a figure. */}
-              <StatTile
-                label="Optimal rewards (est.)"
-                value={hasWeights ? `${formatCurrency(kpis.optimal)}/yr` : '—'}
-                hint={
-                  hasWeights
-                    ? "What the whole lineup earns per year if every weighted category goes on its best card. An estimate from your spend weights — actual card usage isn't tracked."
-                    : 'No category has a spend weight yet, so there is nothing to add up. Map each reward category to a spending category or type an annual spend in Categories & weights below.'
-                }
-              />
-              <StatTile
-                label="Net after fees (est.)"
-                value={hasWeights ? `${formatCurrency(kpis.net)}/yr` : '—'}
-                hint={
-                  hasWeights
-                    ? 'Optimal rewards plus counted credits minus annual fees, across active cards.'
-                    : 'Needs spend weights first — without them this would just be credits minus fees.'
-                }
-              />
-              <StatTile
-                label="Active cards"
-                value={String(kpis.count)}
-                hint="Archived cards keep their history but sit outside the matrix and the math."
-              />
-              {/* ABSENT rather than zero when it has nothing honest to say (spec §6): one
-                  person owning every card has no merge to price, and fees can make the
-                  merge genuinely lose. */}
-              {advantage !== null && (
+            )}
+          </>
+        }
+        resource={{
+          // `cards === null` is the first-payload sentinel: a seeded snapshot fills it before
+          // the first paint, so a revalidation never falls back to the skeleton.
+          status: cards === null ? (error !== null ? 'error' : 'loading') : 'ready',
+          error,
+          busy: loading,
+          fromCache,
+          retry: () => {
+            beginLoad()
+            load()
+          },
+        }}
+        skeleton={{ tiles: 3, cards: [{ span: 12, height: 320 }, { span: 12, height: 260 }] }}
+      >
+        {activeCard ? (
+          <CardDetail
+            key={activeCard.id}
+            card={activeCard}
+            result={result}
+            rates={rates ?? []}
+            categories={categories ?? []}
+            accounts={accounts}
+            busy={busy}
+            weighted={hasWeights}
+            onClose={() => closeDetail(activeCard.id)}
+            onChanged={load}
+          />
+        ) : (
+          <>
+            {kpis && (
+              <div className="kpi-row">
                 <StatTile
-                  label="Household wallet advantage"
-                  value={`${formatCurrency(advantage)}/yr`}
-                  delta="beats the best single wallet"
-                  tone="positive"
-                  hint="Both wallets are priced the same way — optimal rewards plus counted credits minus every annual fee in that wallet — and a single-owner wallet is that person's cards PLUS the joint ones, because either of you can hold a joint card. Hidden when only one person holds cards, or when merging doesn't win."
+                  label="Total credit line"
+                  value={formatCurrency(kpis.totalLine)}
+                  hint="Sum of every active card's current limit."
                 />
-              )}
-            </div>
-          )}
-
-          <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
-            {/* Consult before manage (2026-08-31 audit): the matrix and the keep/drop and
-                line-history answers lead; the roster and weights that parameterize them
-                follow. The header's "+ Add card" still jumps straight to the roster form. */}
-            {activeCards.length > 0 && activeCategories.length > 0 ? (
-              <RewardsMatrix
-                cards={activeCards}
-                categories={activeCategories}
-                rates={rates ?? []}
-                result={result}
-                weights={weights}
-                ownerNames={ownerNames}
-                busy={busy}
-                onCardClick={(card) => setCardParam(card.slug)}
-                onSaveRates={saveRates}
-              />
-            ) : (
-              !loading &&
-              !error && (
-                <div className="card span-12">
-                  <h2 className="eyebrow">Rewards matrix</h2>
-                  <div className="empty-note">
-                    The matrix appears once there is at least one active card and one category —
-                    add a card below
-                    {cards !== null && (categories ?? []).length === 0
-                      ? ' and seed the categories'
-                      : ''}
-                    .
-                  </div>
-                </div>
-              )
-            )}
-
-            {valueOption && !hasWeights && (
-              <div className="card span-12">
-                <h2 className="eyebrow">
-                  Is each card worth keeping? (est.)
-                  <InfoHint text="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. Needs at least one weighted category to say anything." />
-                </h2>
-                <p className="empty-note">
-                  No spend weights yet, so the optimizer values every card at $0 and nothing
-                  on this page is a verdict. In Categories &amp; weights below, edit each
-                  reward category and either pick its spending category — its trailing
-                  12-month spend becomes the weight, split evenly when several rows share
-                  one — or type an annual spend override. Rows with neither stay out of the
-                  $ math.
-                </p>
-              </div>
-            )}
-            {valueOption && hasWeights && (
-              <div className="card span-12">
-                <h2 className="eyebrow">
-                  Is each card worth keeping? (est.)
-                  <InfoHint text="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. A $0 bar means the rest of the lineup already catches that spend." />
-                </h2>
-                <EChart
-                  option={valueOption}
-                  height={Math.max(140, valueRows.length * 34 + 70)}
-                  ariaLabel="Horizontal bars of each card's estimated net annual value"
-                  animateEntrance={!fromCache}
+                {/* A dash, not "$0.00/yr", until at least one category has a weight — a
+                    zero here would be the absence of setup wearing the costume of a figure. */}
+                <StatTile
+                  label="Optimal rewards (est.)"
+                  value={hasWeights ? `${formatCurrency(kpis.optimal)}/yr` : '—'}
+                  hint={
+                    hasWeights
+                      ? "What the whole lineup earns per year if every weighted category goes on its best card. An estimate from your spend weights — actual card usage isn't tracked."
+                      : 'No category has a spend weight yet, so there is nothing to add up. Map each reward category to a spending category or type an annual spend in Categories & weights below.'
+                  }
                 />
-                {droppable.length > 0 && (
-                  <p className="drill-hint">
-                    Droppable on these numbers: {droppable.join(', ')} — zero or negative net value
-                    after fees.
-                    {unweightedCount > 0 &&
-                      ` Excludes ${unweightedCount} unweighted ${
-                        unweightedCount === 1 ? 'category' : 'categories'
-                      }.`}
-                  </p>
+                <StatTile
+                  label="Net after fees (est.)"
+                  value={hasWeights ? `${formatCurrency(kpis.net)}/yr` : '—'}
+                  hint={
+                    hasWeights
+                      ? 'Optimal rewards plus counted credits minus annual fees, across active cards.'
+                      : 'Needs spend weights first — without them this would just be credits minus fees.'
+                  }
+                />
+                <StatTile
+                  label="Active cards"
+                  value={String(kpis.count)}
+                  hint="Archived cards keep their history but sit outside the matrix and the math."
+                />
+                {/* ABSENT rather than zero when it has nothing honest to say (spec §6): one
+                    person owning every card has no merge to price, and fees can make the
+                    merge genuinely lose. */}
+                {advantage !== null && (
+                  <StatTile
+                    label="Household wallet advantage"
+                    value={`${formatCurrency(advantage)}/yr`}
+                    delta="beats the best single wallet"
+                    tone="positive"
+                    hint="Both wallets are priced the same way — optimal rewards plus counted credits minus every annual fee in that wallet — and a single-owner wallet is that person's cards PLUS the joint ones, because either of you can hold a joint card. Hidden when only one person holds cards, or when merging doesn't win."
+                  />
                 )}
               </div>
             )}
 
-            <div className="card span-12">
-              <h2 className="eyebrow">
-                Credit line history
-                <InfoHint text="Each card's limit as a step line — level between changes, stepping at each dated event — plus the total line across active cards." />
-              </h2>
-              {lineOption ? (
-                <EChart
-                  option={lineOption}
-                  height={300}
-                  ariaLabel="Step chart of credit limits over time per card, with the total"
-                  animateEntrance={!fromCache}
+            {/* No `loading-dim` here any more — the frame dims the whole body while it revalidates. */}
+            <div className="card-grid">
+              {/* Consult before manage (2026-08-31 audit): the matrix and the keep/drop and
+                  line-history answers lead; the roster and weights that parameterize them
+                  follow. The header's "+ Add card" still jumps straight to the roster form. */}
+              {activeCards.length > 0 && activeCategories.length > 0 ? (
+                <RewardsMatrix
+                  cards={activeCards}
+                  categories={activeCategories}
+                  rates={rates ?? []}
+                  result={result}
+                  weights={weights}
+                  ownerNames={ownerNames}
+                  busy={busy}
+                  onCardClick={(card) => setCardParam(card.slug)}
+                  onSaveRates={saveRates}
                 />
               ) : (
-                !loading && (
-                  <div className="empty-note">
-                    No limit history yet — open a card's details and add its opening credit line.
+                !loading &&
+                !error && (
+                  <div className="card span-12">
+                    <h2 className="eyebrow">Rewards matrix</h2>
+                    <div className="empty-note">
+                      The matrix appears once there is at least one active card and one category —
+                      add a card below
+                      {cards !== null && (categories ?? []).length === 0
+                        ? ' and seed the categories'
+                        : ''}
+                      .
+                    </div>
                   </div>
                 )
               )}
+
+              {valueOption && !hasWeights && (
+                <div className="card span-12">
+                  <h2 className="eyebrow">
+                    Is each card worth keeping? (est.)
+                    <InfoHint text="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. Needs at least one weighted category to say anything." />
+                  </h2>
+                  <p className="empty-note">
+                    No spend weights yet, so the optimizer values every card at $0 and nothing
+                    on this page is a verdict. In Categories &amp; weights below, edit each
+                    reward category and either pick its spending category — its trailing
+                    12-month spend becomes the weight, split evenly when several rows share
+                    one — or type an annual spend override. Rows with neither stay out of the
+                    $ math.
+                  </p>
+                </div>
+              )}
+              {valueOption && hasWeights && (
+                <div className="card span-12">
+                  <h2 className="eyebrow">
+                    Is each card worth keeping? (est.)
+                    <InfoHint text="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. A $0 bar means the rest of the lineup already catches that spend." />
+                  </h2>
+                  <EChart
+                    option={valueOption}
+                    height={Math.max(140, valueRows.length * 34 + 70)}
+                    ariaLabel="Horizontal bars of each card's estimated net annual value"
+                    animateEntrance={!fromCache}
+                  />
+                  {droppable.length > 0 && (
+                    <p className="drill-hint">
+                      Droppable on these numbers: {droppable.join(', ')} — zero or negative net value
+                      after fees.
+                      {unweightedCount > 0 &&
+                        ` Excludes ${unweightedCount} unweighted ${
+                          unweightedCount === 1 ? 'category' : 'categories'
+                        }.`}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="card span-12">
+                <h2 className="eyebrow">
+                  Credit line history
+                  <InfoHint text="Each card's limit as a step line — level between changes, stepping at each dated event — plus the total line across active cards." />
+                </h2>
+                {lineOption ? (
+                  <EChart
+                    option={lineOption}
+                    height={300}
+                    ariaLabel="Step chart of credit limits over time per card, with the total"
+                    animateEntrance={!fromCache}
+                  />
+                ) : (
+                  !loading && (
+                    <div className="empty-note">
+                      No limit history yet — open a card's details and add its opening credit line.
+                    </div>
+                  )
+                )}
+              </div>
+
+              {cards !== null && (
+                <CardsPanel
+                  cards={cards}
+                  accounts={accounts}
+                  people={orderedPeople}
+                  onChanged={load}
+                />
+              )}
+
+              {categories !== null && (
+                <CategoriesPanel
+                  categories={categories}
+                  cards={cards ?? []}
+                  spendingCategories={spendingCategories}
+                  suggested={suggested}
+                  onChanged={load}
+                />
+              )}
             </div>
-
-            {cards !== null && (
-              <CardsPanel
-                cards={cards}
-                accounts={accounts}
-                people={orderedPeople}
-                onChanged={load}
-              />
-            )}
-
-            {categories !== null && (
-              <CategoriesPanel
-                categories={categories}
-                cards={cards ?? []}
-                spendingCategories={spendingCategories}
-                suggested={suggested}
-                onChanged={load}
-              />
-            )}
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </PageFrame>
     </div>
   )
 }

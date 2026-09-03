@@ -7,16 +7,5 @@
   font-family: inherit;
 }
 
-/* The owner chips sit above the tiles, mirroring NetWorthPage's `.networth-owner-row`
-   exactly — same gap, same wrap, same flattened eyebrow — so the two pages' scope rows
-   read as one control. */
-.cards-owner-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
-}
-.cards-owner-row .eyebrow {
-  margin: 0;
-}
+/* The owner chips moved into the shared sticky scope row (2026-09-03 spec §6), so this
+   page no longer styles a row of its own — `.page-frame-scope` in shell.css owns it. */
