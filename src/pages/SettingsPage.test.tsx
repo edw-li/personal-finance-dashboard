@@ -424,18 +424,59 @@ describe('SettingsPage — app settings', () => {
     expect(screen.queryByText(SAVED_NOTE)).toBeNull()
   })
 
-  it('banners a failed load and refetches on Retry', async () => {
-    vi.mocked(fetchAppSettings)
-      .mockRejectedValueOnce(new ApiError('settings unavailable', 503))
-      .mockResolvedValue(SETTINGS)
+  it('ghosts the page through the frame while the FIRST load is in flight', async () => {
+    const gate = deferred<AppSettingsOut>()
+    vi.mocked(fetchAppSettings).mockReturnValue(gate.promise)
     renderPage()
 
+    // The frame owns the title row and the lifecycle now: what used to be a lone "Loading…"
+    // paragraph is the skeleton's visually-hidden status line over three ghost cards.
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
+    expect(screen.getByText('Loading…')).toBeTruthy()
+    expect(document.querySelectorAll('.page-skeleton .card')).toHaveLength(3)
+    expect(screen.queryByLabelText('ESPP ticker')).toBeNull()
+
+    gate.resolve(SETTINGS)
+    expect(await screen.findByLabelText('ESPP ticker')).toBeTruthy()
+    expect(document.querySelector('.page-skeleton')).toBeNull()
+  })
+
+  it('offers Retry on the first-failure banner, under a name of its own', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    renderPage()
+
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain('settings unavailable')
+    // Bare: "Showing earlier data" would be a claim about cards that never arrived.
+    expect(banner.textContent).not.toContain('Showing earlier data')
+    // Named for the fetch it repeats, because the cards below own Retry buttons of their
+    // own once they are on screen (SystemCard, Limits, Assistant).
+    const retry = screen.getByRole('button', { name: 'Retry loading settings' })
+    expect(banner.contains(retry)).toBe(true)
+    expect(retry.textContent).toBe('Retry')
+  })
+
+  it('banners a failed load and refetches on Retry', async () => {
+    const second = deferred<AppSettingsOut>()
+    vi.mocked(fetchAppSettings)
+      .mockRejectedValueOnce(new ApiError('settings unavailable', 503))
+      .mockReturnValue(second.promise)
+    renderPage()
+
+    // The frame is ready (the Appearance card needs no network), so the failure arrives as
+    // a plain banner above the grid — nothing is on screen for it to be stale over.
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // A FIRST load that failed knows nothing about the stored settings, and a form seeded
     // with blanks would offer to save them (PortfolioPage's null-holdings rule).
     expect(screen.queryByLabelText('ESPP ticker')).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading settings' }))
+    // The retry takes the error with it, so the frame drops back to its skeleton: a banner
+    // left standing over a page that is trying again says nothing is happening.
+    expect(screen.getByText('Loading…')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    second.resolve(SETTINGS)
     expect(await screen.findByLabelText('ESPP ticker')).toBeTruthy()
     expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2)
     expect(swrBox().value).toBe('4.5')
@@ -832,20 +873,24 @@ describe('SettingsPage — appearance card', () => {
     const appearance = await screen.findByRole('region', { name: 'Appearance' })
     // DIRECTLY after, not merely somewhere below: appearance closes the pair of cards about
     // this browser and this login, ahead of the management cards that own fetches of their
-    // own. It owns no fetch, so nothing but the page's loadedOnce gate holds it back.
+    // own. Nothing gates it: it sits BETWEEN the page's two loadedOnce blocks, in that seat.
     const password = screen.getByRole('heading', { name: /^Password/ }).closest('section')
     expect(password).not.toBeNull()
     expect(password?.nextElementSibling).toBe(appearance)
   })
 
-  it('offers no Appearance card when the settings load failed', async () => {
+  it('keeps the Appearance card when the settings load failed', async () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
     expect(await screen.findByText('settings unavailable')).toBeTruthy()
-    // One grid, one gate: the accepted cost of putting a fetch-less card in the same column
-    // as the ones that need the API (SettingsPage.tsx says so at the call site).
-    expect(screen.queryByRole('region', { name: 'Appearance' })).toBeNull()
+    // It owns no fetch, so it sits OUTSIDE the loadedOnce gate the other cards share: theme
+    // and density — and the palette's #appearance jump — still work when the API is
+    // unreachable, which is one of the moments a reader most wants the light theme back.
+    expect(screen.getByRole('region', { name: 'Appearance' })).toBeTruthy()
+    expect(document.getElementById('appearance')).not.toBeNull()
+    // The cards that DO need the API are still gone.
+    expect(screen.queryByLabelText('Workbook (.xlsx)')).toBeNull()
   })
 })
 
