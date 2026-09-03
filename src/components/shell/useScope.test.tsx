@@ -1,9 +1,23 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
+import { useEffect, useRef } from 'react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SCOPE_KEY, useScope, type ScopeUses } from './useScope'
+import { SCOPE_KEY, useScope, type Scope, type ScopeUses } from './useScope'
 
-function Probe({ uses }: { uses: ScopeUses }) {
+/** A Plan 2/3-shaped consumer: a CHILD that picks a month from its own effect on arrival.
+ *  Child effects run before the parent's, so this write is parked before useScope's own
+ *  effects have run at all — the exact commit ordering that used to lose it. */
+function MonthOnMount({ setScope }: { setScope: (partial: Partial<Scope>) => void }) {
+  // Held in a ref so the mount-only effect keeps the arrival-render setter instead of
+  // re-firing every time setScope's identity follows the URL.
+  const ref = useRef(setScope)
+  useEffect(() => {
+    ref.current({ month: '2026-02-01' })
+  }, [])
+  return null
+}
+
+function Probe({ uses, childWritesMonth = false }: { uses: ScopeUses; childWritesMonth?: boolean }) {
   const { scope, setScope } = useScope(uses)
   const location = useLocation()
   return (
@@ -23,16 +37,33 @@ function Probe({ uses }: { uses: ScopeUses }) {
       >
         owner 2 then ytd
       </button>
+      <button
+        onClick={() => {
+          setScope({ owner: 2 })
+          setScope({ owner: 2 })
+        }}
+      >
+        owner 2 twice
+      </button>
+      {childWritesMonth ? <MonthOnMount setScope={setScope} /> : null}
     </div>
   )
 }
 
-function mount(entry: string, uses: ScopeUses = { owner: true, range: true, month: true }) {
-  return render(
+function mount(
+  entry: string,
+  uses: ScopeUses = { owner: true, range: true, month: true },
+  childWritesMonth = false,
+) {
+  const tree = (u: ScopeUses) => (
     <MemoryRouter initialEntries={[entry]}>
-      <Probe uses={uses} />
-    </MemoryRouter>,
+      <Probe uses={u} childWritesMonth={childWritesMonth} />
+    </MemoryRouter>
   )
+  const view = render(tree(uses))
+  // Re-render the SAME hook instance with a different `uses` — a page declaring another key,
+  // which is the only way to ask for normalization again without moving the URL.
+  return { ...view, setUses: (u: ScopeUses) => view.rerender(tree(u)) }
 }
 
 beforeEach(() => localStorage.clear())
@@ -111,5 +142,28 @@ describe('useScope', () => {
     act(() => screen.getByText('joint').click())
     expect(url()).toContain('owner=joint')
     expect(scope().startsWith('joint|')).toBe(true)
+  })
+
+  it('a child effect writing month on arrival is not clobbered by normalization', () => {
+    mount('/net-worth', { owner: true, range: true, month: true }, true)
+    // The child's month survives AND arrival normalization still fills owner and range.
+    expect(url()).toBe('/net-worth?month=2026-02&owner=all&range=1y')
+    expect(scope()).toBe('null|1y|2026-02-01')
+  })
+
+  it('a same-tick no-op re-pick writes once and does not wedge later normalization', () => {
+    const view = mount('/net-worth?owner=all', { owner: true })
+    act(() => screen.getByText('owner 2 twice').click())
+    expect(url()).toBe('/net-worth?owner=2') // the identical second pick adds nothing
+
+    localStorage.clear()
+    act(() => screen.getByText('owner 2 twice').click()) // now BOTH picks are no-ops
+    expect(url()).toBe('/net-worth?owner=2')
+    // A deliberate re-pick is still remembered even though nothing was written to the URL.
+    expect(JSON.parse(localStorage.getItem(SCOPE_KEY) ?? '{}')).toEqual({ owner: 2 })
+
+    // No phantom pending write is left behind, so the next declared key still normalizes.
+    view.setUses({ owner: true, range: true })
+    expect(url()).toBe('/net-worth?owner=2&range=1y')
   })
 })

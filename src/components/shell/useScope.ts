@@ -66,7 +66,7 @@ export function readMemory(): ScopeMemory {
     // Storage is user-writable and survives schema changes — validate it with the same
     // predicates the URL goes through rather than trusting whatever is on disk.
     if (record.owner === null || record.owner === 'joint' || isPersonId(record.owner)) {
-      memory.owner = record.owner as OwnerScope
+      memory.owner = record.owner
     }
     const range = typeof record.range === 'string' ? parseRange(record.range) : undefined
     if (range !== undefined) memory.range = range
@@ -96,13 +96,21 @@ export function useScope(uses: ScopeUses = {}): {
   // react-router's setter — functional form included — hands back the RENDER's params, not the
   // live URL, so two setScope calls in one tick would each start from the same snapshot and the
   // second would drop the first's key. The ref carries the uncommitted params until the URL
-  // catches up. Declared before the normalization effect so it is cleared first each commit.
-  const pendingRef = useRef<URLSearchParams | null>(null)
+  // catches up: `base` is the URL the write was computed from, `next` is what it will become.
+  const pendingRef = useRef<{ base: string; next: URLSearchParams } | null>(null)
   useEffect(() => {
-    pendingRef.current = null
+    // Landed (the URL is what we wrote) or superseded (the URL moved elsewhere): either way the
+    // ref is no longer ahead of the URL. Only "URL still at the base" means in flight — which
+    // includes a write a CHILD effect parked earlier in this same commit, since child effects run
+    // before ours. An unconditional clear here would erase that write and normalization, building
+    // `next` from the stale params, would then replace it away.
+    const pending = pendingRef.current
+    if (pending && searchParams.toString() !== pending.base) pendingRef.current = null
   }, [searchParams])
 
   const scope = useMemo<Scope>(() => {
+    // Memory is a one-shot fallback for the keys the URL left empty, not a subscription to
+    // another tab's edits — hence the raw-value-only dep list below.
     const memory = readMemory()
     const owner = parseOwner(rawOwner)
     const range = parseRange(rawRange)
@@ -111,8 +119,6 @@ export function useScope(uses: ScopeUses = {}): {
       range: range !== undefined ? range : (memory.range ?? DEFAULT_RANGE),
       month: parseMonth(rawMonth) ?? null,
     }
-    // Memory is re-read only when a raw URL value changes: the URL is the truth and storage is
-    // a one-shot fallback for the keys it left empty, not a subscription to another tab's edits.
   }, [rawOwner, rawRange, rawMonth])
 
   // Arrival normalization: a page that USES a key gets it written into the URL when it is
@@ -142,14 +148,15 @@ export function useScope(uses: ScopeUses = {}): {
       }
     }
     if (changed) {
-      pendingRef.current = next
+      pendingRef.current = { base: searchParams.toString(), next }
       setSearchParams(next, { replace: true })
     }
   }, [uses.owner, uses.range, uses.month, rawOwner, rawRange, rawMonth, scope, searchParams, setSearchParams])
 
   const setScope = useCallback(
     (partial: Partial<Scope>) => {
-      const next = new URLSearchParams(pendingRef.current ?? searchParams)
+      const seed = pendingRef.current?.next ?? searchParams
+      const next = new URLSearchParams(seed)
       const memory = readMemory()
       if (partial.owner !== undefined) {
         next.set('owner', ownerToParam(partial.owner))
@@ -167,8 +174,14 @@ export function useScope(uses: ScopeUses = {}): {
         const month = parseMonth(partial.month)
         if (month !== undefined) next.set('month', month.slice(0, 7))
       }
+      // Memory records a deliberate pick even when the URL already agrees, so it stays ahead of
+      // the no-op check below.
       if (partial.owner !== undefined || partial.range !== undefined) writeMemory(memory)
-      pendingRef.current = next
+      // Nothing to write: no location.key churn, and — the load-bearing half — no phantom
+      // pending write whose base equals the URL, which would never clear and would wedge
+      // normalization for the life of the page.
+      if (next.toString() === seed.toString()) return
+      pendingRef.current = { base: searchParams.toString(), next }
       setSearchParams(next, { replace: true })
     },
     [searchParams, setSearchParams],
