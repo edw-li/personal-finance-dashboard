@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -78,6 +79,9 @@ class MonthUpsertResult(BaseModel):
     created: int
     updated: int
     unchanged: int
+    # The change batch this save wrote (2026-09-03 data-lifecycle spec §9) — None until the
+    # router records one, and None when nothing changed (an all-unchanged PUT logs nothing).
+    batch_id: UUID | None = None
 
 
 class MonthBalancesOut(BaseModel):

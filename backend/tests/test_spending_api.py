@@ -195,6 +195,7 @@ async def test_put_spending_month_upserts_and_net_pay_optional(auth_client, db):
         "unchanged": 0,
         "net_pay_set": True,
         "net_pay_cleared": False,
+        "batch_id": None,
     }
     read = (await auth_client.get(put)).json()
     assert read["net_pay"] == "9000.01"  # HALF_UP
@@ -214,6 +215,7 @@ async def test_put_spending_month_upserts_and_net_pay_optional(auth_client, db):
         "unchanged": 1,
         "net_pay_set": False,
         "net_pay_cleared": False,
+        "batch_id": None,
     }
     assert (await auth_client.get(put)).json()["net_pay"] == "9000.01"
 

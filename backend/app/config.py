@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     nvidia_ca_bundle: str | None = None
     scheduler_enabled: bool = True
 
+    # ── Data lifecycle (2026-09-03 spec §8) ────────────────────────────────────────
+    # Where the nightly logical snapshots and pre-restore points live. Relative to the
+    # process cwd on a dev box (./data, gitignored); prod mounts the finance-data volume at
+    # /data and sets DATA_DIR=/data (docker-compose.prod.yml).
+    data_dir: str = "./data"
+    # Mirrors scheduler_enabled: the nightly snapshot job is added only when true (off in
+    # tests — conftest pins it).
+    snapshot_enabled: bool = True
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

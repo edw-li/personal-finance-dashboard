@@ -85,8 +85,18 @@ async def client(db):
 @pytest.fixture(scope="session", autouse=True)
 def _no_scheduler_in_tests():
     # ASGITransport never runs the lifespan today; pin the invariant for any future
-    # TestClient/LifespanManager use (Task 7 review M7).
+    # TestClient/LifespanManager use (Task 7 review M7). The snapshot job rides the same
+    # scheduler and is pinned off the same way (2026-09-03 data-lifecycle spec §8).
     settings.scheduler_enabled = False
+    settings.snapshot_enabled = False
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path, monkeypatch):
+    # Snapshots and restore points are FILES (2026-09-03 data-lifecycle spec §8); every test
+    # gets its own empty tree so one test's ZIPs never read as another's, and nothing lands
+    # in ./data. Restored by monkeypatch; settings is the module singleton the code reads.
+    monkeypatch.setattr(settings, "data_dir", str(tmp_path / "data"))
 
 
 @pytest.fixture(autouse=True)

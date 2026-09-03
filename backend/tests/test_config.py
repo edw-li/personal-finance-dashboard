@@ -47,3 +47,13 @@ def test_assistant_config_defaults(monkeypatch):
     assert s.nvidia_api_key is None
     assert s.nvidia_base_url == "https://integrate.api.nvidia.com/v1"
     assert s.nvidia_ca_bundle is None
+
+
+def test_lifecycle_config_defaults(monkeypatch):
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    monkeypatch.delenv("SNAPSHOT_ENABLED", raising=False)
+    s = Settings(_env_file=None)
+    # ./data relative to the process cwd (backend/ in start.sh); prod mounts a volume at
+    # /data and sets DATA_DIR=/data in docker-compose.prod.yml.
+    assert s.data_dir == "./data"
+    assert s.snapshot_enabled is True

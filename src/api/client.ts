@@ -74,6 +74,9 @@ const MUTATION_FAMILIES: [prefix: string, families: string[]][] = [
   ['/comp', ['paycheck', 'comp', 'espp', 'taxes', 'projection', 'calendar', 'overview']],
   ['/espp', ['paycheck', 'comp', 'espp', 'taxes', 'projection', 'calendar', 'overview']],
   ['/limits', ['paycheck', 'comp', 'espp', 'taxes', 'projection', 'calendar', 'overview']],
+  // Preferences (2026-09-03 data-lifecycle spec §10): the shell caches its prefs GET under
+  // shell:prefs; a PATCH must not cost every page its instant paint.
+  ['/prefs', ['shell']],
 ]
 
 /** Targeted invalidation for a mutation's path. A path NOT in the map above — /household,
@@ -115,7 +118,29 @@ export async function apiReadOnly<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: JSON.stringify(body) })
 }
 
+/** api() plus the response headers — for the two month DELETEs, whose 204 carries the
+ *  change batch in `X-Change-Batch` (2026-09-03 data-lifecycle spec §9). Same invalidation
+ *  rule as api(): any non-GET drops the families its path can have moved. */
+export async function apiWithHeaders<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<{ data: T; headers: Headers }> {
+  const method = (options.method ?? 'GET').toUpperCase()
+  try {
+    return await requestWithHeaders<T>(path, options)
+  } finally {
+    if (method !== 'GET') invalidateForMutation(path)
+  }
+}
+
 async function request<T>(path: string, options: RequestInit): Promise<T> {
+  return (await requestWithHeaders<T>(path, options)).data
+}
+
+async function requestWithHeaders<T>(
+  path: string,
+  options: RequestInit,
+): Promise<{ data: T; headers: Headers }> {
   const headers: Record<string, string> = {
     // FormData bodies must NOT get a manual Content-Type: the browser writes
     // multipart/form-data with its boundary; a hand-set value breaks the upload.
@@ -167,6 +192,9 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
   // not by accident: the mount-time identity check would otherwise renew on a bare page
   // load, and the first data fetch behind it renews anyway.
   if (token !== null && !path.startsWith('/auth/')) afterResponse?.()
-  if (res.status === 204) return undefined as T
-  return (await res.json()) as T
+  // Older fetch stubs in this repo's tests build plain objects with no `headers`; a real
+  // Response always has one. (Named resHeaders because `headers` above is the REQUEST's.)
+  const resHeaders = res.headers ?? new Headers()
+  if (res.status === 204) return { data: undefined as T, headers: resHeaders }
+  return { data: (await res.json()) as T, headers: resHeaders }
 }

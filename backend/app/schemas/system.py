@@ -30,17 +30,27 @@ class BackupStatusOut(BaseModel):
     # du -h's human string ("1.2M") exactly as the script recorded it — a label to echo
     # verbatim, not bytes to do math on (spec §3's example shape).
     size: str
+    # 2026-09-03 data-lifecycle spec §8: the verify phase's fields. ALL optional so the
+    # marker last night's script wrote still parses; None means "an older script wrote this".
+    size_bytes: int | None = None
+    encrypted: bool | None = None
+    retention_days: int | None = None
+    verified: bool | None = None
+    verified_at: datetime | None = None
+    row_counts: dict[str, int] | None = None
+    verify_error: str | None = None
 
 
 class BackupRunOut(BaseModel):
     """One backup_db.sh run from app_settings['backup_runs'] — a FLAT jsonb array (the
     shell writer's no-envelope rule, same as BackupStatusOut). `object` is absent on
-    failed runs; `error` on successful ones."""
+    failed runs; `error` on successful ones; `verified` on runs before the verify phase."""
 
     at: datetime
     ok: bool
     object: str | None = None
     error: str | None = None
+    verified: bool | None = None
 
 
 class RefreshRunOut(BaseModel):

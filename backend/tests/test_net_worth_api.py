@@ -280,6 +280,7 @@ async def test_put_month_creates_snapshot_and_upserts(auth_client, db):
         "created": 2,
         "updated": 0,
         "unchanged": 0,
+        "batch_id": None,
     }
 
     read = (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()
@@ -300,6 +301,7 @@ async def test_put_month_creates_snapshot_and_upserts(auth_client, db):
         "created": 0,
         "updated": 1,
         "unchanged": 0,
+        "batch_id": None,
     }
     read = (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()
     assert read["recorded_on"] == "2026-05-14"  # untouched: field wasn't sent

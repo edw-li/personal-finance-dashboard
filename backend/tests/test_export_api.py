@@ -9,9 +9,14 @@ import zipfile
 from datetime import date
 from decimal import Decimal
 
-from app.api.export import EXCLUDED_TABLES, EXPORTED_TABLES, REDACTED_ROWS
 from app.database import Base
 from app.models import Account, AccountBalance, AppSetting, NetWorthSnapshot
+from app.services.snapshot import (
+    EXCLUDED_TABLES,
+    EXPORTED_TABLES,
+    REDACTED_ROWS,
+    build_snapshot_zip,
+)
 
 EXPORT = "/api/v1/export/snapshot"
 
@@ -156,3 +161,35 @@ async def test_export_redacts_the_nvidia_api_key_row(auth_client, db):
     assert nested["tables"]["app_settings"] == [
         {"key": "assistant_default_model", "value": {"value": "kimi-k3"}}
     ]
+
+
+def test_export_pins_the_lifecycle_decisions():
+    # The three operational tables are NAMED exclusions with a reason (spec §6): a restore
+    # must be recorded in them, not replaced by them. Preferences are user data and export.
+    assert EXCLUDED_TABLES == frozenset({"users", "change_log", "lifecycle_runs"})
+    assert "user_preferences" in {table for _, table in EXPORTED_TABLES}
+
+
+async def test_service_and_endpoint_build_the_same_archive(auth_client, db):
+    # The extraction (spec §12 Phase 0) must be byte-identical below the timestamp: every
+    # CSV member equal, the manifest equal once exported_at is set aside, same member list.
+    account = Account(name="Café Fund", slug="cafe-fund", group="cash", sort_order=2)
+    db.add(account)
+    db.add(AppSetting(key="swr_pct", value={"value": "0.04"}))
+    await db.commit()
+    built = await build_snapshot_zip(db)
+    resp = await auth_client.get(EXPORT)
+    assert resp.status_code == 200, resp.text
+    ours = zipfile.ZipFile(io.BytesIO(built.payload))
+    theirs = zipfile.ZipFile(io.BytesIO(resp.content))
+    assert ours.namelist() == theirs.namelist()
+    for name in ours.namelist():
+        if name.startswith("csv/"):
+            assert ours.read(name) == theirs.read(name), name
+    manifest_a = json.loads(ours.read("manifest.json"))
+    manifest_b = json.loads(theirs.read("manifest.json"))
+    manifest_a.pop("exported_at")
+    manifest_b.pop("exported_at")
+    assert manifest_a == manifest_b
+    assert built.counts["accounts"] == 1 and built.counts["app_settings"] == 1
+    assert re.fullmatch(r"finance-export-\d{8}-\d{4}\.zip", built.filename)
