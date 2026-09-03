@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type {
   AllocationDimension,
@@ -491,6 +492,46 @@ it('keys the snapshot by owner — a chip flip is a cache MISS that re-arms the 
   )
 })
 
+// …and the other direction: coming BACK to a warm scope must leave them still. The peek
+// paints the cached payload during render and the revalidation returns the very same bytes,
+// so load()'s equality skip has to fire — which it only can while `shown` mirrors what was
+// actually APPLIED to the page. A ref the render-time peek cannot write goes stale here,
+// the skip misses, and the identical payload re-arms every chart.
+it('leaves the charts still when a chip flip returns to a warm scope', async () => {
+  vi.mocked(fetchHoldings).mockImplementation((scope) =>
+    Promise.resolve(scope === SAM.id ? EMPTY_HOLDINGS : holdingsOut()),
+  )
+  setSnapshot('portfolio:all', {
+    holdings: holdingsOut(),
+    securities: SECURITIES,
+    transactions: TRANSACTIONS,
+    dividends: DIVIDENDS,
+    dividendEvents: [],
+    industry: allocationOut('industry'),
+    byType: allocationOut('type'),
+    byAccount: allocationOut('account'),
+    sparklines: {},
+    history: HISTORY,
+    realized: REALIZED,
+    refreshStatus: STATUS,
+  })
+  const { container } = renderPage()
+  await waitFor(() => expect(fetchHoldings).toHaveBeenCalledWith(null))
+  await screen.findByRole('group', { name: 'Whose' })
+
+  // Sam is a cache miss, so his payload genuinely re-arms them (the pin above).
+  fireEvent.click(chip('Sam'))
+  await waitFor(() =>
+    expect(screen.getAllByTestId('echart')[0].getAttribute('data-animate')).toBe('true'),
+  )
+
+  fireEvent.click(chip('All'))
+  await waitFor(() => expect(vi.mocked(fetchHoldings)).toHaveBeenLastCalledWith(null))
+  // The dim lifting is that revalidation landing — .finally runs on every resolution.
+  await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+  expect(screen.getAllByTestId('echart')[0].getAttribute('data-animate')).toBe('false')
+})
+
 // ── Owner-switch stranding regression (2026-08-28 bug class, fixed on NetWorthPage
 // @9e20d15) ──────────────────────────────────────────────────────────────────────────────
 // The identical-payload revalidation skip must be judged against the RENDERED snapshot,
@@ -598,6 +639,21 @@ it('applies a revalidation that matches the cache but not the screen', async () 
   // shown = A ≠ B, so the guard must NOT fire and B's hero figure must reach the tile. A
   // cache-compared skip sees previous = B == B, early-returns, and strands the page on A.
   await waitFor(() => expect(heroValue()).toBe('$7,777.00'))
+})
+
+it('shows the alert alone on a failed first load and retries back into the skeleton', async () => {
+  vi.mocked(fetchHoldings).mockRejectedValue(new ApiError('Portfolio service down', 503))
+  const { container } = renderPage()
+  // No data behind it, so the frame shows the alert instead of a page of empty tables.
+  expect((await screen.findByRole('alert')).textContent).toContain('Portfolio service down')
+  expect(screen.queryByText('Portfolio value')).toBeNull()
+
+  // A retry that leaves the error set would keep this alert on screen for its whole
+  // flight; clearing it is what returns the frame to the ghost layout.
+  vi.mocked(fetchHoldings).mockReturnValue(new Promise(() => {}))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(container.querySelector('.page-skeleton')).not.toBeNull()
 })
 
 // Pinned verbatim: this sentence is the page's only defence against reading the weekly
@@ -731,7 +787,7 @@ describe('PortfolioPage — shell scope', () => {
     expect(document.querySelector('.portfolio-owner-row')).toBeNull()
   })
 
-  it('an owner chip in the scope row rewrites the URL, closes the drill-in and refetches', async () => {
+  it('an owner chip in the scope row rewrites the URL and refetches', async () => {
     renderPage('/portfolio')
     fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
     await waitFor(() => expect(vi.mocked(fetchHoldings)).toHaveBeenLastCalledWith(SAM.id))

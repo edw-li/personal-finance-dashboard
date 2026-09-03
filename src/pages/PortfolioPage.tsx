@@ -249,17 +249,21 @@ export default function PortfolioPage() {
   // switch (the previous scope's panels are still up while the next scope's key is warm),
   // and skipping on the cache stranded the page on the previous scope forever (the
   // 2026-08-28 bug NetWorthPage fixed @9e20d15 — no cache-compared skips, house rule).
+  // It is a MIRROR of `applied` below rather than something callers write: the scope peek
+  // applies a snapshot from render, where mutating a ref would be an impure render, so the
+  // truth travels as state and lands in the ref from an effect.
   const shown = useRef<PortfolioSnapshot | null>(cached ?? null)
+  const [applied, setApplied] = useState<PortfolioSnapshot | null>(cached ?? null)
 
   // The ONLY place a snapshot reaches the page — load()'s apply and the scope peek below
-  // both come through here; add new PortfolioSnapshot slots HERE. Setters only: the peek
-  // runs DURING render (the adjust-during-render idiom), where mutating `shown` would be
-  // an impure render — so the ref write lives in applySnapshot, one level up, which only
-  // load()'s continuation calls.
+  // both come through here; add new PortfolioSnapshot slots HERE. Setters only, because the
+  // peek runs DURING render (the adjust-during-render idiom): `setApplied` records what the
+  // page now shows and the effect under it carries that into `shown`.
   // useCallback with an empty dep list: useState setters are identity-stable, so this
   // stays stable and `load` below keeps changing identity ONLY with the scope (a fresh
   // identity per render would re-fire the mount effect on every render).
   const applySnapshotState = useCallback((snap: PortfolioSnapshot, fromCache: boolean) => {
+    setApplied(snap)
     setFromCache(fromCache)
     setHoldings(snap.holdings)
     setSecurities(snap.securities)
@@ -275,18 +279,13 @@ export default function PortfolioPage() {
     setRefreshStatus(snap.refreshStatus)
   }, [])
 
-  // Promise-continuation half: records what the page is now SHOWING for load()'s equality
-  // skip. A render-time peek cannot come through here, so `shown` may lag one scope behind
-  // a peeked switch — deliberately the conservative direction: the skip then simply does
-  // not fire and the identical payload is re-applied, where the reverse (a skip judged on
-  // stale truth) is the 9e20d15 stranding bug.
-  const applySnapshot = useCallback(
-    (snap: PortfolioSnapshot, fromCache: boolean) => {
-      shown.current = snap
-      applySnapshotState(snap, fromCache)
-    },
-    [applySnapshotState],
-  )
+  // The mirror, from a committed render rather than from render itself. Every apply — the
+  // peek's included — lands here before the next load() resolves, so the equality skip below
+  // is always judged against what is genuinely on screen: a switch back to a warm scope
+  // paints from cache and its identical revalidation is skipped, leaving the charts still.
+  useEffect(() => {
+    shown.current = applied
+  }, [applied])
 
   // URL → page, adopted with the adjust-during-render idiom (CategoriesPanel's precedent),
   // so an owner switch never puts a setState inside an effect body. `load` keeps `owner` in
@@ -350,13 +349,13 @@ export default function PortfolioPage() {
         // against the RENDERED snapshot, never the cache (see `shown`).
         if (shown.current !== null && JSON.stringify(shown.current) === JSON.stringify(snapshot))
           return
-        applySnapshot(snapshot, false)
+        applySnapshotState(snapshot, false)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
         setError(err instanceof ApiError ? err.message : 'Failed to load portfolio data')
       })
-  }, [owner, applySnapshot])
+  }, [owner, applySnapshotState])
 
   // Panel mutations refetch WITHOUT unmounting the panels (a spinner swap would throw
   // away the form the user is typing in) — the body dims instead.
@@ -553,7 +552,12 @@ export default function PortfolioPage() {
           error,
           busy: reloading,
           fromCache,
-          retry: reload,
+          // Clearing the error is what returns the frame to the skeleton: leaving it set
+          // would keep the alert on screen, unchanged, for the whole retry.
+          retry: () => {
+            setError(null)
+            reload()
+          },
         }}
         skeleton={{
           tiles: 4,
