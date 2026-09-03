@@ -1217,6 +1217,10 @@ export interface ScopeBarProps {
   owner?: boolean | { joint: boolean; all?: boolean }
   range?: boolean
   month?: MonthScopeProps
+  /** Any value; when it changes the household and coverage fetches re-run. Pages that write
+   *  balances/spending while the bar stays mounted (the wizard after a save) bump it so the
+   *  just-saved month's chip fills without leaving the page. */
+  revalidate?: unknown
 }
 
 const RANGE_OPTIONS: { value: RangePreset; label: string }[] = [
