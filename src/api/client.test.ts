@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, apiReadOnly, expireSession, setAfterResponseHook, setToken } from './client'
+import {
+  api,
+  ApiError,
+  apiReadOnly,
+  apiWithHeaders,
+  expireSession,
+  setAfterResponseHook,
+  setToken,
+} from './client'
 import { clearSnapshots, getSnapshot, setSnapshot } from './snapshotCache'
 
 function mockFetchOk(body: unknown = {}) {
@@ -320,5 +328,84 @@ describe('session plumbing', () => {
     mockFetchOk()
     await api('/net-worth/summary')
     expect(hook).not.toHaveBeenCalled()
+  })
+})
+
+describe('apiWithHeaders — the 204 + header reader', () => {
+  beforeEach(() => clearSnapshots())
+
+  it('returns the parsed body AND the response headers', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'X-Change-Batch': 'b-1' }),
+        json: async () => ({ month: '2026-09-01' }),
+      }),
+    )
+    const { data, headers } = await apiWithHeaders<{ month: string }>(
+      '/net-worth/months/2026-09-01',
+    )
+    expect(data.month).toBe('2026-09-01')
+    expect(headers.get('x-change-batch')).toBe('b-1')
+  })
+
+  it('hands back undefined data for a 204 but still the headers, and invalidates like api()', async () => {
+    setSnapshot('net-worth:all', 1)
+    setSnapshot('portfolio:all', 1)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 204,
+        headers: new Headers({ 'X-Change-Batch': 'b-2' }),
+        json: async () => {
+          throw new Error('no body')
+        },
+      }),
+    )
+    const { data, headers } = await apiWithHeaders<void>('/net-worth/months/2026-09-01', {
+      method: 'DELETE',
+    })
+    expect(data).toBeUndefined()
+    expect(headers.get('x-change-batch')).toBe('b-2')
+    expect(getSnapshot('net-worth:all')).toBeUndefined()
+    expect(getSnapshot('portfolio:all')).toBe(1)
+  })
+
+  it('tolerates a response object without headers (older fetch mocks)', async () => {
+    mockFetchOk({ ok: true })
+    const { headers } = await apiWithHeaders('/x')
+    expect(headers.get('x-change-batch')).toBeNull()
+  })
+})
+
+describe('api — preferences invalidation', () => {
+  beforeEach(() => clearSnapshots())
+
+  // A theme toggle PATCHes /prefs (debounced) several times a sitting; wiping every page
+  // snapshot for it would cost every page its instant paint. Only the shell family moves.
+  it('a PATCH to /prefs drops the shell family and nothing else', async () => {
+    setSnapshot('shell:prefs', 1)
+    setSnapshot('shell:coverage', 1)
+    setSnapshot('overview', 1)
+    setSnapshot('portfolio:all', 1)
+    mockFetchOk({ prefs: {} })
+    await api('/prefs', { method: 'PATCH', body: '{}' })
+    expect(getSnapshot('shell:prefs')).toBeUndefined()
+    expect(getSnapshot('shell:coverage')).toBeUndefined()
+    expect(getSnapshot('overview')).toBe(1)
+    expect(getSnapshot('portfolio:all')).toBe(1)
+  })
+
+  it('an undo and a restore still wipe everything (unmapped paths)', async () => {
+    setSnapshot('overview', 1)
+    mockFetchOk({})
+    await api('/activity/batches/b-1/undo', { method: 'POST' })
+    expect(getSnapshot('overview')).toBeUndefined()
+    setSnapshot('overview', 1)
+    await api('/import/snapshot?dry_run=false', { method: 'POST', body: new FormData() })
+    expect(getSnapshot('overview')).toBeUndefined()
   })
 })

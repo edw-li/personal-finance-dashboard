@@ -122,6 +122,8 @@ export interface MonthUpsertResult {
   created: number
   updated: number
   unchanged: number
+  /** The change batch this save wrote — null when nothing changed. */
+  batch_id?: string | null
 }
 
 export interface CategoryOut {
@@ -185,6 +187,8 @@ export interface SpendingUpsertResult {
   net_pay_set: boolean
   /** An explicit `net_pay: null` deleted the month's cashflow row (the blank-clears rider). */
   net_pay_cleared: boolean
+  /** The change batch this save wrote — null when nothing changed. */
+  batch_id?: string | null
 }
 
 export interface YearRollup {
@@ -460,6 +464,15 @@ export interface BackupStatus {
   object_key: string
   /** du -h's human string ("1.2M") exactly as backup_db.sh recorded it — not bytes. */
   size: string
+  /** Verify-phase fields (2026-09-03 data-lifecycle spec §8) — absent on markers an older
+   *  script wrote; `verified === false` carries `verify_error`. */
+  size_bytes?: number | null
+  encrypted?: boolean | null
+  retention_days?: number | null
+  verified?: boolean | null
+  verified_at?: string | null
+  row_counts?: Record<string, number> | null
+  verify_error?: string | null
 }
 
 export interface BackupRun {
@@ -468,6 +481,8 @@ export interface BackupRun {
   /** The uploaded object key — absent on failed runs. */
   object?: string | null
   error?: string | null
+  /** Absent on runs the script wrote before the verify phase. */
+  verified?: boolean | null
 }
 
 export interface RefreshRun {
@@ -1758,4 +1773,123 @@ export interface AssistantPreviewSection {
 
 export interface AssistantPreviewOut {
   sections: AssistantPreviewSection[]
+}
+
+// --- data lifecycle (2026-09-03 spec §7–§11) ---
+
+export interface RestoreSchema {
+  snapshot_head: string | null
+  server_head: string | null
+  compatible: boolean
+}
+
+export interface RestoreTableDiff {
+  current: number
+  incoming: number
+  /** Same canonical CSV sha256 on both sides. */
+  identical: boolean
+}
+
+// POST /import/snapshot[?dry_run=] and /import/snapshot/stored/{name}.
+export interface RestoreReport {
+  dry_run: boolean
+  applied: boolean
+  /** The snapshot's own export instant — the Restore card asks for its DATE to be typed. */
+  exported_at: string | null
+  schema: RestoreSchema
+  tables: Record<string, RestoreTableDiff>
+  preserved_settings: string[]
+  warnings: string[]
+  errors: string[]
+  restore_point: string | null
+  batch_id: string | null
+  run_id: number | null
+}
+
+// GET/POST /system/snapshots — the nightly stored ZIPs, newest first.
+export interface SnapshotEntry {
+  name: string
+  at: string
+  size_bytes: number
+  alembic_head: string | null
+  /** Head equals this server's — the only entries the Restore card offers to apply. */
+  restorable: boolean
+}
+
+export type ChangeSource = 'ui' | 'import' | 'restore' | 'scheduler' | 'repair' | 'undo'
+export type RunKind = 'import_xlsx' | 'restore' | 'snapshot' | 'restore_point' | 'undo'
+
+export interface ActivityBatch {
+  type: 'batch'
+  batch_id: string
+  at: string
+  source: ChangeSource
+  actor: string | null
+  label: string
+  month: string | null
+  rows: number
+  undoable: boolean
+  undone_by: string | null
+}
+
+export interface ActivityRun {
+  type: 'run'
+  run_id: number
+  at: string
+  kind: RunKind
+  ok: boolean
+  dry_run: boolean
+  filename: string | null
+  size_bytes: number | null
+  has_report: boolean
+}
+
+export type ActivityEntry = ActivityBatch | ActivityRun
+
+// GET /activity?limit=&before= — batches and runs interleaved, newest first.
+export interface ActivityPage {
+  entries: ActivityEntry[]
+  next_before: string | null
+}
+
+// GET /activity/runs/{id} — the stored report verbatim; narrow on run.kind.
+export interface ActivityRunDetail {
+  run: ActivityRun
+  report: Record<string, unknown> | null
+}
+
+export interface PrefEntry {
+  value: unknown
+  updated_at: string
+}
+
+// GET/PATCH /prefs — registered keys only, absent when unset.
+export interface PrefsOut {
+  prefs: Record<string, PrefEntry>
+}
+
+export type HealthSeverity = 'ok' | 'info' | 'warn' | 'error'
+
+export interface HealthFix {
+  kind: 'link' | 'action'
+  label: string
+  to?: string | null
+  /** 'delete_spending_month' (one per month in the check's `months`) | 'snapshot_now'. */
+  action?: string | null
+}
+
+export interface HealthCheck {
+  id: string
+  severity: HealthSeverity
+  title: string
+  detail: string
+  count: number
+  months: string[]
+  fix: HealthFix | null
+}
+
+// GET /system/health
+export interface HealthOut {
+  checked_at: string
+  checks: HealthCheck[]
 }
