@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
+import { compactMoney } from '../../charts/grammar'
 import { MARK_LINE_LABEL, MARK_LINE_STYLE } from '../../charts/markLine'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
@@ -8,6 +9,7 @@ import {
   BAND_SERIES,
   MEDIAN_SERIES,
   NET_WORTH_PROJECTION_SERIES,
+  netWorthProjectionCsv,
   netWorthProjectionOption,
   PROJECTION_SERIES,
   projectionCsv,
@@ -301,9 +303,10 @@ function readNw(option: EChartsOption | null) {
   expect(option).not.toBeNull()
   return option as unknown as {
     dataZoom: { type: string; startValue: number }[]
-    legend: { data: { name: string; icon?: string }[] }
+    legend: { type: string; selected?: Record<string, boolean>; data: { name: string; icon?: string }[] }
+    tooltip: { formatter: (p: unknown) => string }
     xAxis: { data: string[] }
-    yAxis: { type: string }
+    yAxis: { type: string; axisLabel: { formatter: unknown } }
     series: {
       name: string
       type: string
@@ -393,6 +396,39 @@ describe('netWorthProjectionOption', () => {
     expect(option.series[0].data).toEqual([NaN, 101000, 102010])
     expect(option.series[1].data[0]).toBeNaN()
     expect(option.series[1].data[1]).toBe(123456)
+  })
+})
+
+describe('netWorthProjectionOption — grammar', () => {
+  it('log money axis with compact ticks, focus on the trend, page legend picks', () => {
+    const option = readNw(
+      netWorthProjectionOption(HISTORY, FIT, '2026-08-01', 1, { selected: { 'Quadratic trend': false } }),
+    )
+    expect(option.yAxis).toMatchObject({ type: 'log' })
+    expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
+    expect(option.legend.type).toBe('plain')
+    expect(option.legend.selected).toEqual({ 'Quadratic trend': false })
+    expect((option.series[1] as { emphasis?: unknown }).emphasis).toEqual({ focus: 'series' })
+  })
+
+  it('F7: rows in series order, NaN gaps dropped', () => {
+    const option = readNw(netWorthProjectionOption(HISTORY, FIT, '2026-08-01', 1))
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: NET_WORTH_PROJECTION_SERIES[0], seriesType: 'scatter', axisValueLabel: 'Jun 2026', value: 100000, color: PALETTE[0] },
+        { seriesName: NET_WORTH_PROJECTION_SERIES[1], seriesType: 'line', value: Number.NaN, color: PALETTE[1] },
+      ]),
+    )
+    expect(parsed.rows.map((r) => [r.label, r.value])).toEqual([[NET_WORTH_PROJECTION_SERIES[0], '$100,000.00']])
+  })
+
+  it('exports history and the fitted trend over the extended axis', () => {
+    const csv = netWorthProjectionCsv(HISTORY, FIT, '2026-08-01', 1)
+    expect(csv.headers).toEqual(['Month', 'Net worth', 'Quadratic trend'])
+    expect(csv.rows).toHaveLength(15)
+    expect(csv.rows[0]).toEqual(['2026-06-01', '100000.00', '100000.00'])
+    expect(csv.rows[14]).toEqual(['2027-08-01', '', '123456.00'])
+    expect(netWorthProjectionCsv(HISTORY, null, '2026-08-01', 1).rows[0]).toEqual(['2026-06-01', '100000.00', ''])
   })
 })
 

@@ -18,7 +18,7 @@ import { timeZoom } from '../../charts/timeZoom'
 import { axisTooltip, swatch } from '../../charts/tooltip'
 import type { NetWorthTimeseries, ProjectionOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
+import { formatCurrency, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 import { monthSerial } from './polyTrend'
 import type { PolyTrendFit } from './polyTrend'
@@ -297,6 +297,19 @@ export function projectionOption(
 // Series names in series order — the measured months and the fitted extrapolation.
 export const NET_WORTH_PROJECTION_SERIES = ['Net worth', 'Quadratic trend'] as const
 
+/** The extended month axis both the option and the CSV walk: history, then every month to
+ *  the horizon end — a future-dated snapshot at or past the end just empties the continuation. */
+function projectionMonths(
+  history: Pick<NetWorthTimeseries, 'months'>,
+  startMonth: string,
+  years: number,
+): string[] {
+  const last = history.months[history.months.length - 1]
+  const end = addMonths(startMonth, years * 12)
+  const count = Math.max(0, monthSerial(end) - monthSerial(last))
+  return [...history.months, ...Array.from({ length: count }, (_, i) => addMonths(last, i + 1))]
+}
+
 /**
  * The sheet's "Net Worth over Time (Projected)": actual snapshots as blue dots, the
  * second-degree polynomial best-fit as a solid orange curve drawn over history AND the
@@ -310,43 +323,28 @@ export function netWorthProjectionOption(
   fit: PolyTrendFit | null,
   startMonth: string,
   years: number,
+  { selected }: { selected?: Record<string, boolean> } = {},
 ): EChartsOption | null {
   if (history.months.length < 2) return null
-  const last = history.months[history.months.length - 1]
-  const end = addMonths(startMonth, years * 12)
-  // A future-dated snapshot at or past the horizon end just empties the continuation.
-  const count = Math.max(0, monthSerial(end) - monthSerial(last))
-  const future = Array.from({ length: count }, (_, i) => addMonths(last, i + 1))
-  const months = [...history.months, ...future]
-  // The log axis below cannot place zero or below — such points become gaps (NaN keeps
-  // the arrays plain number[]; echarts treats NaN as an empty value), never lies.
+  const months = projectionMonths(history, startMonth, years)
+  // The log axis cannot place zero or below — such points become gaps (NaN keeps the arrays
+  // plain number[]; echarts treats NaN as empty), never lies.
   const positive = (value: number) => (value > 0 ? value : Number.NaN)
+  // The dot series wears a circle swatch so the two entries stay tellable apart.
+  const legendData = [
+    { name: NET_WORTH_PROJECTION_SERIES[0], icon: 'circle' },
+    { name: NET_WORTH_PROJECTION_SERIES[1] },
+  ]
   return {
     dataZoom: timeZoom(months, 'all'),
-    grid: { left: 76, right: 24, top: 40, bottom: 28 },
-    legend: {
-      top: 0,
-      // The dot series wears a circle swatch so the two entries stay tellable apart.
-      data: [
-        { name: NET_WORTH_PROJECTION_SERIES[0], icon: 'circle' },
-        { name: NET_WORTH_PROJECTION_SERIES[1] },
-      ],
-    },
-    tooltip: {
-      trigger: 'axis',
-      valueFormatter: (value) =>
-        value === null || value === undefined || Number.isNaN(value as number)
-          ? '—'
-          : formatCurrency(value as number),
-    },
-    xAxis: { type: 'category', data: months.map(formatMonth), boundaryGap: false },
-    yAxis: {
-      // Log scale (user-requested departure from the zero-anchored house rule — a log
-      // axis HAS no zero): equal steps are equal multiples, so decades of growth can't
-      // squash the early history into the floor.
-      type: 'log',
-      axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-    },
+    grid: grid('fan'),
+    legend: { ...legendFor(legendData.length, selected), data: legendData },
+    tooltip: axisTooltip({ unit: 'money' }),
+    xAxis: monthAxis(months.map(formatMonth)),
+    // Log scale (user-requested departure from the zero-anchored rule — a log axis HAS no
+    // zero): equal steps are equal multiples, so decades of growth can't squash the early
+    // history into the floor. Legal here because nothing is washed.
+    yAxis: moneyAxis({ log: true }),
     series: [
       {
         name: NET_WORTH_PROJECTION_SERIES[0],
@@ -361,16 +359,32 @@ export function netWorthProjectionOption(
         ? []
         : [
             {
+              ...LINE,
               name: NET_WORTH_PROJECTION_SERIES[1],
-              type: 'line' as const,
-              symbol: 'none' as const,
-              lineStyle: { width: 2 },
               color: PALETTE[1],
               z: 2,
               data: months.map((m) => positive(fit.valueAt(m))),
             },
           ]),
     ],
+  }
+}
+
+/** The trend chart as a table (F12): every axis month, the snapshot where one exists, the fit. */
+export function netWorthProjectionCsv(
+  history: Pick<NetWorthTimeseries, 'months' | 'net_worth'>,
+  fit: PolyTrendFit | null,
+  startMonth: string,
+  years: number,
+): ExportTable {
+  const months = history.months.length === 0 ? [] : projectionMonths(history, startMonth, years)
+  return {
+    headers: ['Month', 'Net worth', 'Quadratic trend'],
+    rows: months.map((m, i) => [
+      m,
+      history.net_worth[i] ?? '',
+      fit === null ? '' : fit.valueAt(m).toFixed(2),
+    ]),
   }
 }
 
