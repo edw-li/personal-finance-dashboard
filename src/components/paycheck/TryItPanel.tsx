@@ -7,7 +7,7 @@ import PresetRow from '../../sandbox/PresetRow'
 import SandboxPanel from '../../sandbox/SandboxPanel'
 import { readEntries, toWireDecimal } from '../../sandbox/scenarioUrl'
 import SliderBox from '../../sandbox/SliderBox'
-import { useSandbox, type PinResult, type SandboxSpec } from '../../sandbox/useSandbox'
+import { SEP, useSandbox, type PinResult, type SandboxSpec } from '../../sandbox/useSandbox'
 import type {
   HsaCoverage,
   PaycheckBreakdownOut,
@@ -111,17 +111,23 @@ export default function TryItPanel({
 }) {
   const [params] = useSearchParams()
   // Arriving with entries opens the panel (spec §6); otherwise closed by default (§8.1).
-  const hasEntries = readEntries(params).length > 0
-  const [open, setOpen] = useState(hasEntries)
+  const entriesKey = readEntries(params).join(SEP)
+  const [open, setOpen] = useState(entriesKey !== '')
   // ...and so does a navigation INTO a scenario link while the page is already mounted —
   // the assistant's deep links and the Portfolio drill-in are exactly that (spec §6, §12).
   // Adjusted DURING render, never from an effect body (the house rule): React re-renders
-  // immediately, so nothing paints closed, and the previous value is the latch — a card the
-  // user closed by hand stays closed while the URL still holds its knobs.
-  const [hadEntries, setHadEntries] = useState(hasEntries)
-  if (hasEntries !== hadEntries) {
-    setHadEntries(hasEntries)
-    if (hasEntries) setOpen(true)
+  // immediately, so nothing paints closed.
+  //
+  // The latch is the ENTRIES, not merely whether there are any: "arriving with entries opens
+  // the panel and runs" is about the scenario, so a SECOND link — the assistant's next
+  // answer — is a second arrival and opens the card again. A card the user closed by hand
+  // still stays closed while the URL sits on the entries it was closed on; only a different
+  // scenario re-opens it. Every key the sandbox does not own (owner, month) is absent from
+  // this key, so switching one of those cannot re-open anything.
+  const [arrivedAt, setArrivedAt] = useState(entriesKey)
+  if (entriesKey !== arrivedAt) {
+    setArrivedAt(entriesKey)
+    if (entriesKey !== '') setOpen(true)
   }
   const [unit, setUnit] = useState<Unit>('per_check')
   const profile = breakdown.profile

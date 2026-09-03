@@ -18,7 +18,7 @@ import {
   type EsppEntry,
   type SaleEntry,
 } from '../../sandbox/scenarioUrl'
-import { useSandbox, type PinResult, type SandboxSpec } from '../../sandbox/useSandbox'
+import { SEP, useSandbox, type PinResult, type SandboxSpec } from '../../sandbox/useSandbox'
 import type {
   ChangedInput,
   EsppLotOut,
@@ -139,22 +139,27 @@ export default function WhatIfPanel({
   // feed, so the rewrite rides the feeds' promise callback.
   const [legacy] = useState(() => ({ ticker: legacyTicker(params), lotId: legacyLotId(params) }))
   // Arriving with a scenario opens the card (spec §6); otherwise it mounts closed (§8.1).
-  const hasEntries =
-    readEntries(params).length > 0 || legacy.ticker !== null || legacy.lotId !== null
-  const [open, setOpen] = useState(hasEntries)
+  const entriesKey = readEntries(params).join(SEP)
+  const [open, setOpen] = useState(
+    entriesKey !== '' || legacy.ticker !== null || legacy.lotId !== null,
+  )
   // ...and so does a navigation INTO a scenario link while the page is already mounted. The
   // assistant's "Open in what-if" is exactly that, and when it names the year already on
   // screen the page does NOT remount this card — read only in the initializer, `enabled`
   // would stay false and the link would change the URL and nothing else.
   //
   // Adjusted DURING render, never from an effect body (the house rule): React re-renders
-  // immediately, so nothing paints closed, and the previous value is the latch — a card the
-  // user closed by hand stays closed while the URL still holds its entries (lane P's
-  // TryItPanel, same shape).
-  const [hadEntries, setHadEntries] = useState(hasEntries)
-  if (hasEntries !== hadEntries) {
-    setHadEntries(hasEntries)
-    if (hasEntries) setOpen(true)
+  // immediately, so nothing paints closed.
+  //
+  // The latch is the ENTRIES, not merely whether there are any: a SECOND link — the
+  // assistant's next answer, a second drill-in from Portfolio — is a second arrival and
+  // opens the card again. A card closed by hand stays closed while the URL sits on the
+  // entries it was closed on. `?year=` is not in the key, so a year chip cannot re-open it
+  // (lane P's TryItPanel, same shape).
+  const [arrivedAt, setArrivedAt] = useState(entriesKey)
+  if (entriesKey !== arrivedAt) {
+    setArrivedAt(entriesKey)
+    if (entriesKey !== '') setOpen(true)
   }
   // null = the feed has not answered yet (never [] — an empty book is a real answer, and
   // the two say different things under the form).

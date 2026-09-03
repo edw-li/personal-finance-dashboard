@@ -522,6 +522,31 @@ describe('WhatIfPanel', () => {
     expect(openButton().getAttribute('aria-expanded')).toBe('false')
   })
 
+  it('re-opens a hand-closed card for a DIFFERENT link', async () => {
+    // The latch remembers WHICH entries were arrived at, not merely that there were some:
+    // "arriving opens and runs" (spec §6) is about the scenario, and a second answer from
+    // the assistant is a second arrival. Keyed on a boolean, every link after the first
+    // would move the address bar and leave the card shut on somebody else's numbers.
+    render(
+      <MemoryRouter initialEntries={['/taxes']}>
+        <WhatIfPanel year={2024} />
+        <Url />
+        <Link to="/taxes?whatif=sale%3A7%3A40">open it</Link>
+        <Link to="/taxes?whatif=sale%3A9%3A10">open another</Link>
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByRole('link', { name: 'open it' }))
+    await waitFor(() => expect(openButton().getAttribute('aria-expanded')).toBe('true'))
+    fireEvent.click(openButton())
+    expect(openButton().getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(screen.getByRole('link', { name: 'open another' }))
+    expect(openButton().getAttribute('aria-expanded')).toBe('true')
+    await waitFor(() =>
+      expect(lastBody()?.sales).toEqual([{ security_id: 9, shares: '10', term: 'long' }]),
+    )
+  })
+
   // --- legacy aliases (spec §6) -----------------------------------------------------------
 
   it('normalizes ?whatif=TICKER into a sale entry once the holdings land, in one replace', async () => {
