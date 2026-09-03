@@ -1568,6 +1568,18 @@ Run: `FINANCE_TEST_DB=finance_test_l2 <venv-python> -m pytest -q` → all green.
 
 ---
 
+## As shipped — the undo guards review added
+
+Task 5's three refusals became five, and the Activity listing now agrees with the POST:
+
+- **`refuse_when_depended_on(db, table, image)`** runs before every replayed DELETE. The replay is a bare Core `DELETE`, so Postgres — not the ORM — applies each FK's `ondelete`, and undoing an `insert` of a parent would silently CASCADE away children the batch never imaged (`account_balances.account_id`/`.snapshot_id`, `monthly_spending.category_id`, `category_budgets.category_id`) or SET NULL a pointer at it. It walks `Base.metadata` for constraints referring to the table and `SELECT 1 … LIMIT 1`s each one: any hit is `DEPENDENT_REFUSAL` ("Other rows now depend on this one — undo the changes that added them first"), the general form of the accounts DELETE route's own 409. Rows the same replay already removed do not count — the inverses run in reverse order in one transaction.
+- **`superseded(db, batch_ids) -> {batch_id: sentence}`** replaces the inline overlap query and is the single predicate BOTH `undo_batch` and `GET /activity`'s `undoable` use, so a lit button and a refused POST cannot disagree. Two page-wide queries (never one per row): a self-join for `OVERLAP_REFUSAL`, and `max(id) < (SELECT max(id) WHERE op='batch')` for the new `POST_SUMMARY_REFUSAL` ("An import or restore since then replaced these rows — restore a snapshot instead"). The old check filtered `op != 'batch'`, so an import/restore summary — `table_name` `'*'`, empty pk — could never block an older undo even though its `TRUNCATE … RESTART IDENTITY` + `setval` reused every id. Overlap is reported first: it is the more specific diagnosis, and it keeps the existing three-refusal test's sentence.
+- **`POST /activity/batches/{id}/undo` catches `IntegrityError`** → `rollback()` → 409 `REPLAY_REFUSAL`. A replay can break a constraint no pre-check sees (re-inserting a budget row whose category was deleted afterwards, a value a unique index now rejects); that was a 500.
+- **Paging fetches `limit + 1` from BOTH sources** and trims to `limit`. `len(batches) + len(runs) > limit` was false whenever one source alone filled the page (four batches, no runs, `limit=2` → `next_before: null`), dead-ending the trail on page one.
+- **`ActivityBatchOut.undoable` is documented as not a guarantee**: the dependent-rows guard is undo-time only by nature (it asks about the CURRENT data), so the POST may still refuse — and the Activity card shows that 409's sentence verbatim.
+
+Tests: six added to `tests/test_activity_api.py` (both CASCADE repros, the post-summary refusal plus its greyed listing row, the constraint-breaking replay, the one-source page, and the greyed overlap row asserted against the matching 409). All six fail without their fix.
+
 ## Merge notes for the coordinator
 
 - `backend/app/main.py`: this lane adds ONE import (`activity`) and ONE include; L3 adds `prefs` and `health` the same way — keep all three.

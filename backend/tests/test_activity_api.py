@@ -1,12 +1,32 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import func, select
 
-from app.models import Account, AccountBalance, ChangeLog, LifecycleRun, NetWorthSnapshot
-from app.services.changelog import ALREADY_UNDONE, OVERLAP_REFUSAL, SUMMARY_REFUSAL
+from app.models import (
+    Account,
+    AccountBalance,
+    CategoryBudget,
+    ChangeLog,
+    LifecycleRun,
+    NetWorthSnapshot,
+)
+from app.services.changelog import (
+    ALREADY_UNDONE,
+    DEPENDENT_REFUSAL,
+    OVERLAP_REFUSAL,
+    POST_SUMMARY_REFUSAL,
+    REPLAY_REFUSAL,
+    SUMMARY_REFUSAL,
+)
 
 ACTIVITY = "/api/v1/activity"
 NW = "/api/v1/net-worth"
+SP = "/api/v1/spending"
+
+
+async def count_of(db, model) -> int:
+    return (await db.execute(select(func.count()).select_from(model))).scalar_one()
 
 
 async def make_account(db, name="Checking", slug="checking") -> Account:
@@ -157,7 +177,8 @@ async def test_the_three_refusals_and_undo_of_undo(auth_client, db):
     ).scalar_one()
     summary = await auth_client.post(f"{ACTIVITY}/batches/{summary_id}/undo")
     assert summary.status_code == 409 and summary.json()["detail"] == SUMMARY_REFUSAL
-    # A later batch on the same rows refuses.
+    # A later batch on the same rows refuses. The seeded restore summary above ALSO
+    # postdates `first`; overlap is the sentence because it is the more specific diagnosis.
     second = await save_month(auth_client, account_id, "150.00")
     overlap = await auth_client.post(f"{ACTIVITY}/batches/{first}/undo")
     assert overlap.status_code == 409 and overlap.json()["detail"] == OVERLAP_REFUSAL
@@ -174,3 +195,124 @@ async def test_the_three_refusals_and_undo_of_undo(auth_client, db):
     assert str((await db.execute(select(AccountBalance.balance))).scalar_one()) == "150.00"
     # Unknown batch.
     assert (await auth_client.post(f"{ACTIVITY}/batches/{uuid4()}/undo")).status_code == 404
+
+
+async def test_undo_refuses_rows_that_now_depend_on_the_one_it_would_delete(auth_client, db):
+    """The replayed DELETE is bare Core SQL, so `account_balances.account_id`'s
+    ondelete=CASCADE would silently take a balance the account-create batch never imaged."""
+    created = await auth_client.post(
+        f"{NW}/accounts", json={"name": "Savings", "group": "cash", "sort_order": 3}
+    )
+    assert created.status_code == 201, created.text
+    account_id = created.json()["id"]
+    await save_month(auth_client, account_id, "100.00")
+    batch_id = (
+        await db.execute(select(ChangeLog.batch_id).where(ChangeLog.table_name == "accounts"))
+    ).scalar_one()
+    refused = await auth_client.post(f"{ACTIVITY}/batches/{batch_id}/undo")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == DEPENDENT_REFUSAL
+    await db.rollback()  # the refusal rolled the shared session back
+    assert await count_of(db, Account) == 1 and await count_of(db, AccountBalance) == 1
+
+
+async def test_undo_refuses_a_snapshot_a_later_balance_still_hangs_off(auth_client, db):
+    """Same trap one level down: `account_balances.snapshot_id` CASCADEs, and the batch that
+    created the snapshot only imaged its OWN balance row."""
+    a = await make_account(db, "Checking", "checking")
+    b = await make_account(db, "Brokerage", "brokerage")
+    first = await save_month(auth_client, a.id, "100.00")  # creates the snapshot
+    await save_month(auth_client, b.id, "250.00")  # adds a second balance to it
+    refused = await auth_client.post(f"{ACTIVITY}/batches/{first}/undo")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == DEPENDENT_REFUSAL
+    await db.rollback()
+    # Nothing half-undone: the balance the replay HAD already deleted came back too.
+    assert await count_of(db, NetWorthSnapshot) == 1 and await count_of(db, AccountBalance) == 2
+
+
+async def test_undo_refuses_once_an_import_or_restore_followed_it(auth_client, db):
+    account = await make_account(db)
+    batch_id = await save_month(auth_client, account.id, "100.00")
+    # An import's summary row: op='batch', table_name '*', empty pk — so the per-row overlap
+    # join can never see it, yet its TRUNCATE … RESTART IDENTITY + setval reused every id.
+    db.add(
+        ChangeLog(
+            batch_id=uuid4(),
+            source="import",
+            actor="x",
+            label="Imported finance.xlsx",
+            table_name="*",
+            pk={},
+            op="batch",
+            before=None,
+            after={"tables": {}},
+        )
+    )
+    await db.commit()
+    listing = (await auth_client.get(ACTIVITY)).json()["entries"]
+    assert next(e for e in listing if e.get("batch_id") == batch_id)["undoable"] is False
+    refused = await auth_client.post(f"{ACTIVITY}/batches/{batch_id}/undo")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == POST_SUMMARY_REFUSAL
+
+
+async def test_a_replay_that_breaks_a_constraint_is_a_409_not_a_500(auth_client, db):
+    created = await auth_client.post(f"{SP}/categories", json={"name": "Fun"})
+    assert created.status_code == 201, created.text
+    category_id = created.json()["id"]
+    budgeted = await auth_client.put(
+        f"{SP}/categories/{category_id}/budget",
+        json={"amount": "200.00", "effective_month": "2026-09-01"},
+    )
+    assert budgeted.status_code == 200, budgeted.text
+    removed = await auth_client.delete(f"{SP}/categories/{category_id}/budget/2026-09-01")
+    assert removed.status_code == 204
+    budget_batch = removed.headers["x-change-batch"]
+    assert (await auth_client.delete(f"{SP}/categories/{category_id}")).status_code == 204
+    # A different TABLE, so no pk overlaps — but re-inserting the budget row needs a parent
+    # category that is gone, and the FK says so only when the replay runs.
+    refused = await auth_client.post(f"{ACTIVITY}/batches/{budget_batch}/undo")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == REPLAY_REFUSAL
+    await db.rollback()
+    assert await count_of(db, CategoryBudget) == 0
+
+
+async def test_paging_continues_when_one_source_alone_fills_the_page(auth_client, db):
+    # Four batches and no runs at limit=2: `more` must count the rows FETCHED, not the rows a
+    # full page holds, or the trail dead-ends on page one with next_before null.
+    base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    for n in range(4):
+        db.add(
+            ChangeLog(
+                batch_id=uuid4(),
+                source="ui",
+                actor="me@example.com",
+                label=f"Change {n}",
+                table_name="accounts",
+                pk={"id": n + 1},  # distinct rows, so none supersedes another
+                op="update",
+                before={"sort_order": n},
+                after={"sort_order": n + 1},
+                at=base + timedelta(minutes=n),
+            )
+        )
+    await db.commit()
+    first = (await auth_client.get(f"{ACTIVITY}?limit=2")).json()
+    assert [e["label"] for e in first["entries"]] == ["Change 3", "Change 2"]
+    assert first["next_before"] is not None
+    rest = (await auth_client.get(f"{ACTIVITY}?limit=2&before={first['next_before']}")).json()
+    assert [e["label"] for e in rest["entries"]] == ["Change 1", "Change 0"]
+    assert rest["next_before"] is None
+
+
+async def test_the_listing_greys_a_batch_a_later_change_touched(auth_client, db):
+    account = await make_account(db)
+    first = await save_month(auth_client, account.id, "100.00")
+    second = await save_month(auth_client, account.id, "150.00")
+    listing = {e["batch_id"]: e for e in (await auth_client.get(ACTIVITY)).json()["entries"]}
+    # The same overlap predicate undo_batch refuses on — proven by the 409 below.
+    assert listing[first]["undoable"] is False and listing[second]["undoable"] is True
+    refused = await auth_client.post(f"{ACTIVITY}/batches/{first}/undo")
+    assert refused.status_code == 409 and refused.json()["detail"] == OVERLAP_REFUSAL

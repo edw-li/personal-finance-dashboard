@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -21,7 +22,14 @@ from app.schemas.lifecycle import (
     ActivityRunDetailOut,
     ActivityRunOut,
 )
-from app.services.changelog import UNDOABLE_SOURCES, UndoRefused, undo_batch, undone_by
+from app.services.changelog import (
+    REPLAY_REFUSAL,
+    UNDOABLE_SOURCES,
+    UndoRefused,
+    superseded,
+    undo_batch,
+    undone_by,
+)
 
 router = APIRouter(prefix="/activity", tags=["activity"], dependencies=[Depends(get_current_user)])
 
@@ -58,17 +66,25 @@ async def activity(
         )
         .group_by(ChangeLog.batch_id)
         .order_by(first_at.desc())
-        .limit(limit)
+        .limit(limit + 1)
     )
+    # limit + 1 on BOTH sources, then trim: `more` has to mean "the trail continues", and
+    # one source alone can fill the page (four batches and no runs at limit=2), which a
+    # plain .limit(limit) makes indistinguishable from an exactly-exhausted trail.
     run_q = (
-        select(LifecycleRun).order_by(LifecycleRun.at.desc(), LifecycleRun.id.desc()).limit(limit)
+        select(LifecycleRun)
+        .order_by(LifecycleRun.at.desc(), LifecycleRun.id.desc())
+        .limit(limit + 1)
     )
     if before is not None:
         batch_q = batch_q.having(first_at < before)
         run_q = run_q.where(LifecycleRun.at < before)
     batches = (await db.execute(batch_q)).all()
     runs = (await db.execute(run_q)).scalars().all()
-    undone = await undone_by(db, [b.batch_id for b in batches])
+    batch_ids = [b.batch_id for b in batches]
+    undone = await undone_by(db, batch_ids)
+    # Page-wide, not per row: the two id-ordering refusals undo_batch would raise.
+    stale = await superseded(db, batch_ids)
     entries: list[ActivityBatchOut | ActivityRunOut] = [
         ActivityBatchOut(
             batch_id=b.batch_id,
@@ -78,7 +94,12 @@ async def activity(
             label=b.label,
             month=b.month,
             rows=b.rows,
-            undoable=b.source in UNDOABLE_SOURCES and b.rows > 0 and b.batch_id not in undone,
+            undoable=(
+                b.source in UNDOABLE_SOURCES
+                and b.rows > 0
+                and b.batch_id not in undone
+                and b.batch_id not in stale
+            ),
             undone_by=undone.get(b.batch_id),
         )
         for b in batches
@@ -110,6 +131,12 @@ async def undo(
     except UndoRefused as exc:
         await db.rollback()
         raise HTTPException(status_code=exc.status, detail=exc.detail) from None
+    except IntegrityError:
+        # A replay can meet a constraint no pre-check can see: re-inserting a deleted row
+        # whose parent has since gone, or an old value a unique index now rejects. That is a
+        # refusal, not a server fault — and the rollback leaves the session usable.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=REPLAY_REFUSAL) from None
     rows = (
         (
             await db.execute(

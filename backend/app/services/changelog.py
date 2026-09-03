@@ -16,14 +16,14 @@ itself a batch (source='undo') plus an `undo` run whose report links `undid`, wh
 "already undone" and the listing's `undone_by` are answered.
 """
 
-import json
 import logging
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 from fastapi import Depends, Request
-from sqlalchemy import and_, delete, insert, select, update
+from sqlalchemy import Table, and_, delete, func, insert, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.api.deps import get_current_user
 from app.database import Base, get_db
@@ -44,6 +44,11 @@ UNDOABLE_SOURCES = frozenset({"ui", "repair", "undo"})
 SUMMARY_REFUSAL = "This change is a summary and cannot be undone — restore a snapshot instead"
 OVERLAP_REFUSAL = "Later changes touched these rows — undo those first"
 ALREADY_UNDONE = "This change was already undone"
+POST_SUMMARY_REFUSAL = (
+    "An import or restore since then replaced these rows — restore a snapshot instead"
+)
+DEPENDENT_REFUSAL = "Other rows now depend on this one — undo the changes that added them first"
+REPLAY_REFUSAL = "Undo no longer fits the current data — a row it depends on has changed or is gone"
 
 
 def pk_of(obj: object) -> dict[str, object]:
@@ -156,8 +161,111 @@ class UndoRefused(Exception):
         self.detail = detail
 
 
-def _pk_key(table_name: str, pk: dict[str, object]) -> tuple[str, str]:
-    return table_name, json.dumps(pk, sort_keys=True, separators=(",", ":"))
+async def refuse_when_depended_on(db: AsyncSession, table: Table, image: dict[str, object]) -> None:
+    """Guard in front of a replayed DELETE (undoing an `insert`).
+
+    The replay is a bare Core `DELETE`, not an ORM cascade, so Postgres applies the FK's own
+    `ondelete`: undoing the create of a parent row would silently CASCADE away children this
+    batch never imaged (a month's balances under the account that created them) or SET NULL a
+    pointer at it. So walk the metadata for constraints pointing AT `table` and refuse while
+    any child row still exists — the general form of the accounts DELETE route's own 409.
+
+    Rows the same replay already removed are invisible here: the inverses run in reverse
+    order inside ONE transaction, so a month's balances are gone by the time its snapshot is
+    reached. `image` is the full row (`before`/`after`), not just the pk, so a constraint
+    that references a non-key column resolves too.
+
+    Undo-time only, unavoidably: "does anything depend on this row" is a question about the
+    CURRENT data, which the Activity listing cannot answer when it renders the button.
+    """
+    for child in Base.metadata.tables.values():
+        for constraint in child.foreign_key_constraints:
+            if constraint.referred_table is not table:
+                continue
+            pairs = [(fk.parent, fk.column.key) for fk in constraint.elements]
+            if any(referenced not in image for _, referenced in pairs):
+                continue  # the image cannot name the referenced value — nothing to ask
+            depends = await db.execute(
+                select(literal(1))
+                .select_from(child)
+                .where(
+                    and_(
+                        *[
+                            column == parse_cell(column, image[referenced])
+                            for column, referenced in pairs
+                        ]
+                    )
+                )
+                .limit(1)
+            )
+            if depends.first() is not None:
+                raise UndoRefused(409, DEPENDENT_REFUSAL)
+
+
+async def superseded(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, str]:
+    """batch -> the 409 sentence a LATER log entry earns it, for each batch that has one.
+
+    Two page-wide queries, never one per row, so `GET /activity`'s `undoable` flag and
+    undo_batch's own refusals are decided by this one predicate and cannot drift apart:
+
+    * OVERLAP_REFUSAL — a later row-level entry names one of this batch's rows, so the
+      batch's `before` images are no longer what those rows hold.
+    * POST_SUMMARY_REFUSAL — an import or a restore was logged after it. Both TRUNCATE …
+      RESTART IDENTITY and then setval the sequences, so the ids inside this batch's images
+      may now address entirely different rows; the images cannot be trusted even where no
+      primary key visibly overlaps. Summary rows carry table_name '*' and an empty pk, which
+      is why the overlap join alone can never see them.
+
+    Overlap wins when both apply — it is the more specific diagnosis.
+    """
+    if not batch_ids:
+        return {}
+    # Uncorrelated on purpose: the newest summary row in the WHOLE log, compared once per
+    # batch by the grouped select below.
+    newest_summary = select(func.max(ChangeLog.id)).where(ChangeLog.op == "batch").scalar_subquery()
+    ends = (
+        select(
+            ChangeLog.batch_id.label("batch_id"),
+            func.max(ChangeLog.id).label("last_id"),
+            (func.max(ChangeLog.id) < newest_summary).label("post_summary"),
+        )
+        .where(ChangeLog.batch_id.in_(batch_ids))
+        .group_by(ChangeLog.batch_id)
+        .subquery()
+    )
+    mine = aliased(ChangeLog)
+    later = aliased(ChangeLog)
+    overlapped = (
+        (
+            await db.execute(
+                select(mine.batch_id)
+                .distinct()
+                .select_from(mine)
+                .join(ends, ends.c.batch_id == mine.batch_id)
+                .join(
+                    later,
+                    and_(
+                        later.id > ends.c.last_id,
+                        later.op != "batch",
+                        later.table_name == mine.table_name,
+                        # jsonb '=' normalises key order and whitespace, so this is the SQL
+                        # twin of comparing sorted-key JSON in Python.
+                        later.pk == mine.pk,
+                    ),
+                )
+                .where(mine.op != "batch")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: dict[UUID, str] = dict.fromkeys(overlapped, OVERLAP_REFUSAL)
+    for batch_id, post_summary in (
+        await db.execute(select(ends.c.batch_id, ends.c.post_summary))
+    ).all():
+        if post_summary and batch_id not in out:
+            out[batch_id] = POST_SUMMARY_REFUSAL
+    return out
 
 
 async def undone_by(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, UUID]:
@@ -183,9 +291,11 @@ async def undone_by(db: AsyncSession, batch_ids: list[UUID]) -> dict[UUID, UUID]
 async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> UUID:
     """Replay a batch's inverses in reverse order, in one transaction (spec §9): insert →
     delete, update → set `before`, delete → insert `before`. Refuses (409) a summary-only
-    or non-undoable-source batch, an already-undone batch, and a batch whose rows a later
-    batch touched. Records the replay as a new source='undo' batch plus an `undo` run.
-    Expunges the session afterwards: Core statements bypass the identity map."""
+    or non-undoable-source batch, an already-undone batch, a batch a later change or a later
+    import/restore superseded (`superseded`), and — per replayed DELETE, because only the
+    current data can answer it — a row that others still depend on. Records the replay as a
+    new source='undo' batch plus an `undo` run. Expunges the session afterwards: Core
+    statements bypass the identity map."""
     rows = list(
         (
             await db.execute(
@@ -202,18 +312,11 @@ async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> 
         raise UndoRefused(409, SUMMARY_REFUSAL)
     if batch_id in await undone_by(db, [batch_id]):
         raise UndoRefused(409, ALREADY_UNDONE)
-    keys = {_pk_key(row.table_name, row.pk) for row in row_level}
-    later = (
-        await db.execute(
-            select(ChangeLog).where(
-                ChangeLog.id > rows[-1].id,
-                ChangeLog.table_name.in_({row.table_name for row in row_level}),
-                ChangeLog.op != "batch",
-            )
-        )
-    ).scalars()
-    if any(_pk_key(row.table_name, row.pk) in keys for row in later):
-        raise UndoRefused(409, OVERLAP_REFUSAL)
+    # Same predicate the Activity listing greys the button with, so a visible Undo that the
+    # POST then refuses can only mean the data moved between render and click.
+    stale = (await superseded(db, [batch_id])).get(batch_id)
+    if stale is not None:
+        raise UndoRefused(409, stale)
 
     undo = ChangeBatch(db, source="undo", actor=actor)
     undo.label = f"Undid: {rows[0].label}"
@@ -229,6 +332,7 @@ async def undo_batch(db: AsyncSession, batch_id: UUID, *, actor: str | None) -> 
             if key in table.c
         }
         if row.op == "insert":
+            await refuse_when_depended_on(db, table, {**(row.after or {}), **row.pk})
             await db.execute(delete(table).where(where))
             undo.record(row.table_name, row.pk, row.after, None, month=row.month)
         elif row.op == "update":
