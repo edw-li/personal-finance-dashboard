@@ -439,6 +439,22 @@ in the bucket. The script keeps 30 days of backups — each run deletes both fla
 dump from 30 days prior — and records the run for the Settings System card (the
 `Last backup` marker plus a last-10 trail).
 
+**Verify phase (2026-09-03).** After the upload the script restores the dump it just wrote into
+a scratch database (`finance_verify_<pid>`), compares three row counts
+(`net_worth_snapshots`, `monthly_spending`, `position_transactions`) with the live database's
+at dump time, and drops the scratch. The marker gains `size_bytes`, `encrypted`,
+`retention_days` and `verified` (+ `verified_at`/`row_counts`, or `verify_error`), and the
+System card reads "· encrypted · verified" — "Last backup" now means "the dump restores",
+not "the upload returned". The role needs to create databases, once:
+
+```bash
+sudo -u postgres psql -c "ALTER ROLE finance CREATEDB;"
+```
+
+Without it every run records `verified: false` with `createdb failed …` and the Data health
+card says so; the upload itself is unaffected. A verify failure never fails the run
+(retention still sweeps, exit 0).
+
 ### 5.4 Schedule
 
 ```bash
@@ -449,7 +465,30 @@ crontab -e
 0 3 * * * /home/ubuntu/personal-finance-dashboard/backend/scripts/backup_db.sh >> /home/ubuntu/finance-backup.log 2>&1
 ```
 
-### 5.5 Restore drill (do this once now, and after any schema change you care about)
+### 5.5 Restore drills (do them once now, and after any schema change you care about)
+
+Two restore paths exist and both should be proven, not assumed.
+
+**The app's own snapshot (nightly ZIP, `/settings` → Backups & snapshots).** The drill creates a
+scratch database, runs the real migrations on it, restores a snapshot ZIP through the app's
+own restore, verifies every table against the ZIP, and drops the scratch:
+
+```bash
+# On the box, inside the backend image (it has the app and its driver; host Postgres via host-gateway):
+docker compose -f docker-compose.prod.yml run --rm \
+  -e DB_HOST=host.docker.internal -e DB_PORT=5432 \
+  -v /path/to/finance-export-YYYYMMDD-HHMMSS.zip:/tmp/snap.zip:ro \
+  backend bash scripts/restore_drill.sh /tmp/snap.zip
+# On a dev box, from the repo root (Postgres on 5433):
+DB_PORT=5433 PYTHON=backend/.venv/Scripts/python.exe bash backend/scripts/restore_drill.sh path/to/finance-export-….zip
+```
+
+Expected: `PASS: 35 tables identical` and `[drill] PASS`, exit 0. The nightly files live on the
+`finance-data` volume (`docker volume inspect personal-finance-dashboard_finance-data` for the
+host path); the same ZIP restores from the UI — Restore card → Dry run → type the date →
+Restore — with a pre-restore point written first.
+
+**The nightly dump (disaster recovery — schema-agnostic, survives any app state).**
 
 ```bash
 # Download a backup: bucket → object → Download (or scp it to the server)
@@ -708,6 +747,19 @@ spot-check **/** (Overview), **/taxes** and **/settings**.
 > setup note instead. The export snapshot now redacts the key row (`manifest.json` lists
 > the redaction), and SSE streaming rides `X-Accel-Buffering: no` + keepalive pings, so
 > `nginx.conf` is untouched.
+
+> **Addendum (2026-09-04, data lifecycle)**: one additive migration — `c3a7e19d5b42`
+> (`change_log`, `lifecycle_runs`, `user_preferences`), chained on `b8e4d17c2a90` and applied
+> at boot like every other; the downgrade drops the three tables and nothing else references
+> them. The deploy needs two one-time steps beyond `up -d --build`: the compose file now
+> mounts the `finance-data` volume at `/data` (`DATA_DIR=/data`) for the nightly snapshots
+> and restore points — created automatically on the first `up`; and the role grant
+> `ALTER ROLE finance CREATEDB;` (5.3) so the backup script's verify phase can run. Until
+> the grant lands, the System card says "not verified — createdb failed" and Data health
+> warns; the dumps themselves are unaffected. The first stored snapshot appears at 23:30 PT
+> (a boot after that hour catches up within seconds); `/settings` gains four cards —
+> Backups & snapshots, Restore, Activity, Data health — and every month save and delete
+> now carries an Undo.
 
 That restart re-reads `price_refresh_cron` (4.2). If it happens to span **13:10 PT**, the
 day's scheduled price refresh is skipped — the **Refresh prices** button recovers it. Run the
