@@ -196,13 +196,21 @@ export default function ProjectionPage() {
                 : 'loading'
               : 'ready',
           error: pageError,
-          // NOT the sandbox's busy: the frame's dim covers the whole page and disables
-          // pointer events, so a 300 ms preview tick would grey out the very slider under
-          // the pointer. The two charts carry the cue themselves, and the compare table
-          // gets it from the panel's own Feed.
+          // NOT the sandbox's busy: the frame's dim covers the whole page (opacity only —
+          // the controls stay live), so a 300 ms preview tick would visibly grey out the
+          // very slider under the pointer. The two charts carry the cue themselves, and the
+          // compare table gets it from the panel's own Feed.
           busy: false,
           fromCache,
-          retry: () => setRetryNonce((n) => n + 1),
+          // A 422 is the SCENARIO's refusal, not the data's: re-running the same dataKey
+          // would ask the server the same question it just answered, forever. On this page
+          // the frame is the only surface a knob refusal can reach (the panel keeps its own
+          // when there are figures under it), so Retry there has to mean what Reset to
+          // derived means — drop the entries the server named and run without them.
+          retry: () =>
+            !sandbox.empty && sandbox.errorStatus === 422
+              ? sandbox.reset()
+              : setRetryNonce((n) => n + 1),
         }}
         skeleton={{ tiles: 5, cards: [{ span: 12, height: 340 }] }}
       >

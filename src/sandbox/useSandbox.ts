@@ -71,8 +71,10 @@ export const DEFAULT_DEBOUNCE_MS = 250
 // `['a:1', '', 'b:2']` and `['a:1', 'b:2']` share the empty join, so `?whatif=&whatif=a:5`
 // would compare EQUAL to its own canonical form and the arrival rewrite would never drop the
 // empty entry. US (unit separator) cannot appear in a decoded query value that survived the
-// grammar's parsers, so it is the fence.
-const SEP = '\u001f'
+// grammar's parsers, so it is the fence. EXPORTED because a panel that keys its own
+// state on the entries is asking the same question this file's run key asks, and two
+// spellings of the separator would eventually be two different answers.
+export const SEP = '\u001f'
 
 function messageOf(err: unknown): string {
   return err instanceof ApiError ? err.message : 'The scenario could not be computed'

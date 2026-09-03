@@ -53,6 +53,19 @@ describe('projection scenario codec', () => {
     expect(isEmptyProjection({ knobs: {}, retirements: { 2: '2035-06' } })).toBe(false)
   })
 
+  // services/money.py's _quantize_bounded refuses |value| >= max_abs, so the endpoint's
+  // CONTRIBUTION_MAX_ABS (1e7) is an EXCLUSIVE fence at both ends. A codec that kept the
+  // bound itself would hand the server a value it 422s and call it a link.
+  it('keeps the contribution fence exclusive at both ends, the way the server has it', () => {
+    expect(decodeProjection(['monthly_contribution:10000000']).knobs.monthly_contribution).toBeUndefined()
+    expect(decodeProjection(['monthly_contribution:-10000000']).knobs.monthly_contribution).toBeUndefined()
+    expect(decodeProjection(['monthly_contribution:9999999.99']).knobs.monthly_contribution).toBe('9999999.99')
+    expect(decodeProjection(['monthly_contribution:-9999999.99']).knobs.monthly_contribution).toBe('-9999999.99')
+    // The spend knob's own SPEND_MAX_ABS (1e9), which the codec had no upper fence for at all.
+    expect(decodeProjection(['annual_spend:1000000000']).knobs.annual_spend).toBeUndefined()
+    expect(decodeProjection(['annual_spend:999999999']).knobs.annual_spend).toBe('999999999')
+  })
+
   it('copies the scenario into fetchProjection’s params, omitting unset knobs', () => {
     expect(toParams(decodeProjection(['annual_return:0.06', 'years:40', 'volatility:0', 'retire:2:2035-06']))).toEqual({
       annualReturn: '0.06',

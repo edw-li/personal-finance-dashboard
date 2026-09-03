@@ -37,6 +37,9 @@ function accept(key: ProjectionKnob, value: string): boolean {
   if (key === 'years') return /^\d{1,2}$/.test(value) && Number(value) >= 1 && Number(value) <= 60
   if (!isWireDecimal(value)) return false
   const within = (lo: string, hi: string) => compareDecimals(value, lo) >= 0 && compareDecimals(value, hi) <= 0
+  // services/money.py's _quantize_bounded refuses |value| >= max_abs, so a magnitude fence
+  // is EXCLUSIVE at both ends — `within` would keep the very value the server 422s.
+  const under = (abs: string) => compareDecimals(value, `-${abs}`) > 0 && compareDecimals(value, abs) < 0
   switch (key) {
     case 'annual_return':
       return within('-0.5', '0.5')
@@ -49,11 +52,13 @@ function accept(key: ProjectionKnob, value: string): boolean {
     case 'contribution_growth':
       return within('0', '0.25')
     case 'annual_spend':
-      return compareDecimals(value, '0') > 0
+      // Positive, and under SPEND_MAX_ABS (1e9) — the same exclusive magnitude fence.
+      return compareDecimals(value, '0') > 0 && under('1000000000')
     case 'monthly_contribution':
-      // The server's own magnitude bound (CONTRIBUTION_MAX_ABS = 1e7); negatives are legal
-      // — a household drawing down saves a negative amount each month.
-      return within('-10000000', '10000000')
+      // The server's own magnitude bound (CONTRIBUTION_MAX_ABS = 1e7), exclusive as it is
+      // there; negatives are legal — a household drawing down saves a negative amount each
+      // month.
+      return under('10000000')
   }
 }
 

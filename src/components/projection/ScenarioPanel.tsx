@@ -4,7 +4,7 @@ import CompareTable from '../../sandbox/CompareTable'
 import SandboxPanel from '../../sandbox/SandboxPanel'
 import { MONTH_TOKEN } from '../../sandbox/scenarioUrl'
 import SliderBox from '../../sandbox/SliderBox'
-import type { Sandbox } from '../../sandbox/useSandbox'
+import { SEP, type Sandbox } from '../../sandbox/useSandbox'
 import type { PersonOut, ProjectionOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
@@ -74,7 +74,7 @@ export default function ScenarioPanel({
   // Reconciled to the URL during RENDER, never from an effect body (the house rule): when
   // the committed entries change — Reset to derived, a pasted link, the back button — the
   // drafts and whatever refusal they earned are stale by definition.
-  const entriesKey = sandbox.entries.join('')
+  const entriesKey = sandbox.entries.join(SEP)
   const [seen, setSeen] = useState(entriesKey)
   if (seen !== entriesKey) {
     setSeen(entriesKey)
