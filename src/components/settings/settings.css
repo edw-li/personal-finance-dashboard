@@ -270,3 +270,62 @@
      fade is the half that matters. */
   .settings-page .card { transition: outline-color var(--t-page) ease; }
 }
+
+/* --- backups & restore cards (2026-09-03 data-lifecycle spec §7–§8) --- */
+
+.backups-list {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.backups-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+}
+
+.backups-row .button {
+  margin-left: auto;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+/* The Restore card's source picker: a file input OR a stored-snapshot select, stacked. */
+.restore-source {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 520px;
+  margin-bottom: 0.75rem;
+}
+
+/* The typed-date arm and the red button, side by side (the wizard's danger-row shape). */
+.restore-arm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.restore-arm label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* .danger-button is the monthly-update wizard's class; the same rule lives here so the
+   Restore card is self-sufficient rather than importing that page's sheet. */
+.settings-page .danger-button:not(:disabled) {
+  border-color: var(--negative);
+  color: var(--negative);
+}
