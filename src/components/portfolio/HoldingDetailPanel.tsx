@@ -137,7 +137,8 @@ export default function HoldingDetailPanel({
     () => (points === null ? null : priceHistoryOption({ points, avgCost: holding.avg_cost, events })),
     [points, holding.avg_cost, events],
   )
-  const summary = points === null ? null : priceWindowSummary(points)
+  const summary =
+    points === null ? null : priceWindowSummary(points, span.days, todayIso())
   // Chips the history cannot reach are disabled (F4): a response shorter than it asked for
   // reveals the whole extent, and every longer span would fetch the same rows again.
   const reachable = useMemo(
@@ -296,7 +297,12 @@ export default function HoldingDetailPanel({
         footer={
           summary === null ? undefined : (
             <p className="drill-hint">
-              {formatPct(summary.changePct)} over this window · history since {summary.since}
+              {formatPct(summary.changePct)} over this window ·{' '}
+              {/* 'history since' is a claim about INCEPTION, and only a response short of
+                  the window it asked for earns it; a full one is just a window opening. */}
+              {summary.extentKnown
+                ? `history since ${summary.since}`
+                : `window from ${summary.since}`}
             </p>
           )
         }

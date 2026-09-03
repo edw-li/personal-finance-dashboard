@@ -8,6 +8,7 @@ import type { PricePoint } from '../../types/api'
 import { EVENTS_SERIES } from './historyChartOptions'
 import {
   PRICE_SPANS,
+  extentKnown,
   priceHistoryCsv,
   priceHistoryOption,
   priceWindowSummary,
@@ -167,11 +168,32 @@ describe('priceHistoryOption', () => {
 
 describe('priceWindowSummary / reachableSpans / priceHistoryCsv', () => {
   it('summarises the window: signed change first-to-last and the first date', () => {
-    expect(priceWindowSummary(POINTS)).toEqual({
+    // Three bars back when a year was asked for: the response is short, so the first bar
+    // IS the start of the history and the footer may say so.
+    expect(priceWindowSummary(POINTS, 365, '2026-09-03')).toEqual({
       changePct: (169.8 - 171.25) / 171.25,
       since: 'Aug 10, 2026',
+      extentKnown: true,
     })
-    expect(priceWindowSummary([])).toBeNull()
+    expect(priceWindowSummary([], 365, '2026-09-03')).toBeNull()
+  })
+
+  it('claims the extent only when the response is SHORT of the window it asked for', () => {
+    // A full-length response says nothing about what sits behind it — the first bar is
+    // where this WINDOW starts, not where the history does (the reachableSpans test).
+    const full = [
+      { d: '2025-09-03', c: '100' },
+      { d: '2026-09-03', c: '110' },
+    ]
+    expect(priceWindowSummary(full, 365, '2026-09-03')).toEqual({
+      changePct: 0.1,
+      since: 'Sep 3, 2025',
+      extentKnown: false,
+    })
+    // The same one-week slack reachableSpans uses: 360 days back of a 365-day ask is full.
+    expect(extentKnown(full, 365, '2026-09-03')).toBe(false)
+    expect(extentKnown([{ d: '2026-02-15', c: '1' }], 365, '2026-09-03')).toBe(true)
+    expect(extentKnown([], 365, '2026-09-03')).toBe(false)
   })
 
   it('spans: All replaces Max; a full response leaves every span reachable', () => {

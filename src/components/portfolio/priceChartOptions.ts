@@ -118,16 +118,6 @@ export function priceHistoryOption({
   }
 }
 
-/** The footer's figures: change over the fetched window and where the history begins. */
-export function priceWindowSummary(
-  points: PricePoint[],
-): { changePct: number; since: string } | null {
-  if (points.length === 0) return null
-  const first = Number(points[0].c)
-  const last = Number(points[points.length - 1].c)
-  return { changePct: first === 0 ? 0 : (last - first) / first, since: formatDate(points[0].d) }
-}
-
 const DAY = 86_400_000
 const dayNumber = (iso: string) => {
   const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
@@ -135,6 +125,42 @@ const dayNumber = (iso: string) => {
 }
 // A week of slack: bars are trading days, so a full year of history is short of 365 rows.
 const SLACK_DAYS = 7
+
+/**
+ * Whether the response REVEALS the whole extent of this security's history: it came back
+ * short of the window it asked for, so there is nothing older to fetch. A full-length
+ * response says nothing — decades may sit behind it. The disabled chips and the footer's
+ * wording both turn on this one test, so it lives in one place.
+ */
+export function extentKnown(
+  points: PricePoint[],
+  requestedDays: number,
+  todayIso: string,
+): boolean {
+  if (points.length === 0) return false
+  return dayNumber(todayIso) - dayNumber(points[0].d) < requestedDays - SLACK_DAYS
+}
+
+/**
+ * The footer's figures: change across the fetched window, its first bar, and whether that
+ * bar is the START OF THE HISTORY or merely where this window opens — the panel says
+ * "history since" only in the first case, because claiming it on a full-length response
+ * would invent an inception date for a security that has more behind it.
+ */
+export function priceWindowSummary(
+  points: PricePoint[],
+  requestedDays: number,
+  todayIso: string,
+): { changePct: number; since: string; extentKnown: boolean } | null {
+  if (points.length === 0) return null
+  const first = Number(points[0].c)
+  const last = Number(points[points.length - 1].c)
+  return {
+    changePct: first === 0 ? 0 : (last - first) / first,
+    since: formatDate(points[0].d),
+    extentKnown: extentKnown(points, requestedDays, todayIso),
+  }
+}
 
 /**
  * Which spans are worth offering. A response SHORTER than the window it asked for reveals the
@@ -148,9 +174,8 @@ export function reachableSpans(
   todayIso: string,
 ): Record<SpanDays, boolean> {
   const all: Record<SpanDays, boolean> = { 365: true, 1095: true, 3650: true }
-  if (points.length === 0) return all
+  if (!extentKnown(points, requestedDays, todayIso)) return all
   const covered = dayNumber(todayIso) - dayNumber(points[0].d)
-  if (covered >= requestedDays - SLACK_DAYS) return all
   let covering = false
   for (const span of PRICE_SPANS) {
     if (covering) all[span.days] = false

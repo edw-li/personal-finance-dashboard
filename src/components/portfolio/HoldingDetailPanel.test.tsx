@@ -244,6 +244,25 @@ describe('HoldingDetailPanel price history', () => {
     expect(screen.getByRole('button', { name: 'All' }).hasAttribute('disabled')).toBe(true)
   })
 
+  it('a full-length window opens with a date, it does not claim the history starts there', async () => {
+    // A year asked for and a year returned: the first bar is where the WINDOW opens, and
+    // whatever sits behind it is unknown — so no "history since", and no chip is disabled.
+    const iso = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10)
+    vi.mocked(fetchPriceHistory).mockResolvedValue({
+      ticker: 'AAA',
+      points: [
+        { d: iso(364), c: '100.00' },
+        { d: iso(1), c: '110.00' },
+      ],
+    })
+    renderPanel()
+    await screen.findByText(/\+10\.0% over this window · window from /)
+    expect(screen.queryByText(/history since/)).toBeNull()
+    expect(screen.getByRole('button', { name: '3Y' }).hasAttribute('disabled')).toBe(false)
+    expect(screen.getByRole('button', { name: 'All' }).hasAttribute('disabled')).toBe(false)
+  })
+
   it('says why one bar cannot be a line, in manual-pricing words when it applies', async () => {
     vi.mocked(fetchPriceHistory).mockResolvedValue({ ticker: 'AAA', points: [POINTS.points[0]] })
     renderPanel({ holding: holding({ is_manual_priced: true }) })

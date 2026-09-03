@@ -364,7 +364,6 @@ it('scopes the five owner-filterable fetches to the picked chip, and back on All
   expect(fetchTransactions).toHaveBeenCalledWith(SAM.id)
   expect(fetchDividends).toHaveBeenCalledWith(SAM.id)
   expect(fetchRealized).toHaveBeenCalledWith(SAM.id)
-  expect(fetchAllocation).toHaveBeenCalledWith('industry', SAM.id)
   expect(fetchAllocation).toHaveBeenCalledWith('type', SAM.id)
   expect(fetchAllocation).toHaveBeenCalledWith('account', SAM.id)
   expect(chip('Sam').getAttribute('aria-pressed')).toBe('true')
@@ -407,7 +406,6 @@ it('paints instantly from a seeded snapshot under the household key and revalida
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
-    industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
     sparklines: {},
@@ -436,7 +434,6 @@ it('leaves the charts still when the revalidation payload is identical', async (
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
-    industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
     sparklines: {},
@@ -461,7 +458,6 @@ it('a single-person household issues the pre-ownership requests, scope-free', as
   expect(fetchTransactions).toHaveBeenCalledWith(null)
   expect(fetchDividends).toHaveBeenCalledWith(null)
   expect(fetchRealized).toHaveBeenCalledWith(null)
-  expect(fetchAllocation).toHaveBeenCalledWith('industry', null)
   expect(fetchAllocation).toHaveBeenCalledWith('type', null)
   expect(fetchAllocation).toHaveBeenCalledWith('account', null)
   expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
@@ -477,7 +473,6 @@ it('keys the snapshot by owner — a chip flip is a cache MISS that re-arms the 
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
-    industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
     sparklines: {},
@@ -510,7 +505,6 @@ it('leaves the charts still when a chip flip returns to a warm scope', async () 
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
-    industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
     sparklines: {},
@@ -588,7 +582,6 @@ it('applies a revalidation that matches the cache but not the screen', async () 
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
-    industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
     sparklines: {},
@@ -614,7 +607,6 @@ it('applies a revalidation that matches the cache but not the screen', async () 
     transactions: TRANSACTIONS,
     dividends: DIVIDENDS,
     dividendEvents: [],
-    industry: allocationOut('industry'),
     byType: allocationOut('type'),
     byAccount: allocationOut('account'),
     sparklines: {},

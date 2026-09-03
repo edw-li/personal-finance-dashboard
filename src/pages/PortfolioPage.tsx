@@ -116,7 +116,6 @@ interface PortfolioSnapshot {
   transactions: TransactionOut[]
   dividends: DividendOut[]
   dividendEvents: DividendEventOut[]
-  industry: AllocationResponse
   byType: AllocationResponse
   byAccount: AllocationResponse
   sparklines: SparklinesResponse
@@ -302,7 +301,7 @@ export default function PortfolioPage() {
   }
 
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
-  // law (see NetWorthPage). One load() refetches EVERYTHING: twelve cheap local queries,
+  // law (see NetWorthPage). One load() refetches EVERYTHING: eleven cheap local queries,
   // and every mutation path (panels' onChanged, refresh) converges through it. Returns
   // the chain so callers can keep their own busy flag up until the data is on screen.
   // useCallback over [owner] because the mount effect keys on it: flipping the scope IS
@@ -315,7 +314,8 @@ export default function PortfolioPage() {
       fetchSecurities(),
       fetchTransactions(owner),
       fetchDividends(owner),
-      fetchAllocation('industry', owner),
+      // No 'industry' dimension: the heat-treemap reads the holdings themselves, because it
+      // needs per-ticker figures the AllocationResponse slices do not carry (F5).
       fetchAllocation('type', owner),
       fetchAllocation('account', owner),
       fetchSparklines(),
@@ -324,7 +324,7 @@ export default function PortfolioPage() {
       fetchRefreshStatus(),
       fetchDividendEvents(),
     ])
-      .then(([h, secs, txns, divs, ind, typ, acct, spark, hist, real, status, divEvents]) => {
+      .then(([h, secs, txns, divs, typ, acct, spark, hist, real, status, divEvents]) => {
         if (seq !== seqRef.current) return
         const snapshot: PortfolioSnapshot = {
           holdings: h,
@@ -332,7 +332,6 @@ export default function PortfolioPage() {
           transactions: txns,
           dividends: divs,
           dividendEvents: divEvents,
-          industry: ind,
           byType: typ,
           byAccount: acct,
           sparklines: spark,
