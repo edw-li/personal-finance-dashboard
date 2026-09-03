@@ -8,9 +8,14 @@
 // only the comparison average — a presentation figure that never leaves the page — is a
 // number.
 import type { EChartsOption } from '../../charts/echarts'
-import { PALETTE, SURFACE } from '../../charts/theme'
+import { BAR_MARKS, LINE, WASH, cents, grid, moneyAxis, monthAxis } from '../../charts/grammar'
+import { legendFor } from '../../charts/legend'
+import { referenceLine } from '../../charts/reference'
+import { PALETTE } from '../../charts/theme'
+import { axisTooltip } from '../../charts/tooltip'
 import type { NetWorthTimeseries, SpendingMatrix, TaxSummaryOut } from '../../types/api'
-import { formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
+import type { ExportTable } from '../../utils/download'
+import { formatMonth } from '../../utils/format'
 
 // A full trend chart, dressed exactly like its two card siblings below it. It began life
 // as an axis-free "spark" (Sparkline.tsx's license), but at 220px in a full-width card
@@ -22,33 +27,26 @@ export function netWorthTrendOption(
 ): EChartsOption | null {
   if (ts.months.length < 2) return null
   return {
-    grid: { left: 70, right: 16, top: 12, bottom: 28 },
-    xAxis: { type: 'category', data: ts.months.map(formatMonth), boundaryGap: false },
-    // A washed area over a VISIBLE axis needs the honest zero baseline
-    // (historyChartOptions' rule) — no scale:true, unlike the old axis-free form.
-    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatCurrencyCompact(v) } },
-    // Default axis pointer kept: with axes on screen the dotted rule has something to
-    // point at, and a line chart ships its crosshair by default (dataviz law).
-    tooltip: { trigger: 'axis', valueFormatter: (v) => formatCurrency(v as number) },
-    series: [
-      {
-        type: 'line',
-        name: 'Net worth',
-        symbol: 'none',
-        lineStyle: { width: 2 },
-        // The house visible-axis wash (historyChartOptions' 0.12), now anchored to a
-        // labeled zero it cannot misrepresent.
-        areaStyle: { opacity: 0.12 },
-        color: PALETTE[0],
-        data: ts.net_worth.map(Number),
-      },
-    ],
+    grid: grid('noLegend'),
+    xAxis: monthAxis(ts.months.map(formatMonth)),
+    // A washed area over a VISIBLE axis needs the honest zero baseline — no scale:true.
+    yAxis: moneyAxis(),
+    // Default axis pointer kept: a line chart ships its crosshair by default (dataviz law).
+    tooltip: axisTooltip({ unit: 'money' }),
+    series: [{ ...LINE, name: 'Net worth', ...WASH, color: PALETTE[0], data: ts.net_worth.map(Number) }],
   }
+}
+
+/** The trend as a table (F12): the server's own month strings and figures, verbatim. */
+export function netWorthTrendCsv(ts: Pick<NetWorthTimeseries, 'months' | 'net_worth'>): ExportTable {
+  return { headers: ['Month', 'Net worth'], rows: ts.months.map((m, i) => [m, ts.net_worth[i]]) }
 }
 
 /** The bars' trailing-window length — named so OverviewPage's click handler can map a
  * dataIndex back through the same slice (2026-08-25 spec §2d). */
 export const RECENT_SPEND_MONTHS = 12
+
+const AVERAGE_SERIES = '12-mo average'
 
 export function recentSpendOption(
   matrix: Pick<SpendingMatrix, 'months' | 'totals'>,
@@ -56,22 +54,30 @@ export function recentSpendOption(
 ): EChartsOption | null {
   if (matrix.months.length === 0) return null
   const start = Math.max(0, matrix.months.length - months)
+  const totals = matrix.totals.slice(start).map(Number)
+  // F14: the window's own mean as a reference — the same window the bars show, so the line
+  // and the bars answer one question ("is this month over my recent average?").
+  const mean = cents(totals.reduce((sum, t) => sum + t, 0) / totals.length)
   return {
-    grid: { left: 70, right: 16, top: 24, bottom: 28 },
-    xAxis: { type: 'category', data: matrix.months.slice(start).map(formatMonth) },
-    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatCurrencyCompact(v) } },
-    tooltip: { trigger: 'axis', valueFormatter: (v) => formatCurrency(v as number) },
+    grid: grid(),
+    legend: legendFor(2),
+    xAxis: monthAxis(matrix.months.slice(start).map(formatMonth), { gap: true }),
+    yAxis: moneyAxis(),
+    tooltip: axisTooltip({ unit: 'money', references: [AVERAGE_SERIES], pointer: 'shadow' }),
     series: [
-      {
-        type: 'bar',
-        name: 'Spend',
-        barMaxWidth: 22,
-        color: PALETTE[1],
-        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-        data: matrix.totals.slice(start).map(Number),
-      },
+      { type: 'bar', name: 'Spend', ...BAR_MARKS, color: PALETTE[1], data: totals },
+      referenceLine(AVERAGE_SERIES, totals.map(() => mean)),
     ],
   }
+}
+
+/** The shown months as a table (F12) — the same trailing window the bars draw. */
+export function recentSpendCsv(
+  matrix: Pick<SpendingMatrix, 'months' | 'totals'>,
+  months = RECENT_SPEND_MONTHS,
+): ExportTable {
+  const start = Math.max(0, matrix.months.length - months)
+  return { headers: ['Month', 'Spend'], rows: matrix.months.slice(start).map((m, i) => [m, matrix.totals[start + i]]) }
 }
 
 export interface SpendStats {
