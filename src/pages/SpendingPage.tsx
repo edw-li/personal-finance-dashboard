@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { PencilLine } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { fetchMatrix, fetchYearly } from '../api/spending'
@@ -7,8 +7,9 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import EChart from '../components/EChart'
 import type { EChartEventParams, EChartsInstance } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
-import MonthRibbon from '../components/MonthRibbon'
-import RangeChips from '../components/RangeChips'
+import PageFrame from '../components/shell/PageFrame'
+import ScopeBar from '../components/shell/ScopeBar'
+import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import { useArrivalValue } from '../components/useArrivalParam'
 import ChartZoomHint from '../components/ChartZoomHint'
@@ -41,7 +42,6 @@ import {
   formatMonth,
   formatPct,
 } from '../utils/format'
-import { currentMonthIso } from '../utils/months'
 import { buildMonthSlices, hasVsBudget, monthMovers } from '../utils/spending'
 import '../components/panels.css'
 import './SpendingPage.css'
@@ -110,33 +110,27 @@ export default function SpendingPage() {
   useArrivalValue('trend', arriveOnTrend)
   // false once a revalidation actually CHANGES the data — charts may animate again.
   const [fromCache, setFromCache] = useState(cached !== undefined)
-  // Month drill-in: the ISO month whose breakdown pie replaces the bars chart — READ
-  // from the URL (?month=YYYY-MM-01, the wizard's own param grammar) so a drill is
-  // shareable and Overview can link straight into it (2026-08-25 spec §2d). Month
-  // STRING, never an index: a refetch that reshapes the month list cannot mis-target,
-  // and a month that vanished (or a garbled param) falls back to the all-months view
-  // through the indexOf guard below.
-  const [searchParams, setSearchParams] = useSearchParams()
-  const detailMonth = searchParams.get('month')
-  const setDetailMonth = (month: string | null) => {
-    // replace, not push: a drill is a view state — Back should leave the page, not
-    // unwind every pie the user peeked at.
-    setSearchParams(
-      (current) => {
-        const copy = new URLSearchParams(current)
-        if (month === null) copy.delete('month')
-        else copy.set('month', month)
-        return copy
-      },
-      { replace: true },
-    )
-  }
+  // Month drill-in and time window both live in the shared scope now (2026-09-03 shell
+  // spec §6): the URL is the source of truth and the sticky ScopeBar writes it, so a drill
+  // stays shareable and Overview can still link straight into one. `scope.month` is the
+  // app's YYYY-MM-01 month currency (the URL carries the short YYYY-MM, and a legacy
+  // YYYY-MM-DD deep link is accepted and rewritten). Month STRING, never an index: a
+  // refetch that reshapes the month list cannot mis-target, and a month that vanished (or
+  // a garbled param) falls back to the all-months view through the indexOf guard below.
+  const { scope, setScope } = useScope({ range: true, month: true })
+  const detailMonth = scope.month
+  // replace, not push: setScope's drill-param convention — Back should leave the page,
+  // not unwind every pie the user peeked at.
+  const setDetailMonth = (month: string | null) => setScope({ month })
   // The page's time window, applied to the three time charts together (bars, savings
   // rate, category trends — one month axis, one answer), PLUS any manual ctrl+wheel
   // window mirrored back from a chart's datazoom event (2026-08-25 spec §2e) — so
-  // rebuilds and same-axis siblings keep the wander. Chips hand back a fresh {preset}
-  // with no window: their snap-back contract, unchanged. The heatmap stays whole.
-  const [range, setRange] = useState<RangeState>({ preset: 'all' })
+  // rebuilds and same-axis siblings keep the wander. A chip pick arrives through the URL
+  // as a fresh {preset} with no window: the snap-back contract, unchanged. The heatmap
+  // stays whole. Adopted with the adjust-during-render idiom, never a setState in an
+  // effect body (CategoriesPanel's precedent).
+  const [range, setRange] = useState<RangeState>({ preset: scope.range })
+  if (scope.range !== range.preset) setRange({ preset: scope.range })
   // Legend picks, mirrored from legendselectchanged and fed back via legend.selected —
   // a refetch/notMerge rebuild no longer resets toggles (the budget-line reset bug).
   const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>({})
@@ -610,375 +604,384 @@ export default function SpendingPage() {
     }
   }, [matrix])
 
-  const filledMonths = useMemo(() => {
-    const set = new Set<string>()
-    matrix?.series.forEach((s) =>
-      s.values.forEach((v, i) => {
-        if (v !== null) set.add(matrix.months[i])
-      }),
-    )
-    return set
-  }, [matrix])
+  // What each ribbon chip PRINTS. Which months are entered is the ScopeBar's own business
+  // (it reads /coverage for the two-tone chips); this page contributes only the figure —
+  // that month's total spend — so the ribbon answers "how much" without a second fetch.
+  const ribbonFigures = useMemo(
+    () =>
+      matrix === null
+        ? undefined
+        : Object.fromEntries(matrix.months.map((m, i) => [m, formatCurrency(matrix.totals[i])])),
+    [matrix],
+  )
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1>Spending</h1>
-        <div className="spacer" />
-        <MonthRibbon
-          anchor={currentMonthIso()}
-          filledMonths={filledMonths}
-          onSelect={(month) => navigate(`/update?month=${month}&step=spending`)}
-        />
-        <button
-          className="button button-primary"
-          onClick={() => navigate('/update?step=spending')}
-        >
-          <PencilLine size={15} /> Enter month
-        </button>
-      </div>
-
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
+      <PageFrame
+        title="Spending"
+        actions={
           <button
-            className="button"
-            onClick={() => {
-              beginLoad()
-              load()
-            }}
+            className="button button-primary"
+            onClick={() => navigate('/update?step=spending')}
           >
-            Retry
+            <PencilLine size={15} /> Enter month
           </button>
-        </div>
-      )}
-
-      {kpis && (
-        <div className="kpi-row">
-          <StatTile
-            label={`Spend — ${formatMonth(kpis.month)}`}
-            value={formatCurrency(kpis.total)}
-            hint="The latest entered month's total across all categories."
+        }
+        scopeRow={
+          <ScopeBar
+            range
+            month={{
+              mode: 'view',
+              figures: ribbonFigures,
+              editHref: (month) => `/update?month=${month}&step=spending`,
+            }}
           />
-          <StatTile
-            label="12-month average"
-            value={formatCurrency(kpis.average)}
-            hint="Mean monthly spend over the last 12 entered months, including the latest."
-          />
-          <StatTile
-            label="Savings rate (actual)"
-            value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
-            hint="(net pay − spend) ÷ net pay for the latest month."
-          />
-          <StatTile
-            label="Net pay"
-            value={formatCurrency(kpis.netPay)}
-            hint="Take-home pay entered for the latest month."
-          />
-        </div>
-      )}
-
-      <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
-        <div className="card span-12">
-          <div className="spending-chart-header">
-            <h2 className="eyebrow">
-              {detailLabel
-                ? `Spending breakdown — ${detailLabel}`
-                : `Monthly spend vs net pay — top ${TOP_N} categories + other`}
-              <InfoHint text="Top categories stacked per month under your net-pay line; the dashed line is what your investable assets could sustainably fund each month. Click a bar for that month's breakdown." />
-            </h2>
-            {/* One slot, two modes: the drill-in's way back, or the page's time window
-                (a pie has no time axis, so the chips would be dead weight beside it). */}
-            {activeDetail ? (
-              <button className="button" onClick={() => setDetailMonth(null)}>
-                All months
-              </button>
-            ) : (
-              <RangeChips value={range.preset} onChange={setRange} />
-            )}
-          </div>
-          {activeDetail && matrix ? (
-            <>
-              <p className="drill-hint">
-                Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
-                {formatCurrency(matrix.net_pay[detailIndex])} · Savings{' '}
-                {matrix.savings_rate[detailIndex] === null
-                  ? '—'
-                  : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
-                — click the chart to go back.
-              </p>
-              {monthDetailOption ? (
-                <EChart
-                  option={monthDetailOption}
-                  height={340}
-                  onClick={handleSpendChartClick}
-                  instanceRef={barsChartRef}
-                  animateEntrance={!fromCache}
-                />
-              ) : (
-                <div className="empty-note">No spending recorded for {detailLabel}.</div>
-              )}
-            </>
-          ) : barsOption && matrix ? (
-            <>
-              <p className="drill-hint">Click a month's bar to expand its breakdown.</p>
-              <EChart
-                option={barsOption}
-                height={340}
-                onClick={handleSpendChartClick}
-                instanceRef={barsChartRef}
-                onLegendChange={onLegendChange}
-                onDataZoom={onZoomWindow}
-                zoomWindow={zoomWindow}
-                exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
-                animateEntrance={!fromCache}
-              />
-              <ChartZoomHint />
-            </>
-          ) : (
-            !loading &&
-            !error && (
-              <div className="empty-note">No spending recorded yet — enter a month to begin.</div>
-            )
-          )}
-        </div>
-
-        {movers.length > 0 && (
-          <div className="card span-12">
-            <h2 className="eyebrow">
-              What changed — {monthLabels[focusIndex]}
-              <InfoHint text="The month's biggest category moves, vs the prior month and vs each category's 12-month average." />
-            </h2>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Category</th>
-                  <th className="num">{monthLabels[focusIndex]}</th>
-                  <th className="num">
-                    vs {focusIndex > 0 ? monthLabels[focusIndex - 1] : 'prior month'}
-                  </th>
-                  <th className="num">vs 12-mo avg</th>
-                  {showVsBudget && <th className="num">vs budget</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {movers.map((m) => (
-                  <tr key={m.categoryId}>
-                    <td>{nameById.get(m.categoryId) ?? String(m.categoryId)}</td>
-                    <td className="num">{formatCurrency(m.value)}</td>
-                    <td className="num">{moverCell(m.deltaPrior)}</td>
-                    <td className="num">{moverCell(m.deltaAvg)}</td>
-                    {showVsBudget && <td className="num">{moverCell(m.deltaBudget)}</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="drill-hint">
-              The {MOVERS_TOP} biggest category moves for the month above — drill into a
-              month on the top chart to see its movers instead.
-            </p>
+        }
+        resource={{
+          status: matrix === null ? (error !== null ? 'error' : 'loading') : 'ready',
+          error,
+          busy: loading,
+          fromCache,
+          retry: () => {
+            beginLoad()
+            load()
+          },
+        }}
+        skeleton={{
+          tiles: 4,
+          cards: [
+            { span: 12, height: 360 },
+            { span: 6, height: 300 },
+            { span: 6, height: 300 },
+          ],
+        }}
+      >
+        {kpis && (
+          <div className="kpi-row">
+            <StatTile
+              label={`Spend — ${formatMonth(kpis.month)}`}
+              value={formatCurrency(kpis.total)}
+              hint="The latest entered month's total across all categories."
+            />
+            <StatTile
+              label="12-month average"
+              value={formatCurrency(kpis.average)}
+              hint="Mean monthly spend over the last 12 entered months, including the latest."
+            />
+            <StatTile
+              label="Savings rate (actual)"
+              value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
+              hint="(net pay − spend) ÷ net pay for the latest month."
+            />
+            <StatTile
+              label="Net pay"
+              value={formatCurrency(kpis.netPay)}
+              hint="Take-home pay entered for the latest month."
+            />
           </div>
         )}
 
-        {flowPeriod && (
+        <div className="card-grid">
           <div className="card span-12">
             <div className="spending-chart-header">
               <h2 className="eyebrow">
-                Where {flowPeriod.label} went
-                <InfoHint text="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a red Drawdown source covering the overspend." />
+                {detailLabel
+                  ? `Spending breakdown — ${detailLabel}`
+                  : `Monthly spend vs net pay — top ${TOP_N} categories + other`}
+                <InfoHint text="Top categories stacked per month under your net-pay line; the dashed line is what your investable assets could sustainably fund each month. Click a bar for that month's breakdown." />
               </h2>
-              <div className="segmented" role="group" aria-label="Flow window">
-                {(['month', 'year'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={flowMode === mode ? 'active' : ''}
-                    aria-pressed={flowMode === mode}
-                    onClick={() => setFlowMode(mode)}
-                  >
-                    {mode === 'month' ? 'Month' : 'Year'}
-                  </button>
-                ))}
-              </div>
+              {/* The drill-in's way back. It stays here beside the pie it undoes, where the
+                  eye already is — the scope row's "Back to latest" chip clears the same
+                  selection from the other end. */}
+              {activeDetail ? (
+                <button className="button" onClick={() => setDetailMonth(null)}>
+                  All months
+                </button>
+              ) : null}
             </div>
-            {flowOption ? (
+            {activeDetail && matrix ? (
               <>
+                <p className="drill-hint">
+                  Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
+                  {formatCurrency(matrix.net_pay[detailIndex])} · Savings{' '}
+                  {matrix.savings_rate[detailIndex] === null
+                    ? '—'
+                    : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
+                  — click the chart to go back.
+                </p>
+                {monthDetailOption ? (
+                  <EChart
+                    option={monthDetailOption}
+                    height={340}
+                    onClick={handleSpendChartClick}
+                    instanceRef={barsChartRef}
+                    animateEntrance={!fromCache}
+                  />
+                ) : (
+                  <div className="empty-note">No spending recorded for {detailLabel}.</div>
+                )}
+              </>
+            ) : barsOption && matrix ? (
+              <>
+                <p className="drill-hint">Click a month's bar to expand its breakdown.</p>
                 <EChart
-                  option={flowOption}
-                  height={320}
-                  ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
+                  option={barsOption}
+                  height={340}
+                  onClick={handleSpendChartClick}
+                  instanceRef={barsChartRef}
+                  onLegendChange={onLegendChange}
+                  onDataZoom={onZoomWindow}
+                  zoomWindow={zoomWindow}
+                  exportConfig={{ name: 'spending', csv: () => spendingCsv(matrix, topIds, nameById) }}
                   animateEntrance={!fromCache}
                 />
-                <p className="drill-hint">
-                  Hover a node to trace its flows; drill a month on the top chart and this
-                  card follows it.
-                </p>
+                <ChartZoomHint />
               </>
             ) : (
-              <div className="empty-note">
-                {flowPeriod.netPay === null
-                  ? `Enter net pay for ${flowPeriod.label} to see the flow.`
-                  : `No flow to draw for ${flowPeriod.label}.`}
-              </div>
+              !loading &&
+              !error && (
+                <div className="empty-note">No spending recorded yet — enter a month to begin.</div>
+              )
             )}
           </div>
-        )}
 
-        {/* onBudgetsChanged = the page's refetch: a saved budget re-draws the meters, the
-            chart reference lines and the movers column together, from one matrix. */}
-        {matrix && matrix.months.length > 0 && (
-          <BudgetPanel matrix={matrix} monthIndex={focusIndex} onBudgetsChanged={load} />
-        )}
-
-        {/* Long-run half, summary before detail (2026-08-31 audit): the range-windowed
-            pair reads right after the budgets that feed the trends chart's step lines;
-            the never-windowed full-history pair (heatmap, yearly) closes the page. */}
-        <div className="card span-6">
-          <h2 className="eyebrow">
-            Savings rate (actual)
-            <InfoHint text="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent." />
-          </h2>
-          {savingsOption && (
-            <>
-              <EChart
-                option={savingsOption}
-                height={260}
-                onDataZoom={onZoomWindow}
-                zoomWindow={zoomWindow}
-                animateEntrance={!fromCache}
-              />
-              <ChartZoomHint />
-            </>
-          )}
-          <p className="drill-hint">
-            (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
-            planned rate, so values differ by design.
-          </p>
-        </div>
-
-        <div className="card span-6">
-          <h2 className="eyebrow">
-            Category trends
-            <InfoHint text="Single-category history — pick up to 3 to compare." />
-          </h2>
-          <div className="chip-row">
-            {matrix?.categories.map((category) => {
-              const active = trend.find((t) => t.categoryId === category.id)
-              // Slot hue goes on the BORDER, never the text (text stays --text via
-              // .chip.active) — series color marks identity beside text, not in it.
-              // The DOM swatch reads the CSS slot, not PALETTE: index.css repoints
-              // --chart-N per theme, so the chip border tracks a light/dark switch that a
-              // baked dark hex would ignore. Slots are 0-based, the tokens are 1-based.
-              return (
-                <button
-                  key={category.id}
-                  type="button"
-                  className={active ? 'chip active' : 'chip'}
-                  style={active ? { borderColor: `var(--chart-${active.slot + 1})` } : undefined}
-                  aria-pressed={!!active}
-                  onClick={() => toggleTrend(category.id)}
-                >
-                  {category.name}
-                </button>
-              )
-            })}
-          </div>
-          {trendOption ? (
-            <>
-              <EChart
-                option={trendOption}
-                height={220}
-                onLegendChange={onLegendChange}
-                onDataZoom={onZoomWindow}
-                zoomWindow={zoomWindow}
-                animateEntrance={!fromCache}
-              />
-              <ChartZoomHint />
-            </>
-          ) : (
-            <div className="empty-note">Pick up to {MAX_TREND} categories.</div>
-          )}
-        </div>
-
-        <div className="card span-12">
-          <h2 className="eyebrow">
-            Month × category heatmap
-            <InfoHint text="Spend per category per month on one shared scale — darker is more. Rows are ordered by all-time total." />
-          </h2>
-          {heatmapOption && (
-            <EChart
-              option={heatmapOption}
-              height={Math.max(332, (matrix?.categories.length ?? 0) * 24 + 142)}
-              ariaLabel="Heatmap of spend per category per month — darker is more"
-              onHover={handleHeatmapHover}
-              onHoverEnd={handleHeatmapHoverEnd}
-              animateEntrance={!fromCache}
-            />
-          )}
-        </div>
-
-        <div className="card span-12">
-          <h2 className="eyebrow">
-            Yearly rollups
-            <InfoHint text="Category totals per calendar year, with net pay and that year's savings rate." />
-          </h2>
-          <div className="yearly-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Category</th>
-                  {yearly?.years.map((y) => (
-                    <th key={y.year} className="num">
-                      {y.year}
+          {movers.length > 0 && (
+            <div className="card span-12">
+              <h2 className="eyebrow">
+                What changed — {monthLabels[focusIndex]}
+                <InfoHint text="The month's biggest category moves, vs the prior month and vs each category's 12-month average." />
+              </h2>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th className="num">{monthLabels[focusIndex]}</th>
+                    <th className="num">
+                      vs {focusIndex > 0 ? monthLabels[focusIndex - 1] : 'prior month'}
                     </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {matrix?.categories.map((category) => (
-                  <tr key={category.id}>
-                    <td>{category.name}</td>
-                    {yearly?.years.map((y) => {
-                      const cell = y.by_category.find((c) => c.category_id === category.id)
-                      return (
-                        <td key={y.year} className="num">
-                          {formatCurrency(cell?.total ?? null)}
-                        </td>
-                      )
-                    })}
+                    <th className="num">vs 12-mo avg</th>
+                    {showVsBudget && <th className="num">vs budget</th>}
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td style={{ fontWeight: 600 }}>Total</td>
-                  {yearly?.years.map((y) => (
-                    <td key={y.year} className="num" style={{ fontWeight: 600 }}>
-                      {formatCurrency(y.total)}
-                    </td>
+                </thead>
+                <tbody>
+                  {movers.map((m) => (
+                    <tr key={m.categoryId}>
+                      <td>{nameById.get(m.categoryId) ?? String(m.categoryId)}</td>
+                      <td className="num">{formatCurrency(m.value)}</td>
+                      <td className="num">{moverCell(m.deltaPrior)}</td>
+                      <td className="num">{moverCell(m.deltaAvg)}</td>
+                      {showVsBudget && <td className="num">{moverCell(m.deltaBudget)}</td>}
+                    </tr>
                   ))}
-                </tr>
-                <tr>
-                  <td>Net pay</td>
-                  {yearly?.years.map((y) => (
-                    <td key={y.year} className="num">
-                      {formatCurrency(y.net_pay_total)}
-                    </td>
+                </tbody>
+              </table>
+              <p className="drill-hint">
+                The {MOVERS_TOP} biggest category moves for the month above — drill into a
+                month on the top chart to see its movers instead.
+              </p>
+            </div>
+          )}
+
+          {flowPeriod && (
+            <div className="card span-12">
+              <div className="spending-chart-header">
+                <h2 className="eyebrow">
+                  Where {flowPeriod.label} went
+                  <InfoHint text="Net pay fanned out across the period's categories, wearing the stacked chart's colors; green Saved is what was left. A deficit period adds a red Drawdown source covering the overspend." />
+                </h2>
+                <div className="segmented" role="group" aria-label="Flow window">
+                  {(['month', 'year'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={flowMode === mode ? 'active' : ''}
+                      aria-pressed={flowMode === mode}
+                      onClick={() => setFlowMode(mode)}
+                    >
+                      {mode === 'month' ? 'Month' : 'Year'}
+                    </button>
                   ))}
-                </tr>
-                <tr>
-                  <td>Savings rate</td>
-                  {yearly?.years.map((y) => (
-                    <td key={y.year} className="num">
-                      {y.savings_rate === null ? '—' : formatPct(y.savings_rate, { signed: false })}
-                    </td>
+                </div>
+              </div>
+              {flowOption ? (
+                <>
+                  <EChart
+                    option={flowOption}
+                    height={320}
+                    ariaLabel={`Sankey flow of where ${flowPeriod.label} went, from net pay into categories and savings`}
+                    animateEntrance={!fromCache}
+                  />
+                  <p className="drill-hint">
+                    Hover a node to trace its flows; drill a month on the top chart and this
+                    card follows it.
+                  </p>
+                </>
+              ) : (
+                <div className="empty-note">
+                  {flowPeriod.netPay === null
+                    ? `Enter net pay for ${flowPeriod.label} to see the flow.`
+                    : `No flow to draw for ${flowPeriod.label}.`}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* onBudgetsChanged = the page's refetch: a saved budget re-draws the meters, the
+              chart reference lines and the movers column together, from one matrix. */}
+          {matrix && matrix.months.length > 0 && (
+            <BudgetPanel matrix={matrix} monthIndex={focusIndex} onBudgetsChanged={load} />
+          )}
+
+          {/* Long-run half, summary before detail (2026-08-31 audit): the range-windowed
+              pair reads right after the budgets that feed the trends chart's step lines;
+              the never-windowed full-history pair (heatmap, yearly) closes the page. */}
+          <div className="card span-6">
+            <h2 className="eyebrow">
+              Savings rate (actual)
+              <InfoHint text="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent." />
+            </h2>
+            {savingsOption && (
+              <>
+                <EChart
+                  option={savingsOption}
+                  height={260}
+                  onDataZoom={onZoomWindow}
+                  zoomWindow={zoomWindow}
+                  animateEntrance={!fromCache}
+                />
+                <ChartZoomHint />
+              </>
+            )}
+            <p className="drill-hint">
+              (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
+              planned rate, so values differ by design.
+            </p>
+          </div>
+
+          <div className="card span-6">
+            <h2 className="eyebrow">
+              Category trends
+              <InfoHint text="Single-category history — pick up to 3 to compare." />
+            </h2>
+            <div className="chip-row">
+              {matrix?.categories.map((category) => {
+                const active = trend.find((t) => t.categoryId === category.id)
+                // Slot hue goes on the BORDER, never the text (text stays --text via
+                // .chip.active) — series color marks identity beside text, not in it.
+                // The DOM swatch reads the CSS slot, not PALETTE: index.css repoints
+                // --chart-N per theme, so the chip border tracks a light/dark switch that a
+                // baked dark hex would ignore. Slots are 0-based, the tokens are 1-based.
+                return (
+                  <button
+                    key={category.id}
+                    type="button"
+                    className={active ? 'chip active' : 'chip'}
+                    style={active ? { borderColor: `var(--chart-${active.slot + 1})` } : undefined}
+                    aria-pressed={!!active}
+                    onClick={() => toggleTrend(category.id)}
+                  >
+                    {category.name}
+                  </button>
+                )
+              })}
+            </div>
+            {trendOption ? (
+              <>
+                <EChart
+                  option={trendOption}
+                  height={220}
+                  onLegendChange={onLegendChange}
+                  onDataZoom={onZoomWindow}
+                  zoomWindow={zoomWindow}
+                  animateEntrance={!fromCache}
+                />
+                <ChartZoomHint />
+              </>
+            ) : (
+              <div className="empty-note">Pick up to {MAX_TREND} categories.</div>
+            )}
+          </div>
+
+          <div className="card span-12">
+            <h2 className="eyebrow">
+              Month × category heatmap
+              <InfoHint text="Spend per category per month on one shared scale — darker is more. Rows are ordered by all-time total." />
+            </h2>
+            {heatmapOption && (
+              <EChart
+                option={heatmapOption}
+                height={Math.max(332, (matrix?.categories.length ?? 0) * 24 + 142)}
+                ariaLabel="Heatmap of spend per category per month — darker is more"
+                onHover={handleHeatmapHover}
+                onHoverEnd={handleHeatmapHoverEnd}
+                animateEntrance={!fromCache}
+              />
+            )}
+          </div>
+
+          <div className="card span-12">
+            <h2 className="eyebrow">
+              Yearly rollups
+              <InfoHint text="Category totals per calendar year, with net pay and that year's savings rate." />
+            </h2>
+            <div className="yearly-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    {yearly?.years.map((y) => (
+                      <th key={y.year} className="num">
+                        {y.year}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {matrix?.categories.map((category) => (
+                    <tr key={category.id}>
+                      <td>{category.name}</td>
+                      {yearly?.years.map((y) => {
+                        const cell = y.by_category.find((c) => c.category_id === category.id)
+                        return (
+                          <td key={y.year} className="num">
+                            {formatCurrency(cell?.total ?? null)}
+                          </td>
+                        )
+                      })}
+                    </tr>
                   ))}
-                </tr>
-              </tfoot>
-            </table>
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td style={{ fontWeight: 600 }}>Total</td>
+                    {yearly?.years.map((y) => (
+                      <td key={y.year} className="num" style={{ fontWeight: 600 }}>
+                        {formatCurrency(y.total)}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Net pay</td>
+                    {yearly?.years.map((y) => (
+                      <td key={y.year} className="num">
+                        {formatCurrency(y.net_pay_total)}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Savings rate</td>
+                    {yearly?.years.map((y) => (
+                      <td key={y.year} className="num">
+                        {y.savings_rate === null ? '—' : formatPct(y.savings_rate, { signed: false })}
+                      </td>
+                    ))}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           </div>
         </div>
-      </div>
+      </PageFrame>
     </div>
   )
 }
