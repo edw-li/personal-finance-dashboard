@@ -863,7 +863,7 @@ describe('OverviewPage attention strip', () => {
       screen
         .getByRole('link', { name: /Nightly backup hasn't run recently/ })
         .getAttribute('href'),
-    ).toBe('/settings')
+    ).toBe('/settings#backups')
     // Exactly the four conditions above — nothing else invented itself an item.
     expect(strip.querySelectorAll('a')).toHaveLength(4)
   })
