@@ -75,6 +75,21 @@ describe('annotation rules', () => {
     })
     expect(annotationRules([undefined])).toBeUndefined()
   })
+
+  it('merges rules that land on the SAME category into one two-named label', () => {
+    // Retiring in the month FI arrives: echarts draws one label per data entry at one
+    // position, so two entries here would print two labels on the same pixel.
+    expect(
+      annotationRules([
+        arrivalRule(MONTHS, '2026-08-01', 'Alex'),
+        arrivalRule(MONTHS, '2026-08-01', 'FI'),
+        arrivalRule(MONTHS, '2026-07-01', 'Coast FI'),
+      ])?.data,
+    ).toEqual([
+      { xAxis: 'Aug 2026', label: { formatter: 'Alex · FI' } },
+      { xAxis: 'Jul 2026', label: { formatter: 'Coast FI' } },
+    ])
+  })
 })
 
 describe('areas, marks, baselines', () => {
@@ -94,6 +109,20 @@ describe('areas, marks, baselines', () => {
       data: [{ name: 'p50', coord: ['Aug 2030', 1500000] }],
     })
     expect(marks.label.formatter({ name: 'p50' })).toBe('p50')
+  })
+  it('merges percentile marks that share a coordinate into one circle', () => {
+    // p10 and p50 arriving in the same month: two circles on one pixel, two labels on top
+    // of each other. One circle, named for both.
+    expect(
+      percentileMarks([
+        { name: 'p10', label: 'Aug 2030', value: 1500000 },
+        { name: 'p50', label: 'Aug 2030', value: 1500000 },
+        { name: 'p90', label: 'Aug 2032', value: 1500000 },
+      ]).data,
+    ).toEqual([
+      { name: 'p10 · p50', coord: ['Aug 2030', 1500000] },
+      { name: 'p90', coord: ['Aug 2032', 1500000] },
+    ])
   })
   it('zeroLine is the solid MUTED hairline the savings-rate and card-value charts draw', () => {
     expect(zeroLine()).toEqual({

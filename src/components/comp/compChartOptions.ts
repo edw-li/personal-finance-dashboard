@@ -7,9 +7,12 @@
 // here and never hands a float back to the API (src/utils/format.ts's rule, and the same
 // posture as src/components/taxes/taxChartOptions.ts).
 import type { EChartsOption } from '../../charts/echarts'
-import { INK, PALETTE, SURFACE } from '../../charts/theme'
+import { BAR_MARKS, grid, moneyAxis, monthAxis, roundTo, stagger } from '../../charts/grammar'
+import { FOCUS, legendFor } from '../../charts/legend'
+import { INK, PALETTE } from '../../charts/theme'
+import { axisTooltip } from '../../charts/tooltip'
 import type { CompEventOut } from '../../types/api'
-import { formatCurrency, formatCurrencyCompact } from '../../utils/format'
+import type { ExportTable } from '../../utils/download'
 
 // Base and unvested equity are two KINDS of money, not two positions in an order, so they
 // wear identity hues rather than a sequential ramp (the ramp in taxChartOptions encodes
@@ -31,13 +34,18 @@ export const TC_LABELS = ['Base', 'Equity value (incl. refresh)', 'Total comp'] 
 // (the sheet has no TC column), and saying which proxy is the whole honesty of the chart.
 export const TC_CHART_LABEL = 'Base + unvested equity value'
 
-// Display-only rounding, for the ONE derived quantity on this chart. The subtraction is
-// float arithmetic (601854.46 - 188930 = 412924.45999999996) and a stack segment is chart
-// GEOMETRY rather than a reported figure, so it lands back on cents here — no dust reaches
-// an axis label or a tooltip (taxChartOptions' `roundTo`).
-function roundTo(value: number, places: number): number {
-  const factor = 10 ** places
-  return Math.round(value * factor) / factor
+/** The chart's rows — one computation for the option and the CSV. */
+function trajectoryRows(events: CompEventOut[]) {
+  // The router already orders by focal_year, but the chart owns its own x-axis order
+  // rather than trusting it (trendOption's reasoning).
+  const ordered = [...events].sort((a, b) => a.focal_year - b.focal_year)
+  return ordered.map((e) => {
+    const base = Number(e.new_base ?? e.current_base)
+    const total = Number(e.tc_after)
+    // Display-only rounding: the subtraction is float arithmetic (601854.46 - 188930 =
+    // 412924.45999999996) and a stack segment is chart GEOMETRY, not a reported figure.
+    return { year: e.focal_year, base, total, equity: roundTo(total - base, 2) }
+  })
 }
 
 /**
@@ -58,52 +66,48 @@ function roundTo(value: number, places: number): number {
  * Returns null for an empty feed — the caller renders an empty note, the house pattern for
  * a builder with nothing to draw (taxChartOptions' `trendOption`).
  */
-export function tcTrajectoryOption(events: CompEventOut[]): EChartsOption | null {
+export function tcTrajectoryOption(
+  events: CompEventOut[],
+  { selected }: { selected?: Record<string, boolean> } = {},
+): EChartsOption | null {
   if (events.length === 0) return null
-  // The router already orders by focal_year, but the chart owns its own x-axis order
-  // rather than trusting it (trendOption's reasoning).
-  const ordered = [...events].sort((a, b) => a.focal_year - b.focal_year)
-  const bases = ordered.map((e) => Number(e.new_base ?? e.current_base))
-  const totals = ordered.map((e) => Number(e.tc_after))
-  const equity = totals.map((total, i) => roundTo(total - bases[i], 2))
-
+  const rows = trajectoryRows(events)
+  const stack = (name: string, index: number, data: number[]) => ({
+    name,
+    type: 'bar' as const,
+    stack: 'tc',
+    ...BAR_MARKS,
+    barMaxWidth: 24,
+    ...stagger(index),
+    color: TC_COLORS[index],
+    data,
+  })
   return {
-    grid: { left: 70, right: 24, top: 40, bottom: 28 },
-    legend: { top: 0 },
-    tooltip: {
-      trigger: 'axis',
-      // One unit for all three series, so the single valueFormatter covers them
-      // (SpendingPage's bars tooltip). No user text reaches this tooltip at all — the
-      // categories are years and the series names are this file's own constants.
-      valueFormatter: (value) =>
-        value === null || value === undefined ? '—' : formatCurrency(value as number),
-    },
-    xAxis: { type: 'category', data: ordered.map((e) => String(e.focal_year)) },
-    yAxis: {
-      type: 'value',
-      axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-    },
+    grid: grid(),
+    legend: legendFor(3, selected),
+    // The two segments sum to the line, so a Total row would print the line twice.
+    tooltip: axisTooltip({
+      unit: 'money',
+      groups: [TC_LABELS[0], TC_LABELS[1]],
+      totalLabel: false,
+      pointer: 'shadow',
+    }),
+    xAxis: monthAxis(
+      rows.map((r) => String(r.year)),
+      { gap: true },
+    ),
+    yAxis: moneyAxis(),
     series: [
-      {
-        name: TC_LABELS[0],
-        type: 'bar',
-        stack: 'tc',
-        barMaxWidth: 46,
-        color: TC_COLORS[0],
-        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-        emphasis: { itemStyle: { borderColor: INK } },
-        data: bases,
-      },
-      {
-        name: TC_LABELS[1],
-        type: 'bar',
-        stack: 'tc',
-        barMaxWidth: 46,
-        color: TC_COLORS[1],
-        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-        emphasis: { itemStyle: { borderColor: INK } },
-        data: equity,
-      },
+      stack(
+        TC_LABELS[0],
+        0,
+        rows.map((r) => r.base),
+      ),
+      stack(
+        TC_LABELS[1],
+        1,
+        rows.map((r) => r.equity),
+      ),
       {
         name: TC_LABELS[2],
         type: 'line',
@@ -111,11 +115,25 @@ export function tcTrajectoryOption(events: CompEventOut[]): EChartsOption | null
         symbolSize: 6,
         lineStyle: { width: 2 },
         z: 10,
+        ...FOCUS,
         // tc_after is never null (current_base is NOT NULL and every missing side
         // contributes 0), so this only guards a feed that lost a row on the way here.
         connectNulls: false,
-        data: totals,
+        data: rows.map((r) => r.total),
       },
     ],
+  }
+}
+
+/** The trajectory as a table (F12): one row per focal year, the stack and its total. */
+export function tcTrajectoryCsv(events: CompEventOut[]): ExportTable {
+  return {
+    headers: ['Focal year', ...TC_LABELS],
+    rows: trajectoryRows(events).map((r) => [
+      r.year,
+      r.base.toFixed(2),
+      r.equity.toFixed(2),
+      r.total.toFixed(2),
+    ]),
   }
 }

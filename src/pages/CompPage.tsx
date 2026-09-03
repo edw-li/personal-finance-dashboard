@@ -9,12 +9,13 @@ import {
 } from '../api/comp'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
-import EChart from '../components/EChart'
+import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import RsuGrantsPanel from '../components/comp/RsuGrantsPanel'
 import VestingSchedulePanel, { VestingTiles } from '../components/comp/VestingSchedulePanel'
 import {
   TC_CHART_LABEL,
+  tcTrajectoryCsv,
   tcTrajectoryOption,
 } from '../components/comp/compChartOptions'
 import Feed, { FeedBanner } from '../components/shell/Feed'
@@ -554,15 +555,20 @@ export default function CompPage() {
     reloadSchedule()
   }
 
+  // The legend picks the page mirrors back into the option (§9).
+  const [tcLegend, setTcLegend] = useState<Record<string, boolean>>({})
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every
   // render would replay the chart on unrelated state flips (AllocationPanel's note).
-  const trajectory = useMemo(() => (events === null ? null : tcTrajectoryOption(events)), [events])
+  const trajectory = useMemo(
+    () => (events === null ? null : tcTrajectoryOption(events, { selected: tcLegend })),
+    [events, tcLegend],
+  )
 
   return (
     <div className="page comp-page">
       {/* Nothing is loaded page-wide: the two feeds below own their own lifecycles, so the
           frame is only the title row. */}
-      <PageFrame title="Comp" resource={{ status: 'ready' }}>
+      <PageFrame title="Comp" resource={{ status: 'ready', fromCache }}>
         {/* The schedule feed's banner leads its OWN tiles (2026-08-31 review round): after a
             failed reload the strip below is the page's most prominent stale surface, and the
             "may be showing earlier data" cue has to sit beside it, not below the fold with
@@ -599,27 +605,28 @@ export default function CompPage() {
           {(rows) => <EventsPanel events={rows} onChanged={onEventsChanged} />}
         </Feed>
 
-        {/* Dimmed by the SAME flag as the table above it: both are drawn from one payload,
-            and a chart left bright while the table beside it says "may be showing earlier
-            data" would be the one thing the eye is on claiming to be current. */}
-        <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          <section className="card">
-            <h2 className="eyebrow">
-              {TC_CHART_LABEL}
-              <InfoHint text="Base salary stacked under the value of unvested equity, including the year&apos;s refresh — this app&apos;s total-comp proxy; the line is the server&apos;s own total." />
-            </h2>
+        <ChartCard
+          title={TC_CHART_LABEL}
+          hint="Base salary stacked under the value of unvested equity, including the year's refresh — this app's total-comp proxy; the line is the server's own total."
+          ariaLabel="Stacked bar chart of base salary and unvested equity value per focal year, with total comp as a line"
+          option={trajectory}
+          empty="No comp events yet — add one above."
+          exportName="total-comp"
+          csv={events === null ? undefined : () => tcTrajectoryCsv(events)}
+          height={320}
+          // Dimmed by the SAME flag as the table above it: both are drawn from one payload,
+          // and a chart left bright while the table beside it says "may be showing earlier
+          // data" would be the one thing the eye is on claiming to be current.
+          busy={busy || events === null}
+          onLegendChange={(selected) => setTcLegend((current) => ({ ...current, ...selected }))}
+          footer={
             <p className="drill-hint">
               Total comp as this app defines it: the base the year landed on, stacked under
               the value of the unvested equity behind it (the sheet has no TC column — this is
               the proxy, and the line is the server&apos;s own total).
             </p>
-            {trajectory ? (
-              <EChart option={trajectory} height={320} animateEntrance={!fromCache} />
-            ) : (
-              events !== null && <p className="empty-note">No comp events yet — add one above.</p>
-            )}
-          </section>
-        </div>
+          }
+        />
 
         {/* No `error` here: the schedule's banner already leads the tiles above, and one
             failure must not print two alerts. One payload, one dim — the grants table IS the
