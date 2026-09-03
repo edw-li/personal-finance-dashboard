@@ -116,6 +116,47 @@ Run it: `FINANCE_TEST_DB=finance_test_cal_e .venv/Scripts/python.exe -m pytest t
 
 ---
 
+## Retire at the end of the night
+
+Nothing below is deleted by this lane — deletions are their own pass, after every branch that
+could still import one of these has landed. Each line carries the grep that proved it orphaned,
+run on `calendar-e` (base `df20a1b`, all four lanes merged).
+
+**Orphaned by the calendar lanes — delete:**
+
+| Path | Proof | Note |
+|---|---|---|
+| `src/utils/ics.ts` | `grep -rn "utils/ics'" src` → no hits after Plan E Task 2 | The client-side ICS builder. `escapeIcsText`, `eventUid` and `buildIcs` all moved into `backend/app/services/calendar/ics.py`, which is what both routes render through now |
+| `src/utils/ics.test.ts` | the only file left importing `./ics` | Its RFC-5545 coverage is now `backend/tests/calendar/test_ics.py` plus the `icalendar` parse in `test_feed_api.py` |
+| `backend/app/services/calendar_events.py` | `grep -rn "calendar_events" backend/app --include=*.py` → one **docstring** mention only (`generators/payroll.py:14`) | Superseded by the `backend/app/services/calendar/` package (Plan A) |
+| `backend/tests/test_calendar_events.py` | the only importer of `app.services.calendar_events` | Its rules moved to `backend/tests/calendar/` (compose, fold, generators, model, overrides) |
+
+Take `generators/payroll.py:14` with them: its docstring points at `calendar_events.person_suffix`
+as the source of the person-tag grammar, which becomes a dangling reference the moment the module
+goes. `backend/tests/test_calendar_api.py` is **not** on this list — it tests the live router's
+loaders and is current.
+
+**Unused but not orphaned — a judgement call for the deletion pass:**
+
+- `deleteCalendarOverride` in `src/api/calendar.ts` — zero callers (`grep -rn deleteCalendarOverride src`
+  finds only its own definition). `EventDetails`' "Use the estimate" clears a figure with a PUT, so
+  nothing in the UI ever DELETEs an override. The endpoint it wraps is real and tested
+  (`tests/calendar/test_overrides_api.py`); keep it only if API parity is worth an unused export.
+
+**Orphaned by earlier batches, found while verifying this one (not the calendar lanes' doing):**
+
+- `src/components/MonthRibbon.tsx` + `src/components/MonthRibbon.test.tsx` — superseded by
+  `src/components/shell/MonthRibbon.tsx` (ribbon 2.0); the only `MonthRibbon` importer is `shell/ScopeBar.tsx`.
+- `src/components/RangeChips.tsx` — no importer; two prose mentions only (`charts/timeZoom.test.ts`,
+  `pages/TaxesPage.tsx` comments).
+- `src/pages/PlaceholderPage.tsx` — no importer at all.
+
+**Scratch state (not files):** the test databases `finance_test_ce` / `finance_test_ce2` this lane
+created, plus each lane's own; the four `calendar-a`…`calendar-d` worktrees and branches, and
+`calendar-e` once merged.
+
+---
+
 ## Self-review
 
 **Spec coverage:** §18 phase 3 (merge, full pytest + vitest, tsc, lint, smoke, README) → Tasks 1, 3–5; §17 smoke (`/calendar?month=2026-09` with a priced vest chip, a folded payday, a "+N more" day and its drawer; `feed.ics` fetched with a fresh token, parsed with `icalendar`, 304 on `If-None-Match`) → Tasks 3–4; §11 "the action fetches it and saves the blob through `download.ts`" → Task 2; §20 tax-GET timing measured in the smoke → Task 4. **Placeholders:** none. **Type consistency:** `downloadCalendarIcs(start, end)` (Plan B) and `windowFor(month)` (Plan C's page) are the names swapped in Task 2; `make_token` / `freeze_today` are Plan B's test helpers.
