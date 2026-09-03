@@ -47,7 +47,7 @@ export default function AppearanceCard() {
           onChange={setDensity}
         />
       </div>
-      <p className="drill-hint">Remembered in this browser only.</p>
+      <p className="settings-note">Remembered in this browser only.</p>
     </section>
   )
 }

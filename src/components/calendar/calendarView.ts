@@ -1,22 +1,25 @@
 // Pure calendar-page vocabulary — no React, no fetching (the attention.ts posture).
-import { MUTED, PALETTE } from '../../charts/theme'
 import type { CalendarEvent, CalendarEventType } from '../../types/api'
 
-// FIXED type -> PALETTE-slot map (charts/theme's slot discipline: fixed order IS the
-// CVD-safety mechanism — never reorder, never cycle). Color is never the only channel:
-// every chip carries its label text, and the legend names the types.
+// FIXED type -> palette-slot map (charts/theme's slot discipline: fixed order IS the
+// CVD-safety mechanism — never reorder, never cycle). Spelled as CSS custom properties
+// rather than hexes because every consumer is a DOM inline style — the grid chip's left
+// border, the legend dot, the popover dot — and never an ECharts option (a var() string
+// would be an invalid option value). That way the light theme repaints these the same way
+// it repaints the charts. Color is never the only channel: every chip carries its label
+// text, and the legend names the types.
 export const EVENT_COLORS: Record<CalendarEventType, string> = {
-  rsu_vest: PALETTE[0],
-  espp_purchase: PALETTE[1],
-  espp_qualify: PALETTE[2],
-  ex_dividend: PALETTE[3],
-  update_due: PALETTE[4],
-  payday: PALETTE[5],
-  offering_start: PALETTE[6],
-  tax_deadline: PALETTE[7],
+  rsu_vest: 'var(--chart-1)',
+  espp_purchase: 'var(--chart-2)',
+  espp_qualify: 'var(--chart-3)',
+  ex_dividend: 'var(--chart-4)',
+  update_due: 'var(--chart-5)',
+  payday: 'var(--chart-6)',
+  offering_start: 'var(--chart-7)',
+  tax_deadline: 'var(--chart-8)',
   // User-entered rows: the palette caps chart slots at 8 (fixed order IS the CVD
-  // mechanism), so custom wears the theme's MUTED gray — "entered, not derived".
-  custom: MUTED,
+  // mechanism), so custom wears the theme's muted gray — "entered, not derived".
+  custom: 'var(--muted)',
 }
 
 export const EVENT_TYPE_LABELS: Record<CalendarEventType, string> = {

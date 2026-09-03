@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { MUTED } from '../../charts/theme'
 import type { CalendarEvent } from '../../types/api'
 import {
   EVENT_COLORS,
@@ -13,21 +12,21 @@ import {
 } from './calendarView'
 
 describe('EVENT_COLORS', () => {
-  it('is the FIXED literal slot map — a palette reshuffle or remap must fail here', () => {
+  it('is the FIXED literal slot map — a remap must fail here (index.css owns the hues)', () => {
     expect(EVENT_COLORS).toEqual({
-      rsu_vest: '#3987e5',
-      espp_purchase: '#d95926',
-      espp_qualify: '#199e70',
-      ex_dividend: '#c98500',
-      update_due: '#d55181',
-      payday: '#008300',
-      offering_start: '#9085e9',
-      tax_deadline: '#e66767',
-      custom: '#8b93a3',
+      rsu_vest: 'var(--chart-1)',
+      espp_purchase: 'var(--chart-2)',
+      espp_qualify: 'var(--chart-3)',
+      ex_dividend: 'var(--chart-4)',
+      update_due: 'var(--chart-5)',
+      payday: 'var(--chart-6)',
+      offering_start: 'var(--chart-7)',
+      tax_deadline: 'var(--chart-8)',
+      custom: 'var(--muted)',
     })
   })
 
-  it('gives every type its own hue and the legend names them all', () => {
+  it('gives every type its own slot and the legend names them all', () => {
     expect(new Set(Object.values(EVENT_COLORS)).size).toBe(9)
     expect(EVENT_TYPE_ORDER).toHaveLength(9)
     for (const type of EVENT_TYPE_ORDER) {
@@ -37,7 +36,7 @@ describe('EVENT_COLORS', () => {
   })
 
   it('colors custom with the muted theme token, labels and orders it last', () => {
-    expect(EVENT_COLORS.custom).toBe(MUTED)
+    expect(EVENT_COLORS.custom).toBe('var(--muted)')
     expect(EVENT_TYPE_LABELS.custom).toBe('Custom')
     expect(EVENT_TYPE_ORDER.at(-1)).toBe('custom')
   })

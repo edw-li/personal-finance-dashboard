@@ -113,11 +113,16 @@
   white-space: nowrap;
 }
 
-/* The hero's cqi cap is LOOSER than the normal tile's 10.5cqi on purpose. Sharing 10.5
-   flattened the hierarchy exactly where it matters: in the 4-column band the tiles sit near
-   their 220px floor, both caps bind, and the hero came out ~1.2rem against a normal 1.1rem —
-   a "hero" nobody could pick out. 12cqi restores the step and still fits the longest value
-   the tile carries (14 chars, "-$1,234,567.89") at 220px in the monospace stack. The normal
+/* The hero's cqi cap is LOOSER than the normal tile's 10.5cqi on purpose. cqi resolves
+   against the tile's CONTENT box, so at the 220px floor it is ~183px wide (1.1rem of side
+   padding each side), and 10.5cqi is only ~19.2px. Sharing that cap flattened the hierarchy
+   exactly where it matters: in the 4-column band the tiles sit near their floor, both caps
+   bind, and hero and normal landed on the same ~1.2rem — a "hero" nobody could pick out.
+   12cqi (~22px there) restores the step. The longest value the tile carries is 14 glyphs,
+   "-$1,234,567.89": ~180px on the Cascadia Mono/Consolas front of the stack (fits inside
+   the content box) and ~185-190px on Menlo/SF Mono, where the last few px run into the side
+   padding rather than the card edge. That is the deliberate trade — `white-space: nowrap`
+   plus visible overflow keeps the digits whole instead of wrapping or lying. The normal
    .stat-value keeps 10.5cqi: it has no headroom to give. */
 .stat-tile-hero .stat-value {
   font-size: min(clamp(1.5rem, 1rem + 1.1vw, 2.4rem), 12cqi);

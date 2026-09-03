@@ -239,3 +239,10 @@
   gap: 0.4rem;
   margin-bottom: 0.9rem;
 }
+
+/* panels.css gives .eyebrow `margin: 0 0 0.75rem` for card headings; inside this flex column
+   that margin stacks on top of the 0.4rem gap and pushes the control away from its own
+   label. The gap IS the spacing here. */
+.settings-field > .eyebrow {
+  margin: 0;
+}
