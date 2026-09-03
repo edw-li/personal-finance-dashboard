@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { MUTED, PALETTE, POSITIVE } from '../../charts/theme'
 import type { PaycheckBreakdownOut, PaycheckProfileOut } from '../../types/api'
-import { paycheckSankeyOption } from './paycheckSankeyOptions'
+import { paycheckSankeyCsv, paycheckSankeyOption } from './paycheckSankeyOptions'
 
 // The Workbook reference profile (PaycheckPage.test.tsx's golden fixture). Its display-
 // rounded lines deliberately do NOT reconcile (post_tax 4486.26 vs 236.16 + 865.93 +
@@ -164,4 +164,12 @@ describe('paycheckSankeyOption', () => {
     }
     expect(paycheckSankeyOption(breakdown(zeros))).toBeNull()
   })
+})
+
+it('exports nodes then links, the TABLE figures (never link sums)', () => {
+  const csv = paycheckSankeyCsv(breakdown())
+  expect(csv.headers).toEqual(['Kind', 'Source', 'Target', 'Value'])
+  expect(csv.rows).toContainEqual(['node', 'Post-tax', '', '4486.26'])
+  expect(csv.rows).toContainEqual(['link', 'Post-tax', 'Net pay', '3384.16'])
+  expect(paycheckSankeyCsv(breakdown({ net_pay: '-1.00' })).rows).toEqual([])
 })
