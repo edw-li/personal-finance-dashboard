@@ -49,11 +49,12 @@ export interface ScopeBarProps {
    *  All and shows a null scope as the primary person — for pages that are always about
    *  ONE person (Paycheck). */
   owner?: boolean | { joint: boolean; all?: boolean }
-  /** Page-specific explanation of what a person's view means HERE — the same sentence the
-   *  page used to print beside its own owner row (Net worth: a person is their own accounts
-   *  plus the joint ones). Rendered as an InfoHint right after the owner control, and only
-   *  when that control renders: a one-person household is asked no whose-view question, so
-   *  it is offered no answer either. */
+  /** Overrides the shell's own explanation (below) for a page that has something MORE to say
+   *  about whose view this is — Portfolio adds that performance always covers the household.
+   *  Left undefined, the usual case, the bar prints its default, so every owner page answers
+   *  "Whose" with the same words. Rendered as an InfoHint right after the owner control, and
+   *  only when that control renders: a one-person household is asked no whose-view question,
+   *  so it is offered no answer either. */
   ownerHint?: string
   range?: boolean
   month?: MonthScopeProps
@@ -67,6 +68,13 @@ const RANGE_OPTIONS: { value: RangePreset; label: string }[] = [
   { value: '1y', label: '1Y' },
   { value: 'ytd', label: 'YTD' },
 ]
+
+// The shell's own answer to "Whose", so the question is explained once and identically
+// everywhere instead of each page wording it afresh. Which sentence applies follows the chips
+// actually offered: a Joint chip means there are shared accounts to explain.
+const OWNER_HINT_JOINT =
+  "A person's view is their own accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts."
+const OWNER_HINT_SOLO = 'Each person has their own view; nothing here is shared.'
 
 export const HOUSEHOLD_SNAPSHOT = 'shell:household'
 export const COVERAGE_SNAPSHOT = 'shell:coverage'
@@ -191,7 +199,7 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
             value={ownerChipValue}
             onChange={(value) => setScope({ owner: ownerFromValue(value) })}
           />
-          {ownerHint !== undefined && <InfoHint text={ownerHint} />}
+          <InfoHint text={ownerHint ?? (showJoint ? OWNER_HINT_JOINT : OWNER_HINT_SOLO)} />
         </div>
       )}
       {range && (

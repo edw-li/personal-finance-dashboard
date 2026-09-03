@@ -42,8 +42,13 @@ const HOUSEHOLD = {
 
 const ALONE = { people: [{ id: 2, name: 'Edward', is_primary: true }], marriage_date: null }
 
-// A page's own sentence about what "whose" means there — the bar prints it, it does not own it.
+// A page's override, in miniature (Portfolio's real one adds that performance is household-wide).
 const OWNER_HINT = "A person's view is their own accounts plus the joint ones."
+// The shell's own two sentences, spelled out again here on purpose: these tests pin the WORDS
+// every owner page shows, not whatever the module happens to export.
+const DEFAULT_JOINT =
+  "A person's view is their own accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts."
+const DEFAULT_SOLO = 'Each person has their own view; nothing here is shared.'
 
 beforeEach(() => {
   localStorage.clear()
@@ -130,17 +135,34 @@ describe('ScopeBar', () => {
     expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it("prints the page's owner hint beside the chips, and only when the page sends one", async () => {
-    const { container, rescope } = mount({ owner: true, ownerHint: OWNER_HINT })
+  it('answers "Whose" itself when the page sends no sentence of its own', async () => {
+    const { container } = mount({ owner: true })
     await screen.findByRole('button', { name: 'Grace' })
     // Beside the chips, not loose in the bar: the sentence explains THAT control.
     const hint = container.querySelector('.scope-bar-group button.info-hint')
-    expect(hint).toBeTruthy()
-    expect(hint?.getAttribute('aria-label')).toBe(OWNER_HINT)
-    // Same chips, no sentence: pages that have nothing extra to say get no dangling glyph.
+    expect(hint?.getAttribute('aria-label')).toBe(DEFAULT_JOINT)
+  })
+
+  it('drops the Joint half of the default on a page with no Joint chip', async () => {
+    const { container } = mount({ owner: { joint: false } })
+    await screen.findByRole('button', { name: 'Grace' })
+    expect(screen.queryByRole('button', { name: 'Joint' })).toBeNull()
+    const hint = container.querySelector('.scope-bar-group button.info-hint')
+    expect(hint?.getAttribute('aria-label')).toBe(DEFAULT_SOLO)
+  })
+
+  it("prints the page's own sentence in place of the default when it sends one", async () => {
+    const { container, rescope } = mount({ owner: true, ownerHint: OWNER_HINT })
+    await screen.findByRole('button', { name: 'Grace' })
+    // One glyph, not two: the page's sentence REPLACES the shell's, it does not join it.
+    expect(container.querySelectorAll('.scope-bar-group button.info-hint').length).toBe(1)
+    expect(container.querySelector('button.info-hint')?.getAttribute('aria-label')).toBe(OWNER_HINT)
+    // Drop the prop and the shell's own sentence is back.
     rescope({ owner: true })
     expect(screen.getByRole('group', { name: 'Whose' })).toBeTruthy()
-    expect(container.querySelector('button.info-hint')).toBeNull()
+    expect(container.querySelector('button.info-hint')?.getAttribute('aria-label')).toBe(
+      DEFAULT_JOINT,
+    )
   })
 
   it('drops the owner hint with the chips for a one-person household', async () => {
