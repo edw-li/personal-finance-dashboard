@@ -13,6 +13,7 @@ from app.api import (
     auth,
     calendar,
     comp,
+    coverage,
     credit_cards,
     espp,
     export,
@@ -91,6 +92,7 @@ app.include_router(paycheck.router, prefix="/api/v1")
 app.include_router(limits.router, prefix="/api/v1")
 app.include_router(comp.router, prefix="/api/v1")
 app.include_router(calendar.router, prefix="/api/v1")
+app.include_router(coverage.router, prefix="/api/v1")
 app.include_router(credit_cards.router, prefix="/api/v1")
 app.include_router(projection.router, prefix="/api/v1")
 app.include_router(app_settings.router, prefix="/api/v1")
