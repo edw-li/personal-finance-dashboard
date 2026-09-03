@@ -52,17 +52,18 @@ export default function MonthRibbon({
   /** View pages: where "Edit <month>" goes. */
   editHref?: (monthIso: string) => string
 }) {
-  // The window is DERIVED from the selection, not synced to it: ‹ › paging is remembered against
-  // the scope it happened in, so any new anchor or selection — a deep link, "Back to latest"
-  // clearing the month — retires that memory and the window follows the selection again. The
-  // obvious sync is an effect, which the house forbids (react-hooks/set-state-in-effect), and
-  // adjusting state during render trips its sibling set-state-in-render; deriving needs neither.
-  // Clicking a chip inside the visible window never jumps it: pageContaining maps every month of
-  // a window back to that window's own page index.
-  const scope = `${anchor}|${selected ?? ''}`
-  const [paged, setPaged] = useState<{ scope: string; page: number } | null>(null)
-  const page = paged?.scope === scope ? paged.page : selected ? pageContaining(anchor, selected) : 0
-  const goTo = (next: number) => setPaged({ scope, page: Math.max(0, next) })
+  // ‹ › paging is real state, not a memory keyed by anchor+selection: such a key can be
+  // re-matched later (Back re-selecting an old month) and revive a window the selected chip is
+  // no longer in. Clicking a chip inside the visible window never jumps it either way, because
+  // pageContaining maps every month of a window back to that window's own page index.
+  const [page, setPage] = useState(() => (selected ? pageContaining(anchor, selected) : 0))
+  const [seen, setSeen] = useState({ anchor, selected })
+  if (seen.anchor !== anchor || seen.selected !== selected) {
+    // A selection made elsewhere (deep link, Back, the wizard's reset) recenters the window; a
+    // cleared selection returns to the anchor window. Adjust-during-render, not an effect.
+    setSeen({ anchor, selected })
+    setPage(selected ? pageContaining(anchor, selected) : 0)
+  }
 
   const months = windowFor(anchor, page)
   const canGoEarlier = earliest !== null && months[0] > earliest
@@ -75,7 +76,7 @@ export default function MonthRibbon({
         className="ribbon-page"
         aria-label="Earlier months"
         disabled={!canGoEarlier}
-        onClick={() => goTo(page + 1)}
+        onClick={() => setPage((p) => p + 1)}
       >
         <ChevronLeft size={14} aria-hidden="true" />
       </button>
@@ -130,7 +131,7 @@ export default function MonthRibbon({
         className="ribbon-page"
         aria-label="Later months"
         disabled={!canGoLater}
-        onClick={() => goTo(page - 1)}
+        onClick={() => setPage((p) => Math.max(0, p - 1))}
       >
         <ChevronRight size={14} aria-hidden="true" />
       </button>
