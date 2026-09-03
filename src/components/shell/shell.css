@@ -1,0 +1,257 @@
+/* ── Shell primitives (2026-09-03 shell spec) ─────────────────────────────── */
+/* Imported by every component in src/components/shell/. panels.css keeps the card, tile,
+   table and form grammar; this file owns the page frame, the scope row, the Segmented
+   control and the sidebar footer. */
+
+/* Segmented: the one "pick one of N" control. `.segmented` is the same name panels.css
+   used for RangeChips and the hand-rolled groups, so an unmigrated page keeps its look
+   until Plan 4 deletes the old rule. */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.segmented button {
+  padding: 0.35rem 0.8rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.segmented-sm button {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+
+.segmented button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.segmented button.active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.segmented button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Chips: pill-shaped, no shared border box (the drill-down / trend pickers). */
+.segmented-chips {
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.segmented-chips button {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+.segmented-chips button.active {
+  background: none;
+  color: var(--text);
+  border-color: currentColor;
+}
+
+.segmented-chips button:focus-visible {
+  outline-offset: 1px;
+}
+
+/* Steps: the wizard's numbered pills. */
+.segmented-steps {
+  border: none;
+  overflow: visible;
+  gap: 0.5rem;
+}
+
+.segmented-steps button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.segmented-steps button.active {
+  background: none;
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.segmented-badge {
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+/* ── PageFrame ───────────────────────────────────────────────────────────── */
+
+.page-frame-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.page-frame-header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.page-frame-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.page-frame-subheader {
+  margin: -0.25rem 0 0.9rem;
+}
+
+/* The scope row pins while the page scrolls (user decision 2026-09-03: layout A with the
+   scope row sticky). The hairline appears only once it is actually stuck — an
+   IntersectionObserver on the sentinel above it toggles .is-stuck. z-index sits above
+   cards (which have none) and below the palette (20), drawer (15) and toasts (30). */
+.page-frame-sentinel {
+  height: 1px;
+  margin-top: -1px;
+}
+
+.page-frame-scope {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  padding: 0.6rem 0;
+  margin: 0 0 1rem;
+  background: var(--bg);
+  border-bottom: 1px solid transparent;
+}
+
+.page-frame-scope.is-stuck {
+  border-bottom-color: var(--border);
+}
+
+.page-frame-scope .eyebrow {
+  margin: 0;
+}
+
+.page-frame-stale {
+  margin: 0 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.page-frame-stale .button {
+  margin-left: 0.5rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+
+/* ── Sidebar footer (rendered by Plan 1c's SidebarFooter) ─────────────────── */
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 0.5rem 0.25rem 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.sidebar-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  min-width: 0;
+}
+
+.sidebar-footer-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-footer-pill {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-footer-pill.is-dev {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.sidebar-footer-hash {
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+}
+
+.sidebar-footer-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.sidebar-footer-icon:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.sidebar-footer-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* One focus ring for the shell's own controls, including the nav (which had none). */
+.nav-link:focus-visible,
+.logout-button:focus-visible,
+.sidebar-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .segmented button,
+  .sidebar-footer-icon {
+    transition:
+      background-color var(--t-fast) ease,
+      border-color var(--t-fast) ease,
+      color var(--t-fast) ease;
+  }
+}
