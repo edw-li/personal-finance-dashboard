@@ -139,3 +139,20 @@
   font-variant-numeric: tabular-nums;
   margin-right: 0.25rem;
 }
+
+/* Up next amounts sit right-aligned in the row (2026-09-03 calendar spec §14). */
+.up-next-link {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.up-next-amount {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.up-next-line {
+  margin-top: 0.35rem;
+}
