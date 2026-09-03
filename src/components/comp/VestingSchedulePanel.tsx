@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import ChartCard from '../ChartCard'
 import StatTile from '../StatTile'
+import { useChartDecals } from '../useChartDecals'
 import type { VestDayOut, VestingScheduleOut, VestOut } from '../../types/api'
 import { formatCurrency, formatDate, formatShares } from '../../utils/format'
 import { todayIso } from '../../utils/months'
@@ -163,19 +164,24 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
   // Memoized: EChart keys its effect on [option] with notMerge, so a fresh object every render
   // would replay the chart on unrelated state flips (AllocationPanel's note).
   const [legend, setLegend] = useState<Record<string, boolean>>({})
+  // Appearance › Chart patterns textures every series, so the estimate marker switches
+  // from a hatch to a fade with it (and so does the footnote below).
+  const patterns = useChartDecals()
   const calendar = useMemo(
     () =>
       vestingChartOption(schedule.vests, schedule.grants, schedule.latest_price, {
         todayIso: todayIso(),
         selected: legend,
+        patterns,
       }),
-    [schedule, legend],
+    [schedule, legend, patterns],
   )
 
   const { ticker, latest_price: latestPrice } = schedule
-  // The strip's two figures (F6): what has vested at its own closes, what is still ahead at
-  // today's quote.
-  const totals = vestingTotals(schedule.vests, latestPrice)
+  // The strip's two figures (F6): what has vested, summed from its own stored closes, and
+  // the server's own unvested total — never re-derived here (it is judged against the
+  // SERVER's day, so a client copy would disagree with the tile above).
+  const totals = vestingTotals(schedule.vests)
   // The heading's hint says what the strip's tiles say — quoteSourceOf is the one wording.
   const quoteSource = quoteSourceOf(ticker)
   // The first DATE still ahead — the row the "next" badge belongs on. The feed is
@@ -246,9 +252,9 @@ export default function VestingSchedulePanel({ schedule }: { schedule: VestingSc
           {schedule.grants.length > 0 && (
             <p className="drill-hint">
               Vested {formatCurrency(totals.vested)} · Unvested{' '}
-              {totals.unvested === null ? '—' : formatCurrency(totals.unvested)} (est.)
+              {formatCurrency(schedule.tiles.unvested_value)} (est.)
               {' · '}
-              <span>Hatched = at today’s quote</span>
+              <span>{patterns ? 'Faded' : 'Hatched'} = at today’s quote</span>
             </p>
           )}
           {warningNotes}

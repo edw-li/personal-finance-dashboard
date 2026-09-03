@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- Chart-grammar probe (C5 Task 7): the two new forms THIS lane draws — per-item
+<!-- Chart-grammar probe (spec §17): the two new forms the projection/comp builders draw — per-item
      itemStyle.decal hatching with a Today rule, and a markArea wash with markPoint
      percentile circles on a dashed target — rendered by REAL echarts from node_modules
      with the exact option shapes vestingChartOptions.ts / projectionChartOptions.ts emit.
-     Not part of the app. -->
+     Not part of the app; shoot it with tools/probes/charts-c5/shoot.mjs. -->
 <html><head><meta charset="utf-8" />
 <style>
   body { background: #171a21; color: #e6e9ef; font: 14px system-ui; margin: 24px; }
@@ -11,9 +11,9 @@
   .chart { width: 1100px; height: 320px; margin-bottom: 28px; }
 </style></head><body>
 <p class="title">A — DECALS (app default, NO aria block): a stacked bar with per-item itemStyle.decal (SURFACE hatching) + the Today rule — only the future column may hatch</p><div id="a" class="chart"></div>
-<p class="title">A2 — the same option with Appearance › Chart patterns ON (aria.decal.show) — every series gains echarts' auto-texture on top</p><div id="a2" class="chart"></div>
-<p class="title">B — MARKAREA + MARKPOINT: After-FI wash, FI/Coast FI/retirement rules, p10/p50 marks on a dashed target</p><div id="b" class="chart"></div>
-<script src="../../node_modules/echarts/dist/echarts.js"></script>
+<p class="title">A2 — the same option with Appearance › Chart patterns ON (aria.decal.show) — every series gains echarts' auto-texture, so an estimate hatch says NOTHING here. What this panel proved: under patterns the builder drops the decal and fades the estimate to opacity .55 instead (vestingChartOptions.ts)</p><div id="a2" class="chart"></div>
+<p class="title">B — MARKAREA + MARKPOINT: After-FI wash, FI/Coast FI/retirement rules, p10/p50 marks on a dashed target. What this panel proved: Alex and FI both sit on M13 and echarts prints both labels on the ONE pixel -- annotationRules/percentileMarks now merge same-position entries into a single label (charts/markLine.ts), so the app no longer emits the collision drawn here</p><div id="b" class="chart"></div>
+<script src="../../../node_modules/echarts/dist/echarts.js"></script>
 <script>
 const SURFACE = '#171a21', SURFACE_2 = '#1e222c', INK = '#e6e9ef', MUTED = '#8b93a3', BLUE = '#3987e5', ORANGE = '#d95926'
 const HATCH = { symbol: 'rect', symbolSize: 1, dashArrayX: [1, 0], dashArrayY: [2, 4], rotation: -Math.PI / 4, color: SURFACE }

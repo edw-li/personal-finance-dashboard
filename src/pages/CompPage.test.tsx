@@ -9,6 +9,7 @@ import type {
   VestOut,
 } from '../types/api'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
+import { DECALS_KEY } from '../components/useChartDecals'
 import { TC_CHART_LABEL } from '../components/comp/compChartOptions'
 import CompPage from './CompPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
@@ -297,6 +298,9 @@ const confirmSpy = vi.spyOn(window, 'confirm')
 
 beforeEach(() => {
   clearSnapshots()
+  // Appearance (theme, Chart patterns) and the persisted legends ride localStorage — a
+  // leak from one test would redraw the next one (NetWorthPage.test.tsx hygiene).
+  localStorage.clear()
   vi.mocked(fetchEvents).mockResolvedValue(EVENTS)
   vi.mocked(createEvent).mockResolvedValue(event2027)
   vi.mocked(updateEvent).mockResolvedValue(event2026)
@@ -822,8 +826,23 @@ describe('CompPage — vesting schedule', () => {
     expect(screen.getByRole('group', { name: 'Export total-comp' })).toBeTruthy()
     expect(screen.getByLabelText(/Stacked bar chart of vest value per vest date/)).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Export vesting-calendar' })).toBeTruthy()
-    expect(screen.getByText(/Vested \$[\d,.]+ · Unvested \$[\d,.]+ \(est\.\)/)).toBeTruthy()
+    // The strip's unvested half is the SERVER's tile figure verbatim — the same $235,471.20
+    // the tile above prints. Re-deriving it from the quote here would disagree with that tile
+    // the moment a vest crossed midnight on the server's clock but not the browser's.
+    expect(screen.getByText(/Vested \$[\d,.]+ · Unvested \$235,471\.20 \(est\.\)/)).toBeTruthy()
     expect(screen.getByText('Hatched = at today’s quote')).toBeTruthy()
+  })
+
+  it('fades the estimates — and renames the footnote — when Chart patterns are on', async () => {
+    // Appearance › Chart patterns textures EVERY bar, so a hatch on the estimates would be a
+    // hatch on a hatch (tools/probes/charts-c5 panel A2). The footnote has to name the mark
+    // the eye can actually find, so it switches with the setting.
+    localStorage.setItem(DECALS_KEY, 'on')
+    render(<CompPage />)
+    await screen.findByText('Vesting schedule')
+
+    expect(screen.getByText('Faded = at today’s quote')).toBeTruthy()
+    expect(screen.queryByText('Hatched = at today’s quote')).toBeNull()
   })
 
   it('draws the vesting calendar beside the trajectory, on the vest dates', async () => {

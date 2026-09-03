@@ -80,19 +80,18 @@ function contribution(vest: VestOut, latestPrice: string | null): number | null 
   return vest.shares * Number(latestPrice)
 }
 
-/** The strip's two figures: past tranches at their stored closes, future ones at the quote. */
-export function vestingTotals(
-  vests: VestOut[],
-  latestPrice: string | null,
-): { vested: number; unvested: number | null } {
-  const vested = roundTo(
-    vests.filter((v) => v.is_past && v.value !== null).reduce((sum, v) => sum + Number(v.value), 0),
-    2,
-  )
-  const futureShares = vests.filter((v) => !v.is_past).reduce((sum, v) => sum + v.shares, 0)
+/** The strip's VESTED figure: past tranches summed at their own stored closes. The unvested
+ *  half is NOT computed here — the server owns it (`schedule.tiles.unvested_value`, judged
+ *  against the SERVER's day), and a client re-derivation would disagree with the tile
+ *  beside it the moment a vest crosses midnight. */
+export function vestingTotals(vests: VestOut[]): { vested: number } {
   return {
-    vested,
-    unvested: latestPrice === null ? null : roundTo(futureShares * Number(latestPrice), 2),
+    vested: roundTo(
+      vests
+        .filter((v) => v.is_past && v.value !== null)
+        .reduce((sum, v) => sum + Number(v.value), 0),
+      2,
+    ),
   }
 }
 
@@ -112,7 +111,11 @@ export function vestingChartOption(
   vests: VestOut[],
   grants: RsuGrantOut[],
   latestPrice: string | null,
-  { todayIso, selected }: { todayIso: string; selected?: Record<string, boolean> },
+  {
+    todayIso,
+    selected,
+    patterns = false,
+  }: { todayIso: string; selected?: Record<string, boolean>; patterns?: boolean },
 ): EChartsOption | null {
   if (vests.length < 2) return null
 
@@ -171,6 +174,10 @@ export function vestingChartOption(
   // its tooltip rows say "(est.)" (F6).
   const futureDates = new Set(drawable.filter(({ vest }) => !vest.is_past).map(({ vest }) => vest.vest_date))
   const today = annotationRules([todayRule(dates, todayIso, formatDate)])
+  // With Appearance › Chart patterns ON, echarts textures EVERY series through the aria
+  // decal, and a hatch on top of a hatch says nothing — so an estimate fades instead
+  // (the panel's footnote follows the same switch).
+  const estimateStyle = patterns ? { opacity: 0.55 } : { decal: ESTIMATE_HATCH }
 
   return {
     grid: grid(),
@@ -201,7 +208,7 @@ export function vestingChartOption(
       ...(slot === 0 && today ? { markLine: today } : {}),
       data: data.map((value, column) =>
         futureDates.has(dates[column])
-          ? { value: roundTo(value, 2), itemStyle: { decal: ESTIMATE_HATCH }, estimate: true }
+          ? { value: roundTo(value, 2), itemStyle: estimateStyle, estimate: true }
           : roundTo(value, 2),
       ),
     })),

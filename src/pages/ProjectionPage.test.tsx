@@ -387,6 +387,9 @@ describe('ProjectionPage', () => {
 
     expect(await screen.findByText(/needs at least three snapshots/)).toBeTruthy()
     expect(screen.getAllByTestId('echart')).toHaveLength(2) // the dots still chart
+    // The heading a screen reader hears must not promise a curve that is NOT on the canvas.
+    expect(screen.getByLabelText('Net worth history as dots, on a log scale')).toBeTruthy()
+    expect(screen.queryByLabelText(/with a fitted trend/)).toBeNull()
   })
 
   it('gives the trend its own span chips — 10y default, 40y on demand', async () => {

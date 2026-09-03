@@ -236,10 +236,11 @@ describe('projectionOption — F3', () => {
       }),
     )
     const projected = option.series.find((s) => s.name === PROJECTION_SERIES[0])!
+    // Alex and Coast FI both land on Sep 2026, so they share ONE rule and one label —
+    // two entries would print two labels on the same pixel (charts/markLine.ts).
     expect(projected.markLine?.data).toEqual([
-      { xAxis: 'Sep 2026', label: { formatter: 'Alex' } },
+      { xAxis: 'Sep 2026', label: { formatter: 'Alex · Coast FI' } },
       { xAxis: 'Oct 2026', label: { formatter: 'FI' } },
-      { xAxis: 'Sep 2026', label: { formatter: 'Coast FI' } },
     ])
     expect(projected.markLine?.lineStyle).toEqual(MARK_LINE_STYLE)
   })
@@ -279,6 +280,35 @@ describe('projectionOption — F3', () => {
     expect(linear.series.find((s) => s.name === PROJECTION_SERIES[0])?.areaStyle).toEqual({ opacity: 0.12 })
     expect(log.series.find((s) => s.name === PROJECTION_SERIES[0])?.areaStyle).toBeUndefined()
     expect(log.series.slice(0, 4).every((s) => s.stack === 'mc-band')).toBe(true)
+  })
+
+  it('Log: a month at or below $0 is a GAP, and its whole fan column leaves with it', () => {
+    // A log axis has no room for zero or below, and a stacked wash whose floor is gone has
+    // nothing to stand on — so the fan drops the column entire rather than half of it.
+    const DIP = {
+      ...DATA,
+      projected: ['-500.00', '104000.00', '108000.00'],
+      coast: ['0.00', '100000.00', '100000.00'],
+      bands: {
+        ...BANDS,
+        p10: ['-100.00', '90000.00', '80000.00'],
+        p50: ['-50.00', '104000.00', '108000.00'],
+      },
+    }
+    const log = read(projectionOption(DIP, { log: true }))
+    const at0 = (name: string) => log.series.find((s) => s.name === name)!.data[0]
+    expect(at0(PROJECTION_SERIES[0])).toBeNaN()
+    expect(at0(PROJECTION_SERIES[1])).toBeNaN()
+    expect(at0(MEDIAN_SERIES)).toBeNaN()
+    expect(log.series.slice(0, 4).every((s) => Number.isNaN(s.data[0]))).toBe(true)
+    // Every other month still draws — one bad floor is not a reason to blank the fan.
+    expect(log.series.slice(0, 4).every((s) => Number.isFinite(s.data[1]))).toBe(true)
+
+    // Linear is untouched: a negative month IS drawable there, and clipping it would lie.
+    const linear = read(projectionOption(DIP))
+    expect(linear.series.find((s) => s.name === PROJECTION_SERIES[0])!.data[0]).toBe(-500)
+    expect(linear.series.find((s) => s.name === PROJECTION_SERIES[1])!.data[0]).toBe(0)
+    expect(linear.series[0].data[0]).toBe(-100)
   })
 
   it('feeds the page’s legend picks back in', () => {

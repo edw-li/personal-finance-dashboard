@@ -312,9 +312,27 @@ describe('F6', () => {
     expect(allPast.series[0].markLine).toBeUndefined()
   })
 
-  it('vestingTotals: vested at stored closes, unvested at the quote (null without one)', () => {
-    expect(vestingTotals(GOLDEN_VESTS, QUOTE)).toEqual({ vested: 14446.63, unvested: 11544.8 })
-    expect(vestingTotals(GOLDEN_VESTS, null)).toEqual({ vested: 14446.63, unvested: null })
+  it('vestingTotals: vested at stored closes only — the unvested figure is the server’s', () => {
+    expect(vestingTotals(GOLDEN_VESTS)).toEqual({ vested: 14446.63 })
+    // An unpriced past tranche contributes nothing rather than inventing a figure.
+    expect(vestingTotals([PAST_2024])).toEqual({ vested: 11207.5 })
+  })
+
+  it('fades an estimate instead of hatching it when Chart patterns are on', () => {
+    const patterned = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, {
+      todayIso: TODAY,
+      patterns: true,
+    })! as unknown as { series: { data: unknown[] }[] }
+    const future = patterned.series[1].data[2] as {
+      value: number
+      itemStyle: Record<string, unknown>
+      estimate: boolean
+    }
+    // echarts' auto-texture already covers every bar under patterns, so a decal here would
+    // be a hatch on a hatch; the flag (and the "(est.)" tooltip row) still carry the meaning.
+    expect(future.itemStyle).toEqual({ opacity: 0.55 })
+    expect(future.estimate).toBe(true)
+    expect(typeof patterned.series[0].data[0]).toBe('number') // past columns stay plain
   })
 
   it('vestingCsv lists every tranche with its value and whether it is an estimate', () => {

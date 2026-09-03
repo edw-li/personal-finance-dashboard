@@ -486,8 +486,14 @@ export default function ProjectionPage() {
               <div className="card-grid">
                 <ChartCard
                   title="Net worth over time (projected)"
-                  hint="Every snapshot as dots with a quadratic best-fit extended forward — momentum, not a plan. Log axis: equal steps are equal multiples."
-                  ariaLabel={`Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`}
+                  hint="Every snapshot as dots with a quadratic best-fit extended forward — momentum, not a plan. Log axis: equal steps are equal multiples; months at or below $0 are not drawn on the log scale."
+                  // A refused fit draws dots ALONE, so the sentence must not promise a curve
+                  // that is not on the canvas.
+                  ariaLabel={
+                    fit === null
+                      ? 'Net worth history as dots, on a log scale'
+                      : `Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`
+                  }
                   option={historyError === null ? nwChart : null}
                   // Advisory, never the page banner: the rest of the page runs without it.
                   error={historyError}
@@ -515,8 +521,8 @@ export default function ProjectionPage() {
                   footer={
                     <p className="drill-hint">
                       {fit === null
-                        ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
-                        : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples.`}
+                        ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples; months at or below $0 are not drawn on the log scale.'
+                        : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples; months at or below $0 are not drawn on the log scale.`}
                     </p>
                   }
                 />
@@ -552,6 +558,7 @@ export default function ProjectionPage() {
                       is the same balance with contributions turned off. With a volatility, bands
                       are percentiles across 500 simulated lognormal-return paths — seed-stable,
                       so identical knobs redraw identical bands; the median path is their 50th.
+                      On the Log scale, months at or below $0 are not drawn.
                     </p>
                   }
                 />

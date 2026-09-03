@@ -37,6 +37,11 @@ export const MEDIAN_SERIES = 'Median path'
 
 const monthBucket = (iso: string) => `${iso.slice(0, 7)}-01`
 
+/** A log axis cannot place zero or below — such points become GAPS (NaN keeps the arrays
+ *  plain number[]; echarts treats NaN as empty), never a clamped lie. Both builders on this
+ *  page ride a log axis, so the rule has one owner. */
+const positive = (value: number) => (value > 0 ? value : Number.NaN)
+
 // The runtime shape for trigger:'axis' params (historyChartOptions' subset posture).
 interface AxisTooltipParam {
   seriesName?: string
@@ -154,6 +159,7 @@ export function projectionOption(
   const bands = data.bands ?? null
   const labels = data.months.map(formatMonth)
   const lastLabel = labels[labels.length - 1]
+  const onScale = (values: number[]) => (log ? values.map(positive) : values)
 
   // Rules and washes ride the ONE series every payload has. FI/Coast FI arrive through the
   // same fall-forward anchor as the retirements; an unplaceable month (stale horizon) is
@@ -193,6 +199,12 @@ export function projectionOption(
           // the three washes land on p25 / p75 / p90 and each one fills the gap below
           // itself. Two opacities read as "50% of paths" vs "80%".
           const diff = (hi: number[], lo: number[]) => hi.map((v, i) => v - lo[i])
+          // A stacked wash is drawn from its floor up, and under `log` a floor at or below
+          // zero has nowhere to stand — so a month whose p10 is non-positive drops out of
+          // the fan ENTIRELY (all four members), rather than leaving three washes hanging
+          // off an absent base.
+          const unplaceable = p10.map((v) => log && v <= 0)
+          const gap = (values: number[]) => values.map((v, i) => (unplaceable[i] ? Number.NaN : v))
           // All the projection's own blue: uncertainty about one entity wears that entity's
           // hue (theme law — never a new hue). Tooltip-silent — the footer below
           // reconstructs the real ranges from the percentile arrays instead.
@@ -207,7 +219,7 @@ export function projectionOption(
             tooltip: { show: false },
             silent: true,
             areaStyle: { opacity },
-            data: values,
+            data: gap(values),
           })
           return [
             {
@@ -220,7 +232,7 @@ export function projectionOption(
               emphasis: { disabled: true },
               tooltip: { show: false },
               silent: true,
-              data: p10,
+              data: gap(p10),
             },
             wash(BAND_SERIES[0], diff(p25, p10), 0.1),
             wash(BAND_SERIES[1], diff(p75, p25), 0.18),
@@ -231,7 +243,7 @@ export function projectionOption(
               name: MEDIAN_SERIES,
               lineStyle: { width: 1 },
               color: PALETTE[0],
-              data: bands.p50.map(Number),
+              data: onScale(bands.p50.map(Number)),
             },
           ]
         })()
@@ -259,9 +271,9 @@ export function projectionOption(
       ...(log ? {} : WASH),
       ...(rules ? { markLine: rules } : {}),
       ...(area ? { markArea: area } : {}),
-      data: data.projected.map(Number),
+      data: onScale(data.projected.map(Number)),
     },
-    { ...LINE, name: PROJECTION_SERIES[1], color: PALETTE[1], data: data.coast.map(Number) },
+    { ...LINE, name: PROJECTION_SERIES[1], color: PALETTE[1], data: onScale(data.coast.map(Number)) },
     ...(target === null
       ? []
       : [
@@ -327,9 +339,6 @@ export function netWorthProjectionOption(
 ): EChartsOption | null {
   if (history.months.length < 2) return null
   const months = projectionMonths(history, startMonth, years)
-  // The log axis cannot place zero or below — such points become gaps (NaN keeps the arrays
-  // plain number[]; echarts treats NaN as empty), never lies.
-  const positive = (value: number) => (value > 0 ? value : Number.NaN)
   // The dot series wears a circle swatch so the two entries stay tellable apart.
   const legendData = [
     { name: NET_WORTH_PROJECTION_SERIES[0], icon: 'circle' },
