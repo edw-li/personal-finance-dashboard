@@ -28,6 +28,41 @@ between both modes).
 > the internet in cleartext on every visit. The self-signed cert costs one extra command
 > and a one-time browser warning, and everything is encrypted.
 
+## Shell primitives (frontend)
+
+Every page renders through one set of shell primitives in `src/components/shell/`, so the same
+grammar answers the same questions everywhere. Design record:
+[`docs/superpowers/specs/2026-09-03-shell-grammar-design.md`](docs/superpowers/specs/2026-09-03-shell-grammar-design.md).
+
+- **`PageFrame`** — the title row, the page's actions, an optional subheader, a sticky scope row, and
+  the five states a page can be in: loading (ghost skeleton), error with nothing on screen (alert +
+  Retry), ready, ready-while-revalidating (dimmed), and ready-behind-a-failure (one "Showing earlier
+  data" line). Pages keep their own state and hand the frame a `resource` summary.
+- **`ScopeBar` + `useScope`** — scope lives in the URL: `owner=all|<person id>|joint`,
+  `range=all|1y|ytd`, `month=YYYY-MM`. A page declares which controls it wants and the bar renders
+  only those. Owner and range are remembered across pages in `localStorage` under `finance.scope`;
+  month never is, because it means something different on each page that has one.
+- **`MonthRibbon`** — twelve month chips with year dividers, a ring on the current month, and two-tone
+  fills showing what each month actually holds (balances on the left half, spending on the right),
+  fed by `GET /coverage`.
+- **`Segmented`** — the one "pick one of N" control, in four variants (toggle, tabs, steps, chips)
+  with the ARIA each implies.
+- **`Feed` / `FeedBanner`** — the same three states one card at a time, for pages that load several
+  independent payloads; `FeedBanner` alone is the plain alert for an action that failed.
+- **`ThemeProvider`** — Dark (the default), Light or System, plus Comfortable/Compact density, stored
+  as `finance.theme` and `finance.density` and stamped on `<html>` before first paint (no dark flash).
+  Both palettes live in `src/theme/tokens.ts`, where a test holds every tone to its WCAG contrast
+  floor on both backgrounds; charts follow through versioned ECharts themes and an option recolor.
+- **Command palette** (Ctrl/Cmd+K, with a sidebar row above the nav) — a registry of pages, Settings
+  sections (`/settings#<id>`), actions, and entities loaded on first open (tickers, accounts,
+  spending categories, cards).
+- **Session** — the bearer token renews itself through `POST /auth/renew` inside its last six hours; a
+  password change bumps `users.token_version` and signs every other device out; a 401 remembers the
+  page and returns to it after sign-in.
+- **`ShellErrorBoundary`** — catches a throw anywhere in the shell, tells a post-deploy chunk failure
+  (see 4.4) apart from a real error, and offers Reload plus Copy details (message, stack, route, build
+  hash, last `/system/status`).
+
 ---
 
 ## Part 0 — Before you start (on your local machine)

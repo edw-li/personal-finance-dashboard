@@ -55,6 +55,7 @@ src/components/shell/
   ScopeBar.tsx             owner chips · range chips · month ribbon, per page declaration
   useScope.ts              URL ⇄ memory ⇄ defaults; the one scope rule
   Segmented.tsx            toggle | tabs | steps | chips (+ multiple)
+  Feed.tsx                 one card's states: ghost, dimmed body, stale banner (+ FeedBanner)
   ThemeProvider.tsx        data-theme / data-density, persistence, OS following, theme version
   session.ts               token expiry decode, single-flight renew, return-to-page
   ShellErrorBoundary.tsx   chunk-load vs real error, Reload, Copy details
@@ -86,11 +87,9 @@ interface PageFrameProps {
   actions?: ReactNode
   /** Under the title row: page-local status lines (Portfolio's refresh result, the wizard's step pills). */
   subheader?: ReactNode
-  /** Which scope controls the sticky row shows. Absent → no scope row.
-   *  `owner: { joint: false }` renders the person chips without the Joint option (Paycheck). */
-  scope?: { owner?: boolean | { joint: boolean }; range?: boolean; month?: 'view' | 'edit' }
-  /** Page-specific controls that belong beside the scope (rare; e.g. the wizard's "Start Oct 2026"). */
-  scopeExtra?: ReactNode
+  /** The sticky row's content, composed by the page — a `<ScopeBar …/>` (§6) plus any
+   *  page-specific control that belongs beside it. Absent → no scope row. */
+  scopeRow?: ReactNode
   /** Built from the state pages already hold. */
   resource: {
     status: 'loading' | 'ready' | 'error'
@@ -105,16 +104,24 @@ interface PageFrameProps {
 }
 ```
 
+**As shipped:** the `scope` declaration object and `scopeExtra` collapsed into the one `scopeRow`
+slot — pages compose `<ScopeBar owner range month …/>` into it, so the frame never grows a prop per
+scope control and a page-specific control is simply another child of the same row. The declaration
+itself moved onto ScopeBar's props (§6).
+
 ### Rendering
 
-1. `<header class="page-header">` — `<h1>` left, `actions` right. No icons in the h1 (Monthly update
-   drops its calendar glyph). The vestigial `.spacer` pattern is retired.
+1. `<header class="page-frame-header">` — `<h1>` left, `actions` (in `.page-frame-actions`) right. No
+   icons in the h1 (Monthly update drops its calendar glyph). The vestigial `.spacer` pattern is
+   retired.
 2. `subheader` — optional, directly under the header.
-3. Scope row — rendered only when `scope` is set. `position: sticky; top: 0` inside `<main>`, surface
-   background, with a hairline bottom border that appears only while stuck (an IntersectionObserver
-   sentinel above the row toggles `is-stuck`). Contains `ScopeBar` and `scopeExtra`. z-index sits above
-   cards and below the palette, drawer and toasts. The wizard's live net-worth footer stays sticky at
-   the bottom; the two never overlap.
+3. Scope row — rendered only when `scopeRow` is given. `position: sticky; top: 0` inside `<main>`,
+   surface background, with a hairline bottom border that appears only while stuck (an
+   IntersectionObserver sentinel above the row toggles `is-stuck`). z-index sits above cards and below
+   the palette, drawer and toasts. The wizard's live net-worth footer stays sticky at the bottom; the
+   two never overlap. A row whose content all resolves away — an owner-only `ScopeBar` in a
+   one-person household — renders as an empty element, and `.page-frame-scope:empty` hides it, so the
+   page carries no empty band and no orphan rule.
 4. Body, by state:
    - **loading, no data:** header + scope row + `PageSkeleton` from `skeleton` (defaults: 4 tiles, one
      12-span card of 320 px). The page shape is stable before data arrives.
@@ -129,10 +136,19 @@ interface PageFrameProps {
 ### Migration rule (one page at a time)
 
 Delete the hand-built header, banner and skeleton; wrap the body in `PageFrame`; move any header-
-resident status into `subheader`; move the page's owner row / range chips / ribbon into the `scope`
-declaration (they now come from the shell); keep every role and visible string the page tests query.
+resident status into `subheader`; move the page's owner row / range chips / ribbon into a `ScopeBar`
+in `scopeRow` (they now come from the shell); keep every role and visible string the page tests query.
 A page is "migrated" when it renders no `.page-header` of its own and no bespoke loading or error
 markup.
+
+**Which grammar carries which failure.** The frame's `resource` is the PAGE's payload, so its stale
+line ("Showing earlier data — …") is for a LOAD failure only. A card that loads its own payload — the
+pages with several independent feeds (Comp, ESPP, Paycheck, Taxes) — uses `Feed`, which prints the
+same three states inside the card: a ghost card before the first payload, a dimmed body while a later
+one is in flight, and a banner that only says something is stale when there IS something stale (a
+first-load failure has nothing to be behind, so it reads as a plain error with Retry). An ACTION that
+failed — a save, a validation, a what-if that would not compute — uses the bare `FeedBanner` alert or
+a toast, never the stale line: nothing is stale there, something simply did not happen.
 
 ### Success criteria
 
@@ -148,7 +164,7 @@ sticky on Net worth, Spending, Portfolio, Credit cards, Monthly update and Overv
 |---|---|---|
 | `owner` | `all` · `<person id>` · `joint` | Existing `OwnerScope` semantics: a person is their rows plus joint; `joint` is NULL-owned only |
 | `range` | `all` · `1y` · `ytd` | Time window for the page's time-series charts (existing `RangePreset`) |
-| `month` | `YYYY-MM` | Page-specific: drilled month (Spending), viewed month (Net worth), edited month (Monthly update) |
+| `month` | `YYYY-MM` (a legacy `YYYY-MM-DD` link is accepted and rewritten) | Page-specific: drilled month (Spending), viewed month (Net worth), edited month (Monthly update) |
 
 ### Memory and defaults
 
@@ -157,11 +173,19 @@ localStorage under `finance.scope` (`{ owner, range }`) and written on every cha
 remembered** (its meaning differs per page). Defaults: owner `all`, range `1y`. Arriving on a page
 whose URL lacks a remembered key rewrites the URL from memory with a `replace` navigation, so every
 view is shareable and the back button never sees the normalization. `Layout`'s existing rule that a
-search-param-only navigation neither moves focus nor scrolls already covers this rewrite.
+search-param-only navigation neither moves focus nor scrolls already covers this rewrite. The same
+pass shortens a legacy `month=YYYY-MM-DD` deep link (Overview's spending drills, the wizard's own
+param) to `YYYY-MM`, and deletes a month it cannot parse rather than inventing one.
 
 Writes go through one setter: `setScope({ owner })`, `setScope({ range })`, `setScope({ month })`,
 each a `replace` of the current URL (the house convention from Spending's `?month=` and Credit cards'
-`?card=`).
+`?card=`). Two writes in the same tick coalesce: react-router hands a setter the RENDER's params, not
+the live URL, so `useScope` parks the uncommitted params in a ref keyed by the URL they were computed
+from and the second write starts from the first — otherwise the second would drop the first's key.
+A write that would not change the URL is dropped, which is the one behavior change a reader can feel:
+**re-clicking the range chip that is already active does nothing at all**, so a chart the reader has
+ctrl+wheel-wandered snaps back to the preset when the preset CHANGES, not on a re-click of the chip it
+is already on (the retired `RangeChips` reset on every click).
 
 ### ScopeBar
 
@@ -170,6 +194,48 @@ person — the existing gate), range `Segmented`, and the month ribbon (§7). On
 block; the four page-specific owner rows (`.networth-owner-row`, `.portfolio-owner-row`,
 `.cards-owner-row`, `.paycheck-person-row`) and their labels are deleted. The eyebrow reads "Whose"
 everywhere.
+
+Props as shipped — this is the declaration PageFrame's `scope` object used to carry (§5):
+
+```ts
+interface ScopeBarProps {
+  /** `{ joint: false }` hides Joint (a paycheck has no joint); `{ all: false }` also hides All and
+   *  reads a null scope as the primary person — for pages always about ONE person (Paycheck). */
+  owner?: boolean | { joint: boolean; all?: boolean }
+  /** Overrides the bar's own "whose view" sentence for a page with something more to say. */
+  ownerHint?: string
+  range?: boolean
+  month?: MonthScopeProps
+  /** Any value; a change re-runs the household and coverage fetches (the wizard bumps it after a
+   *  save, so the just-saved month's chip fills without leaving the page). */
+  revalidate?: unknown
+}
+
+type MonthScopeProps =
+  | { mode: 'view'; anchor?: string; figures?: Record<string, string>; editHref?: (m: string) => string }
+  | { mode: 'edit'; anchor?: string; selected?: string; onSelect?: (m: string) => void }
+```
+
+- **Owner.** Paycheck declares `{ joint: false, all: false }`. A scope the page offers no chip for —
+  a hidden `All`, `joint` where there is no Joint chip, a person id from a stale link who has since
+  been deleted — falls to the first chip rather than leaving the row with nothing selected.
+- **The explanation is the shell's.** The bar prints its own answer to "whose view is this": with a
+  Joint chip, "A person's view is their own accounts plus the joint ones — that is what a joint
+  account is. Joint shows only the shared accounts"; without one, "Each person has their own view;
+  nothing here is shared." `ownerHint` overrides it where a page has more to say (Portfolio:
+  performance stays household). It renders — as an `InfoHint` right after the chips — only when the
+  owner control itself does: a one-person household is asked no whose-view question, so it is offered
+  no answer either.
+- **Month, by mode.** The union is discriminated rather than one bag of optionals, so a view page
+  cannot hand over an edit handler nor the wizard an Edit link. `view` reads and writes `?month=`
+  through the scope and offers "Back to latest" while a non-latest month is selected (hidden when the
+  selection already IS the latest covered month, where the button would only churn the URL); `edit`
+  owns the click — it passes `selected` and `onSelect` because the wizard has a draft to guard — and
+  falls back to `/update?month=` when it does not.
+- **Anchor vs today.** `anchor` is the ribbon's right edge and the only injectable one; the ring is
+  drawn from the real clock, so a page anchored ahead of today (the wizard) never moves it.
+- The bar returns nothing when every control it was given resolves away, which is what makes the
+  frame's `:empty` rule above enough.
 
 ### Page adoption
 
@@ -202,9 +268,11 @@ The ribbon is the `month` control of the scope row on Net worth, Spending and Mo
 
 - **Window and paging:** twelve chips at a time; ‹ › page in twelve-month steps back to the earliest
   covered month and forward to the current month. The window containing the selected month is shown
-  first.
+  first. The window ends at an `anchor` — the current month by default, `max(next entry month,
+  current month)` for the wizard.
 - **Year dividers:** a small year label above the first chip of each calendar year in the window.
-- **Today marker:** a ring around the current calendar month.
+- **Today marker:** a ring around the current calendar month — computed from the clock, never from
+  the anchor, which may sit ahead of it.
 - **Two-tone chips:** the left half fills when balances exist for the month, the right half when
   spending exists. A month with neither is hollow. Colors follow the existing filled/hollow tokens.
 - **Hover:** month name; on Net worth also that month's net worth from the timeseries already on the
@@ -292,10 +360,26 @@ grouped under kind headers in the order Actions · Pages · Settings · Holdings
 Cards, at most six per group, recents first when the query is empty. Keyboard behavior, ARIA combobox
 semantics and mousedown execution are unchanged.
 
+Two refinements the build needed. The scorer tries an alignment starting at every WORD HEAD and keeps
+the strongest, because one leftmost-greedy pass is not always the best one: in "Ask assistant" the
+query "assistant" had its a-s stolen by "As", scattering the real word and scoring below the Settings
+card of the same name. A label hit outranks an alias hit of equal strength, and equal scores fall back
+to registry order (actions before pages before sections). And the list keeps its house group order on
+screen while **Enter runs the best-SCORING match wherever it sits** — the highlighted row IS that
+match, so what Enter does is always what the reader sees highlighted, empty query included.
+
 ### Affordance
 
 A sidebar row above the nav — a magnifier icon, "Search or jump…", and a `Ctrl K` / `⌘ K` kbd hint
 chosen by platform — opens the palette. It is the only new sidebar control.
+
+### Deferred
+
+Seeding the entity lists from warm snapshot-cache payloads before any fetch was not built. As shipped,
+the first open in a ten-minute window fires the four entity fetches unconditionally
+(`Promise.allSettled`, so one unreachable endpoint costs only its own group) and the palette opens
+without waiting on them — the seeding would buy a fraction of a second on a page that already holds
+the data. Worth doing later against the cache's own keys; it was not worth holding the lane.
 
 ## 10. Session
 
@@ -331,18 +415,29 @@ chosen by platform — opens the palette. It is the only new sidebar control.
 
 ### Tokens as the single source
 
-`src/theme/tokens.ts` exports `DARK` and `LIGHT`: the same variable names with both palettes' values,
-including the eight chart palette slots, `--chart-ink`, `--chart-muted`, the sequential ramp and the
-positive/negative/warn tones. `index.css` keeps a static `:root` block (dark) and a static
-`[data-theme="light"]` block so the first paint is correct without JavaScript; a vitest parses
-`index.css` and asserts both blocks equal the TS maps, so the two cannot drift.
+`src/theme/tokens.ts` exports `DARK` and `LIGHT`: the same variable names with both palettes' values —
+the eight chart palette slots, `--grid-line`, `--axis-line`, `--other-series`, `--on-accent`, the
+12-step sequential ramp and the positive/negative/warn tones. `index.css` keeps a static `:root` block
+(dark) and a static `[data-theme="light"]` block so the first paint is correct without JavaScript; a
+vitest parses `index.css` and asserts both blocks carry every declaration `cssDeclarations()` emits
+(the sequential ramp stays in TS — only charts read it), so the two cannot drift.
 
-Starting light values (cool neutral, from the approved mockup): background `#f2f5f9`, surface
-`#ffffff`, surface-2 `#f7f9fc`, border `#e1e7ef`, text `#141a24`, muted `#5f6b7a`, accent `#3b7dd8`,
-positive `#1f8f4e`, negative `#c73a3a`, warn `#a86400`. Chart slots are the dark palette's hues
-darkened until each meets 3:1 against `#ffffff`. **Acceptance:** a vitest computes WCAG contrast for
-text-on-surface (≥ 4.5:1), muted-on-surface (≥ 4.5:1), positive/negative/warn-on-surface (≥ 4.5:1 at
-small sizes) and every chart slot on surface (≥ 3:1) for both palettes.
+Light values as shipped (cool neutral): background `#f2f5f9`, surface `#ffffff`, surface-2 `#f7f9fc`,
+border `#e1e7ef`, text `#141a24`, muted `#5f6b7a`, accent `#296dcc`, on-accent `#ffffff`, positive
+`#1b7e44`, negative `#c73a3a`, warn `#996500`, grid-line `#e6ebf2`, axis-line `#d5dce6`, other-series
+`#7f8a9c`; chart slots 1–8 `#2f6fdc`, `#c94f1e`, `#15895f`, `#996500`, `#c2436f`, `#1f7a1f`, `#6f63d6`,
+`#c94848`. The three small-text tones sit one notch below the mockup's `#3b7dd8` / `#1f8f4e` /
+`#a86400`, which cleared 4.5:1 on the white card alone: the floor is read against BOTH text-bearing
+backgrounds and `--bg` is the weaker of the two. `--on-accent` is the one token that inverts between
+palettes — near-black on dark's bright accent, white on light's deep one. The dark palette is
+unchanged except `--other-series`, raised from `#4a5060` (2.16:1) to `#6b7382` to clear its floor.
+
+**Acceptance** (`tokens.test.ts`, both palettes): WCAG contrast against BOTH text-bearing backgrounds
+— the card (`--surface`) and the bare page (`--bg`), since deltas, links and advisories sit on bare
+page as often as on a card — ≥ 4.5:1 for `--text`, `--muted`, `--positive`, `--negative`, `--warn` and
+`--accent`; ≥ 3:1 for the eight chart slots and `--other-series`; ≥ 4.5:1 for `--on-accent` on
+`--accent`. The same test asserts `--warn === --chart-4` in both palettes — one amber per theme, the
+advisory register and chart slot 4 being the same ink.
 
 ### Bridge
 
@@ -370,14 +465,29 @@ cycles Dark ↔ Light and sets the stored theme explicitly. The favicon stays da
 
 ## 12. Shell error boundary and sidebar footer
 
-- `ShellErrorBoundary` wraps everything inside `AuthProvider` (Layout, palette, drawer, toasts).
-  It classifies the error: messages matching `/ChunkLoadError|Loading chunk|Failed to fetch dynamically
-  imported module|Importing a module script failed/` render "The app was updated — reload to get the
-  new version" with a Reload button; anything else renders "Something went wrong" with Reload and
-  **Copy details**, which copies message, stack, current route, build hash and the last cached
-  `/system/status` (alembic head, environment) as text. `RouteBoundary` keeps its per-route role.
-- **Build hash:** `vite.config.ts` defines `__BUILD_HASH__` from `git rev-parse --short HEAD` at build
-  time, falling back to `"dev"`; declared in `vite-env.d.ts`.
+- `ShellErrorBoundary` mounts in `Layout`, wrapping the sidebar, palette, assistant drawer and the
+  routed outlet, so a throw in an overlay can no longer unmount the whole app. It classifies the
+  error: messages matching `/ChunkLoadError|Loading chunk|Failed to fetch dynamically imported
+  module|error loading dynamically imported module|Importing a module script failed|Unable to preload
+  CSS/i` — every engine words the post-deploy chunk failure differently (Firefox's "error loading",
+  Safari's "Importing a module script failed") and Vite's CSS preloader has a sentence of its own —
+  render "The app was updated — reload to get the new version" with a Reload button; anything else
+  renders "Something went wrong" with Reload and **Copy details**, which copies message, stack,
+  React's component stack, current route, build hash and the last cached `/system/status` (alembic
+  head, environment) as text. The button reports its outcome (`Copied` / `Copy failed`), and a
+  read-only textarea holding the same payload appears whenever the clipboard is absent (plain HTTP) or
+  refused, so the reader can still select it by hand. Focus moves to Reload when the fallback appears.
+  A `resetKey` prop (Layout passes `location.key`) clears a shown error on navigation — a prop and not
+  a `key`, because keying would remount the palette and the drawer and throw away the drawer's
+  transcript on every page change. `RouteBoundary` keeps its per-route role.
+  **Known gap:** `ToastProvider` sits above `BrowserRouter` in `App.tsx`, so toasts — and the login
+  route and the `ProtectedRoute` splash — are still OUTSIDE this boundary. Moving the provider inside
+  it is a later change, not a shell one.
+- **Build hash:** `vite.config.ts` defines `__BUILD_HASH__` from the `BUILD_HASH` environment variable
+  when it is set, else `git rev-parse --short HEAD` at build time, else `"dev"`; declared in
+  `vite-env.d.ts`. The env override is what makes the hash real in Docker: `.dockerignore` excludes
+  `.git`, so the probe inside the image always falls through to `"dev"` — the one place the hash
+  matters most. The `Dockerfile` takes it as a build arg (README §3.3).
 - **SidebarFooter:** signed-in email (from `useAuth`), an environment pill (`dev` amber, `prod` muted;
   hidden until `/system/status` has answered once), the build hash in monospace, the theme toggle,
   and Log out. Replaces the bare Log out row.
@@ -409,11 +519,15 @@ cycles Dark ↔ Light and sets the stored theme explicitly. The favicon stays da
   household + coverage under it; the spending matrix's `four_pct_rule` is computed from the
   net-worth investable bases; the credit-cards page keeps ONE snapshot that embeds the spending
   categories, the spending matrix and `/net-worth/accounts`; and the ESPP lots and comp vesting
-  schedule are both valued at the portfolio's latest quote, so a price refresh restates them.
+  schedule are both valued at the portfolio's latest quote, so a price refresh restates them. The last
+  row is not an entry in the map: any path the map does not match — those four prefixes and anything
+  added later — falls through to the old total wipe, so a new endpoint is stale-by-default rather than
+  silently wrong, and joins the table only once someone has reasoned about its blast radius.
 
-- **POST-for-read:** a POST whose body is only the question — `/assistant/context-preview` and
-  `/taxes/what-if` — rides `apiReadOnly`, which skips invalidation entirely. Both re-run on
-  interaction (a drawer open, a what-if keystroke) and neither writes.
+- **POST-for-read:** a POST whose body is only the question — `/assistant/context-preview`,
+  `/taxes/what-if`, and `/auth/renew`, which mints a token and touches no page data — rides
+  `apiReadOnly`, which skips invalidation entirely. All three re-run on interaction (a drawer open, a
+  what-if keystroke, any response inside the renewal window) and none of them writes.
 
 - **Legibility floor:** eyebrows, table heads and nav headings ≥ 0.72 rem; delta text ≥ 0.8 rem;
   `.stat-value` gets `font-variant-numeric: tabular-nums`; `OTHER_SERIES_COLOR` is raised to ≥ 3:1;
