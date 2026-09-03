@@ -766,7 +766,7 @@ export default function TaxesPage() {
             </div>
           )}
           {/* The status of the SELECTED year, not another year to pick: its own row under the
-              chips, in the app-wide segmented treatment (RangeChips' .segmented, declared once
+              chips, in the app-wide segmented treatment (.segmented, declared once
               in panels.css). */}
           {selectedYear !== null && (
             <div className="filing-status-row">
