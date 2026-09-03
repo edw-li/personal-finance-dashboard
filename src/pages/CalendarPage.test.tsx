@@ -1,12 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { CalendarEvent, CalendarResponse } from '../types/api'
-import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
-import CalendarPage from './CalendarPage'
 import ToastProvider from '../components/ToastProvider'
+import { calendarEvent } from '../testing/calendarFixtures'
+import type { CalendarEvent, CalendarResponse } from '../types/api'
+import { formatDate, formatMonth } from '../utils/format'
+import { addDays, addMonths, currentMonthIso } from '../utils/months'
+import CalendarPage from './CalendarPage'
 
 vi.mock('../api/calendar', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/calendar')>()),
@@ -14,6 +16,7 @@ vi.mock('../api/calendar', async (importOriginal) => ({
   createCustomEvent: vi.fn(),
   updateCustomEvent: vi.fn(),
   deleteCustomEvent: vi.fn(),
+  putCalendarOverride: vi.fn(),
 }))
 vi.mock('../utils/ics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/ics')>()),
@@ -24,83 +27,78 @@ import {
   createCustomEvent,
   deleteCustomEvent,
   fetchCalendar,
+  putCalendarOverride,
   updateCustomEvent,
 } from '../api/calendar'
 import { fetchHousehold } from '../api/household'
-import { calendarEvent } from '../testing/calendarFixtures'
 import { downloadIcs } from '../utils/ics'
 
-// Wall-clock-proof fixtures (OverviewPage.test's NW_MONTHS discipline): the page boots
-// on currentMonthIso(), so every fixture date derives from the run's real month.
+// Wall-clock-proof fixtures: the page boots on the current month, so every date derives
+// from the run's real month.
 const MONTH = currentMonthIso()
+const PREV = addMonths(MONTH, -1)
+const NEXT = addMonths(MONTH, 1)
 const DAY_15 = `${MONTH.slice(0, 8)}15`
+const DAY_16 = `${MONTH.slice(0, 8)}16`
+const Q3_KEY = `tax:2026-q3:${DAY_15}`
 
 function fixtureEvents(): CalendarEvent[] {
   return [
-    calendarEvent({
-      date: DAY_15,
-      type: 'rsu_vest',
-      label: 'RSU vest — 2025 offer',
-      detail: '25 sh — 2025 offer',
-    }),
-    calendarEvent({ date: DAY_15, type: 'payday', label: 'Payday' }),
-    calendarEvent({
-      date: addDays(DAY_15, 3),
-      type: 'ex_dividend',
-      label: 'Ex-dividend — NVDA',
-      detail: 'NVDA',
-    }),
-    calendarEvent({
-      date: DAY_15,
-      type: 'custom',
-      label: 'Car insurance',
-      detail: 'policy 8841',
-      id: 41,
-    }),
+    calendarEvent({ date: DAY_16, type: 'rsu_vest', label: 'RSU vest — 4 grants', short_label: 'RSU vest · 4 grants', amount: '41200.00', direction: 'in', basis: 'estimated', items: [{ label: '2025 offer', amount: '41200.00', person_id: null, detail: '50 sh' }] }),
+    calendarEvent({ date: DAY_15, type: 'payday', label: 'Payday', short_label: 'Payday', amount: '6812.44', direction: 'in' }),
+    calendarEvent({ date: DAY_15, type: 'tax_deadline', label: 'Tax deadline — Q3 estimated payment', short_label: 'Q3 est. tax', entity_ref: '2026-q3', amount: '2400.00', direction: 'out', basis: 'estimated' }),
+    calendarEvent({ date: DAY_15, type: 'ex_dividend', label: 'Ex-dividend — NVDA', short_label: 'Ex-div NVDA' }),
+    calendarEvent({ date: DAY_15, type: 'custom', label: 'Car insurance', short_label: 'Car insurance', detail: 'policy 8841', id: 41 }),
   ]
+}
+
+const SOURCES: CalendarResponse['sources'] = [
+  { source: 'rsu', status: 'ok', note: 'valued at the NVDA quote' },
+  { source: 'payroll', status: 'ok', note: null },
+]
+
+function payload(events = fixtureEvents()): CalendarResponse {
+  return { events, sources: SOURCES, quote_as_of: null }
 }
 
 function windowFor(monthIso: string): [string, string] {
   return [addMonths(monthIso, -1), addDays(addMonths(monthIso, 2), -1)]
 }
 
-function renderPage(
-  payload: CalendarEvent[] = fixtureEvents(),
-  entry = '/calendar',
-) {
-  vi.mocked(fetchCalendar).mockResolvedValue({
-    events: payload,
-    sources: [],
-    quote_as_of: null,
-  } satisfies CalendarResponse)
+function Url() {
+  const location = useLocation()
+  return <span data-testid="url">{location.pathname + location.search}</span>
+}
+
+function renderPage(events: CalendarEvent[] = fixtureEvents(), entry = '/calendar') {
+  vi.mocked(fetchCalendar).mockResolvedValue(payload(events))
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <ToastProvider>
-        <CalendarPage />
+        <Routes>
+          <Route
+            path="*"
+            element={
+              <>
+                <CalendarPage />
+                <Url />
+              </>
+            }
+          />
+        </Routes>
       </ToastProvider>
     </MemoryRouter>,
   )
 }
 
-// The palette's "Add custom event" action lands here (2026-09-03 shell spec §9): the form
-// is open on arrival rather than a button to hunt for on a month grid.
-it('opens the add form on a ?add=1 arrival', async () => {
-  renderPage(fixtureEvents(), '/calendar?add=1')
-  // The heading, not the button of the same name: only the form carries a heading.
-  expect(await screen.findByRole('heading', { name: 'Add event' })).toBeTruthy()
-})
-
-it('leaves the form closed without the arrival param', async () => {
-  renderPage()
-  await screen.findByRole('button', { name: 'Add event' })
-  expect(screen.queryByRole('heading', { name: 'Add event' })).toBeNull()
-})
-
-function grid(): HTMLElement {
-  const node = document.querySelector('.cal-grid')
-  expect(node).not.toBeNull()
-  return node as HTMLElement
-}
+const url = () => screen.getByTestId('url').textContent
+const cell = (day: string) =>
+  document.querySelector(`[role="gridcell"][data-day="${day}"]`) as HTMLElement
+const chipIn = (day: string, prefix: string) =>
+  Array.from(cell(day).querySelectorAll('button.cal-chip')).find((c) =>
+    c.textContent?.startsWith(prefix),
+  ) as HTMLElement
+const v2Body = { amount: null, direction: 'neutral', recurrence: 'none', until: null }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -112,119 +110,98 @@ beforeEach(() => {
     ],
     marriage_date: null,
   })
+  vi.mocked(putCalendarOverride).mockResolvedValue({
+    key: Q3_KEY,
+    done: true,
+    hidden: false,
+    note: null,
+    amount: null,
+  })
 })
-
-// Manual cleanup, OverviewPage.test's hygiene: vitest runs without injected globals, so
-// RTL cannot auto-register afterEach — without this, renders accumulate across tests.
 afterEach(cleanup)
 
-describe('CalendarPage', () => {
-  it('fetches the 3-month window around the shown month', async () => {
+describe('CalendarPage — month, views, grid', () => {
+  it('fetches the month ± one and renders the ARIA grid with priced, capped chips', async () => {
     renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    const [start, end] = windowFor(MONTH)
-    expect(fetchCalendar).toHaveBeenCalledWith(start, end)
-  })
-
-  it('places chips on their day — buttons now, a multi-event day carries them all', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    const chips = Array.from(grid().querySelectorAll('button.cal-chip'))
-    const texts = chips.map((chip) => chip.textContent)
-    expect(texts).toContain('RSU vest — 2025 offer')
-    expect(texts).toContain('Payday') // same day, second chip
-    expect(texts).toContain('Ex-dividend — NVDA')
-    expect(texts).toContain('Car insurance')
-    const vestChip = chips.find((chip) => chip.textContent === 'RSU vest — 2025 offer')
-    // No more direct navigation: chips open the details popover (spec §9.2).
-    expect(vestChip?.getAttribute('aria-haspopup')).toBe('dialog')
-    expect(vestChip?.getAttribute('aria-expanded')).toBe('false')
-    // Colored per the fixed type map — but never color alone: the text IS on the chip.
-    expect(vestChip?.getAttribute('style')).toContain('border-left-color')
-  })
-
-  it('spaces the sections with the house card-grid wrapper', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    // The frame owns the dim wrapper now; the page still spaces its sections with card-grid.
-    expect(document.querySelector('.loading-dim > .card-grid')).not.toBeNull()
-  })
-
-  it('renders the accessible date-grouped list for the shown month', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    const list = document.querySelector('.cal-list')
-    expect(list).not.toBeNull()
-    expect(list?.textContent).toContain('RSU vest — 2025 offer')
-    expect(list?.textContent).toContain('25 sh — 2025 offer')
-    expect(list?.textContent).toContain('Payday')
-  })
-
-  it('names all nine event types in the legend, with the cadence/honesty note', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    for (const name of [
-      'RSU vest',
-      'ESPP purchase',
-      'ESPP qualifying date',
-      'Ex-dividend',
-      'Payday',
-      'ESPP offering start',
-      'Tax deadline',
-      'Monthly update due',
-      'Custom',
-    ]) {
-      expect(screen.getAllByText(name).length).toBeGreaterThan(0)
-    }
-    screen.getByText(/semi-monthly \(24 checks\/yr\)/)
-    screen.getByText(/confirmed announcements only/)
-  })
-
-  it('prev / Today / next refetch the shifted window', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(screen.getByRole('button', { name: 'Previous month' }))
-    await waitFor(() =>
-      expect(vi.mocked(fetchCalendar).mock.calls.at(-1)).toEqual(
-        windowFor(addMonths(MONTH, -1)),
-      ),
+    await screen.findByRole('grid')
+    expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(MONTH))
+    expect(chipIn(DAY_16, 'RSU vest').textContent).toBe('RSU vest · 4 grants ~+$41.2k')
+    expect(cell(DAY_15).querySelectorAll('button.cal-chip')).toHaveLength(2)
+    expect(cell(DAY_15).querySelector('button.cal-more')?.textContent).toBe('+2 more')
+    expect(screen.queryByText(/confirmed announcements only/)).toBeNull() // the caveat prose is gone
+    expect(screen.getByRole('list', { name: 'Sources' }).textContent).toContain(
+      'RSU vests — valued at the NVDA quote',
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Today' }))
-    await waitFor(() =>
-      expect(vi.mocked(fetchCalendar).mock.calls.at(-1)).toEqual(windowFor(MONTH)),
-    )
+  })
+
+  it('?month=YYYY-MM drives the fetch; ‹ › and Today write the URL', async () => {
+    renderPage(fixtureEvents(), `/calendar?month=${PREV.slice(0, 7)}`)
+    await screen.findByRole('grid')
+    expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(PREV))
+    expect(screen.getByRole('heading', { name: formatMonth(PREV) })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
+    expect(url()).toBe('/calendar') // the current month is never written
+    await waitFor(() => expect(vi.mocked(fetchCalendar).mock.calls.at(-1)).toEqual(windowFor(MONTH)))
+    fireEvent.click(screen.getByRole('button', { name: 'Previous month' }))
+    expect(url()).toBe(`/calendar?month=${PREV.slice(0, 7)}`)
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }))
+    expect(url()).toBe('/calendar')
+  })
+
+  it('accepts a legacy YYYY-MM-DD month link and the month input jumps', async () => {
+    renderPage(fixtureEvents(), `/calendar?month=${PREV}`)
+    await screen.findByRole('grid')
+    await waitFor(() => expect(url()).toBe(`/calendar?month=${PREV.slice(0, 7)}`))
+    fireEvent.change(screen.getByLabelText('Jump to month'), { target: { value: '2027-03' } })
+    expect(url()).toBe('/calendar?month=2027-03')
     await waitFor(() =>
-      expect(vi.mocked(fetchCalendar).mock.calls.at(-1)).toEqual(
-        windowFor(addMonths(MONTH, 1)),
-      ),
+      expect(vi.mocked(fetchCalendar).mock.calls.at(-1)).toEqual(windowFor('2027-03-01')),
     )
   })
 
-  it('shows the empty note when the window has no events', async () => {
-    renderPage([])
-    await screen.findByText(/No events in this window/)
+  it('?view=list renders the accessible list with amounts instead of the grid', async () => {
+    renderPage(fixtureEvents(), '/calendar?view=list')
+    await screen.findByText('Payday')
+    expect(screen.queryByRole('grid')).toBeNull()
+    const list = document.querySelector('.cal-list') as HTMLElement
+    expect(list.textContent).toContain('+$6.8k')
+    expect(list.textContent).toContain('2025 offer')
+    fireEvent.click(screen.getByRole('button', { name: 'Grid' }))
+    expect(url()).toBe('/calendar')
+    await screen.findByRole('grid')
   })
 
-  it('shows the error banner with a working Retry', async () => {
+  it('the strip totals the visible month', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    expect(screen.getByRole('group', { name: 'Cash in' }).textContent).toContain('$6,812.44')
+    expect(screen.getByRole('group', { name: 'Cash out' }).textContent).toContain('~$2,400.00')
+    expect(screen.getByRole('group', { name: 'Vesting' }).textContent).toContain('~$41,200.00')
+  })
+
+  it('"+N more" and the day number open the drawer; Escape returns focus to the cell', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(cell(DAY_15).querySelector('button.cal-more') as HTMLElement)
+    const dialog = screen.getByRole('dialog', { name: `${formatDate(DAY_15)} — 4 events` })
+    expect(dialog.textContent).toContain('Ex-dividend — NVDA')
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(cell(DAY_15))
+    fireEvent.click(screen.getByRole('button', { name: `Open ${formatDate(DAY_16)}` }))
+    expect(screen.getByRole('dialog', { name: `${formatDate(DAY_16)} — 1 event` })).toBeTruthy()
+  })
+
+  it('exports the fetched window (Plan E swaps this onto the server renderer)', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(screen.getByRole('button', { name: 'Add to calendar (.ics)' }))
+    expect(downloadIcs).toHaveBeenCalledWith(fixtureEvents())
+  })
+
+  it('shows the frame error with Retry on a failed first load', async () => {
     vi.mocked(fetchCalendar).mockRejectedValueOnce(new ApiError('calendar down', 500))
-    vi.mocked(fetchCalendar).mockResolvedValueOnce({
-      events: fixtureEvents(),
-      sources: [],
-      quote_as_of: null,
-    })
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    )
-    await screen.findByText(/calendar down/)
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    await screen.findAllByText('RSU vest — 2025 offer')
-  })
-
-  it('ghosts the first window with the frame skeleton instead of a Loading… line', () => {
-    vi.mocked(fetchCalendar).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchCalendar).mockResolvedValueOnce(payload())
     render(
       <MemoryRouter>
         <ToastProvider>
@@ -232,405 +209,249 @@ describe('CalendarPage', () => {
         </ToastProvider>
       </MemoryRouter>,
     )
-    expect(document.querySelector('.page-skeleton')).not.toBeNull()
-    expect(document.querySelector('p.empty-note.loading-fallback')).toBeNull()
+    // .error-banner, not role="alert": the toast region carries that role too, always.
+    expect((await screen.findByText(/calendar down/)).closest('.error-banner')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByRole('grid')
+  })
+})
+
+describe('CalendarPage — form, arrivals, land-on-save', () => {
+  it('?add=1&date= opens the form prefilled and is consumed with a replace', async () => {
+    renderPage(fixtureEvents(), `/calendar?add=1&date=${DAY_16}`)
+    expect(await screen.findByRole('heading', { name: 'Add event' })).toBeTruthy()
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(DAY_16)
+    await waitFor(() => expect(url()).toBe('/calendar'))
   })
 
-  it('keeps the month on screen and carries the frame stale line when a reload fails', async () => {
+  it('Add event defaults to the first of the viewed month and posts every v2 field', async () => {
+    vi.mocked(createCustomEvent).mockResolvedValue({ id: 99, date: MONTH, label: 'Rent', detail: null, person_id: null, amount: '2400', direction: 'out', recurrence: 'monthly', until: addMonths(MONTH, 3) })
     renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-
-    vi.mocked(fetchCalendar).mockRejectedValueOnce(new ApiError('calendar down', 500))
-    fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
-
-    expect(await screen.findByText(/Showing earlier data — calendar down/)).toBeTruthy()
-    expect(document.querySelector('.cal-grid')).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
-  })
-
-  it('exports the fetched window through downloadIcs', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(screen.getByRole('button', { name: 'Add to calendar (.ics)' }))
-    expect(downloadIcs).toHaveBeenCalledWith(fixtureEvents())
-  })
-
-  function chipFor(text: string): HTMLElement {
-    const chip = Array.from(grid().querySelectorAll('button.cal-chip')).find(
-      (c) => c.textContent === text,
-    )
-    expect(chip).toBeDefined()
-    return chip as HTMLElement
-  }
-
-  function popover(): HTMLElement | null {
-    return document.querySelector('.cal-popover')
-  }
-
-  it('opens a details popover on chip click; Escape closes and refocuses the chip', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    const chip = chipFor('RSU vest — 2025 offer')
-    fireEvent.click(chip)
-    const dialog = popover()
-    expect(dialog).not.toBeNull()
-    expect(dialog?.getAttribute('role')).toBe('dialog')
-    expect(dialog?.textContent).toContain('25 sh — 2025 offer')
-    const link = dialog?.querySelector('a')
-    expect(link?.textContent).toBe('Open Comp →')
-    expect(link?.getAttribute('href')).toBe('/comp')
-    expect(chip.getAttribute('aria-expanded')).toBe('true')
-    fireEvent.keyDown(document, { key: 'Escape' })
-    expect(popover()).toBeNull()
-    expect(document.activeElement).toBe(chip)
-  })
-
-  it('keeps one popover at a time and closes on an outside mousedown', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(chipFor('RSU vest — 2025 offer'))
-    fireEvent.mouseDown(chipFor('Payday'))
-    fireEvent.click(chipFor('Payday'))
-    const dialogs = document.querySelectorAll('.cal-popover')
-    expect(dialogs).toHaveLength(1)
-    expect(dialogs[0].textContent).toContain('Open Paycheck →')
-    fireEvent.mouseDown(document.body)
-    expect(popover()).toBeNull()
-  })
-
-  it('custom popover offers Edit/Delete instead of an Open link', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(chipFor('Car insurance'))
-    const dialog = popover()
-    expect(dialog?.textContent).toContain('policy 8841')
-    expect(dialog?.querySelector('a')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeDefined()
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined()
-  })
-
-  it('list rows expand the same details inline, closing any grid popover', async () => {
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(chipFor('Payday')) // grid popover open first
-    expect(popover()).not.toBeNull()
-    const list = document.querySelector('.cal-list') as HTMLElement
-    const row = Array.from(list.querySelectorAll('button.cal-list-item')).find((r) =>
-      r.textContent?.startsWith('Car insurance'),
-    ) as HTMLElement
-    fireEvent.click(row)
-    const expansion = list.querySelector('.cal-list-expansion')
-    expect(expansion).not.toBeNull()
-    expect(expansion?.textContent).toContain('Custom')
-    expect(expansion?.textContent).toContain('policy 8841')
-    expect(popover()).toBeNull() // one open surface at a time — the grid one closed
-  })
-
-  it('Add event posts the trimmed form and refetches the window', async () => {
-    const todayIsoStr = todayIso()
-    vi.mocked(createCustomEvent).mockResolvedValue({
-      id: 99,
-      date: todayIsoStr,
-      label: 'Car wash',
-      detail: null,
-      person_id: null,
-      amount: null,
-      direction: 'neutral',
-      recurrence: 'none',
-      until: null,
-    })
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
+    await screen.findByRole('grid')
     fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
-    const dateBox = screen.getByLabelText('Date') as HTMLInputElement
-    expect(dateBox.value).toBe(todayIsoStr) // defaults to today
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: '  Car wash ' } })
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(MONTH)
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: ' Rent ' } })
+    fireEvent.change(screen.getByLabelText('Amount (optional)'), { target: { value: '2400' } })
+    fireEvent.change(screen.getByLabelText('Direction'), { target: { value: 'out' } })
+    fireEvent.change(screen.getByLabelText('Repeats'), { target: { value: 'monthly' } })
+    fireEvent.change(screen.getByLabelText('Until (optional)'), {
+      target: { value: addMonths(MONTH, 3) },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Save event' }))
     expect(createCustomEvent).toHaveBeenCalledWith({
-      date: todayIsoStr,
-      label: 'Car wash',
+      date: MONTH,
+      label: 'Rent',
       detail: null,
       person_id: null,
-      amount: null,
-      direction: 'neutral',
-      recurrence: 'none',
-      until: null,
+      amount: '2400',
+      direction: 'out',
+      recurrence: 'monthly',
+      until: addMonths(MONTH, 3),
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
-    // The form closes on success.
     expect(screen.queryByRole('button', { name: 'Save event' })).toBeNull()
   })
 
-  it('Edit prefills the form from the popover and PATCHes the row', async () => {
-    vi.mocked(updateCustomEvent).mockResolvedValue({
-      id: 41,
-      date: DAY_15,
-      label: 'Renewal',
-      detail: 'policy 8841',
-      person_id: null,
-      amount: null,
-      direction: 'neutral',
-      recurrence: 'none',
-      until: null,
-    })
+  it('saving into another month lands the grid there', async () => {
+    const day = `${NEXT.slice(0, 8)}10`
+    vi.mocked(createCustomEvent).mockResolvedValue({ id: 99, date: day, label: 'Trip', detail: null, person_id: null, amount: null, direction: 'neutral', recurrence: 'none', until: null })
     renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(chipFor('Car insurance'))
+    await screen.findByRole('grid')
+    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: day } })
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Trip' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save event' }))
+    await waitFor(() => expect(url()).toBe(`/calendar?month=${NEXT.slice(0, 7)}`))
+    await waitFor(() => expect(vi.mocked(fetchCalendar).mock.calls.at(-1)).toEqual(windowFor(NEXT)))
+    expect(cell(day).getAttribute('tabindex')).toBe('0')
+  })
+
+  it('Edit prefills from the popover and PATCHes the whole row', async () => {
+    vi.mocked(updateCustomEvent).mockResolvedValue({ id: 41, date: DAY_15, label: 'Renewal', detail: 'policy 8841', person_id: null, ...v2Body } as never)
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(chipIn(DAY_15, 'Car insurance'))
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
-    expect(popover()).toBeNull() // the popover hands off to the form
-    const title = screen.getByLabelText('Title') as HTMLInputElement
-    expect(title.value).toBe('Car insurance')
-    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(DAY_15)
-    expect((screen.getByLabelText('Note (optional)') as HTMLInputElement).value).toBe(
-      'policy 8841',
-    )
-    fireEvent.change(title, { target: { value: 'Renewal' } })
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Car insurance')
+    expect((screen.getByLabelText('Repeats') as HTMLSelectElement).value).toBe('none')
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Renewal' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(updateCustomEvent).toHaveBeenCalledWith(41, {
       date: DAY_15,
       label: 'Renewal',
       detail: 'policy 8841',
       person_id: null,
-      amount: null,
-      direction: 'neutral',
-      recurrence: 'none',
-      until: null,
+      ...v2Body,
     })
-    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
   })
 
-  it('Delete removes the row from the popover and refetches', async () => {
+  // Plan A review finding: the edit form used to hard-code amount/direction/recurrence/until
+  // to their empty values, so a label tweak on a priced recurring row wiped its money AND
+  // its series on the full-replace PATCH. The four fields round-trip through form state.
+  it('a label tweak on a priced recurring row keeps its money and its series', async () => {
+    const seriesStart = `${PREV.slice(0, 8)}01`
+    vi.mocked(updateCustomEvent).mockResolvedValue({ id: 42, date: seriesStart, label: 'Rent (raised)', detail: null, person_id: null, amount: '2400.00', direction: 'out', recurrence: 'monthly', until: null })
+    renderPage([
+      calendarEvent({ date: DAY_16, type: 'custom', label: 'Rent', short_label: 'Rent', id: 42, amount: '2400.00', direction: 'out', basis: 'confirmed', recurrence: 'monthly', until: null, series_start: seriesStart }),
+    ])
+    await screen.findByRole('grid')
+    fireEvent.click(chipIn(DAY_16, 'Rent'))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    // A series edits from its START, not from the occurrence that was clicked.
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(seriesStart)
+    expect((screen.getByLabelText('Amount (optional)') as HTMLInputElement).value).toBe('$2,400.00')
+    expect((screen.getByLabelText('Direction') as HTMLSelectElement).value).toBe('out')
+    expect((screen.getByLabelText('Repeats') as HTMLSelectElement).value).toBe('monthly')
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Rent (raised)' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(updateCustomEvent).toHaveBeenCalledWith(42, {
+      date: seriesStart,
+      label: 'Rent (raised)',
+      detail: null,
+      person_id: null,
+      amount: '2400.00',
+      direction: 'out',
+      recurrence: 'monthly',
+      until: null,
+    })
+  })
+
+  it('STRIPS a stamped person suffix before editing', async () => {
+    renderPage([
+      calendarEvent({ date: DAY_15, type: 'custom', label: 'Dentist — Sam', short_label: 'Dentist — Sam', id: 41, person_id: 2 }),
+    ])
+    await screen.findByRole('grid')
+    fireEvent.click(chipIn(DAY_15, 'Dentist'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Dentist')
+    expect((screen.getByLabelText('Person') as HTMLSelectElement).value).toBe('2')
+  })
+
+  it('Delete offers Undo that re-POSTs the v2 body', async () => {
     vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
+    vi.mocked(createCustomEvent).mockResolvedValue({ id: 77, date: DAY_15, label: 'Car insurance', detail: 'policy 8841', person_id: null, ...v2Body } as never)
     renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(chipFor('Car insurance'))
+    await screen.findByRole('grid')
+    fireEvent.click(chipIn(DAY_15, 'Car insurance'))
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(deleteCustomEvent).toHaveBeenCalledWith(41)
-    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
-    expect(popover()).toBeNull()
-    // Focus hands off to a stable landmark, not <body> (the unmounted Delete button).
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add event' }))
-    expect(screen.getByText('Deleted Car insurance')).toBeTruthy()
-  })
-
-  it('reports a FAILED delete as a toast, leaving the frame alert down', async () => {
-    // The month's payload landed and is still true — the write is what failed. Raising the
-    // page error here would have swapped a correct calendar for an alert.
-    vi.mocked(deleteCustomEvent).mockRejectedValue(new ApiError('event is not custom', 400))
-    const { container } = renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(chipFor('Car insurance'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-
-    expect(await screen.findByText('event is not custom')).toBeTruthy()
-    expect(container.querySelector('.error-banner')).toBeNull()
-    // ...and the row is still on the grid, since nothing was deleted.
-    expect(screen.getAllByText('Car insurance').length).toBeGreaterThan(0)
-    // A failed write is not a reason to refetch: only the mount load has run.
-    expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(1)
-  })
-
-  it('Undo re-creates the deleted custom event and refetches', async () => {
-    vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
-    vi.mocked(createCustomEvent).mockResolvedValue({
-      id: 77,
-      date: DAY_15,
-      label: 'Car insurance',
-      detail: 'policy 8841',
-      person_id: null,
-      amount: null,
-      direction: 'neutral',
-      recurrence: 'none',
-      until: null,
-    })
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(chipFor('Car insurance'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
     expect(createCustomEvent).toHaveBeenCalledWith({
       date: DAY_15,
       label: 'Car insurance',
       detail: 'policy 8841',
       person_id: null,
-      amount: null,
-      direction: 'neutral',
-      recurrence: 'none',
-      until: null,
+      ...v2Body,
     })
-    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(3))
   })
 
-  it('tells the reader when payday chips carry a person name', async () => {
-    renderPage()
-    expect(
-      await screen.findByText(
-        /Paydays appear only for semi-monthly \(24 checks\/yr\) paycheck profiles — other cadences are omitted rather than guessed, and each chip carries the person's name once more than one person has a profile\./,
-      ),
-    ).toBeTruthy()
+  // Plan A review finding: Undo re-POSTed the CLICKED occurrence's date, which re-anchored a
+  // deleted series mid-series (a weekly row deleted from its third occurrence came back
+  // starting there). The series' own start is what a restore has to send.
+  it('Undo restores a series from its start, not from the clicked occurrence', async () => {
+    const seriesStart = `${PREV.slice(0, 8)}05`
+    vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
+    vi.mocked(createCustomEvent).mockResolvedValue({ id: 78, date: seriesStart, label: 'Piano lesson', detail: null, person_id: null, amount: '60.00', direction: 'out', recurrence: 'weekly', until: null })
+    renderPage([
+      calendarEvent({ date: DAY_16, type: 'custom', label: 'Piano lesson', short_label: 'Piano lesson', id: 43, amount: '60.00', direction: 'out', basis: 'confirmed', recurrence: 'weekly', until: null, series_start: seriesStart }),
+    ])
+    await screen.findByRole('grid')
+    fireEvent.click(chipIn(DAY_16, 'Piano lesson'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    expect(createCustomEvent).toHaveBeenCalledWith({
+      date: seriesStart,
+      label: 'Piano lesson',
+      detail: null,
+      person_id: null,
+      amount: '60.00',
+      direction: 'out',
+      recurrence: 'weekly',
+      until: null,
+    })
   })
 })
 
-describe('CalendarPage — snapshot cache (2026-08-27 spec §1)', () => {
-  /** Renders without arming a resolution: whatever is on screen came from the seed. */
-  function renderPending() {
+describe('CalendarPage — overrides', () => {
+  it('Mark done PUTs the full override body and refetches', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(chipIn(DAY_15, 'Q3 est. tax'))
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }))
+    expect(putCalendarOverride).toHaveBeenCalledWith(Q3_KEY, {
+      done: true,
+      hidden: false,
+      note: null,
+      amount: null,
+    })
+    await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
+  })
+
+  it('Hide toasts with an Undo that unhides', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(chipIn(DAY_15, 'Q3 est. tax'))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
+    expect(putCalendarOverride).toHaveBeenCalledWith(Q3_KEY, {
+      done: false,
+      hidden: true,
+      note: null,
+      amount: null,
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    expect(putCalendarOverride).toHaveBeenLastCalledWith(Q3_KEY, {
+      done: false,
+      hidden: false,
+      note: null,
+      amount: null,
+    })
+  })
+
+  // A write that failed is not the month's data going stale: the frame's line would blame
+  // the calendar for a PUT (house rule — actions report through toasts).
+  it('a failed override toasts and leaves the frame alone', async () => {
+    renderPage()
+    await screen.findByRole('grid')
+    vi.mocked(putCalendarOverride).mockRejectedValueOnce(new ApiError('override refused', 409))
+    fireEvent.click(chipIn(DAY_15, 'Q3 est. tax'))
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }))
+    expect((await screen.findByText('override refused')).closest('.toast-error')).toBeTruthy()
+    expect(document.querySelector('.page-frame-stale')).toBeNull()
+  })
+
+  it('a hidden event is off the grid but Unhide-able from the list', async () => {
+    renderPage([{ ...fixtureEvents()[2], hidden: true }, fixtureEvents()[1]], '/calendar?view=list')
+    await screen.findByText('Payday')
+    const hiddenRow = screen.getByRole('button', { name: /Tax deadline — Q3/ })
+    expect(hiddenRow.classList.contains('is-hidden')).toBe(true)
+    fireEvent.click(hiddenRow)
+    expect(screen.getByRole('button', { name: 'Unhide' })).toBeTruthy()
+  })
+})
+
+describe('CalendarPage — snapshot cache', () => {
+  it('paints a seeded month instantly and pages to a seen month before its fetch resolves', async () => {
+    setSnapshot(`calendar:${MONTH}`, payload())
+    setSnapshot(
+      `calendar:${NEXT}`,
+      payload([
+        calendarEvent({ date: `${NEXT.slice(0, 8)}09`, type: 'custom', label: 'Next-month seed', short_label: 'Next-month seed', id: 77 }),
+      ]),
+    )
     vi.mocked(fetchCalendar).mockReturnValue(new Promise(() => {}))
-    return render(
+    render(
       <MemoryRouter>
         <ToastProvider>
           <CalendarPage />
         </ToastProvider>
       </MemoryRouter>,
     )
-  }
-
-  it('paints the grid instantly from a seeded month and still revalidates', () => {
-    setSnapshot(`calendar:${MONTH}`, fixtureEvents())
-    renderPending()
-    const texts = Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent)
-    expect(texts).toContain('RSU vest — 2025 offer')
-    expect(document.querySelector('.page-skeleton')).toBeNull()
-    const [start, end] = windowFor(MONTH)
-    expect(fetchCalendar).toHaveBeenCalledWith(start, end)
-  })
-
-  it('pages to an already-seen month and paints it before its fetch resolves', async () => {
-    const next = addMonths(MONTH, 1)
-    setSnapshot(`calendar:${MONTH}`, fixtureEvents())
-    setSnapshot(`calendar:${next}`, [
-      {
-        date: `${next.slice(0, 8)}09`,
-        type: 'custom' as const,
-        label: 'Next-month seed',
-        detail: null,
-        href: null,
-        id: 77,
-      },
-    ])
-    renderPending()
-    fireEvent.click(screen.getByLabelText('Next month'))
-    // No await: the second month's chips are up from ITS key, with its fetch still open.
-    const texts = Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent)
-    expect(texts).toContain('Next-month seed')
-    expect(texts).not.toContain('RSU vest — 2025 offer')
+    // The top-priority chip of the crowded day — Payday sits behind its "+2 more".
+    expect(chipIn(DAY_15, 'Car insurance')).toBeTruthy()
+    expect(fetchCalendar).toHaveBeenCalledWith(...windowFor(MONTH))
+    fireEvent.click(screen.getByRole('button', { name: 'Next month' }))
+    await screen.findByRole('heading', { name: formatMonth(NEXT) })
+    expect(chipIn(`${NEXT.slice(0, 8)}09`, 'Next-month seed')).toBeTruthy()
     await waitFor(() => expect(fetchCalendar).toHaveBeenCalledTimes(2))
-  })
-
-  it('a changed revalidation payload updates the grid', async () => {
-    setSnapshot(`calendar:${MONTH}`, fixtureEvents())
-    renderPage([
-      calendarEvent({ date: DAY_15, type: 'custom', label: 'Fresh from the server', id: 99 }),
-    ])
-    expect(
-      Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent),
-    ).toContain('RSU vest — 2025 offer')
-    await screen.findAllByText('Fresh from the server')
-    expect(
-      Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent),
-    ).not.toContain('RSU vest — 2025 offer')
-  })
-})
-
-describe('CalendarPage — person tags', () => {
-  // The neighbouring suite's helpers, re-declared: an event renders in BOTH the grid and
-  // the list, so a bare text query is ambiguous and the chip is the surface these drive.
-  function gridChip(text: string): HTMLElement {
-    const node = document.querySelector('.cal-grid')
-    const chip = Array.from(node?.querySelectorAll('button.cal-chip') ?? []).find(
-      (c) => c.textContent === text,
-    )
-    expect(chip).toBeDefined()
-    return chip as HTMLElement
-  }
-
-  it('sends the chosen person and defaults to Household', async () => {
-    vi.mocked(createCustomEvent).mockResolvedValue({
-      id: 99, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
-      amount: null, direction: 'neutral' as const, recurrence: 'none' as const, until: null,
-    })
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
-    const select = screen.getByLabelText('Person') as HTMLSelectElement
-    expect(select.value).toBe('') // Household — a tag is always a deliberate choice
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Dentist' } })
-    fireEvent.change(select, { target: { value: '2' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save event' }))
-    await waitFor(() => expect(createCustomEvent).toHaveBeenCalled())
-    expect(vi.mocked(createCustomEvent).mock.calls[0][0].person_id).toBe(2)
-  })
-
-  it('hides the select for a one-person household and sends null', async () => {
-    vi.mocked(fetchHousehold).mockResolvedValue({
-      people: [{ id: 1, name: 'Ed', is_primary: true }],
-      marriage_date: null,
-    })
-    vi.mocked(createCustomEvent).mockResolvedValue({
-      id: 99, date: DAY_15, label: 'Dentist', detail: null, person_id: null,
-      amount: null, direction: 'neutral' as const, recurrence: 'none' as const, until: null,
-    })
-    renderPage()
-    await screen.findAllByText('RSU vest — 2025 offer')
-    fireEvent.click(screen.getByRole('button', { name: 'Add event' }))
-    expect(screen.queryByLabelText('Person')).toBeNull()
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Dentist' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save event' }))
-    await waitFor(() => expect(createCustomEvent).toHaveBeenCalled())
-    expect(vi.mocked(createCustomEvent).mock.calls[0][0].person_id).toBeNull()
-  })
-
-  it('STRIPS the stamped suffix before editing — a re-save must not stamp it twice', async () => {
-    renderPage([
-      calendarEvent({
-        date: DAY_15,
-        type: 'custom',
-        label: 'Dentist — Sam',
-        id: 41,
-        person_id: 2,
-      }),
-    ])
-    await screen.findAllByText('Dentist — Sam')
-    fireEvent.click(gridChip('Dentist — Sam'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Dentist')
-    expect((screen.getByLabelText('Person') as HTMLSelectElement).value).toBe('2')
-    vi.mocked(updateCustomEvent).mockResolvedValue({
-      id: 41, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
-      amount: null, direction: 'neutral' as const, recurrence: 'none' as const, until: null,
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
-    await waitFor(() => expect(updateCustomEvent).toHaveBeenCalled())
-    expect(vi.mocked(updateCustomEvent).mock.calls[0][1]).toMatchObject({
-      label: 'Dentist',
-      person_id: 2,
-    })
-  })
-
-  it('STRIPS the suffix before the delete-Undo re-POST too', async () => {
-    vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
-    vi.mocked(createCustomEvent).mockResolvedValue({
-      id: 42, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
-      amount: null, direction: 'neutral' as const, recurrence: 'none' as const, until: null,
-    })
-    renderPage([
-      calendarEvent({
-        date: DAY_15,
-        type: 'custom',
-        label: 'Dentist — Sam',
-        id: 41,
-        person_id: 2,
-      }),
-    ])
-    await screen.findAllByText('Dentist — Sam')
-    fireEvent.click(gridChip('Dentist — Sam'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
-    await waitFor(() => expect(createCustomEvent).toHaveBeenCalled())
-    expect(vi.mocked(createCustomEvent).mock.calls[0][0]).toMatchObject({
-      label: 'Dentist',
-      person_id: 2,
-    })
   })
 })
