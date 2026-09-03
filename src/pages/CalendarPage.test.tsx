@@ -18,10 +18,7 @@ vi.mock('../api/calendar', async (importOriginal) => ({
   deleteCustomEvent: vi.fn(),
   putCalendarOverride: vi.fn(),
 }))
-vi.mock('../utils/ics', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../utils/ics')>()),
-  downloadIcs: vi.fn(),
-}))
+vi.mock('../api/calendarFeed', () => ({ downloadCalendarIcs: vi.fn() }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
 import {
   createCustomEvent,
@@ -31,7 +28,7 @@ import {
   updateCustomEvent,
 } from '../api/calendar'
 import { fetchHousehold } from '../api/household'
-import { downloadIcs } from '../utils/ics'
+import { downloadCalendarIcs } from '../api/calendarFeed'
 
 // Wall-clock-proof fixtures: the page boots on the current month, so every date derives
 // from the run's real month.
@@ -204,11 +201,23 @@ describe('CalendarPage — month, views, grid', () => {
     expect(document.activeElement).toBe(date)
   })
 
-  it('exports the fetched window (Plan E swaps this onto the server renderer)', async () => {
+  it('exports the fetched window through the server renderer', async () => {
+    vi.mocked(downloadCalendarIcs).mockResolvedValue(undefined)
     renderPage()
     await screen.findByRole('grid')
     fireEvent.click(screen.getByRole('button', { name: 'Add to calendar (.ics)' }))
-    expect(downloadIcs).toHaveBeenCalledWith(fixtureEvents())
+    // The window, not the events on screen: the server re-composes it so the file carries
+    // overrides and folded items the page never held.
+    expect(downloadCalendarIcs).toHaveBeenCalledWith(...windowFor(MONTH))
+  })
+
+  it('reports a failed export in a toast', async () => {
+    vi.mocked(downloadCalendarIcs).mockRejectedValue(new ApiError('export blew up', 500))
+    renderPage()
+    await screen.findByRole('grid')
+    fireEvent.click(screen.getByRole('button', { name: 'Add to calendar (.ics)' }))
+    // A toast, not the frame's error line: the month on screen loaded fine.
+    expect(await screen.findByText('export blew up')).toBeTruthy()
   })
 
   it('shows the frame error with Retry on a failed first load', async () => {
