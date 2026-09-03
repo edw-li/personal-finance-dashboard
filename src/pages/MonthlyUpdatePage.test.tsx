@@ -20,12 +20,15 @@ vi.mock('../api/spending', () => ({
   putSpendingMonth: vi.fn(),
 }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
+// Undo rides the toast (2026-09-03 data-lifecycle spec §9): the page POSTs one batch at a time.
+vi.mock('../api/lifecycle', () => ({ undoBatch: vi.fn() }))
 // The scope row's ribbon reads /coverage for its two-tone chips (2026-09-03 spec §7).
 vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 
 import * as netWorthApi from '../api/netWorth'
 import * as spendingApi from '../api/spending'
 import * as householdApi from '../api/household'
+import * as lifecycleApi from '../api/lifecycle'
 import { fetchCoverage } from '../api/coverage'
 import { clearSnapshots } from '../api/snapshotCache'
 import { formatMonth } from '../utils/format'
@@ -1076,7 +1079,7 @@ it('offers no delete on a month the server has never seen', async () => {
 })
 
 it('arms on the typed month, fires both deletes tolerating a 404, clears the draft', async () => {
-  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue(undefined)
+  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
   // The spending leg 404s (balances-only month) — the delete still fully succeeds.
   vi.mocked(spendingApi.deleteSpendingMonth).mockRejectedValue(
     new ApiError('no spending or net pay recorded for this month', 404),
@@ -1121,6 +1124,93 @@ it('surfaces a non-404 delete failure, stops before the second leg, stays on the
   expect(alert).not.toBeNull()
   expect(spendingApi.deleteSpendingMonth).not.toHaveBeenCalled()
   expect(screen.getByText(`Monthly update — ${formatMonth('2026-07-01')}`)).toBeDefined()
+})
+
+// --- undo (2026-09-03 data-lifecycle spec §9) ---------------------------------------------
+
+it('the delete toast carries Undo, which undoes the spending batch then the balances batch and returns to the month', async () => {
+  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
+  vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-sp' })
+  vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({
+    type: 'batch', batch_id: 'u-1', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
+    label: 'Undid: Deleted Jul 2026 spending', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
+  })
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  const button = (await screen.findByRole('button', { name: 'Delete this month' })) as HTMLButtonElement
+  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+  fireEvent.click(button)
+  await screen.findByText(`Deleted ${formatMonth('2026-07-01')} — balances and spending removed.`)
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(2))
+  expect(vi.mocked(lifecycleApi.undoBatch).mock.calls.map((c) => c[0])).toEqual(['b-sp', 'b-nw'])
+  await screen.findByText('Undone — Jul 2026 is back.')
+  // Back on the undone month's wizard — by the title, not by the loader's calls: every load
+  // fetches the PRIOR month last (the pre-fill), so "last called with" names 2026-06.
+  await waitFor(() =>
+    expect(
+      screen.getByRole('heading', { level: 1, name: `Monthly update — ${formatMonth('2026-07-01')}` }),
+    ).toBeTruthy(),
+  )
+})
+
+it('a 404 leg leaves no batch to undo, so Undo only fires the leg that wrote', async () => {
+  vi.mocked(netWorthApi.deleteMonthBalances).mockResolvedValue({ batchId: 'b-nw' })
+  vi.mocked(spendingApi.deleteSpendingMonth).mockRejectedValue(
+    new ApiError('no spending or net pay recorded for this month', 404),
+  )
+  vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({
+    type: 'batch', batch_id: 'u-1', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
+    label: 'Undid: Deleted Jul 2026 balances', month: '2026-07-01', rows: 2, undoable: true, undone_by: null,
+  })
+  renderWizardAt('/update?month=2026-07-01&step=review')
+  await screen.findByRole('button', { name: 'Delete this month' })
+  fireEvent.change(screen.getByLabelText('Type 2026-07 to confirm'), { target: { value: '2026-07' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Delete this month' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(1))
+  expect(lifecycleApi.undoBatch).toHaveBeenCalledWith('b-nw')
+})
+
+it('the save toast carries Undo when a batch was written, and fires spending then balances', async () => {
+  vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
+    month: '2026-08-01', snapshot_created: true, created: 1, updated: 0, unchanged: 0, batch_id: 'b-nw2',
+  })
+  vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', created: 1, updated: 0, unchanged: 0, net_pay_set: true, net_pay_cleared: false, batch_id: 'b-sp2',
+  })
+  vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({
+    type: 'batch', batch_id: 'u-2', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
+    label: 'Undid: Entered Aug 2026 balances — 1 accounts', month: '2026-08-01', rows: 2, undoable: true, undone_by: null,
+  })
+  renderWizardAt('/update?month=2026-08-01')
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  expect(screen.getByText('Saved Aug 2026 — 1 balances updated')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledTimes(2))
+  expect(vi.mocked(lifecycleApi.undoBatch).mock.calls.map((c) => c[0])).toEqual(['b-sp2', 'b-nw2'])
+  await screen.findByText('Undone — Aug 2026 is back to how it was.')
+})
+
+it('an all-unchanged save toasts nothing and offers no Undo', async () => {
+  vi.mocked(netWorthApi.putMonthBalances).mockResolvedValue({
+    month: '2026-08-01', snapshot_created: false, created: 0, updated: 0, unchanged: 1, batch_id: null,
+  })
+  vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', created: 0, updated: 0, unchanged: 1, net_pay_set: false, net_pay_cleared: false, batch_id: null,
+  })
+  renderWizardAt('/update?month=2026-08-01')
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
 })
 
 describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => {
