@@ -541,7 +541,7 @@ describe('CreditCardsPage — card ownership', () => {
   // The bar answers "Whose" itself now, so the page's cards-specific sentence has to be the
   // bar's ownerHint: standing beside it as a second InfoHint put two ⓘ in one row, each
   // giving a different answer to the same question.
-  it("answers Whose exactly once, in the cards own words", async () => {
+  it('answers Whose exactly once, in the words the cards need', async () => {
     const { container } = renderPage()
     await screen.findByRole('group', { name: 'Whose' })
     const scopeRow = container.querySelector('.page-frame-scope') as HTMLElement
