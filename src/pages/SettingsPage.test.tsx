@@ -265,7 +265,29 @@ const CHECKING: AccountOut = {
   person_id: null,
 }
 
+// jsdom has no ResizeObserver (EChart.test.tsx carries the same note); the anchored arrival
+// watches the page while the cards above it are still growing. The instances are kept so a
+// test can fire one and see what the page does about it.
+type ObserverRecord = { fire: () => void; disconnected: boolean }
+const resizeObservers: ObserverRecord[] = []
+
 beforeEach(() => {
+  resizeObservers.length = 0
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      private readonly record: ObserverRecord
+      constructor(callback: () => void) {
+        this.record = { fire: callback, disconnected: false }
+        resizeObservers.push(this.record)
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {
+        this.record.disconnected = true
+      }
+    },
+  )
   vi.mocked(fetchAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(putAppSettings).mockResolvedValue(SETTINGS)
   vi.mocked(changePassword).mockResolvedValue(undefined)
@@ -293,6 +315,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
 
@@ -322,8 +345,11 @@ describe('SettingsPage — app settings', () => {
     expect(screen.getByText("Blank = ESPP page shows 'no ticker configured'.")).toBeTruthy()
     // TWICE, not once: the Calendar-feed card owns the monthly-update due day, which lives
     // in this same settings row (2026-09-03 calendar spec §12), so it reads /settings for
-    // itself the way every other card here reads its own endpoint.
-    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2)
+    // itself the way every other card here reads its own endpoint. `waitFor`, not a bare
+    // expect: the card mounts in the `loadedOnce` commit that also paints the box above,
+    // and findBy resolves off the DOM mutation — the new subtree's passive effect (and so
+    // its fetch) can land a microtask later. A bare expect failed about one run in three.
+    await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2))
     // The balance-suggestions mapping card was removed end to end (spec §5.2 amendment):
     // this page no longer reads accounts or the allocation, and offers no mapping control.
     expect(screen.queryByText(/Balance suggestions/)).toBeNull()
@@ -1093,6 +1119,86 @@ describe('SettingsPage — anchored arrival from the palette', () => {
           expect(
             document.getElementById('limits')?.classList.contains('is-highlighted'),
           ).toBe(false),
+        { timeout: 2500 },
+      )
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
+  it('takes the page back to the card while the cards above it are still growing', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    try {
+      render(
+        <MemoryRouter initialEntries={['/settings#calendar']}>
+          <SettingsPage />
+        </MemoryRouter>,
+      )
+      await waitFor(() =>
+        expect(document.getElementById('calendar')?.classList.contains('is-highlighted')).toBe(
+          true,
+        ),
+      )
+      const landed = scrollIntoView.mock.calls.length
+      expect(resizeObservers).toHaveLength(1)
+
+      // Every card here fetches its own data and grows as it lands, so the addressed card
+      // slides DOWN after the jump: measured in the browser smoke, #calendar went from 585px
+      // to 1898px — a full viewport below the fold — 400 ms after arriving, leaving the
+      // arrival looking at whatever card ended up there instead.
+      act(() => resizeObservers[0].fire())
+      expect(scrollIntoView.mock.calls.length).toBeGreaterThan(landed)
+
+      // It lets go with the ring: a layout shift minutes later must never yank the page back.
+      await waitFor(
+        () =>
+          expect(document.getElementById('calendar')?.classList.contains('is-highlighted')).toBe(
+            false,
+          ),
+        { timeout: 2500 },
+      )
+      expect(resizeObservers[0].disconnected).toBe(true)
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
+  it('still lands and rings where there is no ResizeObserver at all', async () => {
+    // The stub above is this file's convenience, not a fact about every runtime: an older
+    // browser (or a jsdom test in some other file that renders this page under a hash) has
+    // no ResizeObserver, and an unguarded `new` would turn the arrival into a crash. The
+    // chase is the optional part; landing on the card and ringing it is not.
+    vi.stubGlobal('ResizeObserver', undefined)
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    try {
+      render(
+        <MemoryRouter initialEntries={['/settings#calendar']}>
+          <SettingsPage />
+        </MemoryRouter>,
+      )
+      await waitFor(() =>
+        expect(document.getElementById('calendar')?.classList.contains('is-highlighted')).toBe(
+          true,
+        ),
+      )
+      expect(scrollIntoView).toHaveBeenCalled()
+      expect(resizeObservers).toHaveLength(0)
+      // And it still lets go — the timer, not the observer, is what un-rings the card.
+      await waitFor(
+        () =>
+          expect(document.getElementById('calendar')?.classList.contains('is-highlighted')).toBe(
+            false,
+          ),
         { timeout: 2500 },
       )
     } finally {

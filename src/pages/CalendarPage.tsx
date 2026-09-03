@@ -7,6 +7,7 @@ import {
   putCalendarOverride,
   updateCustomEvent,
 } from '../api/calendar'
+import { downloadCalendarIcs } from '../api/calendarFeed'
 import { ApiError } from '../api/client'
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
@@ -41,7 +42,6 @@ import type {
 } from '../types/api'
 import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatDate, formatMonth } from '../utils/format'
-import { downloadIcs } from '../utils/ics'
 import { addDays, addMonths, currentMonthIso, todayIso } from '../utils/months'
 import '../components/panels.css'
 import './CalendarPage.css'
@@ -476,7 +476,14 @@ export default function CalendarPage() {
               type="button"
               className="button"
               disabled={shown === null || shown.events.length === 0}
-              onClick={() => shown !== null && downloadIcs(shown.events)}
+              onClick={() => {
+                // The server re-composes the window (spec §11): the file carries overrides,
+                // folded items and alarms the page's own event list never held.
+                const { start, end } = windowFor(month)
+                downloadCalendarIcs(start, end).catch((err: unknown) =>
+                  toast.error(err instanceof ApiError ? err.message : 'Could not build the calendar file.'),
+                )
+              }}
             >
               Add to calendar (.ics)
             </button>

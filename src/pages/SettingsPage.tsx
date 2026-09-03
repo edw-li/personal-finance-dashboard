@@ -128,14 +128,31 @@ export default function SettingsPage() {
     const el = document.getElementById(hash.slice(1))
     if (!el) return
     // Optional-call, like HoldingDetailPanel: jsdom has no scrollIntoView.
-    el.scrollIntoView?.({ block: 'start' })
+    const land = () => el.scrollIntoView?.({ block: 'start' })
+    land()
     el.classList.add('is-highlighted')
-    const timer = setTimeout(() => el.classList.remove('is-highlighted'), 1200)
+    // Landing once is not enough. Every card on this page owns its own fetch and GROWS as it
+    // arrives, so the cards ABOVE the anchor push it down after the jump has happened: the
+    // browser smoke measured #calendar going from 585px to 1898px — a full viewport below the
+    // fold — 400 ms after arriving, leaving the user staring at some other card. Re-assert
+    // the scroll on every layout change, and let go with the ring: the arrival is live for
+    // exactly as long as it is being shown, and a shift after that is the user's own.
+    // Guarded like the scrollIntoView call above, and for the same reason: jsdom ships no
+    // ResizeObserver, so an unguarded `new` turns any test that renders this page under a
+    // hash into a crash unless it remembers the stub. Without the API the arrival still
+    // lands and still rings — it just does not chase the cards growing above it.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(land)
+    observer?.observe(document.body)
+    const timer = setTimeout(() => {
+      observer?.disconnect()
+      el.classList.remove('is-highlighted')
+    }, 1200)
     // The class is ours to take back, not only the timer: a re-run (or an unmount) before
     // the timeout fires would otherwise cancel the one thing that removes it and leave the
     // card ringed for good — which is what stripping an arrival param used to cause, since
     // the strip re-rendered this page with a hash-less location.
     return () => {
+      observer?.disconnect()
       clearTimeout(timer)
       el.classList.remove('is-highlighted')
     }
