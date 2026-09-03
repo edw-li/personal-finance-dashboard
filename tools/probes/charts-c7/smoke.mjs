@@ -73,8 +73,12 @@ const THEMES = ['dark', 'light'].filter(
   (t) => !process.env.ONLY_THEME || t === process.env.ONLY_THEME,
 )
 
-// Browser chatter that is never a defect (the same list the shell smoke filters).
-const NOISE = /favicon|DevTools|\[vite\]|Download the React DevTools|React Router Future Flag/i
+// Browser chatter that is never a defect (the same list the shell smoke filters), plus the
+// HMR socket: `@vite/client` dials ws://localhost:5173 while vite listens on [::1] only, so
+// the handshake is refused on every run of this box. It is the dev server talking to itself —
+// the app opens no websocket — and the page under it is fully loaded either way.
+const NOISE =
+  /favicon|DevTools|\[vite\]|@vite\/client|Download the React DevTools|React Router Future Flag/i
 
 // Two dev-data facts that look like errors and are not. They are RECORDED in the report under
 // knownBenign — never silently dropped — so a real regression hiding behind one stays visible.
@@ -213,6 +217,35 @@ for (const theme of THEMES) {
   )
   const page = await ctx.newPage()
   const where = { theme, route: 'boot' }
+  // Since 2026-09-03 (data-lifecycle spec §10) the ACCOUNT owns the theme: the app paints
+  // from localStorage, then GET /prefs answers and the server's stored value is adopted. The
+  // seeded light pass therefore flipped back to dark a beat after every goto — a smoke that
+  // screenshots one theme twice. The pass's theme is injected into the ANSWER instead, so the
+  // app adopts what the walk asked for; every other preference passes through untouched.
+  //
+  // PATCH is stubbed rather than forwarded: a smoke walks, it does not get to rewrite the
+  // account's settings (the first merged-main run wrote `theme: dark` into the dev user's
+  // preferences before this existed). Attempts are recorded in the report.
+  const prefsWrites = []
+  const stamp = new Date().toISOString()
+  const themeEntry = { value: theme, updated_at: stamp }
+  await ctx.route('**/api/v1/prefs*', async (route) => {
+    const request = route.request()
+    if (request.method() === 'GET') {
+      let body = { prefs: {} }
+      try {
+        const upstream = await route.fetch()
+        body = await upstream.json()
+      } catch (e) {
+        problem(`${theme} ${where.route}: GET /prefs could not be read (${e.message})`)
+      }
+      body.prefs = { ...body.prefs, theme: themeEntry }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+    }
+    prefsWrites.push({ ...where, method: request.method(), body: (request.postData() || '').slice(0, 200) })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ prefs: { theme: themeEntry } }) })
+  })
+
   const errors = []
   const warnings = []
   const http = []
@@ -584,6 +617,9 @@ for (const theme of THEMES) {
     errors: tail,
     warnings: warnings.splice(0),
     http: http.splice(0),
+    // Stubbed PATCH /prefs bodies: what the app WOULD have written to the account had the
+    // route not been intercepted. Empty is the expected reading.
+    prefsWrites,
   })
 
   await page.close()
