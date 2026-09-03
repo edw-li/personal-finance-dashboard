@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import {
   cloneBrackets,
@@ -115,20 +116,42 @@ function detailKey(year: number, filingStatus: FilingStatus): string {
 }
 
 export default function TaxesPage() {
-  // The seeded selection replicates loadYears' pick (the latest year), and the seeded
-  // detail reads that year's key using ITS OWN filing status from the cached row.
+  // The selected tax year lives in the URL (2026-09-03 sandbox lane T). Every card on this
+  // page answers for ONE year — the what-if card most of all, whose entries mean nothing
+  // against the wrong one — so a shared address has to name it, and the assistant's
+  // "Open in what-if" link emits /taxes?whatif=…&year=YYYY.
+  //
+  // NOT the same key as CompositionPanel's drill, which is ?comp=: that card's resting
+  // state is "no drill at all", which a selected year cannot express.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const yearParam = Number(searchParams.get('year'))
+  // A garbled or hand-edited ?year= is nobody's year: null falls back to the latest, the way
+  // a bare /taxes does, rather than banner-ing about a URL nobody typed. Number(null) and
+  // Number('') are both 0, which the > 0 fence sends the same way as NaN.
+  const urlYear = Number.isInteger(yearParam) && yearParam > 0 ? yearParam : null
+  // The year the page was ARRIVED at, pinned: `loadYears` runs from a mount effect and must
+  // open the year the link named, not whatever the param has since become.
+  const [arrivalYear] = useState(urlYear)
+
+  // The seeded selection replicates loadYears' pick (the URL's year, else the latest), and
+  // the seeded detail reads that year's key using ITS OWN filing status from the cached row.
   const cachedYears = getSnapshot<TaxYearOut[]>('taxes:years')
   const cachedLatest = cachedYears !== undefined ? latestOf(cachedYears) : undefined
+  // Only a year the cached list actually carries can be seeded — the row is where the
+  // filing status the detail snapshot is keyed by comes from.
+  const cachedPick =
+    cachedYears === undefined
+      ? undefined
+      : (cachedYears.find((y) => y.year === arrivalYear) ?? cachedLatest)
   const [years, setYears] = useState<TaxYearOut[]>(cachedYears ?? [])
   // An OBJECT, not a bare number: a fresh identity re-runs the load effect, so selecting
   // the year that is already selected (right after cloning into it) still refetches.
   const [selection, setSelection] = useState<{ year: number } | null>(
-    cachedLatest ? { year: cachedLatest.year } : null,
+    cachedPick ? { year: cachedPick.year } : null,
   )
   const [detail, setDetail] = useState<YearDetail | null>(() =>
-    cachedLatest
-      ? (getSnapshot<YearDetail>(detailKey(cachedLatest.year, cachedLatest.filing_status)) ??
-        null)
+    cachedPick
+      ? (getSnapshot<YearDetail>(detailKey(cachedPick.year, cachedPick.filing_status)) ?? null)
       : null,
   )
   const [loading, setLoading] = useState(cachedYears === undefined) // the year list
@@ -179,6 +202,26 @@ export default function TaxesPage() {
   // editor is still holding (its closure remembers the year it was rendered for).
   const currentYearRef = useRef<number | null>(null)
 
+  // Guarded adjust-during-render, never a setState in an effect body (react-hooks 7): the
+  // URL moved to a year this page is not showing — an in-page navigate from the assistant's
+  // what-if link, or the palette, while /taxes is already mounted — so the page follows in
+  // the SAME commit rather than painting the old year first. Only a CHANGE in the param
+  // does this: the doors below write it themselves, and re-running every render would fight
+  // the chips. A year the list does not carry is left alone, exactly as on arrival.
+  //
+  // Deliberately no discard confirm: `window.confirm` is a side effect, and render is not
+  // where one may be asked. A navigate is not a chip click — the address bar has already
+  // moved on, and refusing it would leave the URL lying about what is on screen.
+  const [seenYearParam, setSeenYearParam] = useState(urlYear)
+  if (urlYear !== seenYearParam) {
+    setSeenYearParam(urlYear)
+    if (urlYear !== null && urlYear !== selection?.year && years.some((y) => y.year === urlYear)) {
+      setSelection({ year: urlYear })
+      setBusy(true)
+      setYearError(null)
+    }
+  }
+
   const selectedYear = selection?.year ?? null
   // The selected year's ROW, so the selector reads the same list the chips do — one source
   // for "how is this year filed". A year the list has not caught up with (the optimistic
@@ -206,8 +249,9 @@ export default function TaxesPage() {
   // Promise callbacks only: no setState in an effect's synchronous body (react-hooks 7).
   // The mount fetch is covered by the initial loading/busy values; the retry button flips
   // them itself. Re-created per render but reading no reactive value beyond the setters,
-  // so exhaustive-deps has nothing to report (PortfolioPage's `load`).
-  const loadYears = () => {
+  // so exhaustive-deps has nothing to report (PortfolioPage's `load`) — which is why the
+  // year to open is a PARAMETER rather than a closed-over one.
+  const loadYears = (prefer: number | null) => {
     fetchTaxYears()
       .then((list) => {
         const previous = getSnapshot<TaxYearOut[]>('taxes:years')
@@ -222,8 +266,15 @@ export default function TaxesPage() {
         setYears(list)
         const latest = latestOf(list)
         setNewYear(String(latest ? latest.year + 1 : new Date().getFullYear()))
-        if (latest) {
-          setSelection({ year: latest.year })
+        // The preferred year wins when the list carries it; anything else — absent, garbled,
+        // a year that is gone — falls back to the latest and is LEFT in the URL rather than
+        // corrected here. This page writes the param from its own doors only: a write from
+        // a load continuation could land in the same tick as the what-if card's own URL
+        // write, and whichever setSearchParams ran last would silently drop the other
+        // (useSandbox's "one URL writer per tick").
+        const picked = list.find((y) => y.year === prefer) ?? latest
+        if (picked) {
+          setSelection({ year: picked.year })
         } else {
           // Fresh database: there is nothing to load, so release the detail flag here —
           // the new-year form IS the page.
@@ -238,8 +289,9 @@ export default function TaxesPage() {
   }
 
   useEffect(() => {
-    loadYears()
-  }, [])
+    // `arrivalYear` is pinned at mount, so this still runs exactly once.
+    loadYears(arrivalYear)
+  }, [arrivalYear])
 
   // The chain lives inline rather than in a useCallback: this component owns eleven
   // setters, and manual memoization React Compiler cannot preserve drops the whole
@@ -283,9 +335,44 @@ export default function TaxesPage() {
       })
   }, [selection, filingStatus])
 
+  // The selected year is mirrored into the URL from this page's own doors only — a chip, a
+  // create, a status flip, a retry, a delete — and never from an effect or an arrival. The
+  // what-if card writes the SAME search string for its entries, and whichever
+  // setSearchParams runs last in a tick wins outright (useSandbox's note), so keeping these
+  // writes in handlers and promise continuations is what keeps the two from clobbering.
+  //
+  // `pendingRef` carries the uncommitted params until the URL catches up: react-router's
+  // setter — functional form included — hands back the RENDER's params, so two writes in
+  // one tick would each start from the same snapshot and the second would drop the first
+  // (useScope's coalescer, same shape). `base` is the URL the write was computed from.
+  const yearWriteRef = useRef<{ base: string; next: URLSearchParams } | null>(null)
+  useEffect(() => {
+    // Landed (the URL is what we wrote) or superseded (it moved elsewhere): either way the
+    // ref is no longer ahead of the URL. Only "still at the base" means in flight.
+    const pending = yearWriteRef.current
+    if (pending && searchParams.toString() !== pending.base) yearWriteRef.current = null
+  }, [searchParams])
+
+  const writeYearParam = (year: number | null) => {
+    const seed = yearWriteRef.current?.next ?? searchParams
+    const next = new URLSearchParams(seed)
+    if (year === null) next.delete('year')
+    else next.set('year', String(year))
+    // Nothing to write: no location.key churn, and no phantom pending entry whose base
+    // equals the URL — that one would never clear (useScope's note).
+    if (next.toString() === seed.toString()) return
+    yearWriteRef.current =
+      next.toString() === searchParams.toString() ? null : { base: searchParams.toString(), next }
+    // Replace, never push (the drill-param convention): Back leaves the page rather than
+    // walking every year the user looked at.
+    setSearchParams(next, { replace: true })
+  }
+
   // The "we are fetching" flip lives in the handlers that cause a fetch, never in the
   // effect above.
   const loadYear = (year: number) => {
+    // The one door onto a year, so the one place the URL learns which year that is.
+    writeYearParam(year)
     setBusy(true)
     setError(null)
     setYearError(null)
@@ -536,7 +623,8 @@ export default function TaxesPage() {
         setYears((current) => current.filter((y) => y.year !== year))
         if (seq !== seqRef.current) return
         // No year is selected any more — the ref that says which year the page belongs to
-        // was nulled at click time, above.
+        // was nulled at click time, above — so the URL must stop naming one too.
+        writeYearParam(null)
         setSelection(null)
         setDetail(null)
         setInputsDirty(false)
@@ -572,7 +660,9 @@ export default function TaxesPage() {
     if (selectedYear === null) {
       setLoading(true)
       setBusy(true)
-      loadYears()
+      // Still the year the link named: nothing has been selected for the user to have
+      // moved off, so a retry means "try that one again".
+      loadYears(arrivalYear)
       return
     }
     loadYear(selectedYear)

@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { Link, MemoryRouter, useLocation, useNavigationType } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
@@ -354,8 +354,20 @@ const confirmSpy = vi.spyOn(window, 'confirm')
 // what-if params and never rewrites them (a reload re-seeding the same leg is honest).
 function LocationProbe() {
   const location = useLocation()
-  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+  // PUSH vs REPLACE: the drill-param convention is replace, so Back leaves the page rather
+  // than walking every year the user looked at.
+  const navigationType = useNavigationType()
+  return (
+    <>
+      <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+      <span data-testid="nav-type">{navigationType}</span>
+      {/* A door for the in-page navigate the assistant's what-if link is: /taxes is already
+          mounted, so the year has to move without a remount. */}
+      <Link to="/taxes?year=2024">go 2024</Link>
+    </>
+  )
 }
+const navType = () => screen.getByTestId('nav-type').textContent
 
 // Every render goes through a router: the page reads the what-if deep-link params with
 // useSearchParams, which is not optional about its router.
@@ -1338,6 +1350,86 @@ describe('TaxesPage', () => {
     // The page's save chain ran: totals refetched, and this card reloaded its own feed.
     await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(vi.mocked(fetchWithholding)).toHaveBeenCalledTimes(2))
+  })
+})
+
+// The page's selected tax year lives in ?year= (2026-09-03 sandbox lane T): every card on
+// this page — the what-if most of all — answers for ONE year, so a shared address has to
+// name it. The assistant's "Open in what-if" link emits /taxes?whatif=…&year=YYYY.
+describe('?year= selected tax year', () => {
+  it('opens the year the URL names, and never loads the latest one on the way', async () => {
+    renderPage('/taxes?year=2023&whatif=sale%3A7%3A40')
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
+    // The load-bearing half: 2023 is selected BEFORE anything is fetched, so the what-if
+    // entries are never run against a year the link did not ask for — and the latest year's
+    // three payloads are not spent on the way past it either.
+    expect(vi.mocked(fetchTaxInputs)).not.toHaveBeenCalledWith(2024)
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2023'),
+    )
+    // Read, not rewritten: the address the user is sitting on already says this.
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/taxes?year=2023&whatif=sale%3A7%3A40',
+    )
+  })
+
+  it('falls back to the latest year when the param is absent, garbled or unknown', async () => {
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+    )
+    // A bare /taxes is left bare: this page writes the param from its own doors only, so it
+    // never races the what-if card for the search string on arrival.
+    expect(screen.getByTestId('location').textContent).toBe('/taxes')
+    cleanup()
+
+    renderPage('/taxes?year=banana')
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+    )
+    cleanup()
+
+    // A year the list does not carry: the latest, the way a bare /taxes goes.
+    renderPage('/taxes?year=1999')
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+    )
+    expect(vi.mocked(fetchTaxInputs)).not.toHaveBeenCalledWith(1999)
+  })
+
+  it('mirrors a chip pick into the URL, replace-style, beside the sibling params', async () => {
+    renderPage('/taxes?whatif=sale%3A7%3A40')
+    await screen.findByLabelText('Annual Salary')
+
+    fireEvent.click(screen.getByRole('button', { name: '2023' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/taxes?whatif=sale%3A7%3A40&year=2023',
+      ),
+    )
+    // The what-if entries are untouched: two writers, one search string, and this one only
+    // ever sets its own key.
+    expect(navType()).toBe('REPLACE')
+  })
+
+  it('follows an in-page navigate to another year — the assistant link while /taxes is up', async () => {
+    renderPage('/taxes?year=2023')
+    await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
+
+    fireEvent.click(screen.getByRole('link', { name: 'go 2024' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024'),
+    )
+    expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2024)
+  })
+
+  it('drops the param with the year a delete removed', async () => {
+    renderPage('/taxes?year=2024')
+    await screen.findByLabelText('Annual Salary')
+    fireEvent.click(deleteYearButton())
+    await waitFor(() => expect(vi.mocked(deleteTaxYear)).toHaveBeenCalledWith(2024))
+    // Nothing is selected any more, so the URL must stop naming a year that is gone.
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/taxes'))
   })
 })
 
