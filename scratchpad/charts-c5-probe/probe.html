@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- Chart-grammar probe (C5 Task 7): the two new forms THIS lane draws — per-item
+     itemStyle.decal hatching with a Today rule, and a markArea wash with markPoint
+     percentile circles on a dashed target — rendered by REAL echarts from node_modules
+     with the exact option shapes vestingChartOptions.ts / projectionChartOptions.ts emit.
+     Not part of the app. -->
+<html><head><meta charset="utf-8" />
+<style>
+  body { background: #171a21; color: #e6e9ef; font: 14px system-ui; margin: 24px; }
+  .title { margin: 0 0 6px 2px; font-size: 13px; letter-spacing: .08em; color: #8b93a3; }
+  .chart { width: 1100px; height: 320px; margin-bottom: 28px; }
+</style></head><body>
+<p class="title">A — DECALS (app default, NO aria block): a stacked bar with per-item itemStyle.decal (SURFACE hatching) + the Today rule — only the future column may hatch</p><div id="a" class="chart"></div>
+<p class="title">A2 — the same option with Appearance › Chart patterns ON (aria.decal.show) — every series gains echarts' auto-texture on top</p><div id="a2" class="chart"></div>
+<p class="title">B — MARKAREA + MARKPOINT: After-FI wash, FI/Coast FI/retirement rules, p10/p50 marks on a dashed target</p><div id="b" class="chart"></div>
+<script src="../../node_modules/echarts/dist/echarts.js"></script>
+<script>
+const SURFACE = '#171a21', SURFACE_2 = '#1e222c', INK = '#e6e9ef', MUTED = '#8b93a3', BLUE = '#3987e5', ORANGE = '#d95926'
+const HATCH = { symbol: 'rect', symbolSize: 1, dashArrayX: [1, 0], dashArrayY: [2, 4], rotation: -Math.PI / 4, color: SURFACE }
+const draw = (id, option) => echarts.init(document.getElementById(id), null, { renderer: 'canvas' }).setOption(option)
+
+const vestingOption = () => ({
+  grid: { left: 70, right: 24, top: 40, bottom: 28 }, legend: { top: 0 },
+  xAxis: { type: 'category', data: ['Nov 20, 2024', 'Feb 19, 2025', 'Nov 18, 2026'], axisLabel: { interval: 0 } },
+  yAxis: { type: 'value' },
+  series: [
+    { name: 'FY24 new hire', type: 'bar', stack: 'vest', barMaxWidth: 22, color: BLUE, itemStyle: { borderColor: SURFACE, borderWidth: 1 },
+      markLine: { silent: true, symbol: 'none', lineStyle: { color: MUTED, width: 1, type: 'dashed' }, label: { show: true, position: 'insideEndTop', color: MUTED, fontSize: 11 }, data: [{ xAxis: 'Nov 18, 2026', label: { formatter: 'Today' } }] },
+      data: [11207.5, 3239.13, { value: 4581.27, itemStyle: { decal: HATCH } }] },
+    { name: 'FY26 refresh', type: 'bar', stack: 'vest', barMaxWidth: 22, color: ORANGE, itemStyle: { borderColor: SURFACE, borderWidth: 1 },
+      data: [0, 0, { value: 6963.53, itemStyle: { decal: HATCH } }] },
+  ],
+})
+// The app emits NO aria key by default (EChart.tsx adds it only when the user turns
+// Appearance › Chart patterns on) — so panel A is the shape every reader sees.
+draw('a', vestingOption())
+draw('a2', { ...vestingOption(), aria: { enabled: true, label: { enabled: false }, decal: { show: true } } })
+
+const months = Array.from({ length: 24 }, (_, i) => `M${i + 1}`)
+draw('b', {
+  grid: { left: 76, right: 24, top: 40, bottom: 28 }, legend: { top: 0 },
+  xAxis: { type: 'category', boundaryGap: false, data: months }, yAxis: { type: 'value' },
+  series: [
+    { name: 'Projected', type: 'line', symbol: 'none', color: BLUE, lineStyle: { width: 2 }, areaStyle: { opacity: .12 }, data: months.map((_, i) => 100 + i * 8),
+      markLine: { silent: true, symbol: 'none', lineStyle: { color: MUTED, width: 1, type: 'dashed' }, label: { show: true, position: 'insideEndTop', color: MUTED, fontSize: 11 }, data: [{ xAxis: 'M13', label: { formatter: 'Alex' } }, { xAxis: 'M13', label: { formatter: 'FI' } }, { xAxis: 'M9', label: { formatter: 'Coast FI' } }] },
+      markArea: { silent: true, itemStyle: { color: SURFACE_2, opacity: .35 }, label: { show: true, position: 'insideTop', color: MUTED, fontSize: 11, formatter: 'After FI' }, data: [[{ xAxis: 'M13' }, { xAxis: 'M24' }]] } },
+    { name: 'Growth only', type: 'line', symbol: 'none', color: ORANGE, lineStyle: { width: 2 }, data: months.map(() => 150) },
+    { name: 'FI target', type: 'line', symbol: 'none', lineStyle: { width: 2, type: 'dashed' }, color: MUTED, z: 9, data: months.map(() => 200),
+      markPoint: { silent: true, symbol: 'circle', symbolSize: 8, itemStyle: { color: MUTED, borderColor: INK, borderWidth: 1 }, label: { show: true, position: 'top', color: MUTED, fontSize: 11, formatter: (p) => p.name }, data: [{ name: 'p10', coord: ['M10', 200] }, { name: 'p50', coord: ['M13', 200] }] } },
+  ],
+})
+</script></body></html>
