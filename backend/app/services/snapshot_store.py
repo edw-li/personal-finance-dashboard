@@ -36,15 +36,18 @@ CHANGE_LOG_RETENTION_DAYS = 400
 ERROR_SNIPPET_LEN = 500
 
 
-def _head_of(path: Path) -> str | None:
-    """The manifest's alembic_head, or None when the file cannot be read as our ZIP — such
-    a file is LISTED (it is on the volume) but never restorable."""
+def _head_of(path: Path) -> tuple[bool, str | None]:
+    """(readable, the manifest's alembic_head). Two different Nones live here and the
+    listing needs to tell them apart: a file that cannot be read as our ZIP is LISTED (it
+    is on the volume) but NEVER restorable, while a manifest whose alembic_head is null is
+    a snapshot of a create_all database — restorable onto a server that also has no
+    alembic_version, which is exactly what the test suite is."""
     try:
         with zipfile.ZipFile(path) as archive:
             head = json.loads(archive.read("manifest.json")).get("alembic_head")
     except (OSError, zipfile.BadZipFile, KeyError, ValueError):
-        return None
-    return head if isinstance(head, str) else None
+        return False, None
+    return True, head if isinstance(head, str) else None
 
 
 def list_snapshots(server_head: str | None) -> list[SnapshotEntryOut]:
@@ -58,14 +61,14 @@ def list_snapshots(server_head: str | None) -> list[SnapshotEntryOut]:
         stamp = snapshot_stamp(path.name)
         if stamp is None or not path.is_file():
             continue
-        head = _head_of(path)
+        readable, head = _head_of(path)
         entries.append(
             SnapshotEntryOut(
                 name=path.name,
                 at=stamp,
                 size_bytes=path.stat().st_size,
                 alembic_head=head,
-                restorable=head is not None and head == server_head,
+                restorable=readable and head == server_head,
             )
         )
     return sorted(entries, key=lambda entry: entry.name, reverse=True)
