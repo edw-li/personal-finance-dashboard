@@ -216,6 +216,64 @@ describe('AssistantDrawer', () => {
     expect(body.context.route).toBe('/spending')
   })
 
+  // The sandbox seam (2026-09-03 planning-sandboxes spec 12) and the audit's allow-list
+  // rule in one: a tool that modelled a scenario offers to open it live, but ONLY when
+  // the destination is one of the app's own routes. A model that invented a link -- or a
+  // compromised tool that echoed one -- must not get an anchor rendered for it.
+  it('renders the what-if link under the tool chip, for NAV paths only', async () => {
+    streamChat.mockImplementation(
+      (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+        h.onToolStart?.({ name: 'run_tax_whatif', summary: 'year=2026' })
+        h.onToolResult?.({
+          name: 'run_tax_whatif',
+          summary: 'ok',
+          link: {
+            to: '/taxes?year=2026&whatif=qualified_dividends%3A2500',
+            label: 'Open 2026 in What-if →',
+          },
+        })
+        h.onToolStart?.({ name: 'get_page_data', summary: 'page=/calendar' })
+        h.onToolResult?.({
+          name: 'get_page_data',
+          summary: 'ok',
+          link: { to: 'https://evil.example/x', label: 'Open' },
+        })
+        h.onToken('Dividends of $2,500 would...')
+        h.onDone({ model_used: 'kimi-k3' })
+        return { abort: vi.fn(), finished: Promise.resolve() }
+      },
+    )
+    mount()
+    const input = await openDrawer()
+    fireEvent.change(input, { target: { value: 'what if?' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(screen.getByText(/Dividends of/)).toBeTruthy())
+    const link = screen.getByRole('link', { name: 'Open 2026 in What-if →' })
+    expect(link.getAttribute('href')).toBe('/taxes?year=2026&whatif=qualified_dividends%3A2500')
+    // The off-site one is refused outright -- no anchor, however the label reads.
+    expect(screen.queryByRole('link', { name: 'Open' })).toBeNull()
+  })
+
+  // A tool that answered without a scenario is the common case: the chip must stay a
+  // plain chip rather than sprouting an empty anchor.
+  it('renders no link for a tool result that carried none', async () => {
+    streamChat.mockImplementation(
+      (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {
+        h.onToolStart?.({ name: 'get_month_detail', summary: 'Dec 2025' })
+        h.onToolResult?.({ name: 'get_month_detail', summary: 'ok' })
+        h.onToken('Housing was $2,030.00.')
+        h.onDone({ model_used: 'kimi-k3' })
+        return { abort: vi.fn(), finished: Promise.resolve() }
+      },
+    )
+    mount()
+    const input = await openDrawer()
+    fireEvent.change(input, { target: { value: 'why?' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(screen.getByText(/Housing was/)).toBeTruthy())
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
   it('a pre-token failure restores the question to the input and renders the error', async () => {
     streamChat.mockImplementation(
       (_body: unknown, h: import('../../api/assistantStream').AssistantHandlers) => {

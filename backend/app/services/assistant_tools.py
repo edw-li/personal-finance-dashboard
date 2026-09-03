@@ -86,7 +86,16 @@ TOOL_SCHEMAS: list[dict] = [
 
 def _capped(result: dict) -> dict:
     if len(json.dumps(result)) > TOOL_RESULT_CHAR_CAP:
-        return {"truncated": True, "note": "result exceeded the size cap; ask narrower"}
+        capped: dict = {
+            "truncated": True,
+            "note": "result exceeded the size cap; ask narrower",
+        }
+        # The sandbox link outlives the truncation it is most needed after: a scenario big
+        # enough to blow the cap is exactly the one whose numbers the reader has to go and
+        # look at, and ~90 characters of URL is not what pushed it over.
+        if isinstance(result.get("sandbox_url"), str):
+            capped["sandbox_url"] = result["sandbox_url"]
+        return capped
     return result
 
 
@@ -141,6 +150,7 @@ async def _get_month_detail(db: AsyncSession, args: dict) -> dict:
 async def _run_tax_whatif(db: AsyncSession, args: dict) -> dict:
     from app.api.taxes import what_if
     from app.schemas.taxes import WhatIfIn
+    from app.services.sandbox_links import sandbox_link, whatif_entries
 
     try:
         body = WhatIfIn(
@@ -168,6 +178,10 @@ async def _run_tax_whatif(db: AsyncSession, args: dict) -> dict:
                 "sale_details": out.sale_details,
                 "espp_sale_details": out.espp_sale_details,
                 "warnings": out.warnings,
+                # The seam (spec §12): where the drawer can open THIS scenario live.
+                # Encoded from the validated body, so the link models exactly what was
+                # modelled -- the year included, being the scope it is only true within.
+                "sandbox_url": sandbox_link("taxes", whatif_entries(body), year=body.year),
             }
         )
     )

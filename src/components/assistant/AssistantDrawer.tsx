@@ -26,6 +26,7 @@ import type {
   AssistantSettingsOut,
 } from '../../types/api'
 import { NAV_ITEMS } from '../navItems'
+import { isNavLink } from './navLink'
 import { renderMarkdown } from './markdown'
 import { INSIGHT_PRESETS, samplesFor } from './samples'
 import { ASSISTANT_OPEN_EVENT, readAssistantView, useAssistantViewVersion } from './viewState'
@@ -416,7 +417,17 @@ export default function AssistantDrawer() {
           patchAnswer((item) => ({
             ...item,
             tools: (item.tools ?? []).map((t) =>
-              t.name === tool.name && !t.done ? { ...t, summary: tool.summary, done: true } : t,
+              t.name === tool.name && !t.done
+                ? {
+                    ...t,
+                    summary: tool.summary,
+                    done: true,
+                    // Spread only when there IS one: writing `link: undefined` would
+                    // persist a key JSON then drops, so a rehydrated transcript would
+                    // not match the one on screen.
+                    ...(tool.link === undefined ? {} : { link: tool.link }),
+                  }
+                : t,
             ),
           })),
         onToken: (text2) => {
@@ -669,6 +680,14 @@ export default function AssistantDrawer() {
                         <span key={t} className="assistant-tool-chip">
                           <span aria-hidden="true">⚙</span> {tool.name}
                           {tool.done ? '' : '…'}
+                          {tool.link !== undefined && isNavLink(tool.link.to) && (
+                            <>
+                              {' '}
+                              <Link className="assistant-tool-link" to={tool.link.to}>
+                                {tool.link.label}
+                              </Link>
+                            </>
+                          )}
                         </span>
                       ))}
                     </div>

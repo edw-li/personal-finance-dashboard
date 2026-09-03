@@ -820,11 +820,14 @@ describe('CompPage — vesting schedule', () => {
 
   it('mounts the TC trajectory and the vesting calendar through ChartCard', async () => {
     render(<CompPage />)
-    await screen.findByText(TC_CHART_LABEL)
-
-    expect(screen.getByLabelText(/Stacked bar chart of base salary and unvested equity value/)).toBeTruthy()
+    // Await the CHARTS, not the card title: the header (and TC_CHART_LABEL with it) is up
+    // while the body is still the card's own “Loading…” status, so awaiting the title raced
+    // both feeds — green alone, red once the full suite loaded the box (2026-09-04). The two
+    // charts come from two different fetches, so each is awaited on its own name.
+    expect(await screen.findByLabelText(/Stacked bar chart of base salary and unvested equity value/)).toBeTruthy()
+    expect(await screen.findByLabelText(/Stacked bar chart of vest value per vest date/)).toBeTruthy()
+    expect(screen.getByText(TC_CHART_LABEL)).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Export total-comp' })).toBeTruthy()
-    expect(screen.getByLabelText(/Stacked bar chart of vest value per vest date/)).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Export vesting-calendar' })).toBeTruthy()
     // The strip's unvested half is the SERVER's tile figure verbatim — the same $235,471.20
     // the tile above prints. Re-deriving it from the quote here would disagree with that tile

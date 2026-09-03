@@ -35,21 +35,26 @@ export default function CompositionPanel({
   const [incompleteYears, setIncompleteYears] = useState<number[]>([])
   const [error, setError] = useState<string | null>(null)
   // Year drill-in: the year whose jurisdiction pie replaces the trend chart — READ from
-  // the URL (?year=YYYY, 2026-08-25 spec §2d) so a drill is shareable. Stored as the
+  // the URL (?comp=YYYY, 2026-08-25 spec §2d) so a drill is shareable. Stored as the
   // YEAR (never an index); a year the feed does not carry — including any garbled param,
-  // which the integer fence below already nulls (TaxesPage's whatif-lot idiom) — falls
-  // back to the all-years view through the detailSummary find.
+  // which the integer fence below already nulls — falls back to the all-years view
+  // through the detailSummary find.
+  //
+  // `comp`, not `year`: ?year= is the PAGE's selected tax year (2026-09-03 sandbox lane T),
+  // and this is a different question with an answer the page's cannot express — "no drill"
+  // is this card's resting state (the all-years trend), while the page always has a year
+  // selected. Sharing one param would force a pie open on every visit.
   const [searchParams, setSearchParams] = useSearchParams()
-  const yearParam = Number(searchParams.get('year'))
-  const detailYear = Number.isInteger(yearParam) && yearParam > 0 ? yearParam : null
+  const compParam = Number(searchParams.get('comp'))
+  const detailYear = Number.isInteger(compParam) && compParam > 0 ? compParam : null
   const setDetailYear = (year: number | null) => {
-    // replace, not push (SpendingPage's drill rule) — and a COPY, so the page's own
-    // ?whatif= seeds ride along untouched.
+    // replace, not push (SpendingPage's drill rule) — and a COPY, so the page's own ?year=
+    // and the what-if card's entries ride along untouched.
     setSearchParams(
       (current) => {
         const copy = new URLSearchParams(current)
-        if (year === null) copy.delete('year')
-        else copy.set('year', String(year))
+        if (year === null) copy.delete('comp')
+        else copy.set('comp', String(year))
         return copy
       },
       { replace: true },
@@ -105,7 +110,7 @@ export default function CompositionPanel({
 
   // The drilled year's summary comes out of THIS panel's all-years feed, so a save that
   // moves the year's figures redraws the open pie with the fresh ones. From `chartable`, not
-  // `years`: a refusal year carries no sections, so a ?year= deep link to one would read
+  // `years`: a refusal year carries no sections, so a ?comp= deep link to one would read
   // figures that are not there — and the panel falls back to the all-years view instead.
   const detailSummary = useMemo(
     () =>
@@ -171,21 +176,30 @@ export default function CompositionPanel({
           </button>
         ) : undefined
       }
+      // Footer prose that describes INTERACTING with the chart is conditioned on there
+      // being one: under an empty sentence, "click the chart to go back" and "click a
+      // year's bar" point at marks that were never drawn (the All years button is the
+      // way back in the first case). Prose that EXPLAINS the emptiness — the flagged
+      // years — stays, because that is what a reader wants under an empty card.
       footer={
         detailSummary ? (
-          <p className="drill-hint">
-            {/* The SERVER's totals, negatives and all — the pie can only draw the
-                positive slices (yearPieOption's note). */}
-            Total tax {formatCurrency(detailSummary.totals.total_tax)} · Gross{' '}
-            {formatCurrency(detailSummary.totals.gross_income)} · Effective rate{' '}
-            {detailSummary.totals.effective_rate === null
-              ? '—'
-              : formatPct(detailSummary.totals.effective_rate, { signed: false })}{' '}
-            — click the chart to go back.
-          </p>
+          detailPie === null ? undefined : (
+            <p className="drill-hint">
+              {/* The SERVER's totals, negatives and all — the pie can only draw the
+                  positive slices (yearPieOption's note). */}
+              Total tax {formatCurrency(detailSummary.totals.total_tax)} · Gross{' '}
+              {formatCurrency(detailSummary.totals.gross_income)} · Effective rate{' '}
+              {detailSummary.totals.effective_rate === null
+                ? '—'
+                : formatPct(detailSummary.totals.effective_rate, { signed: false })}{' '}
+              — click the chart to go back.
+            </p>
+          )
         ) : (
           <>
-            <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
+            {trend !== null && (
+              <p className="drill-hint">Click a year&apos;s bar to expand its tax breakdown.</p>
+            )}
             {flaggedYears.length > 0 && (
               <p className="drill-hint">
                 Not charted: {flaggedYears.join(', ')} — no bracket tables for that

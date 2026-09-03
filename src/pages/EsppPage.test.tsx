@@ -346,12 +346,13 @@ describe('EsppPage — lots', () => {
     renderPage()
     await screen.findByText('$10,720.49')
 
-    // One per unsold row, each carrying its own lot id — the param TaxesPage reads to seed
-    // an ESPP leg. The fixture holds two unsold lots (1 and 4) and two sold ones (2 and 3).
+    // One per unsold row, each an espp entry naming its own lot id in the sandbox grammar
+    // (2026-09-03 planning-sandboxes spec §6) — no price, so the card prefills the lots
+    // table's own quote. The fixture holds two unsold lots (1 and 4) and two sold (2 and 3).
     const links = screen.getAllByRole('link', { name: 'Model sale →' })
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      '/taxes?whatif-lot=1',
-      '/taxes?whatif-lot=4',
+      '/taxes?whatif=espp%3A1',
+      '/taxes?whatif=espp%3A4',
     ])
 
     // A sold lot 409s at the endpoint (a disposition cannot be modelled twice), so its row

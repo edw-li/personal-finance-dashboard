@@ -166,21 +166,27 @@ describe('HoldingDetailPanel facts', () => {
     await screen.findByTestId('echart')
   })
 
-  it('offers the what-if deep link into Taxes, carrying this ticker', async () => {
-    renderPanel()
+  it('offers the what-if deep link into Taxes as a whole-position sale entry', async () => {
+    const position = holding()
+    renderPanel({ holding: position })
     const link = screen.getByRole('link', { name: 'Model selling AAA in Taxes →' })
-    // The query param the what-if card reads to seed one sale leg (TaxesPage's
-    // useSearchParams → WhatIfPanel's initialTicker).
-    expect(link.getAttribute('href')).toBe('/taxes?whatif=AAA')
+    // The sandbox grammar's own entry (2026-09-03 planning-sandboxes spec §6): the server's
+    // security id and this panel's own share text, with the price left to the latest quote.
+    expect(link.getAttribute('href')).toBe(
+      `/taxes?whatif=${encodeURIComponent(`sale:${position.security_id}:${position.shares}`)}`,
+    )
+    // The colons are percent-encoded, so the entry survives the address bar intact.
+    expect(link.getAttribute('href')).toBe('/taxes?whatif=sale%3A1%3A10')
     await screen.findByTestId('echart')
   })
 
-  it('encodes a ticker the URL would otherwise eat', async () => {
-    renderPanel({ holding: holding({ ticker: 'BRK.B+X' }) })
+  it('names the id, never the ticker — a ticker the URL would eat cannot reach the link', async () => {
+    const position = holding({ ticker: 'BRK.B+X', security_id: 42, shares: '3.5000' })
+    renderPanel({ holding: position })
     expect(
       (screen.getByRole('link', { name: 'Model selling BRK.B+X in Taxes →' }) as HTMLAnchorElement)
         .getAttribute('href'),
-    ).toBe('/taxes?whatif=BRK.B%2BX')
+    ).toBe(`/taxes?whatif=${encodeURIComponent(`sale:${position.security_id}:${position.shares}`)}`)
     await screen.findByTestId('echart')
   })
 })

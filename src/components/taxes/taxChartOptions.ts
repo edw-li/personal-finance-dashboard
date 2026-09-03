@@ -17,6 +17,7 @@ import {
   stagger,
 } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
+import { divergingVisualMap } from '../../charts/scales'
 import {
   INK,
   OTHER_SERIES_COLOR,
@@ -31,7 +32,7 @@ import {
   waterfallSteps,
   waterfallTooltip,
 } from '../../charts/waterfall'
-import type { TaxSummaryOut } from '../../types/api'
+import type { TaxSummaryOut, WhatIfDelta } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { formatCurrency, formatPct } from '../../utils/format'
 import type { LadderSegment } from './marginal'
@@ -53,10 +54,18 @@ export const TAX_LABELS = [
 // the sequential ramp is the compliant form (AllocationPanel's convention). The ramp
 // encodes POSITION in the fixed order above — not magnitude — which is why the two charts
 // can share it: a waterfall step and a stack segment for the same tax wear one color.
-// Slots start at index 4 (below it the ramp drops under 3:1 on the surface, and the lightest
-// slots go to the smallest taxes, whose slivers need the contrast) and SKIP index 6: that
-// step is also PALETTE[0], and charts/recolor.ts elects the categorical blue for a lone hex
-// — so under the light theme the middle tax would have jumped out of the ramp.
+// Slots start at index 4 — where the ramp clears 3:1 on the DARK surface #171a21 — and SKIP
+// index 6: that step is also PALETTE[0], and charts/recolor.ts elects the categorical blue
+// for a lone hex, so under the light theme the middle tax would have jumped out of the ramp.
+// Slot order spends contrast where it is needed: the ramp brightens with index on dark, and
+// TAX_LABELS puts the two LARGEST taxes on the two weakest slots and the slivers (Cap.
+// gains, NIIT) on the strongest.
+//
+// The 3:1 floor at index 4 is a DARK-surface fact only. The light twins run the other way
+// (pale → deep), so slots 0 and 1 arrive at 2.23:1 and 2.78:1 on the light surface — a
+// recorded, tested exception, not an oversight: see "tax slot contrast on both surfaces" in
+// taxChartOptions.test.ts for the arithmetic showing the ramp cannot be re-cut without
+// collapsing its low-mid range, and for the guard that stops the pair from growing.
 export const TAX_COLORS = [
   SEQUENTIAL_BLUE[4],
   SEQUENTIAL_BLUE[5],
@@ -298,7 +307,9 @@ export interface LadderRow {
 
 // Three slots of the ONE hue family (the ≤3-hue law): adjacent segments alternate the two
 // mid tones so their seam reads at a glance, and the bracket the income sits in takes the
-// bright slot. All three sit at/above SEQUENTIAL_BLUE[4], the ramp's documented 3:1 floor.
+// bright slot. All three sit at/above SEQUENTIAL_BLUE[4], the ramp's 3:1 floor ON DARK;
+// base A is the same step as the State tax slot and shares its recorded light-surface
+// exception (2.78:1) — see the TAX_COLORS note above and the contrast test.
 const LADDER_BASE_A = SEQUENTIAL_BLUE[5]
 const LADDER_BASE_B = SEQUENTIAL_BLUE[7]
 const LADDER_CURRENT = SEQUENTIAL_BLUE[10]
@@ -412,5 +423,51 @@ export function ladderCsv(rows: LadderRow[]): ExportTable {
         segment.ceiling === null ? '' : segment.ceiling.toFixed(2),
       ]),
     ),
+  }
+}
+
+/** The seven tax lines the what-if compares, in the compare table's own order — so the bar
+ *  and the rows below it read top to bottom the same way. */
+const DELTA_LINES: readonly [string, (delta: WhatIfDelta) => string | null | undefined][] = [
+  ['Federal', (d) => d.federal_tax],
+  ['State', (d) => d.state_tax],
+  ['NIIT', (d) => d.niit_tax],
+  ['Medicare', (d) => d.medicare_tax],
+  ['Social Security', (d) => d.social_security_tax],
+  ['Disability', (d) => d.disability_tax],
+  ['Capital gains', (d) => d.capital_gains_tax],
+]
+
+/**
+ * The what-if's Δ by jurisdiction (2026-09-03 planning-sandboxes spec §10): one horizontal
+ * bar per tax line, scenario minus baseline, diverging around zero — less tax reads left.
+ * Null when nothing moved at all, which is the card's empty sentence rather than seven bars
+ * of zero pretending to be an answer.
+ *
+ * An ABSENT niit_tax (a payload from before lane B, or a year with no NIIT block either
+ * side) is drawn as no movement, not as a gap: the line exists, and it did not move.
+ */
+export function whatIfDeltaBarOption(delta: WhatIfDelta): EChartsOption | null {
+  const values = DELTA_LINES.map(([, read]) => {
+    const raw = read(delta)
+    return raw === null || raw === undefined ? 0 : Number(raw)
+  })
+  if (values.every((v) => v === 0)) return null
+  // Symmetric on the LARGEST move, so a bar's length means the same thing on either arm.
+  const span = Math.max(...values.map(Math.abs))
+  return {
+    grid: grid('horizontal'),
+    // Item trigger: an axis tooltip would announce the whole ladder for one hover, and each
+    // bar is a separate answer.
+    tooltip: itemTooltip<{ name?: unknown; value?: unknown }>({
+      body: (p) =>
+        typeof p.value === 'number' ? { value: p.value, label: `${String(p.name)} Δ` } : null,
+    }),
+    xAxis: moneyAxis(),
+    // inverse, so Federal reads on TOP the way the compare rows below order them.
+    yAxis: { type: 'category', data: DELTA_LINES.map(([label]) => label), inverse: true },
+    // The colour IS the sign here, so it comes from the scale rather than a per-bar hex.
+    visualMap: divergingVisualMap({ span, formatter: formatCurrency }),
+    series: [{ type: 'bar' as const, ...BAR_MARKS, data: values }],
   }
 }

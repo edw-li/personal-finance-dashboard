@@ -152,11 +152,16 @@ function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
       exportName="paycheck-flow"
       csv={() => paycheckSankeyCsv(data)}
       height={320}
+      // The legend describes the CHART, so it goes when the chart does: under the empty
+      // sentence it was explaining node colours and a hover affordance for a sankey that
+      // is not on the page (the table below is the surface to read instead).
       footer={
-        <p className="drill-hint">
-          Gray nodes restate money in transit; colored nodes are where it lands; green is
-          what you keep. Hover a node to trace its flows.
-        </p>
+        option === null ? undefined : (
+          <p className="drill-hint">
+            Gray nodes restate money in transit; colored nodes are where it lands; green is
+            what you keep. Hover a node to trace its flows.
+          </p>
+        )
       }
     />
   )
