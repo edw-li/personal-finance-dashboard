@@ -1,10 +1,13 @@
 /* Page-scoped rules ONLY. Everything the five portfolio components consume lives in
    src/components/portfolio/portfolio.css (imported by each of them); the app-wide
-   vocabulary (.page, .page-header, .stat-tile, .error-banner, .empty-note, .loading-dim)
-   lives in panels.css. Nothing either file defines is redefined here. */
+   vocabulary (.page, .stat-tile, .error-banner, .empty-note, .loading-dim) lives in
+   panels.css, and the title row, subheader and sticky scope row belong to PageFrame's
+   shell.css. Nothing any of those files defines is redefined here. */
 
-.portfolio-page .page-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-.portfolio-page .header-actions { display: flex; align-items: center; gap: 12px; }
+/* The price clock reads under the title row now (2026-09-03 shell spec §5), on its own
+   line above the refresh note — the header-actions row it used to share retired with the
+   page's own header. */
+.portfolio-page .page-frame-subheader .as-of { display: block; margin-bottom: 4px; }
 .portfolio-page .as-of { color: var(--muted); font-size: 12px; }
 /* A4: the stale variant of the header clock — the shared amber advisory token (--warn,
    PALETTE[3]) every other stale cue already wears; the title attribute carries the words. */
@@ -51,17 +54,3 @@
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 }
-
-/* Page-level ownership scope (2026-08-28 spec §5). It sits directly under the header
-   because it scopes the tiles too — a control that changes the hero number must not be
-   buried in a card header. Mirrors .networth-owner-row; neither file reaches into the
-   other. */
-.portfolio-owner-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
-}
-
-.portfolio-owner-row .eyebrow { margin: 0; }

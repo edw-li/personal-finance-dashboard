@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { MemoryRouter, useLocation } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type {
   AllocationDimension,
@@ -225,6 +225,9 @@ const NO_HOLDINGS_NOTE = 'No holdings yet — add transactions below.'
 
 beforeEach(() => {
   clearSnapshots()
+  // The shared scope remembers owner/range in localStorage, so one test's chip would
+  // otherwise become the next test's default (useScope's memory fallback).
+  localStorage.clear()
   vi.mocked(fetchHoldings).mockResolvedValue(holdingsOut())
   vi.mocked(fetchSecurities).mockResolvedValue(SECURITIES)
   vi.mocked(fetchTransactions).mockResolvedValue(TRANSACTIONS)
@@ -246,10 +249,17 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+// The URL as the router holds it — the scope tests pin the chip → URL direction.
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+}
+
 function renderPage(entry = '/portfolio') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <PortfolioPage />
+      <LocationProbe />
     </MemoryRouter>,
   )
 }
@@ -291,9 +301,9 @@ it('?tab= scrolls the records strip in and focuses its first field', async () =>
   }
 })
 
-// Scoped to the Owner group on purpose: the performance card carries RangeChips with an
-// "All" of its own (NetWorthPage.test.tsx's lesson).
-const ownerChips = () => screen.getByRole('group', { name: 'Owner' })
+// Scoped to the owner group on purpose: the scope row's time-range group carries an
+// "All" of its own (NetWorthPage.test.tsx's lesson). The row labels it "Whose".
+const ownerChips = () => screen.getByRole('group', { name: 'Whose' })
 const chip = (label: string) =>
   [...ownerChips().querySelectorAll('button')].find(
     (b) => b.textContent === label,
@@ -305,7 +315,7 @@ it('hides the owner chips for a one-person household', async () => {
   await screen.findByText('Portfolio')
   await waitFor(() => expect(fetchHousehold).toHaveBeenCalled())
   // Nothing to choose between: one person makes the chips one-option UI.
-  expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
   // The five household-wide fetches never take an argument, before or after this batch.
   expect(fetchSecurities).toHaveBeenCalledWith()
   expect(fetchHistory).toHaveBeenCalledWith()
@@ -318,7 +328,7 @@ it('hides the owner chips for a one-person household', async () => {
 
 it('renders All / each person / Joint once a partner exists', async () => {
   renderPage()
-  const chips = await screen.findByRole('group', { name: 'Owner' })
+  const chips = await screen.findByRole('group', { name: 'Whose' })
   expect([...chips.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
     'All',
     'Me',
@@ -335,14 +345,14 @@ it('keeps the page alive when the household endpoint fails', async () => {
   // The scope control is an affordance; losing it must cost the chips and nothing else.
   expect(await screen.findByText('Portfolio')).toBeTruthy()
   await waitFor(() => expect(fetchHoldings).toHaveBeenCalled())
-  expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
   expect(screen.queryByRole('alert')).toBeNull()
   await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
 })
 
 it('scopes the five owner-filterable fetches to the picked chip, and back on All', async () => {
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   const historyCallsBefore = vi.mocked(fetchHistory).mock.calls.length
 
   fireEvent.click(chip('Sam'))
@@ -378,7 +388,7 @@ it('scopes the five owner-filterable fetches to the picked chip, and back on All
 
 it('re-clicking the active chip spends no request', async () => {
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   await waitFor(() => expect(fetchHoldings).toHaveBeenCalledTimes(1))
   fireEvent.click(chip('All'))
   expect(vi.mocked(fetchHoldings).mock.calls.length).toBe(1)
@@ -450,7 +460,7 @@ it('a single-person household issues the pre-ownership requests, scope-free', as
   expect(fetchAllocation).toHaveBeenCalledWith('industry', null)
   expect(fetchAllocation).toHaveBeenCalledWith('type', null)
   expect(fetchAllocation).toHaveBeenCalledWith('account', null)
-  expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
 })
 
 it('keys the snapshot by owner — a chip flip is a cache MISS that re-arms the charts', async () => {
@@ -501,7 +511,7 @@ it('restores the household view after visiting an owner with no positions', asyn
     Promise.resolve(scope === SAM.id ? [] : DIVIDENDS),
   )
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
 
   fireEvent.click(chip('Sam'))
@@ -594,13 +604,15 @@ it('applies a revalidation that matches the cache but not the screen', async () 
 // performance line as one person's (spec §5) — and, since A3, against wondering where the
 // live dot went on a person view.
 const HOUSEHOLD_HINT =
-  'Performance, sparklines and price refresh always cover the whole household — the owner ' +
-  'chips scope holdings, allocation, dividends, transactions and realized gains. Person ' +
-  'views omit the live price dot because the history is household-wide.'
+  "A person's view is their own portfolio accounts plus the joint ones — that is what a " +
+  'joint account is. Joint shows only the shared accounts. Performance, sparklines and ' +
+  'price refresh always cover the whole household — the owner chips scope holdings, ' +
+  'allocation, dividends, transactions and realized gains. Person views omit the live ' +
+  'price dot because the history is household-wide.'
 
 it('says the performance card is household-wide only while a scope is active', async () => {
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   // Nothing is scoped on All, so the caveat would be noise.
   expect(screen.queryByText(HOUSEHOLD_HINT)).toBeNull()
 
@@ -622,7 +634,7 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
     Promise.resolve(scope === SAM.id ? emptyAllocation(by) : allocationOut(by)),
   )
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   await waitFor(() => expect(screen.queryByText(NO_HOLDINGS_NOTE)).toBeNull())
 
   fireEvent.click(chip('Sam'))
@@ -642,7 +654,7 @@ it('renders the panels real empty notes for an owner who holds nothing', async (
 // series' markLine) renders only on the All view.
 it('renders the live ping only on the All view', async () => {
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   const performance = () => screen.getAllByTestId('echart')[0]
   // holdingsOut()'s latest_quote_at (2026-08-27) is past HISTORY's last bar (2026-08-24),
   // so the household view bridges the series to a live ping. (Both ledger fixtures date
@@ -704,4 +716,44 @@ it('leaves a fresh header untoned and still names the newest clock', async () =>
   expect(header.getAttribute('title')).toBe(
     `oldest quote across holdings — newest ${formatDate(isoDaysAgo(0))}`,
   )
+})
+
+// ── Shell scope (2026-09-03 shell spec §5–§6) ─────────────────────────────────────────────
+// The page no longer owns an owner row or its own range chips: both live in the frame's
+// sticky scope row, and the URL — not component state — is what they mean.
+describe('PortfolioPage — shell scope', () => {
+  it('reads owner and range from the URL', async () => {
+    renderPage('/portfolio?owner=joint&range=ytd')
+    await screen.findByText('Portfolio')
+    await waitFor(() => expect(vi.mocked(fetchHoldings)).toHaveBeenCalledWith('joint'))
+    expect(screen.getByRole('button', { name: 'YTD' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('group', { name: 'Whose' })).toBeTruthy()
+    expect(document.querySelector('.portfolio-owner-row')).toBeNull()
+  })
+
+  it('an owner chip in the scope row rewrites the URL, closes the drill-in and refetches', async () => {
+    renderPage('/portfolio')
+    fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
+    await waitFor(() => expect(vi.mocked(fetchHoldings)).toHaveBeenLastCalledWith(SAM.id))
+    expect(screen.getByTestId('location').textContent).toContain('owner=2')
+  })
+
+  it('closes an open drill-in when the scope changes under it', async () => {
+    renderPage('/portfolio?ticker=voo')
+    await screen.findByRole('heading', { name: /Holdings — VOO/ })
+    fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
+    // The drill holds a TICKER the next scope may not own — it folds rather than
+    // resolving to null under a stale heading.
+    expect(await screen.findByRole('heading', { name: 'Holdings' })).toBeTruthy()
+  })
+
+  it('renders the price status under the title row, not inside it', async () => {
+    renderPage('/portfolio')
+    await screen.findByText(/prices as of|prices never refreshed/)
+    expect(document.querySelector('.page-frame-subheader .as-of')).toBeTruthy()
+    expect(document.querySelector('.page-header')).toBeNull()
+    expect(
+      screen.getByRole('button', { name: /Refresh prices/ }).closest('.page-frame-actions'),
+    ).toBeTruthy()
+  })
 })

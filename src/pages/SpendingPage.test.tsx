@@ -7,6 +7,8 @@ import SpendingPage from './SpendingPage'
 import { expectInDocumentOrder } from '../testing/domOrder'
 
 vi.mock('../api/spending', () => ({ fetchMatrix: vi.fn(), fetchYearly: vi.fn() }))
+// The scope row's month ribbon reads /coverage for its two-tone chips (Plan 1b).
+vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each
 // chart draws is pinned in its option-builder tests; this marker says which charts are
 // up and, via data-* attributes, the option/prop slices these page tests pin: sankey
@@ -83,6 +85,7 @@ vi.mock('../components/EChart', async () => {
       }),
   }
 })
+import { fetchCoverage } from '../api/coverage'
 import { fetchMatrix, fetchYearly } from '../api/spending'
 
 // --- fixtures ---------------------------------------------------------------------------
@@ -90,7 +93,7 @@ import { fetchMatrix, fetchYearly } from '../api/spending'
 
 function matrixFixture(over: Partial<SpendingMatrix> = {}): SpendingMatrix {
   return {
-    months: ['2026-06', '2026-07'],
+    months: ['2026-06-01', '2026-07-01'],
     categories: [
       { id: 1, name: 'Rent', slug: 'rent', sort_order: 0, is_active: true },
       { id: 2, name: 'Groceries', slug: 'groceries', sort_order: 1, is_active: true },
@@ -155,19 +158,28 @@ it('picks the trend named by ?trend=<slug>, waiting for the matrix, then strips 
   expect(screen.getByRole('button', { name: 'Rent', pressed: false })).toBeTruthy()
   // Consumed, not remembered: a refresh or a Back must not replay the command. waitFor
   // because the router commits its own state in a transition, a beat after the chip.
-  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/spending'))
+  // (The scope row writes range= into the URL on arrival, so only the command is pinned.)
+  await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('trend'))
 })
 
 it('ignores a ?trend= slug no category answers to', async () => {
   renderPage('/spending?trend=not-a-category')
   expect(await screen.findByRole('button', { name: 'Rent', pressed: true })).toBeTruthy()
-  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/spending'))
+  await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('trend'))
 })
 
 beforeEach(() => {
   clearSnapshots()
+  // The shared scope remembers range in localStorage, so one test's chip would otherwise
+  // become the next test's default (useScope's memory fallback).
+  localStorage.clear()
   vi.mocked(fetchMatrix).mockResolvedValue(matrixFixture())
   vi.mocked(fetchYearly).mockResolvedValue(YEARLY)
+  vi.mocked(fetchCoverage).mockResolvedValue({
+    balances: [],
+    spending: ['2026-06-01', '2026-07-01'],
+    net_pay: ['2026-06-01', '2026-07-01'],
+  })
 })
 
 afterEach(() => {
@@ -283,12 +295,12 @@ describe('SpendingPage — ?month= deep link (2026-08-25 spec §2d)', () => {
     await screen.findByText('Where Jul 2026 went')
     fireEvent.click(screen.getAllByTestId('echart')[0]) // the bars chart, dataIndex 0
     expect(await screen.findByText('Spending breakdown — Jun 2026')).toBeTruthy()
-    // The fixture months carry no '-01' suffix; the contract is string equality with
-    // matrix.months entries, which in production are the wizard's YYYY-MM-01 grammar.
-    expect(screen.getByTestId('location').textContent).toBe('/spending?month=2026-06')
+    // The drill matches matrix.months entries (YYYY-MM-01, the wire's date grammar) but
+    // the URL carries the shared scope's short month.
+    expect(screen.getByTestId('location').textContent).toContain('month=2026-06')
     fireEvent.click(screen.getByRole('button', { name: 'All months' }))
     await screen.findByText(/Monthly spend vs net pay/)
-    expect(screen.getByTestId('location').textContent).toBe('/spending')
+    expect(screen.getByTestId('location').textContent).not.toContain('month=')
   })
 })
 
@@ -311,7 +323,7 @@ describe('SpendingPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('a changed revalidation payload updates the page', async () => {
     setSnapshot('spending', { matrix: matrixFixture(), yearly: YEARLY })
     vi.mocked(fetchMatrix).mockResolvedValue(
-      matrixFixture({ months: ['2026-06', '2026-09'], net_pay: ['6000.00', '7000.00'] }),
+      matrixFixture({ months: ['2026-06-01', '2026-09-01'], net_pay: ['6000.00', '7000.00'] }),
     )
     renderPage()
     // The seed painted July; the revalidation carries September instead.
@@ -322,7 +334,7 @@ describe('SpendingPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('stills the charts on a cached paint and lets them animate once data changes', async () => {
     setSnapshot('spending', { matrix: matrixFixture(), yearly: YEARLY })
     vi.mocked(fetchMatrix).mockResolvedValue(
-      matrixFixture({ months: ['2026-06', '2026-09'], net_pay: ['6000.00', '7000.00'] }),
+      matrixFixture({ months: ['2026-06-01', '2026-09-01'], net_pay: ['6000.00', '7000.00'] }),
     )
     renderPage()
     expect(
@@ -358,8 +370,10 @@ describe('SpendingPage — legend + zoom persistence (2026-08-25 spec §2e)', ()
       JSON.stringify({ 'Total budget': false }),
     )
     fireEvent.mouseEnter(bars) // stands in for legendselectchanged {'Net pay': false, '4% rule': true}
-    // Rebuild the options with a fresh identity — the active chip re-press class of event.
-    fireEvent.click(screen.getByRole('button', { name: '1Y' }))
+    // Rebuild the options with a fresh identity — a range pick, which the scope row turns
+    // into a URL write and the page mirrors back into `range` (the shared default is 1Y,
+    // so All is the change here).
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
     expect(
       JSON.parse(
         screen.getAllByTestId('echart')[0].getAttribute('data-legend-selected') ?? '{}',
@@ -423,7 +437,7 @@ describe('SpendingPage — absent ≠ zero and axis honesty (2026-08-31 tier-1 A
   // page must judge enteredness on the SERIES.
   const withAbsentMonth = () =>
     matrixFixture({
-      months: ['2026-06', '2026-07', '2026-08'],
+      months: ['2026-06-01', '2026-07-01', '2026-08-01'],
       series: [
         { category_id: 1, values: ['2000.00', '2000.00', null], budgets: [null, null, null] },
         { category_id: 2, values: ['600.00', '580.00', null], budgets: [null, null, null] },
@@ -482,5 +496,54 @@ describe('SpendingPage — section order (2026-08-31 audit)', () => {
     // The windowed pair sits with the other windowed charts; the never-windowed
     // full-history pair (heatmap, yearly) closes the page.
     expectInDocumentOrder(budgets, savings, trends, heatmap, yearly)
+  })
+})
+
+// ── Shell scope (2026-09-03 shell spec §5–§7) ─────────────────────────────────────────────
+// The page keeps no header of its own: the ribbon and the range chips are the frame's
+// sticky scope row, and the month drill is a scope key rather than a private param.
+describe('SpendingPage — shell scope', () => {
+  it('drills a month from the ribbon into ?month=YYYY-MM and shows that month\u2019s breakdown', async () => {
+    renderPage('/spending')
+    await screen.findByText('Spending')
+    fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
+    expect(screen.getByTestId('location').textContent).toContain('month=2026-07')
+    expect(await screen.findByText(/Spending breakdown — Jul 2026/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'All months' }))
+    expect(screen.getByTestId('location').textContent).not.toContain('month=')
+  })
+
+  it('accepts a legacy ?month=YYYY-MM-01 link (Overview\u2019s deep link) and normalizes it', async () => {
+    renderPage('/spending?month=2026-07-01')
+    expect(await screen.findByText(/Spending breakdown — Jul 2026/)).toBeTruthy()
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toContain('month=2026-07'),
+    )
+    expect(screen.getByTestId('location').textContent).not.toContain('2026-07-01')
+  })
+
+  it('takes the range from the scope row and renders no chips of its own', async () => {
+    renderPage('/spending?range=ytd')
+    await screen.findByText('Spending')
+    expect(screen.getByRole('button', { name: 'YTD' }).getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelectorAll('[aria-label="Time range"]')).toHaveLength(1)
+    expect(document.querySelector('.page-header')).toBeNull()
+  })
+
+  it('prints each month\u2019s total on its ribbon chip', async () => {
+    renderPage('/spending')
+    // The figures the page hands the ribbon are matrix.totals, formatted.
+    expect(
+      await screen.findByRole('button', { name: /^Jul 2026 — \$2,580\.00 — / }),
+    ).toBeTruthy()
+  })
+})
+
+describe('SpendingPage — the ribbon\u2019s edit link', () => {
+  it('points the wizard at the drilled month in the wizard\u2019s own grammar', async () => {
+    renderPage('/spending?month=2026-06')
+    await screen.findByText(/Spending breakdown — Jun 2026/)
+    const edit = await screen.findByRole('link', { name: 'Edit Jun 2026 in the wizard' })
+    expect(edit.getAttribute('href')).toBe('/update?month=2026-06-01&step=spending')
   })
 })

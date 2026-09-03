@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { ApiError } from '../api/client'
-import { fetchHousehold } from '../api/household'
 import {
   fetchAllocation,
   fetchDividendEvents,
@@ -33,8 +32,9 @@ import HoldingsTable from '../components/portfolio/HoldingsTable'
 import RealizedPanel from '../components/portfolio/RealizedPanel'
 import SecuritiesPanel from '../components/portfolio/SecuritiesPanel'
 import TransactionsPanel from '../components/portfolio/TransactionsPanel'
-import RangeChips from '../components/RangeChips'
-import PageSkeleton from '../components/PageSkeleton'
+import PageFrame from '../components/shell/PageFrame'
+import ScopeBar from '../components/shell/ScopeBar'
+import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import { useArrivalParam, useArrivalValue } from '../components/useArrivalParam'
 import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
@@ -44,7 +44,6 @@ import type {
   DividendEventOut,
   DividendOut,
   HoldingsResponse,
-  HouseholdOut,
   PortfolioHistory,
   RealizedResponse,
   RefreshResult,
@@ -128,9 +127,13 @@ interface PortfolioSnapshot {
 }
 
 export default function PortfolioPage() {
-  // The initial fetch scope is the whole household, so the mount seed reads exactly the
-  // key that mount's load() will write.
-  const cached = getSnapshot<PortfolioSnapshot>(portfolioKey(null))
+  // The page's ownership scope and performance window both come from the URL now
+  // (2026-09-03 shell spec §6); the sticky ScopeBar below writes them.
+  const { scope } = useScope({ owner: true, range: true })
+  // The mount seed reads exactly the key that mount's load() will write — which is the
+  // ARRIVING scope's key, so a shared /portfolio?owner=2 link paints from its own slot
+  // rather than the household's.
+  const cached = getSnapshot<PortfolioSnapshot>(portfolioKey(scope.owner))
   const [holdings, setHoldings] = useState<HoldingsResponse | null>(cached?.holdings ?? null)
   const [securities, setSecurities] = useState<SecurityOut[]>(cached?.securities ?? [])
   const [transactions, setTransactions] = useState<TransactionOut[]>(cached?.transactions ?? [])
@@ -187,10 +190,11 @@ export default function PortfolioPage() {
     }, 0)
   })
   useEffect(() => () => clearTimeout(recordsTimer.current), [])
-  // Performance-chart window; object identity so a re-click of the active chip snaps a
-  // ctrl+wheel wander back to the preset (NetWorthPage's `range`) — and it now carries
-  // any manual window mirrored back from the chart's datazoom event (spec §2e).
-  const [range, setRange] = useState<RangeState>({ preset: 'all' })
+  // Performance-chart window, mirrored from the shared scope: the row's chips write the
+  // URL and the URL writes this. The object still carries any manual ctrl+wheel window fed
+  // back from the chart's datazoom event (spec §2e); a chip pick replaces it wholesale.
+  const [range, setRange] = useState<RangeState>({ preset: scope.range })
+  if (scope.range !== range.preset) setRange({ preset: scope.range })
   // Mirrors of the chart's own events (2026-08-25 spec §2e): legend picks and a manual
   // ctrl+wheel window become page state, fed back through the memoized option, so a
   // reload or notMerge rebuild no longer resets them.
@@ -211,11 +215,11 @@ export default function PortfolioPage() {
   // finds no holding and the panel folds away, the drill's existing posture.
   const arriveOnTicker = useCallback((value: string) => setDetailTicker(value.toUpperCase()), [])
   useArrivalValue('ticker', arriveOnTicker)
-  // The page's ownership scope: null = the whole household (and NO owner param at all, so
-  // the requests stay byte-identical to the pre-ownership ones). It scopes the tiles, the
-  // holdings table, the allocation charts and the three record tabs — which is why the
-  // chips sit under the page header rather than inside one card.
-  const [owner, setOwner] = useState<OwnerScope>(null)
+  // The page's ownership scope: null = the whole household (and NO owner param on the wire
+  // at all, so the requests stay byte-identical to the pre-ownership ones). It scopes the
+  // tiles, the holdings table, the allocation charts and the three record tabs. Seeded from
+  // the URL and adopted from it below — the ScopeBar's chips never talk to this page.
+  const [owner, setOwner] = useState<OwnerScope>(scope.owner)
   // What the assistant must answer against: the scope, the open record tab and the drill-in
   // ticker, none of which is in the URL once the arrival param is consumed (2026-09-01
   // spec §6). `owner` is stringified because the scope is a person id OR the literal
@@ -225,17 +229,14 @@ export default function PortfolioPage() {
     tab,
     ticker: detailTicker,
   })
-  // Fetched on its own, never inside the page's Promise.all: the chips are an affordance,
-  // and a household hiccup must not blank the portfolio (NetWorthPage's isolated-fetch
-  // posture). null covers both "not loaded yet" and "failed".
-  const [household, setHousehold] = useState<HouseholdOut | null>(null)
-  // Seeded off the cache: the `loading ?` render branch must not swallow a seeded paint.
-  const [loading, setLoading] = useState(cached === undefined)
+  // (The household fetch that fed the old owner row belongs to the ScopeBar now, and it
+  // swallows its own failures — a household hiccup must not blank the portfolio.)
   // false once a revalidation actually CHANGES the data — charts may animate again.
   const [fromCache, setFromCache] = useState(cached !== undefined)
-  // Seeded off the cache like `loading`: a cache hit paints full and revalidates under the
-  // reload dim. Seeded rather than flipped by the mount effect because reload()'s
-  // setReloading(true) would be a synchronous setState in an effect body (react-hooks v7).
+  // Seeded off the cache: a cache hit paints full and revalidates under the reload dim.
+  // Seeded rather than flipped by the mount effect because reload()'s setReloading(true)
+  // would be a synchronous setState in an effect body (react-hooks v7). There is no
+  // separate `loading` flag any more — "no holdings yet" IS the frame's loading state.
   const [reloading, setReloading] = useState(cached !== undefined)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshNote, setRefreshNote] = useState<RefreshNote>(NO_NOTE)
@@ -250,12 +251,15 @@ export default function PortfolioPage() {
   // 2026-08-28 bug NetWorthPage fixed @9e20d15 — no cache-compared skips, house rule).
   const shown = useRef<PortfolioSnapshot | null>(cached ?? null)
 
-  // The ONLY place a snapshot reaches the page — load()'s apply and selectOwner's peek both come through here; add new PortfolioSnapshot slots HERE.
-  // useCallback with an empty dep list: useState setters and the ref are identity-stable,
-  // so this stays stable and `load` below keeps changing identity ONLY with the scope (a
-  // fresh identity per render would re-fire the mount effect on every render).
-  const applySnapshot = useCallback((snap: PortfolioSnapshot, fromCache: boolean) => {
-    shown.current = snap
+  // The ONLY place a snapshot reaches the page — load()'s apply and the scope peek below
+  // both come through here; add new PortfolioSnapshot slots HERE. Setters only: the peek
+  // runs DURING render (the adjust-during-render idiom), where mutating `shown` would be
+  // an impure render — so the ref write lives in applySnapshot, one level up, which only
+  // load()'s continuation calls.
+  // useCallback with an empty dep list: useState setters are identity-stable, so this
+  // stays stable and `load` below keeps changing identity ONLY with the scope (a fresh
+  // identity per render would re-fire the mount effect on every render).
+  const applySnapshotState = useCallback((snap: PortfolioSnapshot, fromCache: boolean) => {
     setFromCache(fromCache)
     setHoldings(snap.holdings)
     setSecurities(snap.securities)
@@ -270,6 +274,36 @@ export default function PortfolioPage() {
     setRealized(snap.realized)
     setRefreshStatus(snap.refreshStatus)
   }, [])
+
+  // Promise-continuation half: records what the page is now SHOWING for load()'s equality
+  // skip. A render-time peek cannot come through here, so `shown` may lag one scope behind
+  // a peeked switch — deliberately the conservative direction: the skip then simply does
+  // not fire and the identical payload is re-applied, where the reverse (a skip judged on
+  // stale truth) is the 9e20d15 stranding bug.
+  const applySnapshot = useCallback(
+    (snap: PortfolioSnapshot, fromCache: boolean) => {
+      shown.current = snap
+      applySnapshotState(snap, fromCache)
+    },
+    [applySnapshotState],
+  )
+
+  // URL → page, adopted with the adjust-during-render idiom (CategoriesPanel's precedent),
+  // so an owner switch never puts a setState inside an effect body. `load` keeps `owner` in
+  // its deps, so the mount effect below refetches on adoption exactly as the old
+  // selectOwner did.
+  if (scope.owner !== owner) {
+    setReloading(true)
+    setError(null)
+    // The open drill-in holds a TICKER the next scope may not own — close it rather than
+    // leave a detail panel resolving to null.
+    setDetailTicker(null)
+    // Already-seen scope: paint it instantly and revalidate underneath. State setters only
+    // — `shown`/ref bookkeeping belongs to load()'s continuation, never to render.
+    const peeked = getSnapshot<PortfolioSnapshot>(portfolioKey(scope.owner))
+    if (peeked !== undefined) applySnapshotState(peeked, true)
+    setOwner(scope.owner)
+  }
 
   // Promise callbacks, no setState in the effect's synchronous body — house react-hooks
   // law (see NetWorthPage). One load() refetches EVERYTHING: twelve cheap local queries,
@@ -322,9 +356,6 @@ export default function PortfolioPage() {
         if (seq !== seqRef.current) return
         setError(err instanceof ApiError ? err.message : 'Failed to load portfolio data')
       })
-      .finally(() => {
-        if (seq === seqRef.current) setLoading(false)
-      })
   }, [owner, applySnapshot])
 
   // Panel mutations refetch WITHOUT unmounting the panels (a spinner swap would throw
@@ -334,38 +365,13 @@ export default function PortfolioPage() {
     load().finally(() => setReloading(false))
   }
 
-  // Scope switches dim the body rather than swapping in the skeleton: a chip must not
-  // unmount the panels (and the tab the user is reading) under them.
-  const selectOwner = (next: OwnerScope) => {
-    if (next === owner) return
-    setReloading(true)
-    setError(null)
-    // The open drill-in holds a TICKER the next scope may not own — close it rather than
-    // leave a detail panel resolving to null.
-    setDetailTicker(null)
-    // Already-seen scope: paint it instantly and revalidate underneath (NetWorthPage's
-    // selectOwner). Seeding `shown` here is what keeps load()'s equality skip truthful —
-    // the guard is about what is RENDERED, and the destination payload is about to be it.
-    const peeked = getSnapshot<PortfolioSnapshot>(portfolioKey(next))
-    if (peeked !== undefined) applySnapshot(peeked, true)
-    setOwner(next)
-  }
-
   // Mount AND every owner switch: `load` changes identity with the scope, which is what
   // re-runs this effect. A cache hit revalidates under the reload dim (raised by
-  // `reloading`'s initializer on mount, by selectOwner on a switch); the trailing release
-  // is a no-op on a cold mount, where `reloading` never went up.
+  // `reloading`'s initializer on mount, by the adoption block on a switch); the trailing
+  // release is a no-op on a cold mount, where `reloading` never went up.
   useEffect(() => {
     load().finally(() => setReloading(false))
   }, [load])
-
-  // Once per visit, and deliberately not part of `load`: setState lives in the promise
-  // continuations, never in the effect body (react-hooks/set-state-in-effect).
-  useEffect(() => {
-    fetchHousehold()
-      .then(setHousehold)
-      .catch(() => setHousehold(null))
-  }, [])
 
   const onRefresh = () => {
     setRefreshing(true)
@@ -383,27 +389,6 @@ export default function PortfolioPage() {
       })
       .finally(() => setRefreshing(false))
   }
-
-  // Primary first, then everyone else by id — the same order the server uses, so these
-  // chips read left-to-right like the net-worth ones. The `?? []` lives INSIDE the memo: a
-  // fresh literal in the dep list would re-sort on every render, which is the memo doing
-  // nothing.
-  const orderedPeople = useMemo(
-    () =>
-      [...(household?.people ?? [])].sort(
-        (a, b) => Number(b.is_primary) - Number(a.is_primary) || a.id - b.id,
-      ),
-    [household],
-  )
-  // One person means there is nothing to choose between: no chips at all.
-  const ownerScopes: { scope: OwnerScope; label: string }[] =
-    orderedPeople.length > 1
-      ? [
-          { scope: null, label: 'All' },
-          ...orderedPeople.map((p) => ({ scope: p.id as OwnerScope, label: p.name })),
-          { scope: 'joint' as OwnerScope, label: 'Joint' },
-        ]
-      : []
 
   const totals = holdings?.totals
   const asOf = holdings?.as_of ?? null
@@ -482,292 +467,289 @@ export default function PortfolioPage() {
 
   return (
     <div className="page portfolio-page">
-      <header className="page-header">
-        <h1>Portfolio</h1>
-        <div className="header-actions">
-          {asOf ? (
-            // A4 (2026-08-31 tier-1): as_of is the OLDEST quote — one manual-priced
-            // straggler pins it — so the header wears the same stale treatment Overview's
-            // freshness cue uses (isStaleQuote → --warn amber) and the tooltip names the
-            // clock it is NOT showing. Display-only: as_of itself is unchanged. The
-            // no-newest fallback is stale-tab armor only — server-side both clocks derive
-            // from one quote list, so they are null (or set) together.
-            <span
-              className={isStaleQuote(asOf) ? 'as-of stale' : 'as-of'}
-              title={
-                newestQuote
-                  ? `oldest quote across holdings — newest ${formatDate(newestQuote)}`
-                  : 'oldest quote across holdings'
-              }
-            >
-              prices as of {formatDate(asOf)}
-            </span>
-          ) : (
-            <span className="as-of">prices never refreshed</span>
-          )}
+      <PageFrame
+        title="Portfolio"
+        actions={
           <button type="button" className="refresh-btn" onClick={onRefresh} disabled={refreshing}>
             <RefreshCw size={14} className={refreshing ? 'spin' : undefined} />
             {refreshing ? 'Refreshing…' : 'Refresh prices'}
           </button>
-        </div>
-      </header>
-      {ownerScopes.length > 0 && (
-        <div className="portfolio-owner-row">
-          <span className="eyebrow">Whose money</span>
-          <div className="segmented" role="group" aria-label="Owner">
-            {ownerScopes.map(({ scope, label }) => (
-              <button
-                key={label}
-                type="button"
-                className={owner === scope ? 'active' : ''}
-                aria-pressed={owner === scope}
-                onClick={() => selectOwner(scope)}
+        }
+        subheader={
+          <>
+            {asOf ? (
+              // A4 (2026-08-31 tier-1): as_of is the OLDEST quote — one manual-priced
+              // straggler pins it — so the clock wears the same stale treatment Overview's
+              // freshness cue uses (isStaleQuote → --warn amber) and the tooltip names the
+              // clock it is NOT showing. Display-only: as_of itself is unchanged. The
+              // no-newest fallback is stale-tab armor only — server-side both clocks derive
+              // from one quote list, so they are null (or set) together.
+              <span
+                className={isStaleQuote(asOf) ? 'as-of stale' : 'as-of'}
+                title={
+                  newestQuote
+                    ? `oldest quote across holdings — newest ${formatDate(newestQuote)}`
+                    : 'oldest quote across holdings'
+                }
               >
-                {label}
-              </button>
-            ))}
-          </div>
-          <InfoHint text="A person's view is their own portfolio accounts plus the joint ones — that is what a joint account is. Joint shows only the shared accounts. Performance, sparklines and price refresh always cover the whole household." />
-        </div>
-      )}
-      {/* One element, always mounted: a live region added at announce-time is not read.
-          Partial failures are an alert, not a status — they need the user's attention. */}
-      <div
-        className={refreshNote.failed > 0 ? 'hint refresh-note-bad' : 'hint'}
-        role={refreshNote.failed > 0 ? 'alert' : 'status'}
-        title={refreshNote.detail || undefined}
-      >
-        {refreshNote.text}
-      </div>
-      {/* The scheduler, finally visible: what ran last (manual or scheduled — the outcome
-          persists either way now) and when the next run fires. Wall-clock stamps, local
-          time — these answer "when", not "which bar". */}
-      {refreshStatus?.last && (
-        <div className="hint refresh-status-line">
-          Last refresh {formatDateTime(refreshStatus.last.at)} ({refreshStatus.last.trigger}) ·{' '}
-          {refreshStatus.last.updated} updated
-          {refreshStatus.last.failed && Object.keys(refreshStatus.last.failed).length > 0 && (
-            <> · {Object.keys(refreshStatus.last.failed).length} failed</>
-          )}
-          {refreshStatus.next_run_at && <> · next {formatDateTime(refreshStatus.next_run_at)}</>}
-        </div>
-      )}
-      {failedEntries.length > 0 && (
-        <div className="refresh-failures">
-          {failedEntries.map(([ticker, reason]) => (
-            <span key={ticker} className="refresh-failure" title={reason}>
-              {ticker}
-              {/* One click retires the ZI ritual (README 7.4's manual is_active edit):
-                  deactivating removes the ticker from every future refresh; the
-                  Securities tab can always bring it back. */}
-              <button
-                type="button"
-                aria-label={`Deactivate ${ticker} so refreshes skip it`}
-                disabled={deactivating !== null}
-                onClick={() => deactivate(ticker)}
-              >
-                {deactivating === ticker ? 'Deactivating…' : 'Deactivate'}
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      {error && <div className="error-banner" role="alert">{error}</div>}
-      {loading ? (
-        <PageSkeleton
-          tiles={4}
-          cards={[
+                prices as of {formatDate(asOf)}
+              </span>
+            ) : (
+              <span className="as-of">prices never refreshed</span>
+            )}
+            {/* One element, always mounted: a live region added at announce-time is not
+                read. Partial failures are an alert, not a status — they need the user's
+                attention. */}
+            <div
+              className={refreshNote.failed > 0 ? 'hint refresh-note-bad' : 'hint'}
+              role={refreshNote.failed > 0 ? 'alert' : 'status'}
+              title={refreshNote.detail || undefined}
+            >
+              {refreshNote.text}
+            </div>
+            {/* The scheduler, finally visible: what ran last (manual or scheduled — the
+                outcome persists either way now) and when the next run fires. Wall-clock
+                stamps, local time — these answer "when", not "which bar". */}
+            {refreshStatus?.last && (
+              <div className="hint refresh-status-line">
+                Last refresh {formatDateTime(refreshStatus.last.at)} (
+                {refreshStatus.last.trigger}) · {refreshStatus.last.updated} updated
+                {refreshStatus.last.failed &&
+                  Object.keys(refreshStatus.last.failed).length > 0 && (
+                    <> · {Object.keys(refreshStatus.last.failed).length} failed</>
+                  )}
+                {refreshStatus.next_run_at && (
+                  <> · next {formatDateTime(refreshStatus.next_run_at)}</>
+                )}
+              </div>
+            )}
+            {failedEntries.length > 0 && (
+              <div className="refresh-failures">
+                {failedEntries.map(([ticker, reason]) => (
+                  <span key={ticker} className="refresh-failure" title={reason}>
+                    {ticker}
+                    {/* One click retires the ZI ritual (README 7.4's manual is_active
+                        edit): deactivating removes the ticker from every future refresh;
+                        the Securities tab can always bring it back. */}
+                    <button
+                      type="button"
+                      aria-label={`Deactivate ${ticker} so refreshes skip it`}
+                      disabled={deactivating !== null}
+                      onClick={() => deactivate(ticker)}
+                    >
+                      {deactivating === ticker ? 'Deactivating…' : 'Deactivate'}
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
+        }
+        scopeRow={<ScopeBar owner range />}
+        // A failed FIRST load leaves holdings null: the frame shows the alert alone rather
+        // than a page of empty tables that read as "you own nothing".
+        resource={{
+          status: holdings === null ? (error !== null ? 'error' : 'loading') : 'ready',
+          error,
+          busy: reloading,
+          fromCache,
+          retry: reload,
+        }}
+        skeleton={{
+          tiles: 4,
+          cards: [
             { span: 12, height: 340 },
             { span: 12, height: 300 },
-          ]}
-        />
-      ) : holdings ? (
-        // A failed FIRST load leaves holdings null: show the error banner alone rather
-        // than a page of empty tables that read as "you own nothing".
-        <div className={`loading-dim${reloading ? ' is-loading' : ''}`}>
-          {totals && (
-            <div className="tiles-row">
-              <StatTile
-                label="Portfolio value"
-                value={formatCurrency(totals.market_value)}
-                // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
-                countUp={
-                  !fromCache
-                    ? { value: Number(totals.market_value), format: formatCurrency }
-                    : undefined
-                }
-                delta={
-                  totals.day_change_amount !== null || totals.day_change_pct !== null
-                    ? `${formatCurrency(totals.day_change_amount)} today (${formatPct(totals.day_change_pct)})`
-                    : undefined
-                }
-                tone={toneOf(totals.day_change_amount)}
-                hint="Market value of every priced holding at the latest quotes."
-                hero
-              />
-              <StatTile
-                label="Unrealized gain"
-                value={formatCurrency(totals.unrealized_gl)}
-                delta={totals.unrealized_gl_pct !== null ? formatPct(totals.unrealized_gl_pct) : undefined}
-                tone={toneOf(totals.unrealized_gl)}
-                hint="Market value minus cost basis across current holdings."
-              />
-              {/* The totals field that never rendered anywhere until the Realized tab
-                  landed — the tile is the headline, the tab below is the breakdown. */}
-              <StatTile
-                label="Realized gains"
-                value={formatCurrency(totals.realized_gl)}
-                tone={toneOf(totals.realized_gl)}
-                hint="Lifetime gains and losses booked on sells, by the average-cost method."
-              />
-              <StatTile
-                label="Cost basis"
-                value={formatCurrency(totals.cost_basis)}
-                hint="What the current holdings cost to acquire, fees included, average-cost method."
-              />
-              <StatTile
-                label="Dividends collected"
-                value={formatCurrency(totals.dividends_collected)}
-                delta={`${formatCurrency(totals.annual_income)}/yr expected`}
-                tone="neutral"
-                hint="Every dividend logged — auto-ingested and manual — with the expected annual income at current rates."
-              />
-            </div>
-          )}
-          <section className="panel">
-            <div className="panel-title-row">
-              <h2 className="panel-title">
-                Performance
-                <InfoHint text="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)." />
-              </h2>
-              {performanceOption && <RangeChips value={range.preset} onChange={setRange} />}
-            </div>
-            {/* Outside the ternary on purpose: the caveat is true whether or not there is
-                a history to draw, and it only appears once a chip has actually narrowed
-                the rest of the page (spec §5 — on All it would be noise). */}
-            {owner !== null && (
-              <p className="hint">
-                Performance, sparklines and price refresh always cover the whole household —
-                the owner chips scope holdings, allocation, dividends, transactions and
-                realized gains. Person views omit the live price dot because the history is
-                household-wide.
-              </p>
-            )}
-            {performanceOption && history ? (
-              <>
-                <EChart
-                  option={performanceOption}
-                  height={300}
-                  onLegendChange={onLegendChange}
-                  onDataZoom={onZoomWindow}
-                  zoomWindow={zoomWindow}
-                  exportConfig={{
-                    name: 'portfolio-performance',
-                    csv: () => portfolioHistoryCsv(history),
-                  }}
-                  animateEntrance={!fromCache}
-                />
-                <ChartZoomHint />
-                {/* Two benchmark legs, one distinction: the baseline invests only the
-                    STARTING balance; the contribution-matched line adds every inferred
-                    flow. Said here so neither gap reads as outperformance. */}
-                <p className="hint">
-                  S&amp;P 500 baseline tracks the starting balance invested in VOO — later
-                  contributions are not added to it. VOO (your contributions) adds each
-                  inferred contribution as it lands.
-                </p>
-              </>
-            ) : (
-              <p className="empty-note">
-                No performance history yet — import your workbook in Settings to load it.
-              </p>
-            )}
-          </section>
-          <section className="panel">
-            <div className="panel-title-row">
-              <h2 className="panel-title">
-                {/* The section keeps its NAME while drilled — "where am I" survives the
-                    swap (SpendingPage's header does the same dance). */}
-                {detailHolding ? `Holdings — ${detailHolding.ticker}` : 'Holdings'}
-                <InfoHint text="One row per held security: price, value, weight, gains, yields, and money-weighted return. XIRR needs dated transactions — imported rows have none until backfilled." />
-              </h2>
-              {detailHolding && (
-                <button type="button" className="button" onClick={() => setDetailTicker(null)}>
-                  All holdings
-                </button>
-              )}
-            </div>
-            {detailHolding ? (
-              // IN PLACE of the table, not below it: a panel appended under ~25 rows was
-              // born off-screen. Keyed by SECURITY so a remount resets the span to 1Y and
-              // starts a fresh history feed (the taxes editors' keying lesson) — moot
-              // while the table is hidden, load-bearing again the day the detail gains an
-              // in-place way to switch tickers.
-              <HoldingDetailPanel
-                key={detailHolding.security_id}
-                holding={detailHolding}
-                transactions={transactions}
-                dividends={dividends}
-              />
-            ) : (
-              <>
-                {totals && totals.unpriced_count > 0 && (
-                  <p className="hint">
-                    {totals.unpriced_count} holding(s) have no price yet — run a refresh or
-                    set a manual price in Securities.
-                  </p>
-                )}
-                <p className="drill-hint">Click a holding to expand its detail.</p>
-                <HoldingsTable
-                  holdings={holdings.holdings}
-                  sparklines={sparklines}
-                  selectedTicker={detailTicker}
-                  // Functional toggle: normally the swap hides the table the moment a row
-                  // is picked, but a vanished ticker leaves the table up with a stale
-                  // selection — re-clicking that row must close, not reopen.
-                  onSelect={(ticker) =>
-                    setDetailTicker((current) => (current === ticker ? null : ticker))
+          ],
+        }}
+      >
+        {holdings !== null && (
+          <>
+            {totals && (
+              <div className="tiles-row">
+                <StatTile
+                  label="Portfolio value"
+                  value={formatCurrency(totals.market_value)}
+                  // Fresh paints only (spec §8); a decimal-string amount, so Number() for the ease.
+                  countUp={
+                    !fromCache
+                      ? { value: Number(totals.market_value), format: formatCurrency }
+                      : undefined
                   }
+                  delta={
+                    totals.day_change_amount !== null || totals.day_change_pct !== null
+                      ? `${formatCurrency(totals.day_change_amount)} today (${formatPct(totals.day_change_pct)})`
+                      : undefined
+                  }
+                  tone={toneOf(totals.day_change_amount)}
+                  hint="Market value of every priced holding at the latest quotes."
+                  hero
                 />
-              </>
+                <StatTile
+                  label="Unrealized gain"
+                  value={formatCurrency(totals.unrealized_gl)}
+                  delta={totals.unrealized_gl_pct !== null ? formatPct(totals.unrealized_gl_pct) : undefined}
+                  tone={toneOf(totals.unrealized_gl)}
+                  hint="Market value minus cost basis across current holdings."
+                />
+                {/* The totals field that never rendered anywhere until the Realized tab
+                    landed — the tile is the headline, the tab below is the breakdown. */}
+                <StatTile
+                  label="Realized gains"
+                  value={formatCurrency(totals.realized_gl)}
+                  tone={toneOf(totals.realized_gl)}
+                  hint="Lifetime gains and losses booked on sells, by the average-cost method."
+                />
+                <StatTile
+                  label="Cost basis"
+                  value={formatCurrency(totals.cost_basis)}
+                  hint="What the current holdings cost to acquire, fees included, average-cost method."
+                />
+                <StatTile
+                  label="Dividends collected"
+                  value={formatCurrency(totals.dividends_collected)}
+                  delta={`${formatCurrency(totals.annual_income)}/yr expected`}
+                  tone="neutral"
+                  hint="Every dividend logged — auto-ingested and manual — with the expected annual income at current rates."
+                />
+              </div>
             )}
-          </section>
-          <AllocationPanel industry={industry} byType={byType} byAccount={byAccount} />
-          {/* The ?tab= arrival's scroll-and-focus target: the strip alone would leave the
-              panel it selects (and that panel's form) off-screen below it. */}
-          <div id="portfolio-records">
-            {/* group, not tablist: these buttons toggle panels below rather than owning
-                tabpanels, and the aria-labels keep "Dividends" from colliding with the
-                holdings table's sort header of the same name. */}
-            <div className="tab-row" role="group" aria-label="Portfolio records">
-              {(['transactions', 'dividends', 'securities', 'realized'] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  aria-label={`Show ${t}`}
-                  aria-pressed={tab === t}
-                  onClick={() => setTab(t)}
-                >
-                  {t[0].toUpperCase() + t.slice(1)}
-                </button>
-              ))}
+            <section className="panel">
+              <div className="panel-title-row">
+                <h2 className="panel-title">
+                  Performance
+                  <InfoHint text="Value vs cost basis, checkpointed weekly after Monday's close. The pinging dot is the live value at the latest prices. The S&P 500 baseline invests only the starting balance; VOO (your contributions) invests every inferred contribution instead. Estimated: contributions inferred from weekly cost-basis changes; dividends excluded on the VOO leg. Event markers annotate dated buys and sells, logged dividends, and older ex-dividend dates (per-share only — dollar amounts that old are unknowable from undated imports)." />
+                </h2>
+              </div>
+              {/* Outside the ternary on purpose: the caveat is true whether or not there is
+                  a history to draw, and it only appears once a chip has actually narrowed
+                  the rest of the page (spec §5 — on All it would be noise). */}
+              {owner !== null && (
+                <p className="hint">
+                  A person's view is their own portfolio accounts plus the joint ones — that
+                  is what a joint account is. Joint shows only the shared accounts.
+                  Performance, sparklines and price refresh always cover the whole household —
+                  the owner chips scope holdings, allocation, dividends, transactions and
+                  realized gains. Person views omit the live price dot because the history is
+                  household-wide.
+                </p>
+              )}
+              {performanceOption && history ? (
+                <>
+                  <EChart
+                    option={performanceOption}
+                    height={300}
+                    onLegendChange={onLegendChange}
+                    onDataZoom={onZoomWindow}
+                    zoomWindow={zoomWindow}
+                    exportConfig={{
+                      name: 'portfolio-performance',
+                      csv: () => portfolioHistoryCsv(history),
+                    }}
+                    animateEntrance={!fromCache}
+                  />
+                  <ChartZoomHint />
+                  {/* Two benchmark legs, one distinction: the baseline invests only the
+                      STARTING balance; the contribution-matched line adds every inferred
+                      flow. Said here so neither gap reads as outperformance. */}
+                  <p className="hint">
+                    S&amp;P 500 baseline tracks the starting balance invested in VOO — later
+                    contributions are not added to it. VOO (your contributions) adds each
+                    inferred contribution as it lands.
+                  </p>
+                </>
+              ) : (
+                <p className="empty-note">
+                  No performance history yet — import your workbook in Settings to load it.
+                </p>
+              )}
+            </section>
+            <section className="panel">
+              <div className="panel-title-row">
+                <h2 className="panel-title">
+                  {/* The section keeps its NAME while drilled — "where am I" survives the
+                      swap (SpendingPage's header does the same dance). */}
+                  {detailHolding ? `Holdings — ${detailHolding.ticker}` : 'Holdings'}
+                  <InfoHint text="One row per held security: price, value, weight, gains, yields, and money-weighted return. XIRR needs dated transactions — imported rows have none until backfilled." />
+                </h2>
+                {detailHolding && (
+                  <button type="button" className="button" onClick={() => setDetailTicker(null)}>
+                    All holdings
+                  </button>
+                )}
+              </div>
+              {detailHolding ? (
+                // IN PLACE of the table, not below it: a panel appended under ~25 rows was
+                // born off-screen. Keyed by SECURITY so a remount resets the span to 1Y and
+                // starts a fresh history feed (the taxes editors' keying lesson) — moot
+                // while the table is hidden, load-bearing again the day the detail gains an
+                // in-place way to switch tickers.
+                <HoldingDetailPanel
+                  key={detailHolding.security_id}
+                  holding={detailHolding}
+                  transactions={transactions}
+                  dividends={dividends}
+                />
+              ) : (
+                <>
+                  {totals && totals.unpriced_count > 0 && (
+                    <p className="hint">
+                      {totals.unpriced_count} holding(s) have no price yet — run a refresh or
+                      set a manual price in Securities.
+                    </p>
+                  )}
+                  <p className="drill-hint">Click a holding to expand its detail.</p>
+                  <HoldingsTable
+                    holdings={holdings.holdings}
+                    sparklines={sparklines}
+                    selectedTicker={detailTicker}
+                    // Functional toggle: normally the swap hides the table the moment a row
+                    // is picked, but a vanished ticker leaves the table up with a stale
+                    // selection — re-clicking that row must close, not reopen.
+                    onSelect={(ticker) =>
+                      setDetailTicker((current) => (current === ticker ? null : ticker))
+                    }
+                  />
+                </>
+              )}
+            </section>
+            <AllocationPanel industry={industry} byType={byType} byAccount={byAccount} />
+            {/* The ?tab= arrival's scroll-and-focus target: the strip alone would leave the
+                panel it selects (and that panel's form) off-screen below it. */}
+            <div id="portfolio-records">
+              {/* group, not tablist: these buttons toggle panels below rather than owning
+                  tabpanels, and the aria-labels keep "Dividends" from colliding with the
+                  holdings table's sort header of the same name. */}
+              <div className="tab-row" role="group" aria-label="Portfolio records">
+                {(['transactions', 'dividends', 'securities', 'realized'] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    aria-label={`Show ${t}`}
+                    aria-pressed={tab === t}
+                    onClick={() => setTab(t)}
+                  >
+                    {t[0].toUpperCase() + t.slice(1)}
+                  </button>
+                ))}
+              </div>
+              {tab === 'transactions' && (
+                <TransactionsPanel securities={securities} transactions={transactions} onChanged={reload} />
+              )}
+              {tab === 'dividends' && (
+                <DividendsPanel
+                  securities={securities}
+                  dividends={dividends}
+                  annualIncome={totals?.annual_income ?? null}
+                  onChanged={reload}
+                />
+              )}
+              {tab === 'securities' && <SecuritiesPanel securities={securities} onChanged={reload} />}
+              {tab === 'realized' && realized && <RealizedPanel realized={realized} />}
             </div>
-            {tab === 'transactions' && (
-              <TransactionsPanel securities={securities} transactions={transactions} onChanged={reload} />
-            )}
-            {tab === 'dividends' && (
-              <DividendsPanel
-                securities={securities}
-                dividends={dividends}
-                annualIncome={totals?.annual_income ?? null}
-                onChanged={reload}
-              />
-            )}
-            {tab === 'securities' && <SecuritiesPanel securities={securities} onChanged={reload} />}
-            {tab === 'realized' && realized && <RealizedPanel realized={realized} />}
-          </div>
-        </div>
-      ) : null}
+          </>
+        )}
+      </PageFrame>
     </div>
   )
 }
