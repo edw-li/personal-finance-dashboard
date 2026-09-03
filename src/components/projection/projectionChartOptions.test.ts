@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { compactMoney } from '../../charts/grammar'
+import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import { MARK_LINE_LABEL, MARK_LINE_STYLE } from '../../charts/markLine'
 import { MUTED, PALETTE } from '../../charts/theme'
 import { tooltipRows } from '../../testing/tooltipRows'
@@ -550,5 +550,47 @@ describe('projectionOption retirement rules', () => {
       const option = read(projectionOption(data))
       expect(option.series.every((s) => s.markLine === undefined)).toBe(true)
     }
+  })
+})
+
+describe('projectionOption references (pinned scenarios)', () => {
+  // The narrow shape the pins add on top of read()'s: an end label and a paint order.
+  function readRefs(option: EChartsOption | null) {
+    expect(option).not.toBeNull()
+    return option as unknown as {
+      grid: { left: number; right: number }
+      legend: { data: string[] }
+      series: { name: string; lineStyle?: { type?: string }; endLabel?: { formatter?: string }; z?: number }[]
+    }
+  }
+
+  it('adds one dashed, end-labelled series per reference after the data series, widening the right inset', () => {
+    const option = readRefs(
+      projectionOption(DATA, {
+        references: [
+          { name: 'Sell 40 VTI', data: DATA.projected.map((v) => String(Number(v) * 1.1)) },
+          { name: 'Retire 2035', data: DATA.projected },
+        ],
+      }),
+    )
+    const names = option.series.map((s) => s.name)
+    expect(names.slice(-2)).toEqual(['Sell 40 VTI', 'Retire 2035'])
+    const pin = option.series.at(-2)!
+    expect(pin.lineStyle?.type).toBe('dashed')
+    expect(pin.endLabel?.formatter).toBe('Sell 40 VTI')
+    expect(pin.z).toBe(9)
+    // The fan's own left inset (wider money labels) with the endLabel variant's right one:
+    // room for the pin names past the last month.
+    expect(option.grid).toEqual({ ...GRID_VARIANTS.fan, right: GRID_VARIANTS.endLabel.right })
+    expect(option.grid.right).toBe(84)
+    expect(option.legend.data).toContain('Sell 40 VTI')
+  })
+
+  it('is byte-identical to the plain option without references', () => {
+    // Stringified, because the tooltip formatter is a fresh closure per build — the
+    // structure is what must not move when the new argument is absent or empty.
+    const plain = JSON.stringify(projectionOption(DATA))
+    expect(JSON.stringify(projectionOption(DATA, {}))).toBe(plain)
+    expect(JSON.stringify(projectionOption(DATA, { references: [] }))).toBe(plain)
   })
 })
