@@ -34,6 +34,7 @@ export default function AmountInput({
   disabled,
   autoFocus,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
 }: {
   value: string
   onValueChange: (next: string) => void
@@ -44,6 +45,8 @@ export default function AmountInput({
   disabled?: boolean
   autoFocus?: boolean
   'aria-label'?: string
+  /** A wrapper's validation sentence (SliderBox's alert) — the field's own description. */
+  'aria-describedby'?: string
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [focused, setFocused] = useState(false)
@@ -141,6 +144,7 @@ export default function AmountInput({
       placeholder={placeholder}
       disabled={disabled}
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       aria-invalid={invalid ? true : undefined}
       value={shown}
       onChange={(e) => onValueChange(e.target.value)}
