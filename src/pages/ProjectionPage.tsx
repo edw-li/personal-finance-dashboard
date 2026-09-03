@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { fetchHousehold } from '../api/household'
@@ -6,17 +6,18 @@ import { fetchTimeseries } from '../api/netWorth'
 import { fetchProjection } from '../api/projection'
 import type { ProjectionParams } from '../api/projection'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
-import EChart from '../components/EChart'
-import ChartZoomHint from '../components/ChartZoomHint'
+import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import { fitPolyTrend } from '../components/projection/polyTrend'
 import {
+  netWorthProjectionCsv,
   netWorthProjectionOption,
   projectionCsv,
   projectionOption,
 } from '../components/projection/projectionChartOptions'
 import StatTile from '../components/StatTile'
 import { FeedBanner } from '../components/shell/Feed'
+import Segmented from '../components/shell/Segmented'
 import PageFrame from '../components/shell/PageFrame'
 import type { HouseholdOut, NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
@@ -352,12 +353,34 @@ export default function ProjectionPage() {
     })
   }
 
-  const chart = data === null ? null : projectionOption(data)
-  const fit = history === null ? null : fitPolyTrend(history.months, history.net_worth)
-  const nwChart =
-    history === null || data === null
-      ? null
-      : netWorthProjectionOption(history, fit, data.start_month, trendYears)
+  // Linear/Log for the fan (F3) and the two charts' mirrored legend picks (§9) — page state,
+  // fed back through the memoized options so a Recalculate never resets them.
+  const [log, setLog] = useState(false)
+  const [fanLegend, setFanLegend] = useState<Record<string, boolean>>({})
+  const [trendLegend, setTrendLegend] = useState<Record<string, boolean>>({})
+  const onFanLegend = (selected: Record<string, boolean>) =>
+    setFanLegend((current) => ({ ...current, ...selected }))
+  const onTrendLegend = (selected: Record<string, boolean>) =>
+    setTrendLegend((current) => ({ ...current, ...selected }))
+  // Memoized (F3): EChart keys its setOption effect on [option], and a fresh object per
+  // keystroke in the knobs form would redraw both charts on every character.
+  const chart = useMemo(
+    () => (data === null ? null : projectionOption(data, { log, selected: fanLegend })),
+    [data, log, fanLegend],
+  )
+  const fit = useMemo(
+    () => (history === null ? null : fitPolyTrend(history.months, history.net_worth)),
+    [history],
+  )
+  const nwChart = useMemo(
+    () =>
+      history === null || data === null
+        ? null
+        : netWorthProjectionOption(history, fit, data.start_month, trendYears, {
+            selected: trendLegend,
+          }),
+    [history, fit, data, trendYears, trendLegend],
+  )
 
   return (
     <div className="page projection-page">
@@ -460,79 +483,86 @@ export default function ProjectionPage() {
                 </div>
               )}
 
-              <section className="card projection-chart-card">
-                <div className="projection-chart-header">
-                  <h2 className="eyebrow">
-                    Net worth over time (projected)
-                    <InfoHint text="Every snapshot as dots with a quadratic best-fit extended forward — momentum, not a plan. Log axis: equal steps are equal multiples." />
-                  </h2>
-                  <div className="segmented" role="group" aria-label="Trend span">
-                    {TREND_SPANS.map((span) => (
-                      <button
-                        key={span}
-                        type="button"
-                        className={trendYears === span ? 'active' : ''}
-                        aria-pressed={trendYears === span}
-                        onClick={() => setTrendYears(span)}
-                      >
-                        {span}Y
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                {historyError !== null ? (
+              <div className="card-grid">
+                <ChartCard
+                  title="Net worth over time (projected)"
+                  hint="Every snapshot as dots with a quadratic best-fit extended forward — momentum, not a plan. Log axis: equal steps are equal multiples; months at or below $0 are not drawn on the log scale."
+                  // A refused fit draws dots ALONE, so the sentence must not promise a curve
+                  // that is not on the canvas.
+                  ariaLabel={
+                    fit === null
+                      ? 'Net worth history as dots, on a log scale'
+                      : `Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`
+                  }
+                  option={historyError === null ? nwChart : null}
                   // Advisory, never the page banner: the rest of the page runs without it.
-                  <p className="empty-note">{historyError}</p>
-                ) : history === null ? (
-                  <p className="empty-note">Loading net-worth history…</p>
-                ) : nwChart === null ? (
-                  <p className="empty-note">Not enough monthly snapshots to chart yet.</p>
-                ) : (
-                  <>
-                    <EChart
-                      option={nwChart}
-                      height={340}
-                      ariaLabel={`Net worth history with a fitted trend extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} forward, on a log scale`}
-                      animateEntrance={!fromCache}
+                  error={historyError}
+                  busy={history === null && historyError === null}
+                  empty="Not enough monthly snapshots to chart yet."
+                  exportName="net-worth-trend"
+                  csv={
+                    history === null
+                      ? undefined
+                      : () => netWorthProjectionCsv(history, fit, data.start_month, trendYears)
+                  }
+                  height={340}
+                  zoomable
+                  onLegendChange={onTrendLegend}
+                  controls={
+                    <Segmented
+                      variant="toggle"
+                      size="sm"
+                      ariaLabel="Trend span"
+                      options={TREND_SPANS.map((span) => ({ value: String(span), label: `${span}Y` }))}
+                      value={String(trendYears)}
+                      onChange={(value) => setTrendYears(Number(value) as TrendSpan)}
                     />
-                    <ChartZoomHint />
+                  }
+                  footer={
                     <p className="drill-hint">
                       {fit === null
-                        ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples.'
-                        : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples.`}
+                        ? 'The polynomial trendline needs at least three snapshots — showing the history alone. Log-scale axis: equal steps are equal multiples; months at or below $0 are not drawn on the log scale.'
+                        : `Second-degree polynomial best-fit over every monthly net-worth snapshot, extended ${trendYears} ${trendYears === 1 ? 'year' : 'years'} — momentum, not a plan; the knob-driven model is the chart below. Log-scale axis: equal steps are equal multiples; months at or below $0 are not drawn on the log scale.`}
                     </p>
-                  </>
-                )}
-              </section>
-
-              <section className="card projection-chart-card">
-                <h2 className="eyebrow">
-                  Projected investable balance
-                  <InfoHint text="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes." />
-                </h2>
-                {chart && data ? (
-                  <>
-                    <EChart
-                      option={chart}
-                      height={340}
-                      ariaLabel={`Projected investable balance over the next ${data.years} years`}
-                      exportConfig={{ name: 'projection', csv: () => projectionCsv(data) }}
-                      animateEntrance={!fromCache}
+                  }
+                />
+                <ChartCard
+                  title="Projected investable balance"
+                  hint="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes. FI and Coast FI mark the months the target is reached; the shaded months come after it."
+                  ariaLabel={`Projected investable balance over the next ${data.years} years`}
+                  option={chart}
+                  empty="Nothing to chart at this horizon."
+                  exportName="projection"
+                  csv={() => projectionCsv(data)}
+                  height={340}
+                  zoomable
+                  onLegendChange={onFanLegend}
+                  controls={
+                    <Segmented
+                      variant="toggle"
+                      size="sm"
+                      ariaLabel="Axis scale"
+                      options={[
+                        { value: 'linear', label: 'Linear' },
+                        { value: 'log', label: 'Log' },
+                      ]}
+                      value={log ? 'log' : 'linear'}
+                      onChange={(value) => setLog(value === 'log')}
                     />
-                    <ChartZoomHint />
-                  </>
-                ) : (
-                  <p className="empty-note">Nothing to chart at this horizon.</p>
-                )}
-                <p className="drill-hint">
-                  Deterministic compounding at one assumed return — a planning sketch, not a
-                  forecast. The chart reads in today&apos;s dollars by default (inflation is
-                  modelled); set inflation to 0 to read nominal dollars. The growth-only line
-                  is the same balance with contributions turned off. With a volatility, bands
-                  are percentiles across 500 simulated lognormal-return paths — seed-stable,
-                  so identical knobs redraw identical bands.
-                </p>
-              </section>
+                  }
+                  footer={
+                    <p className="drill-hint">
+                      Deterministic compounding at one assumed return — a planning sketch, not a
+                      forecast. The chart reads in today&apos;s dollars by default (inflation is
+                      modelled); set inflation to 0 to read nominal dollars. The growth-only line
+                      is the same balance with contributions turned off. With a volatility, bands
+                      are percentiles across 500 simulated lognormal-return paths — seed-stable,
+                      so identical knobs redraw identical bands; the median path is their 50th.
+                      On the Log scale, months at or below $0 are not drawn.
+                    </p>
+                  }
+                />
+              </div>
 
               <section className="card">
                 <h2 className="eyebrow">

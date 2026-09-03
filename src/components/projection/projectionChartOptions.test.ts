@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
+import { compactMoney } from '../../charts/grammar'
+import { MARK_LINE_LABEL, MARK_LINE_STYLE } from '../../charts/markLine'
 import { MUTED, PALETTE } from '../../charts/theme'
+import { tooltipRows } from '../../testing/tooltipRows'
 import type { PolyTrendFit } from './polyTrend'
 import {
   BAND_SERIES,
+  MEDIAN_SERIES,
   NET_WORTH_PROJECTION_SERIES,
+  netWorthProjectionCsv,
   netWorthProjectionOption,
   PROJECTION_SERIES,
   projectionCsv,
   projectionOption,
-  projectionTooltipFormatter,
 } from './projectionChartOptions'
 
 const DATA = {
@@ -35,8 +39,9 @@ function read(option: EChartsOption | null) {
   expect(option).not.toBeNull()
   return option as unknown as {
     dataZoom: { type: string; startValue: number }[]
-    legend: { data: string[] }
+    legend: { data: string[]; selected?: Record<string, boolean> }
     xAxis: { data: string[] }
+    yAxis: { type: string }
     series: {
       name: string
       color: string
@@ -45,6 +50,8 @@ function read(option: EChartsOption | null) {
       tooltip?: { show: boolean }
       emphasis?: { disabled: boolean }
       lineStyle: { type?: string; width?: number }
+      markArea?: unknown
+      markPoint?: { data: { name: string; coord: [string, number] }[] }
       markLine?: {
         silent: boolean
         symbol: string
@@ -102,14 +109,16 @@ describe('projectionOption', () => {
     }
   })
 
-  it('prepends four stacked band series so the lines draw on top', () => {
+  it('prepends four stacked band series plus the median path so the lines draw on top', () => {
     const option = read(projectionOption({ ...DATA, bands: BANDS }))
-    expect(option.series).toHaveLength(7)
+    expect(option.series).toHaveLength(8)
+    // The upper outer wash wears the SAME name as its lower half (F3) — one legend entry.
     expect(option.series.map((s) => s.name)).toEqual([
       'mc-base',
       BAND_SERIES[0],
       BAND_SERIES[1],
-      `${BAND_SERIES[0]}-upper`,
+      BAND_SERIES[0],
+      MEDIAN_SERIES,
       ...PROJECTION_SERIES,
     ])
     // One stack, so echarts sums base + the three diffs back into p25 / p75 / p90.
@@ -155,63 +164,157 @@ describe('projectionOption', () => {
 
   it('names only the two washes that differ in the legend', () => {
     const option = read(projectionOption({ ...DATA, bands: BANDS }))
-    // 'mc-base' is invisible and the '-upper' wash is the same band as its lower half —
-    // an automatic legend would offer both, and one of them twice.
-    expect(option.legend.data).toEqual([...PROJECTION_SERIES, ...BAND_SERIES])
+    // 'mc-base' is invisible; the two outer washes share ONE name, so the legend lists it once.
+    expect(option.legend.data).toEqual([...PROJECTION_SERIES, MEDIAN_SERIES, ...BAND_SERIES])
     expect(option.legend.data).not.toContain('mc-base')
-    expect(option.legend.data).not.toContain(`${BAND_SERIES[0]}-upper`)
   })
 
   it('bands survive a missing target — the threshold leaves, the fan stays', () => {
     const option = read(projectionOption({ ...DATA, fi_target: null, bands: BANDS }))
-    expect(option.series).toHaveLength(6)
+    expect(option.series).toHaveLength(7)
     expect(option.legend.data).toEqual([
       PROJECTION_SERIES[0],
       PROJECTION_SERIES[1],
+      MEDIAN_SERIES,
       ...BAND_SERIES,
     ])
   })
 
-  it('tooltip reconstructs the band RANGES the silent washes cannot say (2026-08-20 revision)', () => {
+  it('F7: rows in series order, the FI target as a muted reference, band ranges as footer lines', () => {
     const option = projectionOption({ ...DATA, bands: BANDS }) as unknown as {
-      tooltip: { formatter?: (params: unknown) => string; valueFormatter?: unknown }
+      tooltip: { formatter: (p: unknown) => string }
     }
-    expect(option.tooltip.valueFormatter).toBeUndefined()
-    expect(typeof option.tooltip.formatter).toBe('function')
-    const html = option.tooltip.formatter!([
-      { seriesName: 'Projected', marker: 'M1', axisValueLabel: 'Sep 2026', dataIndex: 1, value: 104000 },
-      { seriesName: 'Growth only', marker: 'M2', dataIndex: 1, value: 100000 },
-      { seriesName: 'FI target', marker: 'M3', dataIndex: 1, value: 1500000 },
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: 'Projected', seriesType: 'line', axisValueLabel: 'Sep 2026', dataIndex: 1, value: 104000, color: PALETTE[0] },
+        { seriesName: 'Growth only', seriesType: 'line', value: 100000, color: PALETTE[1] },
+        { seriesName: 'FI target', seriesType: 'line', value: 1500000, color: MUTED },
+        { seriesName: MEDIAN_SERIES, seriesType: 'line', value: 104000, color: PALETTE[0] },
+        { seriesName: 'Projected', seriesType: 'line', value: null },
+      ]),
+    )
+    expect(parsed.head).toBe('Sep 2026')
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', 'Projected', '$104,000.00'],
+      ['row', 'Growth only', '$100,000.00'],
+      ['row', MEDIAN_SERIES, '$104,000.00'],
+      ['ref', 'FI target', '$1,500,000.00'],
     ])
-    expect(html).toContain('<strong>Sep 2026</strong>')
-    expect(html).toContain('M1Projected: $104,000.00')
-    expect(html).toContain('M3FI target: $1,500,000.00')
-    // Real percentile ABSOLUTES from the bands arrays — never the stack's diff values.
-    expect(html).toContain(`${BAND_SERIES[0]}: $90,000.00 – $120,000.00`)
-    expect(html).toContain(`${BAND_SERIES[1]}: $95,000.00 – $112,000.00`)
-    // The legend's own order: the wide band above the tight one.
-    expect(html.indexOf(BAND_SERIES[0])).toBeLessThan(html.indexOf(BAND_SERIES[1]))
+    // Real percentile ABSOLUTES from the bands arrays — never the stack's diff values; the
+    // wide band above the tight one (the legend's order).
+    expect(parsed.foot.map((line) => line.replace(/<i [^>]*><\/i>/, ''))).toEqual([
+      `${BAND_SERIES[0]}: $90,000.00 – $120,000.00`,
+      `${BAND_SERIES[1]}: $95,000.00 – $112,000.00`,
+    ])
+    expect(parsed.foot[0]).toContain('is-wash')
+    // No bands → no footer, same formatter family.
+    const plain = projectionOption(DATA) as unknown as {
+      tooltip: { formatter: (p: unknown) => string }
+    }
+    expect(
+      tooltipRows(plain.tooltip.formatter([{ seriesName: 'Projected', seriesType: 'line', dataIndex: 0, value: 1 }])).foot,
+    ).toEqual([])
+  })
+})
+
+describe('projectionOption — F3', () => {
+  const FI = {
+    ...DATA,
+    fi_month: '2026-10-01',
+    coast_fi_month: '2026-09-01',
+    fi_month_p10: '2026-09-01',
+    fi_month_p50: '2026-10-01',
+    fi_month_p90: null,
+    bands: BANDS,
+  }
+
+  it('rules FI and Coast FI on the Projected line beside the retirements, in the shared markLine', () => {
+    const option = read(
+      projectionOption({
+        ...FI,
+        retirements: [{ person_id: 2, name: 'Alex', month: '2026-09-01', monthly_drop: '1.00' }],
+      }),
+    )
+    const projected = option.series.find((s) => s.name === PROJECTION_SERIES[0])!
+    // Alex and Coast FI both land on Sep 2026, so they share ONE rule and one label —
+    // two entries would print two labels on the same pixel (charts/markLine.ts).
+    expect(projected.markLine?.data).toEqual([
+      { xAxis: 'Sep 2026', label: { formatter: 'Alex · Coast FI' } },
+      { xAxis: 'Oct 2026', label: { formatter: 'FI' } },
+    ])
+    expect(projected.markLine?.lineStyle).toEqual(MARK_LINE_STYLE)
   })
 
-  it('keeps the plain per-value tooltip without bands — back-compat', () => {
-    const option = projectionOption(DATA) as unknown as {
-      tooltip: { formatter?: unknown; valueFormatter?: unknown }
-    }
-    expect(option.tooltip.formatter).toBeUndefined()
-    expect(typeof option.tooltip.valueFormatter).toBe('function')
+  it('washes the months after FI and marks the percentile arrivals on the target line', () => {
+    const option = read(projectionOption(FI))
+    const projected = option.series.find((s) => s.name === PROJECTION_SERIES[0])!
+    expect(projected.markArea).toMatchObject({
+      data: [[{ xAxis: 'Oct 2026' }, { xAxis: 'Oct 2026' }]],
+      label: { formatter: 'After FI' },
+    })
+    const target = option.series.find((s) => s.name === PROJECTION_SERIES[2])!
+    // p90 is null → two marks; each sits ON the target value at its anchored month.
+    expect(target.markPoint?.data).toEqual([
+      { name: 'p10', coord: ['Sep 2026', 1500000] },
+      { name: 'p50', coord: ['Oct 2026', 1500000] },
+    ])
+    // No FI → no area, no marks, no rules (a stale payload or an unreachable target).
+    const none = read(projectionOption({ ...DATA, fi_month: null, coast_fi_month: null }))
+    expect(
+      none.series.every((s) => s.markArea === undefined && s.markPoint === undefined && s.markLine === undefined),
+    ).toBe(true)
   })
 
-  it('tooltip formatter drops non-finite rows and answers nothing with none', () => {
-    const formatter = projectionTooltipFormatter(BANDS)
-    expect(formatter([{ seriesName: 'Projected', value: null }])).toBe('')
-    const html = formatter([
-      { seriesName: 'Projected', axisValueLabel: 'Oct 2026', dataIndex: 2, value: 108000 },
-      { seriesName: 'FI target', value: Number.NaN },
-    ])
-    expect(html).toContain('Projected: $108,000.00')
-    expect(html).not.toContain('FI target')
-    expect(html).toContain(`${BAND_SERIES[0]}: $80,000.00 – $150,000.00`)
-    expect(html).toContain(`${BAND_SERIES[1]}: $92,000.00 – $125,000.00`)
+  it('draws the median path as a 1px line in the projection blue when the fan is on', () => {
+    const [, , , , median] = read(projectionOption({ ...DATA, bands: BANDS })).series
+    expect(median).toMatchObject({ name: MEDIAN_SERIES, color: PALETTE[0], lineStyle: { width: 1 } })
+    expect(median.data).toEqual([100000, 104000, 108000])
+    expect(read(projectionOption(DATA)).series.map((s) => s.name)).not.toContain(MEDIAN_SERIES)
+  })
+
+  it('Log: a log money axis and NO wash on the projected line; the fan stays', () => {
+    const linear = read(projectionOption({ ...DATA, bands: BANDS }))
+    const log = read(projectionOption({ ...DATA, bands: BANDS }, { log: true }))
+    expect(linear.yAxis.type).toBe('value')
+    expect(log.yAxis.type).toBe('log')
+    expect(linear.series.find((s) => s.name === PROJECTION_SERIES[0])?.areaStyle).toEqual({ opacity: 0.12 })
+    expect(log.series.find((s) => s.name === PROJECTION_SERIES[0])?.areaStyle).toBeUndefined()
+    expect(log.series.slice(0, 4).every((s) => s.stack === 'mc-band')).toBe(true)
+  })
+
+  it('Log: a month at or below $0 is a GAP, and its whole fan column leaves with it', () => {
+    // A log axis has no room for zero or below, and a stacked wash whose floor is gone has
+    // nothing to stand on — so the fan drops the column entire rather than half of it.
+    const DIP = {
+      ...DATA,
+      projected: ['-500.00', '104000.00', '108000.00'],
+      coast: ['0.00', '100000.00', '100000.00'],
+      bands: {
+        ...BANDS,
+        p10: ['-100.00', '90000.00', '80000.00'],
+        p50: ['-50.00', '104000.00', '108000.00'],
+      },
+    }
+    const log = read(projectionOption(DIP, { log: true }))
+    const at0 = (name: string) => log.series.find((s) => s.name === name)!.data[0]
+    expect(at0(PROJECTION_SERIES[0])).toBeNaN()
+    expect(at0(PROJECTION_SERIES[1])).toBeNaN()
+    expect(at0(MEDIAN_SERIES)).toBeNaN()
+    expect(log.series.slice(0, 4).every((s) => Number.isNaN(s.data[0]))).toBe(true)
+    // Every other month still draws — one bad floor is not a reason to blank the fan.
+    expect(log.series.slice(0, 4).every((s) => Number.isFinite(s.data[1]))).toBe(true)
+
+    // Linear is untouched: a negative month IS drawable there, and clipping it would lie.
+    const linear = read(projectionOption(DIP))
+    expect(linear.series.find((s) => s.name === PROJECTION_SERIES[0])!.data[0]).toBe(-500)
+    expect(linear.series.find((s) => s.name === PROJECTION_SERIES[1])!.data[0]).toBe(0)
+    expect(linear.series[0].data[0]).toBe(-100)
+  })
+
+  it('feeds the page’s legend picks back in', () => {
+    expect(read(projectionOption(DATA, { selected: { 'Growth only': false } })).legend.selected).toEqual({
+      'Growth only': false,
+    })
   })
 })
 
@@ -230,9 +333,10 @@ function readNw(option: EChartsOption | null) {
   expect(option).not.toBeNull()
   return option as unknown as {
     dataZoom: { type: string; startValue: number }[]
-    legend: { data: { name: string; icon?: string }[] }
+    legend: { type: string; selected?: Record<string, boolean>; data: { name: string; icon?: string }[] }
+    tooltip: { formatter: (p: unknown) => string }
     xAxis: { data: string[] }
-    yAxis: { type: string }
+    yAxis: { type: string; axisLabel: { formatter: unknown } }
     series: {
       name: string
       type: string
@@ -325,6 +429,39 @@ describe('netWorthProjectionOption', () => {
   })
 })
 
+describe('netWorthProjectionOption — grammar', () => {
+  it('log money axis with compact ticks, focus on the trend, page legend picks', () => {
+    const option = readNw(
+      netWorthProjectionOption(HISTORY, FIT, '2026-08-01', 1, { selected: { 'Quadratic trend': false } }),
+    )
+    expect(option.yAxis).toMatchObject({ type: 'log' })
+    expect(option.yAxis.axisLabel.formatter).toBe(compactMoney)
+    expect(option.legend.type).toBe('plain')
+    expect(option.legend.selected).toEqual({ 'Quadratic trend': false })
+    expect((option.series[1] as { emphasis?: unknown }).emphasis).toEqual({ focus: 'series' })
+  })
+
+  it('F7: rows in series order, NaN gaps dropped', () => {
+    const option = readNw(netWorthProjectionOption(HISTORY, FIT, '2026-08-01', 1))
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: NET_WORTH_PROJECTION_SERIES[0], seriesType: 'scatter', axisValueLabel: 'Jun 2026', value: 100000, color: PALETTE[0] },
+        { seriesName: NET_WORTH_PROJECTION_SERIES[1], seriesType: 'line', value: Number.NaN, color: PALETTE[1] },
+      ]),
+    )
+    expect(parsed.rows.map((r) => [r.label, r.value])).toEqual([[NET_WORTH_PROJECTION_SERIES[0], '$100,000.00']])
+  })
+
+  it('exports history and the fitted trend over the extended axis', () => {
+    const csv = netWorthProjectionCsv(HISTORY, FIT, '2026-08-01', 1)
+    expect(csv.headers).toEqual(['Month', 'Net worth', 'Quadratic trend'])
+    expect(csv.rows).toHaveLength(15)
+    expect(csv.rows[0]).toEqual(['2026-06-01', '100000.00', '100000.00'])
+    expect(csv.rows[14]).toEqual(['2027-08-01', '', '123456.00'])
+    expect(netWorthProjectionCsv(HISTORY, null, '2026-08-01', 1).rows[0]).toEqual(['2026-06-01', '100000.00', ''])
+  })
+})
+
 describe('projectionCsv', () => {
   const BASE = {
     months: ['2026-09-01', '2026-10-01'],
@@ -356,7 +493,6 @@ describe('projectionCsv', () => {
   })
 })
 
-import { MARK_LINE_LABEL, MARK_LINE_STYLE } from '../../charts/markLine'
 import { retirementMarkLine } from './projectionChartOptions'
 
 describe('retirementMarkLine', () => {

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { INK, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
+import { tooltipRows } from '../../testing/tooltipRows'
 import type { RsuGrantOut, VestOut } from '../../types/api'
 import {
   OTHER_GRANT_LABEL,
   vestingChartOption,
-  vestingTooltipFormatter,
+  vestingCsv,
+  vestingTotals,
 } from './vestingChartOptions'
 
 // --- the golden schedule ----------------------------------------------------------------
@@ -57,6 +59,8 @@ const FUTURE_REFRESH = vest({
 const GOLDEN_VESTS = [PAST_2024, PAST_2025, FUTURE_NEW_HIRE, FUTURE_REFRESH]
 const GOLDEN_GRANTS = [NEW_HIRE, REFRESH]
 const QUOTE = '183.2508'
+// Nov 18, 2026 is the one date in the golden schedule still ahead of this day.
+const TODAY = '2026-09-03'
 
 // --- option readers ---------------------------------------------------------------------
 // EChartsOption is a wide union; these narrow it once so the assertions stay about the
@@ -80,16 +84,6 @@ function categoriesOf(option: EChartsOption | null): string[] {
   return (option as unknown as { xAxis: { data: string[] } }).xAxis.data
 }
 
-function tooltipFormatterOf(option: EChartsOption | null): (params: unknown) => string {
-  return (option as unknown as { tooltip: { formatter: (params: unknown) => string } }).tooltip
-    .formatter
-}
-
-function moneyAxisLabelOf(option: EChartsOption | null): (value: number) => string {
-  return (option as unknown as { yAxis: { axisLabel: { formatter: (v: number) => string } } })
-    .yAxis.axisLabel.formatter
-}
-
 /** Nine grants, each vesting on the same two days — the fold's whole subject. */
 function manyGrants(count: number): { grants: RsuGrantOut[]; vests: VestOut[] } {
   const grants: RsuGrantOut[] = []
@@ -109,7 +103,7 @@ function manyGrants(count: number): { grants: RsuGrantOut[]; vests: VestOut[] } 
 
 describe('vestingChartOption', () => {
   it('stacks one bar series per grant, in the feed’s order, on the validated slots', () => {
-    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE)
+    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, { todayIso: TODAY })
     const series = seriesOf(option)
 
     expect(series).toHaveLength(2)
@@ -125,37 +119,38 @@ describe('vestingChartOption', () => {
     expect(series[1].barMaxWidth).toBe(22)
     // Hover borrows the ink the rest of the app's stacks use.
     expect((series[0] as { emphasis?: unknown }).emphasis).toEqual({
+      focus: 'series',
       itemStyle: { borderColor: INK },
     })
   })
 
   it('gives each distinct vest date one column, however many grants land on it', () => {
-    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE)
+    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, { todayIso: TODAY })
     // Three columns for four tranches: the last two share a day, and a shared day is one
     // bar with two segments — that IS the question the chart answers.
     expect(categoriesOf(option)).toEqual(['Nov 20, 2024', 'Feb 19, 2025', 'Nov 18, 2026'])
     const [newHire, refresh] = seriesOf(option)
     // A grant with nothing on a column contributes a real 0, so the stack stays aligned.
-    expect(refresh.data).toEqual([0, 0, 6963.53])
+    expect(refresh.data).toEqual([0, 0, expect.objectContaining({ value: 6963.53 })])
     expect(newHire.data?.length).toBe(3)
   })
 
   it('values a past vest at its stored close and a future one at the latest quote', () => {
-    const [newHire] = seriesOf(vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE))
+    const [newHire] = seriesOf(vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, { todayIso: TODAY }))
     // The first two are the server's own `value` (fmv x shares at the time), verbatim.
     // The third is 25 x 183.2508 = 4581.27 — the only figure this file computes, and it is
     // chart geometry, not a reported number.
-    expect(newHire.data).toEqual([11207.5, 3239.13, 4581.27])
+    expect(newHire.data).toEqual([11207.5, 3239.13, expect.objectContaining({ value: 4581.27 })])
   })
 
   it('rounds a future bar back to cents rather than shipping float dust', () => {
     // 38 x 183.2508 is 6963.530399999999 in binary; an axis label must not carry it.
-    const [, refresh] = seriesOf(vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE))
-    expect(String((refresh.data ?? [])[2])).toBe('6963.53')
+    const [, refresh] = seriesOf(vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, { todayIso: TODAY }))
+    expect(String((refresh.data![2] as { value: number }).value)).toBe('6963.53')
   })
 
   it('omits the FUTURE columns entirely when there is no quote to value them at', () => {
-    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, null)
+    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, null, { todayIso: TODAY })
     // A zero-height bar over Nov 2026 would say "this vest is worth nothing", which is a
     // different claim from "we do not know what it is worth" — so the day is not drawn.
     expect(categoriesOf(option)).toEqual(['Nov 20, 2024', 'Feb 19, 2025'])
@@ -174,7 +169,7 @@ describe('vestingChartOption', () => {
       vest_date: '2025-05-21', grant_id: 1, label: 'FY24 new hire', shares: 25, is_past: true,
     })
     const [newHire] = seriesOf(
-      vestingChartOption([PAST_2024, PAST_2025, unpriced], [NEW_HIRE], QUOTE),
+      vestingChartOption([PAST_2024, PAST_2025, unpriced], [NEW_HIRE], QUOTE, { todayIso: TODAY }),
     )
     expect(newHire.data).toEqual([11207.5, 3239.13, 0])
   })
@@ -184,7 +179,7 @@ describe('vestingChartOption', () => {
       vest_date: '2025-05-21', grant_id: 1, label: 'FY24 new hire', shares: 0,
       fmv: '150.0000', value: '0.00', is_past: true,
     })
-    const option = vestingChartOption([PAST_2024, PAST_2025, empty], [NEW_HIRE], QUOTE)
+    const option = vestingChartOption([PAST_2024, PAST_2025, empty], [NEW_HIRE], QUOTE, { todayIso: TODAY })
     expect(categoriesOf(option)).toEqual(['Nov 20, 2024', 'Feb 19, 2025', 'May 21, 2025'])
     expect(seriesOf(option)[0].data).toEqual([11207.5, 3239.13, 0])
   })
@@ -200,7 +195,7 @@ describe('vestingChartOption', () => {
     const second = vest({
       vest_date: '2025-05-21', grant_id: 1, label: 'FY24 new hire', shares: 25, is_past: true,
     })
-    expect(vestingChartOption([first, second], [NEW_HIRE], QUOTE)).toBeNull()
+    expect(vestingChartOption([first, second], [NEW_HIRE], QUOTE, { todayIso: TODAY })).toBeNull()
 
     // One PRICED zero among them is a figure the server actually computed, so the chart is
     // drawn — the zero-share-tranche rule above, seen from the other side.
@@ -208,14 +203,14 @@ describe('vestingChartOption', () => {
       vest_date: '2025-08-20', grant_id: 1, label: 'FY24 new hire', shares: 0,
       fmv: '150.0000', value: '0.00', is_past: true,
     })
-    const option = vestingChartOption([first, second, priced], [NEW_HIRE], QUOTE)
+    const option = vestingChartOption([first, second, priced], [NEW_HIRE], QUOTE, { todayIso: TODAY })
     expect(categoriesOf(option)).toEqual(['Feb 19, 2025', 'May 21, 2025', 'Aug 20, 2025'])
     expect(seriesOf(option)[0].data).toEqual([0, 0, 0])
   })
 
   it('folds the ninth grant and beyond into one Other series', () => {
     const { grants, vests } = manyGrants(9)
-    const series = seriesOf(vestingChartOption(vests, grants, QUOTE))
+    const series = seriesOf(vestingChartOption(vests, grants, QUOTE, { todayIso: TODAY }))
 
     // Eight validated slots and never a ninth: the palette's order is the CVD mechanism and
     // cycling back to slot 1 would put two grants in one hue.
@@ -230,7 +225,7 @@ describe('vestingChartOption', () => {
 
   it('sums every folded grant into the one Other stack', () => {
     const { grants, vests } = manyGrants(10)
-    const series = seriesOf(vestingChartOption(vests, grants, QUOTE))
+    const series = seriesOf(vestingChartOption(vests, grants, QUOTE, { todayIso: TODAY }))
     expect(series).toHaveLength(9)
     // Grants 9 and 10: 900 + 1000, then 90 + 100.
     expect(series[8].data).toEqual([1900, 190])
@@ -238,56 +233,122 @@ describe('vestingChartOption', () => {
 
   it('does not fold at exactly eight grants — every slot is still its own', () => {
     const { grants, vests } = manyGrants(8)
-    const series = seriesOf(vestingChartOption(vests, grants, QUOTE))
+    const series = seriesOf(vestingChartOption(vests, grants, QUOTE, { todayIso: TODAY }))
     expect(series).toHaveLength(8)
     expect(series.map((s) => s.name)).toEqual(grants.map((g) => g.label))
     expect(series.map((s) => s.color)).toEqual([...PALETTE])
   })
 
   it('returns null under two vests so the caller can render an empty note', () => {
-    expect(vestingChartOption([], [], QUOTE)).toBeNull()
-    expect(vestingChartOption([PAST_2024], [NEW_HIRE], QUOTE)).toBeNull()
+    expect(vestingChartOption([], [], QUOTE, { todayIso: TODAY })).toBeNull()
+    expect(vestingChartOption([PAST_2024], [NEW_HIRE], QUOTE, { todayIso: TODAY })).toBeNull()
   })
 
   it('returns null when the quote leaves nothing at all to draw', () => {
     // Every tranche still ahead and no price to value them at: two vests on the wire, zero
     // columns after the omission — an axis with no categories is not a chart.
-    expect(vestingChartOption([FUTURE_NEW_HIRE, FUTURE_REFRESH], GOLDEN_GRANTS, null)).toBeNull()
+    expect(vestingChartOption([FUTURE_NEW_HIRE, FUTURE_REFRESH], GOLDEN_GRANTS, null, { todayIso: TODAY })).toBeNull()
   })
 
   it('ignores a vest whose grant is not in the echo', () => {
     // The router drops an unschedulable grant from BOTH lists, so this is a torn feed only —
     // but a series-less vest must not open a column no bar can reach.
     const orphan = vest({ vest_date: '2027-02-17', grant_id: 99, label: 'gone', shares: 10 })
-    const option = vestingChartOption([...GOLDEN_VESTS, orphan], GOLDEN_GRANTS, QUOTE)
+    const option = vestingChartOption([...GOLDEN_VESTS, orphan], GOLDEN_GRANTS, QUOTE, { todayIso: TODAY })
     expect(categoriesOf(option)).toEqual(['Nov 20, 2024', 'Feb 19, 2025', 'Nov 18, 2026'])
   })
 
-  it('formats the axis and wires the total-carrying tooltip formatter', () => {
-    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE)
-    expect(moneyAxisLabelOf(option)(11207.5)).toBe('$11.2K')
-    // The exported formatter itself, not a per-value one: the hover's last row is the
-    // stack's TOTAL (2026-08-21 user request), which needs the whole params list.
-    expect(tooltipFormatterOf(option)).toBe(vestingTooltipFormatter)
+  it('F7: grant rows by value, a Total, "(est.)" on future rows; shadow pointer', () => {
+    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, { todayIso: TODAY })! as unknown as {
+      tooltip: { axisPointer: unknown; formatter: (p: unknown) => string }
+    }
+    expect(option.tooltip.axisPointer).toEqual({ type: 'shadow' })
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: 'FY24 new hire', seriesType: 'bar', axisValueLabel: 'Nov 18, 2026', value: 4581.27, color: PALETTE[0], data: { value: 4581.27, estimate: true } },
+        { seriesName: 'FY26 refresh', seriesType: 'bar', value: 6963.53, color: PALETTE[1], data: { value: 6963.53, estimate: true } },
+      ]),
+    )
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', 'FY26 refresh (est.)', '$6,963.53'],
+      ['row', 'FY24 new hire (est.)', '$4,581.27'],
+      ['total', 'Total', '$11,544.80'],
+    ])
+    const past = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: 'FY24 new hire', seriesType: 'bar', axisValueLabel: 'Nov 20, 2024', value: 11207.5, data: 11207.5 },
+      ]),
+    )
+    expect(past.rows[0].label).toBe('FY24 new hire')
+  })
+})
+
+describe('F6', () => {
+  it('hatches future columns tone-on-tone and marks Today on the first series', () => {
+    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, { todayIso: TODAY })! as unknown as {
+      series: { data: unknown[]; markLine?: { data: { xAxis: string; label: { formatter: string } }[] } }[]
+    }
+    const future = option.series[1].data[2] as {
+      value: number
+      itemStyle: { decal: { color: string; rotation: number } }
+      estimate: boolean
+    }
+    expect(future.estimate).toBe(true)
+    expect(future.itemStyle.decal).toMatchObject({
+      symbol: 'rect',
+      color: SURFACE,
+      dashArrayX: [1, 0],
+      dashArrayY: [2, 4],
+    })
+    expect(typeof option.series[0].data[0]).toBe('number') // past columns are plain values
+    expect(option.series[0].markLine?.data).toEqual([
+      { xAxis: 'Nov 18, 2026', label: { formatter: 'Today' } },
+    ])
+    expect(option.series[1].markLine).toBeUndefined()
+    // Everything past → no rule to draw.
+    const allPast = vestingChartOption([PAST_2024, PAST_2025], [NEW_HIRE], QUOTE, { todayIso: TODAY })! as unknown as {
+      series: { markLine?: unknown }[]
+    }
+    expect(allPast.series[0].markLine).toBeUndefined()
   })
 
-  it('totals the hovered bar and escapes user-text grant labels', () => {
-    const html = vestingTooltipFormatter([
-      {
-        seriesName: '<b>Offer</b> letter',
-        marker: '<span class="m"></span>',
-        axisValueLabel: 'Nov 18, 2026',
-        value: 100.5,
-      },
-      { seriesName: 'Refresh', marker: '', value: 49.5 },
-    ])
-    expect(html).toContain('<strong>Nov 18, 2026</strong>')
-    // A grant label is user text: it must arrive entity-encoded, never as live markup.
-    expect(html).toContain('&lt;b&gt;Offer&lt;/b&gt; letter: $100.50')
-    expect(html).not.toContain('<b>Offer</b>')
-    expect(html).toContain('Refresh: $49.50')
-    expect(html).toContain('<strong>Total: $150.00</strong>')
-    // Nothing finite under the pointer (echarts can hand an empty hover) -> no tooltip.
-    expect(vestingTooltipFormatter([{ value: undefined }])).toBe('')
+  it('vestingTotals: vested at stored closes only — the unvested figure is the server’s', () => {
+    expect(vestingTotals(GOLDEN_VESTS)).toEqual({ vested: 14446.63 })
+    // An unpriced past tranche contributes nothing rather than inventing a figure.
+    expect(vestingTotals([PAST_2024])).toEqual({ vested: 11207.5 })
+  })
+
+  it('fades an estimate instead of hatching it when Chart patterns are on', () => {
+    const patterned = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, {
+      todayIso: TODAY,
+      patterns: true,
+    })! as unknown as { series: { data: unknown[] }[] }
+    const future = patterned.series[1].data[2] as {
+      value: number
+      itemStyle: Record<string, unknown>
+      estimate: boolean
+    }
+    // echarts' auto-texture already covers every bar under patterns, so a decal here would
+    // be a hatch on a hatch; the flag (and the "(est.)" tooltip row) still carry the meaning.
+    expect(future.itemStyle).toEqual({ opacity: 0.55 })
+    expect(future.estimate).toBe(true)
+    expect(typeof patterned.series[0].data[0]).toBe('number') // past columns stay plain
+  })
+
+  it('vestingCsv lists every tranche with its value and whether it is an estimate', () => {
+    const csv = vestingCsv(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE)
+    expect(csv.headers).toEqual(['Vest date', 'Grant', 'Shares', 'Value', 'Estimate'])
+    expect(csv.rows[0]).toEqual(['2024-11-20', 'FY24 new hire', 100, '11207.50', 'no'])
+    expect(csv.rows[3]).toEqual(['2026-11-18', 'FY26 refresh', 38, '6963.53', 'yes'])
+    expect(vestingCsv(GOLDEN_VESTS, GOLDEN_GRANTS, null).rows[3][3]).toBe('')
+  })
+
+  it('feeds the panel’s legend picks back in and staggers the stack', () => {
+    const option = vestingChartOption(GOLDEN_VESTS, GOLDEN_GRANTS, QUOTE, {
+      todayIso: TODAY,
+      selected: { 'FY26 refresh': false },
+    })! as unknown as { legend: { selected: unknown }; series: { animationDelay: () => number }[] }
+    expect(option.legend.selected).toEqual({ 'FY26 refresh': false })
+    expect(option.series[1].animationDelay()).toBe(12)
   })
 })

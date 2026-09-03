@@ -71,10 +71,24 @@ export const todayRule = (isos: string[], todayIso: string, format: (iso: string
 export const arrivalRule = (months: string[], iso: string | null | undefined, label: string) =>
   ruleAt(months, iso, label, formatMonth, monthBucket)
 
-/** The one `markLine` a series carries for ALL its rules (echarts allows one per series). */
+/** The one `markLine` a series carries for ALL its rules (echarts allows one per series).
+ *  Entries that land on the SAME category MERGE into one rule labelled with both names
+ *  (' · '): echarts draws one label per data entry at one position, so retiring in the
+ *  month FI arrives would otherwise print two labels on top of each other. */
 export function annotationRules(entries: (RuleEntry | undefined)[]) {
-  const data = entries.filter((entry): entry is RuleEntry => entry !== undefined)
-  if (data.length === 0) return undefined
+  const placed = entries.filter((entry): entry is RuleEntry => entry !== undefined)
+  if (placed.length === 0) return undefined
+  const byCategory = new Map<string, string[]>()
+  for (const entry of placed) {
+    const labels = byCategory.get(entry.xAxis)
+    if (labels === undefined) byCategory.set(entry.xAxis, [entry.label.formatter])
+    else labels.push(entry.label.formatter)
+  }
+  // Map keeps insertion order, so the rules stay in the order the caller handed them in.
+  const data: RuleEntry[] = [...byCategory].map(([xAxis, labels]) => ({
+    xAxis,
+    label: { formatter: labels.join(' · ') },
+  }))
   return {
     silent: true as const,
     symbol: 'none' as const,
@@ -94,8 +108,18 @@ export function afterArea(fromLabel: string, toLabel: string, label: string) {
   }
 }
 
-/** p10/p50/p90 arrival marks on a reference line: MUTED circles, INK border, named labels. */
+/** p10/p50/p90 arrival marks on a reference line: MUTED circles, INK border, named labels.
+ *  Points sharing a coordinate merge into ONE circle named for both (' · '): two
+ *  percentiles arriving in the same month would otherwise stack two circles and two labels
+ *  on the same pixel. */
 export function percentileMarks(points: { name: string; label: string; value: number }[]) {
+  const byCoord = new Map<string, { coord: [string, number]; names: string[] }>()
+  for (const point of points) {
+    const key = `${point.label}|${point.value}`
+    const seen = byCoord.get(key)
+    if (seen === undefined) byCoord.set(key, { coord: [point.label, point.value], names: [point.name] })
+    else seen.names.push(point.name)
+  }
   return {
     silent: true as const,
     symbol: 'circle' as const,
@@ -108,7 +132,10 @@ export function percentileMarks(points: { name: string; label: string; value: nu
       fontSize: 11,
       formatter: (p: { name?: string }) => p.name ?? '',
     },
-    data: points.map((p) => ({ name: p.name, coord: [p.label, p.value] as [string, number] })),
+    data: [...byCoord.values()].map((entry) => ({
+      name: entry.names.join(' · '),
+      coord: entry.coord,
+    })),
   }
 }
 
