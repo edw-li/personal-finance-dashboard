@@ -3,8 +3,10 @@
 // fetching (the *ChartOptions law) — the option builders under src/components/ spread
 // SANKEY_MARKS into their series and hand their OWN nodes/links to the tooltip factory.
 import type { SankeySeriesOption } from 'echarts/charts'
+import type { ExportTable } from '../utils/download'
 import { escapeHtml, formatCurrency } from '../utils/format'
 import { INK } from './theme'
+import { brandTooltip } from './tooltip'
 
 // The node/link vocabulary the builders emit. `value` on a node is the PAGE's own
 // displayed figure for that entity (the table line / matrix cell), never a link sum —
@@ -100,7 +102,9 @@ export function makeSankeyTooltipFormatter(
   const linkValue = new Map(
     links.map((link) => [`${link.source}\u0000${link.target}`, link.value]),
   )
-  return (params: unknown): string => {
+  // Branded (charts/tooltip.ts): this factory already conforms to §7 — value first, name
+  // second, escaped — so conformance accepts it alongside axisTooltip/itemTooltip.
+  return brandTooltip((params: unknown): string => {
     const p = (Array.isArray(params) ? params[0] : params) as SankeyTooltipParam | null
     if (!p) return ''
     if (p.dataType === 'edge') {
@@ -114,5 +118,17 @@ export function makeSankeyTooltipFormatter(
     const value = nodeValue.get(p.name ?? '')
     if (value === undefined) return ''
     return `<strong>${formatCurrency(value)}</strong><br/>${escapeHtml(p.name ?? '')}`
+  })
+}
+
+/** The flow as a table (F12 "sankeys (nodes + links)"): every node with the PAGE's own
+ *  figure, then every link — the same figures the tooltip echoes. */
+export function sankeyCsv(nodes: SankeyNode[], links: SankeyLink[]): ExportTable {
+  return {
+    headers: ['Kind', 'Source', 'Target', 'Value'],
+    rows: [
+      ...nodes.map((node) => ['node', node.name, '', node.value.toFixed(2)]),
+      ...links.map((link) => ['link', link.source, link.target, link.value.toFixed(2)]),
+    ],
   }
 }

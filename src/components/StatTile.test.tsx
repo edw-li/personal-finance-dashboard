@@ -168,8 +168,9 @@ describe('countUp', () => {
     expect(mid).toBeGreaterThan(0)
     expect(mid).toBeLessThan(100)
 
-    // Past the duration: the override clears and the CALLER's exact string renders.
-    act(() => frames[frames.length - 1](400))
+    // Past the duration (450ms now — the house clock, spec §11): the override clears and the
+    // CALLER's exact string renders.
+    act(() => frames[frames.length - 1](500))
     expect(valueEl.textContent).toBe('$100.00')
   })
 })

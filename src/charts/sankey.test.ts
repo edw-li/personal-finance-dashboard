@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter } from './sankey'
+import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from './sankey'
 import type { SankeyLink, SankeyNode } from './sankey'
 import { INK } from './theme'
+import { isGrammarTooltip } from './tooltip'
 
 describe('claimNodeName', () => {
   it('passes a free name through and registers it as taken', () => {
@@ -70,5 +71,20 @@ describe('makeSankeyTooltipFormatter', () => {
     expect(format(null)).toBe('')
     // echarts hands item-trigger formatters a lone object, but tolerate the array form.
     expect(format([{ dataType: 'node', name: 'Net pay' }])).toContain('$5,000.00')
+  })
+})
+
+describe('sankey grammar conformance', () => {
+  it('brands its formatter and exports nodes + links as one table', () => {
+    const nodes = [{ name: 'Net pay', value: 6000, itemStyle: { color: '#000000' } }]
+    const links = [{ source: 'Net pay', target: 'Rent', value: 2000 }]
+    expect(isGrammarTooltip(makeSankeyTooltipFormatter(nodes, links))).toBe(true)
+    expect(sankeyCsv(nodes, links)).toEqual({
+      headers: ['Kind', 'Source', 'Target', 'Value'],
+      rows: [
+        ['node', 'Net pay', '', '6000.00'],
+        ['link', 'Net pay', 'Rent', '2000.00'],
+      ],
+    })
   })
 })

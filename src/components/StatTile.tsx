@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import InfoHint from './InfoHint'
+import { prefersReducedMotion } from './useReducedMotion'
 import './panels.css'
 
 interface CountUp {
@@ -7,24 +8,19 @@ interface CountUp {
   format: (n: number) => string
 }
 
-// The settle runs only when every leg holds; the useState initializer and the effect
-// share this single predicate so the zero-frame can never strand (an initializer that
-// showed $0 with no animation coming would freeze there).
-//
-// A FUNCTION, not a module const, so tests can stub `matchMedia` per-case — contrast with
-// EChart's module-scope read, which predates this need.
+// The settle runs only when every leg holds; the useState initializer and the effect share
+// this single predicate so the zero-frame can never strand. The reduced-motion read is the
+// shared one (useReducedMotion.ts) — a synchronous call, because it runs in an initializer.
 function shouldCountUp(countUp: CountUp | undefined): countUp is CountUp {
   return (
     countUp !== undefined &&
     typeof requestAnimationFrame === 'function' &&
-    !(
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    )
+    !prefersReducedMotion()
   )
 }
 
-const COUNT_UP_MS = 350
+// The house entrance clock (chart spec §11) — the same 450ms the charts animate in on.
+const COUNT_UP_MS = 450
 
 // Stat-tile contract (dataviz): label · value · optional delta. A delta speaks on three
 // redundant channels, never on colour alone (CVD-safe): the GLYPH carries which way the
@@ -54,7 +50,7 @@ export default function StatTile({
   direction?: 'up' | 'down'
   hint?: string
   hero?: boolean
-  /** Settle the value from 0 over ~350ms on a FRESH first paint (2026-08-27 spec §8).
+  /** Settle the value from 0 over ~450ms on a FRESH first paint (2026-08-27 spec §8).
    *  Callers gate it themselves (never on cached paints); the final frame renders
    *  `value` exactly. Additive — omitted means today's static render. */
   countUp?: CountUp

@@ -146,11 +146,11 @@ describe('shared dark hexes', () => {
     expect(recolorOption([DARK.sequential[6], 7], lightFromDark)).toEqual([LIGHT.palette[0], 7])
   })
 
-  // Position mapping is only safe while the two scales are the same length and every dark
-  // hex has a light twin. tokens.ts makes `sequential` a 12-tuple to force the first half
-  // at compile time; this is the runtime half (a duplicated hex inside one palette would
-  // silently shrink the map without changing any length).
-  it('every dark chart hex has a light twin in the map', () => {
+  // Position mapping is only safe while the two scales are the same length, every dark
+  // hex has a light twin AND no hex repeats inside a scale: a duplicate would make two
+  // positions share one Map key, so the earlier position's light twin would be lost —
+  // and the "every hex is in the map" check below would still pass. Hence the Set sizes.
+  it('every dark chart hex has a light twin in the map, and no scale repeats a hex', () => {
     for (const hex of DARK.sequential) {
       expect(lightFromDark.get('ramp:' + hex.toLowerCase())).toBeDefined()
       expect(lightFromDark.get(hex.toLowerCase())).toBeDefined()
@@ -158,5 +158,22 @@ describe('shared dark hexes', () => {
     for (const hex of DARK.palette) expect(lightFromDark.get(hex.toLowerCase())).toBeDefined()
     expect(DARK.sequential).toHaveLength(LIGHT.sequential.length)
     expect(DARK.palette).toHaveLength(LIGHT.palette.length)
+    expect(new Set(DARK.sequential.map((h) => h.toLowerCase())).size).toBe(DARK.sequential.length)
+    expect(new Set(LIGHT.sequential.map((h) => h.toLowerCase())).size).toBe(LIGHT.sequential.length)
+    expect(new Set(DARK.palette.map((h) => h.toLowerCase())).size).toBe(DARK.palette.length)
+    expect(new Set(LIGHT.palette.map((h) => h.toLowerCase())).size).toBe(LIGHT.palette.length)
+  })
+
+  // The diverging tuple joins the map like `sequential`: by POSITION inside an array (the
+  // ramp rule) and as lone colors. tokens.test.ts guarantees no step shares a hex with any
+  // other token, so the tuple never enters the election above.
+  it('maps the diverging ramp by position and as lone colors', () => {
+    expect(recolorOption({ inRange: { color: [...DARK.diverging] } }, lightFromDark)).toEqual({
+      inRange: { color: [...LIGHT.diverging] },
+    })
+    expect(recolorOption(DARK.diverging[0], lightFromDark)).toBe(LIGHT.diverging[0])
+    expect(recolorOption(DARK.diverging[8], lightFromDark)).toBe(LIGHT.diverging[8])
+    expect(DARK.diverging).toHaveLength(LIGHT.diverging.length)
+    expect(new Set(DARK.diverging.map((h) => h.toLowerCase())).size).toBe(DARK.diverging.length)
   })
 })

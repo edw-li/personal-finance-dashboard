@@ -18,6 +18,8 @@ interface FakeChartLike {
 vi.mock('../charts/echarts', () => {
   class FakeChart {
     handlers: Record<string, (params?: unknown) => void> = {}
+    // echarts sets `group` on the instance; connect() then links every chart wearing it.
+    group = ''
     setOption = vi.fn()
     dispose = vi.fn()
     resize = vi.fn()
@@ -40,6 +42,7 @@ vi.mock('../charts/echarts', () => {
         instances.push(chart)
         return chart
       }),
+      connect: vi.fn(),
     },
     // The theme bridge: the real pair registers an echarts theme and hands back its name.
     // Registration itself is charts/theme.test.ts's subject; here the NAME is what EChart
@@ -53,7 +56,12 @@ vi.mock('../charts/echarts', () => {
   }
 })
 // Identity pass-through: quiesceRipples is reduced-motion armor, not this file's subject.
-vi.mock('../charts/motion', () => ({ quiesceRipples: (option: unknown) => option }))
+// MOTION comes through as the real block — charts/theme.ts spreads it into every built
+// theme, so a mock that omitted it would spread `undefined` and break registration.
+vi.mock('../charts/motion', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../charts/motion')>()),
+  quiesceRipples: (option: unknown) => option,
+}))
 vi.mock('../utils/download', () => ({
   toCsv: vi.fn(() => 'CSV-BODY'),
   downloadDataUrl: vi.fn(),
@@ -422,5 +430,59 @@ describe('EChart — theme bridge', () => {
       series: { itemStyle: { color: string } }[]
     }
     expect(applied.series[0].itemStyle.color).toBe(DARK.positive)
+  })
+})
+
+describe('EChart — group, decals, live reduced motion (chart grammar)', () => {
+  const connect = () => vi.mocked((chartsModule.echarts as unknown as { connect: (g: string) => void }).connect)
+
+  it('sets chart.group and connects on every init — the theme re-init included', async () => {
+    function Harness() {
+      const { setTheme } = useTheme()
+      return (
+        <>
+          <button onClick={() => setTheme('light')}>go light</button>
+          <EChart option={OPTION} group="net-worth" />
+        </>
+      )
+    }
+    render(<ThemeProvider><Harness /></ThemeProvider>)
+    expect((lastChart() as unknown as { group: string }).group).toBe('net-worth')
+    expect(connect()).toHaveBeenCalledWith('net-worth')
+    act(() => screen.getByText('go light').click())
+    await waitFor(() => expect(connect()).toHaveBeenCalledTimes(2))
+    expect((lastChart() as unknown as { group: string }).group).toBe('net-worth')
+  })
+
+  it('does not connect a chart without a group', () => {
+    render(<EChart option={OPTION} />)
+    expect(connect()).not.toHaveBeenCalled()
+  })
+
+  it('merges the aria decal when Chart patterns is on, with echarts’ own label generation OFF', () => {
+    localStorage.setItem('finance.chartDecals', 'on')
+    render(<EChart option={{ series: [] } as EChartsOption} ariaLabel="Test" />)
+    const [applied] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
+    expect(applied.aria).toEqual({ enabled: true, label: { enabled: false }, decal: { show: true } })
+    localStorage.clear()
+    cleanup()
+    render(<EChart option={{ series: [] } as EChartsOption} />)
+    expect('aria' in (lastChart().setOption.mock.calls[0] as [Record<string, unknown>])[0]).toBe(false)
+  })
+
+  it('re-applies animation: false when the OS preference flips while mounted', () => {
+    let listeners: (() => void)[] = []
+    const media = {
+      matches: false,
+      addEventListener: (_: string, cb: () => void) => { listeners.push(cb) },
+      removeEventListener: (_: string, cb: () => void) => { listeners = listeners.filter((l) => l !== cb) },
+    }
+    vi.stubGlobal('matchMedia', () => media)
+    render(<EChart option={{ series: [] } as EChartsOption} />)
+    const chart = lastChart()
+    expect('animation' in (chart.setOption.mock.calls[0] as [Record<string, unknown>])[0]).toBe(false)
+    act(() => { media.matches = true; listeners.forEach((l) => l()) })
+    const last = chart.setOption.mock.calls.at(-1) as [Record<string, unknown>]
+    expect(last[0].animation).toBe(false)
   })
 })

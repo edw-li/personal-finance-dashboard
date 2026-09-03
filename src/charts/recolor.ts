@@ -10,7 +10,10 @@
 //     a CSS `linear-gradient(...)` string — are not in the map and pass through;
 //   • non-plain objects (Date, typed arrays, an echarts `graphic.LinearGradient`
 //     INSTANCE) pass through by identity: a spread copy would drop their prototype and
-//     hand echarts a lookalike it no longer recognizes;
+//     hand echarts a lookalike it no longer recognizes. The cost is real for the gradient
+//     instance — its colorStops DO carry hexes and they are NOT recolored — which is why
+//     builders must write gradients as plain `{ type: 'linear', colorStops }` literals
+//     (walked like any object) and never `new echarts.graphic.LinearGradient(...)`;
 //   • functions pass through by identity, so a formatter's OUTPUT is out of reach —
 //     e.g. projectionChartOptions.ts builds tooltip HTML with PALETTE[0] baked into a
 //     style attribute, and that swatch stays dark-blue under the light theme. Colors
@@ -55,14 +58,22 @@ const SCALARS: (keyof ThemeTokens)[] = [
 const RAMP = 'ramp:'
 
 // BLOCK ORDER IS THE ELECTION: later writes overwrite earlier ones for a shared hex, so
-// scalars → sequential → palette is exactly what makes palette[0] (not sequential[6]) and
-// palette[3] (not warn) the lone-color winners documented above. Reordering re-elects.
+// scalars → sequential → diverging → palette is exactly what makes palette[0] (not
+// sequential[6]) and palette[3] (not warn) the lone-color winners documented above.
+// Reordering re-elects.
 function pairs(from: ThemeTokens, to: ThemeTokens): Map<string, string> {
   const map = new Map<string, string>()
   for (const key of SCALARS) map.set((from[key] as string).toLowerCase(), to[key] as string)
   from.sequential.forEach((hex, i) => {
     map.set(RAMP + hex.toLowerCase(), to.sequential[i])
     map.set(hex.toLowerCase(), to.sequential[i])
+  })
+  // Diverging steps are distinct from every other token (tokens.test.ts), so their order
+  // in this block is not an election — it is just the same ramp+lone registration the
+  // sequential scale gets, so a visualMap `inRange.color` array recolors by position.
+  from.diverging.forEach((hex, i) => {
+    map.set(RAMP + hex.toLowerCase(), to.diverging[i])
+    map.set(hex.toLowerCase(), to.diverging[i])
   })
   from.palette.forEach((hex, i) => map.set(hex.toLowerCase(), to.palette[i]))
   return map
@@ -104,8 +115,9 @@ export function recolorOption(value: unknown, map: Map<string, string>): unknown
     // Only `{}` literals and null-prototype bags are safe to rebuild key-by-key. A Date,
     // a typed array (echarts accepts them as series data) or an echarts LinearGradient
     // INSTANCE would come back as a plain lookalike with its prototype — and so its
-    // methods and echarts' own type checks — gone. None of them can hold a token hex in
-    // an enumerable string field, so passing them through by identity costs nothing.
+    // methods and echarts' own type checks — gone. Dates and typed arrays carry no color;
+    // a gradient INSTANCE does, and it stays dark under the light theme — hence the
+    // plain-literal rule for gradients in the header comment.
     const proto: unknown = Object.getPrototypeOf(value)
     if (proto !== Object.prototype && proto !== null) return value
     const out: Record<string, unknown> = {}

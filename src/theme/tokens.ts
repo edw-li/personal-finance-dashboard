@@ -40,6 +40,10 @@ export interface ThemeTokens {
     string, string, string, string, string, string,
     string, string, string, string, string, string,
   ]
+  /** 9 steps: orange arm (0–3) ← neutral midpoint (4) → blue arm (5–8). Used ONLY through
+   *  charts/scales.ts `divergingVisualMap` (the heatmap's "vs average" mode, the
+   *  heat-treemap). Fixed length like the other ramps: recolor.ts maps by position. */
+  diverging: readonly [string, string, string, string, string, string, string, string, string]
 }
 
 export const DARK: ThemeTokens = {
@@ -61,6 +65,9 @@ export const DARK: ThemeTokens = {
   sequential: [
     '#0d366b', '#104281', '#184f95', '#1c5cab', '#256abf', '#2a78d6',
     '#3987e5', '#5598e7', '#6da7ec', '#86b6ef', '#9ec5f4', '#cde2fb',
+  ],
+  diverging: [
+    '#f28b57', '#e57236', '#b85a2a', '#6b4436', '#272c37', '#2b4a7a', '#2f6bb8', '#4a8ee6', '#7fb2f0',
   ],
 }
 
@@ -96,6 +103,9 @@ export const LIGHT: ThemeTokens = {
     '#e8f0fb', '#d3e2f7', '#bcd3f2', '#a3c2ec', '#89b0e6', '#6f9ddf',
     '#5589d6', '#3f76cb', '#2f65b8', '#255399', '#1d427c', '#153260',
   ],
+  diverging: [
+    '#a63f12', '#c8501f', '#e07a4e', '#f2b899', '#e5eaf1', '#a9c6f0', '#7aa5e4', '#4a7fd0', '#2559a8',
+  ],
 }
 
 /** The CSS custom-property declarations a palette expands to — the shape index.css must
@@ -117,6 +127,7 @@ export function cssDeclarations(t: ThemeTokens): string[] {
     `--axis-line: ${t.axisLine};`,
     `--other-series: ${t.otherSeries};`,
     ...t.palette.map((hex, i) => `--chart-${i + 1}: ${hex};`),
+    ...t.diverging.map((hex, i) => `--diverge-${i + 1}: ${hex};`),
   ]
 }
 

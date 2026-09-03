@@ -28,6 +28,16 @@ describe('chart theme bridge', () => {
     expect(light.valueAxis.splitLine.lineStyle.color).toBe(LIGHT.gridLine)
   })
 
+  it('carries the house motion block and the tooltip class into every theme', () => {
+    for (const theme of [buildTheme(DARK), buildTheme(LIGHT)]) {
+      expect(theme.animationDuration).toBe(450)
+      expect(theme.animationEasing).toBe('cubicOut')
+      expect(theme.animationDurationUpdate).toBe(300)
+      expect(theme.animationEasingUpdate).toBe('cubicInOut')
+      expect(theme.tooltip.className).toBe('chart-tip')
+    }
+  })
+
   it('registers the RESOLVED palette under the versioned name it returns', () => {
     const name = registerThemeVersion('light', 3)
     expect(name).toBe('finance-3')
@@ -41,6 +51,8 @@ describe('chart theme bridge', () => {
 
   it('registers DARK for the dark palette under the same version-0 name as import time', () => {
     expect(registerThemeVersion('dark', 0)).toBe('finance')
-    expect(vi.mocked(echarts.registerTheme)).toHaveBeenCalledWith('finance', FINANCE_THEME)
+    // LAST call, not any call: echarts.ts already registered 'finance' at import, so a
+    // registerThemeVersion that registered nothing would still satisfy toHaveBeenCalledWith.
+    expect(vi.mocked(echarts.registerTheme)).toHaveBeenLastCalledWith('finance', FINANCE_THEME)
   })
 })
