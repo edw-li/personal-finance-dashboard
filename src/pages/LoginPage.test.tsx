@@ -101,6 +101,23 @@ describe('LoginPage', () => {
     expect(localStorage.getItem('finance.lastEmail')).toBe('me@example.com')
   })
 
+  // Peek at mount, spend at success. Consuming the key on arrival threw the page away the
+  // moment the user did the obvious thing after a sign-in that did not take: reload.
+  it('keeps the remembered page across a reload, spending it only on success', async () => {
+    sessionStorage.setItem('finance.returnTo', '/portfolio')
+    const first = renderAt('/login?reason=expired')
+    first.unmount() // F5
+    expect(sessionStorage.getItem('finance.returnTo')).toBe('/portfolio')
+
+    renderAt('/login?reason=expired')
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'me@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/portfolio'))
+    expect(sessionStorage.getItem('finance.returnTo')).toBeNull()
+  })
+
   it('lands on the overview when nothing was remembered', async () => {
     renderAt('/login')
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'me@example.com' } })

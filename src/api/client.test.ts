@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, apiReadOnly, setAfterResponseHook, setToken } from './client'
+import { api, ApiError, apiReadOnly, expireSession, setAfterResponseHook, setToken } from './client'
 import { clearSnapshots, getSnapshot, setSnapshot } from './snapshotCache'
 
 function mockFetchOk(body: unknown = {}) {
@@ -24,6 +24,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
   localStorage.clear()
   sessionStorage.clear()
+  // Module state, not per-test state: a hook left installed by a failing test would fire
+  // (and its assertions would count) inside every test that ran after it.
+  setAfterResponseHook(null)
 })
 
 it('joins FastAPI 422 validation arrays into one message', async () => {
@@ -185,6 +188,21 @@ describe('session plumbing', () => {
     expect(assign).toHaveBeenCalledWith('/login?reason=expired')
   })
 
+  // One helper, shared with the assistant's stream (which bypasses request() entirely).
+  it('expireSession clears the session, remembers the page and names the reason', () => {
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, pathname: '/portfolio', search: '', assign })
+    setToken('x')
+    setSnapshot('overview', { stale: true })
+    sessionStorage.setItem('assistant:transcript', '[]')
+    expireSession()
+    expect(localStorage.getItem('finance_token')).toBeNull()
+    expect(getSnapshot('overview')).toBeUndefined()
+    expect(sessionStorage.getItem('assistant:transcript')).toBeNull()
+    expect(sessionStorage.getItem('finance.returnTo')).toBe('/portfolio')
+    expect(assign).toHaveBeenCalledWith('/login?reason=expired')
+  })
+
   it('runs the after-response hook on successful authenticated calls, not on auth routes', async () => {
     setToken('x')
     const hook = vi.fn()
@@ -195,7 +213,17 @@ describe('session plumbing', () => {
     // /auth/renew is itself an authenticated response; hooking it would recurse.
     await api('/auth/me')
     expect(hook).toHaveBeenCalledTimes(1)
-    setAfterResponseHook(null)
+  })
+
+  // A renewal is a reward for a working session. A 500 or a 429 proves nothing about the
+  // token, and hanging a renew off one would retry the failure on every response.
+  it('leaves the hook alone on a failed response', async () => {
+    setToken('x')
+    const hook = vi.fn()
+    setAfterResponseHook(hook)
+    mockFetchFailure(500, { detail: 'boom' })
+    await expect(api('/net-worth/summary')).rejects.toThrow('boom')
+    expect(hook).not.toHaveBeenCalled()
   })
 
   it('leaves the hook alone when there is no token', async () => {
@@ -204,6 +232,5 @@ describe('session plumbing', () => {
     mockFetchOk()
     await api('/net-worth/summary')
     expect(hook).not.toHaveBeenCalled()
-    setAfterResponseHook(null)
   })
 })

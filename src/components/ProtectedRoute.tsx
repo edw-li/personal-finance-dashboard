@@ -12,17 +12,30 @@ export default function ProtectedRoute() {
   useEffect(() => {
     if (!isLoading) return
     const timer = setTimeout(() => setShowSpinner(true), 300)
-    return () => clearTimeout(timer)
+    // The reset belongs in the CLEANUP, not the body: a Retry re-enters loading and has to
+    // earn the spinner's 300 ms of silence again, rather than flashing the one the previous
+    // attempt left latched on. (setState in an effect body is what the lint rule forbids;
+    // in a cleanup it is the only place this can go.)
+    return () => {
+      clearTimeout(timer)
+      setShowSpinner(false)
+    }
   }, [isLoading])
 
   if (isLoading || (!isAuthenticated && authError !== null)) {
     return (
       <div className="splash" role="status" aria-live="polite">
         <div className="splash-wordmark">Finance</div>
-        {isLoading && showSpinner && <div className="splash-spinner" aria-label="Connecting…" />}
+        {isLoading && showSpinner && (
+          // role="img": an aria-label on a bare div is not exposed to a screen reader, so
+          // without it the spinner announces nothing at all.
+          <div className="splash-spinner" role="img" aria-label="Connecting…" />
+        )}
         {!isLoading && authError !== null && (
           <p className="splash-error">
-            Can&apos;t reach the server — {authError}{' '}
+            {/* Verbatim: AuthContext decides whether this is an unreachable server or a
+                server that answered badly, and hands over a finished sentence. */}
+            {authError}{' '}
             <button type="button" className="splash-retry" onClick={retry}>
               Retry
             </button>

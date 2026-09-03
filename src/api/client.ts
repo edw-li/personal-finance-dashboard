@@ -1,3 +1,4 @@
+import { rememberReturnTo } from '../components/shell/returnTo'
 import { clearAssistantSession } from './assistantSession'
 import { clearSnapshots } from './snapshotCache'
 
@@ -17,6 +18,18 @@ export function setToken(token: string): void {
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY)
+}
+
+/** The one way a session ends against the user's will (2026-09-03 shell spec §10): the
+ *  token and everything that belongs to it go, the page they were reading is remembered,
+ *  and the login says why. Exported because the assistant's stream answers its own 401 —
+ *  it bypasses request() entirely — and the two must not drift apart. */
+export function expireSession(): void {
+  clearToken()
+  clearSnapshots() // snapshots are session data — they must not outlive the token
+  clearAssistantSession() // and a financial chat transcript must not outlive it either
+  rememberReturnTo(window.location.pathname + window.location.search)
+  window.location.assign('/login?reason=expired')
 }
 
 // Called after every successful authenticated response (the session renewer registers
@@ -82,19 +95,7 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
   }
 
   if (res.status === 401 && !path.startsWith('/auth/login')) {
-    clearToken()
-    clearSnapshots() // snapshots are session data — they must not outlive the token
-    clearAssistantSession() // and a financial chat transcript must not outlive it either
-    // Return-to-page (2026-09-03 shell spec §10): remember where the user was, say why they
-    // are seeing the login, and let LoginPage bring them back after they sign in. The key is
-    // spelled out rather than imported: RETURN_TO_KEY lives in session.ts, which imports
-    // THIS module's token helpers, so reaching for it here would close a cycle.
-    try {
-      sessionStorage.setItem('finance.returnTo', window.location.pathname + window.location.search)
-    } catch {
-      // storage blocked — they land on the overview instead
-    }
-    window.location.assign('/login?reason=expired')
+    expireSession()
     throw new ApiError('Session expired', 401)
   }
   if (!res.ok) {
@@ -114,8 +115,10 @@ async function request<T>(path: string, options: RequestInit): Promise<T> {
     }
     throw new ApiError(detail, res.status)
   }
-  // Sliding renewal (spec §10) hangs off any successful authenticated response. /auth/*
-  // is excluded so the renew call cannot re-enter itself.
+  // Sliding renewal (spec §10) hangs off any successful authenticated response. /auth/* is
+  // excluded so the renew call cannot re-enter itself, and that covers /auth/me BY DESIGN,
+  // not by accident: the mount-time identity check would otherwise renew on a bare page
+  // load, and the first data fetch behind it renews anyway.
   if (token !== null && !path.startsWith('/auth/')) afterResponse?.()
   if (res.status === 204) return undefined as T
   return (await res.json()) as T

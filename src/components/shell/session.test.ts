@@ -9,9 +9,14 @@ import {
   shouldRenew,
 } from './session'
 
+const b64 = (s: string) => Buffer.from(s).toString('base64url')
+
+function tokenWithPayload(payload: string): string {
+  return `${b64('{"alg":"HS256","typ":"JWT"}')}.${payload}.sig`
+}
+
 function tokenExpiringAt(epochSeconds: number): string {
-  const b64 = (s: string) => Buffer.from(s).toString('base64url')
-  return `${b64('{"alg":"HS256","typ":"JWT"}')}.${b64(JSON.stringify({ sub: '1', exp: epochSeconds }))}.sig`
+  return tokenWithPayload(b64(JSON.stringify({ sub: '1', exp: epochSeconds })))
 }
 
 vi.mock('../../api/client', () => ({
@@ -38,6 +43,16 @@ describe('expiryOf / shouldRenew', () => {
     expect(expiryOf(tokenExpiringAt(NOW + 100))).toBe((NOW + 100) * 1000)
     expect(expiryOf('not.a.jwt')).toBeNull()
     expect(expiryOf('')).toBeNull()
+  })
+
+  // Every shape a payload can take without an epoch in it. null means "cannot schedule a
+  // renewal", which shouldRenew turns into "leave this token alone" — never a NaN deadline
+  // that renews on every single response.
+  it('reads null from payloads that carry no usable exp', () => {
+    expect(expiryOf(tokenWithPayload(b64('{"sub":"1"}')))).toBeNull() // no exp at all
+    expect(expiryOf(tokenWithPayload(b64('{"exp":"soon"}')))).toBeNull() // exp, not a number
+    expect(expiryOf(tokenWithPayload(b64('not json')))).toBeNull() // decodes, will not parse
+    expect(shouldRenew(tokenWithPayload(b64('{"sub":"1"}')), NOW * 1000)).toBe(false)
   })
 
   it('renews only inside the last six hours of a live token', () => {
@@ -69,6 +84,25 @@ describe('maybeRenew', () => {
     expect(setToken).toHaveBeenCalledWith('new.token.here')
   })
 
+  // Compare-and-set: the renewal is only allowed to replace the token it set out to renew.
+  it('drops its answer when the session changed under it', async () => {
+    const live = tokenExpiringAt(NOW + 3600)
+    // Signed out mid-flight: the token this renewal was extending no longer exists.
+    vi.mocked(getToken).mockReturnValueOnce(live).mockReturnValue(null)
+    vi.mocked(apiReadOnly).mockResolvedValueOnce({ access_token: 'renewed' })
+    await maybeRenew()
+    expect(setToken).not.toHaveBeenCalled()
+  })
+
+  it('drops its answer when a DIFFERENT session signed in under it', async () => {
+    const live = tokenExpiringAt(NOW + 3600)
+    // Somebody else's sign-in landed first; overwriting it would sign them back out.
+    vi.mocked(getToken).mockReturnValueOnce(live).mockReturnValue('other')
+    vi.mocked(apiReadOnly).mockResolvedValueOnce({ access_token: 'renewed' })
+    await maybeRenew()
+    expect(setToken).not.toHaveBeenCalled()
+  })
+
   it('swallows a failed renew and lets the next call try again', async () => {
     vi.mocked(getToken).mockReturnValue(tokenExpiringAt(NOW + 3600))
     vi.mocked(apiReadOnly).mockRejectedValueOnce(new Error('offline'))
@@ -79,20 +113,14 @@ describe('maybeRenew', () => {
   })
 })
 
-describe('return-to', () => {
-  it('remembers an in-app path and hands it back once', () => {
+// The helpers themselves live in (and are tested from) the import-free returnTo leaf; what
+// this pins is that the session still speaks for them, so a caller that thinks of the
+// session as one thing does not have to know about the split.
+describe('return-to re-exports', () => {
+  it('round-trips through the session module', () => {
     rememberReturnTo('/taxes?year=2026')
     expect(sessionStorage.getItem(RETURN_TO_KEY)).toBe('/taxes?year=2026')
     expect(consumeReturnTo()).toBe('/taxes?year=2026')
     expect(consumeReturnTo()).toBeNull()
-  })
-
-  it('refuses anything that is not a same-origin path', () => {
-    rememberReturnTo('//evil.example/x')
-    expect(consumeReturnTo()).toBeNull()
-    rememberReturnTo('https://evil.example')
-    expect(consumeReturnTo()).toBeNull()
-    rememberReturnTo('/login?reason=expired')
-    expect(consumeReturnTo()).toBeNull() // never bounce back to login itself
   })
 })

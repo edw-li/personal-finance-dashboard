@@ -41,8 +41,10 @@
 /* Layout-only: the primary treatment (dark-on-accent — AA-safe, unlike the old local
    white-on-accent at ~3.2:1, 2026-08-25 polish §4) comes from panels.css's
    .button-primary. This selector outranks the class rules per-property, so it must not
-   re-declare background or color. */
-.login-card button {
+   re-declare background or color. Scoped to [type='submit'] because a bare
+   `.login-card button` (0,1,1) also outranks .login-toggle (0,1,0) and stripped the
+   toggle's border and padding. */
+.login-card button[type='submit'] {
   padding: 0.6rem;
   border: none;
   border-radius: 6px;
@@ -84,7 +86,8 @@
   min-width: 0; /* a flex item's auto min-width would push the toggle out of the card */
 }
 
-/* Not .login-card button: that rule strips the border the toggle needs. */
+/* Reachable only because the rule above is scoped to the submit button: an unscoped
+   `.login-card button` wins on specificity and would flatten this to a borderless slab. */
 .login-toggle {
   padding: 0.35rem 0.6rem;
   border: 1px solid var(--border);

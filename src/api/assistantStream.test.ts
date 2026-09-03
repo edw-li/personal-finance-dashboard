@@ -396,22 +396,26 @@ describe('streamChat', () => {
     expect(h.errors).toEqual([{ kind: 'bad_request', message: 'Bad Request' }])
   })
 
-  // client.ts's session-expiry contract, replicated for the one path that bypasses it —
-  // plus the transcript, which is session data too.
-  it('a 401 clears token, snapshots and transcript, then redirects', async () => {
+  // client.ts's session-expiry contract — the same helper, not a copy of it: this path
+  // bypasses request(), and a private replica is how the two drifted apart in the first
+  // place (a bare /login, no memory of the page the user was on).
+  it('a 401 expires the session exactly as request() does', async () => {
     setToken('tok')
     setSnapshot('overview', { stale: true })
     sessionStorage.setItem('assistant:transcript', '[{"role":"user","content":"hi"}]')
     const assign = vi.fn()
-    // jsdom refuses real navigation, so the redirect is stubbed (client.test.ts's arrangement).
-    vi.stubGlobal('location', { ...window.location, assign })
+    // jsdom refuses real navigation, so the redirect (and the location it reads) is stubbed
+    // (client.test.ts's arrangement).
+    vi.stubGlobal('location', { ...window.location, pathname: '/taxes', search: '?year=2026', assign })
     stubFetch(
       async () => new Response(JSON.stringify({ detail: 'Not authenticated' }), { status: 401 }),
     )
     const h = handlers()
     // 'aborted', not 'error': nothing was reported to the handlers and the page is leaving.
     expect(await streamChat(body, h).finished).toBe('aborted')
-    expect(assign).toHaveBeenCalledWith('/login')
+    expect(assign).toHaveBeenCalledWith('/login?reason=expired')
+    // The page they were reading survives the expiry; the login hands it back after sign-in.
+    expect(sessionStorage.getItem('finance.returnTo')).toBe('/taxes?year=2026')
     expect(localStorage.getItem('finance_token')).toBeNull()
     expect(getSnapshot('overview')).toBeUndefined()
     expect(sessionStorage.getItem('assistant:transcript')).toBeNull()

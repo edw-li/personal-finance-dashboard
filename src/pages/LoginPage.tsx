@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
-import { LAST_EMAIL_KEY, consumeReturnTo } from '../components/shell/session'
+import { clearReturnTo, peekReturnTo } from '../components/shell/returnTo'
+import { LAST_EMAIL_KEY } from '../components/shell/session'
 import { useAuth } from '../contexts/AuthContext'
 import '../components/panels.css'
 import './LoginPage.css'
@@ -20,13 +21,12 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const expired = searchParams.get('reason') === 'expired'
-  // Where a successful sign-in lands. Spent ONCE, at mount rather than at submit, because
-  // the redirect has two exits — handleSubmit's navigate() and the isAuthenticated early
-  // return below — and react-router routes its location updates through startTransition,
-  // so React renders the plain setState exit first and <Navigate> wins the race. Settling
-  // the destination up front makes both exits agree; it also survives a failed first
-  // attempt, which a submit-time consume would not.
-  const [destination] = useState(() => consumeReturnTo() ?? '/')
+  // Where a successful sign-in lands, read ONCE at mount but not spent there: the redirect
+  // has two exits — handleSubmit's navigate() and the isAuthenticated early return below —
+  // and react-router routes its location updates through startTransition, so React renders
+  // the plain setState exit first and <Navigate> wins the race. Settling the destination up
+  // front is what makes both exits agree on one answer.
+  const [destination] = useState(() => peekReturnTo() ?? '/')
   const [email, setEmail] = useState(readLastEmail)
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -37,6 +37,13 @@ export default function LoginPage() {
   useEffect(() => {
     document.title = 'Sign in · Finance'
   }, [])
+
+  // Spent only once a session actually exists — the other exit clears it in handleSubmit.
+  // Consuming it at mount instead would lose the page to an F5 on the login itself, which
+  // is exactly what a user does when a sign-in does not take.
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) clearReturnTo()
+  }, [isLoading, isAuthenticated])
 
   if (!isLoading && isAuthenticated) return <Navigate to={destination} replace />
 
@@ -52,7 +59,9 @@ export default function LoginPage() {
         // remembering the email is a nicety
       }
       // Return-to-page (2026-09-03 shell spec §10): the 401 remembered where the session
-      // died; this is where the user gets it back.
+      // died; this is where the user gets it back — and where the key is finally spent, so
+      // the next expiry cannot resurrect a stale destination.
+      clearReturnTo()
       navigate(destination, { replace: true })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Login failed')
