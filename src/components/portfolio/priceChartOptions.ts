@@ -1,7 +1,7 @@
 // Pure option builder for the holding drill-in's price chart — no React, no fetching. Number()
 // here is display-only: the server's Decimal strings are parsed once and never handed back.
 import type { EChartsOption } from '../../charts/echarts'
-import { LINE, dateAxis, grid, moneyAxis } from '../../charts/grammar'
+import { LINE, cents, dateAxis, grid, moneyAxis } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
 import { referenceLine } from '../../charts/reference'
 import { INK, MUTED, NEGATIVE, PALETTE, POSITIVE } from '../../charts/theme'
@@ -13,7 +13,7 @@ import { formatDate } from '../../utils/format'
 import { EVENTS_SERIES, eventLines } from './historyChartOptions'
 import type { ChartEventPoint } from './historyChartOptions'
 
-/** Fetch windows (they move the REQUEST — ?days=), not zooms. 'All' replaces 'Max' (F13). */
+/** Fetch windows (they move the REQUEST — ?days=), not zooms. All replaces the Max chip (F13). */
 export const PRICE_SPANS = [
   { days: 365, label: '1Y' },
   { days: 1095, label: '3Y' },
@@ -40,19 +40,45 @@ export function priceHistoryOption({
 }: PriceChartInput): EChartsOption | null {
   if (points.length < 2) return null
   const cost = avgCost === null ? null : Number(avgCost)
+  const closes = points.map((p) => Number(p.c))
+  // The above/below-cost wash is TWO STACKED PAIRS, not a piecewise visualMap over one
+  // areaStyle.origin: the 2026-09-04 real-echarts probe (scratchpad/charts-c4-probe) showed
+  // that a visualMap whose pieces are open-ended (gte / lt) leaves visualMeta.stops empty,
+  // and echarts 6's getVisualGradient then throws on the first stop — invisible to jsdom,
+  // fatal on a real canvas (the 2026-08-25 sankey lesson). The projection fan's own
+  // technique instead: an invisible absolute base per side, the signed gap stacked on it.
+  const wash = (name: string, stack: string, color: string, data: number[]) => ({
+    name,
+    type: 'line' as const,
+    stack,
+    symbol: 'none' as const,
+    lineStyle: { width: 0 },
+    color,
+    emphasis: { disabled: true },
+    tooltip: { show: false },
+    silent: true,
+    ...(color === 'transparent' ? {} : { areaStyle: { opacity: 0.12 } }),
+    data,
+  })
+  const washes =
+    cost === null
+      ? []
+      : [
+          // Above: a transparent floor AT the cost, then the excess over it in POSITIVE.
+          wash('wash-above-base', 'above-cost', 'transparent', closes.map(() => cost)),
+          wash('Above cost', 'above-cost', POSITIVE, closes.map((c) => cents(Math.max(c - cost, 0)))),
+          // Below: a transparent floor at the close (when under cost), then the shortfall in NEGATIVE.
+          wash('wash-below-base', 'below-cost', 'transparent', closes.map((c) => Math.min(c, cost))),
+          wash('Below cost', 'below-cost', NEGATIVE, closes.map((c) => cents(Math.max(cost - c, 0)))),
+        ]
+  const names = [
+    'Close',
+    ...(cost === null ? [] : ['Avg cost']),
+    ...(events.length > 0 ? [EVENTS_SERIES] : []),
+  ]
   const series = [
-    {
-      ...LINE,
-      name: 'Close',
-      color: PALETTE[0],
-      // The line's colour is set EXPLICITLY so the piecewise visualMap below reaches the wash
-      // and not the stroke (the probe in Task 6 is what holds this claim).
-      lineStyle: { width: 2, color: PALETTE[0] },
-      // The wash's ORIGIN is the cost — the fill lives between the line and the rule, which is
-      // why the scaled (zero: false) axis does not misrepresent it (§8's rationale).
-      ...(cost === null ? {} : { areaStyle: { opacity: 0.12, origin: cost } }),
-      data: points.map((p) => Number(p.c)),
-    },
+    ...washes,
+    { ...LINE, name: 'Close', color: PALETTE[0], data: closes },
     ...(cost === null ? [] : [referenceLine('Avg cost', points.map(() => cost))]),
     ...(events.length > 0
       ? [
@@ -75,7 +101,9 @@ export function priceHistoryOption({
       'all',
     ),
     grid: grid(),
-    legend: legendFor(series.length),
+    // Listed explicitly so the four wash members stay OUT of the legend (the projection
+    // fan's rule): a toggleable "wash-above-base" is not a thing a reader can act on.
+    legend: { ...legendFor(names.length), data: names },
     tooltip: axisTooltip({
       unit: 'money',
       references: ['Avg cost'],
@@ -86,22 +114,6 @@ export function priceHistoryOption({
     // scale, unlike the money charts' zero anchor: a price line has no additive reading, and
     // pinning a ~$580 close to a $0 floor flattens the year to a ribbon.
     yAxis: moneyAxis({ zero: false }),
-    ...(cost === null
-      ? {}
-      : {
-          // Above cost reads POSITIVE, below NEGATIVE — the one status use a series wash is
-          // allowed (spec §12). Hidden: the rule and the footer already say what it means.
-          visualMap: {
-            type: 'piecewise' as const,
-            show: false,
-            seriesIndex: 0,
-            dimension: 1,
-            pieces: [
-              { gte: cost, color: POSITIVE },
-              { lt: cost, color: NEGATIVE },
-            ],
-          },
-        }),
     series,
   }
 }

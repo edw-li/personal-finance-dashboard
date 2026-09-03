@@ -137,7 +137,7 @@ export const SLIVER_SHARE = 0.005
 
 interface HeatLeaf {
   name: string
-  /** [market value, clamped metric] — visualDimension 1 drives the fill. */
+  /** [market value, clamped metric] — levels[1]'s visualDimension 1 drives the fill. */
   value: [number, number]
   /** null on a folded Other cell (nothing to drill into). */
   ticker: string | null
@@ -232,9 +232,6 @@ export function heatTreemapOption(
         // Leaf clicks are the panel's drill-in (onClick → ticker); no zoom-to-node.
         nodeClick: false,
         breadcrumb: { show: false },
-        visualDimension: 1,
-        visualMin: -HEAT_CLAMP,
-        visualMax: HEAT_CLAMP,
         // Canvas TEXT, not tooltip HTML: no escaping needed. Truncated to the cell.
         label: {
           show: true,
@@ -251,17 +248,25 @@ export function heatTreemapOption(
         },
         levels: [
           {},
-          // Industry tier: a muted upper label names the group; thick surface borders separate groups.
+          // Industry tier: a muted upper label names the group; thick surface borders separate
+          // groups — AND the diverging fill for its ticker CHILDREN (min → orange, max → blue).
+          // The mapping belongs to the PARENT: echarts' treemapVisual builds a node's children's
+          // colour mapping out of that node's own model (buildVisualMapping(nodeModel), plus
+          // statistic()'s nodeModel.get('visualDimension')), so a range declared on the series
+          // or on the leaf level never reaches the leaves. The 2026-09-04 real-echarts probe
+          // drew all three placements side by side: series-scoped and levels[2]-scoped both
+          // came out one flat mid-ramp tone, this one ramped (tools/probes/charts-c4).
           {
             upperLabel: { show: true, height: 18, color: MUTED, fontSize: 11 },
             itemStyle: { borderColor: SURFACE, borderWidth: 2, gapWidth: 2 },
-          },
-          // Ticker tier: the diverging fill by the metric (min → orange, max → blue).
-          {
             colorMappingBy: 'value' as const,
             color: [...DIVERGING],
-            itemStyle: { borderColor: SURFACE, borderWidth: 1, gapWidth: 1 },
+            visualDimension: 1,
+            visualMin: -HEAT_CLAMP,
+            visualMax: HEAT_CLAMP,
           },
+          // Ticker tier: borders only — its fill arrives from the level above.
+          { itemStyle: { borderColor: SURFACE, borderWidth: 1, gapWidth: 1 } },
         ],
         data: groups,
       },

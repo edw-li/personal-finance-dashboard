@@ -204,7 +204,7 @@ describe('HoldingDetailPanel price history', () => {
     })
     renderPanel()
     await screen.findByTestId('echart')
-    expect(screen.getByRole('button', { name: 'All' })).toBeTruthy() // 'Max' is gone (F13)
+    expect(screen.getByRole('button', { name: 'All' })).toBeTruthy() // the Max chip is gone (F13)
 
     fireEvent.click(screen.getByRole('button', { name: '3Y' }))
     await waitFor(() => expect(fetchPriceHistory).toHaveBeenCalledWith('AAA', 1095))

@@ -33,7 +33,7 @@ function read(option: EChartsOption | null) {
   return option as unknown as {
     dataZoom: { type: string; startValue: number }[]
     grid: unknown
-    legend: { type: string }
+    legend: { type: string; data?: string[] }
     xAxis: { data: string[]; boundaryGap?: boolean }
     yAxis: { scale?: boolean; axisLabel: { formatter: unknown } }
     visualMap?: {
@@ -48,6 +48,9 @@ function read(option: EChartsOption | null) {
       name: string
       type: string
       color?: string
+      stack?: string
+      silent?: boolean
+      tooltip?: { show?: boolean }
       z?: number
       itemStyle?: { borderColor?: string; borderWidth?: number }
       lineStyle?: { color?: string; type?: string; width?: number }
@@ -71,7 +74,7 @@ describe('priceHistoryOption', () => {
     expect(option.series[0]).toMatchObject({
       type: 'line',
       color: PALETTE[0],
-      lineStyle: { width: 2, color: PALETTE[0] },
+      lineStyle: { width: 2 },
     })
     expect(option.series[0].data).toEqual([171.25, 173, 169.8])
     expect(option.series[0].areaStyle).toBeUndefined() // no cost → no wash
@@ -83,29 +86,50 @@ describe('priceHistoryOption', () => {
     expect(option.legend.type).toBe('plain')
   })
 
-  it('F4: an Avg cost reference, a wash anchored at the cost coloured above/below it, and event markers', () => {
+  it('F4: an Avg cost reference, stacked above/below-cost washes, and event markers', () => {
+    // The 2026-09-04 probe rejected the piecewise-visualMap form (open-ended pieces leave
+    // visualMeta.stops empty and echarts 6 throws inside getVisualGradient), so the wash is
+    // the projection fan's technique: an invisible absolute base per side + the signed gap.
     const option = read(priceHistoryOption({ points: POINTS, avgCost: '172.0000', events: [EVENT] }))
-    expect(option.series.map((s) => s.name)).toEqual(['Close', 'Avg cost', EVENTS_SERIES])
-    expect(option.series[0].areaStyle).toEqual({ opacity: 0.12, origin: 172 })
-    expect(option.series[1]).toMatchObject({ color: MUTED, z: 9, lineStyle: { type: 'dashed' } })
-    expect(option.series[1].data).toEqual([172, 172, 172])
-    expect(option.series[2]).toMatchObject({
+    expect(option.series.map((s) => s.name)).toEqual([
+      'wash-above-base',
+      'Above cost',
+      'wash-below-base',
+      'Below cost',
+      'Close',
+      'Avg cost',
+      EVENTS_SERIES,
+    ])
+    expect(option.visualMap).toBeUndefined()
+    // Only the three real entries are legend-toggleable.
+    expect(option.legend.data).toEqual(['Close', 'Avg cost', EVENTS_SERIES])
+    expect(option.series[0]).toMatchObject({ stack: 'above-cost', color: 'transparent' })
+    expect(option.series[0].areaStyle).toBeUndefined() // an invisible floor, not a fill
+    expect(option.series[0].data).toEqual([172, 172, 172])
+    expect(option.series[1]).toMatchObject({
+      stack: 'above-cost',
+      color: POSITIVE,
+      silent: true,
+      tooltip: { show: false },
+      areaStyle: { opacity: 0.12 },
+    })
+    expect(option.series[1].data).toEqual([0, 1, 0])
+    expect(option.series[2]).toMatchObject({ stack: 'below-cost', color: 'transparent' })
+    expect(option.series[2].data).toEqual([171.25, 172, 169.8])
+    expect(option.series[3]).toMatchObject({ stack: 'below-cost', color: NEGATIVE })
+    // cents(): 172 − 169.8 is 2.1999999999999886 in float, and dust must not reach a chart.
+    expect(option.series[3].data).toEqual([0.75, 0, 2.2])
+    expect(option.series[4]).toMatchObject({ name: 'Close', color: PALETTE[0] })
+    expect(option.series[4].areaStyle).toBeUndefined()
+    expect(option.series[5]).toMatchObject({ color: MUTED, z: 9, lineStyle: { type: 'dashed' } })
+    expect(option.series[5].data).toEqual([172, 172, 172])
+    expect(option.series[6]).toMatchObject({
       type: 'scatter',
       color: MUTED,
       z: 11,
       itemStyle: { borderColor: INK, borderWidth: 1 },
     })
-    expect(option.series[2].data).toEqual([EVENT])
-    expect(option.visualMap).toEqual({
-      type: 'piecewise',
-      show: false,
-      seriesIndex: 0,
-      dimension: 1,
-      pieces: [
-        { gte: 172, color: POSITIVE },
-        { lt: 172, color: NEGATIVE },
-      ],
-    })
+    expect(option.series[6].data).toEqual([EVENT])
   })
 
   it('F7: Close first, Avg cost as a muted reference, events as lines; null closes dropped', () => {

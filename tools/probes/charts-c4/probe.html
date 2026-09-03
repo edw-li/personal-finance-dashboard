@@ -1,0 +1,106 @@
+<!doctype html>
+<!-- Charts C4 probe (plan Task 6): the lane's TWO new forms drawn by REAL echarts out of
+     node_modules, in the exact option shapes allocationChartOptions.heatTreemapOption and
+     priceChartOptions.priceHistoryOption emit. jsdom never paints (the 2026-08-25 sankey
+     lesson), so this page is what holds the two claims no unit test can: WHERE a treemap's
+     colour mapping has to be declared to reach the leaves, and that the above/below-cost
+     wash colours the fill without recolouring the stroke. The rejected placements stay on
+     the page as the evidence behind the comments in those builders. Not part of the app.
+     Run: node tools/probes/charts-c4/shoot.mjs   (EDGE_PATH overrides the browser) -->
+<html><head><meta charset="utf-8" />
+<style>
+  body { background: #171a21; color: #e6e9ef; font: 14px system-ui; margin: 24px; }
+  .title { margin: 0 0 6px 2px; font-size: 13px; letter-spacing: .08em; color: #8b93a3; }
+  .bad { color: #e05252; }
+  .good { color: #3fb968; }
+  .chart { width: 1100px; height: 260px; margin-bottom: 22px; }
+</style></head><body>
+<p class="title good">C — SHIPPED heat-treemap: industry &rarr; ticker, the mapping on levels[1] (the PARENT tier)</p><div id="c" class="chart"></div>
+<p class="title bad">C1 — REJECTED: visual* on the SERIES, color+colorMappingBy on levels[2] — every cell one flat mid-ramp tone</p><div id="c1" class="chart"></div>
+<p class="title bad">C2 — REJECTED: visual* moved INTO levels[2] (the plan's written fallback) — still one flat tone</p><div id="c2" class="chart"></div>
+<p class="title good">D — SHIPPED price wash: stacked transparent base + signed gap per side (the projection fan's technique)</p><div id="d" class="chart"></div>
+<p class="title bad">D0 — REJECTED: areaStyle.origin + a piecewise visualMap — echarts 6 throws in getVisualGradient</p><div id="d0" class="chart"></div>
+<script src="../../../node_modules/echarts/dist/echarts.js"></script>
+<script>
+// The DARK tokens verbatim (src/theme/tokens.ts) — the builders hard-code these.
+const SURFACE = '#171a21', INK = '#e6e9ef', MUTED = '#8b93a3', POS = '#3fb968', NEG = '#e05252', BLUE = '#3987e5'
+const DIVERGING = ['#f28b57','#e57236','#b85a2a','#6b4436','#272c37','#2b4a7a','#2f6bb8','#4a8ee6','#7fb2f0']
+// Each panel draws inside its own try/catch so one thrower still leaves the page readable.
+const draw = (id, option) => {
+  try { echarts.init(document.getElementById(id), null, { renderer: 'canvas' }).setOption(option) }
+  catch (e) { document.getElementById(id).textContent = 'THREW: ' + e.message }
+}
+
+// --- C: the heat-treemap ---------------------------------------------------------------
+// heatTreemapOption(HOLDINGS, 'unrealized') over the heatTreemap fixture's book, with the
+// clamp already applied to value[1] (+80% -> +50%) the way heatGroups() applies it.
+const heatData = () => [
+  { name: 'Semis', value: [805000, 0], children: [
+    { name: 'NVDA', value: [600000, 0.5], label: { color: SURFACE } },
+    { name: 'AMD', value: [200000, -0.1], label: { color: INK } },
+    { name: 'Other', value: [5000, 0.01], label: { color: INK } } ] },
+  { name: 'ETF', value: [195000, 0], children: [ { name: 'VOO', value: [195000, 0.25], label: { color: INK } } ] },
+]
+const heatLabel = {
+  show: true, fontSize: 11, overflow: 'truncate',
+  formatter: (p) => p.name + '\n' + (p.value[1] > 0 ? '+' : '') + Math.round(p.value[1] * 100) + '%',
+}
+const heatBase = { type: 'treemap', roam: false, nodeClick: false, breadcrumb: { show: false }, label: heatLabel, data: heatData() }
+const industryTier = { upperLabel: { show: true, height: 18, color: MUTED, fontSize: 11 }, itemStyle: { borderColor: SURFACE, borderWidth: 2, gapWidth: 2 } }
+const tickerTier = { itemStyle: { borderColor: SURFACE, borderWidth: 1, gapWidth: 1 } }
+const mapping = { colorMappingBy: 'value', color: DIVERGING, visualDimension: 1, visualMin: -0.5, visualMax: 0.5 }
+
+// SHIPPED: the mapping rides the INDUSTRY level, because echarts' treemapVisual builds a
+// node's children's mapping out of that node's OWN model — the parent configures its kids.
+draw('c', { series: [{ ...heatBase, levels: [ {}, { ...industryTier, ...mapping }, tickerTier ] }] })
+// REJECTED 1 — the plan's first form: the range on the series, the palette on the leaf level.
+draw('c1', { series: [{ ...heatBase, visualDimension: 1, visualMin: -0.5, visualMax: 0.5,
+  levels: [ {}, industryTier, { colorMappingBy: 'value', color: DIVERGING, ...tickerTier } ] }] })
+// REJECTED 2 — the plan's written fallback: the whole range moved into the leaf level.
+draw('c2', { series: [{ ...heatBase, levels: [ {}, industryTier, { ...mapping, ...tickerTier } ] }] })
+
+// --- D: the price wash -----------------------------------------------------------------
+const closes = [171, 173, 169.8, 175, 178, 176, 168, 165, 170]
+const COST = 172
+const days = closes.map((_, i) => 'D' + i)
+const cartesian = () => ({
+  grid: { left: 70, right: 24, top: 40, bottom: 28 },
+  xAxis: { type: 'category', boundaryGap: false, data: days },
+  yAxis: { type: 'value', scale: true },
+})
+const costRule = { name: 'Avg cost', type: 'line', symbol: 'none', lineStyle: { width: 2, type: 'dashed' }, color: MUTED, z: 9, data: closes.map(() => COST) }
+
+// SHIPPED: two independent stacks, each an invisible absolute base plus the signed gap, so
+// the fill is green above the rule and red below it while the Close line keeps its one blue.
+const wash = (name, stack, color, data) => ({
+  name, type: 'line', stack, symbol: 'none', lineStyle: { width: 0 }, color,
+  emphasis: { disabled: true }, tooltip: { show: false }, silent: true,
+  ...(color === 'transparent' ? {} : { areaStyle: { opacity: .12 } }),
+  data,
+})
+draw('d', {
+  ...cartesian(),
+  legend: { top: 0, data: ['Close', 'Avg cost'] },
+  series: [
+    wash('wash-above-base', 'above-cost', 'transparent', closes.map(() => COST)),
+    wash('Above cost', 'above-cost', POS, closes.map((c) => Math.max(c - COST, 0))),
+    wash('wash-below-base', 'below-cost', 'transparent', closes.map((c) => Math.min(c, COST))),
+    wash('Below cost', 'below-cost', NEG, closes.map((c) => Math.max(COST - c, 0))),
+    { name: 'Close', type: 'line', symbol: 'none', color: BLUE, lineStyle: { width: 2 }, data: closes },
+    costRule,
+  ],
+})
+
+// REJECTED — the plan's first form. echarts 6.1's getVisualGradient reads visualMeta.stops,
+// which a piecewise map with open-ended pieces (gte / lt) leaves empty, and then indexes
+// [0].coord -> TypeError: the whole chart blanks. Invisible to jsdom, fatal on a canvas.
+draw('d0', {
+  ...cartesian(),
+  legend: { top: 0 },
+  visualMap: { type: 'piecewise', show: false, seriesIndex: 0, dimension: 1, pieces: [{ gte: COST, color: POS }, { lt: COST, color: NEG }] },
+  series: [
+    { name: 'Close', type: 'line', symbol: 'none', color: BLUE, lineStyle: { width: 2, color: BLUE }, areaStyle: { opacity: .12, origin: COST }, data: closes },
+    costRule,
+  ],
+})
+</script></body></html>

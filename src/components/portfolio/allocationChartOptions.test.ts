@@ -238,10 +238,16 @@ const readHeat = (option: unknown) =>
     tooltip: { trigger: string; formatter: (p: unknown) => string }
     series: {
       type: string
-      visualDimension: number
-      visualMin: number
-      visualMax: number
-      levels: { colorMappingBy?: string; color?: string[] }[]
+      visualDimension?: number
+      visualMin?: number
+      visualMax?: number
+      levels: {
+        colorMappingBy?: string
+        color?: string[]
+        visualDimension?: number
+        visualMin?: number
+        visualMax?: number
+      }[]
       label: { formatter: (p: { data: Leaf }) => string }
       data: Leaf[]
     }[]
@@ -251,10 +257,22 @@ describe('heatTreemapOption', () => {
   it('groups tickers under their industry (type label when none), area = market value, fill = the clamped metric', () => {
     const option = readHeat(heatTreemapOption(BOOK, 'unrealized'))
     const series = option.series[0]
-    expect(series).toMatchObject({
-      type: 'treemap', visualDimension: 1, visualMin: -HEAT_CLAMP, visualMax: HEAT_CLAMP,
+    expect(series.type).toBe('treemap')
+    // The colour mapping lives on the PARENT tier, not the series and not the leaf tier:
+    // echarts' treemapVisual builds a node's children's mapping from that NODE's own model
+    // (buildVisualMapping(nodeModel) + statistic()'s nodeModel.get('visualDimension')), so
+    // the industry level configures its ticker children. The 2026-09-04 probe drew all three
+    // placements — series-scoped and levels[2]-scoped both came out one flat colour, and only
+    // this one ramped (scratchpad/charts-c4-probe/variants.png; tools/probes/charts-c4).
+    expect(series.visualDimension).toBeUndefined()
+    expect(series.levels[1]).toMatchObject({
+      colorMappingBy: 'value',
+      color: [...DIVERGING],
+      visualDimension: 1,
+      visualMin: -HEAT_CLAMP,
+      visualMax: HEAT_CLAMP,
     })
-    expect(series.levels[2]).toMatchObject({ colorMappingBy: 'value', color: [...DIVERGING] })
+    expect(series.levels[2].color).toBeUndefined()
     expect(series.data.map((g) => g.name)).toEqual(['Semis', 'ETF']) // biggest industry first
     const semis = series.data[0]
     expect(semis.children!.map((l) => l.name)).toEqual(['NVDA', 'AMD', 'Other'])
