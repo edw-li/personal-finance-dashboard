@@ -17,12 +17,15 @@ describe('Feed', () => {
     )
     expect(screen.getByText('Loading rows…')).toBeTruthy()
     expect(screen.queryByText('rows')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
     rerender(
       <Feed data={null} busy={false} staleNoun="the table" skeleton={{ height: 200, label: 'Loading rows…' }}>
         {() => <p>rows</p>}
       </Feed>,
     )
     expect(screen.queryByText('Loading rows…')).toBeNull()
+    expect(screen.queryByText('rows')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('renders the empty node when idle with no data and one is given', () => {
@@ -32,6 +35,8 @@ describe('Feed', () => {
       </Feed>,
     )
     expect(screen.getByText('none yet')).toBeTruthy()
+    expect(screen.queryByText('rows')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('renders children from the data and dims them while busy', () => {
@@ -42,6 +47,7 @@ describe('Feed', () => {
     )
     expect(screen.getByText('3 rows')).toBeTruthy()
     expect(container.querySelector('.loading-dim.is-loading')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
     rerender(
       <Feed data={{ n: 3 }} busy staleNoun="the table" skeleton={{ height: 200, label: 'x' }}>
         {(d) => <p>{d.n} rows</p>}
@@ -57,8 +63,7 @@ describe('Feed', () => {
         {() => null}
       </Feed>,
     )
-    expect(screen.getByRole('alert').textContent).toContain('offline')
-    expect(screen.getByRole('alert').textContent).not.toContain('earlier data')
+    expect(screen.getByRole('alert').textContent).toBe('offline Retry')
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading rows' }))
     expect(retry).toHaveBeenCalledTimes(1)
     rerender(
@@ -68,11 +73,27 @@ describe('Feed', () => {
     )
     expect(screen.getByRole('alert').textContent).toBe('offline — the table may be showing earlier data. Retry')
   })
+
+  it('treats an empty error as no error, so no lone stale cue appears', () => {
+    // ApiError('') is reachable — an HTTP/2 response's statusText is '' — and with data
+    // behind it a truthiness-free guard would render a bare " — the table may be…" banner.
+    render(
+      <Feed data={{}} busy={false} error="" staleNoun="the table" skeleton={{ height: 1, label: 'x' }}>
+        {() => <p>rows</p>}
+      </Feed>,
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByText('rows')).toBeTruthy()
+  })
 })
 
 describe('FeedBanner', () => {
-  it('renders nothing for a null error and an alert otherwise', () => {
+  it('renders nothing for any falsy error and an alert otherwise', () => {
     const { container, rerender } = render(<FeedBanner error={null} />)
+    expect(container.firstChild).toBeNull()
+    rerender(<FeedBanner error={undefined} />)
+    expect(container.firstChild).toBeNull()
+    rerender(<FeedBanner error="" />)
     expect(container.firstChild).toBeNull()
     rerender(<FeedBanner error="bad input" />)
     expect(screen.getByRole('alert').textContent).toBe('bad input')
