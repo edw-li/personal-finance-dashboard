@@ -69,6 +69,28 @@ export function formatDateTime(iso: string | null | undefined): string {
   return `${MONTH_NAMES[at.getMonth()]} ${at.getDate()}, ${at.getFullYear()}, ${hours}:${minutes} ${meridiem}`
 }
 
+export function localDateKey(iso: string | null | undefined): string | null {
+  // The LOCAL calendar day of an INSTANT, as YYYY-MM-DD. formatDate's slice(0, 10) reads
+  // the day off the text, which is the SERVER's day: the 23:30 PT nightly is stamped
+  // 06:30 UTC the next morning, so a card that lists it as "Sep 3, 11:30 PM"
+  // (formatDateTime, local) would then demand "2026-09-04" in the arm box. One clock, and
+  // it is formatDateTime's — these stamps are "when did it happen", not calendar data.
+  // Null (never a guess) when there is nothing to read: the callers all have a "—" case.
+  if (!iso) return null
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return null
+  const month = String(at.getMonth() + 1).padStart(2, '0')
+  const day = String(at.getDate()).padStart(2, '0')
+  return `${at.getFullYear()}-${month}-${day}`
+}
+
+export function formatInstantDate(iso: string | null | undefined): string {
+  // formatDate's words on localDateKey's clock — the pair the Restore card shows and asks
+  // for. Never for bare dates: those are calendar data and formatDate owns them.
+  const key = localDateKey(iso)
+  return key === null ? '—' : formatDate(key)
+}
+
 export function formatBytes(bytes: number): string {
   // pg_database_size is exact bytes; the card wants a human size. Base 1024 with one
   // decimal past B — the register `du -h` speaks, which the backup row quotes verbatim.

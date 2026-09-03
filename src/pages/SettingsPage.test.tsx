@@ -1,5 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type {
@@ -8,6 +8,7 @@ import type {
   ImportReport,
   ImportSheetReport,
   PersonOut,
+  SnapshotEntry,
   SystemStatus,
 } from '../types/api'
 import SettingsPage from './SettingsPage'
@@ -82,10 +83,25 @@ vi.mock('../api/limits', async (importOriginal) => ({
   putLimits: vi.fn(),
   cloneLimits: vi.fn(),
 }))
+// The Backups, Restore, Health and Activity cards (2026-09-03 data-lifecycle spec §7–§9, §11)
+// each own a fetch; unmocked they would hit the network from every test in this file.
+vi.mock('../api/lifecycle', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/lifecycle')>()),
+  fetchSnapshots: vi.fn(),
+  createSnapshot: vi.fn(),
+  restoreUpload: vi.fn(),
+  restoreStored: vi.fn(),
+  fetchActivity: vi.fn(),
+  fetchActivityRun: vi.fn(),
+  undoBatch: vi.fn(),
+  fetchHealth: vi.fn(),
+}))
+import { createSnapshot, fetchSnapshots } from '../api/lifecycle'
 import { fetchAssistantSettings } from '../api/assistant'
 import { changePassword } from '../api/auth'
 import { fetchHousehold } from '../api/household'
 import { importXlsx } from '../api/importer'
+import { fetchActivity, fetchHealth } from '../api/lifecycle'
 import { fetchLimits } from '../api/limits'
 import { fetchAccounts } from '../api/netWorth'
 import { fetchPortfolioAccounts } from '../api/portfolio'
@@ -111,6 +127,7 @@ const SETTINGS: AppSettingsOut = {
   swr_pct: '0.045000',
   espp_ticker: 'NVDA',
   price_refresh_cron: '10 13 * * mon-fri',
+  calendar_update_due_day: 1,
 }
 
 // Quiet system payload — the card's rendering details are pinned in SystemCard.test.tsx;
@@ -213,8 +230,11 @@ const fileBox = () => screen.getByLabelText('Workbook (.xlsx)') as HTMLInputElem
 // Prefix-stable like the two above, so the in-flight labels ('Dry run…', 'Applying…')
 // answer to the same query as the idle ones. Dry run is anchored at both ends for the same
 // reason as pwButton: the card's ⓘ hint aria-label also opens "Dry run …".
+// Scoped to the import card: the Restore card below (2026-09-03 data-lifecycle spec §7)
+// carries a Dry run button of its own, so a page-wide query now finds two.
+const importCard = () => document.getElementById('import') as HTMLElement
 const dryButton = () =>
-  screen.getByRole('button', { name: /^dry run…?$/i }) as HTMLButtonElement
+  within(importCard()).getByRole('button', { name: /^dry run…?$/i }) as HTMLButtonElement
 const applyButton = () => screen.getByRole('button', { name: /^appl/i }) as HTMLButtonElement
 // jsdom has no file picker: the change event carries the File list itself.
 const pick = (file: File) => fireEvent.change(fileBox(), { target: { files: [file] } })
@@ -242,6 +262,9 @@ beforeEach(() => {
   vi.mocked(changePassword).mockResolvedValue(undefined)
   vi.mocked(importXlsx).mockResolvedValue(makeReport())
   vi.mocked(fetchSystemStatus).mockResolvedValue(SYSTEM)
+  // Empty volume: the Backups card settles into its own empty note without adding a row,
+  // a link or a banner to any of this file's queries.
+  vi.mocked(fetchSnapshots).mockResolvedValue([])
   vi.mocked(fetchHousehold).mockResolvedValue({ people: [ME], marriage_date: null })
   vi.mocked(fetchAccounts).mockResolvedValue([CHECKING])
   vi.mocked(fetchPortfolioAccounts).mockResolvedValue([])
@@ -253,6 +276,9 @@ beforeEach(() => {
     key: { configured: true, source: 'env' },
     default_model: 'kimi-k3',
   })
+  // Empty answers: neither card adds a row, a banner or a button to this file's queries.
+  vi.mocked(fetchActivity).mockResolvedValue({ entries: [], next_before: null })
+  vi.mocked(fetchHealth).mockResolvedValue({ checked_at: '2026-09-04T09:00:00+00:00', checks: [] })
   confirmSpy.mockReturnValue(true)
 })
 
@@ -355,6 +381,7 @@ describe('SettingsPage — app settings', () => {
       swr_pct: '0.037500',
       espp_ticker: 'MSFT',
       price_refresh_cron: '30 14 * * mon-fri',
+      calendar_update_due_day: 1,
     })
     renderPage()
     await screen.findByLabelText('ESPP ticker')
@@ -608,7 +635,8 @@ describe('SettingsPage — xlsx import', () => {
     expect(vi.mocked(importXlsx).mock.calls[0]).toEqual([file, true])
 
     expect(await screen.findByText('Dry run — nothing was written.')).toBeTruthy()
-    expect(screen.getByText('Spending')).toBeTruthy()
+    // By role: the Appearance card's Landing page select carries a 'Spending' option too.
+    expect(screen.getByRole('heading', { name: 'Spending' })).toBeTruthy()
     expect(screen.getByText('transaction')).toBeTruthy()
     // A header row, unlike the plan's headerless skeleton: the glyphs alone say nothing
     // about which of the importer's four verbs a number belongs to.
@@ -629,7 +657,7 @@ describe('SettingsPage — xlsx import', () => {
     expect(screen.getByText('2024-03-05 new: Gas 51.00')).toBeTruthy()
     // All nine sheets come back on every report; the eight that changed nothing are not
     // headings — a wall of empty sections would bury the one that did.
-    expect(screen.queryByText('Paycheck')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Paycheck' })).toBeNull()
     expect(screen.queryByText(APPLIED_NOTE)).toBeNull()
   })
 
@@ -645,7 +673,7 @@ describe('SettingsPage — xlsx import', () => {
 
     // The fourth arm of the has-content filter: a sheet can change nothing countable and
     // still have something to show. Dropped, its preview lines would vanish silently.
-    expect(await screen.findByText('Paycheck')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Paycheck' })).toBeTruthy()
     // No "(+n more)" when nothing was dropped — the cap is news only when it bit.
     expect(screen.getByText('1 sample changes')).toBeTruthy()
     expect(screen.getByText('2024-06-14 gross 12500.00 -> 12750.00')).toBeTruthy()
@@ -866,6 +894,53 @@ describe('SettingsPage — system card', () => {
   })
 })
 
+describe('SettingsPage — backups and restore cards', () => {
+  it('mounts Backups & snapshots then Restore directly after the System card', async () => {
+    renderPage()
+    const backups = await screen.findByRole('region', { name: 'Backups & snapshots' })
+    const restore = screen.getByRole('region', { name: 'Restore' })
+    const system = screen.getByRole('heading', { name: /^System/ }).closest('section')
+    expect(system?.nextElementSibling).toBe(backups)
+    expect(backups.nextElementSibling).toBe(restore)
+    await waitFor(() => expect(vi.mocked(fetchSnapshots)).toHaveBeenCalledTimes(2))
+  })
+
+  it('offers neither card when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    renderPage()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Restore' })).toBeNull()
+    expect(vi.mocked(fetchSnapshots)).not.toHaveBeenCalled()
+  })
+
+  // The plan's Phase 2 smoke, as a test: the two cards hold SEPARATE copies of the stored
+  // list, so a file written by Snapshot now exists only in the Backups card's — and the
+  // Restore… link it offers names a snapshot the Restore card has never heard of.
+  it('carries a Snapshot now file to the Restore card through the Restore… link', async () => {
+    const fresh: SnapshotEntry = {
+      name: 'finance-export-20260904-091500.zip',
+      at: '2026-09-04T09:15:00+00:00',
+      size_bytes: 2_097_152,
+      alembic_head: 'c3a7e19d5b42',
+      restorable: true,
+    }
+    vi.mocked(createSnapshot).mockResolvedValue(fresh)
+    renderPage()
+    await screen.findByText(/No stored snapshots yet/)
+    fireEvent.click(screen.getByRole('button', { name: 'Snapshot now' }))
+    const link = await screen.findByRole('link', { name: 'Restore…' })
+    // Only the server knows about the new file; the Restore card must go and look.
+    vi.mocked(fetchSnapshots).mockResolvedValue([fresh])
+    fireEvent.click(link)
+    await waitFor(() =>
+      expect((screen.getByLabelText('Stored snapshot') as HTMLSelectElement).value).toBe(
+        fresh.name,
+      ),
+    )
+    expect(vi.mocked(fetchSnapshots)).toHaveBeenCalledTimes(3) // two mounts, then the look
+  })
+})
+
 describe('SettingsPage — appearance card', () => {
   it('mounts the Appearance card directly after the Password card', async () => {
     renderPage()
@@ -950,6 +1025,27 @@ describe('SettingsPage — assistant card', () => {
   })
 })
 
+describe('SettingsPage — health and activity cards', () => {
+  it('mounts Data health then Activity directly before the App settings card', async () => {
+    renderPage()
+    const health = await screen.findByRole('region', { name: 'Data health' })
+    const activity = screen.getByRole('region', { name: 'Activity' })
+    const appSettings = document.getElementById('app-settings')
+    expect(health.nextElementSibling).toBe(activity)
+    expect(activity.nextElementSibling).toBe(appSettings)
+    await waitFor(() => expect(vi.mocked(fetchHealth)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(fetchActivity)).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers neither card when the settings load failed', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    renderPage()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Data health' })).toBeNull()
+    expect(vi.mocked(fetchHealth)).not.toHaveBeenCalled()
+  })
+})
+
 describe('SettingsPage — anchored arrival from the palette', () => {
   it('scrolls the addressed card into view and rings it for a moment', async () => {
     // jsdom implements no scrollIntoView (HoldingDetailPanel carries the same note), so
@@ -990,9 +1086,75 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     }
   })
 
+  it('keeps the ring on the card a Restore… link aimed at, after the arrival is consumed', async () => {
+    const fresh: SnapshotEntry = {
+      name: 'finance-export-20260904-091500.zip',
+      at: '2026-09-04T09:15:00+00:00',
+      size_bytes: 2_097_152,
+      alembic_head: 'c3a7e19d5b42',
+      restorable: true,
+    }
+    const snapshots = deferred<SnapshotEntry[]>()
+    vi.mocked(fetchSnapshots).mockReturnValue(snapshots.promise)
+    render(
+      <MemoryRouter
+        initialEntries={[`/settings?restore=${encodeURIComponent(fresh.name)}#restore`]}
+      >
+        <SettingsPage />
+      </MemoryRouter>,
+    )
+    // The ring lands as soon as the cards exist; the arrival is still waiting for the list.
+    await waitFor(() =>
+      expect(document.getElementById('restore')?.classList.contains('is-highlighted')).toBe(true),
+    )
+    await act(async () => {
+      snapshots.resolve([fresh])
+    })
+    expect((screen.getByLabelText('Stored snapshot') as HTMLSelectElement).value).toBe(fresh.name)
+    // Consuming ?restore= must not take the anchor with it: this effect is keyed on the
+    // hash, and a hash-less re-render would cancel the only timer that unrings the card.
+    expect(document.getElementById('restore')?.classList.contains('is-highlighted')).toBe(true)
+    await waitFor(
+      () =>
+        expect(document.getElementById('restore')?.classList.contains('is-highlighted')).toBe(
+          false,
+        ),
+      { timeout: 2500 },
+    )
+  })
+
+  it('takes the ring off the card it leaves when the anchor moves', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings#limits']}>
+        <SettingsPage />
+        <AnchorProbe to="/settings#backups" />
+      </MemoryRouter>,
+    )
+    await waitFor(() =>
+      expect(document.getElementById('limits')?.classList.contains('is-highlighted')).toBe(true),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'go' }))
+    // The ring belongs to the anchor, not to the page. Clearing the timer is only half of
+    // taking it back — the class has to come off with it, or the card keeps it for good.
+    expect(document.getElementById('limits')?.classList.contains('is-highlighted')).toBe(false)
+    expect(document.getElementById('backups')?.classList.contains('is-highlighted')).toBe(true)
+  })
+
   it('leaves every card unrung when the URL carries no anchor', async () => {
     renderPage()
     const limits = await screen.findByRole('region', { name: 'Contribution limits' })
     expect(limits.classList.contains('is-highlighted')).toBe(false)
   })
 })
+
+// An in-page navigate, the shape every anchored arrival takes once the page is mounted:
+// the palette and the Backups card's Restore… link both push a new hash onto a page
+// that is already there.
+function AnchorProbe({ to }: { to: string }) {
+  const navigate = useNavigate()
+  return (
+    <button type="button" onClick={() => navigate(to)}>
+      go
+    </button>
+  )
+}

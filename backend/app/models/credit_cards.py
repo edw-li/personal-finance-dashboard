@@ -17,6 +17,10 @@ from app.database import Base
 
 REWARDS_CURRENCIES = ("cash", "points", "miles")
 
+# When a recurring credit resets (2026-09-03 calendar spec §6): the calendar year, or the
+# card's opened_on anniversary. The calendar's card generator dates `card_credit` events by it.
+CREDIT_RESET_CADENCES = ("calendar", "anniversary")
+
 
 class CreditCard(Base):
     """One real card account. OWNERSHIP is `person_id` (NULL = joint — either spouse can
@@ -60,13 +64,22 @@ class CardCredit(Base):
     worth-keeping math (spec §1 economics decision)."""
 
     __tablename__ = "card_credits"
-    __table_args__ = (CheckConstraint("annual_value >= 0", name="annual_value_non_negative"),)
+    __table_args__ = (
+        CheckConstraint("annual_value >= 0", name="annual_value_non_negative"),
+        CheckConstraint(
+            "reset_cadence IN ('calendar', 'anniversary')", name="reset_cadence_vocabulary"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     card_id: Mapped[int] = mapped_column(ForeignKey("credit_cards.id", ondelete="CASCADE"))
     label: Mapped[str] = mapped_column(String(120))
     annual_value: Mapped[Decimal] = mapped_column(Numeric(8, 2))
     counts: Mapped[bool] = mapped_column(default=True)
+    # server_default repeated from migration d4f6b8c0e2a5 so `alembic check` stays clean.
+    reset_cadence: Mapped[str] = mapped_column(
+        String(12), default="calendar", server_default="calendar"
+    )
 
 
 class RewardCategory(Base):

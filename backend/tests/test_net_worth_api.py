@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from unittest.mock import ANY
 
 from sqlalchemy import func, select
 
@@ -280,8 +281,10 @@ async def test_put_month_creates_snapshot_and_upserts(auth_client, db):
         "created": 2,
         "updated": 0,
         "unchanged": 0,
-        "batch_id": None,
+        # The creating PUT now logs a change batch (2026-09-03 data-lifecycle spec section 9).
+        "batch_id": ANY,
     }
+    assert resp.json()["batch_id"] is not None
 
     read = (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()
     assert read["exists"] is True
@@ -301,8 +304,9 @@ async def test_put_month_creates_snapshot_and_upserts(auth_client, db):
         "created": 0,
         "updated": 1,
         "unchanged": 0,
-        "batch_id": None,
+        "batch_id": ANY,
     }
+    assert resp.json()["batch_id"] is not None  # one balance changed, so a batch was logged
     read = (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()
     assert read["recorded_on"] == "2026-05-14"  # untouched: field wasn't sent
     assert {b["account_id"]: b["balance"] for b in read["balances"]}[card.id] == "-50.00"

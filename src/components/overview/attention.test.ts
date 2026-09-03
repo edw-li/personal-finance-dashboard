@@ -268,12 +268,29 @@ describe('attentionItems — the nightly backup (prod only)', () => {
     const [item] = attentionItems(prod(null), TODAY)
     expect(item.key).toBe('backup-stale')
     expect(item.text).toBe("Nightly backup hasn't run recently")
-    expect(item.to).toBe('/settings')
+    expect(item.to).toBe('/settings#backups')
   })
 
   it('nags past 48 hours and stays quiet through the 48th exactly', () => {
     expect(keys(prod(backupOut('2026-08-15T23:00:00Z')))).toEqual(['backup-stale'])
     expect(keys(prod(backupOut('2026-08-16T00:00:00Z')))).toEqual([])
+    expect(keys(prod(backupOut('2026-08-17T09:00:00Z')))).toEqual([])
+  })
+
+  // The verify phase (2026-09-03 data-lifecycle spec §8): a dump that uploaded but did not
+  // restore is worth a line even when it is fresh.
+  it('appends the verify verdict to a stale nag, and nags alone when fresh but unverified', () => {
+    const stale = { ...backupOut('2026-08-15T23:00:00Z'), verified: false, verify_error: 'createdb failed' }
+    const [item] = attentionItems(prod(stale), TODAY)
+    expect(item.key).toBe('backup-stale')
+    expect(item.text).toBe("Nightly backup hasn't run recently and last night's was not verified")
+    const fresh = { ...backupOut('2026-08-17T09:00:00Z'), verified: false, verify_error: 'createdb failed' }
+    const [only] = attentionItems(prod(fresh), TODAY)
+    expect(only.key).toBe('backup-unverified')
+    expect(only.text).toBe("Last night's backup was not verified")
+    expect(only.to).toBe('/settings#backups')
+    // Verified, fresh: nothing. Unknown (an older marker): nothing either — absence is not failure.
+    expect(keys(prod({ ...backupOut('2026-08-17T09:00:00Z'), verified: true }))).toEqual([])
     expect(keys(prod(backupOut('2026-08-17T09:00:00Z')))).toEqual([])
   })
 

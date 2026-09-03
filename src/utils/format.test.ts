@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   escapeHtml,
   formatCurrency,
@@ -6,9 +6,11 @@ import {
   formatBytes,
   formatDate,
   formatDateTime,
+  formatInstantDate,
   formatMonth,
   formatPct,
   formatShares,
+  localDateKey,
 } from './format'
 
 describe('formatDateTime', () => {
@@ -114,5 +116,34 @@ describe('formatBytes', () => {
   it('answers a dash for the unrenderable', () => {
     expect(formatBytes(-1)).toBe('—')
     expect(formatBytes(Number.NaN)).toBe('—')
+  })
+})
+
+describe('localDateKey / formatInstantDate', () => {
+  // Pinned, because the whole point of these two is that they read an instant on the
+  // LOCAL clock: on a UTC runner every assertion below would also hold of the naive
+  // slice they exist to replace, and the test would prove nothing.
+  beforeAll(() => vi.stubEnv('TZ', 'America/Los_Angeles'))
+  afterAll(() => vi.unstubAllEnvs())
+
+  it('reads the local day of an instant that has already crossed UTC midnight', () => {
+    // The 23:30 PT nightly, stamped 06:30 the next morning in UTC.
+    expect(localDateKey('2026-09-04T06:30:00+00:00')).toBe('2026-09-03')
+    expect(formatInstantDate('2026-09-04T06:30:00+00:00')).toBe('Sep 3, 2026')
+    // …and the naive text read, which is what they are here to stop.
+    expect(formatDate('2026-09-04T06:30:00+00:00')).toBe('Sep 4, 2026')
+  })
+
+  it('pads the key to YYYY-MM-DD, the shape the arm box asks to be typed', () => {
+    expect(localDateKey('2026-03-02T08:00:00+00:00')).toBe('2026-03-02')
+    expect(formatInstantDate('2026-03-02T08:00:00+00:00')).toBe('Mar 2, 2026')
+  })
+
+  it('answers nothing for nothing, and for text that is not an instant', () => {
+    expect(localDateKey(null)).toBeNull()
+    expect(localDateKey('')).toBeNull()
+    expect(localDateKey('not a date')).toBeNull()
+    expect(formatInstantDate(null)).toBe('—')
+    expect(formatInstantDate('not a date')).toBe('—')
   })
 })

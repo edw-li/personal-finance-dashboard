@@ -52,6 +52,31 @@ async def _read_espp_ticker(db: AsyncSession) -> str | None:
     return ticker or None
 
 
+DEFAULT_UPDATE_DUE_DAY = 1
+MAX_UPDATE_DUE_DAY = 28  # every month has a 28th — the reminder can never miss a month
+
+
+async def read_update_due_day(db: AsyncSession) -> int:
+    """app_settings['calendar_update_due_day'] envelope {"value": 1..28}; any unexpected
+    shape falls back to the default (get_swr_pct's posture). Imported by api/calendar.py."""
+    setting = await db.get(AppSetting, "calendar_update_due_day")
+    if setting is None or not isinstance(setting.value, dict):
+        return DEFAULT_UPDATE_DUE_DAY
+    raw = setting.value.get("value")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return DEFAULT_UPDATE_DUE_DAY
+    return raw if 1 <= raw <= MAX_UPDATE_DUE_DAY else DEFAULT_UPDATE_DUE_DAY
+
+
+def _validated_due_day(value: int) -> int:
+    if not 1 <= value <= MAX_UPDATE_DUE_DAY:
+        raise HTTPException(
+            status_code=422,
+            detail=f"calendar_update_due_day: must be between 1 and {MAX_UPDATE_DUE_DAY}",
+        )
+    return value
+
+
 def _validated_swr(value: Decimal) -> Decimal:
     # get_swr_pct's fallback bounds as HARD validation: what the reader silently
     # discards, the writer refuses. The `+ ZERO` is the house signed-zero collapse
@@ -106,6 +131,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> AppSettingsOut:
         swr_pct=await get_swr_pct(db),
         espp_ticker=await _read_espp_ticker(db),
         price_refresh_cron=await read_cron_setting(db),
+        calendar_update_due_day=await read_update_due_day(db),
     )
 
 
@@ -120,6 +146,12 @@ async def put_settings(
         else _normalize_ticker(body.espp_ticker)
     )
     cron = _validated_cron(body.price_refresh_cron)
+    # None = the writing card does not own this field; keep whatever is stored.
+    due_day = (
+        await read_update_due_day(db)
+        if body.calendar_update_due_day is None
+        else _validated_due_day(body.calendar_update_due_day)
+    )
     # Envelope {"value": ...} is the readers' convention (Plan 1 note). swr is stored as a
     # plain-notation STRING — get_swr_pct Decimal(str(raw))s it back losslessly, where a
     # float would round-trip through binary. Get-then-set on three rows is the accepted
@@ -128,6 +160,7 @@ async def put_settings(
         ("swr_pct", {"value": format(swr, "f")}),
         ("espp_ticker", {"value": ticker}),
         ("price_refresh_cron", {"value": cron}),
+        ("calendar_update_due_day", {"value": due_day}),
     ):
         setting = await db.get(AppSetting, key)
         if setting is None:
@@ -139,4 +172,9 @@ async def put_settings(
     # process — tests, SCHEDULER_ENABLED=0, where this is a plain False) falls back to at
     # the next boot. Best-effort by design; the response is the same either way.
     reschedule_price_refresh(cron)
-    return AppSettingsOut(swr_pct=swr, espp_ticker=ticker or None, price_refresh_cron=cron)
+    return AppSettingsOut(
+        swr_pct=swr,
+        espp_ticker=ticker or None,
+        price_refresh_cron=cron,
+        calendar_update_due_day=due_day,
+    )

@@ -13,6 +13,7 @@ vi.mock('../api/paycheck', () => ({
   updateProfile: vi.fn(),
   deleteProfile: vi.fn(),
   fetchBreakdown: vi.fn(),
+  previewPaycheck: vi.fn(),
 }))
 // The chips' source. Mocked because the page now fetches it on mount: unmocked, the real
 // client would reach `fetch` in jsdom and the isolated-fetch catch would swallow a network
@@ -48,6 +49,7 @@ import {
   deleteProfile,
   fetchBreakdown,
   fetchProfiles,
+  previewPaycheck,
   updateProfile,
 } from '../api/paycheck'
 import { fetchHousehold } from '../api/household'
@@ -95,6 +97,26 @@ const profile2025: PaycheckProfileOut = {
 
 // effective_date DESC, the order the router answers in.
 const PROFILES = [profile2026, profile2025]
+
+// The Try it card's payload is the sandbox's own business (TryItPanel.test.tsx pins every
+// figure); here the lines only have to be present, so one flat block stands in for all six.
+const PREVIEW_LINES = {
+  gross: '0.00', trad_401k: '0.00', dental_vision: '0.00', hsa: '0.00', taxable: '0.00', withholding: '0.00',
+  post_tax: '0.00', roth_401k: '0.00', after_tax_401k: '0.00', espp: '0.00', net_pay: '0.00', savings: '0.00',
+}
+
+function previewOf(profile: PaycheckProfileOut) {
+  const block = { baseline: PREVIEW_LINES, scenario: PREVIEW_LINES, delta: PREVIEW_LINES }
+  return {
+    profile,
+    per_check: block,
+    monthly: block,
+    annual: block,
+    pace: { baseline: [], scenario: [] },
+    changed: [],
+    warnings: [],
+  }
+}
 
 function breakdownOf(
   profile: PaycheckProfileOut,
@@ -980,6 +1002,47 @@ describe('PaycheckPage — shell scope', () => {
       expect(vi.mocked(fetchBreakdown)).toHaveBeenLastCalledWith(undefined, undefined),
     )
     expect(screen.getByTestId('location').textContent).toContain(`owner=${ME.id}`)
+  })
+
+  it('Apply from Try it pre-fills the profile form for next month and writes nothing', async () => {
+    vi.mocked(previewPaycheck).mockResolvedValue(previewOf(profile2026))
+    renderPage('/paycheck?whatif=trad_401k_pct%3A0.2')
+    await screen.findByText('Payroll savings')
+    fireEvent.click(screen.getByRole('button', { name: /^Save as profile effective / }))
+    const trad = (await screen.findAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement
+    expect(trad.value).toBe('20%') // AmountInput's blurred echo of the seeded "20"
+    const date = document.getElementById('paycheck-effective-date') as HTMLInputElement
+    expect(date.value).toMatch(/^\d{4}-\d{2}-01$/)
+    expect(document.activeElement).toBe(date)
+    expect(createProfile).not.toHaveBeenCalled()
+    expect(updateProfile).not.toHaveBeenCalled()
+  })
+
+  it('never hands one person’s applied scenario to another person’s form', async () => {
+    // jsdom implements no scrollIntoView (PortfolioPage.test.tsx carries the same note); the
+    // seeded mount calls it, so the stub is how "and it did not scroll again" is sayable.
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    twoEarners()
+    vi.mocked(previewPaycheck).mockResolvedValue(previewOf(profile2026))
+    renderPage('/paycheck?whatif=trad_401k_pct%3A0.2')
+    await screen.findByText('Payroll savings')
+    fireEvent.click(screen.getByRole('button', { name: /^Save as profile effective / }))
+    expect(((await screen.findAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement).value).toBe('20%')
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+    await screen.findByText('Per-check breakdown — effective Mar 1, 2026')
+    // Sam's own latest row seeds Sam's carry-forward form — 6%, never the 20% modelled for
+    // the primary — and the seeded-mount scroll/focus does not run again.
+    const trad = (await screen.findAllByLabelText('Traditional 401(k) %'))[0] as HTMLInputElement
+    expect(trad.value).toBe('6%')
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).not.toBe(document.getElementById('paycheck-effective-date'))
   })
 })
 

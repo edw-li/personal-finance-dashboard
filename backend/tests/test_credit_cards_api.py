@@ -14,6 +14,8 @@ from app.models import (
     RewardCategory,
     RewardRate,
 )
+from app.models.credit_cards import CREDIT_RESET_CADENCES
+from app.schemas.credit_cards import CreditResetCadence
 
 CARDS = "/api/v1/credit-cards"
 
@@ -416,6 +418,38 @@ async def test_credit_crud_and_validation(auth_client):
     gone = await auth_client.delete(f"{CARDS}/credits/{credit['id']}")
     assert gone.status_code == 204
     assert (await auth_client.delete(f"{CARDS}/credits/{credit['id']}")).status_code == 404
+
+
+async def test_credit_reset_cadence_round_trips_defaults_and_validates(auth_client):
+    # The wire union and the column's check constraint are two copies of the same words;
+    # adding a cadence to one and not the other is the drift this catches.
+    assert set(CREDIT_RESET_CADENCES) == set(CreditResetCadence.__args__)
+    card = (await auth_client.post(CARDS, json=card_body())).json()
+    defaulted = await auth_client.post(
+        f"{CARDS}/{card['id']}/credits",
+        json={"label": "Travel credit", "annual_value": "300.00", "counts": True},
+    )
+    assert defaulted.status_code == 201, defaulted.text
+    assert defaulted.json()["reset_cadence"] == "calendar"  # v1 clients keep working
+    credit = defaulted.json()
+    flipped = await auth_client.patch(
+        f"{CARDS}/credits/{credit['id']}",
+        json={
+            "label": "Travel credit",
+            "annual_value": "300.00",
+            "counts": True,
+            "reset_cadence": "anniversary",
+        },
+    )
+    assert flipped.status_code == 200, flipped.text
+    assert flipped.json()["reset_cadence"] == "anniversary"
+    listed = (await auth_client.get(CARDS)).json()
+    assert listed[0]["credits"][0]["reset_cadence"] == "anniversary"
+    bad = await auth_client.post(
+        f"{CARDS}/{card['id']}/credits",
+        json={"label": "x", "annual_value": "1", "counts": True, "reset_cadence": "quarterly"},
+    )
+    assert bad.status_code == 422
 
 
 # --- limit events -------------------------------------------------------------------------

@@ -8,10 +8,12 @@ import {
   useState,
 } from 'react'
 import type { ReactNode } from 'react'
+import { STORAGE_KEYS, getLocal, setLocal, subscribe } from '../../prefs/prefsStore'
 import type { ResolvedTheme } from '../../theme/tokens'
 
-// The shell's appearance state (2026-09-03 shell spec §11). Browser-local by decision:
-// localStorage now, the Data-lifecycle spec's server prefs later. `version` is the chart
+// The shell's appearance state (2026-09-03 shell spec §11). Browser-local FIRST, then the
+// account: prefsStore mirrors every change to the server and adopts the server's value at
+// session start (2026-09-03 data-lifecycle spec §10). `version` is the chart
 // bridge's signal — EChart re-initializes with a versioned theme whenever the RESOLVED
 // palette changes, and only then (density and a same-palette choice do not redraw charts).
 // How it is used: mount <ThemeProvider> once around the app, then `useTheme()` anywhere for
@@ -23,9 +25,11 @@ export type ThemeChoice = 'system' | 'dark' | 'light'
 export type { ResolvedTheme }
 export type Density = 'comfortable' | 'compact'
 
-// index.html's inline script repeats these literally; ThemeProvider.test pins them.
-export const THEME_KEY = 'finance.theme'
-export const DENSITY_KEY = 'finance.density'
+// index.html's inline script repeats these literally; ThemeProvider.test pins them. Aliases
+// of prefsStore's registry rather than second copies of the spelling: the store owns every
+// storage key, and two literals for one key is how a rename loses a user's theme.
+export const THEME_KEY = STORAGE_KEYS.theme
+export const DENSITY_KEY = STORAGE_KEYS.density
 export const LIGHT_QUERY = '(prefers-color-scheme: light)'
 
 export interface ThemeState {
@@ -51,20 +55,11 @@ const BARE: ThemeState = {
 const ThemeContext = createContext<ThemeState | null>(null)
 
 function readChoice(): ThemeChoice {
-  try {
-    const raw = localStorage.getItem(THEME_KEY)
-    return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'dark'
-  } catch {
-    return 'dark'
-  }
+  return getLocal('theme') ?? 'dark'
 }
 
 function readDensity(): Density {
-  try {
-    return localStorage.getItem(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable'
-  } catch {
-    return 'comfortable'
-  }
+  return getLocal('density') ?? 'comfortable'
 }
 
 function osPrefersLight(): boolean {
@@ -75,14 +70,6 @@ function osPrefersLight(): boolean {
 export function resolveTheme(choice: ThemeChoice): ResolvedTheme {
   if (choice === 'system') return osPrefersLight() ? 'light' : 'dark'
   return choice
-}
-
-function persist(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    // A blocked localStorage costs persistence, never the switch itself.
-  }
 }
 
 export default function ThemeProvider({ children }: { children: ReactNode }) {
@@ -122,10 +109,24 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
     return () => query.removeEventListener('change', onChange)
   }, [theme, applyResolved])
 
+  // Server adoption (2026-09-03 data-lifecycle spec §10): a value synced after first paint
+  // lands here. Storage is already written by the store; this moves the LIVE state.
+  useEffect(() => {
+    const offTheme = subscribe('theme', (next) => {
+      setThemeState(next)
+      applyResolved(resolveTheme(next))
+    })
+    const offDensity = subscribe('density', setDensityState)
+    return () => {
+      offTheme()
+      offDensity()
+    }
+  }, [applyResolved])
+
   const setTheme = useCallback(
     (next: ThemeChoice) => {
       setThemeState(next)
-      persist(THEME_KEY, next)
+      setLocal('theme', next)
       applyResolved(resolveTheme(next))
     },
     [applyResolved],
@@ -133,7 +134,7 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
 
   const setDensity = useCallback((next: Density) => {
     setDensityState(next)
-    persist(DENSITY_KEY, next)
+    setLocal('density', next)
   }, [])
 
   const value = useMemo<ThemeState>(

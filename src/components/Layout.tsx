@@ -1,6 +1,7 @@
 import { Search } from 'lucide-react'
 import { Suspense, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigationType } from 'react-router-dom'
+import { markLanded } from '../prefs/LandingRedirect'
 import AssistantDrawer from './assistant/AssistantDrawer'
 import CommandPalette from './CommandPalette'
 import './Layout.css'
@@ -34,6 +35,15 @@ export default function Layout() {
     navigationTypeRef.current = navigationType
     locationKeyRef.current = locationKey
   })
+
+  // The shell mounting IS the tab's arrival, whatever page it arrived on (2026-09-03
+  // data-lifecycle spec §10). It belongs here rather than in LandingRedirect because that
+  // component only ever mounts on `/`: a tab that opened on /net-worth would leave the flag
+  // unset and turn the next Overview CLICK into a landing-page redirect. Mount-only, and
+  // effects run after render, so the `/` route's own decision is already made when it fires.
+  useEffect(() => {
+    markLanded()
+  }, [])
 
   // Record scroll depth per history entry (rAF-throttled, passive). sessionStorage, not
   // memory: the map must survive a reload for Back to keep working afterwards. We own

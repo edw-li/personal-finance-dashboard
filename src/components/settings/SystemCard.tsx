@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../api/client'
-import { downloadSnapshot, fetchSystemStatus } from '../../api/system'
+import { fetchSystemStatus } from '../../api/system'
 import type { BackupRun, RefreshRun, SystemStatus } from '../../types/api'
 import { formatBytes, formatDateTime } from '../../utils/format'
 import { backupAge } from '../../utils/staleness'
@@ -22,19 +22,38 @@ function refreshLine(status: SystemStatus): string {
   }`
 }
 
+// The marker's words (2026-09-03 data-lifecycle spec §8): stamp · size · encrypted · verified,
+// or "· not verified — <reason>" in the overdue tone. size_bytes (the verify-phase script)
+// wins over the older du -h string; both parse, because every new field is optional.
 function backupLine(status: SystemStatus): { text: string; className: string } {
   if (status.backup === null) {
     // The permanent, unremarkable state on a dev box — said plainly. The prod-only
     // nagging lives on the Overview strip (attention.ts), never here.
     return { text: 'No backup recorded', className: '' }
   }
-  const stamp = `${formatDateTime(status.backup.last_success_at)} (${status.backup.size})`
-  const age = backupAge(status.backup.last_success_at)
+  const backup = status.backup
+  const parts = [
+    formatDateTime(backup.last_success_at),
+    backup.size_bytes != null ? formatBytes(backup.size_bytes) : backup.size,
+  ]
+  if (backup.encrypted === true) parts.push('encrypted')
+  let className = ''
+  if (backup.verified === true) {
+    parts.push('verified')
+  } else if (backup.verified === false) {
+    parts.push(`not verified — ${backup.verify_error ?? 'no reason recorded'}`)
+    className = 'system-overdue'
+  }
+  let text = parts.join(' · ')
+  const age = backupAge(backup.last_success_at)
   if (age === 'overdue') {
     // Past seven days the WORDING changes too (spec §3) — colour is never the only channel.
-    return { text: `${stamp} — more than a week old`, className: 'system-overdue' }
+    text += ' — more than a week old'
+    className = 'system-overdue'
+  } else if (age === 'stale' && className === '') {
+    className = 'system-stale'
   }
-  return { text: stamp, className: age === 'stale' ? 'system-stale' : '' }
+  return { text, className }
 }
 
 // Compact last-5 trails (spec §B3): one line each, newest first — the server stores 10,
@@ -60,15 +79,7 @@ function refreshRunsLine(runs: RefreshRun[]): string {
     .join(' · ')
 }
 
-function SystemFacts({
-  status,
-  downloading,
-  onDownload,
-}: {
-  status: SystemStatus
-  downloading: boolean
-  onDownload: () => void
-}) {
+function SystemFacts({ status }: { status: SystemStatus }) {
   const backup = backupLine(status)
   return (
     <dl className="system-facts">
@@ -93,12 +104,7 @@ function SystemFacts({
       <div className="system-fact">
         <dt>Last backup</dt>
         <dd>
-          <span className={backup.className}>{backup.text}</span>{' '}
-          {/* The on-demand door beside the nightly marker (spec §B1): the snapshot ZIP
-              is the app's own backup, so it lives on the backup row. */}
-          <button type="button" className="button" onClick={onDownload} disabled={downloading}>
-            {downloading ? 'Preparing…' : 'Download snapshot (.zip)'}
-          </button>
+          <span className={backup.className}>{backup.text}</span>
         </dd>
       </div>
       <div className="system-fact">
@@ -123,7 +129,8 @@ function SystemFacts({
 
 /**
  * The Settings System card (2026-08-25 spec §3): read-only operational facts — the last
- * refresh run and its schedule, the nightly-backup marker, database size and migration
+ * refresh run and its schedule, the nightly-backup marker with its verify verdict,
+ * database size and migration
  * head. Its own fetch and error state (the Up-next posture): a status hiccup must not
  * dent the settings forms, nor the reverse.
  */
@@ -132,21 +139,6 @@ export default function SystemCard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const seqRef = useRef(0)
-  const [downloading, setDownloading] = useState(false)
-  const [downloadError, setDownloadError] = useState<string | null>(null)
-
-  // Its OWN error state, never the card's `error`: that one unmounts SystemFacts (the
-  // render below is `!error && <SystemFacts/>`), and a failed download must not blank
-  // rows that loaded fine.
-  const download = () => {
-    setDownloading(true)
-    setDownloadError(null)
-    downloadSnapshot()
-      .catch((err: unknown) => {
-        setDownloadError(err instanceof ApiError ? err.message : 'Export failed.')
-      })
-      .finally(() => setDownloading(false))
-  }
 
   const load = () => {
     const seq = ++seqRef.current
@@ -174,7 +166,7 @@ export default function SystemCard() {
     <section className="card span-12" id="system">
       <h2 className="eyebrow">
         System
-        <InfoHint text="Operational status: the last price refresh and its schedule, the nightly backup marker recorded by the backup script, and the database's size and migration head." />
+        <InfoHint text="Operational status: the last price refresh and its schedule, the nightly backup marker recorded by the backup script — with whether last night's dump restored — and the database's size and migration head. Snapshots and downloads live on the Backups card." />
       </h2>
       <FeedBanner
         error={error}
@@ -183,12 +175,9 @@ export default function SystemCard() {
           load()
         }}
       />
-      <FeedBanner error={downloadError} />
       {status === null
         ? loading && <p className="empty-note">Loading…</p>
-        : !error && (
-            <SystemFacts status={status} downloading={downloading} onDownload={download} />
-          )}
+        : !error && <SystemFacts status={status} />}
     </section>
   )
 }

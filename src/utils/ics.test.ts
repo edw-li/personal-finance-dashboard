@@ -1,18 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
+import { calendarEvent } from '../testing/calendarFixtures'
 import type { CalendarEvent } from '../types/api'
 import { buildIcs, downloadIcs, escapeIcsText, eventUid } from './ics'
 
 function event(over: Partial<CalendarEvent> = {}): CalendarEvent {
-  return {
+  return calendarEvent({
     date: '2026-09-16',
     type: 'rsu_vest',
     label: 'RSU vest — 2025 offer',
     detail: '25 sh — 2025 offer',
-    href: '/comp',
-    id: null,
-    person_id: null,
     ...over,
-  }
+  })
 }
 
 describe('eventUid', () => {
