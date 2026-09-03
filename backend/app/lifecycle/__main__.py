@@ -85,7 +85,14 @@ async def _amain(command: str, zip_path: Path, dry_run: bool) -> int:
                 return 2
             except Exception as exc:  # a CLI reports, it does not traceback
                 await db.rollback()
-                print(f"error: restore failed and nothing was changed ({exc!r})", file=sys.stderr)
+                # `verify` and `restore --dry-run` never wrote: saying a restore failed
+                # would send the drill's reader hunting for damage that cannot exist.
+                failed = (
+                    "restore failed and nothing was changed"
+                    if command == "restore" and not dry_run
+                    else f"{command} failed"
+                )
+                print(f"error: {failed} ({exc!r})", file=sys.stderr)
                 return 1
     finally:
         await engine.dispose()

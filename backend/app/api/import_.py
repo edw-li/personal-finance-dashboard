@@ -68,11 +68,17 @@ async def import_stored_snapshot(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RestoreReport:
-    # The name grammar IS the path-safety check: a match cannot carry a separator or a dot
-    # segment, so nothing but a stored snapshot is ever opened.
-    path = snapshots_dir() / name
-    if SNAPSHOT_NAME_RE.fullmatch(name) is None or not await asyncio.to_thread(path.is_file):
-        raise HTTPException(status_code=404, detail=f"No stored snapshot named {name!r}")
+    # The name grammar IS the path-safety check, and it runs BEFORE any path is built from
+    # the untrusted name: a match can carry neither a separator nor a dot segment, so
+    # nothing but a stored snapshot is ever opened.
+    missing = f"No stored snapshot named {name!r}"
+    if SNAPSHOT_NAME_RE.fullmatch(name) is None:
+        raise HTTPException(status_code=404, detail=missing)
+    directory = snapshots_dir()
+    path = directory / name
+    # Belt-and-braces on the join itself: only reachable if the grammar above ever loosens.
+    if not path.is_relative_to(directory) or not await asyncio.to_thread(path.is_file):
+        raise HTTPException(status_code=404, detail=missing)
     data = await asyncio.to_thread(path.read_bytes)
     return await _restore(data, dry_run=dry_run, user=user, db=db, source_name=name)
 

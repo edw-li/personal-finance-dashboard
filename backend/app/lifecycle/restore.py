@@ -47,6 +47,11 @@ logger = logging.getLogger(__name__)
 NOT_A_SNAPSHOT = "Not a snapshot ZIP from this app"
 APP_MARKER = "personal-finance-dashboard"
 
+# Per-member UNCOMPRESSED ceiling. Only manifest.json and finance-export.json are ever read,
+# and a real book's JSON is a few MB; this is generous enough never to bite a genuine export
+# while bounding the memory a crafted archive can demand.
+MAX_MEMBER_BYTES = 64 * 1024 * 1024
+
 # The five app_settings rows that describe THIS server, never the snapshot's (spec §7 step
 # 2): a snapshot never carries the assistant key (redacted), and the backup/refresh markers
 # say what this box's cron and scheduler did.
@@ -77,6 +82,27 @@ class LoadedSnapshot:
     tables: dict[str, list[dict[str, object]]]
 
 
+def _too_big(name: str, size: int) -> SnapshotError:
+    return SnapshotError(
+        413,
+        f"Snapshot member {name} is too large ({size} bytes uncompressed; "
+        f"max {MAX_MEMBER_BYTES} bytes)",
+    )
+
+
+def _read_member(archive: zipfile.ZipFile, name: str) -> bytes:
+    """One member, bounded. The 15 MB upload ceiling is COMPRESSED bytes, and deflate
+    reaches ~1000:1 on padding, so a small upload can still ask for gigabytes of memory:
+    read one byte past the cap and refuse if it arrives. The caller checked every declared
+    file_size first (a clear refusal before decompressing); this catches a local header
+    that lies about its size."""
+    with archive.open(name) as handle:
+        data = handle.read(MAX_MEMBER_BYTES + 1)
+    if len(data) > MAX_MEMBER_BYTES:
+        raise _too_big(name, len(data))
+    return data
+
+
 def load_snapshot(data: bytes) -> LoadedSnapshot:
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
@@ -85,9 +111,14 @@ def load_snapshot(data: bytes) -> LoadedSnapshot:
     names = set(archive.namelist())
     if "manifest.json" not in names or "finance-export.json" not in names:
         raise SnapshotError(400, NOT_A_SNAPSHOT)
+    oversized = next(
+        (info for info in archive.infolist() if info.file_size > MAX_MEMBER_BYTES), None
+    )
+    if oversized is not None:
+        raise _too_big(oversized.filename, oversized.file_size)
     try:
-        manifest = json.loads(archive.read("manifest.json"))
-        payload = json.loads(archive.read("finance-export.json"))
+        manifest = json.loads(_read_member(archive, "manifest.json"))
+        payload = json.loads(_read_member(archive, "finance-export.json"))
     except (ValueError, UnicodeDecodeError):
         raise SnapshotError(400, NOT_A_SNAPSHOT) from None
     if not isinstance(manifest, dict) or not isinstance(payload, dict):
@@ -211,6 +242,17 @@ def _digest(columns, rows: list[dict[str, object]]) -> str:
     return hashlib.sha256(csv_for_rows(columns, rows).encode("utf-8")).hexdigest()
 
 
+def _restorable_rows(name: str, rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The rows a restore actually writes. The preserved app_settings keys are NOT among
+    them — step 6 puts this server's own back instead — so they are cut from BOTH sides of
+    the digest and from the counts. Otherwise a snapshot carrying `backup_status` would
+    report an app_settings difference that no restore can ever settle, and the drill's
+    `verify` would fail on every real snapshot."""
+    if name != "app_settings":
+        return rows
+    return [row for row in rows if row["key"] not in RESTORE_PRESERVED_SETTINGS]
+
+
 async def _current_rows(db: AsyncSession, model: type, name: str) -> list[dict[str, object]]:
     """The live table as the export would write it — redactions included, so a snapshot
     (which never carries the key row) compares fairly."""
@@ -223,7 +265,7 @@ async def _current_rows(db: AsyncSession, model: type, name: str) -> list[dict[s
     if redacted is not None:
         rows = [row for row in rows if row.key not in redacted]
     columns = list(model.__table__.columns)
-    return [row_dict(row, columns) for row in rows]
+    return _restorable_rows(name, [row_dict(row, columns) for row in rows])
 
 
 async def diff_tables(db: AsyncSession, parsed: ParsedTables) -> dict[str, RestoreTableDiff]:
@@ -231,7 +273,7 @@ async def diff_tables(db: AsyncSession, parsed: ParsedTables) -> dict[str, Resto
     for model, name in EXPORTED_TABLES:
         columns = list(model.__table__.columns)
         current = await _current_rows(db, model, name)
-        incoming = parsed.rows[name]
+        incoming = _restorable_rows(name, parsed.rows[name])
         diffs[name] = RestoreTableDiff(
             current=len(current),
             incoming=len(incoming),
@@ -289,7 +331,9 @@ def _exported_in_fk_order() -> list[tuple[type, str]]:
 def _label_for(snapshot: LoadedSnapshot) -> str:
     if snapshot.exported_at is None:
         return "Restored snapshot"
-    at = snapshot.exported_at
+    # The Activity card reads this label next to local-time stamps: a 5 p.m. Pacific export
+    # is "Sep 2", not the UTC "Sep 3" its instant spells.
+    at = snapshot.exported_at.astimezone()
     return f"Restored snapshot from {at:%b} {at.day}, {at.year}"  # no %-d: not portable
 
 
@@ -335,8 +379,7 @@ async def apply_restore(
             {key: value for key, value in row.items() if key not in absent}
             for row in parsed.rows[name]
         ]
-        if name == "app_settings":
-            rows = [row for row in rows if row["key"] not in RESTORE_PRESERVED_SETTINGS]
+        rows = _restorable_rows(name, rows)
         deferred: list[tuple[object, object]] = []
         self_ref = SELF_REFERENCES.get(name)
         if self_ref is not None:

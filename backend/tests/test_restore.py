@@ -25,6 +25,7 @@ from app.models import (
     CreditCard,
     CustomEvent,
     LifecycleRun,
+    Person,
     SpendingCategory,
     UserPreference,
 )
@@ -132,6 +133,17 @@ async def test_check_schema_409s_with_the_spec_sentence_and_treats_two_nones_as_
     with pytest.raises(SnapshotError) as none_vs_head:
         check_schema(loaded, "c3a7e19d5b42")
     assert "exported at schema `none`" in none_vs_head.value.detail
+
+
+async def test_load_snapshot_refuses_a_member_over_the_uncompressed_cap(db, monkeypatch):
+    # The 15 MB upload ceiling counts COMPRESSED bytes; the cap here bounds what a crafted
+    # archive can ask us to hold in memory. Shrink it rather than build a 64 MB bomb.
+    snap = await build_snapshot_zip(db)
+    monkeypatch.setattr("app.lifecycle.restore.MAX_MEMBER_BYTES", 64)
+    with pytest.raises(SnapshotError) as excinfo:
+        load_snapshot(snap.payload)
+    assert excinfo.value.status == 413
+    assert "is too large" in excinfo.value.detail
 
 
 # ── parse_tables / diff_tables ───────────────────────────────────────────────────────
@@ -255,6 +267,12 @@ async def seed_a_book(db, seeded_user) -> None:
         )
     )
     db.add(CustomEvent(event_date=date(2026, 12, 25), label="Bonus lands", detail=None))
+    # `people` is the SECOND-TO-LAST exported table but the parent of accounts.person_id and
+    # credit_cards.person_id: owning a row from each pins the FK-ordered insert (spec §7
+    # step 4). Insert in the export's own order instead and both statements fail.
+    person = Person(name="Alex", is_primary=True)
+    db.add(person)
+    await db.flush()
     db.add(
         CreditCard(
             name="Sapphire",
@@ -262,9 +280,12 @@ async def seed_a_book(db, seeded_user) -> None:
             rewards_currency="points",
             annual_fee=Decimal("95.00"),
             point_value_cents=Decimal("1.5000"),
+            person_id=person.id,
         )
     )
     db.add(UserPreference(user_id=seeded_user.id, key="theme", value="light"))
+    owned = (await db.execute(select(Account).order_by(Account.id))).scalars().first()
+    owned.person_id = person.id
     await db.commit()
 
 
@@ -290,6 +311,7 @@ async def test_apply_restore_round_trips_every_table_byte_for_byte(db, seeded_us
     await seed_a_book(db, seeded_user)
     before = await build_snapshot_zip(db)
     assert before.counts["accounts"] == 3 and before.counts["credit_cards"] == 1
+    assert before.counts["people"] == 1  # the FK the insert order has to respect
     await wipe_exported_tables(db)
     assert await count(db, Account) == 0
 
@@ -357,6 +379,39 @@ async def test_apply_restore_preserves_this_servers_operational_settings(db, see
             "refresh_runs",
             "last_refresh",
         }
+    # A preserved row is never written from the file, so it is not part of the identity
+    # either: the drill's `verify` passes right after this restore even though this
+    # server's backup_status differs from the one the snapshot carries.
+    plan = await plan_restore(
+        db, load_snapshot(snap.payload), user_id=seeded_user.id, server_head=None
+    )
+    assert plan.tables["app_settings"] == RestoreTableDiff(current=1, incoming=1, identical=True)
+    assert all(diff.identical for diff in plan.tables.values())
+
+
+async def test_a_snapshot_carrying_preserved_settings_reports_only_the_rows_it_writes(
+    db, seeded_user
+):
+    db.add(AppSetting(key="backup_status", value={"snapshot": True}))
+    db.add(AppSetting(key="refresh_runs", value=[{"at": "2026-09-01T00:00:00+00:00"}]))
+    db.add(AppSetting(key="swr_pct", value={"value": "0.04"}))
+    await db.commit()
+    snap = await build_snapshot_zip(db)
+    assert len(load_snapshot(snap.payload).tables["app_settings"]) == 3  # the file has all three
+    await wipe_exported_tables(db)
+
+    report = await restore_now(db, snap.payload, seeded_user.id)
+    # Counted as written, not as carried: two preserved rows stay out of the report and out
+    # of the database (this server has none to put back after the truncate).
+    assert report.tables["app_settings"] == RestoreTableDiff(current=0, incoming=1, identical=False)
+    assert report.preserved_settings == []
+    assert [s.key for s in (await db.execute(select(AppSetting))).scalars()] == ["swr_pct"]
+    # And the same file now verifies clean — the diff a restore cannot settle is gone.
+    plan = await plan_restore(
+        db, load_snapshot(snap.payload), user_id=seeded_user.id, server_head=None
+    )
+    assert plan.tables["app_settings"] == RestoreTableDiff(current=1, incoming=1, identical=True)
+    assert [name for name, diff in plan.tables.items() if not diff.identical] == []
 
 
 async def test_apply_restore_rewrites_preferences_fixes_the_self_reference_and_resumes_sequences(

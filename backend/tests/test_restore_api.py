@@ -127,6 +127,9 @@ async def test_a_failure_after_the_restore_point_answers_500_and_changes_nothing
     resp = await auth_client.post(f"{UPLOAD}?dry_run=false", files=upload(snap.payload))
     assert resp.status_code == 500
     assert resp.json()["detail"] == "Restore failed and nothing was changed"
+    # The ROUTER rolled the transaction back, not this test: drop its `await db.rollback()`
+    # and the session is still sitting in an aborted transaction here.
+    assert not db.in_transaction()
     await db.rollback()
     assert await count_accounts(db) == 1
     runs = (await db.execute(select(LifecycleRun))).scalars().all()
