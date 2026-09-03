@@ -62,9 +62,25 @@ export default function ScenarioPanel({
 }) {
   const [open, setOpen] = useState(true)
   const [monthError, setMonthError] = useState<string | null>(null)
+  // The month boxes' own transient text. A browser WITHOUT a month picker renders
+  // type="month" as a plain text field and hands over one character at a time, so a
+  // URL-controlled box validated per keystroke is untypeable: "2", "20", "203" would each
+  // be refused and wiped. The draft holds the half-typed month; blur and Enter commit it.
+  const [drafts, setDrafts] = useState<Record<number, string>>({})
   const derived = derivedOf(baseline)
   const breakdown = baseline?.contribution_breakdown ?? null
   const { scenario } = sandbox
+
+  // Reconciled to the URL during RENDER, never from an effect body (the house rule): when
+  // the committed entries change — Reset to derived, a pasted link, the back button — the
+  // drafts and whatever refusal they earned are stale by definition.
+  const entriesKey = sandbox.entries.join('')
+  const [seen, setSeen] = useState(entriesKey)
+  if (seen !== entriesKey) {
+    setSeen(entriesKey)
+    setDrafts({})
+    setMonthError(null)
+  }
 
   const knob = (key: ProjectionKnob) => (next: string, commit: boolean) =>
     sandbox.set(
@@ -77,7 +93,7 @@ export default function ScenarioPanel({
       { immediate: commit },
     )
 
-  const setRetire = (person: PersonOut, month: string) => {
+  const commitRetire = (person: PersonOut, month: string) => {
     const text = month.trim()
     if (text !== '' && !MONTH_TOKEN.test(text)) {
       setMonthError(`${person.name}'s retirement month must look like YYYY-MM`)
@@ -93,6 +109,20 @@ export default function ScenarioPanel({
       },
       { immediate: true },
     )
+  }
+
+  const onRetireChange = (person: PersonOut, raw: string) => {
+    setDrafts((current) => ({ ...current, [person.id]: raw }))
+    setMonthError(null) // the sentence described what WAS in the box
+    // A month picker (and a cleared box) hands over a complete answer in ONE event — commit
+    // it at once, so choosing a month is still immediate. Anything partial is a keystroke
+    // from a browser without a picker: hold it until blur or Enter.
+    if (raw === '' || MONTH_TOKEN.test(raw)) commitRetire(person, raw)
+  }
+
+  const onRetireCommit = (person: PersonOut) => {
+    const draft = drafts[person.id]
+    if (draft !== undefined) commitRetire(person, draft)
   }
 
   return (
@@ -161,12 +191,21 @@ export default function ScenarioPanel({
             id={`scenario-retire-${person.id}`}
             type="month"
             className="field-input"
-            value={scenario.retirements[person.id] ?? ''}
-            onChange={(e) => setRetire(person, e.target.value)}
+            aria-describedby={monthError !== null ? 'scenario-retire-error' : undefined}
+            value={drafts[person.id] ?? scenario.retirements[person.id] ?? ''}
+            onChange={(e) => onRetireChange(person, e.target.value)}
+            onBlur={() => onRetireCommit(person)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return
+              e.preventDefault() // Enter inside a card must not implicit-submit
+              onRetireCommit(person)
+            }}
           />
         </div>
       ))}
-      <FeedBanner error={monthError} />
+      <div id="scenario-retire-error">
+        <FeedBanner error={monthError} />
+      </div>
       {people.length > 0 && (
         // Named only where the boxes are: a roster-less database has no retirement to explain.
         <p className="drill-hint">

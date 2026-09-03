@@ -320,13 +320,19 @@ export function projectionOption(
   return {
     // ctrl+wheel / drag-pan over a 30-year axis; the horizon knob changes the window.
     dataZoom: timeZoom(data.months, 'all'),
-    // The fan's own left inset (wider money labels); with pins on it, the endLabel
-    // variant's right one (chart grammar §8) — room for their names past the last month.
-    grid: references.length === 0 ? grid('fan') : { ...grid('fan'), right: grid('endLabel').right },
+    // A NAMED variant either way (conformance checks grids by variant, never by literal):
+    // the fan, or the fan with room for the pin names past the last month.
+    grid: grid(references.length === 0 ? 'fan' : 'fanEndLabel'),
     // Listed explicitly so the invisible base stays OUT; the two outer washes share one name
     // and therefore one entry.
     legend: { ...legendFor(legendData.length, selected), data: legendData },
-    tooltip: axisTooltip({ unit: 'money', references: [PROJECTION_SERIES[2]], footer: bandLines }),
+    // Pins are reference series, so they read as references in the hover too (spec §11):
+    // muted rows under the live scenario's, never mixed in with it.
+    tooltip: axisTooltip({
+      unit: 'money',
+      references: [PROJECTION_SERIES[2], ...references.map((ref) => ref.name)],
+      footer: bandLines,
+    }),
     xAxis: monthAxis(labels),
     yAxis: moneyAxis({ log }),
     series,

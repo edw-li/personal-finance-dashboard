@@ -9,6 +9,7 @@ import {
 } from '../components/projection/projectionChartOptions'
 import type { NetWorthTimeseries, ProjectionOut } from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
+import { PINS_VERSION, pinsKey } from '../sandbox/pins'
 import ProjectionPage from './ProjectionPage'
 
 vi.mock('../api/projection', async (importOriginal) => ({
@@ -665,6 +666,34 @@ describe('ProjectionPage', () => {
     await waitFor(() => expect(seriesOf(chart)).toContain('Return 6%'))
   })
 
+  it('draws a pin stored from an earlier visit as a series on mount', async () => {
+    // Personal working memory, KNOBS only (spec §4.5): the stored entries are re-run
+    // against live data on arrival, so a pinned line can never show a stale figure.
+    localStorage.setItem(
+      pinsKey('projection'),
+      JSON.stringify({
+        version: PINS_VERSION,
+        pins: [
+          {
+            id: 'p1',
+            label: 'Retire Alex 2035-06',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            entries: ['retire:2:2035-06'],
+          },
+        ],
+      }),
+    )
+    renderPage()
+
+    const chart = await screen.findByLabelText(/Projected investable balance over the next/)
+    await waitFor(() => expect(seriesOf(chart)).toContain('Retire Alex 2035-06'))
+    // Its own run, beside the derived one — and the URL is untouched: pins are not links.
+    expect(vi.mocked(fetchProjection)).toHaveBeenCalledWith({
+      retirements: [{ personId: 2, month: '2035-06' }],
+    })
+    expect(url()).toBe('/projection')
+  })
+
   it('hangs a hint on the FI-target tile and on both chart headings', async () => {
     renderPage()
     await loaded()
@@ -803,6 +832,7 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
     const monthBox = box('Retires — Alex')
     monthBox.type = 'text'
     fireEvent.change(monthBox, { target: { value: '2035-13' } })
+    fireEvent.blur(monthBox) // the box's own commit point — typing is never refused mid-word
 
     expect(screen.getByText("Alex's retirement month must look like YYYY-MM")).toBeTruthy()
     expect(fetchProjection).toHaveBeenCalledTimes(1) // the derived run only
@@ -835,14 +865,16 @@ describe('ProjectionPage — dual-career retirements (2026-08-28 spec §4.3)', (
 
     fireEvent.change(box('Retires — Alex'), { target: { value: '2035-06' } })
 
-    // Twice over, and both are the server's own sentence: the frame's stale line above the
-    // page (the earlier figures are still on screen) and the knobs card's own alert.
-    await waitFor(() =>
-      expect(
-        screen.getAllByText(/Alex has no paycheck profile in force — nothing to drop/).length,
-      ).toBeGreaterThan(0),
+    // ONE surface, and it is the knobs card's: the page's own resource is the DERIVED run,
+    // whose figures are still on screen and still true. Saying it twice — and offering a
+    // frame Retry that would re-send the refused scenario — is what this pins against.
+    const shown = await screen.findAllByText(
+      /Alex has no paycheck profile in force — nothing to drop/,
     )
-    expect(screen.getByRole('alert')).toBeTruthy() // a refusal IS an alert
+    expect(shown).toHaveLength(1)
+    expect(screen.getByRole('alert')).toBe(shown[0])
+    expect(screen.queryByText(/Showing earlier data/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
   it('names the approximation the drop actually is', async () => {

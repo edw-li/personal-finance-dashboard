@@ -26,7 +26,7 @@ import StatTile from '../components/StatTile'
 import Segmented from '../components/shell/Segmented'
 import PageFrame from '../components/shell/PageFrame'
 import { useSandbox, type SandboxSpec } from '../sandbox/useSandbox'
-import type { HouseholdOut, NetWorthTimeseries, ProjectionOut } from '../types/api'
+import type { HouseholdOut, NetWorthTimeseries, PersonOut, ProjectionOut } from '../types/api'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import '../components/panels.css'
 import './ProjectionPage.css'
@@ -43,6 +43,10 @@ function message(err: unknown, fallback: string): string {
 const TREND_SPANS = [1, 5, 10, 40] as const
 type TrendSpan = (typeof TREND_SPANS)[number]
 
+// One frozen empty roster, so "the household has not answered" keeps a stable identity and
+// the sandbox spec's memo (and every child's props) does not churn on it.
+const NO_PEOPLE: PersonOut[] = []
+
 // The eight knobs and the retirement months live in the URL (2026-09-03 planning-sandboxes
 // spec §11): `?whatif=annual_return:0.06&whatif=retire:2:2035-06` IS the request the page
 // sends, so a link reproduces a scenario exactly and the back button leaves the page rather
@@ -55,6 +59,10 @@ export default function ProjectionPage() {
   const [cachedProjection] = useState(() => getSnapshot<ProjectionOut>('projection:default'))
   // The frame's Retry: a new dataKey re-runs the live scenario, the baseline and every pin.
   const [retryNonce, setRetryNonce] = useState(0)
+  // Read before the spec so a pin's label can name the person; state, so its identity is
+  // stable across renders and the spec's memo actually holds.
+  const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  const roster = household?.people ?? NO_PEOPLE
   const spec = useMemo<SandboxSpec<ProjectionScenario, ProjectionOut>>(
     () => ({
       page: 'projection',
@@ -68,15 +76,22 @@ export default function ProjectionPage() {
       // The empty run IS the page's default payload — the one knob-free projection the
       // snapshot cache may hold (knob-parameterized runs never enter it).
       onBaseline: (baseline) => setSnapshot('projection:default', baseline),
-      labelFor: labelForProjection,
+      // A pin's default name says WHO retires, not which id (spec §11).
+      labelFor: (scenario) => labelForProjection(scenario, roster),
     }),
-    [retryNonce, cachedProjection],
+    [retryNonce, cachedProjection, roster],
   )
   const sandbox = useSandbox(spec)
   // What the tiles and charts draw: the live scenario, or the derived run while it is empty.
   const data = sandbox.result ?? sandbox.baseline
   // A 404 is "nothing to project from yet" (no snapshots): the wizard, not a Retry.
   const missing = sandbox.result === null && sandbox.errorStatus === 404
+  // The page's RESOURCE is the derived run. A knob's refusal belongs to the knobs card,
+  // which words it itself through the panel's Feed and keeps the earlier figures on
+  // screen — repeating it on the frame would say the same 422 twice and offer a Retry that
+  // re-sends the scenario the server just refused. A failure with nothing on screen has no
+  // other surface, so that one still rides the frame.
+  const pageError = missing ? null : sandbox.empty || data === null ? sandbox.error : null
 
   // The history behind the trend chart — its OWN state and failure: the card degrades to a
   // note while the tiles, the investable chart and the knobs keep running.
@@ -85,10 +100,6 @@ export default function ProjectionPage() {
   )
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [trendYears, setTrendYears] = useState<TrendSpan>(10)
-  // Fetched on its own, never inside a Promise.all: the knobs are an affordance, and a
-  // household hiccup must not blank the projection (NetWorthPage's isolated-fetch
-  // posture). null covers both "not loaded yet" and "failed".
-  const [household, setHousehold] = useState<HouseholdOut | null>(null)
 
   useEffect(() => {
     // Mount-only, never on a knob: the history doesn't change with the scenario — the
@@ -104,14 +115,14 @@ export default function ProjectionPage() {
   }, [])
 
   useEffect(() => {
-    // Once per visit. Its own failure: no retirement knobs, and the rest never notices.
+    // Fetched on its own, never inside a Promise.all: the knobs are an affordance, and a
+    // household hiccup must not blank the projection (NetWorthPage's isolated-fetch
+    // posture). Once per visit; its own failure means no retirement knobs and nothing else.
     fetchHousehold()
       .then(setHousehold)
       .catch(() => setHousehold(null))
   }, [])
 
-  // Server order: primary first, then by id — the same order every owner control uses.
-  const people = household?.people ?? []
 
   // Still the cached payload — the very object on the first paint, or a revalidation that
   // changed nothing: either way a cached paint, so both charts stay still (2026-08-27 spec
@@ -180,12 +191,16 @@ export default function ProjectionPage() {
           status: missing
             ? 'ready'
             : data === null
-              ? sandbox.error !== null
+              ? pageError !== null
                 ? 'error'
                 : 'loading'
               : 'ready',
-          error: missing ? null : sandbox.error,
-          busy: sandbox.busy,
+          error: pageError,
+          // NOT the sandbox's busy: the frame's dim covers the whole page and disables
+          // pointer events, so a 300 ms preview tick would grey out the very slider under
+          // the pointer. The two charts carry the cue themselves, and the compare table
+          // gets it from the panel's own Feed.
+          busy: false,
           fromCache,
           retry: () => setRetryNonce((n) => n + 1),
         }}
@@ -291,7 +306,9 @@ export default function ProjectionPage() {
                   option={historyError === null ? nwChart : null}
                   // Advisory, never the page banner: the rest of the page runs without it.
                   error={historyError}
-                  busy={history === null && historyError === null}
+                  // The trend curve is extended from the projection's own t0, so a run in
+                  // flight makes this card's tail stale as well as the fan below.
+                  busy={(history === null && historyError === null) || sandbox.busy}
                   empty="Not enough monthly snapshots to chart yet."
                   exportName="net-worth-trend"
                   csv={
@@ -322,9 +339,10 @@ export default function ProjectionPage() {
                 />
                 <ChartCard
                   title="Projected investable balance"
-                  hint="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes. FI and Coast FI mark the months the target is reached; the shaded months come after it. Dashed lines are pinned scenarios."
+                  hint="Deterministic compounding at your assumptions; the bands hold the middle 50% and 80% of simulated outcomes. FI and Coast FI mark the months the target is reached; the shaded months come after it. The FI target and any pinned scenarios are dashed grey, each labelled at its own end."
                   ariaLabel={`Projected investable balance over the next ${data.years} years`}
                   option={chart}
+                  busy={sandbox.busy}
                   empty="Nothing to chart at this horizon."
                   exportName="projection"
                   csv={() => projectionCsv(data)}
@@ -358,7 +376,8 @@ export default function ProjectionPage() {
                 />
               </div>
 
-              <ScenarioPanel sandbox={sandbox} baseline={sandbox.baseline} people={people} />
+              {/* Server order: primary first, then by id — every owner control's order. */}
+              <ScenarioPanel sandbox={sandbox} baseline={sandbox.baseline} people={roster} />
             </>
           )
         )}

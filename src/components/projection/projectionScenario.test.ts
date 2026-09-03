@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import type { ProjectionOut } from '../../types/api'
 import {
   COMPARE_ROWS,
+  KNOBS,
+  SLIDER,
   decodeProjection,
   derivedOf,
   encodeProjection,
@@ -44,7 +46,7 @@ describe('projection scenario codec', () => {
     expect(
       decodeProjection([
         'annual_return:0.6', 'annual_return:0.06', 'swr:0', 'swr:2', 'volatility:1.5', 'inflation:0.3', 'contribution_growth:-0.1',
-        'years:0', 'years:61', 'years:7.5', 'annual_spend:0', 'monthly_contribution:-100', 'retire:x:2035-06', 'retire:2:2035-13', 'bonus:1', 'NVDA',
+        'years:0', 'years:61', 'years:7.5', 'annual_spend:0', 'monthly_contribution:20000000', 'monthly_contribution:-100', 'retire:x:2035-06', 'retire:2:2035-13', 'bonus:1', 'NVDA',
       ]),
     ).toEqual({ knobs: { annual_return: '0.06', monthly_contribution: '-100' }, retirements: {} })
     expect(isEmptyProjection({ knobs: {}, retirements: {} })).toBe(true)
@@ -70,9 +72,20 @@ describe('projection scenario codec', () => {
     expect(derivedOf(null).years).toBeNull()
   })
 
-  it('labels a pin by its first two knobs', () => {
+  it('labels a pin by its first two knobs, naming a retiring person when the roster is known', () => {
     expect(labelForProjection(decodeProjection(['annual_return:0.06', 'monthly_contribution:5400', 'years:40']))).toBe('Return 6% · Contribution $5,400.00')
+    expect(labelForProjection(decodeProjection(['retire:2:2035-06']), [{ id: 2, name: 'Grace' }])).toBe('Retire Grace 2035-06')
+    // No roster (it failed, or has not arrived): the id is all there is to say.
     expect(labelForProjection(decodeProjection(['retire:2:2035-06']))).toBe('Retire #2 2035-06')
+  })
+
+  it('keeps every slider track inside the fence its own knob accepts', () => {
+    for (const key of KNOBS) {
+      const { min, max } = SLIDER[key]
+      for (const edge of [min, max]) {
+        expect(decodeProjection([`${key}:${edge}`]).knobs[key], `${key} ${edge}`).toBe(edge)
+      }
+    }
   })
 
   it('maps the compare rows onto the payload', () => {

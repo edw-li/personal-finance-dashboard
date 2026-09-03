@@ -579,11 +579,28 @@ describe('projectionOption references (pinned scenarios)', () => {
     expect(pin.lineStyle?.type).toBe('dashed')
     expect(pin.endLabel?.formatter).toBe('Sell 40 VTI')
     expect(pin.z).toBe(9)
-    // The fan's own left inset (wider money labels) with the endLabel variant's right one:
-    // room for the pin names past the last month.
-    expect(option.grid).toEqual({ ...GRID_VARIANTS.fan, right: GRID_VARIANTS.endLabel.right })
+    // A named variant, so charts/conformance's grid rule accepts it.
+    expect(option.grid).toEqual(GRID_VARIANTS.fanEndLabel)
     expect(option.grid.right).toBe(84)
     expect(option.legend.data).toContain('Sell 40 VTI')
+  })
+
+  it('hovers a pin as a reference row, under the live scenario’s own', () => {
+    const option = projectionOption(DATA, {
+      references: [{ name: 'Sell 40 VTI', data: DATA.projected }],
+    }) as unknown as { tooltip: { formatter: (p: unknown) => string } }
+    const parsed = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: 'Projected', seriesType: 'line', axisValueLabel: 'Sep 2026', dataIndex: 1, value: 104000, color: PALETTE[0] },
+        { seriesName: 'FI target', seriesType: 'line', value: 1500000, color: MUTED },
+        { seriesName: 'Sell 40 VTI', seriesType: 'line', value: 114400, color: MUTED },
+      ]),
+    )
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', 'Projected', '$104,000.00'],
+      ['ref', 'FI target', '$1,500,000.00'],
+      ['ref', 'Sell 40 VTI', '$114,400.00'],
+    ])
   })
 
   it('is byte-identical to the plain option without references', () => {

@@ -51,14 +51,19 @@ function accept(key: ProjectionKnob, value: string): boolean {
     case 'annual_spend':
       return compareDecimals(value, '0') > 0
     case 'monthly_contribution':
-      return true // any money figure; the server bounds its magnitude
+      // The server's own magnitude bound (CONTRIBUTION_MAX_ABS = 1e7); negatives are legal
+      // — a household drawing down saves a negative amount each month.
+      return within('-10000000', '10000000')
   }
 }
 
 /** The sliders' tracks — UI ranges, wider than typical but inside the fences above. */
 export const SLIDER: Record<ProjectionKnob, { min: string; max: string; step: string; kind: 'percent' | 'money' | 'plain' }> = {
   annual_return: { min: '-0.5', max: '0.5', step: '0.001', kind: 'percent' },
-  annual_spend: { min: '0', max: '1000000', step: '1000', kind: 'money' },
+  // The track's floor is INSIDE the fence above (spend must be > 0): a slider dragged to
+  // its own minimum must produce a value the URL will keep, or the knob would silently
+  // snap back to derived on the arrival rewrite.
+  annual_spend: { min: '1000', max: '1000000', step: '1000', kind: 'money' },
   contribution_growth: { min: '0', max: '0.25', step: '0.001', kind: 'percent' },
   inflation: { min: '-0.1', max: '0.25', step: '0.001', kind: 'percent' },
   monthly_contribution: { min: '0', max: '50000', step: '100', kind: 'money' },
@@ -142,7 +147,12 @@ const SHORT: Record<ProjectionKnob, string> = {
   years: 'Horizon',
 }
 
-export function labelForProjection(scenario: ProjectionScenario): string {
+/** A pin's default name — its first two knobs. `people` names a retirement by the person
+ *  it belongs to ("Retire Grace 2035-06"); without a roster the id has to stand in. */
+export function labelForProjection(
+  scenario: ProjectionScenario,
+  people: { id: number; name: string }[] = [],
+): string {
   const parts: string[] = []
   for (const key of KNOBS) {
     const value = scenario.knobs[key]
@@ -150,7 +160,10 @@ export function labelForProjection(scenario: ProjectionScenario): string {
     const { kind } = SLIDER[key]
     parts.push(kind === 'percent' ? `${SHORT[key]} ${shiftPoint(value, 2)}%` : kind === 'money' ? `${SHORT[key]} ${formatCurrency(value)}` : `${SHORT[key]} ${value}y`)
   }
-  for (const [personId, month] of Object.entries(scenario.retirements)) parts.push(`Retire #${personId} ${month}`)
+  for (const [personId, month] of Object.entries(scenario.retirements)) {
+    const who = people.find((p) => String(p.id) === personId)
+    parts.push(`Retire ${who === undefined ? `#${personId}` : who.name} ${month}`)
+  }
   return parts.slice(0, 2).join(' · ')
 }
 
