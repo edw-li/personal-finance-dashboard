@@ -755,6 +755,9 @@ export interface WhatIfDelta {
   social_security_tax: string
   disability_tax: string
   capital_gains_tax: string
+  // NIIT delta (2026-09-03 planning-sandboxes spec §13). OPTIONAL: pinned fixtures and the
+  // assistant's compact result predate it; null when either summary has no NIIT block.
+  niit_tax?: string | null
   // A fraction delta (scenario − baseline); null when either side has no rate at all.
   effective_rate: string | null
 }
@@ -1130,6 +1133,75 @@ export interface PaycheckBreakdownOut {
   monthly_net: string
   warnings: string[]
   pace: PaceItem[]
+}
+
+// --- paycheck: the "Try it" sandbox (POST /paycheck/preview, 2026-09-03 planning-sandboxes
+// spec §13) ---
+// Nothing is stored. `overrides` is the server's ProfileOverrides (extra keys 422): every
+// field optional, in the WIRE vocabulary — fractions for the five pcts, money strings for
+// the per-check amounts, the coverage tier as stored. The percent shift happens in
+// SliderBox's box and nowhere else.
+
+export interface PaycheckPreviewOverrides {
+  annual_salary?: string
+  pay_periods_per_year?: number
+  trad_401k_pct?: string
+  roth_401k_pct?: string
+  after_tax_401k_pct?: string
+  espp_pct?: string
+  withholding_pct?: string
+  dental_vision_per_check?: string
+  hsa_per_check?: string
+  hsa_coverage?: HsaCoverage
+}
+
+export interface PaycheckPreviewIn {
+  /** The base — the same two selectors GET /breakdown takes; both null = the primary's
+   *  profile in force. */
+  profile_id: number | null
+  person_id: number | null
+  overrides: PaycheckPreviewOverrides
+}
+
+/** The eleven waterfall lines plus `savings` (trad + Roth + after-tax + ESPP + HSA), each a
+ *  2dp string; in a `delta` block each is the difference of two such figures. */
+export interface PaycheckPreviewLines {
+  gross: string
+  trad_401k: string
+  dental_vision: string
+  hsa: string
+  taxable: string
+  withholding: string
+  post_tax: string
+  roth_401k: string
+  after_tax_401k: string
+  espp: string
+  net_pay: string
+  savings: string
+}
+
+export interface PaycheckPreviewBlock {
+  baseline: PaycheckPreviewLines
+  scenario: PaycheckPreviewLines
+  delta: PaycheckPreviewLines
+}
+
+export interface PaycheckChangedField {
+  key: keyof PaycheckPreviewOverrides
+  label: string
+  before: string
+  after: string
+}
+
+export interface PaycheckPreviewOut {
+  profile: PaycheckProfileOut
+  per_check: PaycheckPreviewBlock
+  monthly: PaycheckPreviewBlock
+  annual: PaycheckPreviewBlock
+  pace: { baseline: PaceItem[]; scenario: PaceItem[] }
+  changed: PaycheckChangedField[]
+  /** Scenario-side advisories only — the breakdown's own two sentences. */
+  warnings: string[]
 }
 
 // --- comp ---

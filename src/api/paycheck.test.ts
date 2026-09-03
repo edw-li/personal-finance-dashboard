@@ -1,5 +1,14 @@
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { createProfile, fetchBreakdown, fetchProfiles } from './paycheck'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createProfile, fetchBreakdown, fetchProfiles, previewPaycheck } from './paycheck'
+
+// The snapshot cache is the seam that tells api() from apiReadOnly(): api() drops the
+// /paycheck families after ANY non-GET, apiReadOnly() drops nothing.
+vi.mock('./snapshotCache', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./snapshotCache')>()),
+  clearSnapshots: vi.fn(),
+  clearSnapshotsWhere: vi.fn(),
+}))
+import { clearSnapshots, clearSnapshotsWhere } from './snapshotCache'
 
 // The client module is a thin path/verb/body mapper; fetch is the seam (household.test.ts's
 // arrangement). Every assertion here is about the REQUEST, not the response.
@@ -67,5 +76,24 @@ it('POSTs the create body verbatim, person_id included when the caller sends one
     annual_salary: '120000',
     person_id: 2,
     hsa_coverage: 'family',
+  })
+})
+
+describe('previewPaycheck', () => {
+  it('POSTs the scenario to /paycheck/preview through apiReadOnly — a preview is a read', async () => {
+    const body = {
+      profile_id: 7,
+      person_id: null,
+      overrides: { trad_401k_pct: '0.15', hsa_coverage: 'family' as const },
+    }
+    await previewPaycheck(body)
+    const init = fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1] as RequestInit
+    expect(lastUrl()).toBe('/api/v1/paycheck/preview')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify(body))
+    // Through api() this POST would have dropped seven families on every keystroke of the
+    // sandbox, for data no preview can have moved.
+    expect(clearSnapshotsWhere).not.toHaveBeenCalled()
+    expect(clearSnapshots).not.toHaveBeenCalled()
   })
 })

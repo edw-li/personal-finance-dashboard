@@ -1,6 +1,8 @@
-import { api } from './client'
+import { api, apiReadOnly } from './client'
 import type {
   PaycheckBreakdownOut,
+  PaycheckPreviewIn,
+  PaycheckPreviewOut,
   PaycheckProfileCreate,
   PaycheckProfileOut,
   PaycheckProfileUpdate,
@@ -47,4 +49,13 @@ export function fetchBreakdown(
   if (personId !== undefined) params.push(`person_id=${personId}`)
   const qs = params.length === 0 ? '' : `?${params.join('&')}`
   return api<PaycheckBreakdownOut>(`/paycheck/breakdown${qs}`)
+}
+
+// The "Try it" sandbox's one request (2026-09-03 planning-sandboxes spec §13): the profile
+// GET /breakdown would show, against the same profile with `overrides` applied. Pure —
+// SELECTs only server-side — so it rides apiReadOnly and never touches the snapshot cache.
+// 404 "no paycheck profiles" / "paycheck profile not found" / "person not found" and 422s
+// in the profile writers' own words, rendered verbatim by the panel.
+export function previewPaycheck(body: PaycheckPreviewIn): Promise<PaycheckPreviewOut> {
+  return apiReadOnly<PaycheckPreviewOut>('/paycheck/preview', body)
 }
