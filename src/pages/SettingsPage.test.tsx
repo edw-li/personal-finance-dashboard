@@ -322,8 +322,11 @@ describe('SettingsPage — app settings', () => {
     expect(screen.getByText("Blank = ESPP page shows 'no ticker configured'.")).toBeTruthy()
     // TWICE, not once: the Calendar-feed card owns the monthly-update due day, which lives
     // in this same settings row (2026-09-03 calendar spec §12), so it reads /settings for
-    // itself the way every other card here reads its own endpoint.
-    expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2)
+    // itself the way every other card here reads its own endpoint. `waitFor`, not a bare
+    // expect: the card mounts in the `loadedOnce` commit that also paints the box above,
+    // and findBy resolves off the DOM mutation — the new subtree's passive effect (and so
+    // its fetch) can land a microtask later. A bare expect failed about one run in three.
+    await waitFor(() => expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2))
     // The balance-suggestions mapping card was removed end to end (spec §5.2 amendment):
     // this page no longer reads accounts or the allocation, and offers no mapping control.
     expect(screen.queryByText(/Balance suggestions/)).toBeNull()
