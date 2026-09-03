@@ -102,7 +102,6 @@ HSA_COVERAGE_MESSAGE = "hsa_coverage must be 'none', 'self' or 'family'"
 # roster was never seeded has nobody to default to.
 NO_PRIMARY_PERSON_MESSAGE = "household has no primary person"
 
-ONE = Decimal("1")
 # Every field a preview may override, in the order `changed` reports them, with the labels
 # the sandbox prints (the profile form's own words — percents named as percents).
 SCENARIO_FIELDS = (
@@ -496,21 +495,43 @@ def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> Sce
     )
 
 
-def _lines(profile, scale: Decimal) -> dict[str, Decimal]:
+def _per_check(value: Decimal, profile) -> Decimal:
+    """One check, as `breakdown()` already computed it."""
+    return value
+
+
+def _monthly(value: Decimal, profile) -> Decimal:
+    """`value * periods / 12`, in THAT ORDER — BreakdownOut.monthly_net's own expression.
+
+    Scaling by a precomputed `periods / 12` instead rounds the SCALE to the context's 28
+    digits, and for any repeating quotient (52, 13, 22, 10, 4 or 1 periods) the product can
+    land a cent under the GET's: weekly on 156,000 at 0.360615 withholding gives 8312.005 a
+    month, which is 8312.01 here and was 8312.00 through a divided-first scale. Two doors,
+    one number — so the preview divides LAST.
+    """
+    return value * Decimal(profile.pay_periods_per_year) / MONTHS_PER_YEAR
+
+
+def _annual(value: Decimal, profile) -> Decimal:
+    """A year of checks. Exact: no division, so no operation-order trap."""
+    return value * Decimal(profile.pay_periods_per_year)
+
+
+def _lines(profile, scale) -> dict[str, Decimal]:
     """The eleven lines plus `savings`, scaled on the FULL-precision chain and quantized
     once — so monthly.net_pay is exactly BreakdownOut.monthly_net for the same profile."""
     raw = breakdown(profile)
     chain = {key: raw[key] for key in WATERFALL_KEYS}
     chain["savings"] = sum((raw[key] for key in PAYROLL_SAVING_KEYS), ZERO)
-    return {key: half_up2(value * scale) for key, value in chain.items()}
+    return {key: half_up2(scale(value, profile)) for key, value in chain.items()}
 
 
-def _block(base, scenario, scale_of) -> PreviewBlock:
-    """Baseline · scenario · delta at one cadence. Each side is scaled by ITS OWN period
-    count (a scenario may change the cadence), and every delta is the difference of two
-    already-quantized figures — the what-if endpoint's rule."""
-    before = _lines(base, scale_of(base))
-    after = _lines(scenario, scale_of(scenario))
+def _block(base, scenario, scale) -> PreviewBlock:
+    """Baseline · scenario · delta at one cadence. Each side is scaled against ITS OWN
+    period count (a scenario may change the cadence), and every delta is the difference of
+    two already-quantized figures — the what-if endpoint's rule."""
+    before = _lines(base, scale)
+    after = _lines(scenario, scale)
     return PreviewBlock(
         baseline=PreviewLines(**before),
         scenario=PreviewLines(**after),
@@ -558,9 +579,9 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
     base = await _resolve_breakdown_profile(db, body.profile_id, body.person_id, today)
     scenario = _scenario_profile(base, body.overrides)
 
-    per_check = _block(base, scenario, lambda p: ONE)
-    monthly = _block(base, scenario, lambda p: Decimal(p.pay_periods_per_year) / MONTHS_PER_YEAR)
-    annual = _block(base, scenario, lambda p: Decimal(p.pay_periods_per_year))
+    per_check = _block(base, scenario, _per_check)
+    monthly = _block(base, scenario, _monthly)
+    annual = _block(base, scenario, _annual)
 
     limits = await _limits_for(db, today.year)
     pace = PreviewPace(

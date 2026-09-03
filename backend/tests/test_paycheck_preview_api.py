@@ -288,3 +288,29 @@ async def test_preview_pace_scenario_reflects_the_overrides(auth_client, db, me)
     assert after["limit_401k_elective"]["annualized"] == "24500.00"
     assert after["limit_401k_elective"]["ratio"] == "1.0000"
     assert after["limit_401k_elective"]["tone"] == "warn"
+
+
+async def test_preview_monthly_matches_the_breakdowns_operation_order(auth_client, me):
+    """A repeating cadence quotient is the trap: `value * (52/12)` rounds the SCALE to the
+    context's 28 digits and lands a cent under `value * 52 / 12`, which is what
+    BreakdownOut.monthly_net computes. Weekly, 156,000, withholding 0.360615: gross 3000,
+    net 1918.155 a check, 8312.005 a month — HALF_UP to 8312.01, never 8312.00. The same
+    trap waits at 13, 22, 10, 4 and 1 periods, so the preview divides LAST, like the GET."""
+    await create_profile(
+        auth_client,
+        annual_salary="156000",
+        pay_periods_per_year=52,
+        trad_401k_pct="0",
+        after_tax_401k_pct="0",
+        espp_pct="0",
+        withholding_pct="0.360615",
+        dental_vision_per_check="0",
+        hsa_per_check="0",
+    )
+    shown = (await auth_client.get(BREAKDOWN)).json()
+    assert (shown["net_pay"], shown["monthly_net"]) == ("1918.16", "8312.01")
+
+    body = await preview(auth_client)
+    assert body["monthly"]["baseline"]["net_pay"] == shown["monthly_net"]
+    assert body["monthly"]["scenario"]["net_pay"] == shown["monthly_net"]
+    assert body["monthly"]["delta"]["net_pay"] == "0.00"
