@@ -8,9 +8,16 @@ import MarginalPanel from './MarginalPanel'
 vi.mock('../EChart', async () => {
   const { createElement } = await import('react')
   return {
-    default: ({ option }: { option: { series?: { name?: string }[] } }) =>
+    default: ({
+      option,
+      ariaLabel,
+    }: {
+      option: { series?: { name?: string }[] }
+      ariaLabel?: string
+    }) =>
       createElement('div', {
         'data-testid': 'echart',
+        'aria-label': ariaLabel,
         'data-series': (option.series ?? []).map((s) => s.name ?? '').join('|'),
       }),
   }
@@ -91,6 +98,8 @@ describe('MarginalPanel', () => {
     ).toBeTruthy()
     // Drawable tables → the ladder is on screen, marker series and all.
     expect(screen.getByTestId('echart').getAttribute('data-series')).toContain('Taxable income')
+    // Mounted through ChartCard, naming what it draws (F11).
+    expect(screen.getByLabelText(/Bracket ladder per jurisdiction/)).toBeTruthy()
   })
 
   it('drops the Medicare clause when combined wages sit below the tier', () => {

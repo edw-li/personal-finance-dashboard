@@ -461,6 +461,10 @@ describe('CreditCardsPage', () => {
   it('credit line history draws per-card steps plus the total', async () => {
     renderPage()
     await screen.findByText('Credit line history')
+    // Both cards mount through ChartCard: the house sentence (F11) and an export row each (F12).
+    expect(screen.getByLabelText(/Horizontal bars of each card/)).toBeTruthy()
+    expect(screen.getByLabelText(/Step chart of credit limits/)).toBeTruthy()
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(2)
     const charts = screen.getAllByTestId('echart')
     const line = charts.find((el) =>
       (el.getAttribute('data-series-names') ?? '').includes('Total line'),

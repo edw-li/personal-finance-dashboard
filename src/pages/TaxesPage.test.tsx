@@ -44,13 +44,17 @@ vi.mock('../components/EChart', async () => {
   return {
     default: ({
       option,
+      ariaLabel,
       onClick,
     }: {
       option: { xAxis?: { data?: unknown[] } }
+      ariaLabel?: string
       onClick?: (params: { name?: string }) => void
     }) =>
       createElement('div', {
         'data-testid': 'echart',
+        // Every mount is a ChartCard now, and each one names what it draws (F11).
+        'aria-label': ariaLabel,
         'data-categories': (option.xAxis?.data ?? []).join(','),
         // A click on the marker stands in for a click on the chart's FIRST category —
         // enough to walk the trend's drill-in door both ways without a canvas. Charts
@@ -310,7 +314,7 @@ const DELETE_2024_CONFIRM =
 // the matcher accepts both faces of the same card.
 const trendCard = () =>
   screen
-    .getByText(/Tax composition and effective rate by year|Tax breakdown — /)
+    .getByText(/Tax composition by year|Tax breakdown — /)
     .closest('.card') as HTMLElement
 const trendChart = () => within(trendCard()).getByTestId('echart')
 const trendCategories = () => trendChart().getAttribute('data-categories')
@@ -841,6 +845,10 @@ describe('TaxesPage', () => {
     expect(screen.getByText('24.7%')).toBeTruthy()
     // Two charts: this year's waterfall and the all-years trend.
     await waitFor(() => expect(screen.getAllByTestId('echart')).toHaveLength(2))
+    // Both mount through ChartCard: the house sentence (F11) and the export row (F12).
+    expect(screen.getByLabelText(/Waterfall chart walking gross income/)).toBeTruthy()
+    expect(screen.getByLabelText(/Stacked bar chart of tax by jurisdiction per year/)).toBeTruthy()
+    expect(screen.getByRole('group', { name: /Export tax-trend/ })).toBeTruthy()
   })
 
   it('renders the per-jurisdiction detail table straight from the summary payload', async () => {
@@ -999,6 +1007,7 @@ describe('TaxesPage', () => {
     // Same mount, now a pie — no x axis — and the way back is written beside it, with
     // the SERVER's totals for the year (the pie itself only draws positive slices).
     expect(trendCategories()).toBe('')
+    expect(screen.getByLabelText(/Donut chart of 2023’s tax by jurisdiction/)).toBeTruthy()
     expect(screen.getByText(/click the chart to go back/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'All years' })).toBeTruthy()
 
@@ -1719,7 +1728,7 @@ describe('TaxesPage — section order (2026-08-31 audit)', () => {
     const totals = screen.getByText(`Totals — ${thisYear}`)
     const marginal = screen.getByText(`Marginal rates — ${thisYear}`)
     const whatIf = screen.getByTestId('whatif-panel')
-    const trend = screen.getByText('Tax composition and effective rate by year')
+    const trend = screen.getByText('Tax composition by year')
     const inputs = screen.getByText(`Tax inputs — ${thisYear}`)
     const brackets = screen.getByText(`Bracket tables — ${thisYear}`)
     expectInDocumentOrder(totals, willIOwe, marginal, whatIf, trend, inputs, brackets)

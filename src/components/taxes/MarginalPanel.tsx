@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
-import EChart from '../EChart'
-import InfoHint from '../InfoHint'
+import ChartCard from '../ChartCard'
 import type { TaxBracketsOut, TaxSummaryOut } from '../../types/api'
 import { formatCurrency } from '../../utils/format'
 import {
@@ -9,7 +8,7 @@ import {
   marginalCost,
   toBrackets,
 } from './marginal'
-import { marginalLadderOption } from './taxChartOptions'
+import { ladderCsv, marginalLadderOption } from './taxChartOptions'
 import type { LadderRow } from './taxChartOptions'
 // This component's own sheet, like its siblings: the app-wide vocabulary (.card/.eyebrow/
 // .empty-note/.drill-hint) is panels.css, which the PAGE imports.
@@ -74,38 +73,38 @@ export default function MarginalPanel({
       medicare,
       Number(summary.medicare.taxable_wages),
     )
-    return { option: marginalLadderOption(rows), parts, medicareStep }
+    return { option: marginalLadderOption(rows), parts, medicareStep, rows }
   }, [summary, brackets, refused])
 
   if (model === null) return null
 
   return (
-    <section className="card">
-      <h2 className="eyebrow">
-        Marginal rates — {summary.year}
-        <InfoHint text="Where this year&apos;s taxable income (◆) sits in the bracket ladders, and what the next $1,000 of ordinary income costs. Computed in the browser from the stored tables — nothing here is saved." />
-      </h2>
-      {model.parts.length === 0 ? (
-        <p className="empty-note">
-          No federal or state bracket tables for this year yet — the ladder has nothing to
-          walk. Enter them in the bracket tables below.
-        </p>
-      ) : (
-        <>
-          <p className="marginal-sentence">
-            {`Your next $1,000 of ordinary income costs ${model.parts.join(' + ')}${
-              model.medicareStep === null
-                ? ''
-                : ` + ${formatCurrency(model.medicareStep)} additional Medicare (combined wages sit above the top Medicare tier)`
-            }.`}
-          </p>
-          {model.option !== null && <EChart option={model.option} height={170} />}
-          <p className="drill-hint">
-            Bracket boundaries and rates are this year&apos;s stored tables for its filing
-            status. Capital gains stack separately and are not on this ladder.
-          </p>
-        </>
-      )}
-    </section>
+    <ChartCard
+      title={`Marginal rates — ${summary.year}`}
+      hint="Where this year's taxable income (◆) sits in the bracket ladders, and what the next $1,000 of ordinary income costs. Computed in the browser from the stored tables — nothing here is saved."
+      ariaLabel="Bracket ladder per jurisdiction with this year’s taxable income marked"
+      option={model.option}
+      empty="No federal or state bracket tables for this year yet — the ladder has nothing to walk. Enter them in the bracket tables below."
+      exportName={`marginal-ladder-${summary.year}`}
+      csv={() => ladderCsv(model.rows)}
+      height={170}
+      footer={
+        model.parts.length === 0 ? undefined : (
+          <>
+            <p className="marginal-sentence">
+              {`Your next $1,000 of ordinary income costs ${model.parts.join(' + ')}${
+                model.medicareStep === null
+                  ? ''
+                  : ` + ${formatCurrency(model.medicareStep)} additional Medicare (combined wages sit above the top Medicare tier)`
+              }.`}
+            </p>
+            <p className="drill-hint">
+              Bracket boundaries and rates are this year&apos;s stored tables for its filing
+              status. Capital gains stack separately and are not on this ladder.
+            </p>
+          </>
+        )
+      }
+    />
   )
 }

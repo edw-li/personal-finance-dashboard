@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { GRID_VARIANTS } from '../../charts/grammar'
+import { INK, PALETTE } from '../../charts/theme'
+import { tooltipRows } from '../../testing/tooltipRows'
 import {
   creditLineChartOption,
+  creditLineCsv,
   limitMonths,
   monthOf,
   resolvedLimits,
@@ -52,5 +56,55 @@ describe('creditLineChartOption', () => {
   it('omits the total when not asked', () => {
     const option = creditLineChartOption([VX], months, { includeTotal: false })
     expect((option.series as unknown[]).length).toBe(1)
+  })
+
+  it('grammar: money grid, LINE posture on every step series, INK total, legend picks fed back', () => {
+    const option = creditLineChartOption([VX, BILT], months, {
+      includeTotal: true,
+      selected: { BILT: false },
+    }) as unknown as {
+      grid: unknown
+      legend: { type: string; selected: unknown }
+      series: { color: string; symbol: string; step: string; emphasis: unknown; z?: number }[]
+      tooltip: { formatter: (p: unknown) => string }
+    }
+    expect(option.grid).toEqual(GRID_VARIANTS.default)
+    expect(option.legend).toMatchObject({ type: 'plain', selected: { BILT: false } })
+    expect(option.series.map((s) => s.color)).toEqual([PALETTE[0], PALETTE[1], INK])
+    expect(option.series[0]).toMatchObject({
+      symbol: 'none',
+      step: 'end',
+      emphasis: { focus: 'series' },
+    })
+    expect(option.series[2].z).toBe(10)
+    const rows = tooltipRows(
+      option.tooltip.formatter([
+        {
+          seriesName: 'Venture X',
+          seriesType: 'line',
+          axisValueLabel: 'Feb 2024',
+          value: 20000,
+          color: PALETTE[0],
+        },
+        { seriesName: 'BILT', seriesType: 'line', value: 12500, color: PALETTE[1] },
+        { seriesName: 'Total line', seriesType: 'line', value: 32500, color: INK },
+      ]),
+    )
+    expect(rows.rows.map((r) => [r.label, r.value])).toEqual([
+      ['Venture X', '$20,000.00'],
+      ['BILT', '$12,500.00'],
+      ['Total line', '$32,500.00'],
+    ])
+  })
+
+  it('exports month × card + total, blanks before a card exists', () => {
+    expect(creditLineCsv([VX, BILT], months)).toEqual({
+      headers: ['Month', 'Venture X', 'BILT', 'Total'],
+      rows: [
+        ['2024-01-01', '20000.00', '', '20000.00'],
+        ['2024-02-01', '20000.00', '12500.00', '32500.00'],
+        ['2024-09-01', '25000.00', '12500.00', '37500.00'],
+      ],
+    })
   })
 })

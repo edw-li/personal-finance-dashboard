@@ -10,10 +10,13 @@ import {
 import { fetchHousehold } from '../api/household'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
-import EChart from '../components/EChart'
+import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import PacePanel from '../components/paycheck/PacePanel'
-import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptions'
+import {
+  paycheckSankeyCsv,
+  paycheckSankeyOption,
+} from '../components/paycheck/paycheckSankeyOptions'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
@@ -135,31 +138,25 @@ function BreakdownPanel({ data, still }: { data: PaycheckBreakdownOut; still: bo
  * check) — the table is the always-correct surface, so this card steps aside with a
  * sentence instead of drawing a lie.
  */
-function FlowPanel({ data, still }: { data: PaycheckBreakdownOut; still: boolean }) {
+function FlowPanel({ data }: { data: PaycheckBreakdownOut }) {
   const option = useMemo(() => paycheckSankeyOption(data), [data])
   return (
-    <section className="card">
-      <h2 className="eyebrow">
-        Where each check goes
-        <InfoHint text="The table&apos;s own figures drawn as a flow — gross splits into pre-tax deductions and taxable, taxable into withholding and post-tax, post-tax into contributions and net pay. Amounts match the table exactly." />
-      </h2>
-      {option !== null ? (
-        <>
-          <EChart
-            option={option}
-            height={320}
-            ariaLabel="Sankey flow of one paycheck from gross to net"
-            animateEntrance={!still}
-          />
-          <p className="drill-hint">
-            Gray nodes restate money in transit; colored nodes are where it lands; green
-            is what you keep. Hover a node to trace its flows.
-          </p>
-        </>
-      ) : (
-        <p className="empty-note">This profile&apos;s deductions exceed pay — see the table.</p>
-      )}
-    </section>
+    <ChartCard
+      title="Where each check goes"
+      hint="The table's own figures drawn as a flow — gross splits into pre-tax deductions and taxable, taxable into withholding and post-tax, post-tax into contributions and net pay. Amounts match the table exactly."
+      ariaLabel="Sankey flow of one paycheck from gross to net"
+      option={option}
+      empty="This profile's deductions exceed pay — see the table."
+      exportName="paycheck-flow"
+      csv={() => paycheckSankeyCsv(data)}
+      height={320}
+      footer={
+        <p className="drill-hint">
+          Gray nodes restate money in transit; colored nodes are where it lands; green is
+          what you keep. Hover a node to trace its flows.
+        </p>
+      }
+    />
   )
 }
 
@@ -1019,8 +1016,9 @@ export default function PaycheckPage() {
         // used to live in `.paycheck-person-row` is this row now.
         scopeRow={<ScopeBar owner={{ joint: false, all: false }} />}
         // Nothing is loaded page-wide: the two feeds below own their own lifecycles, so the
-        // frame is only the title row and the scope row.
-        resource={{ status: 'ready' }}
+        // frame is only the title row and the scope row — plus the cached-paint flag, which
+        // every ChartCard under it reads to render still (spec §1).
+        resource={{ status: 'ready', fromCache }}
       >
         {/* TWO OR MORE answers or nothing: one person's net is not a household take-home, and
             printing it as one would be a half-truth (spec §6). It sits OUTSIDE the per-check
@@ -1083,7 +1081,7 @@ export default function PaycheckPage() {
               <PacePanel items={data.pace} />
               {/* Same payload, same busy dim: the flow can never show a different check than
                   the table above it. */}
-              <FlowPanel data={data} still={fromCache} />
+              <FlowPanel data={data} />
             </>
           )}
         </Feed>
