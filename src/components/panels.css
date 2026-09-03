@@ -137,53 +137,6 @@
 .stat-delta-negative { color: var(--negative); }
 .stat-delta-neutral { color: var(--muted); }
 
-/* ── Month ribbon (signature) ──────────────────────────────────────── */
-
-.month-ribbon {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.month-chip {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 7px 5px;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 0.65rem;
-  line-height: 1;
-}
-
-.month-chip:hover { background: var(--surface-2); }
-
-.month-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.month-chip-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1.5px solid var(--muted);
-}
-
-.month-chip.filled .month-chip-dot {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.month-chip.selected {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
 /* ── Data tables ───────────────────────────────────────────────────── */
 
 .data-table {
@@ -555,7 +508,6 @@
 @media (prefers-reduced-motion: no-preference) {
   .button,
   .chip,
-  .month-chip,
   .row-toggle,
   .info-hint,
   .segmented button {
