@@ -10,8 +10,17 @@ from app.lifecycle.restore import (
     SnapshotError,
     check_schema,
     load_snapshot,
+    parse_tables,
+    plan_restore,
 )
-from app.services.snapshot import EXPORTED_TABLES, build_snapshot_zip
+from app.models import (
+    Account,
+    ChangeLog,
+    LifecycleRun,
+    UserPreference,
+)
+from app.schemas.lifecycle import RestoreTableDiff
+from app.services.snapshot import EXPORTED_TABLES, build_snapshot_zip, restore_points_dir
 
 TABLE_NAMES = [name for _, name in EXPORTED_TABLES]
 
@@ -114,3 +123,105 @@ async def test_check_schema_409s_with_the_spec_sentence_and_treats_two_nones_as_
     with pytest.raises(SnapshotError) as none_vs_head:
         check_schema(loaded, "c3a7e19d5b42")
     assert "exported at schema `none`" in none_vs_head.value.detail
+
+
+# ── parse_tables / diff_tables ───────────────────────────────────────────────────────
+
+
+async def test_parse_tables_422s_on_an_unknown_column_and_warns_on_an_absent_one(db, seeded_user):
+    db.add(Account(name="A", slug="a", group="cash", sort_order=1))
+    await db.commit()
+    snap = await build_snapshot_zip(db)
+
+    def add_colour(tables):
+        tables["accounts"][0]["colour"] = "teal"
+
+    def drop_person_id(tables):
+        del tables["accounts"][0]["person_id"]
+
+    with pytest.raises(SnapshotError) as excinfo:
+        parse_tables(
+            load_snapshot(rezip(snap.payload, tables_patch=add_colour)), user_id=seeded_user.id
+        )
+    assert excinfo.value.status == 422
+    assert excinfo.value.detail == "Snapshot column accounts.colour is unknown to this server"
+
+    parsed = parse_tables(
+        load_snapshot(rezip(snap.payload, tables_patch=drop_person_id)), user_id=seeded_user.id
+    )
+    assert parsed.warnings == [
+        "accounts.person_id is absent from the snapshot — the column default applies"
+    ]
+    assert parsed.absent["accounts"] == ["person_id"]
+    assert parsed.rows["accounts"][0]["person_id"] is None  # for the identity hash
+    assert parsed.rows["accounts"][0]["sort_order"] == 1
+
+
+async def test_parse_tables_422s_on_a_value_that_does_not_parse(db, seeded_user):
+    db.add(Account(name="A", slug="a", group="cash", sort_order=1))
+    await db.commit()
+    snap = await build_snapshot_zip(db)
+
+    def bad_sort(tables):
+        tables["accounts"][0]["sort_order"] = "many"
+
+    with pytest.raises(SnapshotError) as excinfo:
+        parse_tables(
+            load_snapshot(rezip(snap.payload, tables_patch=bad_sort)), user_id=seeded_user.id
+        )
+    assert excinfo.value.status == 422
+    assert "accounts.sort_order" in excinfo.value.detail
+
+
+async def test_parse_tables_rewrites_preferences_to_the_caller_and_notes_a_foreign_environment(
+    db, seeded_user
+):
+    db.add(UserPreference(user_id=seeded_user.id, key="theme", value="light"))
+    await db.commit()
+    snap = await build_snapshot_zip(db)
+
+    def foreign_user(tables):
+        tables["user_preferences"][0]["user_id"] = 999
+        tables["user_preferences"].append({**tables["user_preferences"][0], "user_id": 42})
+
+    loaded = load_snapshot(
+        rezip(snap.payload, manifest_patch={"environment": "prod"}, tables_patch=foreign_user)
+    )
+    parsed = parse_tables(loaded, user_id=seeded_user.id)
+    # One row per key, owned by the caller — duplicates from another account collapse.
+    assert [(r["user_id"], r["key"]) for r in parsed.rows["user_preferences"]] == [
+        (seeded_user.id, "theme")
+    ]
+    assert parsed.warnings == [
+        "Snapshot was exported from a 'prod' environment; this server is 'dev'"
+    ]
+    no_user = parse_tables(loaded, user_id=None)
+    assert no_user.rows["user_preferences"] == []
+    assert "user_preferences skipped — no user to attach them to" in no_user.warnings
+
+
+async def test_diff_tables_hashes_identity_through_the_csv_writer(db, seeded_user):
+    account = Account(name="Café Fund", slug="cafe-fund", group="cash", sort_order=2)
+    db.add(account)
+    await db.commit()
+    snap = await build_snapshot_zip(db)
+    parsed = parse_tables(load_snapshot(snap.payload), user_id=seeded_user.id)
+    report = await plan_restore(
+        db, load_snapshot(snap.payload), user_id=seeded_user.id, server_head=None
+    )
+    assert report.dry_run is True and report.applied is False
+    assert report.exported_at == snap.exported_at
+    assert report.tables["accounts"] == RestoreTableDiff(current=1, incoming=1, identical=True)
+    assert all(diff.identical for diff in report.tables.values())
+    assert report.restore_point is None and report.batch_id is None and report.run_id is None
+    # Change the live row: same counts, no longer identical.
+    account.sort_order = 3
+    await db.commit()
+    changed = await plan_restore(
+        db, load_snapshot(snap.payload), user_id=seeded_user.id, server_head=None
+    )
+    assert changed.tables["accounts"] == RestoreTableDiff(current=1, incoming=1, identical=False)
+    assert parsed.rows["accounts"][0]["sort_order"] == 2
+    # A dry run writes nothing: no restore point, no run, no change-log row.
+    assert not restore_points_dir().exists()
+    assert await count(db, LifecycleRun) == 0 and await count(db, ChangeLog) == 0

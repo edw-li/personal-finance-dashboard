@@ -14,17 +14,29 @@ preserved rows come back, and a summary change-log row plus a `restore` run reco
 Any exception rolls the transaction back; the restore point (its own committed run) stays.
 """
 
+import hashlib
 import io
 import json
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.api.system import BACKUP_RUNS_KEY, BACKUP_STATUS_KEY
-from app.schemas.lifecycle import RestoreSchema
+from app.config import settings
+from app.models import AppSetting
+from app.schemas.lifecycle import RestoreReport, RestoreSchema, RestoreTableDiff
 from app.services.assistant_models import KEY_SETTING
 from app.services.price_service import LAST_REFRESH_KEY, REFRESH_RUNS_KEY
-from app.services.snapshot import EXPORTED_TABLES
+from app.services.snapshot import (
+    EXPORTED_TABLES,
+    REDACTED_ROWS,
+    csv_for_rows,
+    parse_cell,
+    row_dict,
+)
 
 NOT_A_SNAPSHOT = "Not a snapshot ZIP from this app"
 APP_MARKER = "personal-finance-dashboard"
@@ -118,4 +130,140 @@ def check_schema(snapshot: LoadedSnapshot, server_head: str | None) -> RestoreSc
         )
     return RestoreSchema(
         snapshot_head=snapshot.alembic_head, server_head=server_head, compatible=True
+    )
+
+
+@dataclass
+class ParsedTables:
+    # table -> parsed rows; EVERY model column present (absent ones as None) so the identity
+    # hash and the live rows write the same columns
+    rows: dict[str, list[dict[str, object]]]
+    # table -> the model columns the file lacked; dropped at insert time so the column
+    # DEFAULT applies (an explicit None would violate NOT NULL)
+    absent: dict[str, list[str]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+
+
+def parse_tables(snapshot: LoadedSnapshot, *, user_id: int | None) -> ParsedTables:
+    parsed = ParsedTables(rows={})
+    for model, name in EXPORTED_TABLES:
+        columns = list(model.__table__.columns)
+        model_keys = [column.key for column in columns]
+        rows = snapshot.tables[name]
+        file_keys: set[str] = set().union(*(row.keys() for row in rows)) if rows else set()
+        unknown = sorted(file_keys - set(model_keys))
+        if unknown:
+            raise SnapshotError(
+                422, f"Snapshot column {name}.{unknown[0]} is unknown to this server"
+            )
+        absent = sorted(set(model_keys) - file_keys) if rows else []
+        parsed.absent[name] = absent
+        for column_key in absent:
+            parsed.warnings.append(
+                f"{name}.{column_key} is absent from the snapshot — the column default applies"
+            )
+        out: list[dict[str, object]] = []
+        for row in rows:
+            try:
+                out.append(
+                    {column.key: parse_cell(column, row.get(column.key)) for column in columns}
+                )
+            except ValueError as exc:
+                raise SnapshotError(422, f"Snapshot value in {exc}") from None
+        if name == "user_preferences":
+            out = _rewrite_preferences(out, user_id, parsed.warnings)
+        parsed.rows[name] = out
+    if snapshot.environment is not None and snapshot.environment != settings.environment:
+        parsed.warnings.append(
+            f"Snapshot was exported from a '{snapshot.environment}' environment; "
+            f"this server is '{settings.environment}'"
+        )
+    return parsed
+
+
+def _rewrite_preferences(
+    rows: list[dict[str, object]], user_id: int | None, warnings: list[str]
+) -> list[dict[str, object]]:
+    """user_preferences.user_id becomes the caller's (spec §7 step 4) — a snapshot from
+    another account is this user's data now. One row per key; nothing without a user."""
+    if not rows:
+        return rows
+    if user_id is None:
+        warnings.append("user_preferences skipped — no user to attach them to")
+        return []
+    seen: set[object] = set()
+    rewritten: list[dict[str, object]] = []
+    for row in rows:
+        if row["key"] in seen:
+            continue
+        seen.add(row["key"])
+        rewritten.append({**row, "user_id": user_id})
+    return rewritten
+
+
+def _digest(columns, rows: list[dict[str, object]]) -> str:
+    return hashlib.sha256(csv_for_rows(columns, rows).encode("utf-8")).hexdigest()
+
+
+async def _current_rows(db: AsyncSession, model: type, name: str) -> list[dict[str, object]]:
+    """The live table as the export would write it — redactions included, so a snapshot
+    (which never carries the key row) compares fairly."""
+    rows = (
+        (await db.execute(select(model).order_by(*model.__table__.primary_key.columns)))
+        .scalars()
+        .all()
+    )
+    redacted = REDACTED_ROWS.get(name)
+    if redacted is not None:
+        rows = [row for row in rows if row.key not in redacted]
+    columns = list(model.__table__.columns)
+    return [row_dict(row, columns) for row in rows]
+
+
+async def diff_tables(db: AsyncSession, parsed: ParsedTables) -> dict[str, RestoreTableDiff]:
+    diffs: dict[str, RestoreTableDiff] = {}
+    for model, name in EXPORTED_TABLES:
+        columns = list(model.__table__.columns)
+        current = await _current_rows(db, model, name)
+        incoming = parsed.rows[name]
+        diffs[name] = RestoreTableDiff(
+            current=len(current),
+            incoming=len(incoming),
+            identical=_digest(columns, current) == _digest(columns, incoming),
+        )
+    return diffs
+
+
+async def _preserved_keys_present(db: AsyncSession) -> list[str]:
+    return sorted(
+        (
+            await db.execute(
+                select(AppSetting.key).where(AppSetting.key.in_(RESTORE_PRESERVED_SETTINGS))
+            )
+        ).scalars()
+    )
+
+
+async def plan_restore(
+    db: AsyncSession,
+    snapshot: LoadedSnapshot,
+    *,
+    user_id: int | None,
+    server_head: str | None,
+) -> RestoreReport:
+    """The dry run (spec §7): counts and identity per table, warnings, nothing written."""
+    schema = check_schema(snapshot, server_head)
+    parsed = parse_tables(snapshot, user_id=user_id)
+    return RestoreReport(
+        dry_run=True,
+        applied=False,
+        exported_at=snapshot.exported_at,
+        schema=schema,
+        tables=await diff_tables(db, parsed),
+        preserved_settings=await _preserved_keys_present(db),
+        warnings=parsed.warnings,
+        errors=[],
+        restore_point=None,
+        batch_id=None,
+        run_id=None,
     )
