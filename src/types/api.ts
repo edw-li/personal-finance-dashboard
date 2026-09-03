@@ -1362,6 +1362,24 @@ export interface RetirementEcho {
   monthly_drop: string
 }
 
+/** One earner's monthly payroll-deducted savings (401(k) traditional/Roth/after-tax, ESPP,
+ *  HSA) from the paycheck profile in force. */
+export interface PayrollSavingOut {
+  person_id: number
+  name: string
+  monthly: string
+}
+
+/** How a DERIVED monthly contribution was built (2026-09-03): cash savings — the trailing
+ *  mean of (net pay − spend) — plus every earner's payroll deductions. Null when the knob
+ *  was typed. */
+export interface ContributionBreakdownOut {
+  cash: string
+  payroll: string
+  total: string
+  by_person: PayrollSavingOut[]
+}
+
 export interface ProjectionOut {
   starting_balance: string
   /** The snapshot month the starting balance came from. */
@@ -1399,6 +1417,9 @@ export interface ProjectionOut {
    *  param; null/absent from a backend older than the dual-career batch — the `bands`
    *  posture, so every reader takes it as `?? []`. */
   retirements: RetirementEcho[] | null
+  /** Present when the contribution was DERIVED, null when it was typed; absent from a
+   *  backend older than 2026-09-03 — readers take it as `?? null`. */
+  contribution_breakdown?: ContributionBreakdownOut | null
 }
 
 // --- import (mirrors backend/app/importer/report.py) ---

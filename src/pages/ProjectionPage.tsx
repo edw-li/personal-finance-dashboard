@@ -542,12 +542,15 @@ export default function ProjectionPage() {
               <p className="drill-hint">
                 Blank DERIVED boxes re-derive on Recalculate (a blank Retires box instead
                 means that person never retires): contribution from the trailing 12
-                months of (net pay − spend), annual spend from the trailing spend, the
-                withdrawal rate from Settings, and the three assumptions from their
-                defaults (15 / 3 / 3). Percents are percents (5 = 5%). Volatility turns on
-                the bands; inflation converts everything to today&apos;s dollars;
-                contribution growth models raises. 0 turns the fan off (volatility) or
-                reads nominal dollars (inflation).
+                months of (net pay − spend) plus the payroll deductions that land in your
+                own accounts — 401(k), ESPP and HSA — from each person&apos;s paycheck
+                profile in force (RSU vests are not included; raise the box to model
+                them), annual spend from the trailing spend, the withdrawal rate from
+                Settings, and the three assumptions from their defaults (15 / 3 / 3).
+                Percents are percents (5 = 5%). Volatility turns on the bands; inflation
+                converts everything to today&apos;s dollars; contribution growth models
+                raises. 0 turns the fan off (volatility) or reads nominal dollars
+                (inflation).
               </p>
               <form
                 className="projection-form"
@@ -573,6 +576,20 @@ export default function ProjectionPage() {
                     value={knobs.monthlyContribution}
                     onChange={(e) => setKnob('monthlyContribution')(e.target.value)}
                   />
+                  {/* The echo's own arithmetic, so a derived figure is never a bare number
+                      the reader has to trust: cash savings + payroll deductions, per
+                      person. Absent when the knob was typed (nothing to explain) and on a
+                      backend older than the breakdown. */}
+                  {data?.contribution_breakdown && (
+                    <span className="projection-derived">
+                      derived: {formatCurrency(data.contribution_breakdown.cash)} cash savings +{' '}
+                      {formatCurrency(data.contribution_breakdown.payroll)} payroll deductions
+                      {data.contribution_breakdown.by_person.length > 0 &&
+                        ` (${data.contribution_breakdown.by_person
+                          .map((row) => `${row.name} ${formatCurrency(row.monthly)}`)
+                          .join(' · ')})`}
+                    </span>
+                  )}
                 </label>
                 <label>
                   Annual spend
@@ -647,9 +664,10 @@ export default function ProjectionPage() {
               </form>
               {people.length > 0 && (
                 <p className="drill-hint">
-                  A retirement month drops that person&apos;s CURRENT monthly take-home —
-                  the paycheck profile in force today, not a projection of it — out of the
-                  contribution stream from that month on; whatever is left keeps escalating
+                  A retirement month drops that person&apos;s CURRENT monthly take-home
+                  and payroll deductions — the paycheck profile in force today, not a
+                  projection of it — out of the contribution stream from that month on;
+                  whatever is left keeps escalating
                   at the contribution-growth rate — so a far-off retirement&apos;s cost is
                   slightly understated, since the drop never gets that person&apos;s share
                   of the modelled raises. Spending stays a household figure, so the FI

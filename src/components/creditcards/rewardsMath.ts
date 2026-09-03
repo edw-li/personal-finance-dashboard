@@ -359,15 +359,50 @@ export function suggestedAnnualSpend(matrix: SpendingMatrix): Map<number, number
   return out
 }
 
-/** Weight resolution (spec §4): manual override ?? suggestion via the mapping ?? null. */
+/** Weight resolution (spec §4): manual override ?? suggestion via the mapping ?? null.
+ *  `sharers` is how many ACTIVE auto-weighted rows map to the same spending category
+ *  (see `autoWeightSharers`); the suggestion is split evenly among them. */
 export function resolveWeight(
   category: RewardCategoryOut,
   suggested: Map<number, number>,
+  sharers = 1,
 ): number | null {
   if (category.annual_spend !== null) return Number(category.annual_spend)
   if (category.spending_category_id !== null) {
     const auto = suggested.get(category.spending_category_id)
-    if (auto !== undefined) return auto
+    if (auto !== undefined) return auto / Math.max(1, sharers)
   }
   return null
+}
+
+/** Per spending category, how many ACTIVE reward rows take their weight from it through
+ *  the auto path (mapped, no override). One spending category is one pool of dollars:
+ *  Travel mapped to Flights, Hotels AND Rental Cars was being counted three times, which
+ *  inflated every $ figure on the page (2026-09-03 audit). Overrides and hidden rows are
+ *  outside the pool — an override is its own number, a hidden row is outside the matrix. */
+export function autoWeightSharers(categories: RewardCategoryOut[]): Map<number, number> {
+  const out = new Map<number, number>()
+  for (const category of categories) {
+    if (!category.is_active) continue
+    if (category.annual_spend !== null || category.spending_category_id === null) continue
+    out.set(category.spending_category_id, (out.get(category.spending_category_id) ?? 0) + 1)
+  }
+  return out
+}
+
+/** Every row's resolved weight, with shared suggestions split (the page's and the
+ *  Categories panel's ONE weight rule — the matrix footer, the KPI tiles and the weight
+ *  column must never disagree about a row's dollars). */
+export function resolveWeights(
+  categories: RewardCategoryOut[],
+  suggested: Map<number, number>,
+): Map<number, number | null> {
+  const sharers = autoWeightSharers(categories)
+  const out = new Map<number, number | null>()
+  for (const category of categories) {
+    const pool =
+      category.spending_category_id === null ? 1 : (sharers.get(category.spending_category_id) ?? 1)
+    out.set(category.id, resolveWeight(category, suggested, pool))
+  }
+  return out
 }

@@ -43,6 +43,7 @@ export default function CardDetail({
   categories,
   accounts,
   busy,
+  weighted = true,
   onClose,
   onChanged,
 }: {
@@ -52,6 +53,9 @@ export default function CardDetail({
   categories: RewardCategoryOut[]
   accounts: AccountOut[]
   busy: boolean
+  /** False when NO active category carries a spend weight: every marginal is then $0 by
+   *  construction, and the tile must read as "unweighted", never as a verdict. */
+  weighted?: boolean
   onClose: () => void
   onChanged: () => void
 }) {
@@ -269,13 +273,15 @@ export default function CardDetail({
               <StatTile
                 label="Net value per year"
                 value={formatCurrency(value.net)}
-                tone={value.net > 0 ? 'positive' : 'negative'}
+                tone={!weighted ? 'neutral' : value.net > 0 ? 'positive' : 'negative'}
                 hint="marginal + counted credits − annual fee"
               />
               <p className="drill-hint">
                 {formatCurrency(value.marginal)} marginal + {formatCurrency(value.countedCredits)}{' '}
                 credits − {formatCurrency(value.annualFee)} fee
-                {value.net <= 0 && ' — droppable: the rest of the lineup catches this spend.'}
+                {!weighted
+                  ? ' — no spend weights yet, so the marginal reads $0 by construction; set weights in Categories & weights to judge this card.'
+                  : value.net <= 0 && ' — droppable: the rest of the lineup catches this spend.'}
               </p>
             </>
           ) : (

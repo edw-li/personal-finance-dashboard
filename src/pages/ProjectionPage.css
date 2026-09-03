@@ -57,3 +57,12 @@
   line-height: 1.45;
   color: var(--muted);
 }
+
+/* The derived-contribution arithmetic under its knob: a caption, not a control. */
+.projection-form .projection-derived {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--muted);
+}

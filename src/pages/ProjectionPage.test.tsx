@@ -190,6 +190,35 @@ describe('ProjectionPage', () => {
     expect(await screen.findAllByTestId('echart')).toHaveLength(2)
   })
 
+  it('spells out how a derived contribution was built', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(
+      projectionOut({
+        monthly_contribution: '4400.00',
+        contribution_breakdown: {
+          cash: '4000.00',
+          payroll: '400.00',
+          total: '4400.00',
+          by_person: [
+            { person_id: 1, name: 'Me', monthly: '250.00' },
+            { person_id: 2, name: 'Alex', monthly: '150.00' },
+          ],
+        },
+      }),
+    )
+    renderPage()
+    const note = await screen.findByText(/derived: \$4,000\.00 cash savings \+ \$400\.00 payroll/)
+    expect(note.textContent).toContain('Me $250.00 · Alex $150.00')
+  })
+
+  it('says nothing about a derivation when the knob was typed', async () => {
+    vi.mocked(fetchProjection).mockResolvedValue(
+      projectionOut({ monthly_contribution: '1000.00', contribution_breakdown: null }),
+    )
+    renderPage()
+    await waitFor(() => expect(box(/monthly contribution/i).value).toBe('1000.00'))
+    expect(screen.queryByText(/derived:/)).toBeNull()
+  })
+
   it('seeds the knobs from the echo, percent-shifted into the boxes vocabulary', async () => {
     renderPage()
     await waitFor(() => expect(box(/annual return/i).value).toBe('5'))

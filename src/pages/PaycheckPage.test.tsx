@@ -926,6 +926,28 @@ describe('PaycheckPage — snapshot cache (2026-08-27 spec §1)', () => {
 })
 
 describe('PaycheckPage — two earners (2026-08-27 spec §5)', () => {
+  it('seeds the carry-forward form from the PRIMARY’s latest row even when the household lands late', async () => {
+    // Production on 2026-09-03: the partner's profile was the newest row overall, the
+    // household answered after the profiles did, and the primary's "new profile" form came
+    // up pre-filled with the partner's salary and percentages.
+    const gate = deferred<HouseholdOut>()
+    vi.mocked(fetchHousehold).mockReturnValue(gate.promise)
+    vi.mocked(fetchProfiles).mockResolvedValue(TWO_PERSON_PROFILES)
+    routeBreakdowns()
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    // The profiles are on screen and the household is still in flight.
+    expect(screen.queryByRole('button', { name: 'Sam' })).toBeNull()
+
+    gate.resolve(household({ people: [ME, SAM] }))
+    await screen.findByRole('button', { name: 'Sam' })
+
+    // My newest row is the 2026 one — never Sam's 120,000.
+    await waitFor(() => expect(field('Annual salary').value).toBe('$188,930.00'))
+    expect(field('Traditional 401(k) %').value).toBe('13%')
+    expect(field('Notes').value).toBe('')
+  })
+
   it('shows no switcher at all for a one-person household', async () => {
     render(<PaycheckPage />, { wrapper: MemoryRouter })
     await screen.findByText('$3,384.16')

@@ -3,9 +3,12 @@
 One computed GET in the ESPP-modeler shape: what-if knobs arrive as query params, every
 knob NOT provided is seeded from the data the app already holds — the latest investable
 balance (net_worth_calc's own rule, the 4%-line's base), the trailing-12 mean of
-(net pay − spend) as the contribution, the trailing-12 mean spend ×12 as the annual
-spend, and the stored SWR — and the response echoes the values actually used, so the
-page's form seeds from the echo.
+(net pay − spend) PLUS every earner's payroll-deducted savings as the contribution
+(2026-09-03: 401(k), ESPP and HSA money never reaches net pay, so the cash-only derivation
+understated the stream by thousands a month and called FI unreachable), the trailing-12 mean
+spend ×12 as the annual spend, and the stored SWR — and the response echoes the values
+actually used, so the page's form seeds from the echo. A derived contribution also echoes
+its `contribution_breakdown` so the page can say what it added up.
 
 The three ASSUMPTION knobs (volatility, inflation, contribution growth) have no data to
 derive from, so an absent one takes a planning default instead (the DEFAULT_* constants
@@ -40,11 +43,16 @@ from app.api.deps import get_current_user
 from app.api.paycheck import MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE, _default_profile
 from app.database import get_db
 from app.models import MonthlyCashflow, MonthlySpending, NetWorthSnapshot
-from app.schemas.projection import ProjectionOut, RetirementOut
+from app.schemas.projection import (
+    ContributionBreakdownOut,
+    PayrollSavingOut,
+    ProjectionOut,
+    RetirementOut,
+)
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import get_swr_pct, investable_base
-from app.services.paycheck_calc import breakdown, half_up2
+from app.services.paycheck_calc import MONTHS_PER_YEAR, breakdown, half_up2
 from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
 
@@ -93,6 +101,14 @@ RETIRE_FORMAT_MESSAGE = "retire must be '<person_id>:<YYYY-MM>' (e.g. retire=2:2
 
 NO_SNAPSHOTS = "no net-worth snapshots to project from"
 NO_CASHFLOW_WARNING = "no cashflow history — monthly contribution defaulted to 0"
+NO_CASHFLOW_PAYROLL_WARNING = (
+    "no cashflow history — the monthly contribution is payroll deductions alone"
+)
+# The paycheck lines that are SAVINGS — money that leaves the check but lands in an account
+# the household owns. Dental/vision and withholding are costs; employer match is not
+# modeled (limit_check.py's caveat); the take-home itself is what `_trailing_savings`
+# nets against spend, so it is deliberately not in this tuple.
+PAYROLL_SAVING_KEYS = ("trad_401k", "roth_401k", "after_tax_401k", "espp", "hsa")
 NO_SPEND_WARNING = "no spending history — provide an annual spend to model the FI target"
 NO_SWR_WARNING = "withdrawal rate is 0 — no FI target to model"
 
@@ -151,6 +167,45 @@ async def _trailing_savings(db: AsyncSession) -> Decimal | None:
     return total / len(cash)
 
 
+def _payroll_monthly(profile) -> Decimal:
+    """One profile's payroll-deducted savings per MONTH, at full precision: the five saving
+    lines of `breakdown` per check × the profile's cadence ÷ 12 (the `monthly_net` rule)."""
+    lines = breakdown(profile)
+    per_check = sum((lines[key] for key in PAYROLL_SAVING_KEYS), Decimal(0))
+    return per_check * Decimal(profile.pay_periods_per_year) / MONTHS_PER_YEAR
+
+
+async def _payroll_savings(
+    db: AsyncSession, today: date
+) -> tuple[Decimal, list[PayrollSavingOut], list[str]]:
+    """Every earner's monthly payroll savings from the profile in force today, summed.
+
+    Best-effort by design: a person with no profile contributes nothing and says nothing
+    (the Paycheck page is where that gets fixed), and an unusable stored cadence is a
+    warning rather than the 422 `_resolve_retirements` raises — a derivation must never
+    veto the projection. Rows are cents (half_up2) so the echo sums exactly.
+    """
+    total = ZERO
+    rows: list[PayrollSavingOut] = []
+    warnings: list[str] = []
+    for person in await load_people(db):
+        profile = await _default_profile(db, person.id, today)
+        if profile is None:
+            continue
+        if profile.pay_periods_per_year < MIN_PAY_PERIODS:
+            warnings.append(
+                f"{person.name}'s paycheck profile: {PAY_PERIODS_MESSAGE} — "
+                "payroll savings left out of the contribution"
+            )
+            continue
+        monthly = half_up2(_payroll_monthly(profile))
+        if monthly <= ZERO:
+            continue
+        rows.append(PayrollSavingOut(person_id=person.id, name=person.name, monthly=monthly))
+        total += monthly
+    return total, rows, warnings
+
+
 async def _resolve_retirements(
     db: AsyncSession, raw: list[str], months: list[date], years: int, today: date
 ) -> list[RetirementOut]:
@@ -162,9 +217,11 @@ async def _resolve_retirements(
     the order is fixed — format, person, duplicate, horizon, profile, cadence — so the
     message always names the nearest thing to fix.
 
-    The drop is that person's monthly take-home from the profile `_default_profile` says
-    is in force TODAY. It is a today's-dollars figure exactly like `monthly_contribution`,
-    and the caller hands it to the engine UNCONVERTED — see the Fisher note at the call.
+    The drop is that person's monthly take-home PLUS their payroll-deducted savings, both
+    from the profile `_default_profile` says is in force TODAY — retiring stops the whole
+    check, and the derived contribution counts both halves (2026-09-03). It is a today's-
+    dollars figure exactly like `monthly_contribution`, and the caller hands it to the
+    engine UNCONVERTED — see the Fisher note at the call.
     """
     people = {person.id: person for person in await load_people(db)}
     rows: list[RetirementOut] = []
@@ -216,6 +273,10 @@ async def _resolve_retirements(
             # An over-committed check nets negative; a retirement must never ADD to the
             # stream, so a negative take-home simply has nothing to drop.
             drop = ZERO
+        # The deductions stop with the paycheck too — the same figure the derived
+        # contribution added for this person, so a retirement removes exactly what the
+        # profile put in. Non-negative by construction (pcts and riders are fenced ≥ 0).
+        drop += half_up2(_payroll_monthly(profile))
         rows.append(
             RetirementOut(person_id=person_id, name=person.name, month=month, monthly_drop=drop)
         )
@@ -264,13 +325,22 @@ async def projection(
             raise HTTPException(status_code=422, detail=RETURN_MESSAGE)
         annual_return = quantize_pct(annual_return)
 
+    contribution_breakdown: ContributionBreakdownOut | None = None
     if monthly_contribution is None:
-        derived = await _trailing_savings(db)
-        if derived is None:
-            monthly_contribution = ZERO
-            warnings.append(NO_CASHFLOW_WARNING)
+        cash = await _trailing_savings(db)
+        payroll, by_person, payroll_warnings = await _payroll_savings(db, today)
+        warnings.extend(payroll_warnings)
+        if cash is None:
+            cash_part = ZERO
+            warnings.append(NO_CASHFLOW_WARNING if payroll <= ZERO else NO_CASHFLOW_PAYROLL_WARNING)
         else:
-            monthly_contribution = derived.quantize(CENT, rounding=ROUND_HALF_UP)
+            cash_part = cash.quantize(CENT, rounding=ROUND_HALF_UP)
+        # Both halves are cents already, so the sum needs no second rounding; quantize
+        # anyway so a Decimal('0') cash part still echoes as "0.00".
+        monthly_contribution = (cash_part + payroll).quantize(CENT, rounding=ROUND_HALF_UP)
+        contribution_breakdown = ContributionBreakdownOut(
+            cash=cash_part, payroll=payroll, total=monthly_contribution, by_person=by_person
+        )
     else:
         monthly_contribution = quantize_money(
             monthly_contribution, "monthly_contribution", max_abs=CONTRIBUTION_MAX_ABS
@@ -415,6 +485,7 @@ async def projection(
         start_month=start_month,
         annual_return=annual_return,
         monthly_contribution=monthly_contribution,
+        contribution_breakdown=contribution_breakdown,
         annual_spend=annual_spend,
         swr_pct=swr,
         years=years,

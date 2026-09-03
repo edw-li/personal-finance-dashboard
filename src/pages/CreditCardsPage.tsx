@@ -24,7 +24,7 @@ import {
   householdAdvantage,
   optimize,
   ownerMatches,
-  resolveWeight,
+  resolveWeights,
   suggestedAnnualSpend,
   toMathCards,
   toMathCategories,
@@ -184,11 +184,19 @@ export default function CreditCardsPage() {
     () => (matrix ? suggestedAnnualSpend(matrix) : new Map<number, number>()),
     [matrix],
   )
-  const weights = useMemo(() => {
-    const out = new Map<number, number | null>()
-    for (const category of categories ?? []) out.set(category.id, resolveWeight(category, suggested))
-    return out
-  }, [categories, suggested])
+  // ONE weight rule for the page (shared suggestions split across the rows mapped to
+  // them) — the Categories panel labels its column from the same function.
+  const weights = useMemo(() => resolveWeights(categories ?? [], suggested), [categories, suggested])
+  // How many matrix rows actually carry dollars. Zero is a SETUP state, not a verdict:
+  // every marginal is $0 by construction, so the $ tiles, the keep/drop bars and the
+  // "droppable" sentence would all be reporting the absence of weights as if it were the
+  // absence of value (production, 2026-09-03: six cards, five "droppable", no weights).
+  const weightedCount = useMemo(
+    () => activeCategories.filter((c) => (weights.get(c.id) ?? null) !== null).length,
+    [activeCategories, weights],
+  )
+  const hasWeights = weightedCount > 0
+  const unweightedCount = activeCategories.length - weightedCount
 
   const result = useMemo(
     () =>
@@ -331,6 +339,7 @@ export default function CreditCardsPage() {
           categories={categories ?? []}
           accounts={accounts}
           busy={busy}
+          weighted={hasWeights}
           onClose={() => closeDetail(activeCard.id)}
           onChanged={load}
         />
@@ -363,15 +372,25 @@ export default function CreditCardsPage() {
                 value={formatCurrency(kpis.totalLine)}
                 hint="Sum of every active card's current limit."
               />
+              {/* A dash, not "$0.00/yr", until at least one category has a weight — a
+                  zero here would be the absence of setup wearing the costume of a figure. */}
               <StatTile
                 label="Optimal rewards (est.)"
-                value={`${formatCurrency(kpis.optimal)}/yr`}
-                hint="What the whole lineup earns per year if every weighted category goes on its best card. An estimate from your spend weights — actual card usage isn't tracked."
+                value={hasWeights ? `${formatCurrency(kpis.optimal)}/yr` : '—'}
+                hint={
+                  hasWeights
+                    ? "What the whole lineup earns per year if every weighted category goes on its best card. An estimate from your spend weights — actual card usage isn't tracked."
+                    : 'No category has a spend weight yet, so there is nothing to add up. Map each reward category to a spending category or type an annual spend in Categories & weights below.'
+                }
               />
               <StatTile
                 label="Net after fees (est.)"
-                value={`${formatCurrency(kpis.net)}/yr`}
-                hint="Optimal rewards plus counted credits minus annual fees, across active cards."
+                value={hasWeights ? `${formatCurrency(kpis.net)}/yr` : '—'}
+                hint={
+                  hasWeights
+                    ? 'Optimal rewards plus counted credits minus annual fees, across active cards.'
+                    : 'Needs spend weights first — without them this would just be credits minus fees.'
+                }
               />
               <StatTile
                 label="Active cards"
@@ -426,7 +445,23 @@ export default function CreditCardsPage() {
               )
             )}
 
-            {valueOption && (
+            {valueOption && !hasWeights && (
+              <div className="card span-12">
+                <h2 className="eyebrow">
+                  Is each card worth keeping? (est.)
+                  <InfoHint text="Marginal value (optimal lineup with the card minus without it) plus counted credits minus the annual fee. Needs at least one weighted category to say anything." />
+                </h2>
+                <p className="empty-note">
+                  No spend weights yet, so the optimizer values every card at $0 and nothing
+                  on this page is a verdict. In Categories &amp; weights below, edit each
+                  reward category and either pick its spending category — its trailing
+                  12-month spend becomes the weight, split evenly when several rows share
+                  one — or type an annual spend override. Rows with neither stay out of the
+                  $ math.
+                </p>
+              </div>
+            )}
+            {valueOption && hasWeights && (
               <div className="card span-12">
                 <h2 className="eyebrow">
                   Is each card worth keeping? (est.)
@@ -442,6 +477,10 @@ export default function CreditCardsPage() {
                   <p className="drill-hint">
                     Droppable on these numbers: {droppable.join(', ')} — zero or negative net value
                     after fees.
+                    {unweightedCount > 0 &&
+                      ` Excludes ${unweightedCount} unweighted ${
+                        unweightedCount === 1 ? 'category' : 'categories'
+                      }.`}
                   </p>
                 )}
               </div>

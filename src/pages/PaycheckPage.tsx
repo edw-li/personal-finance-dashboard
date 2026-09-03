@@ -1086,16 +1086,19 @@ export default function PaycheckPage() {
         profilesBusy && <SkeletonCard height={240} label="Loading profiles…" />
       ) : (
         <div className={`loading-dim${profilesBusy ? ' is-loading' : ''}`}>
-          {/* Keyed by the CHIP's pick and by nothing else. Switching person must re-seed
-              the carry-forward form from THAT person's latest row — a half-typed row
-              surviving the switch would be filed under the wrong person on the next save.
-              It reads `selection.personId` rather than the resolved `activePersonId` on
-              purpose: the resolved one changes from null to the primary's id when the
-              household lands mid-visit, which would remount the panel and destroy a
-              half-typed row for no reason. Constant for a one-person household, so a
-              breakdown refetch still leaves typed work alone (the pre-batch behaviour). */}
+          {/* Keyed by the CHIP's pick, and by whether the list is scoped yet. Switching
+              person must re-seed the carry-forward form from THAT person's latest row — a
+              half-typed row surviving the switch would be filed under the wrong person on
+              the next save. It reads `selection.personId` rather than the resolved
+              `activePersonId` so the primary's key is constant across a breakdown refetch
+              (the pre-batch behaviour: typed work survives). The `switchable` half is the
+              2026-09-03 fix: the profiles usually land BEFORE the household, so the panel
+              first mounts on the UNFILTERED list and seeds its form from whoever's row is
+              newest overall — the partner's, in production. Remounting once when the
+              household resolves re-seeds from the primary's own latest row; the only
+              typing that can be lost is whatever landed in that first instant. */}
           <ProfilesPanel
-            key={selection.personId ?? 'primary'}
+            key={`${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`}
             profiles={shownProfiles}
             personId={selection.personId}
             shownId={breakdown?.profile.id ?? null}

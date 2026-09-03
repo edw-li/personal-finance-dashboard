@@ -599,10 +599,12 @@ async def test_projection_retirement_degrades_on_unusable_stored_profiles(auth_c
     )
 
 
-async def test_projection_retirement_of_a_negative_net_drops_nothing(auth_client, db):
+async def test_projection_retirement_of_a_negative_net_drops_only_its_deductions(auth_client, db):
     # An over-committed check nets negative: gross 1,000 with 50% roth and 80% espp is
-    # -300 a check, -600.00 a month. A retirement must never ADD to the stream, so the
-    # drop floors at 0 — and the echo says 0.00 rather than inventing a raise.
+    # -300 a check, -600.00 a month. The take-home half of the drop floors at 0 — a
+    # retirement must never ADD to the stream by "removing" a negative — while the
+    # deductions half (1,300 a check = 2,600.00 a month) is exactly what the derived
+    # contribution counted for this profile, so it leaves with the paycheck (2026-09-03).
     this_month = await _seed_book(db)
     alex = await _seed_person(db, "Alex", primary=True)
     await _seed_profile(
@@ -614,8 +616,10 @@ async def test_projection_retirement_of_a_negative_net_drops_nothing(auth_client
             f"&retire={alex.id}:{_month_param(month_add(this_month, 6))}"
         )
     ).json()
-    assert body["retirements"][0]["monthly_drop"] == "0.00"
-    assert body["projected"][7] == "128000.00"  # 100,000 + 7 x 4,000, untouched
+    assert body["monthly_contribution"] == "6600.00"  # 4,000 cash + 2,600 payroll
+    assert body["retirements"][0]["monthly_drop"] == "2600.00"
+    # Five full months, then 4,000 a month from the retirement month on: back to cash alone.
+    assert body["projected"][7] == "141000.00"  # 100,000 + 5 x 6,600 + 2 x 4,000
 
 
 async def test_projection_retirement_uses_the_profile_in_force_not_the_newest(auth_client, db):
@@ -636,6 +640,99 @@ async def test_projection_retirement_uses_the_profile_in_force_not_the_newest(au
         )
     ).json()
     assert body["retirements"][0]["monthly_drop"] == "2000.00"
+
+
+# --- payroll-deducted savings in the derived contribution (2026-09-03) ---
+# A profile that deducts 10% traditional 401(k), 5% ESPP and $50 HSA per check on 24,000/24:
+# gross 1,000 → 100 + 50 + 50 = 200 a check = 400.00 a month of payroll savings; take-home is
+# 1,000 − 100 − 50 (pre-tax) − 50 (ESPP) = 800 a check = 1,600.00 a month.
+PAYROLL_PROFILE = {
+    "trad_401k_pct": Decimal("0.10"),
+    "espp_pct": Decimal("0.05"),
+    "hsa_per_check": Decimal("50.00"),
+}
+
+
+async def test_projection_derived_contribution_adds_payroll_savings(auth_client, db):
+    await _seed_book(db)  # cash savings: mean of (net pay − spend) = 4,000
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex, **PAYROLL_PROFILE)
+    body = (await auth_client.get("/api/v1/projection")).json()
+
+    # Money that never reaches net pay is still saved: the derived knob is cash + payroll.
+    assert body["monthly_contribution"] == "4400.00"
+    assert body["contribution_breakdown"] == {
+        "cash": "4000.00",
+        "payroll": "400.00",
+        "total": "4400.00",
+        "by_person": [{"person_id": alex.id, "name": "Alex", "monthly": "400.00"}],
+    }
+    assert body["warnings"] == []
+
+
+async def test_projection_derived_contribution_sums_every_earner(auth_client, db):
+    await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    bo = await _seed_person(db, "Bo")
+    await _seed_profile(db, alex, **PAYROLL_PROFILE)
+    await _seed_profile(db, bo, trad_401k_pct=Decimal("0.10"))  # 100 a check = 200.00 a month
+    body = (await auth_client.get("/api/v1/projection")).json()
+
+    assert body["monthly_contribution"] == "4600.00"
+    assert body["contribution_breakdown"]["payroll"] == "600.00"
+    assert [row["name"] for row in body["contribution_breakdown"]["by_person"]] == ["Alex", "Bo"]
+
+
+async def test_projection_explicit_contribution_carries_no_breakdown(auth_client, db):
+    await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex, **PAYROLL_PROFILE)
+    body = (await auth_client.get("/api/v1/projection?monthly_contribution=1000")).json()
+
+    # A typed knob is the user's number, whole: nothing is added to it and there is no
+    # derivation to explain.
+    assert body["monthly_contribution"] == "1000.00"
+    assert body["contribution_breakdown"] is None
+
+
+async def test_projection_payroll_alone_when_there_is_no_cashflow_history(auth_client, db):
+    await _seed_book(db, with_history=False)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex, **PAYROLL_PROFILE)
+    body = (await auth_client.get("/api/v1/projection")).json()
+
+    assert body["monthly_contribution"] == "400.00"
+    assert body["contribution_breakdown"]["cash"] == "0.00"
+    assert body["contribution_breakdown"]["payroll"] == "400.00"
+    # The old "defaulted to 0" sentence would be a lie here — the stream is payroll alone.
+    assert "no cashflow history — monthly contribution defaulted to 0" not in body["warnings"]
+    assert (
+        "no cashflow history — the monthly contribution is payroll deductions alone"
+        in body["warnings"]
+    )
+
+
+async def test_projection_retirement_drop_includes_payroll_savings(auth_client, db):
+    # Retiring stops the whole paycheck: the take-home AND the deductions that were landing
+    # in the retiree's own accounts. Nominal zeros keep the chain exact addition.
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex, **PAYROLL_PROFILE)
+    retires = month_add(this_month, 6)
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+            f"&retire={alex.id}:{_month_param(retires)}"
+        )
+    ).json()
+
+    assert body["retirements"][0]["monthly_drop"] == "2000.00"  # 1,600 take-home + 400 payroll
+
+    def step(i: int) -> Decimal:
+        return Decimal(body["projected"][i]) - Decimal(body["projected"][i - 1])
+
+    assert step(5) == Decimal("4400.00")
+    assert step(6) == Decimal("2400.00")
 
 
 # --- the engine itself (pure Decimal, no DB): the contribution escalator's two pins ---

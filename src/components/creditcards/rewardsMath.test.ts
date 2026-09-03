@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { RewardCategoryOut, SpendingMatrix } from '../../types/api'
 import {
+  autoWeightSharers,
   effectiveRate,
   householdAdvantage,
   optimize,
   ownerMatches,
   resolveWeight,
+  resolveWeights,
   suggestedAnnualSpend,
   type MathCard,
   type MathCategory,
@@ -237,6 +239,48 @@ describe('weights', () => {
     ).toBe(2400)
     expect(resolveWeight({ ...base, spending_category_id: 7 }, suggested)).toBe(1200)
     expect(resolveWeight(base, suggested)).toBeNull()
+  })
+
+  it('resolveWeights splits one spending category across the reward rows mapped to it', () => {
+    // Travel (7) is one spending category; Flights, Hotels and Rental Cars are three matrix
+    // rows. Handing each the whole Travel figure counted it three times (2026-09-03 audit).
+    const suggested = new Map([
+      [7, 3000],
+      [8, 1200],
+    ])
+    const row = (id: number, name: string, over: Partial<RewardCategoryOut> = {}) =>
+      ({
+        id,
+        name,
+        slug: name.toLowerCase(),
+        sort_order: id,
+        is_active: true,
+        annual_spend: null,
+        spending_category_id: 7,
+        pinned_card_id: null,
+        ...over,
+      }) as RewardCategoryOut
+    const rows = [
+      row(1, 'Flights'),
+      row(2, 'Hotels'),
+      row(3, 'Rental Cars'),
+      // An override never shares and never dilutes the others.
+      row(4, 'Gas', { annual_spend: '2400.00', spending_category_id: 8 }),
+      // A hidden row is outside the matrix and must not dilute the visible ones.
+      row(5, 'Cruises', { is_active: false }),
+      // Auto weight on a category nobody else maps to: the whole figure.
+      row(6, 'Transit', { spending_category_id: 8 }),
+      row(7, 'Rent', { spending_category_id: null }),
+    ]
+    const weights = resolveWeights(rows, suggested)
+    expect(weights.get(1)).toBeCloseTo(1000)
+    expect(weights.get(2)).toBeCloseTo(1000)
+    expect(weights.get(3)).toBeCloseTo(1000)
+    expect(weights.get(4)).toBe(2400)
+    expect(weights.get(6)).toBe(1200)
+    expect(weights.get(7)).toBeNull()
+    expect(autoWeightSharers(rows).get(7)).toBe(3)
+    expect(autoWeightSharers(rows).get(8)).toBe(1)
   })
 })
 

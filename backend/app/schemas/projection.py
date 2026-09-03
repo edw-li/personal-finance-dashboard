@@ -7,15 +7,40 @@ from pydantic import BaseModel
 class RetirementOut(BaseModel):
     """One resolved `retire=<person_id>:<YYYY-MM>` param (2026-08-28 spec §4.3).
 
-    `monthly_drop` is that person's take-home from the paycheck profile in force AT
-    REQUEST TIME — today's honest approximation, named in the page's hint — so the echo is
-    also what tells the user what a date actually costs the contribution stream.
+    `monthly_drop` is that person's take-home PLUS their payroll-deducted savings, both from
+    the paycheck profile in force AT REQUEST TIME — today's honest approximation, named in
+    the page's hint — so the echo is also what tells the user what a date actually costs the
+    contribution stream (2026-09-03: retiring stops the whole check, not just the net).
     """
 
     person_id: int
     name: str
     month: date  # always a first-of-month, on the projection's own axis
     monthly_drop: Decimal
+
+
+class PayrollSavingOut(BaseModel):
+    """One earner's monthly payroll-deducted savings — the deductions that land in an account
+    they own (401(k) traditional/Roth/after-tax, ESPP, HSA), per check × periods ÷ 12."""
+
+    person_id: int
+    name: str
+    monthly: Decimal
+
+
+class ContributionBreakdownOut(BaseModel):
+    """How a DERIVED `monthly_contribution` was built (2026-09-03).
+
+    `cash` is the trailing mean of (net pay − spend) — the pre-2026-09 derivation on its own,
+    which silently excluded every dollar that never reaches net pay. `payroll` is the sum of
+    `by_person`. Null on the wire when the knob was supplied: a typed number is the user's,
+    whole, and there is no derivation to explain.
+    """
+
+    cash: Decimal
+    payroll: Decimal
+    total: Decimal
+    by_person: list[PayrollSavingOut]
 
 
 class ProjectionOut(BaseModel):
@@ -57,3 +82,6 @@ class ProjectionOut(BaseModel):
     # Empty for every request without a `retire` param, which leaves the rest of this
     # payload byte-identical to the pre-retirement one.
     retirements: list[RetirementOut] = []
+    # Present whenever `monthly_contribution` was DERIVED (2026-09-03); None when it was
+    # supplied. Nullable-with-default so an older stored payload still validates.
+    contribution_breakdown: ContributionBreakdownOut | None = None

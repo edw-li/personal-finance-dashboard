@@ -266,6 +266,35 @@ describe('CreditCardsPage', () => {
     expect(screen.getByText('Is each card worth keeping? (est.)')).toBeTruthy()
   })
 
+  it('names the unweighted rows the droppable verdict leaves out', async () => {
+    renderPage()
+    // RH Gold only ties Dining → $0 marginal → droppable; Rent has no weight.
+    const note = await screen.findByText(/Droppable on these numbers/)
+    expect(note.textContent).toContain('RH Gold')
+    expect(note.textContent).toContain('Excludes 1 unweighted category')
+  })
+
+  it('with no weighted categories the page explains setup instead of declaring cards droppable', async () => {
+    // Production on 2026-09-03: every reward category unmapped and unweighted, so the
+    // optimizer valued every card at $0 and called five of six "droppable".
+    vi.mocked(fetchRewardCategories).mockResolvedValue(
+      CATEGORIES.map((c) => ({ ...c, annual_spend: null, spending_category_id: null })),
+    )
+    renderPage()
+    await screen.findByText('Est. $/yr won')
+
+    expect(screen.queryByText(/Droppable on these numbers/)).toBeNull()
+    const setup = screen.getByText(/No spend weights yet/)
+    expect(setup.textContent).toContain('Categories & weights')
+    // The two $ tiles have nothing honest to say: a dash, not "$0.00/yr".
+    const optimal = screen.getByText('Optimal rewards (est.)').closest('.stat-tile') as HTMLElement
+    expect(optimal.querySelector('.stat-value')?.textContent).toBe('—')
+    const net = screen.getByText('Net after fees (est.)').closest('.stat-tile') as HTMLElement
+    expect(net.querySelector('.stat-value')?.textContent).toBe('—')
+    // The matrix itself still renders — the green set needs no weights.
+    expect(matrixRow('Groceries').textContent).toContain('no weight')
+  })
+
   it('clicking a card column opens the drill-in and writes ?card=', async () => {
     renderPage()
     await screen.findByText('Rewards matrix — best card per category')

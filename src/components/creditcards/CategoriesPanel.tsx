@@ -12,6 +12,7 @@ import { useToast } from '../ToastProvider'
 import type { CategoryOut, CreditCardOut, RewardCategoryOut } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
+import { autoWeightSharers } from './rewardsMath'
 import './categories.css'
 
 // The workbook's Credit Card Matrix rows — the empty-state seed (spec §4).
@@ -249,6 +250,9 @@ export default function CategoriesPanel({
       .finally(() => setBusy(false))
   }
 
+  // The page's weight rule, applied to the column so it never disagrees with the matrix:
+  // rows that share one spending category split its figure (rewardsMath.autoWeightSharers).
+  const sharers = autoWeightSharers(categories)
   const weightCell = (category: RewardCategoryOut) => {
     if (category.annual_spend !== null)
       return (
@@ -259,13 +263,18 @@ export default function CategoriesPanel({
       )
     if (category.spending_category_id !== null) {
       const auto = suggested.get(category.spending_category_id)
-      if (auto !== undefined)
+      if (auto !== undefined) {
+        const pool = category.is_active ? (sharers.get(category.spending_category_id) ?? 1) : 1
         return (
           <>
-            {formatCurrency(auto)}
-            <span className="sub"> auto · trailing 12 mo</span>
+            {formatCurrency(auto / pool)}
+            <span className="sub">
+              {' '}
+              auto · {pool > 1 ? `1/${pool} of ` : ''}trailing 12 mo
+            </span>
           </>
         )
+      }
     }
     return <span className="sub">— excluded from $ math</span>
   }
