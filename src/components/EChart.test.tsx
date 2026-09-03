@@ -115,28 +115,40 @@ describe('EChart aria facade', () => {
     )
   })
 
-  it('renders NO role and no label when the prop is absent', () => {
-    const { container } = render(<EChart option={OPTION} />)
+  // The label is REQUIRED since the chart grammar (spec §14, F11): a nameless mount is a
+  // compile error, not a review note, so `role="img"` no longer has to hedge against an
+  // unnamed image. The @ts-expect-error IS the assertion — if the prop ever goes back to
+  // optional, tsc fails on the now-unused directive; the runtime half pins the role as
+  // unconditional (it was `undefined` while the prop was optional).
+  it('requires the label at the compiler and paints role="img" unconditionally', () => {
+    const { container } = render(
+      // @ts-expect-error ariaLabel is required — every chart names what it shows.
+      <EChart option={OPTION} />,
+    )
     const div = container.firstElementChild as HTMLElement
-    expect(div.getAttribute('role')).toBeNull()
-    expect(div.getAttribute('aria-label')).toBeNull()
+    expect(div.getAttribute('role')).toBe('img')
   })
 })
 
 describe('EChart export menu', () => {
   it('renders no menu without exportConfig', () => {
-    render(<EChart option={OPTION} />)
+    render(<EChart ariaLabel="test chart" option={OPTION} />)
     expect(screen.queryByRole('group', { name: /Export/ })).toBeNull()
   })
 
   it('offers PNG always and CSV only when a csv fn is supplied', () => {
-    const { unmount } = render(<EChart option={OPTION} exportConfig={{ name: 'demo' }} />)
+    const { unmount } = render(<EChart
+      ariaLabel="test chart"
+      option={OPTION}
+      exportConfig={{ name: 'demo' }}
+    />)
     expect(screen.getByRole('group', { name: 'Export demo' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'PNG' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'CSV' })).toBeNull()
     unmount()
     render(
       <EChart
+        ariaLabel="test chart"
         option={OPTION}
         exportConfig={{ name: 'demo', csv: () => ({ headers: [], rows: [] }) }}
       />,
@@ -145,7 +157,7 @@ describe('EChart export menu', () => {
   })
 
   it('PNG snapshots at 2x on the card surface and downloads {name}.png', () => {
-    render(<EChart option={OPTION} exportConfig={{ name: 'demo' }} />)
+    render(<EChart ariaLabel="test chart" option={OPTION} exportConfig={{ name: 'demo' }} />)
     fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
     expect(lastChart().getDataURL).toHaveBeenCalledWith({
       pixelRatio: 2,
@@ -160,7 +172,7 @@ describe('EChart export menu', () => {
     localStorage.setItem('finance.theme', 'light')
     render(
       <ThemeProvider>
-        <EChart option={OPTION} exportConfig={{ name: 'demo' }} />
+        <EChart ariaLabel="test chart" option={OPTION} exportConfig={{ name: 'demo' }} />
       </ThemeProvider>,
     )
     fireEvent.click(screen.getByRole('button', { name: 'PNG' }))
@@ -172,7 +184,7 @@ describe('EChart export menu', () => {
 
   it('CSV serializes the caller rows and downloads {name}.csv as UTF-8 text/csv', () => {
     const csv = vi.fn(() => ({ headers: ['Month', 'Total'], rows: [['2026-06-01', 1]] }))
-    render(<EChart option={OPTION} exportConfig={{ name: 'demo', csv }} />)
+    render(<EChart ariaLabel="test chart" option={OPTION} exportConfig={{ name: 'demo', csv }} />)
     fireEvent.click(screen.getByRole('button', { name: 'CSV' }))
     expect(csv).toHaveBeenCalledTimes(1) // lazy: rows built on click, never on render
     expect(toCsv).toHaveBeenCalledWith(['Month', 'Total'], [['2026-06-01', 1]])
@@ -183,7 +195,7 @@ describe('EChart export menu', () => {
 describe('EChart event mirrors', () => {
   it('hands legendselectchanged a COPY of the name→shown map', () => {
     const onLegendChange = vi.fn()
-    render(<EChart option={OPTION} onLegendChange={onLegendChange} />)
+    render(<EChart ariaLabel="test chart" option={OPTION} onLegendChange={onLegendChange} />)
     const selected = { 'Net pay': false, '4% rule': true }
     lastChart().handlers['legendselectchanged']({ name: 'Net pay', selected })
     expect(onLegendChange).toHaveBeenCalledWith({ 'Net pay': false, '4% rule': true })
@@ -193,14 +205,14 @@ describe('EChart event mirrors', () => {
 
   it('reads the resolved index window off the option on datazoom', () => {
     const onDataZoom = vi.fn()
-    render(<EChart option={OPTION} onDataZoom={onDataZoom} />)
+    render(<EChart ariaLabel="test chart" option={OPTION} onDataZoom={onDataZoom} />)
     lastChart().handlers['datazoom']()
     expect(onDataZoom).toHaveBeenCalledWith({ startValue: 3, endValue: 9 })
   })
 
   it('stays silent when the option carries no numeric window', () => {
     const onDataZoom = vi.fn()
-    render(<EChart option={OPTION} onDataZoom={onDataZoom} />)
+    render(<EChart ariaLabel="test chart" option={OPTION} onDataZoom={onDataZoom} />)
     lastChart().getOption.mockReturnValue({ dataZoom: [{}] })
     lastChart().handlers['datazoom']()
     expect(onDataZoom).not.toHaveBeenCalled()
@@ -209,8 +221,12 @@ describe('EChart event mirrors', () => {
   it('always fires the LATEST handler without rebinding (the ref pattern)', () => {
     const first = vi.fn()
     const second = vi.fn()
-    const { rerender } = render(<EChart option={OPTION} onLegendChange={first} />)
-    rerender(<EChart option={OPTION} onLegendChange={second} />)
+    const { rerender } = render(<EChart
+      ariaLabel="test chart"
+      option={OPTION}
+      onLegendChange={first}
+    />)
+    rerender(<EChart ariaLabel="test chart" option={OPTION} onLegendChange={second} />)
     lastChart().handlers['legendselectchanged']({ selected: { A: false } })
     expect(first).not.toHaveBeenCalled()
     expect(second).toHaveBeenCalledWith({ A: false })
@@ -221,7 +237,11 @@ describe('EChart event mirrors', () => {
 // the only thing that can force `animation: false` is the new prop.
 describe('EChart animateEntrance (2026-08-27 spec §1)', () => {
   it('animateEntrance={false} suppresses the ENTRANCE only — update animation survives', () => {
-    render(<EChart option={{ series: [] } as EChartsOption} animateEntrance={false} />)
+    render(<EChart
+      ariaLabel="test chart"
+      option={{ series: [] } as EChartsOption}
+      animateEntrance={false}
+    />)
     const chart = instances[0]
     const [option] = chart.setOption.mock.calls[0] as [Record<string, unknown>]
     expect(option.animationDuration).toBe(0)
@@ -229,7 +249,7 @@ describe('EChart animateEntrance (2026-08-27 spec §1)', () => {
   })
 
   it('animateEntrance defaults on (no forced animation flag)', () => {
-    render(<EChart option={{ series: [] } as EChartsOption} />)
+    render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} />)
     const chart = lastChart()
     const [option] = chart.setOption.mock.calls[0] as [Record<string, unknown>]
     expect('animation' in option).toBe(false)
@@ -242,6 +262,7 @@ describe('zoomWindow fast path', () => {
   it('a zoom-only option change dispatches an animated dataZoom instead of rebuilding', () => {
     const { rerender } = render(
       <EChart
+        ariaLabel="test chart"
         option={{ series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption}
         zoomWindow={{ startValue: 3, endValue: 9 }}
       />,
@@ -250,6 +271,7 @@ describe('zoomWindow fast path', () => {
     expect(chart.setOption).toHaveBeenCalledTimes(1)
     rerender(
       <EChart
+        ariaLabel="test chart"
         option={{ series, dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
         zoomWindow={{ startValue: 5, endValue: 9 }}
       />,
@@ -265,6 +287,7 @@ describe('zoomWindow fast path', () => {
   it('an echoed window equal to the chart state settles as a no-op (ctrl+wheel mirror)', () => {
     const { rerender } = render(
       <EChart
+        ariaLabel="test chart"
         option={{ series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption}
         zoomWindow={{ startValue: 3, endValue: 9 }}
       />,
@@ -272,6 +295,7 @@ describe('zoomWindow fast path', () => {
     const chart = instances[0]
     rerender(
       <EChart
+        ariaLabel="test chart"
         option={
           { series, dataZoom: [{ type: 'inside', startValue: 3, endValue: 9 }] } as EChartsOption
         }
@@ -285,6 +309,7 @@ describe('zoomWindow fast path', () => {
   it('a data change takes the full notMerge path even with zoomWindow set', () => {
     const { rerender } = render(
       <EChart
+        ariaLabel="test chart"
         option={
           {
             series: [{ type: 'line', data: [1] }],
@@ -297,6 +322,7 @@ describe('zoomWindow fast path', () => {
     const chart = instances[0]
     rerender(
       <EChart
+        ariaLabel="test chart"
         option={
           {
             series: [{ type: 'line', data: [1, 2] }],
@@ -324,7 +350,11 @@ describe('zoomWindow fast path', () => {
     }
     vi.stubGlobal('matchMedia', () => media)
     const option = { series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption
-    render(<EChart option={option} zoomWindow={{ startValue: 3, endValue: 9 }} />)
+    render(<EChart
+      ariaLabel="test chart"
+      option={option}
+      zoomWindow={{ startValue: 3, endValue: 9 }}
+    />)
     const chart = instances[0]
     expect((chart.setOption.mock.calls[0] as [Record<string, unknown>])[0].animation).toBe(false)
     // Same option object, same window — only the OS preference moves.
@@ -337,12 +367,14 @@ describe('zoomWindow fast path', () => {
   it('without zoomWindow, a zoom-only change still rebuilds (opt-in contract)', () => {
     const { rerender } = render(
       <EChart
+        ariaLabel="test chart"
         option={{ series, dataZoom: [{ type: 'inside', startValue: 3 }] } as EChartsOption}
       />,
     )
     const chart = instances[0]
     rerender(
       <EChart
+        ariaLabel="test chart"
         option={{ series, dataZoom: [{ type: 'inside', startValue: 5 }] } as EChartsOption}
       />,
     )
@@ -371,7 +403,7 @@ describe('EChart — theme bridge', () => {
       return (
         <>
           <button onClick={() => setTheme('light')}>go light</button>
-          <EChart option={THEMED} onClick={onClick} />
+          <EChart ariaLabel="test chart" option={THEMED} onClick={onClick} />
         </>
       )
     }
@@ -423,7 +455,7 @@ describe('EChart — theme bridge', () => {
     localStorage.setItem('finance.theme', 'light')
     render(
       <ThemeProvider>
-        <EChart option={{ series: [] }} />
+        <EChart ariaLabel="test chart" option={{ series: [] }} />
       </ThemeProvider>,
     )
     expect(registerThemeVersion).toHaveBeenCalledWith('light', 0)
@@ -433,7 +465,10 @@ describe('EChart — theme bridge', () => {
     localStorage.setItem('finance.theme', 'light')
     render(
       <ThemeProvider>
-        <EChart option={{ series: [{ type: 'bar', itemStyle: { color: DARK.positive } }] }} />
+        <EChart
+          ariaLabel="test chart"
+          option={{ series: [{ type: 'bar', itemStyle: { color: DARK.positive } }] }}
+        />
       </ThemeProvider>,
     )
     const instance = lastChart()
@@ -447,7 +482,10 @@ describe('EChart — theme bridge', () => {
   it('leaves the option untouched under the dark theme (dark is the identity)', () => {
     render(
       <ThemeProvider>
-        <EChart option={{ series: [{ type: 'bar', itemStyle: { color: DARK.positive } }] }} />
+        <EChart
+          ariaLabel="test chart"
+          option={{ series: [{ type: 'bar', itemStyle: { color: DARK.positive } }] }}
+        />
       </ThemeProvider>,
     )
     const applied = lastChart().setOption.mock.calls.at(-1)?.[0] as {
@@ -466,7 +504,7 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
       return (
         <>
           <button onClick={() => setTheme('light')}>go light</button>
-          <EChart option={OPTION} group="net-worth" />
+          <EChart ariaLabel="test chart" option={OPTION} group="net-worth" />
         </>
       )
     }
@@ -479,7 +517,7 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
   })
 
   it('does not connect a chart without a group', () => {
-    render(<EChart option={OPTION} />)
+    render(<EChart ariaLabel="test chart" option={OPTION} />)
     expect(connect()).not.toHaveBeenCalled()
   })
 
@@ -490,7 +528,7 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
     expect(applied.aria).toEqual({ enabled: true, label: { enabled: false }, decal: { show: true } })
     localStorage.clear()
     cleanup()
-    render(<EChart option={{ series: [] } as EChartsOption} />)
+    render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} />)
     expect('aria' in (lastChart().setOption.mock.calls[0] as [Record<string, unknown>])[0]).toBe(false)
   })
 
@@ -502,7 +540,7 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
       removeEventListener: (_: string, cb: () => void) => { listeners = listeners.filter((l) => l !== cb) },
     }
     vi.stubGlobal('matchMedia', () => media)
-    render(<EChart option={{ series: [] } as EChartsOption} />)
+    render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} />)
     const chart = lastChart()
     expect('animation' in (chart.setOption.mock.calls[0] as [Record<string, unknown>])[0]).toBe(false)
     act(() => { media.matches = true; listeners.forEach((l) => l()) })
