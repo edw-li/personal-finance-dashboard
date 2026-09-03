@@ -1198,6 +1198,28 @@ describe('CompPage — RSU grant writes', () => {
   })
 })
 
+describe('CompPage — shell frame', () => {
+  it('renders through PageFrame and keeps both feeds’ strings', async () => {
+    vi.mocked(fetchVestingSchedule)
+      .mockResolvedValueOnce(SCHEDULE)
+      .mockRejectedValueOnce(new ApiError('vesting unavailable', 503))
+    render(<CompPage />)
+    await screen.findByText('RSU grants')
+
+    // One header for every page (spec §5) — the page's own title row is gone.
+    expect(document.querySelector('.page-header')).toBeNull()
+    expect(document.querySelector('.page-frame-header h1')?.textContent).toBe('Comp')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete the FY26 refresh grant' }))
+    await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2))
+
+    // The shared Feed prints this page's own sentence, to the word.
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'vesting unavailable — the schedule may be showing earlier data. Retry',
+    )
+  })
+})
+
 describe('CompPage — the two feeds are independent', () => {
   it('banners a schedule failure with a Retry while the events card still renders', async () => {
     vi.mocked(fetchVestingSchedule).mockRejectedValueOnce(

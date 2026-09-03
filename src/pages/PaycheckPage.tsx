@@ -12,9 +12,12 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
-import { SkeletonCard } from '../components/PageSkeleton'
 import PacePanel from '../components/paycheck/PacePanel'
 import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptions'
+import Feed, { FeedBanner } from '../components/shell/Feed'
+import PageFrame from '../components/shell/PageFrame'
+import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
+import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import type {
   HouseholdOut,
@@ -464,11 +467,9 @@ function ProfilesPanel({
         entered as percents (13 = 13%) and stored as fractions with nine decimal places;
         withholding is a tax rather than a contribution, so it is not part of the 100% check.
       </p>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      {/* A save that failed, not a feed that is behind: the bare alert, with no stale cue
+          and nothing to retry — the form itself is the retry. */}
+      <FeedBanner error={error} />
       <form
         className="paycheck-form"
         onSubmit={(e) => {
@@ -684,6 +685,10 @@ function breakdownKey(profileId: number | null, personId: number | null): string
 }
 
 export default function PaycheckPage() {
+  // The scope row's person chip IS this page's person picker (spec §6), so the URL — not a
+  // piece of page state — is where the pick lives.
+  const { scope } = useScope({ owner: true })
+
   const [profiles, setProfiles] = useState<PaycheckProfileOut[] | null>(
     () => getSnapshot<PaycheckProfileOut[]>('paycheck:profiles') ?? null,
   )
@@ -700,6 +705,14 @@ export default function PaycheckPage() {
   // key belongs to a different person than the one on screen), and skipping on the cache
   // stranded the page there (2026-08-28 bug).
   const shownBreakdown = useRef<PaycheckBreakdownOut | null>(cachedBreakdown ?? null)
+  // ...kept in step with the render by an effect, never written by hand: the person adopt
+  // runs DURING render (where a ref write would survive a discarded render), and a peeked
+  // paint that left the ref behind made the identical live payload look like a change —
+  // re-arming the count-up and the flow's entrance on a switch back to a person already
+  // seen. A ref write in an effect body is not state, so react-hooks 7 does not apply.
+  useEffect(() => {
+    shownBreakdown.current = breakdown
+  }, [breakdown])
   // false once a revalidation actually CHANGES the data — the flow may animate again.
   const [fromCache, setFromCache] = useState(cachedBreakdown !== undefined)
   const [breakdownError, setBreakdownError] = useState<string | null>(null)
@@ -720,7 +733,13 @@ export default function PaycheckPage() {
   // The chips' source. Fetched on its own, never folded into either load above: the
   // switcher is an affordance, and a household hiccup must not cost the waterfall
   // (NetWorthPage's isolated-fetch posture). null covers both "not loaded" and "failed".
-  const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  // Seeded from the row's OWN snapshot key so the page and the scope row agree on the first
+  // paint: without it the chips could be up (ScopeBar paints from the snapshot) while the
+  // page still believed there was nobody to switch between, and a chip press would do
+  // nothing until this fetch answered.
+  const [household, setHousehold] = useState<HouseholdOut | null>(
+    () => getSnapshot<HouseholdOut>(HOUSEHOLD_SNAPSHOT) ?? null,
+  )
   // One in-force breakdown per person, fetched on its OWN so a partner failure costs the
   // tile and nothing else. Deliberately NOT derived from the waterfall above: that one
   // follows the chips and any pinned row, while this figure is always "the profile in
@@ -790,7 +809,10 @@ export default function PaycheckPage() {
   useEffect(() => {
     fetchHousehold()
       .then(setHousehold)
-      .catch(() => setHousehold(null))
+      .catch(() => {
+        /* keep whatever the snapshot had, as ScopeBar does: the switcher is an affordance,
+           and a household hiccup must not cost the waterfall */
+      })
   }, [])
 
   // Two GETs on a two-person household, once per household load (and once per write), and
@@ -832,12 +854,14 @@ export default function PaycheckPage() {
         setBreakdownMissing(false)
         // Identical payload: nothing re-renders, the flow stays still (spec §1) — judged
         // against the RENDERED check, never the snapshot cache (see shownBreakdown).
+        // A person switch that peeked a warm key IS skipped here, because the mirror
+        // effect above has already moved the ref onto the peeked check: the flow and the
+        // count-up stay still on a switch back to a person already seen.
         if (
           shownBreakdown.current !== null &&
           JSON.stringify(shownBreakdown.current) === JSON.stringify(data)
         )
           return
-        shownBreakdown.current = data
         setFromCache(false)
         setBreakdown(data)
       })
@@ -848,10 +872,7 @@ export default function PaycheckPage() {
         // (or there never was one), so there is nothing left for the waterfall to be about.
         // Anything else keeps it — the panel names its own profile, so a stale waterfall
         // under the cue below still says whose it is.
-        if (missing) {
-          shownBreakdown.current = null
-          setBreakdown(null)
-        }
+        if (missing) setBreakdown(null)
         setBreakdownMissing(missing)
         setBreakdownError(message(err, 'Failed to load the paycheck breakdown'))
       })
@@ -912,9 +933,14 @@ export default function PaycheckPage() {
    * person's profile id under another's scope is either a 404 or, worse, someone else's
    * check under this person's name. The switch always lands on "whichever profile is in
    * force for them", which is the same place the page opens on.
+   *
+   * RENDER-SAFE: its only caller is the adopt block below, which runs during render, so
+   * this is state setters and nothing else — `shownBreakdown` is mirrored from `breakdown`
+   * by an effect, never written here (a ref written mid-render survives a discarded one).
+   * The adopt block also owns the "already there" check, so there is no guard here to go
+   * stale against a closure.
    */
   const selectPerson = (personId: number | null) => {
-    if (personId === selection.personId) return
     setBreakdownBusy(true)
     setBreakdownError(null)
     setBreakdownMissing(false)
@@ -923,12 +949,26 @@ export default function PaycheckPage() {
     // showMonth). A cold key keeps the old check dimmed under the busy flag, as before.
     const peeked = getSnapshot<PaycheckBreakdownOut>(breakdownKey(null, personId))
     if (peeked !== undefined) {
-      shownBreakdown.current = peeked
       setFromCache(true)
       setBreakdown(peeked)
     }
     setSelection({ profileId: null, personId })
   }
+
+  // The chip's pick arrives through the URL, so it is adopted DURING render — state setters
+  // only, no effect (the CategoriesPanel idiom; a setState in an effect body is react-hooks 7).
+  // null / joint / an unknown id all mean the primary, exactly what `selection.personId ===
+  // null` has always meant on the wire, so a stale link or a remembered `joint` from another
+  // page lands on the person this page has always opened with rather than on nothing.
+  const primaryId = orderedPeople[0]?.id ?? null
+  const wantedPersonId: number | null =
+    !switchable ||
+    typeof scope.owner !== 'number' ||
+    scope.owner === primaryId ||
+    !orderedPeople.some((p) => p.id === scope.owner)
+      ? null
+      : scope.owner
+  if (wantedPersonId !== selection.personId) selectPerson(wantedPersonId)
 
   // The history table follows the chips — client-side, because the router answers with one
   // ordered list for every person (spec §4.1), so a chip press costs the table nothing.
@@ -973,142 +1013,117 @@ export default function PaycheckPage() {
 
   return (
     <div className="page paycheck-page">
-      <div className="page-header">
-        <h1>Paycheck</h1>
-        <div className="spacer" />
-      </div>
+      <PageFrame
+        title="Paycheck"
+        // No All and no Joint: a paycheck belongs to ONE person (spec §6), and the chip that
+        // used to live in `.paycheck-person-row` is this row now.
+        scopeRow={<ScopeBar owner={{ joint: false, all: false }} />}
+        // Nothing is loaded page-wide: the two feeds below own their own lifecycles, so the
+        // frame is only the title row and the scope row.
+        resource={{ status: 'ready' }}
+      >
+        {/* TWO OR MORE answers or nothing: one person's net is not a household take-home, and
+            printing it as one would be a half-truth (spec §6). It sits OUTSIDE the per-check
+            card on purpose — it is not part of any one person's waterfall, and it does not
+            follow the chips. */}
+        {householdNets !== null && householdNets.length > 1 && (
+          <section className="paycheck-household">
+            <div className="kpi-row kpi-row-lone">
+              <StatTile
+                label="Household take-home"
+                value={formatCurrency(householdTotal)}
+                hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted. Each person has their own profile timeline. The waterfall, the flow and the history below all follow the chip; the household figure does not — it is always both of you."
+              />
+            </div>
+            <p className="drill-hint">
+              {householdNets.map((leg) => leg.name).join(' + ')} — the profile in force for
+              each person.
+            </p>
+          </section>
+        )}
 
-      {switchable && (
-        <div className="paycheck-person-row">
-          <span className="eyebrow">Whose paycheck</span>
-          <div className="segmented" role="group" aria-label="Person">
-            {orderedPeople.map((person, index) => (
-              <button
-                key={person.id}
-                type="button"
-                className={activePersonId === person.id ? 'active' : ''}
-                aria-pressed={activePersonId === person.id}
-                // The FIRST chip is the primary and carries null — no person param on the
-                // wire, so pressing "back to me" restores the exact request this page has
-                // always made.
-                onClick={() => selectPerson(index === 0 ? null : person.id)}
-              >
-                {person.name}
-              </button>
-            ))}
-          </div>
-          <InfoHint text="Each person has their own profile timeline. The waterfall, the flow and the history below all follow this chip; the household figure below does not — it is always both of you." />
-        </div>
-      )}
+        {/* A 404 is not a failure to recover from — it is "there is nothing to model yet", so
+            it travels as the feed's EMPTY state rather than its error: the answer on screen is
+            the form below, not a Retry. */}
+        <Feed
+          data={breakdownMissing ? null : breakdown}
+          error={breakdownMissing ? null : breakdownError}
+          busy={breakdownBusy && !breakdownMissing}
+          staleNoun="this breakdown"
+          retry={() => reselect(selection.profileId)}
+          retryLabel="Retry the breakdown"
+          skeleton={{ height: 320, label: 'Loading the breakdown…' }}
+          empty={
+            breakdownMissing ? (
+              <section className="card">
+                <h2 className="eyebrow">Per-check breakdown</h2>
+                {/* The server's sentence, plus where to go next — and the two 404s mean
+                    different things: "no paycheck profiles" is an empty database, while
+                    "paycheck profile not found" is a pinned row that has since been deleted,
+                    and telling THAT user to add a profile would be answering the wrong
+                    question. */}
+                <p className="empty-note">
+                  {/* Judged on the FILTERED list: the person on screen may have no rows while
+                      another person does, and "choose a profile below" beside an empty table
+                      answers the wrong question (2026-08-28 bug report). */}
+                  {shownProfiles.length > 0
+                    ? `${breakdownError} — choose a profile below.`
+                    : `${breakdownError} — add one below to see the waterfall.`}
+                </p>
+              </section>
+            ) : undefined
+          }
+        >
+          {(data) => (
+            <>
+              <BreakdownPanel data={data} still={fromCache} />
+              {/* Pace strip (2026-08-27 spec §5): the SAME payload as the waterfall above, so
+                  the rows can never describe a different profile than the check they sit
+                  under — including whichever person the chips picked. */}
+              <PacePanel items={data.pace} />
+              {/* Same payload, same busy dim: the flow can never show a different check than
+                  the table above it. */}
+              <FlowPanel data={data} still={fromCache} />
+            </>
+          )}
+        </Feed>
 
-      {/* TWO OR MORE answers or nothing: one person's net is not a household take-home, and
-          printing it as one would be a half-truth (spec §6). It sits OUTSIDE the per-check
-          card on purpose — it is not part of any one person's waterfall, and it does not
-          follow the chips. */}
-      {householdNets !== null && householdNets.length > 1 && (
-        <section className="paycheck-household">
-          <div className="kpi-row kpi-row-lone">
-            <StatTile
-              label="Household take-home"
-              value={formatCurrency(householdTotal)}
-              hint="The monthly net of the profile IN FORCE for each person, added together. It ignores the chip and any pinned row — it is always the whole household — and a person with no profile in force is not counted."
+        <Feed
+          data={profiles}
+          error={profilesError}
+          busy={profilesBusy}
+          staleNoun="the table"
+          retry={reloadProfiles}
+          retryLabel="Retry loading profiles"
+          skeleton={{ height: 240, label: 'Loading profiles…' }}
+        >
+          {/* The render prop's argument is only proof that `profiles` is non-null: the table
+              draws `shownProfiles`, the memo that scopes the one ordered list to the chip. */}
+          {() => (
+            /* Keyed by the CHIP's pick, and by whether the list is scoped yet. Switching
+               person must re-seed the carry-forward form from THAT person's latest row — a
+               half-typed row surviving the switch would be filed under the wrong person on
+               the next save. It reads `selection.personId` rather than the resolved
+               `activePersonId` so the primary's key is constant across a breakdown refetch
+               (the pre-batch behaviour: typed work survives). The `switchable` half is the
+               2026-09-03 fix: the profiles usually land BEFORE the household, so the panel
+               first mounts on the UNFILTERED list and seeds its form from whoever's row is
+               newest overall — the partner's, in production. Remounting once when the
+               household resolves re-seeds from the primary's own latest row; the only
+               typing that can be lost is whatever landed in that first instant. */
+            <ProfilesPanel
+              key={`${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`}
+              profiles={shownProfiles}
+              personId={selection.personId}
+              shownId={breakdown?.profile.id ?? null}
+              pinnedId={selection.profileId}
+              onSelect={selectProfile}
+              onShowCurrent={showCurrent}
+              onChanged={onProfilesChanged}
             />
-          </div>
-          <p className="drill-hint">
-            {householdNets.map((leg) => leg.name).join(' + ')} — the profile in force for
-            each person.
-          </p>
-        </section>
-      )}
-
-      {breakdownError !== null && !breakdownMissing && (
-        <div className="error-banner" role="alert">
-          {breakdown === null
-            ? breakdownError
-            : `${breakdownError} — this breakdown may be showing earlier data.`}{' '}
-          <button
-            className="button"
-            aria-label="Retry the breakdown"
-            onClick={() => reselect(selection.profileId)}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-      {breakdownMissing ? (
-        <section className="card">
-          <h2 className="eyebrow">Per-check breakdown</h2>
-          {/* The server's sentence, plus where to go next — and the two 404s mean
-              different things: "no paycheck profiles" is an empty database, while
-              "paycheck profile not found" is a pinned row that has since been deleted, and
-              telling THAT user to add a profile would be answering the wrong question. */}
-          <p className="empty-note">
-            {/* Judged on the FILTERED list: the person on screen may have no rows while
-                another person does, and "choose a profile below" beside an empty table
-                answers the wrong question (2026-08-28 bug report). */}
-            {shownProfiles.length > 0
-              ? `${breakdownError} — choose a profile below.`
-              : `${breakdownError} — add one below to see the waterfall.`}
-          </p>
-        </section>
-      ) : breakdown === null ? (
-        breakdownBusy && <SkeletonCard height={320} label="Loading the breakdown…" />
-      ) : (
-        <div className={`loading-dim${breakdownBusy ? ' is-loading' : ''}`}>
-          <BreakdownPanel data={breakdown} still={fromCache} />
-          {/* Pace strip (2026-08-27 spec §5): the SAME payload as the waterfall above, so
-              the rows can never describe a different profile than the check they sit
-              under — including whichever person the chips picked. */}
-          <PacePanel items={breakdown.pace} />
-          {/* Same payload, same busy dim: the flow can never show a different check than
-              the table above it. */}
-          <FlowPanel data={breakdown} still={fromCache} />
-        </div>
-      )}
-
-      {profilesError && (
-        <div className="error-banner" role="alert">
-          {/* The stale cue only when there IS something stale: a reload failure leaves the
-              previous table up, a first-load failure leaves nothing to be behind. */}
-          {profiles === null
-            ? profilesError
-            : `${profilesError} — the table may be showing earlier data.`}{' '}
-          <button
-            className="button"
-            aria-label="Retry loading profiles"
-            onClick={reloadProfiles}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-      {profiles === null ? (
-        profilesBusy && <SkeletonCard height={240} label="Loading profiles…" />
-      ) : (
-        <div className={`loading-dim${profilesBusy ? ' is-loading' : ''}`}>
-          {/* Keyed by the CHIP's pick, and by whether the list is scoped yet. Switching
-              person must re-seed the carry-forward form from THAT person's latest row — a
-              half-typed row surviving the switch would be filed under the wrong person on
-              the next save. It reads `selection.personId` rather than the resolved
-              `activePersonId` so the primary's key is constant across a breakdown refetch
-              (the pre-batch behaviour: typed work survives). The `switchable` half is the
-              2026-09-03 fix: the profiles usually land BEFORE the household, so the panel
-              first mounts on the UNFILTERED list and seeds its form from whoever's row is
-              newest overall — the partner's, in production. Remounting once when the
-              household resolves re-seeds from the primary's own latest row; the only
-              typing that can be lost is whatever landed in that first instant. */}
-          <ProfilesPanel
-            key={`${selection.personId ?? 'primary'}:${switchable ? 'scoped' : 'unscoped'}`}
-            profiles={shownProfiles}
-            personId={selection.personId}
-            shownId={breakdown?.profile.id ?? null}
-            pinnedId={selection.profileId}
-            onSelect={selectProfile}
-            onShowCurrent={showCurrent}
-            onChanged={onProfilesChanged}
-          />
-        </div>
-      )}
+          )}
+        </Feed>
+      </PageFrame>
     </div>
   )
 }

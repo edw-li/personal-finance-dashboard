@@ -11,13 +11,14 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
-import { SkeletonCard } from '../components/PageSkeleton'
 import RsuGrantsPanel from '../components/comp/RsuGrantsPanel'
 import VestingSchedulePanel, { VestingTiles } from '../components/comp/VestingSchedulePanel'
 import {
   TC_CHART_LABEL,
   tcTrajectoryOption,
 } from '../components/comp/compChartOptions'
+import Feed, { FeedBanner } from '../components/shell/Feed'
+import PageFrame from '../components/shell/PageFrame'
 import type { CompEventCreate, CompEventOut, VestingScheduleOut } from '../types/api'
 import { canonicalAmount } from '../utils/amount'
 import { formatCurrency, formatPct, formatShares } from '../utils/format'
@@ -268,11 +269,9 @@ function EventsPanel({
         the refresh pair values the new grant. Everything to the right of the notes is
         computed by the server at read time.
       </p>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      {/* A save that failed, not a feed that is behind: the bare alert, with no stale cue
+          and nothing to retry — the form itself is the retry. */}
+      <FeedBanner error={error} />
       {orphans.length > 0 && (
         // Not an error banner: nothing failed and nothing is blocked. React text nodes, so
         // the sentences are escaped by construction — though every one of them is this
@@ -561,102 +560,91 @@ export default function CompPage() {
 
   return (
     <div className="page comp-page">
-      <div className="page-header">
-        <h1>Comp</h1>
-        <div className="spacer" />
-      </div>
+      {/* Nothing is loaded page-wide: the two feeds below own their own lifecycles, so the
+          frame is only the title row. */}
+      <PageFrame title="Comp" resource={{ status: 'ready' }}>
+        {/* The schedule feed's banner leads its OWN tiles (2026-08-31 review round): after a
+            failed reload the strip below is the page's most prominent stale surface, and the
+            "may be showing earlier data" cue has to sit beside it, not below the fold with
+            the schedule card. The headline tiles themselves are the 2026-08-31 audit's; the
+            no-grants branch is VestingTiles' own (it renders nothing — the panel's empty
+            state carries the message). */}
+        <Feed
+          data={schedule}
+          error={scheduleError}
+          busy={scheduleBusy}
+          staleNoun="the schedule"
+          retry={reloadSchedule}
+          retryLabel="Retry loading the vesting schedule"
+          // Its own sentence, not the schedule card's: two identical hidden labels would
+          // read out one after the other while the one feed behind them loads.
+          skeleton={{ height: 96, label: 'Loading vesting totals…' }}
+        >
+          {(s) => <VestingTiles schedule={s} />}
+        </Feed>
 
-      {/* The schedule feed's banner leads its OWN tiles (2026-08-31 review round): after a
-          failed reload the strip below is the page's most prominent stale surface, and the
-          "may be showing earlier data" cue has to sit beside it, not below the fold with
-          the schedule card. */}
-      {scheduleError && (
-        <div className="error-banner" role="alert">
-          {schedule === null
-            ? scheduleError
-            : `${scheduleError} — the schedule may be showing earlier data.`}{' '}
-          <button
-            className="button"
-            aria-label="Retry loading the vesting schedule"
-            onClick={reloadSchedule}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-      {/* The schedule's headline tiles at the page top (2026-08-31 audit). The pinned card
-          order below is untouched; the no-grants branch is VestingTiles' own (it renders
-          nothing — the panel's empty state carries the message). Dimmed by the schedule
-          feed's own flag, like the cards it summarizes. */}
-      {schedule !== null && (
-        <div className={`loading-dim${scheduleBusy ? ' is-loading' : ''}`}>
-          <VestingTiles schedule={schedule} />
-        </div>
-      )}
+        {/* Page order (2026-08-21 user revision): the ENTERED history first — Focal History,
+            then the chart it draws — and the computed vesting surfaces after: grants (the
+            input), then the schedule they produce. The panel is NOT keyed: a reload
+            re-renders it with a replaced array, so its half-typed row survives. */}
+        <Feed
+          data={events}
+          error={error}
+          busy={busy}
+          staleNoun="the table"
+          retry={reload}
+          retryLabel="Retry loading comp events"
+          skeleton={{ height: 240, label: 'Loading comp events…' }}
+        >
+          {(rows) => <EventsPanel events={rows} onChanged={onEventsChanged} />}
+        </Feed>
 
-      {error && (
-        <div className="error-banner" role="alert">
-          {/* The stale cue only when there IS something stale: a reload failure leaves the
-              previous table up, a first-load failure leaves nothing to be behind. */}
-          {events === null ? error : `${error} — the table may be showing earlier data.`}{' '}
-          <button className="button" aria-label="Retry loading comp events" onClick={reload}>
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* Page order (2026-08-21 user revision): the ENTERED history first — Focal History,
-          then the chart it draws — and the computed vesting surfaces after: grants (the
-          input), then the schedule they produce. */}
-      {events === null ? (
-        busy && <SkeletonCard height={240} label="Loading comp events…" />
-      ) : (
+        {/* Dimmed by the SAME flag as the table above it: both are drawn from one payload,
+            and a chart left bright while the table beside it says "may be showing earlier
+            data" would be the one thing the eye is on claiming to be current. */}
         <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          {/* NOT keyed: a reload re-renders this panel with a replaced array, so its
-              half-typed row survives. */}
-          <EventsPanel events={events} onChanged={onEventsChanged} />
+          <section className="card">
+            <h2 className="eyebrow">
+              {TC_CHART_LABEL}
+              <InfoHint text="Base salary stacked under the value of unvested equity, including the year&apos;s refresh — this app&apos;s total-comp proxy; the line is the server&apos;s own total." />
+            </h2>
+            <p className="drill-hint">
+              Total comp as this app defines it: the base the year landed on, stacked under
+              the value of the unvested equity behind it (the sheet has no TC column — this is
+              the proxy, and the line is the server&apos;s own total).
+            </p>
+            {trajectory ? (
+              <EChart option={trajectory} height={320} animateEntrance={!fromCache} />
+            ) : (
+              events !== null && <p className="empty-note">No comp events yet — add one above.</p>
+            )}
+          </section>
         </div>
-      )}
 
-      {/* Dimmed by the SAME flag as the table above it: both are drawn from one payload,
-          and a chart left bright while the table beside it says "may be showing earlier
-          data" would be the one thing the eye is on claiming to be current. */}
-      <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-        <section className="card">
-          <h2 className="eyebrow">
-            {TC_CHART_LABEL}
-            <InfoHint text="Base salary stacked under the value of unvested equity, including the year&apos;s refresh — this app&apos;s total-comp proxy; the line is the server&apos;s own total." />
-          </h2>
-          <p className="drill-hint">
-            Total comp as this app defines it: the base the year landed on, stacked under
-            the value of the unvested equity behind it (the sheet has no TC column — this is
-            the proxy, and the line is the server&apos;s own total).
-          </p>
-          {trajectory ? (
-            <EChart option={trajectory} height={320} animateEntrance={!fromCache} />
-          ) : (
-            events !== null && <p className="empty-note">No comp events yet — add one above.</p>
+        {/* No `error` here: the schedule's banner already leads the tiles above, and one
+            failure must not print two alerts. One payload, one dim — the grants table IS the
+            schedule card's input, and a bright form beside a card that says it may be stale
+            would invite an edit against figures that are already gone. NOT keyed, like the
+            events panel. Grants before the schedule (the 2026-08-21 order): the inputs, then
+            what they compute. */}
+        <Feed
+          data={schedule}
+          busy={scheduleBusy}
+          staleNoun="the schedule"
+          skeleton={{ height: 280, label: 'Loading the vesting schedule…' }}
+        >
+          {(s) => (
+            <>
+              <RsuGrantsPanel
+                grants={s.grants}
+                seedCandidates={s.seed_candidates}
+                onChanged={reloadSchedule}
+              />
+              <VestingSchedulePanel schedule={s} />
+            </>
           )}
-        </section>
-      </div>
-
-      {schedule === null ? (
-        scheduleBusy && <SkeletonCard height={280} label="Loading the vesting schedule…" />
-      ) : (
-        // One payload, one dim: the grants table IS the schedule card's input, and a bright
-        // form beside a card that says it may be stale would invite an edit against figures
-        // that are already gone. NOT keyed — a reload re-renders the grants panel with a
-        // replaced array, so its half-typed row survives. Grants before the schedule (the
-        // 2026-08-21 order): the inputs, then what they compute.
-        <div className={`loading-dim${scheduleBusy ? ' is-loading' : ''}`}>
-          <RsuGrantsPanel
-            grants={schedule.grants}
-            seedCandidates={schedule.seed_candidates}
-            onChanged={reloadSchedule}
-          />
-          <VestingSchedulePanel schedule={schedule} />
-        </div>
-      )}
+        </Feed>
+      </PageFrame>
     </div>
   )
 }
