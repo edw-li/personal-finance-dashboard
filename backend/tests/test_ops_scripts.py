@@ -107,8 +107,9 @@ def test_restore_drill_exists_and_runs_the_four_steps():
     assert "app.lifecycle restore" in text and "app.lifecycle verify" in text
     assert "CREATE DATABASE" in text and "DROP DATABASE IF EXISTS" in text
     assert "PASS" in text and "FAIL" in text
-    # Every step's failure is a drill FAIL, not a bare `set -e` exit with no verdict.
-    assert text.count("|| fail") == 4
+    # Every step's failure is a drill FAIL, not a bare `set -e` exit with no verdict —
+    # CREATE DATABASE included.
+    assert text.count("|| fail") == 5
     _bash_syntax_ok(DRILL)
 
 
@@ -124,9 +125,16 @@ def test_restore_drill_resolves_python_and_cleans_up_before_it_cds():
     # The usage error the header promises is 2, not ${1:?}'s 1.
     assert "${1:?" not in text
     assert 'if [ "$#" -ne 1 ]; then' in text and "exit 2" in text
-    # One trap for both leaks: the scratch database and the mktemp -d data dir.
+    # One trap for both leaks: the scratch database and the drill's temp dir. The rm must
+    # never name the INHERITED DATA_DIR — that is /data inside the container, the mounted
+    # finance-data volume with every real snapshot and restore point on it, and any exit
+    # before the drill overwrote the variable would have deleted the lot.
     assert "trap cleanup EXIT" in text
-    assert 'rm -rf "$DATA_DIR"' in text
+    assert 'rm -rf "$DATA_DIR"' not in text
+    assert 'rm -rf "$DRILL_DATA_DIR"' in text
+    assert 'export DATA_DIR="$DRILL_DATA_DIR"' in text
+    # ...and the directory exists before the trap that removes it is armed.
+    assert text.index('DRILL_DATA_DIR="$(mktemp -d)"') < text.index("trap cleanup EXIT")
 
 
 def test_restore_drill_takes_its_credentials_from_database_url():

@@ -88,6 +88,14 @@ DB_PORT="${DB_PORT:-${URL_PORT:-5432}}"
 DB_USER="${POSTGRES_USER:-${URL_USER:-finance}}"
 DB_PASSWORD="${POSTGRES_PASSWORD:-${URL_PASSWORD:-finance}}"
 DRILL_DB="finance_drill_$(date +%Y%m%d_%H%M%S)"
+# The drill writes its snapshots into a throwaway directory of its OWN, in its OWN
+# variable. The inherited DATA_DIR is /data inside the container — the mounted
+# finance-data volume holding every real snapshot and restore point — so no destructive
+# command below may ever name it. Declared here so the cleanup trap always reads a
+# defined value, whatever order a later edit puts things in.
+DRILL_DATA_DIR=""
+TMP_ROOT="${TMPDIR:-/tmp}"
+TMP_ROOT="${TMP_ROOT%/}"
 
 db_url() {  # $1 = database, $2 = driver -> a DSN whose credentials are properly ENCODED
   ( cd "$BACKEND_DIR" \
@@ -143,24 +151,36 @@ fail() {  # every step's failure is a drill FAIL, never a bare set -e exit
   exit 1
 }
 
-echo "[drill] creating ${DRILL_DB}"
-pg_admin "CREATE DATABASE \"${DRILL_DB}\""
-cleanup() {  # the scratch database AND the throwaway data dir; neither may outlive the drill
+# Made BEFORE the trap that removes it: a trap armed while DRILL_DATA_DIR was still empty —
+# or, worse, while the rm still named the inherited DATA_DIR — would take the production
+# volume with it on any early exit (a failed db_url, a Ctrl-C forwarded by docker compose run).
+DRILL_DATA_DIR="$(mktemp -d)"
+
+cleanup() {  # the scratch database AND the drill's OWN temp dir; neither may outlive the drill
   pg_admin "DROP DATABASE IF EXISTS \"${DRILL_DB}\"" || echo "[drill] WARN: could not drop ${DRILL_DB}"
-  if [ -n "${DATA_DIR:-}" ]; then
-    rm -rf "$DATA_DIR"
-  fi
+  # Three conditions before an rm -rf, because the cost of getting this wrong is the user's
+  # entire snapshot history: a non-empty path, under the temp root mktemp -d writes into
+  # (Git Bash reports /tmp whatever TMPDIR says), that is still a directory.
+  case "${DRILL_DATA_DIR:-}" in
+    "${TMP_ROOT}"/?* | /tmp/?*)
+      if [ -d "$DRILL_DATA_DIR" ]; then
+        rm -rf "$DRILL_DATA_DIR"
+      fi
+      ;;
+  esac
   return 0  # an EXIT trap that ends non-zero would rewrite the drill's own exit code
 }
 trap cleanup EXIT
+
+echo "[drill] creating ${DRILL_DB}"
+pg_admin "CREATE DATABASE \"${DRILL_DB}\"" || fail
 
 # Point the app at the scratch database; no scheduler, no snapshot job, a throwaway data dir.
 DATABASE_URL="$(db_url "$DRILL_DB" postgresql+asyncpg)"
 export DATABASE_URL
 export SCHEDULER_ENABLED=0
 export SNAPSHOT_ENABLED=0
-DATA_DIR="$(mktemp -d)"
-export DATA_DIR
+export DATA_DIR="$DRILL_DATA_DIR"  # only now does DATA_DIR stop being the caller's
 cd "$BACKEND_DIR"
 
 echo "[drill] alembic upgrade head"
