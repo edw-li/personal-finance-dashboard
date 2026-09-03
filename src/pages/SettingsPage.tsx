@@ -100,6 +100,13 @@ export default function SettingsPage() {
     // mount-only: a plain function over stable setters (house idiom)
   }, [])
 
+  // The one reload door, shared by the two surfaces that can offer it: the plain banner
+  // when the first load failed, and the frame's stale line if cards are already up.
+  const retryLoad = () => {
+    setLoading(true)
+    load()
+  }
+
   // Anchored arrival from the palette (/settings#limits, 2026-09-03 spec §9): scroll the
   // card into view and light it for a moment, because a page of ten cards gives no other
   // sign that the jump landed. Gated on `loading` because the cards only exist once the
@@ -271,15 +278,13 @@ export default function SettingsPage() {
         title="Settings"
         resource={{
           // Ready as soon as the first load SETTLES, either way: the Appearance card below
-          // owns no request, so a settings GET that failed must not blank the page — the
-          // frame's stale line carries the message and Retry above the card that survived.
+          // owns no request, so a settings GET that failed must not blank the page.
           status: loadedOnce || error !== null ? 'ready' : 'loading',
-          error,
+          // The frame's line reads "Showing earlier data" — true only when there IS data
+          // behind it. A first failure has none, and is bannered below instead.
+          error: loadedOnce ? error : null,
           busy: loading && loadedOnce,
-          retry: () => {
-            setLoading(true)
-            load()
-          },
+          retry: retryLoad,
         }}
         // The page's own shape: the full-width import card over the two half-width forms.
         skeleton={{
@@ -291,6 +296,14 @@ export default function SettingsPage() {
           ],
         }}
       >
+        {/* The first-load failure, in the seat the page header's banner used to hold: the
+            frame is ready (the Appearance card needs no network), so the message and its
+            retry ride a plain alert above the grid rather than a staleness line. */}
+        <FeedBanner
+          error={loadedOnce ? null : error}
+          retry={retryLoad}
+          retryLabel="Retry loading settings"
+        />
         <div className="card-grid">
           {loadedOnce && (
             <>

@@ -441,21 +441,35 @@ describe('SettingsPage — app settings', () => {
     expect(document.querySelector('.page-skeleton')).toBeNull()
   })
 
+  it('offers Retry on the first-failure banner, under a name of its own', async () => {
+    vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
+    renderPage()
+
+    const banner = await screen.findByRole('alert')
+    expect(banner.textContent).toContain('settings unavailable')
+    // Bare: "Showing earlier data" would be a claim about cards that never arrived.
+    expect(banner.textContent).not.toContain('Showing earlier data')
+    // Named for the fetch it repeats, because the cards below own Retry buttons of their
+    // own once they are on screen (SystemCard, Limits, Assistant).
+    const retry = screen.getByRole('button', { name: 'Retry loading settings' })
+    expect(banner.contains(retry)).toBe(true)
+    expect(retry.textContent).toBe('Retry')
+  })
+
   it('banners a failed load and refetches on Retry', async () => {
     vi.mocked(fetchAppSettings)
       .mockRejectedValueOnce(new ApiError('settings unavailable', 503))
       .mockResolvedValue(SETTINGS)
     renderPage()
 
-    // Ready-with-error, not error-only: the Appearance card below needs no network, so the
-    // frame stays ready and carries the message on its stale line — with Retry on it.
-    const stale = await screen.findByText(/settings unavailable/)
-    expect(stale.textContent).toContain('Showing earlier data')
+    // The frame is ready (the Appearance card needs no network), so the failure arrives as
+    // a plain banner above the grid — nothing is on screen for it to be stale over.
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // A FIRST load that failed knows nothing about the stored settings, and a form seeded
     // with blanks would offer to save them (PortfolioPage's null-holdings rule).
     expect(screen.queryByLabelText('ESPP ticker')).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading settings' }))
     expect(await screen.findByLabelText('ESPP ticker')).toBeTruthy()
     expect(vi.mocked(fetchAppSettings)).toHaveBeenCalledTimes(2)
     expect(swrBox().value).toBe('4.5')
@@ -546,7 +560,7 @@ describe('SettingsPage — xlsx import', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText(/settings unavailable/)).toBeTruthy()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // The card shares the two forms' `loadedOnce` gate on purpose: a settings GET that
     // failed means the API is unreachable, and an upload card that could only fail —
     // possibly after the user picked a 14 MB workbook — is not worth offering.
@@ -862,7 +876,7 @@ describe('SettingsPage — appearance card', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText(/settings unavailable/)).toBeTruthy()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // It owns no fetch, so it sits OUTSIDE the loadedOnce gate the other cards share: theme
     // and density — and the palette's #appearance jump — still work when the API is
     // unreachable, which is one of the moments a reader most wants the light theme back.
@@ -898,7 +912,7 @@ describe('SettingsPage — household, accounts and categories cards', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText(/settings unavailable/)).toBeTruthy()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
     // They share the import card's `loadedOnce` gate: a settings GET that failed means the
     // API is unreachable, and three cards that could only fail are not worth offering.
     expect(screen.queryByText('Household')).toBeNull()
@@ -923,7 +937,7 @@ describe('SettingsPage — assistant card', () => {
     vi.mocked(fetchAppSettings).mockRejectedValue(new ApiError('settings unavailable', 503))
     renderPage()
 
-    expect(await screen.findByText(/settings unavailable/)).toBeTruthy()
+    expect(await screen.findByText('settings unavailable')).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Assistant' })).toBeNull()
     expect(vi.mocked(fetchAssistantSettings)).not.toHaveBeenCalled()
   })
