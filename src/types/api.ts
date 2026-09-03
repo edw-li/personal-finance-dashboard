@@ -1699,17 +1699,23 @@ export interface MoneyFlowOut {
 
 export type RewardsCurrency = 'cash' | 'points' | 'miles'
 
+/** When a recurring credit resets (2026-09-03 calendar spec §6): the calendar year (Jan 1)
+ *  or the card's opened_on anniversary. The calendar dates its reset event by this. */
+export type CardCreditResetCadence = 'calendar' | 'anniversary'
+
 export interface CardCreditOut {
   id: number
   label: string
   annual_value: string
   counts: boolean
+  reset_cadence: CardCreditResetCadence
 }
 
 export interface CardCreditIn {
   label: string
   annual_value: string
   counts: boolean
+  reset_cadence: CardCreditResetCadence
 }
 
 export interface CreditLimitEventOut {

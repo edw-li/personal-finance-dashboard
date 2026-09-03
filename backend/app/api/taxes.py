@@ -1057,21 +1057,13 @@ def _wage_base(values: dict[str, Decimal]) -> Decimal:
     return sum((values.get(key, ZERO) for key in WAGE_KEYS), ZERO)
 
 
-@router.get("/years/{year}/withholding", response_model=WithholdingOut)
-async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> WithholdingOut:
-    """Estimated all-in withholding for the CURRENT year vs the engine's liability.
-
-    `product_today` is the one clock this route reads (comp.py's note: the prod container runs
-    UTC, so date.today() is already tomorrow on a PT evening), and it is read ONCE — the
-    same day decides the year check, which checks have been received, and which vests are
-    behind us. `withholding_calc` never re-reads a vest tuple's date, so that single value is
-    what keeps the past/future split and the check grid consistent with each other.
+async def withholding_estimate(db: AsyncSession, year: int, today: date) -> WithholdingOut:
+    """The withholding tracker's whole computation for ONE year as of `today`, callable from
+    OTHER routers as well as this one — the calendar prices its estimated-tax deadlines
+    with it rather than re-deriving the safe harbor (2026-09-03 calendar spec §6). Raises
+    this router's own 404 when the year has no row; `today` is a PARAMETER, so a caller
+    pricing two years reads the clock once.
     """
-    today = product_today()
-    if year != today.year:
-        # Before `_require_year`: a settled year may well be stored and summarizable, and the
-        # reason this card cannot be drawn for it has nothing to do with whether it exists.
-        raise HTTPException(status_code=422, detail=NON_CURRENT_YEAR_MESSAGE)
     await _require_year(db, year)
 
     feed = await _engine_feed(db, year)
@@ -1359,6 +1351,25 @@ async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) ->
         safe_harbor=safe_harbor,
         warnings=warnings,
     )
+
+
+@router.get("/years/{year}/withholding", response_model=WithholdingOut)
+async def get_withholding(year: YearPath, db: AsyncSession = Depends(get_db)) -> WithholdingOut:
+    """Estimated all-in withholding for the CURRENT year vs the engine's liability.
+
+    `product_today` is the one clock this route reads (comp.py's note: the prod container runs
+    UTC, so date.today() is already tomorrow on a PT evening), and it is read ONCE — the
+    same day decides the year check, which checks have been received, and which vests are
+    behind us. `withholding_calc` never re-reads a vest tuple's date, and neither does
+    `withholding_estimate`, so that single value is what keeps the past/future split and the
+    check grid consistent with each other.
+    """
+    today = product_today()
+    if year != today.year:
+        # Before `_require_year`: a settled year may well be stored and summarizable, and the
+        # reason this card cannot be drawn for it has nothing to do with whether it exists.
+        raise HTTPException(status_code=422, detail=NON_CURRENT_YEAR_MESSAGE)
+    return await withholding_estimate(db, year, today)
 
 
 @router.post("/what-if", response_model=WhatIfOut)

@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -13,6 +14,12 @@ def _stripped_or_none(value: str | None) -> str | None:
     return value or None
 
 
+# The wire vocabulary, spelled as a Literal so a bad value 422s in the parser and the
+# OpenAPI schema carries the union. models.credit_cards.CREDIT_RESET_CADENCES is the same
+# two words at the DB check constraint; test_credit_cards_api pins them against each other.
+CreditResetCadence = Literal["calendar", "anniversary"]
+
+
 class CardCreditOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -20,12 +27,16 @@ class CardCreditOut(BaseModel):
     label: str
     annual_value: Decimal
     counts: bool
+    reset_cadence: CreditResetCadence
 
 
 class CardCreditIn(BaseModel):
     label: str = Field(min_length=1, max_length=120)
     annual_value: Decimal
     counts: bool = True
+    # When the credit resets (2026-09-03 calendar spec §6): the calendar year (Jan 1) or the
+    # card's opened_on anniversary. The default keeps v1 clients valid.
+    reset_cadence: CreditResetCadence = "calendar"
 
     @field_validator("label")
     @classmethod

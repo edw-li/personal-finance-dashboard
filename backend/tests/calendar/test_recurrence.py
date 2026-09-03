@@ -69,3 +69,14 @@ def test_occurrences_before_the_window_are_dropped_and_the_window_end_stops_the_
 def test_unknown_rule_raises():
     with pytest.raises(ValueError):
         expand("daily", date(2026, 1, 1), None, W)
+
+
+def test_a_window_touching_the_end_of_the_date_range_stops_instead_of_overflowing():
+    """Stepping past date.max raises inside `date`, and a stored row must never 500 a GET
+    (api/calendar.py's GET-never-rejects law) — the series just ends."""
+    end = Window(date(9999, 12, 1), date(9999, 12, 31))
+    assert expand("weekly", date(9999, 12, 25), None, end) == [date(9999, 12, 25)]
+    assert expand("monthly", date(9999, 12, 15), None, end) == [date(9999, 12, 15)]
+    assert expand("yearly", date(9999, 12, 15), None, end) == [date(9999, 12, 15)]
+    # The clamp is on the STEP, not the window: an until inside the range still ends there.
+    assert expand("monthly", date(9999, 10, 15), date(9999, 12, 15), end) == [date(9999, 12, 15)]

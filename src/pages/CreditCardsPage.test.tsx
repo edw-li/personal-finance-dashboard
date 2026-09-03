@@ -60,6 +60,7 @@ vi.mock('../components/EChart', async () => {
 })
 
 import {
+  createCardCredit,
   createCreditCard,
   deleteCreditCard,
   fetchCreditCards,
@@ -85,7 +86,10 @@ function vx(over: Partial<CreditCardOut> = {}): CreditCardOut {
     rewards_currency: 'miles', point_value_cents: '1.7000', primary_holder: 'Ed',
     authorized_users: 'P2', opened_on: '2023-05-12', is_active: true, account_id: null,
     person_id: 1, notes: null, sort_order: 0,
-    credits: [{ id: 11, label: '$300 travel credit', annual_value: '300.00', counts: true }],
+    credits: [
+      { id: 11, label: '$300 travel credit', annual_value: '300.00', counts: true,
+        reset_cadence: 'calendar' },
+    ],
     current_limit: '30000.00',
     limit_events: [
       { id: 21, effective_date: '2023-05-12', limit_amount: '20000.00', note: 'opened' },
@@ -398,6 +402,7 @@ describe('CreditCardsPage', () => {
   it('toggling a credit\'s "counts" PATCHes the full credit body', async () => {
     vi.mocked(updateCardCredit).mockResolvedValue({
       id: 11, label: '$300 travel credit', annual_value: '300.00', counts: false,
+      reset_cadence: 'calendar',
     })
     renderPage('/credit-cards?card=venture-x')
     await screen.findByText('Worth keeping? (est.)')
@@ -409,8 +414,60 @@ describe('CreditCardsPage', () => {
         label: '$300 travel credit',
         annual_value: '300.00',
         counts: false,
+        reset_cadence: 'calendar',
       }),
     )
+  })
+
+  it('flips a credit\'s reset cadence with a full-body PATCH', async () => {
+    vi.mocked(updateCardCredit).mockResolvedValue({
+      id: 11, label: '$300 travel credit', annual_value: '300.00', counts: true,
+      reset_cadence: 'anniversary',
+    })
+    renderPage('/credit-cards?card=venture-x')
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: '$300 travel credit resets on the card anniversary',
+      }),
+    )
+    await waitFor(() =>
+      expect(updateCardCredit).toHaveBeenCalledWith(11, {
+        label: '$300 travel credit',
+        annual_value: '300.00',
+        counts: true,
+        reset_cadence: 'anniversary',
+      }),
+    )
+  })
+
+  it('adding a credit sends the calendar cadence by default', async () => {
+    vi.mocked(createCardCredit).mockResolvedValue({
+      id: 12, label: 'Lounge', annual_value: '100.00', counts: true, reset_cadence: 'calendar',
+    })
+    renderPage('/credit-cards?card=venture-x')
+    fireEvent.change(await screen.findByLabelText('Credit label'), {
+      target: { value: 'Lounge' },
+    })
+    fireEvent.change(screen.getByLabelText('Credit annual value'), { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add credit' }))
+    await waitFor(() =>
+      expect(createCardCredit).toHaveBeenCalledWith(1, {
+        label: 'Lounge',
+        annual_value: '100',
+        counts: true,
+        reset_cadence: 'calendar',
+      }),
+    )
+  })
+
+  it('the roster nudges for active cards without an opened date', async () => {
+    renderPage()
+    await screen.findByText('Card roster')
+    // SavorOne and RH Gold both carry opened_on: null in the fixtures; Venture X is dated.
+    expect(screen.getByText(/2 active cards have no opened date/)).toBeTruthy()
+    expect(
+      screen.getByText(/fees, anniversaries and credit resets reach the calendar/),
+    ).toBeTruthy()
   })
 
   it('reordering a category is optimistic and PATCHes only the rows that moved', async () => {

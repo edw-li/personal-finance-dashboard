@@ -15,6 +15,16 @@ def freeze_today(monkeypatch):
     monkeypatch.setattr("app.api.calendar.product_today", lambda: date(2026, 8, 24))
 
 
+async def test_a_negative_override_amount_is_refused(auth_client):
+    """`direction` carries the sign on a generated event too — "your figure" may be zero
+    but never negative."""
+    resp = await auth_client.put(
+        f"{CALENDAR}/overrides/{Q3}",
+        json={"done": False, "hidden": False, "note": None, "amount": "-1"},
+    )
+    assert resp.status_code == 422
+
+
 async def test_put_upserts_full_replace_and_get_applies_it(auth_client, db, monkeypatch):
     freeze_today(monkeypatch)
     db.add(NetWorthSnapshot(month=date(2026, 7, 1)))
