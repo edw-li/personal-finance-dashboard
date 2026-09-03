@@ -177,11 +177,14 @@ describe('tax scenario codec', () => {
       expect(noGainer.title).toBe('No held position with an unrealized gain to realize')
     })
 
-    it('disables what the page has not loaded yet, in words', () => {
+    it('disables what the page has not loaded yet, in the SAME words as a missing value', () => {
       const presets = taxPresets({ year: 2024, limits: null, inputs: null, holdings: null, brackets: null, summary: null }, vi.fn())
       expect(presets.map((p) => p.id)).toEqual(['max401k', 'maxhsa-self', 'maxhsa-family', 'realize15'])
-      expect(presets[0].title).toBe("Loading 2024's limits…")
-      expect(presets[1].title).toBe("Loading 2024's limits…")
+      // No "loading" register on the chips: the panel renders this row only once its three
+      // feeds have landed together, so a null payload here can only mean the value is
+      // missing — and while they ARE in flight the card says so above the chips.
+      expect(presets[0].title).toBe("Enter 2024's 401(k) limit in Settings › Limits")
+      expect(presets[1].title).toBe("Enter 2024's HSA self limit in Settings › Limits")
       expect(presets[3].title).toBe("Enter 2024's capital-gains brackets first")
       const noLimit = taxPresets({ year: 2024, limits: { year: 2024, items: [] }, inputs, holdings, brackets, summary }, vi.fn())
       expect(noLimit[0].title).toBe("Enter 2024's 401(k) limit in Settings › Limits")

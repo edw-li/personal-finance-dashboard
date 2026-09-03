@@ -1224,6 +1224,9 @@ describe('TaxesPage', () => {
     expect(screen.getByTestId('location').textContent).toContain('whatif=sale%3A7%3A40')
   })
 
+  // The SINGLE-column branch: annual_salary is a per-person key, but a one-person year has
+  // exactly one row for it, so the household total and the primary's row are the same number
+  // and the `values` shorthand writes what the scenario previewed.
   it('Apply from the what-if confirms before → after, PUTs the overrides once and remounts the inputs form', async () => {
     // The PUT echo carries the moved salary — the remount is what puts it on screen,
     // because InputsForm ignores prop replacement by design.
@@ -1267,6 +1270,25 @@ describe('TaxesPage', () => {
     await screen.findByTestId('whatif-panel')
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
     expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+  })
+
+  it('refuses Apply for a per-person key on a multi-column year, naming the form that can split it', async () => {
+    vi.mocked(fetchTaxInputs).mockImplementation(async (year: number) => marriedInputsFor(year))
+    renderPage()
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+
+    // The engine reads ONE household figure, so the what-if applied 210000 to Alex + Sam's
+    // total — but this PUT's `values` shorthand writes the PRIMARY's row alone, leaving Sam's
+    // 90000 standing: 300000 stored under a 210000 answer. Refused before the confirm, so the
+    // user is never asked to approve a write that cannot mean what it says.
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(
+      await screen.findByText(
+        'Annual Salary is stored per person, and 2024 is filed with 2 columns — the scenario ran against their total. Edit it in Tax inputs — 2024, which says which person.',
+      ),
+    ).toBeTruthy()
   })
 
   it('hands the year’s input definitions to the what-if card, deduped by key', async () => {

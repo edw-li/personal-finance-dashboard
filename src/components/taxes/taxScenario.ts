@@ -230,7 +230,6 @@ function householdValue(inputs: TaxInputsOut | null, key: string): string {
 }
 
 export function taxPresets(ctx: TaxPresetContext, apply: (patch: TaxPresetPatch) => void): Preset[] {
-  const loading = ctx.limits === null
   const elective = limitValue(ctx.limits, 'limit_401k_elective')
   const employerHsa = householdValue(ctx.inputs, 'hsa_contributions_employer')
   const presets: Preset[] = [
@@ -238,11 +237,10 @@ export function taxPresets(ctx: TaxPresetContext, apply: (patch: TaxPresetPatch)
       id: 'max401k',
       label: 'Max 401(k)',
       disabled: elective === null,
-      title: loading
-        ? `Loading ${ctx.year}'s limits…`
-        : elective === null
-          ? `Enter ${ctx.year}'s 401(k) limit ${LIMITS_HINT}`
-          : undefined,
+      // No "loading" branch: the panel renders this row only once its three feeds have
+      // landed together, and while they are in flight the CARD says so — a second sentence
+      // on the chips would answer a question already answered above them.
+      title: elective === null ? `Enter ${ctx.year}'s 401(k) limit ${LIMITS_HINT}` : undefined,
       apply: () => {
         if (elective !== null) apply({ overrides: { trad_401k_contributions: elective } })
       },
@@ -254,11 +252,7 @@ export function taxPresets(ctx: TaxPresetContext, apply: (patch: TaxPresetPatch)
       id: `maxhsa-${tier}`,
       label: `Max HSA — ${tier}`,
       disabled: limit === null,
-      title: loading
-        ? `Loading ${ctx.year}'s limits…`
-        : limit === null
-          ? `Enter ${ctx.year}'s HSA ${tier} limit ${LIMITS_HINT}`
-          : undefined,
+      title: limit === null ? `Enter ${ctx.year}'s HSA ${tier} limit ${LIMITS_HINT}` : undefined,
       apply: () => {
         if (limit !== null) apply({ overrides: { hsa_contributions: subtractDecimals(limit, employerHsa) } })
       },

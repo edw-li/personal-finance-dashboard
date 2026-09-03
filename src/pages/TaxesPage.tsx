@@ -78,6 +78,17 @@ function bracketsKey(brackets: TaxBracketsOut): string {
 // D1: the override select's option list — every definition ONCE, payload order, label from
 // the definition table. Per-person keys repeat once per column in the payload; overrides
 // address the HOUSEHOLD key map, so the dedupe is the semantics, not a display nicety.
+/** The keys the definition table stores once per PERSON (`is_per_person`), mapped to the
+ *  label the form shows for them. The what-if overrides the SUMMED household figure, so on a
+ *  multi-column year these are the keys Apply cannot write. */
+function perPersonLabels(inputs: TaxInputsOut): Map<string, string> {
+  const labels = new Map<string, string>()
+  for (const section of inputs.sections)
+    for (const item of section.items)
+      if (item.is_per_person && !labels.has(item.key)) labels.set(item.key, item.label)
+  return labels
+}
+
 function overrideDefinitions(inputs: TaxInputsOut): OverrideDefinition[] {
   const seen = new Set<string>()
   const definitions: OverrideDefinition[] = []
@@ -202,6 +213,24 @@ export default function TaxesPage() {
   // editor is still holding (its closure remembers the year it was rendered for).
   const currentYearRef = useRef<number | null>(null)
 
+  // Everything entering a year does EXCEPT the URL write. Two callers: `loadYear` below
+  // (which writes ?year= too) and the in-page navigate above, which arrives with the URL
+  // already moved and must not write it back. Setters and a pure snapshot read only — no ref
+  // writes, because the render-adjust path calls it during render.
+  const enterYear = (year: number) => {
+    setBusy(true)
+    setError(null)
+    setYearError(null)
+    // A create error is about the form above, and the form's own state moved on the moment
+    // the user navigated — leaving the sentence there would answer a question nobody asked.
+    setCreateError(null)
+    // Already-seen year: paint its detail instantly and revalidate underneath.
+    const status = years.find((y) => y.year === year)?.filing_status ?? 'single'
+    const peeked = getSnapshot<YearDetail>(detailKey(year, status))
+    if (peeked !== undefined) setDetail(peeked)
+    setSelection({ year })
+  }
+
   // Guarded adjust-during-render, never a setState in an effect body (react-hooks 7): the
   // URL moved to a year this page is not showing — an in-page navigate from the assistant's
   // what-if link, or the palette, while /taxes is already mounted — so the page follows in
@@ -216,9 +245,10 @@ export default function TaxesPage() {
   if (urlYear !== seenYearParam) {
     setSeenYearParam(urlYear)
     if (urlYear !== null && urlYear !== selection?.year && years.some((y) => y.year === urlYear)) {
-      setSelection({ year: urlYear })
-      setBusy(true)
-      setYearError(null)
+      // The SAME bookkeeping the chips get — this is a year switch, and half of one would
+      // leave a create sentence and a stale snapshot behind it. `enterYear` is loadYear
+      // minus the URL write, which this path must not do: the address bar already moved.
+      enterYear(urlYear)
     }
   }
 
@@ -304,6 +334,10 @@ export default function TaxesPage() {
     if (selection === null) return
     const year = selection.year
     currentYearRef.current = year
+    // Any totals refresh still in flight belongs to the year being LEFT. Here rather than in
+    // the handlers, so every door into a year gets it — including the render adjust above,
+    // where a ref write would be illegal — and so a filing-status flip drops one too.
+    summarySeqRef.current += 1
     const seq = ++seqRef.current
     Promise.all([
       fetchTaxInputs(year),
@@ -373,19 +407,7 @@ export default function TaxesPage() {
   const loadYear = (year: number) => {
     // The one door onto a year, so the one place the URL learns which year that is.
     writeYearParam(year)
-    setBusy(true)
-    setError(null)
-    setYearError(null)
-    // A create error is about the form above, and the form's own state moved on the moment
-    // the user navigated — leaving the sentence there would answer a question nobody asked.
-    setCreateError(null)
-    // Any totals refresh still in flight belongs to the year being left.
-    summarySeqRef.current += 1
-    // Already-seen year: paint its detail instantly and revalidate underneath.
-    const status = years.find((y) => y.year === year)?.filing_status ?? 'single'
-    const peeked = getSnapshot<YearDetail>(detailKey(year, status))
-    if (peeked !== undefined) setDetail(peeked)
-    setSelection({ year })
+    enterYear(year)
   }
 
   // The house confirm (TransactionsPanel's delete): a reload replaces both editors'
@@ -489,9 +511,29 @@ export default function TaxesPage() {
   // the chip counts. Never a new write path, and the unsaved-edits warning rides the same
   // sentence rather than asking twice.
   const applyOverrides = (overrides: Record<string, string | null>, changed: ChangedInput[]) => {
-    if (selectedYear === null) return
+    if (selectedYear === null || detail === null) return
     const year = selectedYear
+    const inputs = detail.inputs
     const keys = Object.keys(overrides)
+    // The engine reads ONE household figure per key, so the what-if applies an override to
+    // the SUM (services/tax_whatif.apply_scenario) — but a per-person key is stored once per
+    // person, and this PUT's `values` shorthand writes the PRIMARY's row alone. On a
+    // two-column year `annual_salary: 210000` previews a 210k household while the write
+    // would leave the partner's 150k standing: 360k stored under a 210k answer, silently.
+    // Every preset key (salary, 401(k), HSA) is per-person, so this is the common case, not
+    // the exotic one. There is no split this page could invent — a 210k household could be
+    // any pair — so it refuses and names the form that CAN say which person.
+    const perPerson = perPersonLabels(inputs)
+    const split = keys.filter((key) => perPerson.has(key))
+    if (inputs.people.length > 1 && split.length > 0) {
+      const named = split.map((key) => perPerson.get(key) ?? key).join(', ')
+      setYearError(
+        `${named} ${split.length === 1 ? 'is' : 'are'} stored per person, and ${year} is filed with ` +
+          `${inputs.people.length} columns — the scenario ran against their total. Edit ` +
+          `${split.length === 1 ? 'it' : 'them'} in Tax inputs — ${year}, which says which person.`,
+      )
+      return
+    }
     // Only the keys being written: the endpoint reports every input its run moved, including
     // the engine's own derived rows, and listing those would promise writes nobody asked for.
     const lines = changed

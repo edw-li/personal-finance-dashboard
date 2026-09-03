@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { Link, MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type {
@@ -490,6 +490,38 @@ describe('WhatIfPanel', () => {
     expect(screen.getByRole('heading', { name: /What if — 2025/ })).toBeTruthy()
   })
 
+  it('opens and runs when a link lands entries while the card is already mounted', async () => {
+    // The assistant's "Open in what-if" fired from /taxes: same page, same YEAR, so nothing
+    // remounts — the entries have to be read every render, not just in the initializer, or
+    // the link would move the address bar and nothing else.
+    render(
+      <MemoryRouter initialEntries={['/taxes']}>
+        <WhatIfPanel year={2024} />
+        <Url />
+        <Link to="/taxes?whatif=sale%3A7%3A40">open it</Link>
+      </MemoryRouter>,
+    )
+    expect(openButton().getAttribute('aria-expanded')).toBe('false')
+    expect(vi.mocked(runWhatIf)).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('link', { name: 'open it' }))
+    await waitFor(() => expect(addSale()).toBeTruthy())
+    expect(openButton().getAttribute('aria-expanded')).toBe('true')
+    await waitFor(() =>
+      expect(lastBody()?.sales).toEqual([{ security_id: 7, shares: '40', term: 'long' }]),
+    )
+    // The feeds are still fetched ONCE — the effect follows `open`, the ref inside is the guard.
+    expect(vi.mocked(fetchHoldings)).toHaveBeenCalledTimes(1)
+
+    // ...and the latch: a card closed BY HAND stays closed while the URL still holds its
+    // entries, so the re-open follows a navigation and never a re-render.
+    fireEvent.click(openButton())
+    expect(openButton().getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: 'Open what-if' }))
+    fireEvent.click(openButton())
+    expect(openButton().getAttribute('aria-expanded')).toBe('false')
+  })
+
   // --- legacy aliases (spec §6) -----------------------------------------------------------
 
   it('normalizes ?whatif=TICKER into a sale entry once the holdings land, in one replace', async () => {
@@ -632,6 +664,42 @@ describe('WhatIfPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reset to actual' }))
     expect(url()).toBe('/taxes')
     await waitFor(() => expect(lastBody()).toEqual({ year: 2024, sales: [], espp_sales: [] }))
+  })
+
+  it('holds Apply shut until the result on screen is the URL’s own answer', async () => {
+    const applyButton = () =>
+      screen.getByRole('button', { name: 'Apply 1 override to 2024' }) as HTMLButtonElement
+    const { onApplyOverrides } = mount('/taxes?whatif=annual_salary%3A210000', {
+      definitions: DEFS,
+    })
+    await screen.findByText('Δ total tax')
+    expect(applyButton().disabled).toBe(false)
+
+    // Apply confirms `changed_inputs` from the run ON SCREEN but PUTs the URL's overrides —
+    // so inside the run that follows a keystroke those are two different scenarios, and an
+    // ungated button would confirm 210000's before → after and write 220000.
+    const slow = deferred<WhatIfOut>()
+    vi.mocked(runWhatIf).mockReturnValueOnce(slow.promise)
+    fireEvent.focus(field('Override 1 value'))
+    fireEvent.change(field('Override 1 value'), { target: { value: '220000' } })
+    fireEvent.blur(field('Override 1 value'))
+    await waitFor(() => expect(applyButton().disabled).toBe(true))
+    fireEvent.click(applyButton())
+    expect(onApplyOverrides).not.toHaveBeenCalled()
+
+    await act(async () => {
+      slow.resolve(resultFixture())
+    })
+    await waitFor(() => expect(applyButton().disabled).toBe(false))
+
+    // The other half: a refusal leaves an OLDER result under the stale line, which is not
+    // this scenario's answer either.
+    vi.mocked(runWhatIf).mockRejectedValueOnce(new ApiError('unknown input key: nope', 422))
+    fireEvent.focus(field('Override 1 value'))
+    fireEvent.change(field('Override 1 value'), { target: { value: '230000' } })
+    fireEvent.blur(field('Override 1 value'))
+    await waitFor(() => expect(applyButton().disabled).toBe(true))
+    expect(onApplyOverrides).not.toHaveBeenCalled()
   })
 
   it('Apply hands the overrides and the changed inputs up, and renders only with overrides present', async () => {

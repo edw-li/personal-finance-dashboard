@@ -138,9 +138,24 @@ export default function WhatIfPanel({
   // in the initializer, before that runs. A ticker or lot id only means something against a
   // feed, so the rewrite rides the feeds' promise callback.
   const [legacy] = useState(() => ({ ticker: legacyTicker(params), lotId: legacyLotId(params) }))
-  const [open, setOpen] = useState(
-    () => readEntries(params).length > 0 || legacy.ticker !== null || legacy.lotId !== null,
-  )
+  // Arriving with a scenario opens the card (spec §6); otherwise it mounts closed (§8.1).
+  const hasEntries =
+    readEntries(params).length > 0 || legacy.ticker !== null || legacy.lotId !== null
+  const [open, setOpen] = useState(hasEntries)
+  // ...and so does a navigation INTO a scenario link while the page is already mounted. The
+  // assistant's "Open in what-if" is exactly that, and when it names the year already on
+  // screen the page does NOT remount this card — read only in the initializer, `enabled`
+  // would stay false and the link would change the URL and nothing else.
+  //
+  // Adjusted DURING render, never from an effect body (the house rule): React re-renders
+  // immediately, so nothing paints closed, and the previous value is the latch — a card the
+  // user closed by hand stays closed while the URL still holds its entries (lane P's
+  // TryItPanel, same shape).
+  const [hadEntries, setHadEntries] = useState(hasEntries)
+  if (hasEntries !== hadEntries) {
+    setHadEntries(hasEntries)
+    if (hasEntries) setOpen(true)
+  }
   // null = the feed has not answered yet (never [] — an empty book is a real answer, and
   // the two say different things under the form).
   const [holdings, setHoldings] = useState<HoldingsResponse | null>(null)
@@ -237,11 +252,13 @@ export default function WhatIfPanel({
   }
 
   useEffect(() => {
-    // The OPEN-ON-ARRIVAL mount only (entries or an alias in the URL); every other open goes
-    // through the toggle. loadFeeds reads no reactive value beyond its setters and refs.
+    // EVERY open — the arrival mount, the toggle, and the render adjust above that follows an
+    // in-page link — goes through here, so there is one door and `feedsRef` inside loadFeeds
+    // is what makes it once-per-mount. loadFeeds reads no reactive value beyond its setters
+    // and refs.
     if (open) loadFeeds()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only by design (PortfolioPage's `load`)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on `open` alone (PortfolioPage's `load`)
+  }, [open])
 
   const unsoldLots = lots?.lots.filter((lot) => !lot.is_sold) ?? []
   const holdingFor = (securityId: number) => held.find((h) => h.security_id === securityId)
@@ -249,11 +266,7 @@ export default function WhatIfPanel({
   // the server's per-LIST sales/ESPP cap — the overrides are a dict, with no such cap.
   const legCount = scenario.sales.length + scenario.espp.length
 
-  const toggle = () => {
-    const next = !open
-    setOpen(next)
-    if (next) loadFeeds()
-  }
+  const toggle = () => setOpen((o) => !o)
 
   // The feeds are fetched once per mount, so without this door a single blip would leave the
   // card dead until a year switch remounted it — the house rule that a recoverable banner
@@ -344,6 +357,14 @@ export default function WhatIfPanel({
   const pinSide = (r: PinResult<WhatIfOut>): PinResult<TaxSummaryOut> =>
     r === 'pending' || 'error' in r ? r : r.scenario
   const overrideCount = overrideKeys.length
+  // "The result on screen IS this URL's answer": nothing in flight, nothing withheld, no
+  // refusal standing. Apply reads both halves, so both have to describe one scenario.
+  const settled =
+    result !== null &&
+    !sandbox.busy &&
+    !sandbox.stale &&
+    sandbox.error === null &&
+    formError === null
 
   return (
     <SandboxPanel
@@ -518,9 +539,16 @@ export default function WhatIfPanel({
       apply={
         onApplyOverrides !== undefined && overrideCount > 0 ? (
           <>
+            {/* The confirmation quotes `changed_inputs` from the run ON SCREEN while the PUT
+                sends the URL's overrides — and between a keystroke and the 400 ms tick, or
+                after a refusal, those are two different scenarios: 210000's before → after
+                would be confirmed and 220000 written. Gated on a SETTLED run, so the numbers
+                confirmed are the numbers written. */}
             <button
               type="button"
               className="button button-primary"
+              disabled={!settled}
+              title={settled ? undefined : 'Waiting for this scenario to finish running'}
               onClick={() => onApplyOverrides({ ...scenario.overrides }, result?.changed_inputs ?? [])}
             >
               Apply {overrideCount} override{overrideCount === 1 ? '' : 's'} to {year}
@@ -825,7 +853,10 @@ function DraftInput({
   const push = (text: string, immediate: boolean) => {
     const problem = validate(text)
     if (problem !== null) {
-      onInvalid(problem)
+      // Judged on blur/Enter only: "1" on the way to "12.5" is not a mistake, and a sentence
+      // per keystroke would flicker under the form (lane P's BoxKnob). The request is
+      // withheld either way — `push` returns without committing.
+      if (immediate) onInvalid(problem)
       return
     }
     onCommit(text, immediate)
