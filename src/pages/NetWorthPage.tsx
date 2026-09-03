@@ -7,8 +7,7 @@ import { fetchHousehold } from '../api/household'
 import { ApiError } from '../api/client'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { useAssistantView } from '../components/assistant/viewState'
-import ChartZoomHint from '../components/ChartZoomHint'
-import EChart from '../components/EChart'
+import ChartCard from '../components/ChartCard'
 import InfoHint from '../components/InfoHint'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar from '../components/shell/ScopeBar'
@@ -17,22 +16,18 @@ import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import { useArrivalValue } from '../components/useArrivalParam'
 import {
-  NOTES_SERIES,
-  marriageMarkLine,
+  STACK_MODES,
+  netWorthBridgeCsv,
+  netWorthBridgeOption,
   netWorthCsv,
-  netWorthStackedTooltipFormatter,
+  netWorthDrillCsv,
+  netWorthDrillOption,
+  netWorthStackOption,
 } from '../components/networth/netWorthChartOptions'
-import type { EChartsOption } from '../charts/echarts'
-import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
+import type { StackMode } from '../components/networth/netWorthChartOptions'
+import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
-import {
-  GROUP_COLORS,
-  GROUP_LABELS,
-  GROUP_ORDER,
-  INK,
-  MUTED,
-  PALETTE,
-} from '../charts/theme'
+import { GROUP_LABELS, PALETTE } from '../charts/theme'
 import type {
   AccountGroup,
   HouseholdOut,
@@ -40,17 +35,11 @@ import type {
   NetWorthTimeseries,
 } from '../types/api'
 import { nestComponents } from '../utils/accounts'
-import {
-  formatCurrency,
-  formatCurrencyCompact,
-  formatMonth,
-  formatPct,
-} from '../utils/format'
+import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { toneOf } from '../utils/tone'
 import '../components/panels.css'
 import './NetWorthPage.css'
 
-const ASSET_GROUPS = GROUP_ORDER.filter((g): g is AccountGroup => g !== 'liability')
 // One slot per validated palette hue (theme.ts: never cycle past 8).
 const MAX_DRILL = PALETTE.length
 
@@ -116,8 +105,9 @@ export default function NetWorthPage() {
   // posture). null covers both "not loaded yet" and "failed".
   const [household, setHousehold] = useState<HouseholdOut | null>(null)
   // Group stacking stays the default (spec §6): "how is it invested" is the question this
-  // chart has always answered; "whose is it" is the new second reading of the same total.
-  const [stackBy, setStackBy] = useState<'group' | 'owner'>('group')
+  // chart has always answered; "whose is it" and "what share" are the other two readings
+  // of the same total.
+  const [stackBy, setStackBy] = useState<StackMode>('group')
   // The initial fetch parameters are monthly + whatever the URL says, so the mount seed
   // reads exactly the key that mount's load() will write.
   const cached = getSnapshot<NetWorthSnapshot>(netWorthKey('monthly', scope.owner, scope.month))
@@ -322,167 +312,43 @@ export default function NetWorthPage() {
     [data, range],
   )
 
-  const stackedOption = useMemo<EChartsOption | null>(() => {
-    if (!data || data.months.length === 0) return null
-    const labels = data.months.map(formatMonth)
-    // The annotation layer: one marker per NOTED month, sitting on the net-worth line at
-    // that month's value. (data.notes ?? []) is stale-deploy armor — a tab served the old
-    // bundle keeps working against a payload that already carries notes, and vice versa.
-    const noted = data.months
-      .map((_, i) => ({
-        label: labels[i],
-        value: Number(data.net_worth[i]),
-        note: (data.notes ?? [])[i],
-      }))
-      .filter((p): p is { label: string; value: number; note: string } => !!p.note)
-    const marriageMark = marriageMarkLine(data.months, household?.marriage_date ?? null)
-    return {
-      // Windowed, not sliced: dataZoom keeps the whole series loaded so a ctrl+wheel or a
-      // chip flip never refetches, and the y-axis re-scales to the visible window (filter
-      // mode) so a zoomed-in year is read at its own scale.
-      dataZoom: rangeZoom(data.months, range),
-      grid: { left: 70, right: 84, top: 40, bottom: 28 },
-      legend: { top: 0, selected: stackedLegend },
-      tooltip: {
-        trigger: 'axis',
-        // Asset rows + their subtotal, then liabilities/net worth/notes — the formatter
-        // (and its escapeHtml duty on note text) lives in netWorthChartOptions.ts.
-        // Owner columns already sum to the net-worth row, so an "Assets" subtotal would
-        // just print the same number twice: no asset set in owner mode, no subtotal row.
-        formatter: netWorthStackedTooltipFormatter(
-          stackBy === 'owner' ? [] : ASSET_GROUPS.map((g) => GROUP_LABELS[g]),
-        ),
-      },
-      xAxis: { type: 'category', data: labels, boundaryGap: false },
-      yAxis: {
-        type: 'value',
-        axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-      },
-      series: [
-        ...(stackBy === 'owner'
-          ? (data.owner_series ?? []).map((series) => ({
-              // The server's owner_series is EXCLUSIVE and sums to net_worth, so the stack
-              // lands exactly on the line below. `?? []` is stale-deploy armor, like notes.
-              name: series.name ?? 'Joint',
-              type: 'line' as const,
-              stack: 'owner',
-              // Owner columns are NET (assets minus that owner's liabilities), so one of
-              // them can go negative. echarts' default 'samesign' strategy would then park
-              // it on the baseline and the stack would stop meeting the net-worth line;
-              // 'all' keeps the sum honest.
-              stackStrategy: 'all' as const,
-              symbol: 'none' as const,
-              lineStyle: { width: 1 },
-              areaStyle: { opacity: 0.5 },
-              // Colour is keyed by the person's HOUSEHOLD slot (primary first, then by id,
-              // joint last), not by position in this response — owner_series membership
-              // varies with the chip scope, and a person must keep their colour across
-              // scopes. Households are far smaller than PALETTE (theme.ts caps at 8).
-              color:
-                PALETTE[
-                  (series.person_id === null
-                    ? orderedPeople.length
-                    : Math.max(
-                        orderedPeople.findIndex((p) => p.id === series.person_id),
-                        0,
-                      )) % PALETTE.length
-                ],
-              data: series.values.map(Number),
-            }))
-          : [
-              ...ASSET_GROUPS.map((group) => ({
-                name: GROUP_LABELS[group],
-                type: 'line' as const,
-                stack: 'assets',
-                symbol: 'none' as const,
-                lineStyle: { width: 1 },
-                areaStyle: { opacity: 0.5 },
-                color: GROUP_COLORS[group],
-                data: data.group_totals[group].map(Number),
-              })),
-              {
-                name: GROUP_LABELS.liability,
-                type: 'line' as const,
-                symbol: 'none' as const,
-                lineStyle: { width: 1 },
-                areaStyle: { opacity: 0.5 },
-                color: GROUP_COLORS.liability,
-                data: data.group_totals.liability.map(Number),
-              },
-            ]),
-        {
-          name: 'Net worth',
-          type: 'line' as const,
-          symbol: 'none' as const,
-          lineStyle: { width: 2.5 },
-          color: INK,
-          z: 10,
-          endLabel: {
-            show: true,
-            color: INK,
-            fontWeight: 600,
-            formatter: (params: { value?: unknown }) =>
-              formatCurrencyCompact(params.value as number),
-          },
-          // The wedding rule rides the net-worth line: one annotation, on the series that
-          // is present in BOTH stack modes.
-          ...(marriageMark ? { markLine: marriageMark } : {}),
-          data: data.net_worth.map(Number),
-        },
-        ...(noted.length > 0
-          ? [
-              {
-                name: NOTES_SERIES,
-                // Plain scatter, deliberately not effectScatter: a note is history, and
-                // the ripple is the live ping's reserved "this is now" signal. Diamond +
-                // MUTED = identity by SHAPE and a neutral tone — the wizard's notes are
-                // an annotation layer, not a fourth data hue (theme.ts's ≤3-hue law).
-                type: 'scatter' as const,
-                symbol: 'diamond' as const,
-                symbolSize: 9,
-                color: MUTED,
-                itemStyle: { borderColor: INK, borderWidth: 1 },
-                emphasis: { itemStyle: { borderColor: INK } },
-                z: 11,
-                data: noted.map((p) => ({ value: [p.label, p.value], note: p.note })),
-              },
-            ]
-          : []),
-      ],
-    }
-  }, [data, range, stackedLegend, stackBy, household, orderedPeople])
+  const months = data?.months ?? []
+  // The accounts table follows the VIEWED month (a ribbon click writes ?month=), and the
+  // latest column when nothing is selected — or when the selection has no column in this
+  // scope at all (a quarterly grain, a series that starts later).
+  const selectedIndex = scope.month === null ? -1 : months.indexOf(scope.month)
+  const viewedIndex = selectedIndex >= 0 ? selectedIndex : months.length - 1
+  // …so the card heading names that month rather than claiming "latest" over it.
+  const viewedLabel =
+    selectedIndex >= 0
+      ? formatMonth(months[selectedIndex])
+      : `latest ${granularity === 'quarterly' ? 'quarter' : 'month'}`
+  const momHeader = granularity === 'quarterly' ? 'QoQ %' : 'MoM %'
 
-  const drillOption = useMemo<EChartsOption | null>(() => {
-    if (!data || drill.length === 0) return null
-    const byId = new Map(data.series.map((s) => [s.account_id, s.values]))
-    const nameById = new Map(data.accounts.map((a) => [a.id, a.name]))
-    return {
-      dataZoom: rangeZoom(data.months, range), // the page's one window (see `range`)
-      grid: { left: 70, right: 24, top: 40, bottom: 28 },
-      legend: { top: 0, selected: drillLegend },
-      tooltip: {
-        trigger: 'axis',
-        valueFormatter: (value) =>
-          value === null || value === undefined ? '—' : formatCurrency(value as number),
-      },
-      xAxis: { type: 'category', data: data.months.map(formatMonth), boundaryGap: false },
-      yAxis: {
-        type: 'value',
-        axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-      },
-      series: drill.map(({ accountId, slot }) => ({
-        name: nameById.get(accountId) ?? String(accountId),
-        type: 'line' as const,
-        symbol: 'circle' as const,
-        symbolSize: 8,
-        showSymbol: false,
-        lineStyle: { width: 2 },
-        color: PALETTE[slot],
-        connectNulls: false,
-        data: (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v))),
-      })),
-    }
-  }, [data, drill, range, drillLegend])
+  const stackedOption = useMemo(
+    () =>
+      data === null
+        ? null
+        : netWorthStackOption({
+            ts: data,
+            mode: stackBy,
+            people: orderedPeople,
+            marriageDate: household?.marriage_date ?? null,
+            range,
+            selected: stackedLegend,
+          }),
+    [data, stackBy, orderedPeople, household, range, stackedLegend],
+  )
+  const drillOption = useMemo(
+    () => (data === null ? null : netWorthDrillOption({ ts: data, drill, range, selected: drillLegend })),
+    [data, drill, range, drillLegend],
+  )
+  // The viewed month against the one before it — null on the first snapshot, where there
+  // is nothing to bridge FROM.
+  const bridgeOption = useMemo(
+    () => (data === null ? null : netWorthBridgeOption(data, viewedIndex)),
+    [data, viewedIndex],
+  )
 
   const toggleDrill = (accountId: number) => {
     setDrill((current) => {
@@ -508,18 +374,6 @@ export default function NetWorthPage() {
   // not at their raw sheet-column sort position.
   const orderedAccounts = useMemo(() => (data ? nestComponents(data.accounts) : []), [data])
 
-  const months = data?.months ?? []
-  // The accounts table follows the VIEWED month (a ribbon click writes ?month=), and the
-  // latest column when nothing is selected — or when the selection has no column in this
-  // scope at all (a quarterly grain, a series that starts later).
-  const selectedIndex = scope.month === null ? -1 : months.indexOf(scope.month)
-  const viewedIndex = selectedIndex >= 0 ? selectedIndex : months.length - 1
-  // …so the card heading names that month rather than claiming "latest" over it.
-  const viewedLabel =
-    selectedIndex >= 0
-      ? formatMonth(months[selectedIndex])
-      : `latest ${granularity === 'quarterly' ? 'quarter' : 'month'}`
-  const momHeader = granularity === 'quarterly' ? 'QoQ %' : 'MoM %'
 
   return (
     <div className="page">
@@ -629,27 +483,44 @@ export default function NetWorthPage() {
         )}
 
         <div className="card-grid">
-          <div className="card span-12">
-            <div className="networth-chart-header">
-              <h2 className="eyebrow">
-                By group over time
-                <InfoHint text="Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note." />
-              </h2>
-              <div className="networth-chart-controls">
-                {ownerScopes.length > 0 && (
-                  <Segmented
-                    variant="toggle"
-                    ariaLabel="Stack by"
-                    options={[
-                      { value: 'group', label: 'By group' },
-                      { value: 'owner', label: 'By owner' },
-                    ]}
-                    value={stackBy}
-                    onChange={setStackBy}
-                  />
-                )}
+          <ChartCard
+            title="By group over time"
+            hint={
+              stackBy === 'share'
+                ? 'Each asset group as a share of that month’s assets — composition, not size.'
+                : 'Asset groups stacked to their combined total, with liabilities and net worth as their own lines. Diamonds mark months with a saved note. Liabilities under 1% of assets stay in the tooltip but are not drawn.'
+            }
+            ariaLabel={
+              stackBy === 'owner'
+                ? 'Stacked area chart of net worth by owner over time'
+                : stackBy === 'share'
+                  ? 'Stacked area chart of each asset group as a share of assets per month'
+                  : 'Stacked area chart of asset groups over time with liabilities and net worth as lines'
+            }
+            option={stackedOption}
+            empty="No snapshots yet — enter your first month to start the chart."
+            exportName="net-worth"
+            csv={data === null ? undefined : () => netWorthCsv(data)}
+            height={360}
+            zoomable
+            group="net-worth"
+            onLegendChange={onStackedLegendChange}
+            onDataZoom={onZoomWindow}
+            zoomWindow={zoomWindow}
+            controls={
+              <>
                 <Segmented
                   variant="toggle"
+                  size="sm"
+                  ariaLabel="Stack by"
+                  // One person means "whose" has nothing to choose between — By owner hides.
+                  options={ownerScopes.length > 0 ? STACK_MODES : STACK_MODES.filter((m) => m.value !== 'owner')}
+                  value={stackBy}
+                  onChange={setStackBy}
+                />
+                <Segmented
+                  variant="toggle"
+                  size="sm"
                   ariaLabel="Granularity"
                   options={[
                     { value: 'monthly', label: 'Monthly' },
@@ -677,89 +548,79 @@ export default function NetWorthPage() {
                     setGranularity(g)
                   }}
                 />
-              </div>
-            </div>
-            {stackedOption && data ? (
-              <>
-                <EChart
-                  option={stackedOption}
-                  height={360}
-                  onLegendChange={onStackedLegendChange}
-                  onDataZoom={onZoomWindow}
-                  zoomWindow={zoomWindow}
-                  exportConfig={{ name: 'net-worth', csv: () => netWorthCsv(data) }}
-                  animateEntrance={!fromCache}
-                />
-                <ChartZoomHint />
               </>
-            ) : (
-              !loading &&
-              !error && (
-                <div className="empty-note">
-                  No snapshots yet — enter your first month to start the chart.
-                </div>
-              )
-            )}
-          </div>
+            }
+          />
 
-          <div className="card span-12">
-            <h2 className="eyebrow">
-              Account drill-down
-              <InfoHint text="Individual account balances over time — toggle accounts here or by clicking table rows." />
-            </h2>
-            <p className="drill-hint">
-              Pick up to {MAX_DRILL} accounts to compare their history. Clicking rows in the
-              accounts table below toggles them here too.
-            </p>
-            <Segmented
-              variant="chips"
-              multiple
-              ariaLabel="Accounts to compare"
-              options={orderedAccounts.map((account) => {
-                const active = drill.find((d) => d.accountId === account.id)
-                return {
-                  value: String(account.id),
-                  // Slot hue rides a swatch beside the name, never the text itself
-                  // (SpendingPage's chip rule). The DOM swatch reads the CSS slot, not
-                  // PALETTE: index.css repoints --chart-N per theme, so it tracks a
-                  // light/dark switch that a baked hex would ignore. Slots are 0-based,
-                  // the tokens are 1-based.
-                  label: (
-                    <>
-                      {active !== undefined && (
-                        <span
-                          className="networth-drill-swatch"
-                          aria-hidden="true"
-                          style={{ background: `var(--chart-${active.slot + 1})` }}
-                        />
-                      )}
-                      {account.name}
-                    </>
-                  ),
-                  // Every palette slot spoken for: the rest go quiet rather than silently
-                  // refusing the click (theme.ts: never cycle past 8).
-                  disabled: active === undefined && drill.length >= MAX_DRILL,
-                }
-              })}
-              value={drill.map((d) => String(d.accountId))}
-              onChange={syncDrill}
+          {data !== null && viewedIndex >= 1 && (
+            <ChartCard
+              title={`What moved — ${formatMonth(months[viewedIndex])}`}
+              hint="How each account group moved net worth from the prior snapshot to this one — a waterfall from last month’s total to this month’s. Groups that did not move are left out."
+              ariaLabel="Waterfall chart of how each account group moved net worth from the prior month to this one"
+              option={bridgeOption}
+              empty="Nothing moved between these two months."
+              exportName="net-worth-bridge"
+              csv={() => netWorthBridgeCsv(data, viewedIndex)}
+              height={280}
             />
-            {drillOption ? (
+          )}
+
+          <ChartCard
+            title="Account drill-down"
+            hint="Individual account balances over time — toggle accounts below or by clicking table rows."
+            ariaLabel="Line chart of the selected accounts’ balances over time"
+            option={drillOption}
+            empty="No accounts selected."
+            exportName="net-worth-accounts"
+            csv={data === null ? undefined : () => netWorthDrillCsv(data, drill)}
+            height={280}
+            zoomable
+            group="net-worth"
+            onLegendChange={onDrillLegendChange}
+            onDataZoom={onZoomWindow}
+            zoomWindow={zoomWindow}
+            footer={
               <>
-                <EChart
-                  option={drillOption}
-                  height={280}
-                  onLegendChange={onDrillLegendChange}
-                  onDataZoom={onZoomWindow}
-                  zoomWindow={zoomWindow}
-                  animateEntrance={!fromCache}
+                <p className="drill-hint">
+                  Pick up to {MAX_DRILL} accounts to compare their history. Clicking rows in the
+                  accounts table below toggles them here too.
+                </p>
+                <Segmented
+                  variant="chips"
+                  multiple
+                  ariaLabel="Accounts to compare"
+                  options={orderedAccounts.map((account) => {
+                    const active = drill.find((d) => d.accountId === account.id)
+                    return {
+                      value: String(account.id),
+                      // Slot hue rides a swatch beside the name, never the text itself
+                      // (SpendingPage's chip rule). The DOM swatch reads the CSS slot, not
+                      // PALETTE: index.css repoints --chart-N per theme, so it tracks a
+                      // light/dark switch that a baked hex would ignore. Slots are 0-based,
+                      // the tokens are 1-based.
+                      label: (
+                        <>
+                          {active !== undefined && (
+                            <span
+                              className="networth-drill-swatch"
+                              aria-hidden="true"
+                              style={{ background: `var(--chart-${active.slot + 1})` }}
+                            />
+                          )}
+                          {account.name}
+                        </>
+                      ),
+                      // Every palette slot spoken for: the rest go quiet rather than silently
+                      // refusing the click (theme.ts: never cycle past 8).
+                      disabled: active === undefined && drill.length >= MAX_DRILL,
+                    }
+                  })}
+                  value={drill.map((d) => String(d.accountId))}
+                  onChange={syncDrill}
                 />
-                <ChartZoomHint />
               </>
-            ) : (
-              !loading && <div className="empty-note">No accounts selected.</div>
-            )}
-          </div>
+            }
+          />
 
           <div className="card span-12">
             <h2 className="eyebrow">

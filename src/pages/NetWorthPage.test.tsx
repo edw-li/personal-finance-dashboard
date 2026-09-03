@@ -20,6 +20,7 @@ vi.mock('../components/EChart', async () => {
   return {
     default: ({
       option,
+      ariaLabel,
       onLegendChange,
       animateEntrance = true,
     }: {
@@ -31,11 +32,14 @@ vi.mock('../components/EChart', async () => {
           markLine?: { data?: { xAxis?: string }[] }
         }[]
       }
+      ariaLabel?: string
       onLegendChange?: (selected: Record<string, boolean>) => void
       animateEntrance?: boolean
     }) =>
       createElement('div', {
         'data-testid': 'echart',
+        // ChartCard hands every mount its house sentence (F11) — the page tests read it.
+        'aria-label': ariaLabel,
         'data-series': (option.series ?? []).map((s) => s.name ?? '').join('|'),
         'data-stacks': (option.series ?? []).map((s) => s.stack ?? '-').join('|'),
         'data-marriage': (option.series ?? [])
@@ -177,9 +181,15 @@ it('hides the owner controls entirely for a one-person household', async () => {
   renderPage()
   await screen.findByText('Net worth')
   await waitFor(() => expect(fetchHousehold).toHaveBeenCalled())
-  // Nothing to choose between: chips and the stack toggle would both be one-option UI.
+  // Nothing to choose between: the chips would be one-option UI.
   expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
-  expect(screen.queryByRole('group', { name: 'Stack by' })).toBeNull()
+  // Stack by survives — By group vs Share % is still a real choice (F2) — but the
+  // whose-is-it reading has nobody to split between, so By owner drops out.
+  const stackBy = await screen.findByRole('group', { name: 'Stack by' })
+  expect([...stackBy.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+    'By group',
+    'Share %',
+  ])
 })
 
 it('renders All / each person / Joint once a partner exists', async () => {
@@ -244,6 +254,9 @@ it('keeps the page alive when the household endpoint fails', async () => {
 })
 
 const stacked = () => screen.getAllByTestId('echart')[0]
+// The drill card is the page's last chart: the What-moved bridge sits between it and
+// the stack whenever a prior month exists.
+const drilled = () => screen.getAllByTestId('echart').at(-1) as HTMLElement
 
 it('stacks by group by default and by owner on demand — no refetch either way', async () => {
   renderPage()
@@ -253,7 +266,7 @@ it('stacks by group by default and by owner on demand — no refetch either way'
   )
   const callsBefore = vi.mocked(fetchTimeseries).mock.calls.length
 
-  fireEvent.click(screen.getByRole('button', { name: 'By owner' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'By owner' }))
   // owner_series ships on the SAME payload, so the toggle is a re-render, not a request.
   expect(vi.mocked(fetchTimeseries).mock.calls.length).toBe(callsBefore)
   expect(stacked().getAttribute('data-series')).toBe('Me|Joint|Net worth')
@@ -303,7 +316,7 @@ describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
     vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
     renderPage()
     // My Checking (150) beats Joint Savings (80) at the latest month — slot 1.
-    expect(screen.getAllByTestId('echart')[1].getAttribute('data-series')).toBe('My Checking')
+    expect(drilled().getAttribute('data-series')).toBe('My Checking')
     expect(screen.queryByText('No accounts selected.')).toBeNull()
   })
 
@@ -433,13 +446,13 @@ it('keeps a drill toggle on an account named "Cash" out of the stacked chart', a
   await screen.findByRole('group', { name: 'Whose' })
   // The drill seeds to the biggest account — the one wearing the colliding name.
   await waitFor(() =>
-    expect(screen.getAllByTestId('echart')[1].getAttribute('data-series')).toBe('Cash'),
+    expect(drilled().getAttribute('data-series')).toBe('Cash'),
   )
 
-  fireEvent.mouseEnter(screen.getAllByTestId('echart')[1]) // drill legend: { Cash: false }
+  fireEvent.mouseEnter(drilled()) // drill legend: { Cash: false }
 
   expect(
-    JSON.parse(screen.getAllByTestId('echart')[1].getAttribute('data-legend-selected') ?? '{}'),
+    JSON.parse(drilled().getAttribute('data-legend-selected') ?? '{}'),
   ).toEqual({ Cash: false })
   // The stacked chart's own map never saw the toggle — its Cash GROUP series (and the
   // Assets subtotal the tooltip builds over it) stay untouched.
@@ -540,9 +553,32 @@ describe('NetWorthPage — shell scope', () => {
     // Seeded to the biggest account; the other chip joins it in the next palette slot.
     fireEvent.click(within(group).getByRole('button', { name: 'Joint Savings' }))
     await waitFor(() =>
-      expect(screen.getAllByTestId('echart')[1].getAttribute('data-series')).toBe(
+      expect(drilled().getAttribute('data-series')).toBe(
         'My Checking|Joint Savings',
       ),
     )
+  })
+})
+
+// ── The three cards on ChartCard (charts C2, F2/F8/F9/F11/F12) ──────────────────────────
+describe('NetWorthPage — chart cards', () => {
+  it('mounts the stack, the bridge and the drill through ChartCard: labels, export rows, Share %, one group', async () => {
+    renderPage()
+    await screen.findByText('By group over time')
+    expect(screen.getByLabelText(/Stacked area chart of asset groups over time/)).toBeTruthy()
+    expect(screen.getByLabelText(/Line chart of the selected accounts/)).toBeTruthy()
+    expect(screen.getByText(/What moved — Aug 2026/)).toBeTruthy()
+    expect(screen.getByLabelText(/Waterfall chart of how each account group moved/)).toBeTruthy()
+    expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(3)
+    expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Share %' })).toBeTruthy()
+  })
+
+  it('Share % swaps the stack to composition and drops the net-worth line', async () => {
+    renderPage()
+    await screen.findByText('By group over time')
+    fireEvent.click(screen.getByRole('button', { name: 'Share %' }))
+    expect(stacked().getAttribute('data-series')).toBe('Cash|Pre-tax|Post-tax|Taxable|Equity|Other')
+    expect(screen.getByLabelText(/share of assets per month/)).toBeTruthy()
   })
 })
