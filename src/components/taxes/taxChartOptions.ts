@@ -33,7 +33,7 @@ import {
 } from '../../charts/waterfall'
 import type { TaxSummaryOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
+import { formatCurrency, formatPct } from '../../utils/format'
 import type { LadderSegment } from './marginal'
 
 // The seven tax lines in the order the engine reports them — one order shared by the
@@ -300,7 +300,7 @@ function ladderCap(row: LadderRow): number {
  * per bracket slot (a lane with fewer brackets holds null in the extra slots), and a
  * scatter diamond marking each lane's own taxable income — the two lanes have DIFFERENT
  * taxable incomes (state deductions differ), which is why a single markLine cannot do it.
- * Returns null when no lane is drawable — the caller renders its empty note.
+ * Returns null when no lane is drawable — the card renders its empty sentence.
  */
 export function marginalLadderOption(rows: LadderRow[]): EChartsOption | null {
   const drawable = rows.filter((row) => row.segments.length > 0 && ladderCap(row) > 0)
@@ -325,28 +325,28 @@ export function marginalLadderOption(rows: LadderRow[]): EChartsOption | null {
     }))
   })
   const maxSegments = Math.max(...cells.map((lane) => lane.length))
+  const range = (cell: Cell) =>
+    cell.ceiling === null
+      ? `${formatCurrency(cell.floor)} and up`
+      : `${formatCurrency(cell.floor)} – ${formatCurrency(cell.ceiling)}`
 
   return {
-    grid: { left: 70, right: 24, top: 12, bottom: 28 },
-    tooltip: {
-      // Item trigger: an axis tooltip would announce every segment of the lane at once.
-      // Own constants and formatted numbers only — no user text reaches this HTML.
-      formatter: (params) => {
-        const p = Array.isArray(params) ? params[0] : params
-        const cell = cells[p.dataIndex ?? 0]?.[p.seriesIndex ?? 0]
-        if (!cell) return ''
-        const lane = drawable[p.dataIndex ?? 0]
-        const range =
-          cell.ceiling === null
-            ? `${formatCurrency(cell.floor)} and up`
-            : `${formatCurrency(cell.floor)} – ${formatCurrency(cell.ceiling)}`
-        return `${lane.label} — <strong>${formatPct(cell.rate, { signed: false })}</strong> bracket<br/>${range}`
+    grid: grid('noLegend'),
+    // Item trigger: an axis tooltip would announce every segment of the lane at once. Rate
+    // first — it is the answer the ladder exists to give.
+    tooltip: itemTooltip<{ dataIndex?: number; seriesIndex?: number }>({
+      body: (p) => {
+        const cell = cells[p.dataIndex ?? -1]?.[p.seriesIndex ?? -1]
+        const lane = drawable[p.dataIndex ?? -1]
+        if (cell === undefined || lane === undefined) return null
+        return {
+          value: formatPct(cell.rate, { signed: false }),
+          label: `${lane.label} bracket`,
+          sub: range(cell),
+        }
       },
-    },
-    xAxis: {
-      type: 'value',
-      axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-    },
+    }),
+    xAxis: moneyAxis(),
     // inverse, so the first lane (Federal) reads on TOP the way the sentence orders them.
     yAxis: { type: 'category', data: drawable.map((row) => row.label), inverse: true },
     series: [
@@ -354,9 +354,9 @@ export function marginalLadderOption(rows: LadderRow[]): EChartsOption | null {
         name: `Bracket ${i + 1}`,
         type: 'bar' as const,
         stack: 'ladder',
-        barMaxWidth: 26,
-        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-        emphasis: { itemStyle: { borderColor: INK } },
+        ...BAR_MARKS,
+        barMaxWidth: 24,
+        ...stagger(i),
         data: cells.map((lane) =>
           lane[i] === undefined
             ? null
@@ -371,16 +371,31 @@ export function marginalLadderOption(rows: LadderRow[]): EChartsOption | null {
         itemStyle: { color: INK },
         z: 10,
         data: drawable.map((row) => [row.taxableIncome, row.label]),
-        tooltip: {
-          formatter: (params) => {
-            const p = Array.isArray(params) ? params[0] : params
-            const lane = drawable[p.dataIndex ?? 0]
+        tooltip: itemTooltip<{ dataIndex?: number }>({
+          body: (p) => {
+            const lane = drawable[p.dataIndex ?? -1]
             return lane === undefined
-              ? ''
-              : `${lane.label} taxable income<br/><strong>${formatCurrency(lane.taxableIncome)}</strong>`
+              ? null
+              : { value: lane.taxableIncome, label: `${lane.label} taxable income` }
           },
-        },
+        }),
       },
     ],
+  }
+}
+
+/** The ladder as a table (F12): every bracket of every lane, rate as the stored fraction. */
+export function ladderCsv(rows: LadderRow[]): ExportTable {
+  return {
+    headers: ['Jurisdiction', 'Bracket', 'Rate', 'From', 'To'],
+    rows: rows.flatMap((row) =>
+      row.segments.map((segment, i) => [
+        row.label,
+        i + 1,
+        String(segment.rate),
+        segment.floor.toFixed(2),
+        segment.ceiling === null ? '' : segment.ceiling.toFixed(2),
+      ]),
+    ),
   }
 }

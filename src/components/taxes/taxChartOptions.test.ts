@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
 import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
-import { OTHER_SERIES_COLOR, PALETTE, POSITIVE, SEQUENTIAL_BLUE } from '../../charts/theme'
+import {
+  OTHER_SERIES_COLOR,
+  PALETTE,
+  POSITIVE,
+  SEQUENTIAL_BLUE,
+  SURFACE,
+} from '../../charts/theme'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
 import type { TaxSummaryOut } from '../../types/api'
@@ -10,6 +16,7 @@ import {
   TAX_LABELS,
   TAX_SERIES_IDS,
   WATERFALL_CATEGORIES,
+  ladderCsv,
   marginalLadderOption,
   taxTrendCsv,
   trendOption,
@@ -667,6 +674,44 @@ describe('marginalLadderOption', () => {
     expect((series[3].data[0] as { value: number }).value).toBe(15078.75)
     // State: max(60000, 10000) × 1.15 = 69000 → span 59000.
     expect((series[1].data[1] as { value: number }).value).toBe(59000)
+  })
+
+  it('grammar: no-legend grid, compact money X axis, 24px bars with the surface hairline', () => {
+    const option = marginalLadderOption([fedRow, stateRow])! as unknown as {
+      grid: unknown
+      xAxis: { type: string; axisLabel: { formatter: unknown } }
+      series: { barMaxWidth?: number; itemStyle?: unknown }[]
+    }
+    expect(option.grid).toEqual(GRID_VARIANTS.noLegend)
+    expect(option.xAxis.type).toBe('value')
+    expect(option.xAxis.axisLabel.formatter).toBe(compactMoney)
+    expect(option.series[0].barMaxWidth).toBe(24)
+    expect(option.series[0].itemStyle).toEqual({ borderColor: SURFACE, borderWidth: 1 })
+  })
+
+  it('F7: a cell reads rate first, then the jurisdiction, then the range; the marker reads the income', () => {
+    const option = marginalLadderOption([fedRow, stateRow])! as unknown as {
+      tooltip: { formatter: (p: unknown) => string }
+      series: { tooltip?: { formatter: (p: unknown) => string } }[]
+    }
+    const cell = tooltipRows(option.tooltip.formatter({ dataIndex: 0, seriesIndex: 2 }))
+    expect([cell.lead, cell.label, cell.sub]).toEqual([
+      '22.0%',
+      'Federal bracket',
+      '$47,150.00 – $100,525.00',
+    ])
+    const top = tooltipRows(option.tooltip.formatter({ dataIndex: 1, seriesIndex: 1 }))
+    expect(top.sub).toBe('$10,000.00 and up')
+    expect(option.tooltip.formatter({ dataIndex: 1, seriesIndex: 3 })).toBe('') // the state lane has two brackets
+    const marker = tooltipRows(option.series[4].tooltip!.formatter({ dataIndex: 1 }))
+    expect([marker.lead, marker.label]).toEqual(['$60,000.00', 'State taxable income'])
+  })
+
+  it('exports every bracket per lane', () => {
+    const csv = ladderCsv([fedRow, stateRow])
+    expect(csv.headers).toEqual(['Jurisdiction', 'Bracket', 'Rate', 'From', 'To'])
+    expect(csv.rows[2]).toEqual(['Federal', 3, '0.22', '47150.00', '100525.00'])
+    expect(csv.rows[5]).toEqual(['State', 2, '0.093', '10000.00', ''])
   })
 
   it('returns null with nothing drawable', () => {
