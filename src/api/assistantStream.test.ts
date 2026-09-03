@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { extractFrames, streamChat } from './assistantStream'
-import type { AssistantErrorEvent, AssistantHandlers, ChatRequest } from './assistantStream'
+import type {
+  AssistantErrorEvent,
+  AssistantHandlers,
+  ChatRequest,
+  ToolResultEvent,
+} from './assistantStream'
 import { getSnapshot, setSnapshot } from './snapshotCache'
 import { setToken } from './client'
 
@@ -31,7 +36,7 @@ interface Recorder extends AssistantHandlers {
   errors: AssistantErrorEvent[]
   notices: { kind: string; from: string; to: string }[]
   toolStarts: { name: string; summary: string }[]
-  toolResults: { name: string; summary: string }[]
+  toolResults: ToolResultEvent[]
   statuses: string[]
   thinkings: string[]
 }
@@ -44,7 +49,7 @@ function handlers(): Recorder {
   const errors: AssistantErrorEvent[] = []
   const notices: { kind: string; from: string; to: string }[] = []
   const toolStarts: { name: string; summary: string }[] = []
-  const toolResults: { name: string; summary: string }[] = []
+  const toolResults: ToolResultEvent[] = []
   const statuses: string[] = []
   const thinkings: string[] = []
   return {
@@ -146,6 +151,32 @@ describe('streamChat', () => {
     expect(h.toolStarts).toEqual([{ name: 'spending', summary: 'Dec 2025' }])
     expect(h.toolResults).toEqual([{ name: 'spending', summary: '12 rows' }])
     expect(h.errors).toEqual([])
+  })
+
+  // The sandbox seam (2026-09-03 planning-sandboxes spec 12): `link` is the server's,
+  // not this module's -- it rides through to the handler whole, so the drawer alone
+  // decides whether the path is one it will render. Dropping or reshaping it here would
+  // silently cost every what-if answer its "Open in What-if" affordance.
+  it('passes a tool_result link through to onToolResult untouched', async () => {
+    stubFetch(async () =>
+      sseResponse([
+        'event: tool_result\ndata: {"name":"run_tax_whatif","summary":"ok","link":{"to":"/taxes?whatif=qualified_dividends%3A2500","label":"Open in What-if →"}}\n\n',
+        'event: done\ndata: {"model_used":"kimi-k3"}\n\n',
+      ]),
+    )
+    const h = handlers()
+    expect(await streamChat(body, h).finished).toBe('done')
+    expect(h.toolResults).toEqual([
+      {
+        name: 'run_tax_whatif',
+        summary: 'ok',
+        link: { to: '/taxes?whatif=qualified_dividends%3A2500', label: 'Open in What-if →' },
+      },
+    ])
+    // Present as a KEY, not merely equal: the drawer renders on `tool.link !== undefined`,
+    // so a handler that manufactured `link: undefined` would read the same to toEqual and
+    // yet behave differently at the chip.
+    expect('link' in h.toolResults[0]).toBe(true)
   })
 
   it('surfaces server error events', async () => {

@@ -380,3 +380,11 @@
     }
   }
 }
+
+/* The sandbox affordance inside a tool chip: it has to read as the chip's own tail, not
+   as a second control, so it borrows the chip's scale and only leans on the link colour. */
+.assistant-tool-link {
+  margin-left: 0.35rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}

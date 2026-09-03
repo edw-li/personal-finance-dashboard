@@ -61,6 +61,18 @@ function pageLabel(route: string): string {
   return NAV_ITEMS.find((item) => item.to === route)?.label ?? route
 }
 
+// Only the app's own destinations are ever rendered as anchors (the 2026-09-02 audit's
+// allow-list rule). The server already allow-lists the three sandbox paths, but a link
+// arrives here through a model's tool call, and one loop of that is exactly where an
+// off-site or javascript: destination would be smuggled in. Checked on the PATH alone,
+// so the query -- the scenario itself -- stays free-form; `//host` is rejected because
+// a protocol-relative URL starts with a slash yet leaves the origin.
+const NAV_PATHS = new Set(NAV_ITEMS.map((item) => item.to))
+export function isNavLink(to: string): boolean {
+  if (!to.startsWith('/') || to.startsWith('//')) return false
+  return NAV_PATHS.has(to.split('?')[0])
+}
+
 /** Keeps the selection inside the catalog: a key the server has since retired — persisted
  *  from an earlier session, or a stale default — falls back to the catalog's own default,
  *  else its first available entry. Left alone while the catalog is unknown; whichever of
@@ -416,7 +428,17 @@ export default function AssistantDrawer() {
           patchAnswer((item) => ({
             ...item,
             tools: (item.tools ?? []).map((t) =>
-              t.name === tool.name && !t.done ? { ...t, summary: tool.summary, done: true } : t,
+              t.name === tool.name && !t.done
+                ? {
+                    ...t,
+                    summary: tool.summary,
+                    done: true,
+                    // Spread only when there IS one: writing `link: undefined` would
+                    // persist a key JSON then drops, so a rehydrated transcript would
+                    // not match the one on screen.
+                    ...(tool.link === undefined ? {} : { link: tool.link }),
+                  }
+                : t,
             ),
           })),
         onToken: (text2) => {
@@ -669,6 +691,14 @@ export default function AssistantDrawer() {
                         <span key={t} className="assistant-tool-chip">
                           <span aria-hidden="true">⚙</span> {tool.name}
                           {tool.done ? '' : '…'}
+                          {tool.link !== undefined && isNavLink(tool.link.to) && (
+                            <>
+                              {' '}
+                              <Link className="assistant-tool-link" to={tool.link.to}>
+                                {tool.link.label}
+                              </Link>
+                            </>
+                          )}
                         </span>
                       ))}
                     </div>

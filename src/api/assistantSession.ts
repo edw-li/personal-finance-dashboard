@@ -7,6 +7,12 @@ export interface TranscriptTool {
   name: string
   summary: string
   done: boolean
+  /** The sandbox the tool's answer can be opened in (spec 12). A structural COPY of
+   *  assistantStream's ToolLink rather than an import: this module is deliberately
+   *  dependency-free (the 401 path clears it with no component tree around), and it
+   *  is also a persistence shape -- a transcript rehydrated from an older session may
+   *  carry tools without it. */
+  link?: { to: string; label: string }
 }
 
 export interface TranscriptError {
