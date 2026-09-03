@@ -146,6 +146,20 @@ describe('prefsStore — session sync', () => {
     expect(patchPrefs).toHaveBeenCalledWith({ theme: 'light' })
   })
 
+  // The browser spells the household `owner: null` (OwnerScope); the WIRE spells it the
+  // string 'all' (backend prefs_registry) — a seed that shipped null would 422, and an
+  // adopted 'all' that stayed a string would fail useScope's own predicates.
+  it('round-trips the scope owner: null in the browser, "all" on the wire', async () => {
+    setLocal('scope', { owner: null, range: 'all' })
+    await vi.advanceTimersByTimeAsync(PATCH_DEBOUNCE_MS)
+    expect(patchPrefs).toHaveBeenCalledWith({ scope: { owner: 'all', range: 'all' } })
+    resetPrefsStoreForTests() // a fresh session: nothing is dirty, so the server's copy wins
+    vi.mocked(fetchPrefs).mockResolvedValue({ prefs: { scope: entry({ owner: 'all', range: 'ytd' }) } })
+    await syncFromServer()
+    expect(getLocal('scope')).toEqual({ owner: null, range: 'ytd' })
+    expect(localStorage.getItem('finance.scope')).toBe(JSON.stringify({ owner: null, range: 'ytd' }))
+  })
+
   it('ignores a server value of the wrong shape and stays quiet when the GET fails', async () => {
     localStorage.setItem('finance.theme', 'light')
     vi.mocked(fetchPrefs).mockResolvedValue({ prefs: { theme: entry('neon') } })
