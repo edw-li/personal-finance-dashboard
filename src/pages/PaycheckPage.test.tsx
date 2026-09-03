@@ -1233,6 +1233,23 @@ describe('person switching keeps the rendered check truthful', () => {
     expect(screen.getByText('Where each check goes')).toBeTruthy()
   })
 
+  it('stays still when the switched-to person’s live payload matches the warm cache', async () => {
+    twoEarners()
+    // Sam has been seen before, and the revalidation answers with exactly what the cache
+    // holds — the peeked paint IS the live payload.
+    setSnapshot('paycheck:breakdown:current:person:2', samBreakdown)
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('Per-check breakdown — effective Jan 1, 2026')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
+    await screen.findByText('Per-check breakdown — effective Mar 1, 2026')
+    await act(async () => {})
+
+    // Nothing changed, so nothing re-arms: the flow's entrance (and with it the monthly
+    // count-up, which rides the same `still` flag) stays put (spec §1).
+    expect(screen.getByTestId('echart').getAttribute('data-animate')).toBe('false')
+  })
+
   it('never leaves the previous person’s check rendered under a warm snapshot', async () => {
     twoEarners()
     // Sam’s key is already warm (an earlier visit), and the revalidation will answer with

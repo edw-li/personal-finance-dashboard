@@ -14,9 +14,9 @@ import EChart from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import PacePanel from '../components/paycheck/PacePanel'
 import { paycheckSankeyOption } from '../components/paycheck/paycheckSankeyOptions'
-import Feed from '../components/shell/Feed'
+import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
-import ScopeBar from '../components/shell/ScopeBar'
+import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import type {
@@ -467,11 +467,9 @@ function ProfilesPanel({
         entered as percents (13 = 13%) and stored as fractions with nine decimal places;
         withholding is a tax rather than a contribution, so it is not part of the 100% check.
       </p>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      {/* A save that failed, not a feed that is behind: the bare alert, with no stale cue
+          and nothing to retry — the form itself is the retry. */}
+      <FeedBanner error={error} />
       <form
         className="paycheck-form"
         onSubmit={(e) => {
@@ -707,6 +705,14 @@ export default function PaycheckPage() {
   // key belongs to a different person than the one on screen), and skipping on the cache
   // stranded the page there (2026-08-28 bug).
   const shownBreakdown = useRef<PaycheckBreakdownOut | null>(cachedBreakdown ?? null)
+  // ...kept in step with the render by an effect, never written by hand: the person adopt
+  // runs DURING render (where a ref write would survive a discarded render), and a peeked
+  // paint that left the ref behind made the identical live payload look like a change —
+  // re-arming the count-up and the flow's entrance on a switch back to a person already
+  // seen. A ref write in an effect body is not state, so react-hooks 7 does not apply.
+  useEffect(() => {
+    shownBreakdown.current = breakdown
+  }, [breakdown])
   // false once a revalidation actually CHANGES the data — the flow may animate again.
   const [fromCache, setFromCache] = useState(cachedBreakdown !== undefined)
   const [breakdownError, setBreakdownError] = useState<string | null>(null)
@@ -727,7 +733,13 @@ export default function PaycheckPage() {
   // The chips' source. Fetched on its own, never folded into either load above: the
   // switcher is an affordance, and a household hiccup must not cost the waterfall
   // (NetWorthPage's isolated-fetch posture). null covers both "not loaded" and "failed".
-  const [household, setHousehold] = useState<HouseholdOut | null>(null)
+  // Seeded from the row's OWN snapshot key so the page and the scope row agree on the first
+  // paint: without it the chips could be up (ScopeBar paints from the snapshot) while the
+  // page still believed there was nobody to switch between, and a chip press would do
+  // nothing until this fetch answered.
+  const [household, setHousehold] = useState<HouseholdOut | null>(
+    () => getSnapshot<HouseholdOut>(HOUSEHOLD_SNAPSHOT) ?? null,
+  )
   // One in-force breakdown per person, fetched on its OWN so a partner failure costs the
   // tile and nothing else. Deliberately NOT derived from the waterfall above: that one
   // follows the chips and any pinned row, while this figure is always "the profile in
@@ -797,7 +809,10 @@ export default function PaycheckPage() {
   useEffect(() => {
     fetchHousehold()
       .then(setHousehold)
-      .catch(() => setHousehold(null))
+      .catch(() => {
+        /* keep whatever the snapshot had, as ScopeBar does: the switcher is an affordance,
+           and a household hiccup must not cost the waterfall */
+      })
   }, [])
 
   // Two GETs on a two-person household, once per household load (and once per write), and
@@ -839,16 +854,14 @@ export default function PaycheckPage() {
         setBreakdownMissing(false)
         // Identical payload: nothing re-renders, the flow stays still (spec §1) — judged
         // against the RENDERED check, never the snapshot cache (see shownBreakdown).
-        // A person switch that peeked a warm key is the one case this does NOT skip: the
-        // ref is written here, in the continuation, never during the render-time adopt, so
-        // the peeked paint is replaced once by the identical live payload. One extra paint
-        // of the same numbers is the price of a render-safe adopt.
+        // A person switch that peeked a warm key IS skipped here, because the mirror
+        // effect above has already moved the ref onto the peeked check: the flow and the
+        // count-up stay still on a switch back to a person already seen.
         if (
           shownBreakdown.current !== null &&
           JSON.stringify(shownBreakdown.current) === JSON.stringify(data)
         )
           return
-        shownBreakdown.current = data
         setFromCache(false)
         setBreakdown(data)
       })
@@ -859,10 +872,7 @@ export default function PaycheckPage() {
         // (or there never was one), so there is nothing left for the waterfall to be about.
         // Anything else keeps it — the panel names its own profile, so a stale waterfall
         // under the cue below still says whose it is.
-        if (missing) {
-          shownBreakdown.current = null
-          setBreakdown(null)
-        }
+        if (missing) setBreakdown(null)
         setBreakdownMissing(missing)
         setBreakdownError(message(err, 'Failed to load the paycheck breakdown'))
       })
@@ -925,8 +935,8 @@ export default function PaycheckPage() {
    * force for them", which is the same place the page opens on.
    *
    * RENDER-SAFE: its only caller is the adopt block below, which runs during render, so
-   * this is state setters and nothing else — the `shownBreakdown` ref is written in the
-   * loader's continuation, never here (a ref written mid-render survives a discarded one).
+   * this is state setters and nothing else — `shownBreakdown` is mirrored from `breakdown`
+   * by an effect, never written here (a ref written mid-render survives a discarded one).
    * The adopt block also owns the "already there" check, so there is no guard here to go
    * stale against a closure.
    */

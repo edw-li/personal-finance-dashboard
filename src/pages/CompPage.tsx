@@ -576,7 +576,9 @@ export default function CompPage() {
           staleNoun="the schedule"
           retry={reloadSchedule}
           retryLabel="Retry loading the vesting schedule"
-          skeleton={{ height: 96, label: 'Loading the vesting schedule…' }}
+          // Its own sentence, not the schedule card's: two identical hidden labels would
+          // read out one after the other while the one feed behind them loads.
+          skeleton={{ height: 96, label: 'Loading vesting totals…' }}
         >
           {(s) => <VestingTiles schedule={s} />}
         </Feed>
