@@ -148,3 +148,28 @@ class OverrideIn(BaseModel):
 
 class OverrideOut(OverrideIn):
     key: str
+
+
+class FeedTokenIn(BaseModel):
+    label: str = Field(min_length=1, max_length=60)
+
+    @field_validator("label")
+    @classmethod
+    def _label_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("label must not be blank")
+        return stripped
+
+
+class FeedTokenOut(BaseModel):
+    id: int
+    label: str
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+class FeedTokenCreated(FeedTokenOut):
+    """POST's answer: the plaintext rides ONCE (spec §11) and no GET ever returns it."""
+
+    token: str
