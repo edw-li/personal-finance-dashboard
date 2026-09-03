@@ -1,18 +1,27 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../../api/client'
 import { fetchLots } from '../../api/espp'
+import { fetchLimits } from '../../api/limits'
 import { fetchHoldings } from '../../api/portfolio'
 import { runWhatIf } from '../../api/whatif'
-import AmountInput from '../AmountInput'
-import InfoHint from '../InfoHint'
-import StatTile from '../StatTile'
+import CompareTable from '../../sandbox/CompareTable'
+import { inverted } from '../../sandbox/DeltaChip'
+import PresetRow from '../../sandbox/PresetRow'
+import SandboxPanel from '../../sandbox/SandboxPanel'
+import { legacyLotId, legacyTicker, readEntries, type EsppEntry, type SaleEntry } from '../../sandbox/scenarioUrl'
+import { useSandbox, type PinResult, type SandboxSpec } from '../../sandbox/useSandbox'
 import type {
+  ChangedInput,
   EsppLotOut,
   EsppLotsResponse,
-  EsppSaleIn,
   HoldingOut,
   HoldingsResponse,
-  SaleLegIn,
+  LimitsOut,
+  TaxBracketsOut,
+  TaxInputsOut,
+  TaxSummaryOut,
   WhatIfOut,
 } from '../../types/api'
 import { canonicalAmount, isAmount } from '../../utils/amount'
@@ -20,27 +29,32 @@ import { formatCurrency, formatDate, formatPct, formatShares } from '../../utils
 import { isPlainDecimal } from '../../utils/percent'
 import { toneOf } from '../../utils/tone'
 import type { Tone } from '../../utils/tone'
+import AmountInput from '../AmountInput'
+import InfoHint from '../InfoHint'
+import { FeedBanner } from '../shell/Feed'
+import StatTile from '../StatTile'
+import {
+  COMPARE_ROWS,
+  decodeTax,
+  deltaValue,
+  encodeTax,
+  isEmptyTax,
+  labelForTax,
+  summaryValue,
+  taxPresets,
+  toWhatIfBody,
+  type TaxPresetPatch,
+  type TaxScenario,
+} from './taxScenario'
 // This component's own sheet, like its three siblings: the app-wide vocabulary
 // (.card/.eyebrow/.kpi-row/.data-table/.error-banner/.empty-note) is panels.css, which the
 // PAGE imports — and StatTile brings it along regardless.
-import { FeedBanner } from '../shell/Feed'
 import './taxes.css'
 
 // The API's own ceiling (schemas/taxes.py: WhatIfIn.sales / .espp_sales max_length=20).
 const MAX_LEGS = 20
-
-// Strings as typed, converted at submit — a leg is form text until the moment it ships.
-interface SaleLegForm {
-  securityId: string
-  shares: string
-  price: string
-  term: 'long' | 'short'
-}
-
-interface EsppLegForm {
-  lotId: string
-  salePrice: string
-}
+// The endpoint folds the portfolio on every call (spec §10).
+const DEBOUNCE_MS = 400
 
 /** One option of the override select — the definition table's own label + key. TaxesPage
  *  dedupes per-person repeats before handing these down: overrides address the HOUSEHOLD
@@ -50,27 +64,22 @@ export interface OverrideDefinition {
   label: string
 }
 
-interface OverrideLegForm {
-  key: string
-  value: string
-}
-
 // The whole position at the latest quote: the common question is "what if I sold this",
 // and every figure is the holdings feed's own text, never re-derived. An unpriced holding
-// prefills BLANK, which is the omit case — and the server then 422s by ticker.
-function saleLegFor(holding: HoldingOut): SaleLegForm {
+// carries NO price, which is the omit case — and the server then 422s by ticker.
+function saleLegFor(holding: HoldingOut): SaleEntry {
   return {
-    securityId: String(holding.security_id),
+    security_id: holding.security_id,
     shares: holding.shares,
-    price: holding.price ?? '',
     term: 'long',
+    ...(holding.price === null ? {} : { price: holding.price }),
   }
 }
 
 // The lot's whole share count is implied (the API sells the lot, not a slice of it), so the
 // only knob is the price — prefilled from the quote the lots table itself was priced at.
-function esppLegFor(lot: EsppLotOut, quote: string | null): EsppLegForm {
-  return { lotId: String(lot.id), salePrice: quote ?? '' }
+function esppLegFor(lot: EsppLotOut, quote: string | null): EsppEntry {
+  return { lot_id: lot.id, ...(quote === null ? {} : { sale_price: quote }) }
 }
 
 /**
@@ -79,67 +88,94 @@ function esppLegFor(lot: EsppLotOut, quote: string | null): EsppLegForm {
  * good/bad, and the tile's words carry the judgment. Left to derive the glyph from the
  * tone, a scenario that RAISED the tax would print ▼ on a number that went up.
  */
-function inverted(tone: Tone): Tone {
-  return tone === 'positive' ? 'negative' : tone === 'negative' ? 'positive' : 'neutral'
-}
-
 function directionOf(tone: Tone): 'up' | 'down' | undefined {
   return tone === 'positive' ? 'up' : tone === 'negative' ? 'down' : undefined
 }
 
 /**
- * The tax sandbox: prospective brokerage sales and ESPP lot sales run against the stored
- * year, baseline vs. scenario vs. delta. NOTHING is stored — the endpoint reads the year's
- * inputs and brackets, runs the engine twice and answers; a run is safe to repeat.
+ * The tax sandbox (2026-09-03 planning-sandboxes spec §10): prospective brokerage sales, ESPP
+ * lot sales and input overrides run LIVE against the stored year — baseline vs. scenario vs.
+ * delta, compared side by side with up to three pins. The scenario lives in the URL
+ * (`whatif=sale:…`, `espp:…`, `<input_key>:…`); the text boxes hold a draft only while
+ * focused. NOTHING is stored: the endpoint reads the year's inputs and brackets, runs the
+ * engine twice and answers. Apply (overrides only) is the PAGE's write, handed up.
  *
- * Own feeds, own failure surface (SummaryPanel's posture), and both of them LAZY: the page
- * is already long and these are two GETs for a card the user may never open.
+ * Own feeds, own failure surface (SummaryPanel's posture), all three LAZY: the page is
+ * already long and these are three GETs for a card the user may never open.
  */
 export default function WhatIfPanel({
   year,
-  initialTicker = null,
-  initialLotId = null,
   definitions = [],
+  inputs = null,
+  brackets = null,
+  summary = null,
+  onApplyOverrides,
 }: {
   year: number
-  /**
-   * The deep links' seeds (/taxes?whatif=TICKER from the holdings drill-in, ?whatif-lot={id}
-   * from the ESPP lots table), read off the URL by TaxesPage and handed down. Either one
-   * non-null mounts the card OPEN and prefills ONE leg once the feeds land — the ticker/lot
-   * id only mean something against a feed, so the seeding rides its promise callback.
-   */
-  initialTicker?: string | null
-  initialLotId?: number | null
   /** The year payload's input definitions (deduped by key, payload order) — the override
-   *  rows' key select. Optional so fetch-free mounts (and the pinned older tests) need no
-   *  list; with none, Add override stays shut. */
+   *  rows' key select. Optional so fetch-free mounts need no list; with none, Add override
+   *  stays shut. */
   definitions?: OverrideDefinition[]
+  /** The year's payloads, for the presets (employer HSA, the CG table, the gains stack). */
+  inputs?: TaxInputsOut | null
+  brackets?: TaxBracketsOut | null
+  summary?: TaxSummaryOut | null
+  /** The page's write door: confirm before → after, PUT the inputs, remount the form. Absent
+   *  → no Apply slot. */
+  onApplyOverrides?: (overrides: Record<string, string | null>, changed: ChangedInput[]) => void
 }) {
-  // The deep-link seeds, pinned at MOUNT. They live in a ref because `loadFeeds` below must
-  // read no reactive value beyond its setters — a prop read there would make it reactive,
-  // and the mount effect would then owe it a dependency that re-runs the pair of GETs on
-  // every render (SettingsPage's note; the house rejects the useCallback alternative). The
-  // semantics are the ones Task 5 wants anyway: the page remounts this panel by year, so a
-  // seed only ever applies to the mount that carried it.
-  const seedRef = useRef({ ticker: initialTicker, lotId: initialLotId })
-  const [open, setOpen] = useState(initialTicker !== null || initialLotId !== null)
+  const [params] = useSearchParams()
+  // The legacy deep links (`?whatif=TICKER`, `?whatif-lot=<id>`), pinned at MOUNT — the hook's
+  // arrival normalization drops the colon-less value on its first effect, so it is read here,
+  // in the initializer, before that runs. A ticker or lot id only means something against a
+  // feed, so the rewrite rides the feeds' promise callback.
+  const [legacy] = useState(() => ({ ticker: legacyTicker(params), lotId: legacyLotId(params) }))
+  const [open, setOpen] = useState(
+    () => readEntries(params).length > 0 || legacy.ticker !== null || legacy.lotId !== null,
+  )
   // null = the feed has not answered yet (never [] — an empty book is a real answer, and
   // the two say different things under the form).
   const [holdings, setHoldings] = useState<HoldingsResponse | null>(null)
   const [lots, setLots] = useState<EsppLotsResponse | null>(null)
+  const [limits, setLimits] = useState<LimitsOut | null>(null)
   const [feedError, setFeedError] = useState<string | null>(null)
-  const [legs, setLegs] = useState<SaleLegForm[]>([])
-  const [esppLegs, setEsppLegs] = useState<EsppLegForm[]>([])
-  const [overrideLegs, setOverrideLegs] = useState<OverrideLegForm[]>([])
-  const [result, setResult] = useState<WhatIfOut | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  // Two Runs in a row are two scenarios in flight; only the newest may land (or complain).
-  const seqRef = useRef(0)
+  // The box's own refusal (an oversell, a garbled value): the request is WITHHELD and the URL
+  // keeps the last valid scenario, so `stale` stays false (spec §10).
+  const [formError, setFormError] = useState<string | null>(null)
   // The feeds are fetched ONCE per mount. The ref — not `holdings === null` — is the guard,
-  // so a pair that FAILED does not re-fire on every re-open, and the deep-link door below
-  // cannot spend a second pair.
+  // so a set that FAILED does not re-fire on every re-open.
   const feedsRef = useRef(false)
+
+  const held = holdings?.holdings ?? []
+
+  const spec = useMemo<SandboxSpec<TaxScenario, WhatIfOut>>(
+    () => ({
+      page: 'taxes',
+      decode: decodeTax,
+      encode: encodeTax,
+      isEmpty: isEmptyTax,
+      preview: (scenario) => runWhatIf(toWhatIfBody(year, scenario)),
+      baselineOf: (result) => result,
+      dataKey: String(year),
+      debounceMs: DEBOUNCE_MS,
+      enabled: open,
+      // The pin label names tickers when the feed has landed; `holdings` lands once per
+      // mount, so a re-created spec is cheap.
+      labelFor: (scenario) =>
+        labelForTax(
+          scenario,
+          (securityId) => holdings?.holdings.find((h) => h.security_id === securityId)?.ticker ?? null,
+        ),
+    }),
+    [year, open, holdings],
+  )
+  const sandbox = useSandbox(spec)
+  const { scenario, result } = sandbox
+
+  const patch = (change: (current: TaxScenario) => TaxScenario, immediate: boolean) => {
+    setFormError(null) // the sentence described the legs as they WERE
+    sandbox.set(change, { immediate })
+  }
 
   // A plain function over stable setters (TaxesPage's `loadYears`), called from both doors
   // into the card. Promise callbacks only — no setState in an effect's synchronous body
@@ -147,49 +183,63 @@ export default function WhatIfPanel({
   const loadFeeds = () => {
     if (feedsRef.current) return
     feedsRef.current = true
-    Promise.all([fetchHoldings(), fetchLots()])
-      .then(([heldRes, lotsRes]) => {
+    Promise.all([fetchHoldings(), fetchLots(), fetchLimits(year)])
+      .then(([heldRes, lotsRes, limitsRes]) => {
         setHoldings(heldRes)
         setLots(lotsRes)
-        // Seeding rides the SAME callback as the feeds it reads: a deep link names a ticker
-        // or a lot id, and only the feed knows which row that is. A name that matches
-        // nothing seeds nothing — the open card with its empty leg list is the honest
-        // answer, not an error (the holding may have been sold since the link was made).
-        const seed = seedRef.current
-        if (seed.ticker !== null) {
-          const ticker = seed.ticker.toUpperCase()
-          const match = heldRes.holdings.find((holding) => holding.ticker.toUpperCase() === ticker)
-          if (match !== undefined) setLegs([saleLegFor(match)])
+        setLimits(limitsRes)
+        // Alias normalization (spec §6): resolve the legacy ticker / lot against the feed and
+        // rewrite the URL to the new entries in ONE replace that also drops `whatif-lot`. A
+        // name that matches nothing (sold since the link was made) seeds nothing — the open
+        // card with its empty legs is the honest answer, not an error.
+        const additions: { sale?: SaleEntry; espp?: EsppEntry } = {}
+        if (legacy.ticker !== null) {
+          const ticker = legacy.ticker.toUpperCase()
+          const match = heldRes.holdings.find((h) => h.ticker.toUpperCase() === ticker)
+          if (match !== undefined) additions.sale = saleLegFor(match)
         }
-        if (seed.lotId !== null) {
-          const lot = lotsRes.lots.find((row) => row.id === seed.lotId && !row.is_sold)
-          if (lot !== undefined) setEsppLegs([esppLegFor(lot, lotsRes.current_price)])
+        if (legacy.lotId !== null) {
+          const lot = lotsRes.lots.find((row) => row.id === legacy.lotId && !row.is_sold)
+          if (lot !== undefined) additions.espp = esppLegFor(lot, lotsRes.current_price)
+        }
+        if (legacy.ticker !== null || legacy.lotId !== null) {
+          const sale = additions.sale
+          const espp = additions.espp
+          sandbox.set(
+            (current) => ({
+              ...current,
+              sales:
+                sale === undefined
+                  ? current.sales
+                  : [...current.sales.filter((s) => s.security_id !== sale.security_id), sale],
+              espp:
+                espp === undefined
+                  ? current.espp
+                  : [...current.espp.filter((e) => e.lot_id !== espp.lot_id), espp],
+            }),
+            { immediate: true, drop: ['whatif-lot'] },
+          )
         }
       })
       .catch((err: unknown) => {
         setFeedError(
-          err instanceof ApiError ? err.message : 'Failed to load holdings and ESPP lots',
+          err instanceof ApiError ? err.message : 'Failed to load holdings, ESPP lots and limits',
         )
       })
   }
 
   useEffect(() => {
-    // The DEEP-LINKED mount only; every other open goes through the toggle below. Mount-only,
-    // and loadFeeds reads no reactive value beyond its setters and refs, so react-hooks 7
-    // has nothing to report here (PortfolioPage's `load`).
-    const seed = seedRef.current
-    if (seed.ticker !== null || seed.lotId !== null) loadFeeds()
+    // The OPEN-ON-ARRIVAL mount only (entries or an alias in the URL); every other open goes
+    // through the toggle. loadFeeds reads no reactive value beyond its setters and refs.
+    if (open) loadFeeds()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only by design (PortfolioPage's `load`)
   }, [])
 
-  const held = holdings?.holdings ?? []
   const unsoldLots = lots?.lots.filter((lot) => !lot.is_sold) ?? []
-  const holdingFor = (securityId: string) =>
-    held.find((holding) => String(holding.security_id) === securityId)
+  const holdingFor = (securityId: number) => held.find((h) => h.security_id === securityId)
   // Deliberately NOT counting the override rows: legCount feeds the MAX_LEGS fence, which is
   // the server's per-LIST sales/ESPP cap — the overrides are a dict, with no such cap.
-  const legCount = legs.length + esppLegs.length
-  // What "there is nothing to run" means once a scenario can be an override alone.
-  const scenarioEmpty = legCount === 0 && overrideLegs.length === 0
+  const legCount = scenario.sales.length + scenario.espp.length
 
   const toggle = () => {
     const next = !open
@@ -209,575 +259,631 @@ export default function WhatIfPanel({
   // The first held security not already in a leg: two rows for one ticker are almost always
   // a mis-click, and the server classifies each leg against the FULL position — so the pair
   // would sell the same shares twice without ever tripping the oversell fence.
-  const nextHolding = () => {
-    const taken = new Set(legs.map((leg) => leg.securityId))
-    return held.find((holding) => !taken.has(String(holding.security_id)))
-  }
-
-  const nextLot = () => {
-    const taken = new Set(esppLegs.map((leg) => leg.lotId))
-    return unsoldLots.find((lot) => !taken.has(String(lot.id)))
-  }
+  const nextHolding = () => held.find((h) => !scenario.sales.some((s) => s.security_id === h.security_id))
+  const nextLot = () => unsoldLots.find((lot) => !scenario.espp.some((e) => e.lot_id === lot.id))
+  const nextDefinition = () => definitions.find((d) => !(d.key in scenario.overrides))
 
   const addSale = () => {
     const holding = nextHolding()
-    if (holding === undefined) return
-    setError(null) // the sentence described the legs as they WERE
-    setLegs((current) => [...current, saleLegFor(holding)])
+    if (holding !== undefined) patch((s) => ({ ...s, sales: [...s.sales, saleLegFor(holding)] }), true)
   }
-
   const addEsppSale = () => {
     const lot = nextLot()
-    if (lot === undefined) return
-    setError(null)
-    setEsppLegs((current) => [...current, esppLegFor(lot, lots?.current_price ?? null)])
+    if (lot !== undefined) patch((s) => ({ ...s, espp: [...s.espp, esppLegFor(lot, lots?.current_price ?? null)] }), true)
   }
-
-  const setLeg = (index: number, patch: Partial<SaleLegForm>) => {
-    setError(null)
-    setLegs((current) => current.map((leg, i) => (i === index ? { ...leg, ...patch } : leg)))
-  }
-
-  // Switching the ticker re-prefills the amounts with it: the old row's share count belongs
-  // to the old position, and leaving it there is an oversell one keystroke from happening.
-  const setLegSecurity = (index: number, securityId: string) => {
-    const holding = holdingFor(securityId)
-    if (holding === undefined) return
-    setLeg(index, { ...saleLegFor(holding), term: legs[index].term })
-  }
-
-  const setEsppLeg = (index: number, patch: Partial<EsppLegForm>) => {
-    setError(null)
-    setEsppLegs((current) => current.map((leg, i) => (i === index ? { ...leg, ...patch } : leg)))
-  }
-
-  const removeLeg = (index: number) => {
-    setError(null)
-    setLegs((current) => current.filter((_, i) => i !== index))
-  }
-
-  const removeEsppLeg = (index: number) => {
-    setError(null)
-    setEsppLegs((current) => current.filter((_, i) => i !== index))
-  }
-
-  // The first definition not already in a row — the sale legs' "one row per thing" posture,
-  // and the reason Add override shuts once every key is taken (and with no definitions).
-  const nextDefinition = () => {
-    const taken = new Set(overrideLegs.map((leg) => leg.key))
-    return definitions.find((definition) => !taken.has(definition.key))
-  }
-
   const addOverride = () => {
     const definition = nextDefinition()
-    if (definition === undefined) return
-    setError(null)
-    setOverrideLegs((current) => [...current, { key: definition.key, value: '' }])
+    if (definition !== undefined) patch((s) => ({ ...s, overrides: { ...s.overrides, [definition.key]: null } }), true)
   }
 
-  const setOverrideLeg = (index: number, patch: Partial<OverrideLegForm>) => {
-    setError(null)
-    setOverrideLegs((current) =>
-      current.map((leg, i) => (i === index ? { ...leg, ...patch } : leg)),
+  const setSale = (index: number, change: Partial<SaleEntry>, immediate: boolean) =>
+    patch((s) => ({ ...s, sales: s.sales.map((leg, i) => (i === index ? { ...leg, ...change } : leg)) }), immediate)
+  // Switching the ticker re-prefills the amounts with it: the old row's share count belongs
+  // to the old position, and leaving it there is an oversell one keystroke from happening.
+  const setSaleSecurity = (index: number, securityId: number) => {
+    const holding = holdingFor(securityId)
+    if (holding === undefined) return
+    patch(
+      (s) => ({ ...s, sales: s.sales.map((leg, i) => (i === index ? { ...saleLegFor(holding), term: leg.term } : leg)) }),
+      true,
     )
   }
+  const removeSale = (index: number) => patch((s) => ({ ...s, sales: s.sales.filter((_, i) => i !== index) }), true)
+  const setEspp = (index: number, change: Partial<EsppEntry>, immediate: boolean) =>
+    patch((s) => ({ ...s, espp: s.espp.map((leg, i) => (i === index ? { ...leg, ...change } : leg)) }), immediate)
+  const removeEspp = (index: number) => patch((s) => ({ ...s, espp: s.espp.filter((_, i) => i !== index) }), true)
 
-  const removeOverrideLeg = (index: number) => {
-    setError(null)
-    setOverrideLegs((current) => current.filter((_, i) => i !== index))
+  const overrideKeys = Object.keys(scenario.overrides)
+  const setOverrideKey = (from: string, to: string) => {
+    if (to in scenario.overrides) {
+      // Last-write-wins on a dict would silently drop the earlier row — refuse instead.
+      const label = definitions.find((d) => d.key === to)?.label ?? to
+      setFormError(`${label} is overridden twice — one row per key`)
+      return
+    }
+    patch((s) => {
+      const overrides: Record<string, string | null> = {}
+      for (const [key, value] of Object.entries(s.overrides)) overrides[key === from ? to : key] = value
+      return { ...s, overrides }
+    }, true)
   }
+  const setOverrideValue = (key: string, value: string | null, immediate: boolean) =>
+    patch((s) => ({ ...s, overrides: { ...s.overrides, [key]: value } }), immediate)
+  const removeOverride = (key: string) =>
+    patch((s) => {
+      const overrides = { ...s.overrides }
+      delete overrides[key]
+      return { ...s, overrides }
+    }, true)
 
-  /**
-   * The router's own fences, refused here in the BOX's vocabulary rather than spending a
-   * request on the 422 (ProjectionPage's posture) — and worded the way the server words
-   * them where it has a twin, so the two never disagree about the same leg.
-   *
-   * Number() is display-only (utils/format.ts's rule): nothing derived from it is sent —
-   * every figure that ships is the TYPED text, and the server does the quantizing.
-   */
-  const run = () => {
-    const sales: SaleLegIn[] = []
-    for (const [index, leg] of legs.entries()) {
-      const holding = holdingFor(leg.securityId)
-      if (holding === undefined) {
-        setError(`Sale ${index + 1}: choose a security you hold`)
-        return
-      }
-      const shares = leg.shares.trim()
-      if (shares === '' || !isPlainDecimal(shares) || !(Number(shares) > 0)) {
-        setError(`${holding.ticker}: shares must be a number greater than 0`)
-        return
-      }
-      if (Number(shares) > Number(holding.shares)) {
-        // The server's own sentence (api/taxes.py's oversell 422) — one vocabulary.
-        setError(`selling ${shares} ${holding.ticker} — only ${holding.shares} held`)
-        return
-      }
-      const price = leg.price.trim()
-      if (price !== '' && (!isPlainDecimal(price) || !(Number(price) > 0))) {
-        setError(`${holding.ticker}: price must be a number greater than 0, or blank`)
-        return
-      }
-      // A blank price is OMITTED, never sent as "" (the projection page's blank-omit
-      // convention): the key's absence is what asks for the security's latest quote.
-      sales.push({
-        security_id: holding.security_id,
-        shares,
-        term: leg.term,
-        ...(price === '' ? {} : { price }),
-      })
-    }
-
-    const esppSales: EsppSaleIn[] = []
-    for (const [index, leg] of esppLegs.entries()) {
-      const lot = unsoldLots.find((row) => String(row.id) === leg.lotId)
-      if (lot === undefined) {
-        setError(`ESPP sale ${index + 1}: choose an unsold lot`)
-        return
-      }
-      const price = leg.salePrice.trim()
-      if (price !== '' && (!isPlainDecimal(price) || !(Number(price) > 0))) {
-        setError(
-          `Lot ${formatDate(lot.purchase_date)}: sale price must be a number greater than 0, or blank`,
-        )
-        return
-      }
-      esppSales.push({ lot_id: lot.id, ...(price === '' ? {} : { sale_price: price }) })
-    }
-
-    const overrides: Record<string, string | null> = {}
-    for (const [index, leg] of overrideLegs.entries()) {
-      const definition = definitions.find((d) => d.key === leg.key)
-      if (definition === undefined) {
-        setError(`Override ${index + 1}: choose an input key`)
-        return
-      }
-      if (leg.key in overrides) {
-        // Last-write-wins on a dict would silently drop the earlier row — refuse instead
-        // (the sale legs' same-security posture, override-flavoured).
-        setError(`${definition.label} is overridden twice — one row per key`)
-        return
-      }
-      const text = leg.value.trim()
-      if (text !== '' && !isAmount(text)) {
-        setError(`${definition.label}: enter a number, or leave the value blank to clear it`)
-        return
-      }
-      // Canonical at the wire (InputsForm's boundary): AmountInput's tolerant grammar
-      // ("$1,600", grouping) must never reach the server's Decimal column raw. A blank is
-      // an explicit null — the endpoint's "clear this input" spelling, which the scenario
-      // computes as 0 without churning the engine's missing-key warning
-      // (tax_whatif.apply_scenario).
-      overrides[leg.key] = text === '' ? null : canonicalAmount(text)
-    }
-
-    const seq = ++seqRef.current
-    setBusy(true)
-    setError(null)
-    runWhatIf({
-      year,
-      sales,
-      espp_sales: esppSales,
-      // Omitted entirely with no rows: the pre-override wire stays byte-identical, which
-      // the exact-body test pins depend on.
-      ...(overrideLegs.length === 0 ? {} : { overrides }),
-    })
-      .then((res) => {
-        if (seq !== seqRef.current) return
-        setResult(res)
-        setError(null)
-      })
-      .catch((err: unknown) => {
-        if (seq !== seqRef.current) return
-        // Dropped, not kept: the answer is a function of the legs, and leaving the last one
-        // on screen would read as the answer for the ones now in the form (ProjectionPage).
-        setResult(null)
-        setError(err instanceof ApiError ? err.message : 'Failed to run the scenario')
-      })
-      .finally(() => {
-        if (seq === seqRef.current) setBusy(false)
-      })
+  const applyPreset = (change: TaxPresetPatch) => {
+    if ('overrides' in change) patch((s) => ({ ...s, overrides: { ...s.overrides, ...change.overrides } }), true)
+    else
+      patch(
+        (s) => ({ ...s, sales: [...s.sales.filter((leg) => leg.security_id !== change.sale.security_id), change.sale] }),
+        true,
+      )
   }
+  const presets = taxPresets(
+    { year, limits, inputs, holdings: holdings === null ? null : held, brackets, summary },
+    applyPreset,
+  )
 
   const taxTone = result === null ? 'neutral' : toneOf(result.delta.total_tax)
   const takeHomeTone = result === null ? 'neutral' : toneOf(result.delta.take_home)
+  // A pin column compares SUMMARIES; the payload's own baseline half is the same for every
+  // column, so a pin contributes its scenario side.
+  const pinSide = (r: PinResult<WhatIfOut>): PinResult<TaxSummaryOut> =>
+    r === 'pending' || 'error' in r ? r : r.scenario
+  const overrideCount = overrideKeys.length
 
   return (
-    <section className="card">
-      <div className="chart-card-header">
-        <h2 className="eyebrow">
-          What if — {year}
-          <InfoHint text="Model prospective sales or input changes against this year&apos;s stored return — nothing is saved." />
-        </h2>
-        <button type="button" className="button" aria-expanded={open} onClick={toggle}>
-          {open ? 'Close what-if' : 'Open what-if'}
-        </button>
-      </div>
-      {!open ? (
+    <SandboxPanel
+      eyebrow={`What if — ${year}`}
+      hint="Model prospective sales or input changes against this year's stored return — nothing is saved."
+      open={open}
+      onToggle={toggle}
+      toggleLabels={{ open: 'Open what-if', close: 'Close what-if' }}
+      sandbox={sandbox}
+      closedHint={
         <p className="drill-hint">
-          Model prospective share sales against {year}&apos;s stored inputs — nothing is
-          saved, and the stored year is never touched.
+          Model prospective share sales against {year}&apos;s stored inputs — nothing is saved, and the
+          stored year is never touched.
         </p>
-      ) : (
-        <>
-          <p className="drill-hint">
-            Sales are classified at average cost, the app&apos;s only basis method, and ESPP
-            ordinary income lands in Other W2 Income — which raises the engine&apos;s
-            Medicare/Social Security/SDI wage bases, exactly as the sheet does it. Real ESPP
-            ordinary income is FICA-exempt; this sandbox inherits the sheet&apos;s structure.
-            Long/short is your call: imported transactions carry no dates, so the app
-            cannot verify a holding period. Nothing here is stored.
-          </p>
-          <FeedBanner error={feedError} retry={retryFeeds} />
-          {/* Both feeds land together (one Promise.all) or neither does, so one null is the
-              whole "still waiting" question — and a pair that FAILED leaves the banner above
-              as the card's only content: there is nothing to build a leg out of, and a form
-              of empty selects would read as "you hold nothing". */}
-          {holdings === null && feedError === null && (
-            <p className="empty-note">Loading holdings and ESPP lots…</p>
-          )}
-          {holdings !== null && (
-            <>
-              <div className="whatif-legs">
-                {/* Position IS the identity here (a leg has no id of its own), and every
-                    field is controlled from this array — so an index key cannot strand a
-                    typed value in a reused row (BracketsEditor's note). */}
-                {legs.map((leg, index) => (
-                  <div key={index} className="whatif-form">
-                    <label htmlFor={`whatif-sale-security-${index}`}>Sell</label>
-                    <select
-                      id={`whatif-sale-security-${index}`}
-                      className="field-input whatif-select"
-                      value={leg.securityId}
-                      onChange={(e) => setLegSecurity(index, e.target.value)}
-                    >
-                      {held.map((holding) => (
-                        <option key={holding.security_id} value={String(holding.security_id)}>
-                          {holding.ticker}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      aria-label={`Sale ${index + 1} shares`}
-                      className="field-input"
-                      inputMode="decimal"
-                      value={leg.shares}
-                      onChange={(e) => setLeg(index, { shares: e.target.value })}
-                    />
-                    <input
-                      aria-label={`Sale ${index + 1} price`}
-                      className="field-input"
-                      inputMode="decimal"
-                      placeholder="latest"
-                      value={leg.price}
-                      onChange={(e) => setLeg(index, { price: e.target.value })}
-                    />
-                    <div className="segmented" role="group" aria-label={`Sale ${index + 1} term`}>
-                      <button
-                        type="button"
-                        className={leg.term === 'long' ? 'active' : ''}
-                        aria-pressed={leg.term === 'long'}
-                        onClick={() => setLeg(index, { term: 'long' })}
-                      >
-                        Long
-                      </button>
-                      <button
-                        type="button"
-                        className={leg.term === 'short' ? 'active' : ''}
-                        aria-pressed={leg.term === 'short'}
-                        onClick={() => setLeg(index, { term: 'short' })}
-                      >
-                        Short
-                      </button>
-                    </div>
-                    <span className="drill-hint">
-                      {formatShares(holdingFor(leg.securityId)?.shares)} held
-                    </span>
-                    <button
-                      type="button"
-                      className="button"
-                      aria-label={`Remove sale ${index + 1}`}
-                      onClick={() => removeLeg(index)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-                {esppLegs.map((leg, index) => (
-                  <div key={index} className="whatif-form">
-                    <label htmlFor={`whatif-espp-lot-${index}`}>ESPP lot</label>
-                    <select
-                      id={`whatif-espp-lot-${index}`}
-                      className="field-input whatif-select"
-                      value={leg.lotId}
-                      onChange={(e) => setEsppLeg(index, { lotId: e.target.value })}
-                    >
-                      {unsoldLots.map((lot) => (
-                        <option key={lot.id} value={String(lot.id)}>
-                          {formatDate(lot.purchase_date)} — {formatShares(lot.shares)} sh
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      aria-label={`ESPP sale ${index + 1} price`}
-                      className="field-input"
-                      inputMode="decimal"
-                      placeholder="latest"
-                      value={leg.salePrice}
-                      onChange={(e) => setEsppLeg(index, { salePrice: e.target.value })}
-                    />
-                    <button
-                      type="button"
-                      className="button"
-                      aria-label={`Remove ESPP sale ${index + 1}`}
-                      onClick={() => removeEsppLeg(index)}
-                    >
-                      Remove
-                    </button>
-                  </div>
+      }
+      presets={holdings === null ? null : <PresetRow presets={presets} />}
+      staleNoun="this scenario"
+      skeletonHeight={220}
+      compare={
+        result === null ? null : (
+          <div className="whatif-result">
+            {/* Every figure is the server's, rendered as it arrived (global rule 9) — the
+                deltas are the endpoint's own subtraction of two quantized summaries. */}
+            <div className="kpi-row">
+              <StatTile
+                label="Δ total tax"
+                value={formatCurrency(result.delta.total_tax)}
+                delta={
+                  taxTone === 'neutral'
+                    ? 'no change'
+                    : `${taxTone === 'positive' ? 'more' : 'less'} tax than ${year} as stored`
+                }
+                tone={inverted(taxTone)}
+                direction={directionOf(taxTone)}
+                hint="Scenario total tax minus baseline — positive means the scenario owes more."
+              />
+              <StatTile
+                label="Δ take-home"
+                value={formatCurrency(result.delta.take_home)}
+                delta={`${formatCurrency(result.baseline.totals.take_home)} → ${formatCurrency(
+                  result.scenario.totals.take_home,
+                )}`}
+                tone={takeHomeTone}
+                hint="Scenario take-home minus baseline."
+              />
+              {/* A rate is a level, not a movement: both sides, no arrow. */}
+              <StatTile
+                label="Effective rate"
+                value={`${formatPct(result.baseline.totals.effective_rate, {
+                  signed: false,
+                })} → ${formatPct(result.scenario.totals.effective_rate, { signed: false })}`}
+                hint="Overall effective rate, baseline → scenario."
+              />
+            </div>
+            <CompareTable<TaxSummaryOut>
+              rows={COMPARE_ROWS}
+              baseline={result.baseline}
+              scenario={result.scenario}
+              valueOf={summaryValue}
+              delta={(key) => deltaValue(result.delta, key)}
+              pins={sandbox.pins.map((pin) => ({
+                id: pin.id,
+                label: pin.label,
+                result: pinSide(sandbox.pinResults[pin.id]),
+              }))}
+              onUnpin={sandbox.unpin}
+            />
+            {result.warnings.length > 0 && (
+              // Advisory, never an error banner: the scenario RAN — these are the honest
+              // asterisks on what it ran with (the engine's own register).
+              <div className="tax-warnings">
+                {result.warnings.map((warning, i) => (
+                  <p key={i}>{warning}</p>
                 ))}
               </div>
-
-              {overrideLegs.length > 0 && (
-                <div className="tax-section whatif-overrides">
-                  <h3 className="eyebrow">
-                    Input overrides
-                    <InfoHint text="Absolute replacements applied AFTER the sale legs. An override addresses the household key map — on a married year a per-person line is replaced as one combined figure, the same aggregation the engine applies." />
-                  </h3>
-                  <p className="drill-hint">
-                    Overrides set a key&apos;s household value for this scenario only. A
-                    blank value clears the input (the scenario computes it as 0).
-                  </p>
-                  <div className="whatif-legs">
-                    {/* Position IS the identity, like the sale legs above. */}
-                    {overrideLegs.map((leg, index) => (
-                      <div key={index} className="whatif-form">
-                        <label htmlFor={`whatif-override-key-${index}`}>Override</label>
-                        <select
-                          id={`whatif-override-key-${index}`}
-                          className="field-input whatif-select"
-                          value={leg.key}
-                          onChange={(e) => setOverrideLeg(index, { key: e.target.value })}
-                        >
-                          {definitions.map((definition) => (
-                            <option key={definition.key} value={definition.key}>
-                              {definition.label} ({definition.key})
-                            </option>
-                          ))}
-                        </select>
-                        <AmountInput
-                          aria-label={`Override ${index + 1} value`}
-                          value={leg.value}
-                          onValueChange={(next) => setOverrideLeg(index, { value: next })}
-                          placeholder="blank clears"
-                        />
-                        <button
-                          type="button"
-                          className="button"
-                          aria-label={`Remove override ${index + 1}`}
-                          onClick={() => removeOverrideLeg(index)}
-                        >
-                          Remove
-                        </button>
-                      </div>
+            )}
+            {result.sale_details.length > 0 && (
+              <div className="tax-section">
+                <h3 className="eyebrow">Sale legs</h3>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th className="num">Shares</th>
+                      <th className="num">Price</th>
+                      <th className="num">Proceeds</th>
+                      <th className="num">Cost basis</th>
+                      <th className="num">Gain</th>
+                      <th>Term</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.sale_details.map((detail, i) => (
+                      <tr key={i}>
+                        <td>{detail.ticker}</td>
+                        <td className="num">{formatShares(detail.shares)}</td>
+                        <td className="num">{formatCurrency(detail.price)}</td>
+                        <td className="num">{formatCurrency(detail.proceeds)}</td>
+                        <td className="num">{formatCurrency(detail.cost_basis)}</td>
+                        <td className="num">{formatCurrency(detail.gain)}</td>
+                        <td>{detail.term}</td>
+                      </tr>
                     ))}
-                  </div>
-                </div>
-              )}
-
-              {scenarioEmpty && (
-                <p className="empty-note">
-                  No legs yet — add a sale or an input override to model it against{' '}
-                  {year}&apos;s stored inputs.
-                </p>
-              )}
-
-              <div className="whatif-actions">
-                <button
-                  type="button"
-                  className="button"
-                  disabled={legCount >= MAX_LEGS || nextHolding() === undefined}
-                  onClick={addSale}
-                >
-                  Add sale
-                </button>
-                <button
-                  type="button"
-                  className="button"
-                  disabled={legCount >= MAX_LEGS || nextLot() === undefined}
-                  onClick={addEsppSale}
-                >
-                  Add ESPP sale
-                </button>
-                <button
-                  type="button"
-                  className="button"
-                  disabled={nextDefinition() === undefined}
-                  onClick={addOverride}
-                >
-                  Add override
-                </button>
-                {/* Shut only with nothing to run. Deliberately NOT disabled while busy, the
-                    way a SAVE button is: a run stores nothing and is safe to repeat, and
-                    the natural move on seeing an answer is to edit a leg and ask again —
-                    refusing that mid-flight would make the card feel stuck. Two runs in
-                    flight is exactly what the seq ref is for. */}
-                <button
-                  type="button"
-                  className="button button-primary"
-                  disabled={scenarioEmpty}
-                  onClick={run}
-                >
-                  {busy ? 'Running…' : 'Run what-if'}
-                </button>
-                <span className="drill-hint">
-                  A blank price uses the latest quote. At most {MAX_LEGS} legs.
-                </span>
+                  </tbody>
+                </table>
               </div>
-
-              <FeedBanner error={error} />
-
-              {result !== null && (
-                <div className="whatif-result">
-                  {/* Every figure is the server's, rendered as it arrived (global rule 9) —
-                      the deltas are the endpoint's own subtraction of two quantized
-                      summaries, never this component's. */}
-                  <div className="kpi-row">
-                    <StatTile
-                      label="Δ total tax"
-                      value={formatCurrency(result.delta.total_tax)}
-                      delta={
-                        taxTone === 'neutral'
-                          ? 'no change'
-                          : `${taxTone === 'positive' ? 'more' : 'less'} tax than ${year} as stored`
-                      }
-                      tone={inverted(taxTone)}
-                      direction={directionOf(taxTone)}
-                      hint="Scenario total tax minus baseline — positive means the scenario owes more."
-                    />
-                    <StatTile
-                      label="Δ take-home"
-                      value={formatCurrency(result.delta.take_home)}
-                      delta={`${formatCurrency(result.baseline.totals.take_home)} → ${formatCurrency(
-                        result.scenario.totals.take_home,
-                      )}`}
-                      tone={takeHomeTone}
-                      hint="Scenario take-home minus baseline."
-                    />
-                    {/* A rate is a level, not a movement: both sides, no arrow. */}
-                    <StatTile
-                      label="Effective rate"
-                      value={`${formatPct(result.baseline.totals.effective_rate, {
-                        signed: false,
-                      })} → ${formatPct(result.scenario.totals.effective_rate, { signed: false })}`}
-                      hint="Overall effective rate, baseline → scenario."
-                    />
-                  </div>
-
-                  {result.warnings.length > 0 && (
-                    // Advisory, never an error banner: the scenario RAN — these are the
-                    // honest asterisks on what it ran with (the engine's own register).
-                    <div className="tax-warnings">
-                      {result.warnings.map((warning, i) => (
-                        <p key={i}>{warning}</p>
-                      ))}
-                    </div>
-                  )}
-
-                  {result.sale_details.length > 0 && (
-                    <div className="tax-section">
-                      <h3 className="eyebrow">Sale legs</h3>
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>Ticker</th>
-                            <th className="num">Shares</th>
-                            <th className="num">Price</th>
-                            <th className="num">Proceeds</th>
-                            <th className="num">Cost basis</th>
-                            <th className="num">Gain</th>
-                            <th>Term</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {result.sale_details.map((detail, i) => (
-                            <tr key={i}>
-                              <td>{detail.ticker}</td>
-                              <td className="num">{formatShares(detail.shares)}</td>
-                              <td className="num">{formatCurrency(detail.price)}</td>
-                              <td className="num">{formatCurrency(detail.proceeds)}</td>
-                              <td className="num">{formatCurrency(detail.cost_basis)}</td>
-                              <td className="num">{formatCurrency(detail.gain)}</td>
-                              <td>{detail.term}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {result.espp_sale_details.length > 0 && (
-                    <div className="tax-section">
-                      <h3 className="eyebrow">ESPP legs</h3>
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>Lot</th>
-                            <th className="num">Shares</th>
-                            <th className="num">Sale price</th>
-                            <th className="num">Proceeds</th>
-                            <th className="num">Ordinary income</th>
-                            <th className="num">Capital gain</th>
-                            <th>Term</th>
-                            <th>Disposition</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {result.espp_sale_details.map((detail, i) => (
-                            <tr key={i}>
-                              <td>{formatDate(detail.purchase_date)}</td>
-                              <td className="num">{formatShares(detail.shares)}</td>
-                              <td className="num">{formatCurrency(detail.sale_price)}</td>
-                              <td className="num">{formatCurrency(detail.proceeds)}</td>
-                              <td className="num">{formatCurrency(detail.ordinary_income)}</td>
-                              <td className="num">{formatCurrency(detail.capital_gain)}</td>
-                              <td>{detail.term}</td>
-                              <td>{detail.disposition}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  <div className="tax-section">
-                    <h3 className="eyebrow">Inputs this scenario moved</h3>
-                    {result.changed_inputs.length === 0 ? (
-                      <p className="empty-note">
-                        Nothing moved — this scenario computes to the stored year.
-                      </p>
-                    ) : (
-                      <ul className="whatif-changed">
-                        {result.changed_inputs.map((changed) => (
-                          // An em dash, not a colon: the label is the definition table's own
-                          // text and often carries a colon already ("LTCG: Brokerage
-                          // Gain/Loss"), which a second one would double-punctuate. The
-                          // label itself is rendered as it arrived, like every figure
-                          // beside it.
-                          <li key={changed.key}>
-                            {changed.label} — {formatCurrency(changed.before)} →{' '}
-                            {formatCurrency(changed.after)}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
+            )}
+            {result.espp_sale_details.length > 0 && (
+              <div className="tax-section">
+                <h3 className="eyebrow">ESPP legs</h3>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Lot</th>
+                      <th className="num">Shares</th>
+                      <th className="num">Sale price</th>
+                      <th className="num">Proceeds</th>
+                      <th className="num">Ordinary income</th>
+                      <th className="num">Capital gain</th>
+                      <th>Term</th>
+                      <th>Disposition</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.espp_sale_details.map((detail, i) => (
+                      <tr key={i}>
+                        <td>{formatDate(detail.purchase_date)}</td>
+                        <td className="num">{formatShares(detail.shares)}</td>
+                        <td className="num">{formatCurrency(detail.sale_price)}</td>
+                        <td className="num">{formatCurrency(detail.proceeds)}</td>
+                        <td className="num">{formatCurrency(detail.ordinary_income)}</td>
+                        <td className="num">{formatCurrency(detail.capital_gain)}</td>
+                        <td>{detail.term}</td>
+                        <td>{detail.disposition}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="tax-section">
+              <h3 className="eyebrow">Inputs this scenario moved</h3>
+              {result.changed_inputs.length === 0 ? (
+                <p className="empty-note">Nothing moved — this scenario computes to the stored year.</p>
+              ) : (
+                <ul className="whatif-changed">
+                  {result.changed_inputs.map((changed) => (
+                    // An em dash, not a colon: the label is the definition table's own text
+                    // and often carries a colon already ("LTCG: Brokerage Gain/Loss").
+                    <li key={changed.key}>
+                      {changed.label} — {formatCurrency(changed.before)} → {formatCurrency(changed.after)}
+                    </li>
+                  ))}
+                </ul>
               )}
-            </>
+            </div>
+          </div>
+        )
+      }
+      apply={
+        onApplyOverrides !== undefined && overrideCount > 0 ? (
+          <>
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => onApplyOverrides({ ...scenario.overrides }, result?.changed_inputs ?? [])}
+            >
+              Apply {overrideCount} override{overrideCount === 1 ? '' : 's'} to {year}
+            </button>
+            <span className="drill-hint">
+              Overrides only — sale and ESPP legs are hypothetical and are never applied.
+            </span>
+          </>
+        ) : undefined
+      }
+    >
+      <p className="drill-hint">
+        Sales are classified at average cost, the app&apos;s only basis method, and ESPP ordinary income
+        lands in Other W2 Income — which raises the engine&apos;s Medicare/Social Security/SDI wage bases,
+        exactly as the sheet does it. Real ESPP ordinary income is FICA-exempt; this sandbox inherits the
+        sheet&apos;s structure. Long/short is your call: imported transactions carry no dates, so the app
+        cannot verify a holding period. Nothing here is stored.
+      </p>
+      <FeedBanner error={feedError} retry={retryFeeds} />
+      {/* All three feeds land together (one Promise.all) or none does, so one null is the
+          whole "still waiting" question — and a set that FAILED leaves the banner above as
+          the card's only content: there is nothing to build a leg out of, and a form of
+          empty selects would read as "you hold nothing". */}
+      {holdings === null && feedError === null && (
+        <p className="empty-note">Loading holdings, ESPP lots and limits…</p>
+      )}
+      {holdings !== null && (
+        <>
+          <div className="whatif-legs">
+            {/* Position IS the identity here (a leg has no id of its own), and every field is
+                controlled from the URL's scenario — so an index key cannot strand a typed
+                value in a reused row (BracketsEditor's note). */}
+            {scenario.sales.map((leg, index) => {
+              const holding = holdingFor(leg.security_id)
+              const ticker = holding?.ticker ?? `#${leg.security_id}`
+              return (
+                <div key={index} className="whatif-form">
+                  <label htmlFor={`whatif-sale-security-${index}`}>Sell</label>
+                  <select
+                    id={`whatif-sale-security-${index}`}
+                    className="field-input whatif-select"
+                    value={String(leg.security_id)}
+                    onChange={(e) => setSaleSecurity(index, Number(e.target.value))}
+                  >
+                    {/* A link made before the position was sold names an id nobody holds; the
+                        row says so rather than silently reading as another ticker. */}
+                    {holding === undefined && <option value={String(leg.security_id)}>{ticker} (not held)</option>}
+                    {held.map((h) => (
+                      <option key={h.security_id} value={String(h.security_id)}>
+                        {h.ticker}
+                      </option>
+                    ))}
+                  </select>
+                  <DraftInput
+                    ariaLabel={`Sale ${index + 1} shares`}
+                    value={leg.shares}
+                    validate={(text) => {
+                      const shares = text.trim()
+                      if (shares === '' || !isPlainDecimal(shares) || !(Number(shares) > 0))
+                        return `${ticker}: shares must be a number greater than 0`
+                      // The server's own sentence (api/taxes.py's oversell 422) — one vocabulary.
+                      if (holding !== undefined && Number(shares) > Number(holding.shares))
+                        return `selling ${shares} ${ticker} — only ${holding.shares} held`
+                      return null
+                    }}
+                    onCommit={(text, immediate) => setSale(index, { shares: text.trim() }, immediate)}
+                    onInvalid={setFormError}
+                  />
+                  <DraftInput
+                    ariaLabel={`Sale ${index + 1} price`}
+                    placeholder="latest"
+                    value={leg.price ?? ''}
+                    validate={(text) => {
+                      const price = text.trim()
+                      return price !== '' && (!isPlainDecimal(price) || !(Number(price) > 0))
+                        ? `${ticker}: price must be a number greater than 0, or blank`
+                        : null
+                    }}
+                    onCommit={(text, immediate) => {
+                      const price = text.trim()
+                      patch(
+                        (s) => ({
+                          ...s,
+                          sales: s.sales.map((row, i) => {
+                            if (i !== index) return row
+                            const next = { ...row }
+                            if (price === '') delete next.price // the omit case: the latest quote
+                            else next.price = price
+                            return next
+                          }),
+                        }),
+                        immediate,
+                      )
+                    }}
+                    onInvalid={setFormError}
+                  />
+                  <div className="segmented" role="group" aria-label={`Sale ${index + 1} term`}>
+                    <button
+                      type="button"
+                      className={leg.term === 'long' ? 'active' : ''}
+                      aria-pressed={leg.term === 'long'}
+                      onClick={() => setSale(index, { term: 'long' }, true)}
+                    >
+                      Long
+                    </button>
+                    <button
+                      type="button"
+                      className={leg.term === 'short' ? 'active' : ''}
+                      aria-pressed={leg.term === 'short'}
+                      onClick={() => setSale(index, { term: 'short' }, true)}
+                    >
+                      Short
+                    </button>
+                  </div>
+                  <span className="drill-hint">{formatShares(holding?.shares)} held</span>
+                  <button
+                    type="button"
+                    className="button"
+                    aria-label={`Remove sale ${index + 1}`}
+                    onClick={() => removeSale(index)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )
+            })}
+            {scenario.espp.map((leg, index) => {
+              const lot = unsoldLots.find((row) => row.id === leg.lot_id)
+              return (
+                <div key={index} className="whatif-form">
+                  <label htmlFor={`whatif-espp-lot-${index}`}>ESPP lot</label>
+                  <select
+                    id={`whatif-espp-lot-${index}`}
+                    className="field-input whatif-select"
+                    value={String(leg.lot_id)}
+                    onChange={(e) => setEspp(index, { lot_id: Number(e.target.value) }, true)}
+                  >
+                    {lot === undefined && (
+                      <option value={String(leg.lot_id)}>Lot {leg.lot_id} (not available)</option>
+                    )}
+                    {unsoldLots.map((row) => (
+                      <option key={row.id} value={String(row.id)}>
+                        {formatDate(row.purchase_date)} — {formatShares(row.shares)} sh
+                      </option>
+                    ))}
+                  </select>
+                  <DraftInput
+                    ariaLabel={`ESPP sale ${index + 1} price`}
+                    placeholder="latest"
+                    value={leg.sale_price ?? ''}
+                    validate={(text) => {
+                      const price = text.trim()
+                      return price !== '' && (!isPlainDecimal(price) || !(Number(price) > 0))
+                        ? `Lot ${lot === undefined ? leg.lot_id : formatDate(lot.purchase_date)}: sale price must be a number greater than 0, or blank`
+                        : null
+                    }}
+                    onCommit={(text, immediate) => {
+                      const price = text.trim()
+                      patch(
+                        (s) => ({
+                          ...s,
+                          espp: s.espp.map((row, i) => {
+                            if (i !== index) return row
+                            const next = { ...row }
+                            if (price === '') delete next.sale_price
+                            else next.sale_price = price
+                            return next
+                          }),
+                        }),
+                        immediate,
+                      )
+                    }}
+                    onInvalid={setFormError}
+                  />
+                  <button
+                    type="button"
+                    className="button"
+                    aria-label={`Remove ESPP sale ${index + 1}`}
+                    onClick={() => removeEspp(index)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+
+          {overrideKeys.length > 0 && (
+            <div className="tax-section whatif-overrides">
+              <h3 className="eyebrow">
+                Input overrides
+                <InfoHint text="Absolute replacements applied AFTER the sale legs. An override addresses the household key map — on a married year a per-person line is replaced as one combined figure, the same aggregation the engine applies." />
+              </h3>
+              <p className="drill-hint">
+                Overrides set a key&apos;s household value for this scenario only. A blank value clears the
+                input (the scenario computes it as 0).
+              </p>
+              <div className="whatif-legs">
+                {overrideKeys.map((key, index) => {
+                  const label = definitions.find((d) => d.key === key)?.label ?? key
+                  return (
+                    <div key={key} className="whatif-form">
+                      <label htmlFor={`whatif-override-key-${index}`}>Override</label>
+                      <select
+                        id={`whatif-override-key-${index}`}
+                        className="field-input whatif-select"
+                        value={key}
+                        onChange={(e) => setOverrideKey(key, e.target.value)}
+                      >
+                        {!definitions.some((d) => d.key === key) && <option value={key}>{key}</option>}
+                        {definitions.map((d) => (
+                          <option key={d.key} value={d.key}>
+                            {d.label} ({d.key})
+                          </option>
+                        ))}
+                      </select>
+                      <DraftAmount
+                        ariaLabel={`Override ${index + 1} value`}
+                        value={scenario.overrides[key] ?? ''}
+                        onCommit={(canonical, immediate) => setOverrideValue(key, canonical, immediate)}
+                        onInvalid={() =>
+                          setFormError(`${label}: enter a number, or leave the value blank to clear it`)
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="button"
+                        aria-label={`Remove override ${index + 1}`}
+                        onClick={() => removeOverride(key)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           )}
+
+          {sandbox.empty && (
+            <p className="empty-note">
+              No legs yet — add a sale or an input override to model it against {year}&apos;s stored inputs.
+            </p>
+          )}
+
+          <div className="whatif-actions">
+            <button
+              type="button"
+              className="button"
+              disabled={legCount >= MAX_LEGS || nextHolding() === undefined}
+              onClick={addSale}
+            >
+              Add sale
+            </button>
+            <button
+              type="button"
+              className="button"
+              disabled={legCount >= MAX_LEGS || nextLot() === undefined}
+              onClick={addEsppSale}
+            >
+              Add ESPP sale
+            </button>
+            <button type="button" className="button" disabled={nextDefinition() === undefined} onClick={addOverride}>
+              Add override
+            </button>
+            <span className="drill-hint">
+              A blank price uses the latest quote. At most {MAX_LEGS} legs. Edits run as you type.
+            </span>
+          </div>
+          <FeedBanner error={formError} />
         </>
       )}
-    </section>
+    </SandboxPanel>
+  )
+}
+
+/** A leg text box: the typed text is control-local while focused (AmountInput's posture); a
+ *  keystroke commits valid text debounced, blur/Enter commit at once, invalid text raises the
+ *  panel's sentence and commits nothing — the URL keeps the last valid scenario. */
+function DraftInput({
+  ariaLabel,
+  placeholder,
+  value,
+  validate,
+  onCommit,
+  onInvalid,
+}: {
+  ariaLabel: string
+  placeholder?: string
+  value: string
+  validate: (text: string) => string | null
+  onCommit: (text: string, immediate: boolean) => void
+  onInvalid: (sentence: string) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const push = (text: string, immediate: boolean) => {
+    const problem = validate(text)
+    if (problem !== null) {
+      onInvalid(problem)
+      return
+    }
+    onCommit(text, immediate)
+  }
+  const settle = () => {
+    if (draft === null) return
+    push(draft, true)
+    setDraft(null)
+  }
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      settle()
+    }
+  }
+  return (
+    <input
+      aria-label={ariaLabel}
+      className="field-input"
+      inputMode="decimal"
+      placeholder={placeholder}
+      value={draft ?? value}
+      onChange={(e) => {
+        setDraft(e.target.value)
+        push(e.target.value, false)
+      }}
+      onBlur={settle}
+      onKeyDown={onKeyDown}
+    />
+  )
+}
+
+/** The override value box: AmountInput's tolerant grammar ("$1,600") canonicalized at commit
+ *  (InputsForm's boundary); a blank is the explicit null — the endpoint's "clear this input". */
+function DraftAmount({
+  ariaLabel,
+  value,
+  onCommit,
+  onInvalid,
+}: {
+  ariaLabel: string
+  value: string
+  onCommit: (canonical: string | null, immediate: boolean) => void
+  onInvalid: () => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  // AmountInput canonicalizes on ITS OWN blur, which fires before this wrapper's: the ref is
+  // what settle() reads, so the canonical text lands even though `draft` has not re-rendered.
+  const draftRef = useRef<string | null>(null)
+  const settle = () => {
+    const text = draftRef.current
+    if (text === null) return
+    draftRef.current = null
+    setDraft(null)
+    const trimmed = text.trim()
+    if (trimmed === '') {
+      onCommit(null, true)
+      return
+    }
+    if (!isAmount(trimmed)) {
+      onInvalid()
+      return
+    }
+    onCommit(canonicalAmount(trimmed), true)
+  }
+  return (
+    <span
+      onBlur={settle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          settle()
+        }
+      }}
+    >
+      <AmountInput
+        aria-label={ariaLabel}
+        value={draft ?? value}
+        placeholder="blank clears"
+        onValueChange={(next) => {
+          draftRef.current = next
+          setDraft(next)
+        }}
+      />
+    </span>
   )
 }
