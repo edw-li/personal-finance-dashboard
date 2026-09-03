@@ -16,6 +16,7 @@ read: which profile is current when no `profile_id` is given, and which year's
 contribution limits the pace rows are measured against.
 """
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Annotated
@@ -27,7 +28,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models import ContributionLimit, PaycheckProfile, Person
-from app.schemas.paycheck import BreakdownOut, PaceItemOut, ProfileIn, ProfileOut, ProfileUpdate
+from app.schemas.paycheck import (
+    BreakdownOut,
+    ChangedField,
+    PaceItemOut,
+    PreviewBlock,
+    PreviewIn,
+    PreviewLines,
+    PreviewOut,
+    PreviewPace,
+    ProfileIn,
+    ProfileOut,
+    ProfileOverrides,
+    ProfileUpdate,
+)
 from app.services.limit_check import paycheck_pace
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
@@ -35,7 +49,13 @@ from app.services.money import (
     quantize_money,
     require_reasonable_date,
 )
-from app.services.paycheck_calc import breakdown, half_up2
+from app.services.paycheck_calc import (
+    MONTHS_PER_YEAR,
+    PAYROLL_SAVING_KEYS,
+    WATERFALL_KEYS,
+    breakdown,
+    half_up2,
+)
 from app.services.people import load_people, primary_person
 
 router = APIRouter(prefix="/paycheck", tags=["paycheck"], dependencies=[Depends(get_current_user)])
@@ -81,6 +101,30 @@ HSA_COVERAGE_MESSAGE = "hsa_coverage must be 'none', 'self' or 'family'"
 # A stored profile must have an owner (person_id is NOT NULL), and only a database whose
 # roster was never seeded has nobody to default to.
 NO_PRIMARY_PERSON_MESSAGE = "household has no primary person"
+
+ONE = Decimal("1")
+# Every field a preview may override, in the order `changed` reports them, with the labels
+# the sandbox prints (the profile form's own words — percents named as percents).
+SCENARIO_FIELDS = (
+    "annual_salary",
+    "pay_periods_per_year",
+    *PCT_FIELDS,
+    "dental_vision_per_check",
+    "hsa_per_check",
+    "hsa_coverage",
+)
+FIELD_LABELS = {
+    "annual_salary": "Annual salary",
+    "pay_periods_per_year": "Pay periods per year",
+    "trad_401k_pct": "Traditional 401(k) %",
+    "roth_401k_pct": "Roth 401(k) %",
+    "after_tax_401k_pct": "After-tax 401(k) %",
+    "espp_pct": "ESPP %",
+    "withholding_pct": "Withholding %",
+    "dental_vision_per_check": "Dental & vision",
+    "hsa_per_check": "HSA",
+    "hsa_coverage": "HSA coverage",
+}
 
 
 def _positive_salary(value: Decimal, field: str) -> Decimal:
@@ -337,59 +381,214 @@ async def _default_profile(db: AsyncSession, person_id: int, today: date) -> Pay
     )
 
 
+async def _resolve_breakdown_profile(
+    db: AsyncSession, profile_id: int | None, person_id: int | None, today: date
+) -> PaycheckProfile:
+    """WHICH profile a breakdown or a preview is about — the one rule, two doors.
+
+    An explicit row wins outright: `person_id` only names WHOSE profile in force to pick,
+    and there is nothing to pick when the row itself is named. Absent both = the primary's
+    profile in force. The roster-less answer is the legacy 404, word for word.
+
+    Also the stored-data guard, and the one thing a read CAN reject: every writer bounds
+    `pay_periods_per_year`, but the API's bounds cannot see a row put there by hand, and
+    `gross = annual_salary / periods` turns a stored 0 into a DivisionByZero 500. Only the
+    floor is fenced: an over-large period count computes fine.
+    """
+    if profile_id is not None:
+        profile = await _get_profile(db, profile_id)
+    else:
+        owner = await _resolve_person_id(db, person_id)  # absent = the primary person
+        profile = None if owner is None else await _default_profile(db, owner, today)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="no paycheck profiles")
+    if profile.pay_periods_per_year < MIN_PAY_PERIODS:
+        raise HTTPException(status_code=422, detail=PAY_PERIODS_MESSAGE)
+    return profile
+
+
+async def _limits_for(db: AsyncSession, year: int) -> dict[str, Decimal]:
+    """This year's entered caps. No limits entered yet is the NORMAL first-run state, not an
+    error: paycheck_pace answers with null caps and the page offers a link to Settings."""
+    return {
+        row.key: row.value
+        for row in (
+            await db.execute(select(ContributionLimit).where(ContributionLimit.year == year))
+        ).scalars()
+    }
+
+
+def _advisories(profile, net_pay: Decimal) -> list[str]:
+    """Advisory only, never a 422: each pct is individually legal, and the sheet itself
+    lets you model an over-committed check. Judged on the DISPLAYED net, so the warning
+    can never contradict the number next to it: a -1e-9 net renders as 0.00 and says
+    nothing."""
+    warnings: list[str] = []
+    if sum((getattr(profile, name) for name in CONTRIBUTION_FIELDS), ZERO) > 1:
+        warnings.append(CONTRIBUTIONS_WARNING)
+    if net_pay < 0:
+        warnings.append(NEGATIVE_NET_WARNING)
+    return warnings
+
+
+@dataclass(frozen=True)
+class ScenarioProfile:
+    """A profile with overrides applied — "anything with its columns" for
+    `paycheck_calc.breakdown` and `limit_check.paycheck_pace`. Never an ORM row: a preview
+    must not dirty the session (the purity walk in tests/test_sandbox_purity.py)."""
+
+    annual_salary: Decimal
+    pay_periods_per_year: int
+    trad_401k_pct: Decimal
+    roth_401k_pct: Decimal
+    after_tax_401k_pct: Decimal
+    espp_pct: Decimal
+    withholding_pct: Decimal
+    dental_vision_per_check: Decimal
+    hsa_per_check: Decimal
+    hsa_coverage: str
+
+
+def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> ScenarioProfile:
+    """The base row's values with every PROVIDED override validated by the writers' own
+    helpers — one rule, one sentence per field, on both sides of the wire. Raises before it
+    returns anything."""
+    periods = (
+        base.pay_periods_per_year
+        if overrides.pay_periods_per_year is None
+        else overrides.pay_periods_per_year
+    )
+    if not MIN_PAY_PERIODS <= periods <= MAX_PAY_PERIODS:
+        raise HTTPException(status_code=422, detail=PAY_PERIODS_MESSAGE)
+    pcts = {
+        name: (
+            getattr(base, name)
+            if getattr(overrides, name) is None
+            else _validated_pct(getattr(overrides, name), name)
+        )
+        for name in PCT_FIELDS
+    }
+    return ScenarioProfile(
+        annual_salary=(
+            base.annual_salary
+            if overrides.annual_salary is None
+            else _positive_salary(overrides.annual_salary, "annual_salary")
+        ),
+        pay_periods_per_year=periods,
+        dental_vision_per_check=(
+            base.dental_vision_per_check
+            if overrides.dental_vision_per_check is None
+            else _non_negative_per_check(
+                overrides.dental_vision_per_check, "dental_vision_per_check"
+            )
+        ),
+        hsa_per_check=(
+            base.hsa_per_check
+            if overrides.hsa_per_check is None
+            else _non_negative_per_check(overrides.hsa_per_check, "hsa_per_check")
+        ),
+        hsa_coverage=(
+            base.hsa_coverage
+            if overrides.hsa_coverage is None
+            else _validated_coverage(overrides.hsa_coverage)
+        ),
+        **pcts,
+    )
+
+
+def _lines(profile, scale: Decimal) -> dict[str, Decimal]:
+    """The eleven lines plus `savings`, scaled on the FULL-precision chain and quantized
+    once — so monthly.net_pay is exactly BreakdownOut.monthly_net for the same profile."""
+    raw = breakdown(profile)
+    chain = {key: raw[key] for key in WATERFALL_KEYS}
+    chain["savings"] = sum((raw[key] for key in PAYROLL_SAVING_KEYS), ZERO)
+    return {key: half_up2(value * scale) for key, value in chain.items()}
+
+
+def _block(base, scenario, scale_of) -> PreviewBlock:
+    """Baseline · scenario · delta at one cadence. Each side is scaled by ITS OWN period
+    count (a scenario may change the cadence), and every delta is the difference of two
+    already-quantized figures — the what-if endpoint's rule."""
+    before = _lines(base, scale_of(base))
+    after = _lines(scenario, scale_of(scenario))
+    return PreviewBlock(
+        baseline=PreviewLines(**before),
+        scenario=PreviewLines(**after),
+        delta=PreviewLines(**{key: after[key] - before[key] for key in before}),
+    )
+
+
+def _text(value) -> str:
+    # `format(d, "f")`, never str(): a zero comes back from the driver as Decimal("0E-9").
+    return format(value, "f") if isinstance(value, Decimal) else str(value)
+
+
 @router.get("/breakdown", response_model=BreakdownOut)
 async def get_breakdown(
     profile_id: IdQuery = None,
     person_id: IdQuery = None,
     db: AsyncSession = Depends(get_db),
 ) -> BreakdownOut:
-    # The ONLY clock read in this module, and it now decides TWO things: which profile is
-    # in force, and which year's contribution limits the pace rows are measured against.
-    # One read, so a request that straddles midnight on 31 December cannot pair January's
-    # profile with December's caps.
+    # The ONLY clock read for this route, deciding TWO things: which profile is in force,
+    # and which year's contribution limits the pace rows are measured against. One read, so
+    # a request that straddles midnight on 31 December cannot pair January's profile with
+    # December's caps.
     today = date.today()
-    if profile_id is not None:
-        # An explicit row wins outright: `person_id` only names WHOSE profile in force to
-        # pick, and there is nothing to pick when the row itself is named.
-        profile = await _get_profile(db, profile_id)
-    else:
-        owner = await _resolve_person_id(db, person_id)  # absent = the primary person
-        profile = None if owner is None else await _default_profile(db, owner, today)
-        if profile is None:
-            # Also the roster-less answer: person_id is NOT NULL, so a database with no
-            # people has no profiles either — the legacy 404, word for word.
-            raise HTTPException(status_code=404, detail="no paycheck profiles")
-
-    # The stored-data guard, and the one thing this read CAN reject: every writer bounds
-    # `pay_periods_per_year`, but the API's bounds cannot see a row put there by hand (or
-    # by a future importer), and `gross = annual_salary / periods` turns a stored 0 into a
-    # DivisionByZero 500. A GET must degrade instead — same rule, same words as the write
-    # side. Only the floor is fenced: an over-large period count computes fine.
-    if profile.pay_periods_per_year < MIN_PAY_PERIODS:
-        raise HTTPException(status_code=422, detail=PAY_PERIODS_MESSAGE)
-
+    profile = await _resolve_breakdown_profile(db, profile_id, person_id, today)
     lines = {name: half_up2(value) for name, value in breakdown(profile).items()}
-    warnings: list[str] = []
-    # Advisory only, never a 422: each pct is individually legal, and the sheet itself
-    # lets you model an over-committed check (the result is simply a negative net).
-    if sum((getattr(profile, name) for name in CONTRIBUTION_FIELDS), ZERO) > 1:
-        warnings.append(CONTRIBUTIONS_WARNING)
-    # Judged on the DISPLAYED net, so the warning can never contradict the number next to
-    # it: a -1e-9 net renders as 0.00 and says nothing.
-    if lines["net_pay"] < 0:
-        warnings.append(NEGATIVE_NET_WARNING)
-    limits = {
-        row.key: row.value
-        for row in (
-            await db.execute(select(ContributionLimit).where(ContributionLimit.year == today.year))
-        ).scalars()
-    }
-    # No limits entered yet is the NORMAL first-run state, not an error: paycheck_pace
-    # answers with null caps and the page offers a link to Settings.
+    warnings = _advisories(profile, lines["net_pay"])
+    limits = await _limits_for(db, today.year)
     pace = [
         PaceItemOut.model_validate(item)
         for item in paycheck_pace(profile, limits, profile.hsa_coverage)
     ]
     return BreakdownOut(
         profile=ProfileOut.model_validate(profile), warnings=warnings, pace=pace, **lines
+    )
+
+
+@router.post("/preview", response_model=PreviewOut)
+async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> PreviewOut:
+    """The Paycheck sandbox's one request (2026-09-03 planning-sandboxes spec §13): the
+    base profile — selected exactly as GET /breakdown selects it — against the same profile
+    with `overrides` applied. NOTHING is stored: SELECTs only, no add/flush/commit anywhere
+    in this call graph (tests/test_sandbox_purity.py proves it). `today` is read once for
+    both the profile in force and the limits year, like the GET."""
+    today = date.today()
+    base = await _resolve_breakdown_profile(db, body.profile_id, body.person_id, today)
+    scenario = _scenario_profile(base, body.overrides)
+
+    per_check = _block(base, scenario, lambda p: ONE)
+    monthly = _block(base, scenario, lambda p: Decimal(p.pay_periods_per_year) / MONTHS_PER_YEAR)
+    annual = _block(base, scenario, lambda p: Decimal(p.pay_periods_per_year))
+
+    limits = await _limits_for(db, today.year)
+    pace = PreviewPace(
+        baseline=[
+            PaceItemOut.model_validate(item)
+            for item in paycheck_pace(base, limits, base.hsa_coverage)
+        ],
+        scenario=[
+            PaceItemOut.model_validate(item)
+            for item in paycheck_pace(scenario, limits, scenario.hsa_coverage)
+        ],
+    )
+    changed = [
+        ChangedField(
+            key=name,
+            label=FIELD_LABELS[name],
+            before=_text(getattr(base, name)),
+            after=_text(getattr(scenario, name)),
+        )
+        for name in SCENARIO_FIELDS
+        if getattr(base, name) != getattr(scenario, name)
+    ]
+    return PreviewOut(
+        profile=ProfileOut.model_validate(base),
+        per_check=per_check,
+        monthly=monthly,
+        annual=annual,
+        pace=pace,
+        changed=changed,
+        warnings=_advisories(scenario, per_check.scenario.net_pay),
     )
