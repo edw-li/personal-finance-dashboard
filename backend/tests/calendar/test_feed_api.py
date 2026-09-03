@@ -5,9 +5,14 @@ ceiling, plaintext-once tokens."""
 import hashlib
 from datetime import UTC, date, datetime, timedelta
 
-import icalendar
+import pytest
 
 from app.models import CalendarFeedToken
+
+# Module level, so a venv built from requirements.txt alone SKIPS this file instead of
+# failing collection: `icalendar` is a requirements-DEV pin (the feed smoke parser), and a
+# test run that cannot even collect is indistinguishable from a broken feed.
+icalendar = pytest.importorskip("icalendar")
 
 CALENDAR = "/api/v1/calendar"
 TODAY = date(2026, 8, 24)
@@ -170,8 +175,9 @@ async def test_feed_is_rate_limited_per_ip(client):
 async def test_feed_parses_with_icalendar_and_revalidates(client, auth_client, monkeypatch):
     """A real RFC 5545 parser, not more of our own assertions: the folding, escaping and
     CRLF the hand-rolled renderer emits have to survive the library calendar apps use.
-    `icalendar` is a pinned dev requirement, so a missing install is a hard error here
-    rather than a silent skip that would let a broken feed ship."""
+    `icalendar` is a pinned dev requirement (`requirements-dev.txt`), so the every-night run
+    always executes this; the module-level `importorskip` only spares a venv that installed
+    the app's runtime requirements alone, where the alternative is a collection error."""
     freeze_today(monkeypatch)
     await auth_client.post(
         f"{CALENDAR}/events",

@@ -1168,6 +1168,44 @@ describe('SettingsPage — anchored arrival from the palette', () => {
     }
   })
 
+  it('still lands and rings where there is no ResizeObserver at all', async () => {
+    // The stub above is this file's convenience, not a fact about every runtime: an older
+    // browser (or a jsdom test in some other file that renders this page under a hash) has
+    // no ResizeObserver, and an unguarded `new` would turn the arrival into a crash. The
+    // chase is the optional part; landing on the card and ringing it is not.
+    vi.stubGlobal('ResizeObserver', undefined)
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    })
+    try {
+      render(
+        <MemoryRouter initialEntries={['/settings#calendar']}>
+          <SettingsPage />
+        </MemoryRouter>,
+      )
+      await waitFor(() =>
+        expect(document.getElementById('calendar')?.classList.contains('is-highlighted')).toBe(
+          true,
+        ),
+      )
+      expect(scrollIntoView).toHaveBeenCalled()
+      expect(resizeObservers).toHaveLength(0)
+      // And it still lets go — the timer, not the observer, is what un-rings the card.
+      await waitFor(
+        () =>
+          expect(document.getElementById('calendar')?.classList.contains('is-highlighted')).toBe(
+            false,
+          ),
+        { timeout: 2500 },
+      )
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
   it('keeps the ring on the card a Restore… link aimed at, after the arrival is consumed', async () => {
     const fresh: SnapshotEntry = {
       name: 'finance-export-20260904-091500.zip',

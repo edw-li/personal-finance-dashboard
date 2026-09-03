@@ -39,7 +39,8 @@ Same stack and the same dev seed credentials. A merge lane runs its own pair of 
 the shared ones so the walk is judged on the lane's build, not on whatever owns port 8000:
 
 ```bash
-OUT="$SCRATCH/calendar-smoke" && mkdir -p "$OUT"
+# Anywhere outside the repo; the C7 recipe above writes to the gitignored scratchpad/ instead.
+OUT=/tmp/calendar-smoke && mkdir -p "$OUT"
 # in the worktree: uvicorn on 8010, vite on 5174
 (cd backend && SCHEDULER_ENABLED=0 .venv/Scripts/python.exe -m uvicorn app.main:app --port 8010 &)
 npm run dev -- --port 5174 &
@@ -51,8 +52,19 @@ TOKEN_FILE=$OUT/token.txt SMOKE_OUT=$OUT APP_BASE=http://localhost:5174 \
 ```
 
 Prints `CALENDAR SMOKE OK`, or exits 1 listing every problem. Env: `SMOKE_OUT`, `TOKEN_FILE`,
-`APP_BASE`, `API_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`, `SKIP_ACTIONS`. It writes
-to the **dev** database on purpose — that is the point of the write walk — and undoes
-everything it writes: the custom events are deleted, the override is reopened and its row is
-dropped through `DELETE /calendar/overrides/{key}`, and the feed token is revoked. `PATCH
-/prefs` is stubbed, so a run never rewrites the account's settings.
+`APP_BASE`, `API_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`, `SKIP_ACTIONS`.
+**`PLAYWRIGHT_CORE` is required off this box**: playwright-core is not a repo dependency, so
+the driver falls back to one author's npx cache (`…/npm-cache/_npx/<hash>/node_modules/playwright-core`)
+— a path that exists nowhere else. Point it at any local install (`npx --no-save playwright-core`
+leaves one in the npx cache; `npm i --no-save playwright-core` leaves one in `node_modules`).
+`EDGE_PATH` is the same kind of default.
+
+The driver writes to the **dev** database on purpose — that is the point of the write walk —
+and undoes everything it writes, twice over. The walk deletes its own events, reopens the
+override and revokes the feed link through the UI, because doing so is part of what it proves;
+then a sweep in a `finally` settles the same three things straight against the API, so a
+Playwright timeout halfway through still leaves the database as it was found. The sweep only
+touches rows it can name (its own event labels, a feed link labelled `smoke` created inside
+this run) and it puts an override row the walk found back exactly as it was rather than
+deleting it. Anything it cannot settle is reported and fails the run. `PATCH /prefs` is
+stubbed, so a run never rewrites the account's settings.

@@ -137,10 +137,14 @@ export default function SettingsPage() {
     // fold — 400 ms after arriving, leaving the user staring at some other card. Re-assert
     // the scroll on every layout change, and let go with the ring: the arrival is live for
     // exactly as long as it is being shown, and a shift after that is the user's own.
-    const observer = new ResizeObserver(land)
-    observer.observe(document.body)
+    // Guarded like the scrollIntoView call above, and for the same reason: jsdom ships no
+    // ResizeObserver, so an unguarded `new` turns any test that renders this page under a
+    // hash into a crash unless it remembers the stub. Without the API the arrival still
+    // lands and still rings — it just does not chase the cards growing above it.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(land)
+    observer?.observe(document.body)
     const timer = setTimeout(() => {
-      observer.disconnect()
+      observer?.disconnect()
       el.classList.remove('is-highlighted')
     }, 1200)
     // The class is ours to take back, not only the timer: a re-run (or an unmount) before
@@ -148,7 +152,7 @@ export default function SettingsPage() {
     // card ringed for good — which is what stripping an arrival param used to cause, since
     // the strip re-rendered this page with a hash-less location.
     return () => {
-      observer.disconnect()
+      observer?.disconnect()
       clearTimeout(timer)
       el.classList.remove('is-highlighted')
     }
