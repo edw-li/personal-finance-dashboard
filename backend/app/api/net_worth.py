@@ -267,10 +267,19 @@ async def timeseries(
 @router.get("/summary", response_model=SummaryOut)
 async def summary(
     owner: OwnerQuery = None,
+    # Annotated + a plain None default, like OwnerQuery above and NOT `= Query(default=None)`:
+    # assistant_context calls this function directly, and a params.Query left sitting in the
+    # default would sail past `is None` and reach the 404 formatter as a non-date.
+    month: Annotated[date | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
 ) -> SummaryOut:
+    """The latest month by default; `month=YYYY-MM-01` views an earlier snapshot with ITS
+    month-over-month delta (against the snapshot immediately before it), for the ribbon's
+    click-to-view (2026-09-03 shell spec §7). The charts are unaffected — they span all months."""
     snapshots, accounts, balances = await load_balance_matrix(db, _owner_filter(owner))
     if not snapshots:
+        if month is not None:
+            raise HTTPException(status_code=404, detail=f"no snapshot for {month:%Y-%m}")
         return SummaryOut(
             month=None,
             net_worth=None,
@@ -279,8 +288,14 @@ async def summary(
             groups=[],
             owner_totals=[],
         )
-    latest = snapshots[-1]
-    previous = snapshots[-2] if len(snapshots) > 1 else None
+    if month is None:
+        index = len(snapshots) - 1
+    else:
+        index = next((i for i, snap in enumerate(snapshots) if snap.month == month), -1)
+        if index == -1:
+            raise HTTPException(status_code=404, detail=f"no snapshot for {month:%Y-%m}")
+    latest = snapshots[index]
+    previous = snapshots[index - 1] if index > 0 else None
     latest_nw = net_worth_for(latest.id, accounts, balances)
     latest_groups = group_totals_for(latest.id, accounts, balances)
     prev_nw = net_worth_for(previous.id, accounts, balances) if previous else None

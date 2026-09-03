@@ -644,3 +644,41 @@ async def test_owner_series_on_a_peopleless_database_is_one_joint_row(auth_clien
     assert body["owner_series"] == [
         {"person_id": None, "name": None, "values": ["900.00", "1120.00", "1500.00"]}
     ]
+
+
+async def test_summary_month_param_returns_that_month_and_its_own_delta(auth_client, db):
+    # Three months: 100 → 150 → 200 in one taxable account.
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    db.add(acct)
+    await db.flush()
+    snaps = [NetWorthSnapshot(month=date(2026, m, 1)) for m in (1, 2, 3)]
+    db.add_all(snaps)
+    await db.flush()
+    for snap, amount in zip(snaps, ("100.00", "150.00", "200.00"), strict=True):
+        db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal(amount)))
+    await db.commit()
+
+    latest = (await auth_client.get("/api/v1/net-worth/summary")).json()
+    assert latest["month"] == "2026-03-01"
+    assert latest["net_worth"] == "200.00"
+    assert latest["mom_delta"] == "50.00"
+
+    viewed = (await auth_client.get("/api/v1/net-worth/summary?month=2026-02-01")).json()
+    assert viewed["month"] == "2026-02-01"
+    assert viewed["net_worth"] == "150.00"
+    assert viewed["mom_delta"] == "50.00"  # against January, not March
+
+    first = (await auth_client.get("/api/v1/net-worth/summary?month=2026-01-01")).json()
+    assert first["mom_delta"] is None  # nothing before the first month
+
+
+async def test_summary_month_param_404s_for_a_month_with_no_snapshot(auth_client, db):
+    acct = Account(name="Brokerage", slug="brokerage", group="taxable", sort_order=1)
+    snap = NetWorthSnapshot(month=date(2026, 1, 1))
+    db.add_all([acct, snap])
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snap.id, account_id=acct.id, balance=Decimal("1.00")))
+    await db.commit()
+    resp = await auth_client.get("/api/v1/net-worth/summary?month=2025-12-01")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "no snapshot for 2025-12"
