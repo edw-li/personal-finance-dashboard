@@ -9,6 +9,8 @@ from sqlalchemy import select
 
 from app.models import (
     AppSetting,
+    CardCredit,
+    CreditCard,
     EsppLot,
     EsppOffering,
     LatestPrice,
@@ -18,7 +20,12 @@ from app.models import (
     PositionTransaction,
     RsuGrant,
     Security,
+    SecurityDividendEvent,
+    TaxBracket,
+    TaxInput,
+    TaxYear,
 )
+from app.seed import seed_tax_definitions
 from tests.portfolio_factories import acct
 
 CALENDAR = "/api/v1/calendar"
@@ -217,6 +224,7 @@ async def test_calendar_composes_the_whole_household_datebook(auth_client, db, m
         "dividend",
         "payroll",
         "tax",
+        "card",
         "ritual",
         "custom",
     ]
@@ -707,3 +715,178 @@ async def test_custom_event_money_validation(auth_client):
     ).status_code == 422
     too_big = await auth_client.post(f"{CALENDAR}/events", json={**base, "amount": "10000000000"})
     assert too_big.status_code == 422  # Numeric(12,2) fence via quantize_money
+
+
+async def test_calendar_card_events_and_the_card_health_row(auth_client, db, monkeypatch):
+    freeze_today(monkeypatch)
+    venture = CreditCard(
+        name="Venture X",
+        slug="venture-x",
+        annual_fee=Decimal("395.00"),
+        rewards_currency="miles",
+        point_value_cents=Decimal("1.7"),
+        opened_on=date(2024, 5, 12),
+    )
+    undated = CreditCard(
+        name="SavorOne",
+        slug="savorone",
+        annual_fee=Decimal("0"),
+        rewards_currency="cash",
+        point_value_cents=Decimal("1"),
+        opened_on=None,
+    )
+    archived = CreditCard(
+        name="Old",
+        slug="old",
+        annual_fee=Decimal("95"),
+        rewards_currency="cash",
+        point_value_cents=Decimal("1"),
+        opened_on=date(2020, 1, 15),
+        is_active=False,
+    )
+    db.add_all([venture, undated, archived])
+    await db.flush()
+    counted = CardCredit(
+        card_id=venture.id,
+        label="$300 travel credit",
+        annual_value=Decimal("300"),
+        counts=True,
+        reset_cadence="anniversary",
+    )
+    db.add_all(
+        [
+            counted,
+            # counts=False is the "I never use this" toggle - it earns no calendar event.
+            CardCredit(
+                card_id=venture.id, label="ignored", annual_value=Decimal("50"), counts=False
+            ),
+        ]
+    )
+    await db.flush()
+    venture_id, credit_id = venture.id, counted.id
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-05-01&end=2026-05-31")).json()
+    cards = [e for e in body["events"] if e["source"] == "card"]
+    assert [(e["type"], e["date"], e["key"], e["amount"], e["direction"]) for e in cards] == [
+        ("card_anniversary", "2026-05-12", f"card:{venture_id}:2026-05-12", None, "neutral"),
+        ("card_credit", "2026-05-12", f"card:credit-{credit_id}:2026-05-12", "300.00", "neutral"),
+        ("card_fee", "2026-05-12", f"card:{venture_id}-fee:2026-05-12", "395.00", "out"),
+    ]
+    assert cards[0]["detail"] == "Year 2 with Venture X — falls off 5/24"
+    # The archived card is filtered out; SavorOne has no opened date, so it produces nothing
+    # and is named in the footer instead.
+    assert [s["source"] for s in body["sources"]] == [
+        "rsu",
+        "espp",
+        "dividend",
+        "payroll",
+        "tax",
+        "card",
+        "ritual",
+        "custom",
+    ]
+    assert next(s for s in body["sources"] if s["source"] == "card") == {
+        "source": "card",
+        "status": "partial",
+        "note": "1 card(s) without an opened date — no fee or anniversary events",
+    }
+
+
+async def test_calendar_tax_amounts_ride_the_withholding_tracker(auth_client, db, monkeypatch):
+    freeze_today(monkeypatch)
+    # Without a 2026 tax year: dates only, and the footer says why.
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    q3 = next(e for e in body["events"] if e["key"] == "tax:2026-q3:2026-09-15")
+    assert (q3["amount"], q3["basis"]) == (None, "scheduled")
+    assert next(s for s in body["sources"] if s["source"] == "tax") == {
+        "source": "tax",
+        "status": "partial",
+        "note": "no 2026 tax year entered — dates only",
+    }
+
+    # A priceable 2026: one W-2 input, flat brackets, a semi-monthly profile (the shape
+    # test_withholding_api seeds).
+    await seed_tax_definitions(db)
+    db.add(TaxYear(year=2026, filing_status="single"))
+    await db.flush()
+    db.add(TaxInput(year=2026, key="latest_w2_income", value=Decimal("240000")))
+    for name, table in {
+        "federal": [("0.1000", "0.00")],
+        "state": [("0.0500", "0.00")],
+        "medicare": [("0.0145", "0.00")],
+        "social_security": [("0.0620", "0.00"), ("0.0000", "168600.00")],
+        "disability": [("0.0110", "0.00")],
+        "capital_gains": [("0.1500", "0.00")],
+    }.items():
+        for index, (rate, threshold) in enumerate(table, start=1):
+            db.add(
+                TaxBracket(
+                    year=2026,
+                    jurisdiction=name,
+                    bracket_index=index,
+                    rate=Decimal(rate),
+                    threshold=Decimal(threshold),
+                )
+            )
+    db.add(
+        PaycheckProfile(
+            person_id=(await seed_primary(db)).id,
+            effective_date=date(2025, 1, 1),
+            annual_salary=Decimal("240000"),
+            withholding_pct=Decimal("0.05"),
+        )
+    )
+    await db.commit()
+
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    q3 = next(e for e in body["events"] if e["key"] == "tax:2026-q3:2026-09-15")
+    # 5% withholding against a ~15% liability: a shortfall, split across Sep 15 and Jan 15.
+    assert q3["basis"] == "estimated" and Decimal(q3["amount"]) > 0
+    assert q3["detail"].startswith("Shortfall $")
+    assert "current-year leg — $" in q3["detail"]
+    assert next(s for s in body["sources"] if s["source"] == "tax")["status"] == "ok"
+
+
+async def test_calendar_prices_ex_dividends_from_the_latest_stored_per_share(
+    auth_client, db, monkeypatch
+):
+    freeze_today(monkeypatch)
+    nvda = Security(
+        ticker="NVDA", name="NVDA Inc", holding_type="stock", next_ex_div_date=date(2026, 9, 3)
+    )
+    db.add(nvda)
+    await db.flush()
+    db.add(
+        PositionTransaction(
+            security_id=nvda.id,
+            portfolio_account=acct("RH Taxable"),
+            type="buy",
+            shares=Decimal("10"),
+            price=Decimal("100"),
+            sort_index=10,
+        )
+    )
+    db.add_all(
+        [
+            SecurityDividendEvent(
+                security_id=nvda.id, ex_date=date(2026, 3, 4), per_share=Decimal("0.010000")
+            ),
+            # The announcement carries no amount, so the LATEST stored per-share prices it.
+            SecurityDividendEvent(
+                security_id=nvda.id, ex_date=date(2026, 6, 3), per_share=Decimal("0.020000")
+            ),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get(f"{CALENDAR}?start=2026-09-01&end=2026-09-30")).json()
+    [ex] = [e for e in body["events"] if e["type"] == "ex_dividend"]
+    assert (ex["amount"], ex["basis"], ex["detail"]) == (
+        "0.20",
+        "estimated",
+        "NVDA · 10 sh × $0.020000",
+    )
+    assert next(s for s in body["sources"] if s["source"] == "dividend") == {
+        "source": "dividend",
+        "status": "ok",
+        "note": None,
+    }

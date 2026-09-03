@@ -1,7 +1,7 @@
 """The calendar router (2026-09-03 calendar spec §5, §13, §16): LOADERS only — every
 rule lives in services/calendar, driven here as plain values. Regions, in order:
 
-  1. loaders  → `_load_sources` (Lane D appends card / tax / dividend facts HERE)
+  1. loaders  → `_load_sources` (+ `_card_facts`, `_tax_facts`, `_held_ex_dividends`)
   2. `_compose_for` + GET /calendar
   3. custom events CRUD
   4. overrides PUT/DELETE
@@ -20,9 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.app_settings import read_update_due_day
 from app.api.deps import get_current_user
 from app.api.espp import _espp_quote
+from app.api.taxes import withholding_estimate
 from app.database import get_db
 from app.models import (
     CalendarEventOverride,
+    CardCredit,
+    CreditCard,
     CustomEvent,
     EsppLot,
     EsppOffering,
@@ -33,6 +36,7 @@ from app.models import (
     PositionTransaction,
     RsuGrant,
     Security,
+    SecurityDividendEvent,
 )
 from app.schemas.calendar import (
     CalendarEventOut,
@@ -45,10 +49,13 @@ from app.schemas.calendar import (
     SourceHealthOut,
 )
 from app.services import rsu_vesting
+from app.services.business_days import next_business_day
 from app.services.calendar import Sources, compose
+from app.services.calendar.generators.cards import CardCreditFacts, CardFacts
 from app.services.calendar.generators.custom import CustomRow
 from app.services.calendar.generators.dividends import ExDividend
 from app.services.calendar.generators.payroll import PaydaySource
+from app.services.calendar.generators.taxes import TaxFacts
 from app.services.calendar.model import KEY_RE, Event, Window
 from app.services.calendar.overrides import Override
 from app.services.espp_calc import OfferingInfo, StoredPeriod
@@ -84,8 +91,9 @@ def _health(source: str, status: str, note: str | None = None) -> SourceHealthOu
 async def _held_ex_dividends(db: AsyncSession) -> list[ExDividend]:
     """(ticker, next_ex_div_date, held shares) for ACTIVE securities carrying an
     announcement that are actually HELD — folded shares > 0 summed across accounts
-    (allocation()'s zero-share rule, SHARE_Q quantize included so dust does not count).
-    Lane D adds the per-share estimate."""
+    (allocation()'s zero-share rule, SHARE_Q quantize included so dust does not count),
+    priced at the LATEST stored per-share for the security (the announcement itself carries
+    only a date, so the last declared dividend is the only estimate available)."""
     candidates = list(
         (
             await db.execute(
@@ -109,11 +117,29 @@ async def _held_ex_dividends(db: AsyncSession) -> list[ExDividend]:
     shares_by_sec: dict[int, Decimal] = {}
     for pos in fold_transactions(txns).values():
         shares_by_sec[pos.security_id] = shares_by_sec.get(pos.security_id, ZERO) + pos.shares
+    ids = [security.id for security in candidates]
+    # Ascending by ex_date, so building the dict keeps the LATEST per-share per security.
+    latest_per_share: dict[int, Decimal] = dict(
+        (
+            await db.execute(
+                select(SecurityDividendEvent.security_id, SecurityDividendEvent.per_share)
+                .where(SecurityDividendEvent.security_id.in_(ids))
+                .order_by(SecurityDividendEvent.security_id, SecurityDividendEvent.ex_date)
+            )
+        ).all()
+    )
     held: list[ExDividend] = []
     for security in candidates:
         shares = shares_by_sec.get(security.id, ZERO).quantize(SHARE_Q, rounding=ROUND_HALF_UP)
         if shares > 0:
-            held.append(ExDividend(security.ticker, security.next_ex_div_date, shares, None))
+            held.append(
+                ExDividend(
+                    security.ticker,
+                    security.next_ex_div_date,
+                    shares,
+                    latest_per_share.get(security.id),
+                )
+            )
     return held
 
 
@@ -173,6 +199,105 @@ async def _payday_sources(
     return sources, _health("payroll", "ok")
 
 
+async def _card_facts(db: AsyncSession) -> tuple[list[CardFacts], SourceHealthOut]:
+    """Active cards with their COUNTED credits. A card without `opened_on` still resets its
+    calendar-cadence credits but has no fee or anniversary — the footer counts those."""
+    cards = list(
+        (
+            await db.execute(
+                select(CreditCard)
+                .where(CreditCard.is_active.is_(True))
+                .order_by(CreditCard.sort_order, CreditCard.id)
+            )
+        ).scalars()
+    )
+    if not cards:
+        return [], _health("card", "off", "no cards entered")
+    credits_by_card: dict[int, list[CardCreditFacts]] = {}
+    for credit in (
+        await db.execute(
+            select(CardCredit)
+            .where(
+                CardCredit.card_id.in_([card.id for card in cards]),
+                CardCredit.counts.is_(True),
+            )
+            .order_by(CardCredit.id)
+        )
+    ).scalars():
+        credits_by_card.setdefault(credit.card_id, []).append(
+            CardCreditFacts(credit.id, credit.label, credit.annual_value, credit.reset_cadence)
+        )
+    facts = [
+        CardFacts(
+            card.id,
+            card.name,
+            card.annual_fee,
+            card.opened_on,
+            tuple(credits_by_card.get(card.id, [])),
+        )
+        for card in cards
+    ]
+    undated = sum(1 for card in cards if card.opened_on is None)
+    if undated:
+        return facts, _health(
+            "card",
+            "partial",
+            f"{undated} card(s) without an opened date — no fee or anniversary events",
+        )
+    return facts, _health("card", "ok")
+
+
+async def _tax_facts(
+    db: AsyncSession, window: Window, today: date
+) -> tuple[dict[int, TaxFacts], SourceHealthOut]:
+    """ONE withholding computation for the current year when the window holds future dates,
+    plus the prior year's when Apr 15 (the filing) is ahead and inside the window — the
+    spec's "one computation per year touching the window" (§16, §20)."""
+    if window.end < today:
+        return {}, _health(
+            "tax", "ok", "statutory dates; amounts are estimated for the current year only"
+        )
+    try:
+        current = await withholding_estimate(db, today.year, today)
+    except HTTPException:
+        return {}, _health("tax", "partial", f"no {today.year} tax year entered — dates only")
+    prior_balance: Decimal | None = None
+    filing = next_business_day(date(today.year, 4, 15))
+    if filing >= today and window.contains(filing):
+        try:
+            prior = await withholding_estimate(db, today.year - 1, today)
+        except HTTPException:
+            prior = None
+        if (
+            prior is not None
+            and prior.balance_projected is not None
+            and prior.balance_projected > 0
+        ):
+            prior_balance = prior.balance_projected
+    harbor = current.safe_harbor
+    if harbor is None:
+        facts = TaxFacts(today.year, None, current.total.projected, None, prior_balance)
+        return {today.year: facts}, _health(
+            "tax", "partial", "no safe-harbor leg yet — estimated payments unknown"
+        )
+    # The prior-year leg WON only if it is the lesser of the two, which is exactly when the
+    # effective threshold is it — the sentence the detail then names.
+    leg = (
+        "prior-year"
+        if harbor.threshold is not None and harbor.threshold == harbor.effective_threshold
+        else "current-year"
+    )
+    facts = TaxFacts(
+        today.year, harbor.effective_threshold, current.total.projected, leg, prior_balance
+    )
+    note = (
+        "safe harbor met"
+        if harbor.met
+        else f"safe-harbor shortfall split across the remaining {today.year} payments"
+    )
+    return {today.year: facts}, _health("tax", "ok", note)
+
+
 async def _custom_rows(db: AsyncSession, window: Window, names: dict[int, str]) -> list[CustomRow]:
     """Rows whose occurrences CAN land in the window: a single date inside it, or a series
     that started on or before the window end and has not ended before the window start."""
@@ -210,8 +335,7 @@ async def _load_sources(
     db: AsyncSession, window: Window, today: date
 ) -> tuple[Sources, list[SourceHealthOut], datetime | None]:
     """Every generator input as plain values, plus the health footer and the quote stamp.
-    Health rows come out in SOURCE_FAMILIES order; Lane D inserts `card` between tax and
-    ritual and refines the tax and dividend notes."""
+    Health rows come out in SOURCE_FAMILIES order — `card` between tax and ritual."""
     health: list[SourceHealthOut] = []
 
     grants = list(
@@ -275,18 +399,29 @@ async def _load_sources(
     )
 
     ex_dividends = await _held_ex_dividends(db)
-    health.append(
-        _health("dividend", "ok")
-        if ex_dividends
-        else _health("dividend", "off", "no announced ex-dividend dates on held securities")
-    )
+    unpriced = sum(1 for item in ex_dividends if item.per_share is None)
+    if not ex_dividends:
+        health.append(
+            _health("dividend", "off", "no announced ex-dividend dates on held securities")
+        )
+    elif unpriced:
+        health.append(
+            _health(
+                "dividend",
+                "partial",
+                f"{unpriced} announced date(s) without a stored per-share amount",
+            )
+        )
+    else:
+        health.append(_health("dividend", "ok"))
 
     payday_sources, payroll_health = await _payday_sources(db, today)
     health.append(payroll_health)
 
-    health.append(
-        _health("tax", "ok", "statutory dates; amounts arrive with the withholding tracker")
-    )
+    tax_facts, tax_health = await _tax_facts(db, window, today)
+    health.append(tax_health)
+    cards, card_health = await _card_facts(db)
+    health.append(card_health)
 
     due_day = await read_update_due_day(db)
     entered_months = set((await db.execute(select(NetWorthSnapshot.month))).scalars().all())
@@ -307,6 +442,8 @@ async def _load_sources(
         custom_rows=custom_rows,
         due_day=due_day,
         entered_months=entered_months,
+        tax_facts=tax_facts,
+        cards=cards,
     )
     return sources, health, quoted_at
 

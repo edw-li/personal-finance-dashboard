@@ -16,7 +16,7 @@ from ..model import MONEY_QUANTUM, Event, Window, make_event, money
 @dataclass(frozen=True)
 class TaxFacts:
     """One tax year's withholding picture, reduced to what the generator prices with
-    (filled by api/calendar.py from the withholding tracker — Lane D)."""
+    (filled by api/calendar.py's `_tax_facts` from the withholding tracker)."""
 
     year: int
     effective_threshold: Decimal | None = None
