@@ -7,7 +7,16 @@
 // here and never hand a float back to the API (src/utils/format.ts's rule, and the same
 // posture as src/utils/spending.ts).
 import type { EChartsOption } from '../../charts/echarts'
-import { grid, moneyAxis, monthAxis, roundTo } from '../../charts/grammar'
+import {
+  BAR_MARKS,
+  capLabel,
+  grid,
+  moneyAxis,
+  monthAxis,
+  roundTo,
+  stagger,
+} from '../../charts/grammar'
+import { legendFor } from '../../charts/legend'
 import {
   INK,
   OTHER_SERIES_COLOR,
@@ -15,6 +24,7 @@ import {
   SEQUENTIAL_BLUE,
   SURFACE,
 } from '../../charts/theme'
+import { axisTooltip, itemTooltip } from '../../charts/tooltip'
 import {
   waterfallCsv as stepsCsv,
   waterfallSeries,
@@ -64,8 +74,6 @@ export const WATERFALL_CATEGORIES = ['Gross', ...TAX_LABELS, 'Take-home'] as con
 // keys on id across notMerge setOption calls, so the year's segments morph into slices
 // and back out (SpendingPage's `cat-${id}` idiom). Index in TAX_LABELS is the identity.
 export const TAX_SERIES_IDS = TAX_LABELS.map((_, i) => `tax-${i}`)
-
-const RATE_SERIES_NAME = 'Effective rate'
 
 // The seven tax figures of one year, in TAX_LABELS order.
 function taxAmounts(summary: TaxSummaryOut): number[] {
@@ -131,20 +139,28 @@ export function waterfallCsv(summary: TaxSummaryOut): ExportTable {
 }
 
 /**
- * Multi-year composition: one stacked bar per year of the tax figures, with the
- * overall effective rate as a line on a secondary percent axis (the rate is a ratio, so it
- * cannot share the money axis). Returns null when the feed carries no years at all — the
- * caller renders an empty note.
+ * Multi-year composition: one stacked bar per year of the tax figures with the year's
+ * effective rate as a direct label on the stack's cap (F15 — one axis; a ratio does not
+ * share a money axis and does not deserve a second one). Returns null when the feed carries
+ * no years at all — the card renders its empty sentence.
  */
-export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
+export function trendOption(
+  years: TaxSummaryOut[],
+  { selected }: { selected?: Record<string, boolean> } = {},
+): EChartsOption | null {
   if (years.length === 0) return null
   // The feed is already ordered, but the chart owns its own x-axis order rather than
   // trusting it (TaxesPage's `latestOf` reasoning).
   const ordered = [...years].sort((a, b) => a.year - b.year)
   const amounts = ordered.map(taxAmounts)
+  // Percent units at 4dp (0.306020 × 100 is 30.602000000000004 unrounded).
   const rates = ordered.map((y) =>
     y.totals.effective_rate === null ? null : roundTo(Number(y.totals.effective_rate) * 100, 4),
   )
+  const rateText = (index: number): string => {
+    const rate = rates[index]
+    return rate === null || rate === undefined ? '' : formatPct(rate / 100, { signed: false })
+  }
   const niitIndex = TAX_LABELS.indexOf('NIIT')
   // NIIT stacks only when some year carries it: an all-zero series would add a legend
   // entry and a $0.00 tooltip row to every pre-NIIT year. One nonzero year brings the
@@ -152,93 +168,39 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
   const stacked = amounts.some((a) => a[niitIndex] !== 0)
     ? [...TAX_LABELS]
     : TAX_LABELS.slice(0, niitIndex)
+  const top = stacked.length - 1
 
   return {
-    grid: { left: 70, right: 56, top: 40, bottom: 28 },
-    legend: { top: 0 },
-    tooltip: {
-      trigger: 'axis',
-      // Two units in one tooltip, so `valueFormatter` (one formatter for every series)
-      // cannot do it: money for the stacks, percent for the rate line. All own constants
-      // and server numbers — nothing user-typed reaches this HTML.
-      formatter: (params) => {
-        const list = Array.isArray(params) ? params : [params]
-        const head = `<strong>${list[0]?.name ?? ''}</strong>`
-        const line = (p: (typeof list)[number]) => {
-          const value = p.value as number | null
-          const text =
-            value === null || value === undefined
-              ? '—'
-              : p.seriesName === RATE_SERIES_NAME
-                ? formatPct(value / 100, { signed: false })
-                : formatCurrency(value)
-          return `${p.marker ?? ''}${p.seriesName ?? ''}: ${text}`
-        }
-        // The stacks, then the year's total (vestingChartOptions' Total row,
-        // jurisdiction-flavoured — 2026-08-25 spec §2b), then the rate line: the rate is
-        // a ratio, not another addend, so it stays out of the sum and under it.
-        const taxRows = list.filter((p) => p.seriesName !== RATE_SERIES_NAME)
-        const rateRows = list.filter((p) => p.seriesName === RATE_SERIES_NAME)
-        const total = taxRows.reduce(
-          (sum, p) => sum + (typeof p.value === 'number' ? p.value : 0),
-          0,
-        )
-        return [
-          head,
-          ...taxRows.map(line),
-          ...(taxRows.length > 0
-            ? [`<strong>Total tax: ${formatCurrency(total)}</strong>`]
-            : []),
-          ...rateRows.map(line),
-        ].join('<br/>')
-      },
-    },
-    xAxis: { type: 'category', data: ordered.map((y) => String(y.year)) },
-    yAxis: [
-      {
-        type: 'value',
-        axisLabel: { formatter: (value: number) => formatCurrencyCompact(value) },
-      },
-      {
-        type: 'value',
-        // Anchored at zero like the money axis beside it: auto-scaling a 27%→32% run to
-        // fill the frame would draw a cliff next to bars that are honest about their
-        // baseline, and the two axes' zeros would sit at different heights.
-        min: 0,
-        // The rate axis rides in PERCENT units (a 6dp fraction ×100), so its own labels
-        // divide back out before handing the value to formatPct.
-        axisLabel: {
-          formatter: (value: number) => formatPct(value / 100, { signed: false, decimals: 0 }),
-        },
-        splitLine: { show: false },
-      },
-    ],
-    series: [
-      ...stacked.map((label, i) => ({
-        id: TAX_SERIES_IDS[i],
-        name: label,
-        type: 'bar' as const,
-        stack: 'tax',
-        barMaxWidth: 46,
-        color: TAX_COLORS[i],
-        itemStyle: { borderColor: SURFACE, borderWidth: 1 },
-        emphasis: { itemStyle: { borderColor: INK } },
-        universalTransition: true,
-        data: amounts.map((a) => a[i]),
-      })),
-      {
-        name: RATE_SERIES_NAME,
-        type: 'line' as const,
-        yAxisIndex: 1,
-        color: INK,
-        symbolSize: 6,
-        lineStyle: { width: 2 },
-        z: 10,
-        // A year with no gross income has no rate: the line stops rather than diving to 0.
-        connectNulls: false,
-        data: rates,
-      },
-    ],
+    grid: grid(),
+    legend: legendFor(stacked.length, selected),
+    tooltip: axisTooltip({
+      unit: 'money',
+      groups: stacked,
+      totalLabel: 'Total tax',
+      pointer: 'shadow',
+      // The rate is a ratio, not another addend: it stays out of the sum and under it.
+      footer: (index) => (rateText(index) === '' ? [] : [`Effective rate ${rateText(index)}`]),
+    }),
+    xAxis: monthAxis(
+      ordered.map((y) => String(y.year)),
+      { gap: true },
+    ),
+    yAxis: moneyAxis(),
+    series: stacked.map((label, i) => ({
+      id: TAX_SERIES_IDS[i],
+      name: label,
+      type: 'bar' as const,
+      stack: 'tax',
+      ...BAR_MARKS,
+      barMaxWidth: 24,
+      ...stagger(i),
+      color: TAX_COLORS[i],
+      universalTransition: true,
+      // The cap label rides the TOP series so it sits on the year's total; an empty string
+      // for a year with no gross income (no rate to state).
+      ...(i === top ? { label: capLabel((p) => rateText(p.dataIndex)) } : {}),
+      data: amounts.map((a) => a[i]),
+    })),
   }
 }
 
@@ -248,7 +210,7 @@ export function trendOption(years: TaxSummaryOut[]): EChartsOption | null {
  * so zero and negative figures (a credit-driven negative state tax) are EXCLUDED here
  * while the stacked bar nets them into the year's column; the totals line beside the
  * chart stays the server's, which includes them (buildMonthSlices' documented
- * divergence). Returns null when nothing is drawable — the caller renders an empty note.
+ * divergence). Returns null when nothing is drawable — the card renders its empty sentence.
  */
 export function yearPieOption(summary: TaxSummaryOut): EChartsOption | null {
   const slices = taxAmounts(summary)
@@ -256,19 +218,15 @@ export function yearPieOption(summary: TaxSummaryOut): EChartsOption | null {
     .filter((s) => s.value > 0)
   if (slices.length === 0) return null
   return {
-    tooltip: {
-      // Item trigger (pies have no axis). "of tax" because this percent shares the YEAR'S
-      // TOTAL TAX — bare, a Federal slice's "56.1%" reads as a rate on income, which the
-      // trend's own rate line says is ~30%. Every string is this file's constant or a
-      // formatted server number — no user text reaches the HTML.
-      formatter: (params) => {
-        const p = Array.isArray(params) ? params[0] : params
-        return (
-          `<strong>${formatCurrency(p.value as number)}</strong> · ` +
-          `${(p.percent ?? 0).toFixed(1)}% of tax<br/>${p.name ?? ''}`
-        )
-      },
-    },
+    // "of tax": the percent shares the YEAR'S TOTAL TAX — bare, a Federal "56.1%" reads as
+    // a rate on income, which the cap label above the trend says is ~30%.
+    tooltip: itemTooltip<{ name?: string; value?: unknown; percent?: number }>({
+      body: (p) => ({
+        value: Number(p.value),
+        label: p.name ?? '',
+        sub: `${(p.percent ?? 0).toFixed(1)}% of tax`,
+      }),
+    }),
     series: [
       {
         id: 'tax-year-pie',
@@ -280,13 +238,20 @@ export function yearPieOption(summary: TaxSummaryOut): EChartsOption | null {
         // Morph the year's stack segments into slices and back out on exit; falls back
         // to a plain swap under reduced motion (EChart forces animation off).
         universalTransition: { enabled: true, seriesKey: [...TAX_SERIES_IDS] },
-        data: slices.map((s) => ({
-          name: s.name,
-          value: s.value,
-          itemStyle: { color: s.color },
-        })),
+        data: slices.map((s) => ({ name: s.name, value: s.value, itemStyle: { color: s.color } })),
       },
     ],
+  }
+}
+
+/** The drilled year as a table (F12): the positive slices the pie draws. */
+export function yearPieCsv(summary: TaxSummaryOut): ExportTable {
+  return {
+    headers: ['Jurisdiction', 'Tax'],
+    rows: taxAmounts(summary)
+      .map((value, i) => ({ name: TAX_LABELS[i], value }))
+      .filter((s) => s.value > 0)
+      .map((s) => [s.name, s.value.toFixed(2)]),
   }
 }
 

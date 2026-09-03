@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from '../../charts/echarts'
-import { GRID_VARIANTS } from '../../charts/grammar'
+import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
 import { OTHER_SERIES_COLOR, PALETTE, POSITIVE, SEQUENTIAL_BLUE } from '../../charts/theme'
 import { isGrammarTooltip } from '../../charts/tooltip'
 import { tooltipRows } from '../../testing/tooltipRows'
@@ -15,6 +15,7 @@ import {
   trendOption,
   waterfallCsv,
   waterfallOption,
+  yearPieCsv,
   yearPieOption,
 } from './taxChartOptions'
 import type { LadderRow } from './taxChartOptions'
@@ -197,16 +198,6 @@ interface BarPoint {
   value: number
   itemStyle?: { color?: string }
 }
-// The two formatters carry logic of their own (a ÷100 each), so the tests call them
-// directly rather than trusting that a chart nobody renders in jsdom would show it.
-interface TooltipParam {
-  name?: string
-  seriesName?: string
-  value?: number | null
-  percent?: number
-  marker?: string
-}
-
 function seriesOf(option: EChartsOption | null): SeriesLike[] {
   expect(option).not.toBeNull()
   return (option as unknown as { series: SeriesLike[] }).series
@@ -216,22 +207,8 @@ function categoriesOf(option: EChartsOption | null): string[] {
   return (option as unknown as { xAxis: { data: string[] } }).xAxis.data
 }
 
-function yAxesOf(option: EChartsOption | null): { min?: number }[] {
-  return (option as unknown as { yAxis: { min?: number }[] }).yAxis
-}
-
 function points(series: SeriesLike): BarPoint[] {
   return (series.data ?? []) as BarPoint[]
-}
-
-function tooltipFormatterOf(option: EChartsOption | null): (params: TooltipParam[]) => string {
-  return (option as unknown as { tooltip: { formatter: (p: TooltipParam[]) => string } }).tooltip
-    .formatter
-}
-
-function rateAxisLabelOf(option: EChartsOption | null): (value: number) => string {
-  return (option as unknown as { yAxis: { axisLabel: { formatter: (v: number) => string } }[] })
-    .yAxis[1].axisLabel.formatter
 }
 
 describe('waterfallOption', () => {
@@ -386,7 +363,7 @@ describe('trendOption', () => {
     expect(trendOption([])).toBeNull()
   })
 
-  it('stacks the seven taxes per year and lines the effective rate on a % axis', () => {
+  it('stacks the seven taxes per year; the effective rate is a cap label, not an axis', () => {
     const option = trendOption([2023, 2024, 2025, 2026].map(summaryFixture))
     expect(categoriesOf(option)).toEqual(['2023', '2024', '2025', '2026'])
 
@@ -405,26 +382,32 @@ describe('trendOption', () => {
     // year has it — a series that came and went across one chart would lie.
     expect(series[6].data).toEqual([0, 75.59, 418.88, 0])
 
-    const rate = series[7]
-    expect(rate.name).toBe('Effective rate')
-    expect(rate.type).toBe('line')
-    // Secondary axis, in PERCENT units: the 6dp fraction ×100, landing on 4dp with no
-    // float dust (0.306020 × 100 is 30.602000000000004 unrounded).
-    expect(rate.yAxisIndex).toBe(1)
-    expect(rate.data).toEqual([27.1681, 30.602, 31.4828, 32.1443])
-    // Zero-anchored: a 27%→32% run auto-scaled to fill the frame would read as a cliff
-    // beside bars that are honest about their baseline.
-    expect(yAxesOf(option)[1].min).toBe(0)
+    expect(series).toHaveLength(7) // no rate line (F15)
+    expect(series.every((s) => s.type === 'bar')).toBe(true)
+    const yAxis = (
+      option as unknown as { yAxis: { type: string; axisLabel: { formatter: unknown } } }
+    ).yAxis
+    expect(Array.isArray(yAxis)).toBe(false) // one axis (F15)
+    expect(yAxis.axisLabel.formatter).toBe(compactMoney)
+    // The rate rides the TOP series' cap as a direct label — the 6dp fraction ×100, 1dp.
+    const cap = (series[6] as { label?: { formatter: (p: { dataIndex: number }) => string } }).label!
+    expect(cap.formatter({ dataIndex: 0 })).toBe('27.2%')
+    expect(cap.formatter({ dataIndex: 1 })).toBe('30.6%')
+    expect(series.slice(0, 6).every((s) => (s as { label?: unknown }).label === undefined)).toBe(
+      true,
+    )
+    expect((series[0] as { barMaxWidth?: number }).barMaxWidth).toBe(24) // F13
+    expect((option as unknown as { grid: unknown }).grid).toEqual(GRID_VARIANTS.default)
   })
 
   it('stacks NIIT only when some year in the feed carries it', () => {
     // 2024 has the surcharge, 2026 does not — one nonzero year brings the series for BOTH.
     const withNiit = seriesOf(trendOption([2024, 2026].map(summaryFixture)))
-    expect(withNiit.slice(0, -1).map((s) => s.name)).toEqual([...TAX_LABELS])
+    expect(withNiit.map((s) => s.name)).toEqual([...TAX_LABELS])
     // A feed where NOBODY pays it drops the stack entirely: an all-zero series would add a
     // legend entry and a $0.00 tooltip row to every pre-NIIT year.
     const without = seriesOf(trendOption([summaryFixture(2026)]))
-    expect(without.slice(0, -1).map((s) => s.name)).toEqual(TAX_LABELS.slice(0, -1))
+    expect(without.map((s) => s.name)).toEqual(TAX_LABELS.slice(0, -1))
     expect(without.map((s) => s.name)).not.toContain('NIIT')
   })
 
@@ -442,26 +425,34 @@ describe('trendOption', () => {
     expect(feed.map((y) => y.year)).toEqual([2025, 2023, 2026, 2024])
   })
 
-  it('divides the rate back out in BOTH places that render it', () => {
-    const option = trendOption([summaryFixture(2024)])
-    // Two units in one tooltip: money for the stacked bars, percent for the rate line.
-    // The line's value rides the axis in PERCENT units, so it divides by 100 before
-    // formatPct multiplies by 100 again — without the divisor this reads "3056.6%".
-    expect(
-      tooltipFormatterOf(option)([
-        { name: '2024', seriesName: 'Federal', value: 40782.88, marker: '[m]' },
-        { name: '2024', seriesName: 'Effective rate', value: 30.602, marker: '[r]' },
+  it('F7/F15: jurisdictions by value, Total tax, then the rate as a footer line', () => {
+    const option = trendOption([summaryFixture(2024)])!
+    const format = (
+      option as unknown as { tooltip: { formatter: (p: unknown) => string; axisPointer: unknown } }
+    ).tooltip
+    expect(format.axisPointer).toEqual({ type: 'shadow' })
+    const parsed = tooltipRows(
+      format.formatter([
+        {
+          seriesName: 'State',
+          seriesType: 'bar',
+          axisValueLabel: '2024',
+          dataIndex: 0,
+          value: 15901.12,
+          color: TAX_COLORS[1],
+        },
+        { seriesName: 'Federal', seriesType: 'bar', value: 40782.88, color: TAX_COLORS[0] },
+        { seriesName: 'SDI', seriesType: 'bar', value: null, color: TAX_COLORS[4] },
       ]),
-    ).toBe(
-      '<strong>2024</strong><br/>[m]Federal: $40,782.88<br/>' +
-        '<strong>Total tax: $40,782.88</strong><br/>[r]Effective rate: 30.6%',
     )
-    // The percent AXIS is handed the same ×100 units and divides them back out too, at
-    // whole percents; without the divisor this tick would read "3060%".
-    const label = rateAxisLabelOf(option)
-    expect(label(30.602)).toBe('31%')
-    expect(label(30)).toBe('30%')
-    expect(label(0)).toBe('0%')
+    // Jurisdictions by value desc, the total under them; the null row is dropped, never dashed.
+    expect(parsed.rows.map((r) => [r.kind, r.label, r.value])).toEqual([
+      ['row', 'Federal', '$40,782.88'],
+      ['row', 'State', '$15,901.12'],
+      ['total', 'Total tax', '$56,684.00'],
+    ])
+    // The rate is a ratio, not another addend: it sits UNDER the sum as a footer line.
+    expect(parsed.foot).toEqual(['Effective rate 30.6%'])
   })
 
   it('breaks the rate line where a year has no rate, and still stacks its zeros', () => {
@@ -473,9 +464,29 @@ describe('trendOption', () => {
     // The sparse fixture carries no `niit` section at all (a stored pre-NIIT payload):
     // absent reads as zero rather than throwing or blanking the stack.
     expect(series[6].data).toEqual([75.59, 0])
-    // null, not 0: a year with no gross income has no effective rate to draw, and
-    // connectNulls is off so the line simply stops.
-    expect(series[7].data).toEqual([30.602, null])
+    // No rate to state for a year with no gross income: the cap label goes blank rather
+    // than printing a 0.0% the engine never computed — and the tooltip drops its footer.
+    expect(
+      (series[6] as { label: { formatter: (p: { dataIndex: number }) => string } }).label.formatter({
+        dataIndex: 1,
+      }),
+    ).toBe('')
+    const format = (option as unknown as { tooltip: { formatter: (p: unknown) => string } }).tooltip
+      .formatter
+    expect(
+      tooltipRows(
+        format([
+          {
+            seriesName: 'Federal',
+            seriesType: 'bar',
+            axisValueLabel: '2025',
+            dataIndex: 1,
+            value: 0,
+            color: TAX_COLORS[0],
+          },
+        ]),
+      ).foot,
+    ).toEqual([])
   })
 
   it('gives the seven stacks the stable ids the drill-in pie morphs from', () => {
@@ -484,23 +495,19 @@ describe('trendOption', () => {
     // drill-in is a hard cut instead of a morph (SpendingPage's cat-${id} idiom).
     expect(series.slice(0, 7).map((s) => s.id)).toEqual([...TAX_SERIES_IDS])
     expect(series.slice(0, 7).every((s) => s.universalTransition === true)).toBe(true)
-    // The rate line stays out of the morph: it has no pie counterpart.
-    expect(series[7].id).toBeUndefined()
+    // §11: every stack member enters 12ms behind the one before it (a FUNCTION delay, so
+    // the zoom fast path's JSON fingerprint never sees it).
+    expect(
+      series.every((s) => typeof (s as { animationDelay?: unknown }).animationDelay === 'function'),
+    ).toBe(true)
   })
 
-  it('totals the jurisdiction rows — dashes excluded, the rate line never an addend', () => {
-    const html = tooltipFormatterOf(trendOption([summaryFixture(2024)]))([
-      { name: '2024', seriesName: 'Federal', value: 40782.88, marker: '[m]' },
-      { name: '2024', seriesName: 'State', value: 15901.12, marker: '[s]' },
-      { name: '2024', seriesName: 'SDI', value: null, marker: '[d]' },
-      { name: '2024', seriesName: 'Effective rate', value: 30.602, marker: '[r]' },
-    ])
-    expect(html).toContain('[d]SDI: —')
-    // 40782.88 + 15901.12; the null row contributes nothing, the rate is not money.
-    expect(html).toContain('<strong>Total tax: $56,684.00</strong>')
-    // Ordering: jurisdictions, the total, THEN the rate — a ratio after its parts.
-    expect(html.indexOf('Total tax')).toBeGreaterThan(html.indexOf('[s]State'))
-    expect(html.indexOf('[r]Effective rate')).toBeGreaterThan(html.indexOf('Total tax'))
+  it("feeds the panel's legend picks back in", () => {
+    // F9: the card mirrors the user's legend picks back into the option, so a re-render
+    // (a fresh year, a theme swap) does not un-hide what they hid.
+    expect(
+      trendOption([summaryFixture(2024)], { selected: { State: false } })!.legend,
+    ).toMatchObject({ selected: { State: false } })
   })
 })
 
@@ -542,16 +549,36 @@ describe('yearPieOption', () => {
     expect(yearPieOption(emptySummary(2026))).toBeNull()
   })
 
-  it('says "of tax" in the tooltip — a bare percent reads as a rate on income', () => {
-    const option = yearPieOption(summaryFixture(2024))
-    const formatter = (
-      option as unknown as { tooltip: { formatter: (p: TooltipParam) => string } }
-    ).tooltip.formatter
+  it('F7: value first, the jurisdiction, "of tax" — a bare percent reads as a rate on income', () => {
+    const format = (
+      yearPieOption(summaryFixture(2024)) as unknown as {
+        tooltip: { trigger: string; formatter: (p: unknown) => string }
+      }
+    ).tooltip
+    expect(format.trigger).toBe('item')
     // 40782.88 of 72824.61 total tax is 56.0% — while the year's effective rate is 30.6%,
     // which is exactly the number a bare "56.0%" would be misread as.
-    expect(formatter({ name: 'Federal', value: 40782.88, percent: 56.0 })).toBe(
-      '<strong>$40,782.88</strong> · 56.0% of tax<br/>Federal',
+    const parsed = tooltipRows(
+      format.formatter({ name: 'Federal', value: 40782.88, percent: 56.0 }),
     )
+    expect([parsed.lead, parsed.label, parsed.sub]).toEqual([
+      '$40,782.88',
+      'Federal',
+      '56.0% of tax',
+    ])
+  })
+
+  it('exports the drawn slices', () => {
+    expect(yearPieCsv(summaryFixture(2026))).toEqual({
+      headers: ['Jurisdiction', 'Tax'],
+      rows: [
+        ['Federal', '57160.35'],
+        ['State', '22206.80'],
+        ['Medicare', '5299.21'],
+        ['Soc. Sec.', '10918.20'],
+        ['SDI', '3000.00'],
+      ],
+    })
   })
 })
 
