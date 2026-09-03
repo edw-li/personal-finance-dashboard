@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type { HouseholdOut, NetWorthSummary, NetWorthTimeseries } from '../types/api'
@@ -7,6 +7,9 @@ import NetWorthPage from './NetWorthPage'
 
 vi.mock('../api/netWorth', () => ({ fetchTimeseries: vi.fn(), fetchSummary: vi.fn() }))
 vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
+// The scope row's ribbon feed (Plan 1b): two-tone chips need to know which months carry
+// balances, and the page's own timeseries is no longer that source.
+vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law) — what each chart
 // DRAWS is pinned in netWorthChartOptions.test.ts; this marker exposes only the option
 // slices this page owns: series names, their stack ids, any markLine anchor, and (A2) the
@@ -49,9 +52,13 @@ vi.mock('../components/EChart', async () => {
 })
 
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
+import { fetchCoverage } from '../api/coverage'
 import { fetchHousehold } from '../api/household'
 
 const ME = { id: 1, name: 'Me', is_primary: true }
+// My Checking's JULY column in the timeseries fixture — the balance the accounts table
+// must swap to once the ribbon views that month.
+const JULY_CHECKING_BALANCE = '$100.00'
 const SAM = { id: 2, name: 'Sam', is_primary: false }
 
 function timeseriesOut(over: Partial<NetWorthTimeseries> = {}): NetWorthTimeseries {
@@ -108,9 +115,17 @@ function household(over: Partial<HouseholdOut> = {}): HouseholdOut {
 
 beforeEach(() => {
   clearSnapshots()
+  // useScope remembers owner and range in localStorage for the keys a URL leaves empty —
+  // a scope one test picks would otherwise be the next test's default.
+  localStorage.clear()
   vi.mocked(fetchTimeseries).mockResolvedValue(timeseriesOut())
   vi.mocked(fetchSummary).mockResolvedValue(summaryOut())
   vi.mocked(fetchHousehold).mockResolvedValue(household())
+  vi.mocked(fetchCoverage).mockResolvedValue({
+    balances: ['2026-07-01', '2026-08-01'],
+    spending: [],
+    net_pay: [],
+  })
 })
 
 afterEach(() => {
@@ -118,10 +133,21 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+function LocationProbe() {
+  const location = useLocation()
+  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+}
+
+// Routed, not bare: navigating away has to really UNMOUNT the page the way the app's router
+// does, or the page's own scope normalization would re-stamp ?owner= onto the destination.
 function renderPage(entry = '/net-worth') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
-      <NetWorthPage />
+      <Routes>
+        <Route path="/net-worth" element={<NetWorthPage />} />
+        <Route path="*" element={null} />
+      </Routes>
+      <LocationProbe />
     </MemoryRouter>,
   )
 }
@@ -152,13 +178,13 @@ it('hides the owner controls entirely for a one-person household', async () => {
   await screen.findByText('Net worth')
   await waitFor(() => expect(fetchHousehold).toHaveBeenCalled())
   // Nothing to choose between: chips and the stack toggle would both be one-option UI.
-  expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
   expect(screen.queryByRole('group', { name: 'Stack by' })).toBeNull()
 })
 
 it('renders All / each person / Joint once a partner exists', async () => {
   renderPage()
-  const chips = await screen.findByRole('group', { name: 'Owner' })
+  const chips = await screen.findByRole('group', { name: 'Whose' })
   expect(
     [...chips.querySelectorAll('button')].map((b) => b.textContent),
   ).toEqual(['All', 'Me', 'Sam', 'Joint'])
@@ -166,7 +192,7 @@ it('renders All / each person / Joint once a partner exists', async () => {
 
 it('renders the per-owner strip in chip order, skipping owners the payload lacks', async () => {
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   const strip = document.querySelector('.networth-owner-strip')
   expect(strip).not.toBeNull()
   // Me then Joint — the fixture's owner_totals has no SAM row, and a missing owner is
@@ -191,20 +217,20 @@ it('hides the strip for a one-person household', async () => {
 
 it('scopes BOTH fetches to the picked owner, and back to the household on All', async () => {
   renderPage()
-  const chips = await screen.findByRole('group', { name: 'Owner' })
+  const chips = await screen.findByRole('group', { name: 'Whose' })
   fireEvent.click(screen.getByRole('button', { name: 'Sam' }))
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', SAM.id))
-  expect(fetchSummary).toHaveBeenCalledWith(SAM.id)
+  expect(fetchSummary).toHaveBeenCalledWith(SAM.id, undefined)
   expect(screen.getByRole('button', { name: 'Sam' }).getAttribute('aria-pressed')).toBe('true')
 
   fireEvent.click(screen.getByRole('button', { name: 'Joint' }))
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', 'joint'))
-  expect(fetchSummary).toHaveBeenCalledWith('joint')
+  expect(fetchSummary).toHaveBeenCalledWith('joint', undefined)
 
   fireEvent.click(chips.querySelectorAll('button')[0])
   // null, not omitted: the client turns null into no param at all (netWorth.test.ts).
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', null))
-  expect(fetchSummary).toHaveBeenLastCalledWith(null)
+  expect(fetchSummary).toHaveBeenLastCalledWith(null, undefined)
 })
 
 it('keeps the page alive when the household endpoint fails', async () => {
@@ -213,7 +239,7 @@ it('keeps the page alive when the household endpoint fails', async () => {
   // The scope control is an affordance; losing it must cost the chips and nothing else.
   expect(await screen.findByText('Net worth')).toBeTruthy()
   await waitFor(() => expect(fetchTimeseries).toHaveBeenCalled())
-  expect(screen.queryByRole('group', { name: 'Owner' })).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Whose' })).toBeNull()
   expect(screen.queryByRole('alert')).toBeNull()
 })
 
@@ -247,13 +273,13 @@ it('marks the wedding month on the trend once a marriage date is set', async () 
 
 it('draws no marriage rule when the household has no date yet', async () => {
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   expect(stacked().getAttribute('data-marriage')).toBe('')
 })
 
 describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('paints instantly from a seeded snapshot and still revalidates', () => {
-    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    setSnapshot('networth:monthly:all:latest', { ts: timeseriesOut(), summary: summaryOut() })
     // Never-resolving fetches: whatever is on screen came from the seed alone.
     vi.mocked(fetchTimeseries).mockReturnValue(new Promise(() => {}))
     vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
@@ -272,7 +298,7 @@ describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
   })
 
   it('derives the drill default from the seed — the drill chart is up before any fetch', () => {
-    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    setSnapshot('networth:monthly:all:latest', { ts: timeseriesOut(), summary: summaryOut() })
     vi.mocked(fetchTimeseries).mockReturnValue(new Promise(() => {}))
     vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
     renderPage()
@@ -282,7 +308,7 @@ describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
   })
 
   it('a changed revalidation payload updates the page and re-arms the charts', async () => {
-    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    setSnapshot('networth:monthly:all:latest', { ts: timeseriesOut(), summary: summaryOut() })
     vi.mocked(fetchTimeseries).mockResolvedValue(
       timeseriesOut({
         owner_series: [{ person_id: 1, name: 'Renamed', values: ['100.00', '150.00'] }],
@@ -296,7 +322,7 @@ describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
   })
 
   it('leaves the charts still when the revalidation payload is identical', async () => {
-    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    setSnapshot('networth:monthly:all:latest', { ts: timeseriesOut(), summary: summaryOut() })
     const { container } = renderPage()
     // The dim lifting is the revalidation landing — .finally runs on every resolution.
     await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
@@ -306,7 +332,7 @@ describe('NetWorthPage — snapshot cache (2026-08-27 spec §1)', () => {
   })
 
   it('keys the snapshot by granularity — a quarterly flip is a cache MISS', async () => {
-    setSnapshot('net-worth:monthly:all', { ts: timeseriesOut(), summary: summaryOut() })
+    setSnapshot('networth:monthly:all:latest', { ts: timeseriesOut(), summary: summaryOut() })
     renderPage()
     await waitFor(() => expect(fetchTimeseries).toHaveBeenCalledWith('monthly', null))
     vi.mocked(fetchTimeseries).mockResolvedValue(timeseriesOut({ months: ['2026-07-01'] }))
@@ -354,8 +380,8 @@ it('restores the household view after visiting an owner with no data', async () 
   // Sam owns nothing yet: the table genuinely empties.
   await waitFor(() => expect(screen.queryByText('My Checking')).toBeNull())
 
-  // Scoped to the Owner group: the range chips carry an "All" too.
-  const ownerChips = screen.getByRole('group', { name: 'Owner' })
+  // Scoped to the owner group: the range chips carry an "All" too.
+  const ownerChips = screen.getByRole('group', { name: 'Whose' })
   const allChip = [...ownerChips.querySelectorAll('button')].find(
     (b) => b.textContent === 'All',
   )
@@ -383,7 +409,7 @@ it('keeps a drill toggle on an account named "Cash" out of the stacked chart', a
     }),
   )
   renderPage()
-  await screen.findByRole('group', { name: 'Owner' })
+  await screen.findByRole('group', { name: 'Whose' })
   // The drill seeds to the biggest account — the one wearing the colliding name.
   await waitFor(() =>
     expect(screen.getAllByTestId('echart')[1].getAttribute('data-series')).toBe('Cash'),
@@ -399,4 +425,103 @@ it('keeps a drill toggle on an account named "Cash" out of the stacked chart', a
   expect(
     JSON.parse(screen.getAllByTestId('echart')[0].getAttribute('data-legend-selected') ?? '{}'),
   ).toEqual({})
+})
+
+describe('NetWorthPage — shell scope', () => {
+  it('reads owner and range from the URL and fetches accordingly', async () => {
+    renderPage('/net-worth?owner=joint&range=ytd')
+    await screen.findByRole('heading', { level: 1, name: 'Net worth' })
+
+    await waitFor(() =>
+      expect(vi.mocked(fetchTimeseries)).toHaveBeenCalledWith('monthly', 'joint'),
+    )
+    expect(vi.mocked(fetchSummary)).toHaveBeenCalledWith('joint', undefined)
+    expect(screen.getByRole('button', { name: 'YTD' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('picking an owner in the scope row rewrites the URL and refetches that scope', async () => {
+    renderPage('/net-worth')
+    fireEvent.click(await screen.findByRole('button', { name: 'Sam' }))
+
+    await waitFor(() =>
+      expect(vi.mocked(fetchTimeseries)).toHaveBeenLastCalledWith('monthly', SAM.id),
+    )
+    expect(screen.getByTestId('location').textContent).toContain('owner=2')
+  })
+
+  it('viewing a month through the ribbon fetches that month\u2019s summary and shows its balances', async () => {
+    renderPage('/net-worth')
+    await screen.findByRole('heading', { level: 1, name: 'Net worth' })
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
+    await waitFor(() =>
+      expect(vi.mocked(fetchSummary)).toHaveBeenLastCalledWith(null, '2026-07-01'),
+    )
+    expect(screen.getByTestId('location').textContent).toContain('month=2026-07')
+    expect(await screen.findByRole('button', { name: 'Back to latest' })).toBeTruthy()
+    // The other verb on a viewed month: the wizard, by link rather than by selection.
+    expect(screen.getByRole('link', { name: 'Edit Jul 2026 in the wizard' })).toBeTruthy()
+    // The accounts table's Balance column now reads July's figures from the timeseries.
+    expect(screen.getByText(JULY_CHECKING_BALANCE)).toBeTruthy()
+  })
+
+  it('prints each month\u2019s net worth on its ribbon chip', async () => {
+    renderPage('/net-worth')
+    // The figure rides the timeseries, so a chip only carries it once the payload lands.
+    expect(
+      await screen.findByRole('button', {
+        name: 'Aug 2026 — $230.00 — balances entered, spending missing',
+      }),
+    ).toBeTruthy()
+  })
+
+  it('dims the body while the viewed month\u2019s summary is in flight', async () => {
+    const { container } = renderPage('/net-worth')
+    await screen.findByRole('heading', { level: 1, name: 'Net worth' })
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+
+    vi.mocked(fetchTimeseries).mockReturnValue(new Promise(() => {}))
+    vi.mocked(fetchSummary).mockReturnValue(new Promise(() => {}))
+    fireEvent.click(await screen.findByRole('button', { name: /^Jul 2026/ }))
+    // The table swaps to July's column at once; the tiles still belong to the old month, so
+    // the dim is what says so.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  })
+
+  it('defaults the page-level range to 1Y', async () => {
+    renderPage('/net-worth')
+    expect(
+      (await screen.findByRole('button', { name: '1Y' })).getAttribute('aria-pressed'),
+    ).toBe('true')
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toContain('range=1y'),
+    )
+  })
+
+  it('renders no bespoke header, owner row, or range chips of its own', async () => {
+    renderPage('/net-worth')
+    await screen.findByRole('heading', { level: 1, name: 'Net worth' })
+
+    expect(document.querySelector('.page-header')).toBeNull()
+    expect(document.querySelector('.networth-owner-row')).toBeNull()
+    // Exactly one time-range control on the page: the scope row's.
+    expect(document.querySelectorAll('[aria-label="Time range"]')).toHaveLength(1)
+  })
+
+  it('keeps the drill chips in one labelled group that adds rather than replaces', async () => {
+    renderPage('/net-worth')
+    const group = await screen.findByRole('group', { name: 'Accounts to compare' })
+    expect([...group.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'My Checking',
+      'Joint Savings',
+    ])
+    // Scoped to the group: every account is a chip AND a table row-toggle.
+    // Seeded to the biggest account; the other chip joins it in the next palette slot.
+    fireEvent.click(within(group).getByRole('button', { name: 'Joint Savings' }))
+    await waitFor(() =>
+      expect(screen.getAllByTestId('echart')[1].getAttribute('data-series')).toBe(
+        'My Checking|Joint Savings',
+      ),
+    )
+  })
 })

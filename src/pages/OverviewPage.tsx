@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { fetchCalendar } from '../api/calendar'
 import { ApiError } from '../api/client'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
+import type { OwnerScope } from '../api/netWorth'
 import { fetchMoneyFlow } from '../api/overview'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
 import { fetchMatrix, fetchYearly } from '../api/spending'
@@ -16,7 +17,6 @@ import InfoHint from '../components/InfoHint'
 import { eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
-import PageSkeleton from '../components/PageSkeleton'
 import { UP_NEXT_WINDOW_DAYS, upNextItems } from '../components/overview/upNext'
 import { ytdStats } from '../components/overview/ytd'
 import {
@@ -27,6 +27,9 @@ import {
   spendStats,
 } from '../components/overview/overviewChartOptions'
 import { liveFromHoldings, portfolioHistoryOption } from '../components/portfolio/historyChartOptions'
+import PageFrame from '../components/shell/PageFrame'
+import ScopeBar from '../components/shell/ScopeBar'
+import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import type {
   CalendarEvent,
@@ -70,7 +73,18 @@ interface OverviewData {
   system: SystemStatus
 }
 
-const SNAPSHOT_KEY = 'overview'
+// Keyed by the fetch parameters, like every other page's: an owner scope is a DIFFERENT
+// snapshot, and one key for all of them would paint the wrong person's numbers.
+function overviewKey(owner: OwnerScope): string {
+  return `overview:${owner ?? 'all'}`
+}
+
+// The two feeds with no owner dimension server-side. Under an owner scope their cards say
+// so, rather than letting the chip imply a filter that never ran.
+const SPENDING_HINT =
+  "The latest entered month's total spend against your trailing 12-month average."
+const PERFORMANCE_HINT =
+  "Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. The S&P 500 line invests only the starting balance; VOO (your contributions) invests every inferred contribution instead."
 
 // The up-next window slides with the calendar day — key it by today so a date rollover
 // misses cleanly instead of painting yesterday's window.
@@ -84,13 +98,24 @@ function flowKey(year: number | null): string {
 
 export default function OverviewPage() {
   const navigate = useNavigate()
-  const cachedData = getSnapshot<OverviewData>(SNAPSHOT_KEY)
+  // The URL owns the scope (2026-09-03 shell spec §6) and the scope row writes it; this
+  // page only reads it, so there is no local owner state to keep in step.
+  const { scope } = useScope({ owner: true })
+  const owner = scope.owner
+  const snapshotKey = overviewKey(owner)
+  const cachedData = getSnapshot<OverviewData>(snapshotKey)
   const [data, setData] = useState<OverviewData | null>(cachedData ?? null)
   const [busy, setBusy] = useState(true)
   // false once a revalidation actually CHANGES the data — charts may animate again.
   const [fromCache, setFromCache] = useState(cachedData !== undefined)
   const [error, setError] = useState<string | null>(null)
   const seqRef = useRef(0)
+  // What the page is actually SHOWING. The identical-payload skip in load() is judged
+  // against this, never against the snapshot cache: render and cache diverge across owner
+  // switches (the previous scope's tiles are still up while the next scope's key is warm),
+  // and skipping on the cache would strand the page on the previous scope — NetWorthPage's
+  // 2026-08-28 bug, which this page inherits the moment its key grows an owner.
+  const shownRef = useRef<OverviewData | null>(cachedData ?? null)
 
   // The forward-looking strip is a SEPARATE fetch with its own tiny error state: the
   // snapshot Promise.all above stays untouched (its all-or-nothing contract is the
@@ -161,16 +186,18 @@ export default function OverviewPage() {
     loadFlow(year)
   }
 
-  // Plain function + inline chain (preserve-manual-memoization wall — Plan 3/5 notes).
-  // Promise.all is deliberate: the page renders one coherent snapshot, and a partial
-  // refresh would let the tiles disagree with the charts. On failure the previous payload
-  // stays on screen with the staleness cue in the banner (EsppPage class).
-  const load = () => {
+  // Memoized over the scope, so the effect below refetches when — and only when — the
+  // owner changes. Promise.all is deliberate: the page renders one coherent snapshot, and
+  // a partial refresh would let the tiles disagree with the charts. On failure the previous
+  // payload stays on screen with the frame's staleness line (EsppPage class).
+  const load = useCallback(() => {
     const seq = ++seqRef.current
     Promise.all([
-      fetchSummary(),
-      fetchTimeseries('monthly'),
-      fetchHoldings(),
+      fetchSummary(owner),
+      fetchTimeseries('monthly', owner),
+      fetchHoldings(owner),
+      // Household-wide until the history endpoint grows an owner param; /spending has no
+      // owner dimension at all. Both cards say so under a scope (see the hints below).
       fetchHistory(),
       fetchMatrix(),
       fetchAllTaxSummaries(),
@@ -186,12 +213,16 @@ export default function OverviewPage() {
           const snapshot: OverviewData = {
             summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system,
           }
-          const previous = getSnapshot<OverviewData>(SNAPSHOT_KEY)
-          setSnapshot(SNAPSHOT_KEY, snapshot)
+          setSnapshot(snapshotKey, snapshot)
           setError(null)
-          // Identical payload: nothing re-renders, the charts stay still (spec §1).
-          if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(snapshot))
+          // Identical payload: nothing re-renders, the charts stay still (spec §1) — judged
+          // against the RENDERED snapshot, never the cache (see `shownRef`).
+          if (
+            shownRef.current !== null &&
+            JSON.stringify(shownRef.current) === JSON.stringify(snapshot)
+          )
             return
+          shownRef.current = snapshot
           setFromCache(false)
           setData(snapshot)
         },
@@ -203,13 +234,35 @@ export default function OverviewPage() {
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
       })
+  }, [owner, snapshotKey])
+
+  // Adopting an owner change, adjust-during-render (CategoriesPanel's precedent, and the
+  // shape Net worth uses): the effect below must not refetch silently — the body dims, and
+  // an already-seen scope paints instantly and revalidates underneath. `shownRef` stays out
+  // of this: a ref write belongs in a promise continuation, and leaving it on the previous
+  // scope only costs one extra repaint when the live payload lands. It sits HERE, after
+  // load(), because a render-phase setState ahead of that useCallback costs the React
+  // Compiler its stable-setter inference (react-hooks/preserve-manual-memoization).
+  const [seenOwner, setSeenOwner] = useState<OwnerScope>(owner)
+  if (owner !== seenOwner) {
+    setSeenOwner(owner)
+    setBusy(true)
+    const peeked = getSnapshot<OverviewData>(snapshotKey)
+    if (peeked !== undefined) {
+      setFromCache(true)
+      setData(peeked)
+    }
   }
 
   useEffect(() => {
     load()
+  }, [load])
+
+  useEffect(() => {
     loadUpNext()
     loadFlow(null)
-    // mount-only: load is a plain function over stable setters (house idiom)
+    // mount-only: these two are household-wide and never re-run on a scope change; both
+    // are plain functions over stable setters (house idiom).
   }, [])
 
   // The busy flag is raised by the CALLERS, never inside load(): load() runs in the mount
@@ -300,6 +353,16 @@ export default function OverviewPage() {
         }
       : null
 
+  // Two cards the owner scope cannot reach: /spending/matrix has no owner dimension, and
+  // the weekly /portfolio/history checkpoints are household-wide. Saying so beats a silent
+  // number that looks filtered.
+  const spendingHint =
+    owner === null ? SPENDING_HINT : `${SPENDING_HINT} Household total — spending has no owner.`
+  const performanceHint =
+    owner === null
+      ? PERFORMANCE_HINT
+      : `${PERFORMANCE_HINT} Household history; owner scope does not apply to the weekly checkpoints.`
+
   const taxLabel =
     tax === null
       ? 'Effective tax'
@@ -313,291 +376,290 @@ export default function OverviewPage() {
 
   return (
     <div className="page overview-page">
-      <header className="page-header">
-        <h1>Overview</h1>
-        <div className="spacer" />
-        {/* Nothing but idempotent GETs and no mutation anywhere on this page, so the button
-            stays live while a load is in flight: an impatient second click is harmless,
-            the body dims to show the work, and seqRef decides which answer lands. */}
-        <button type="button" className="button" onClick={reload}>
-          Refresh
-        </button>
-      </header>
-      {error && (
-        <div className="error-banner" role="alert">
-          {/* The stale cue only when there IS something stale: a reload failure leaves the
-              previous snapshot up, a first-load failure leaves nothing to be behind. */}
-          {data === null ? error : `${error} — the page may be showing earlier data.`}{' '}
-          <button className="button" aria-label="Retry loading the overview" onClick={reload}>
-            Retry
+      <PageFrame
+        title="Overview"
+        actions={
+          /* Nothing but idempotent GETs and no mutation anywhere on this page, so the
+             button stays live while a load is in flight: an impatient second click is
+             harmless, the body dims to show the work, and seqRef decides which answer
+             lands. */
+          <button type="button" className="button" onClick={reload}>
+            Refresh
           </button>
-        </div>
-      )}
-      {data === null ? (
-        // A failed FIRST load shows the banner alone rather than a page of $0.00 tiles that
-        // reads as "you are broke" (PortfolioPage posture).
-        busy && (
-          <PageSkeleton
-            tiles={4}
-            cards={[
-              { span: 12, height: 220 },
-              { span: 12, height: 280 },
-              { span: 12, height: 240 },
-              { span: 12, height: 200 },
-            ]}
-          />
-        )
-      ) : (
-        <div className={`loading-dim${busy ? ' is-loading' : ''}`}>
-          {/* The dashboard's to-do list: each line is a condition the snapshot itself
-              proves and a link to where it gets fixed. Absent when nothing needs doing —
-              an "all clear" badge would be one more thing to read every morning. */}
-          {attention.length > 0 && (
-            <nav className="attention-strip" aria-label="Needs attention">
-              {attention.map((item) => (
-                <NavLink key={item.key} className="attention-item" to={item.to}>
-                  {item.text} →
-                </NavLink>
-              ))}
-            </nav>
-          )}
-          <div className="kpi-row">
-            <StatTile
-              hero
-              label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
-              value={formatCurrency(summary?.net_worth)}
-              // A FRESH-paint flourish only: a cached paint is a number the user has already
-              // seen, and re-counting it would fake newness. Money rides the wire as a decimal
-              // string, hence Number() for the easing math — the last frame drops the override
-              // and renders `value` itself, so the end state is the string above verbatim.
-              countUp={
-                !fromCache && summary?.net_worth != null
-                  ? { value: Number(summary.net_worth), format: formatCurrency }
-                  : undefined
-              }
-              // Both halves or neither: a bare amount with no rate reads as a total.
-              delta={
-                summary?.mom_delta != null && summary.mom_pct != null
-                  ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) MoM`
-                  : undefined
-              }
-              tone={toneOf(summary?.mom_delta)}
-              hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
-            />
-            <StatTile
-              label="Portfolio"
-              value={formatCurrency(totals?.market_value)}
-              // Omitted before the first price refresh — there is no day to compare to.
-              delta={
-                totals?.day_change_amount != null && totals.day_change_pct != null
-                  ? `${formatCurrency(totals.day_change_amount)} (${formatPct(
-                      totals.day_change_pct,
-                    )}) today`
-                  : undefined
-              }
-              tone={toneOf(totals?.day_change_amount)}
-              hint="Market value of every priced holding at the latest quotes, and today's move vs the prior close."
-            />
-            <StatTile
-              label={stats?.month ? `Spending — ${formatMonth(stats.month)}` : 'Spending'}
-              value={cashflowOnly ? '—' : formatCurrency(stats?.total)}
-              delta={spendDelta?.text}
-              tone={spendDelta?.tone}
-              direction={spendDelta?.direction}
-              hint="The latest entered month's total spend against your trailing 12-month average."
-            />
-            {/* A rate is a level, not a movement: no delta, no arrow. */}
-            <StatTile
-              label={taxLabel}
-              value={tax === null ? '—' : formatPct(tax.totals.effective_rate, { signed: false })}
-              hint="Total tax ÷ gross income from the tax engine, for the year named in the label."
-            />
-          </div>
-          {showYtd && ytd && (
-            <section className="card ytd-card">
-              <h2 className="eyebrow">
-                Year to date — {ytd.year}
-                <InfoHint text="The year so far: net-worth change since the last pre-January snapshot, plus spend, net pay, savings rate, and dividends." />
-              </h2>
-              <dl className="ytd-facts">
-                <div className="ytd-fact">
-                  <dt>Net worth</dt>
-                  <dd>
-                    {ytd.netWorthDelta === null ? (
-                      '—'
-                    ) : (
-                      // Glyph + colour + the signed number — three channels, none alone
-                      // (StatTile's delta grammar). Up is good here, so glyph and tone agree.
-                      <span
-                        className={
-                          ytd.netWorthDelta > 0
-                            ? 'delta-positive'
-                            : ytd.netWorthDelta < 0
-                              ? 'delta-negative'
-                              : ''
-                        }
-                      >
-                        <span aria-hidden="true">
-                          {ytd.netWorthDelta > 0 ? '▲ ' : ytd.netWorthDelta < 0 ? '▼ ' : ''}
-                        </span>
-                        {formatCurrency(ytd.netWorthDelta)}
-                        {ytd.netWorthPct !== null && ` (${formatPct(ytd.netWorthPct)})`}
-                      </span>
-                    )}
-                    {ytd.anchorMonth && (
-                      <span className="ytd-sub"> since {formatMonth(ytd.anchorMonth)}</span>
-                    )}
-                  </dd>
-                </div>
-                <div className="ytd-fact">
-                  <dt>Spend</dt>
-                  <dd>{formatCurrency(ytd.spend)}</dd>
-                </div>
-                <div className="ytd-fact">
-                  <dt>Net pay</dt>
-                  <dd>{formatCurrency(ytd.netPay)}</dd>
-                </div>
-                <div className="ytd-fact">
-                  <dt>Savings rate</dt>
-                  <dd>
-                    {ytd.savingsRate === null
-                      ? '—'
-                      : formatPct(ytd.savingsRate, { signed: false })}
-                  </dd>
-                </div>
-                <div className="ytd-fact">
-                  <dt>Dividends collected</dt>
-                  <dd>{ytd.dividends === null ? '—' : formatCurrency(ytd.dividends)}</dd>
-                </div>
-              </dl>
-            </section>
-          )}
-          <div className="card-grid">
-            <section className="card span-12">
-              <h2 className="eyebrow">
-                Net worth trend
-                <InfoHint text="Net worth at every monthly snapshot — the series the Net Worth page breaks down by group." />
-              </h2>
-              <NavLink className="drill-hint" to="/net-worth">
-                Open net worth →
-              </NavLink>
-              {nwTrend ? (
-                <EChart
-                  option={nwTrend}
-                  height={220}
-                  ariaLabel="Line chart of net worth at every monthly snapshot"
-                  onClick={() => navigate('/net-worth')}
-                  animateEntrance={!fromCache}
-                />
-              ) : (
-                <p className="empty-note">No snapshots yet.</p>
-              )}
-            </section>
-            <section className="card span-12">
-              <h2 className="eyebrow">
-                Portfolio performance
-                <InfoHint text="Portfolio value vs cost basis, checkpointed weekly after Monday's close; the pinging dot is live. The S&P 500 line invests only the starting balance; VOO (your contributions) invests every inferred contribution instead." />
-              </h2>
-              <NavLink className="drill-hint" to="/portfolio">
-                Open portfolio →
-              </NavLink>
-              {perf ? (
-                <EChart
-                  option={perf}
-                  height={280}
-                  ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
-                  onClick={() => navigate('/portfolio')}
-                  animateEntrance={!fromCache}
-                />
-              ) : (
-                <p className="empty-note">No performance history yet.</p>
-              )}
-            </section>
-            <section className="card span-12">
-              <h2 className="eyebrow">
-                Recent spending
-                <InfoHint text="Total spend for each of the last 12 entered months." />
-              </h2>
-              <NavLink className="drill-hint" to="/spending">
-                Open spending →
-              </NavLink>
-              {bars ? (
-                <EChart
-                  option={bars}
-                  height={240}
-                  ariaLabel="Bar chart of total spending for each of the last 12 entered months"
-                  onClick={openSpendingMonth}
-                  animateEntrance={!fromCache}
-                />
-              ) : (
-                <p className="empty-note">No spending months yet.</p>
-              )}
-            </section>
-            <MoneyFlowCard
-              flow={flow}
-              failed={flowFailed}
-              onRetry={() => loadFlow(flowYear)}
-              onYearChange={showFlowYear}
-            />
-          </div>
-          <div className="up-next">
-            <h2 className="eyebrow">
-              Up next
-              <InfoHint text="The next few dated events — vests, ESPP dates, ex-dividends, paydays, deadlines — from the calendar." />
-            </h2>
-            {upNextFailed ? (
-              <p className="drill-hint">Couldn&apos;t load upcoming events.</p>
-            ) : upNext === null ? null : upNextItems(upNext, todayIso()).length === 0 ? (
-              <p className="drill-hint">
-                Nothing scheduled in the next {UP_NEXT_WINDOW_DAYS} days.
-              </p>
-            ) : (
-              <ul className="up-next-list">
-                {upNextItems(upNext, todayIso()).map((event) => (
-                  <li key={eventKey(event)}>
-                    {event.href !== null ? (
-                      <NavLink to={event.href} className="up-next-link">
-                        <span className="up-next-date">{formatDate(event.date)}</span>{' '}
-                        {event.label}
-                      </NavLink>
-                    ) : (
-                      // Custom events are informational — no page to open (spec §9.2).
-                      <span className="up-next-link up-next-plain">
-                        <span className="up-next-date">{formatDate(event.date)}</span>{' '}
-                        {event.label}
-                      </span>
-                    )}
-                  </li>
+        }
+        scopeRow={<ScopeBar owner />}
+        resource={{
+          // A failed FIRST load is the frame's alert alone rather than a page of $0.00
+          // tiles that reads as "you are broke" (PortfolioPage posture); a failed RELOAD
+          // keeps the previous payload up under the frame's stale line.
+          status: data === null ? (error !== null ? 'error' : 'loading') : 'ready',
+          error,
+          busy,
+          fromCache,
+          retry: reload,
+        }}
+        skeleton={{
+          tiles: 4,
+          cards: [
+            { span: 12, height: 220 },
+            { span: 12, height: 280 },
+            { span: 12, height: 240 },
+            { span: 12, height: 200 },
+          ],
+        }}
+      >
+        {data !== null && (
+          <>
+            {/* The dashboard's to-do list: each line is a condition the snapshot itself
+                proves and a link to where it gets fixed. Absent when nothing needs doing —
+                an "all clear" badge would be one more thing to read every morning. */}
+            {attention.length > 0 && (
+              <nav className="attention-strip" aria-label="Needs attention">
+                {attention.map((item) => (
+                  <NavLink key={item.key} className="attention-item" to={item.to}>
+                    {item.text} →
+                  </NavLink>
                 ))}
-              </ul>
+              </nav>
             )}
-            <NavLink className="drill-hint" to="/calendar">
-              Open calendar →
-            </NavLink>
-          </div>
-          {/* Three different clocks: quotes move daily, snapshots and spending months are
-              hand-entered. The page says which date each half of it is standing on. */}
-          <div className="overview-freshness">
-            <span className={isStaleQuote(asOf) ? 'freshness stale' : 'freshness'}>
-              {/* Capitalized, a deliberate departure from PortfolioPage's lowercase pair
-                  ("prices as of …" / "prices never refreshed" — a note tucked beside its
-                  Refresh button). This row is three PEER clauses separated by dots, and
-                  its other two capitalize; a lowercase third would read as a fragment. */}
-              {asOf ? `Prices as of ${formatDate(asOf)}` : 'Prices never refreshed'}
-            </span>
-            <span aria-hidden="true">·</span>
-            <span className="freshness">
-              {summary?.month
-                ? `Net worth through ${formatMonth(summary.month)}`
-                : 'Net worth — no snapshots'}
-            </span>
-            <span aria-hidden="true">·</span>
-            <span className="freshness">
-              {stats?.month ? `Spending through ${formatMonth(stats.month)}` : 'Spending — no months'}
-            </span>
-          </div>
-        </div>
-      )}
+            <div className="kpi-row">
+              <StatTile
+                hero
+                label={summary?.month ? `Net worth — ${formatMonth(summary.month)}` : 'Net worth'}
+                value={formatCurrency(summary?.net_worth)}
+                // A FRESH-paint flourish only: a cached paint is a number the user has already
+                // seen, and re-counting it would fake newness. Money rides the wire as a decimal
+                // string, hence Number() for the easing math — the last frame drops the override
+                // and renders `value` itself, so the end state is the string above verbatim.
+                countUp={
+                  !fromCache && summary?.net_worth != null
+                    ? { value: Number(summary.net_worth), format: formatCurrency }
+                    : undefined
+                }
+                // Both halves or neither: a bare amount with no rate reads as a total.
+                delta={
+                  summary?.mom_delta != null && summary.mom_pct != null
+                    ? `${formatCurrency(summary.mom_delta)} (${formatPct(summary.mom_pct)}) MoM`
+                    : undefined
+                }
+                tone={toneOf(summary?.mom_delta)}
+                hint="Assets minus liabilities from the latest monthly snapshot, with its change from the month before."
+              />
+              <StatTile
+                label="Portfolio"
+                value={formatCurrency(totals?.market_value)}
+                // Omitted before the first price refresh — there is no day to compare to.
+                delta={
+                  totals?.day_change_amount != null && totals.day_change_pct != null
+                    ? `${formatCurrency(totals.day_change_amount)} (${formatPct(
+                        totals.day_change_pct,
+                      )}) today`
+                    : undefined
+                }
+                tone={toneOf(totals?.day_change_amount)}
+                hint="Market value of every priced holding at the latest quotes, and today's move vs the prior close."
+              />
+              <StatTile
+                label={stats?.month ? `Spending — ${formatMonth(stats.month)}` : 'Spending'}
+                value={cashflowOnly ? '—' : formatCurrency(stats?.total)}
+                delta={spendDelta?.text}
+                tone={spendDelta?.tone}
+                direction={spendDelta?.direction}
+                hint={spendingHint}
+              />
+              {/* A rate is a level, not a movement: no delta, no arrow. */}
+              <StatTile
+                label={taxLabel}
+                value={tax === null ? '—' : formatPct(tax.totals.effective_rate, { signed: false })}
+                hint="Total tax ÷ gross income from the tax engine, for the year named in the label."
+              />
+            </div>
+            {showYtd && ytd && (
+              <section className="card ytd-card">
+                <h2 className="eyebrow">
+                  Year to date — {ytd.year}
+                  <InfoHint text="The year so far: net-worth change since the last pre-January snapshot, plus spend, net pay, savings rate, and dividends." />
+                </h2>
+                <dl className="ytd-facts">
+                  <div className="ytd-fact">
+                    <dt>Net worth</dt>
+                    <dd>
+                      {ytd.netWorthDelta === null ? (
+                        '—'
+                      ) : (
+                        // Glyph + colour + the signed number — three channels, none alone
+                        // (StatTile's delta grammar). Up is good here, so glyph and tone agree.
+                        <span
+                          className={
+                            ytd.netWorthDelta > 0
+                              ? 'delta-positive'
+                              : ytd.netWorthDelta < 0
+                                ? 'delta-negative'
+                                : ''
+                          }
+                        >
+                          <span aria-hidden="true">
+                            {ytd.netWorthDelta > 0 ? '▲ ' : ytd.netWorthDelta < 0 ? '▼ ' : ''}
+                          </span>
+                          {formatCurrency(ytd.netWorthDelta)}
+                          {ytd.netWorthPct !== null && ` (${formatPct(ytd.netWorthPct)})`}
+                        </span>
+                      )}
+                      {ytd.anchorMonth && (
+                        <span className="ytd-sub"> since {formatMonth(ytd.anchorMonth)}</span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="ytd-fact">
+                    <dt>Spend</dt>
+                    <dd>{formatCurrency(ytd.spend)}</dd>
+                  </div>
+                  <div className="ytd-fact">
+                    <dt>Net pay</dt>
+                    <dd>{formatCurrency(ytd.netPay)}</dd>
+                  </div>
+                  <div className="ytd-fact">
+                    <dt>Savings rate</dt>
+                    <dd>
+                      {ytd.savingsRate === null
+                        ? '—'
+                        : formatPct(ytd.savingsRate, { signed: false })}
+                    </dd>
+                  </div>
+                  <div className="ytd-fact">
+                    <dt>Dividends collected</dt>
+                    <dd>{ytd.dividends === null ? '—' : formatCurrency(ytd.dividends)}</dd>
+                  </div>
+                </dl>
+              </section>
+            )}
+            <div className="card-grid">
+              <section className="card span-12">
+                <h2 className="eyebrow">
+                  Net worth trend
+                  <InfoHint text="Net worth at every monthly snapshot — the series the Net Worth page breaks down by group." />
+                </h2>
+                <NavLink className="drill-hint" to="/net-worth">
+                  Open net worth →
+                </NavLink>
+                {nwTrend ? (
+                  <EChart
+                    option={nwTrend}
+                    height={220}
+                    ariaLabel="Line chart of net worth at every monthly snapshot"
+                    onClick={() => navigate('/net-worth')}
+                    animateEntrance={!fromCache}
+                  />
+                ) : (
+                  <p className="empty-note">No snapshots yet.</p>
+                )}
+              </section>
+              <section className="card span-12">
+                <h2 className="eyebrow">
+                  Portfolio performance
+                  <InfoHint text={performanceHint} />
+                </h2>
+                <NavLink className="drill-hint" to="/portfolio">
+                  Open portfolio →
+                </NavLink>
+                {perf ? (
+                  <EChart
+                    option={perf}
+                    height={280}
+                    ariaLabel="Line chart of portfolio value against cost basis and benchmark lines, weekly"
+                    onClick={() => navigate('/portfolio')}
+                    animateEntrance={!fromCache}
+                  />
+                ) : (
+                  <p className="empty-note">No performance history yet.</p>
+                )}
+              </section>
+              <section className="card span-12">
+                <h2 className="eyebrow">
+                  Recent spending
+                  <InfoHint text="Total spend for each of the last 12 entered months." />
+                </h2>
+                <NavLink className="drill-hint" to="/spending">
+                  Open spending →
+                </NavLink>
+                {bars ? (
+                  <EChart
+                    option={bars}
+                    height={240}
+                    ariaLabel="Bar chart of total spending for each of the last 12 entered months"
+                    onClick={openSpendingMonth}
+                    animateEntrance={!fromCache}
+                  />
+                ) : (
+                  <p className="empty-note">No spending months yet.</p>
+                )}
+              </section>
+              <MoneyFlowCard
+                flow={flow}
+                failed={flowFailed}
+                onRetry={() => loadFlow(flowYear)}
+                onYearChange={showFlowYear}
+              />
+            </div>
+            <div className="up-next">
+              <h2 className="eyebrow">
+                Up next
+                <InfoHint text="The next few dated events — vests, ESPP dates, ex-dividends, paydays, deadlines — from the calendar." />
+              </h2>
+              {upNextFailed ? (
+                <p className="drill-hint">Couldn&apos;t load upcoming events.</p>
+              ) : upNext === null ? null : upNextItems(upNext, todayIso()).length === 0 ? (
+                <p className="drill-hint">
+                  Nothing scheduled in the next {UP_NEXT_WINDOW_DAYS} days.
+                </p>
+              ) : (
+                <ul className="up-next-list">
+                  {upNextItems(upNext, todayIso()).map((event) => (
+                    <li key={eventKey(event)}>
+                      {event.href !== null ? (
+                        <NavLink to={event.href} className="up-next-link">
+                          <span className="up-next-date">{formatDate(event.date)}</span>{' '}
+                          {event.label}
+                        </NavLink>
+                      ) : (
+                        // Custom events are informational — no page to open (spec §9.2).
+                        <span className="up-next-link up-next-plain">
+                          <span className="up-next-date">{formatDate(event.date)}</span>{' '}
+                          {event.label}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <NavLink className="drill-hint" to="/calendar">
+                Open calendar →
+              </NavLink>
+            </div>
+            {/* Three different clocks: quotes move daily, snapshots and spending months are
+                hand-entered. The page says which date each half of it is standing on. */}
+            <div className="overview-freshness">
+              <span className={isStaleQuote(asOf) ? 'freshness stale' : 'freshness'}>
+                {/* Capitalized, a deliberate departure from PortfolioPage's lowercase pair
+                    ("prices as of …" / "prices never refreshed" — a note tucked beside its
+                    Refresh button). This row is three PEER clauses separated by dots, and
+                    its other two capitalize; a lowercase third would read as a fragment. */}
+                {asOf ? `Prices as of ${formatDate(asOf)}` : 'Prices never refreshed'}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="freshness">
+                {summary?.month
+                  ? `Net worth through ${formatMonth(summary.month)}`
+                  : 'Net worth — no snapshots'}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="freshness">
+                {stats?.month ? `Spending through ${formatMonth(stats.month)}` : 'Spending — no months'}
+              </span>
+            </div>
+          </>
+        )}
+      </PageFrame>
     </div>
   )
 }

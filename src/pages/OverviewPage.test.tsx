@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
@@ -67,6 +67,11 @@ vi.mock('../api/overview', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/overview')>()),
   fetchMoneyFlow: vi.fn(),
 }))
+// The scope row's own two fetches (Plan 1b): the household behind the owner chips, and
+// coverage — which this page's ScopeBar never asks for, but which must not reach the
+// network if a later scope key does.
+vi.mock('../api/household', () => ({ fetchHousehold: vi.fn() }))
+vi.mock('../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 // echarts needs a real canvas and is NEVER rendered in jsdom (house law). What the three
 // charts DRAW is pinned elsewhere — the net-worth trend and the bars in
 // src/components/overview/overviewChartOptions.test.ts, the performance lines in
@@ -98,7 +103,9 @@ vi.mock('../components/EChart', async () => {
   }
 })
 import { fetchCalendar } from '../api/calendar'
+import { fetchCoverage } from '../api/coverage'
 import { fetchLots } from '../api/espp'
+import { fetchHousehold } from '../api/household'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import { fetchMoneyFlow } from '../api/overview'
 import { fetchDividends, fetchHistory, fetchHoldings } from '../api/portfolio'
@@ -298,6 +305,16 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
   }
 }
 
+// Two people, so the scope row really renders its owner chips (one person hides them).
+// The primary is the LOWER id here, which is the order the chips must survive.
+const HOUSEHOLD = {
+  people: [
+    { id: 1, name: 'Edward', is_primary: true },
+    { id: 2, name: 'Grace', is_primary: false },
+  ],
+  marriage_date: null,
+}
+
 function upNextEvents(count = 6): CalendarEvent[] {
   return Array.from({ length: count }, (_, i) => ({
     date: daysAgo(-(i + 1)),
@@ -386,10 +403,16 @@ function LocationProbe() {
   return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
 }
 
-function renderPage() {
+// Routed, not bare: a click-through has to really UNMOUNT this page the way the app's
+// router does. Rendered unconditionally, the page's own scope normalization would re-stamp
+// ?owner= onto whatever URL the click navigated to.
+function renderPage(entry = '/') {
   return render(
-    <MemoryRouter>
-      <OverviewPage />
+    <MemoryRouter initialEntries={[entry]}>
+      <Routes>
+        <Route path="/" element={<OverviewPage />} />
+        <Route path="*" element={null} />
+      </Routes>
       <LocationProbe />
     </MemoryRouter>,
   )
@@ -428,6 +451,11 @@ function categoriesOf(chart: Element): string {
 beforeEach(() => {
   vi.clearAllMocks()
   clearSnapshots()
+  // useScope falls back to localStorage for keys the URL leaves empty — a scope one test
+  // picks would otherwise be the next test's default.
+  localStorage.clear()
+  vi.mocked(fetchHousehold).mockResolvedValue(HOUSEHOLD)
+  vi.mocked(fetchCoverage).mockResolvedValue({ balances: [], spending: [], net_pay: [] })
 })
 
 /** The eleven-client snapshot exactly as the page stores it (the `flow` leg is its own
@@ -482,7 +510,7 @@ describe('OverviewPage tiles', () => {
     // paints only, and a settling number is not a string this test can pin. The revalidation
     // still goes out and lands the same payload, so every figure below is the snapshot's.
     const payload = serve()
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -523,7 +551,7 @@ describe('OverviewPage tiles', () => {
   it('drops the hero delta when the server sends an amount with no rate', async () => {
     // Cached paint (see above): the hero VALUE is pinned here too, so the count-up stays off.
     const payload = serve({ summary: summaryOut({ mom_delta: '100.00', mom_pct: null }) })
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -658,7 +686,7 @@ describe('OverviewPage snapshot fan-out', () => {
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
-    expect(fetchTimeseries).toHaveBeenCalledWith('monthly')
+    expect(fetchTimeseries).toHaveBeenCalledWith('monthly', null)
   })
 
   it('refetches all eleven clients on Refresh', async () => {
@@ -911,7 +939,7 @@ describe('OverviewPage failures', () => {
     expect(document.querySelectorAll('.stat-tile')).toHaveLength(0)
 
     serve()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading the overview' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
     await screen.findByText('Net worth — Aug 2026')
     expect(screen.queryByRole('alert')).toBeNull()
@@ -929,16 +957,14 @@ describe('OverviewPage failures', () => {
     // Seeded so the first paint is cached and the hero settles nowhere (spec §8) — the
     // successful load this test needs before the failure still happens, as the revalidation.
     const payload = serve()
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
     failAll('overview unavailable')
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
 
-    await screen.findByText('overview unavailable — the page may be showing earlier data.', {
-      exact: false,
-    })
+    await screen.findByText(/Showing earlier data — overview unavailable/)
     // The previous snapshot survives the failure — a dashboard that blanks itself on a
     // dropped connection is worse than one that admits the numbers are a minute old.
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
@@ -954,7 +980,7 @@ describe('OverviewPage failures', () => {
     // Seeded so the hero is static from the first paint (spec §8) — the two refreshes whose
     // ordering this test is about are unchanged.
     const payload = serve()
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     renderPage()
     await screen.findByText('Net worth — Aug 2026')
 
@@ -1094,7 +1120,7 @@ it('Refresh refetches the money flow alongside the snapshot', async () => {
 describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('paints instantly from a seeded snapshot and still revalidates', () => {
     const payload = serve()
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     pendAllSnapshotFetches()
     const { container } = renderPage()
     // The hero tile's number is up on the very first paint, with no Loading… line.
@@ -1111,7 +1137,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('seeds the up-next strip from its own day-keyed track', () => {
     const payload = serve()
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     pendAllSnapshotFetches()
     // todayIso() is LOCAL-date based (utils/months) — the UTC slice would miss by a day.
     setSnapshot(`overview:upnext:${todayIso()}`, upNextEvents())
@@ -1123,7 +1149,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('a changed revalidation payload updates the page and re-arms the charts', async () => {
     const payload = serve()
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     serve({ summary: summaryOut({ net_worth: '2000000.00' }) })
     const { container } = renderPage()
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
@@ -1138,7 +1164,7 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
 
   it('leaves the charts still when the revalidation payload is identical', async () => {
     const payload = serve()
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     const { container } = renderPage()
     // The dim lifting is the revalidation landing — .finally runs on every resolution.
     await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
@@ -1177,7 +1203,7 @@ describe('OverviewPage — skeleton first paint (2026-08-27 spec §3)', () => {
 
   it('revalidates a seeded page under the dim, never behind a skeleton', () => {
     const payload = serve()
-    setSnapshot('overview', snapshotOf(payload))
+    setSnapshot('overview:all', snapshotOf(payload))
     pendAllSnapshotFetches()
     const { container } = renderPage()
 
@@ -1208,5 +1234,132 @@ describe('OverviewPage — hero count-up (2026-08-27 spec §8)', () => {
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$0.00')
     // The non-hero tiles never settle — they are up whole on the same paint.
     expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
+  })
+})
+
+describe('OverviewPage — shell frame and owner scope', () => {
+  it('renders through PageFrame: one h1, actions on the right, no bespoke header', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+
+    expect(document.querySelector('.page-frame-header h1')?.textContent).toBe('Overview')
+    expect(document.querySelectorAll('h1')).toHaveLength(1)
+    // The hand-built header is gone, not merely restyled.
+    expect(document.querySelector('.page-header')).toBeNull()
+    expect(
+      screen.getByRole('button', { name: 'Refresh' }).closest('.page-frame-actions'),
+    ).toBeTruthy()
+  })
+
+  it('a reload failure keeps the page and shows the frame’s stale line with Retry', async () => {
+    serve()
+    renderPage()
+    await screen.findByText('Net worth — Aug 2026')
+
+    vi.mocked(fetchSummary).mockRejectedValueOnce(new ApiError('offline', 503))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    expect(await screen.findByText(/Showing earlier data — offline/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(document.querySelector('.stat-tile')).toBeTruthy() // data stayed up
+  })
+
+  it('a first-load failure shows the frame’s alert alone', async () => {
+    serve()
+    vi.mocked(fetchSummary).mockRejectedValueOnce(new ApiError('boom', 500))
+    renderPage()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('boom')
+    // Not even the skeleton's ghost tiles: an error with no data is the banner alone.
+    expect(document.querySelector('.stat-tile')).toBeNull()
+  })
+
+  it('honors the owner scope from the URL for net worth and holdings, not spending', async () => {
+    serve()
+    renderPage('/?owner=2')
+    await screen.findByText('Overview')
+
+    await waitFor(() => expect(vi.mocked(fetchSummary)).toHaveBeenCalledWith(2))
+    expect(vi.mocked(fetchTimeseries)).toHaveBeenCalledWith('monthly', 2)
+    expect(vi.mocked(fetchHoldings)).toHaveBeenCalledWith(2)
+    // Spending is household-wide — no owner param, and exactly one call.
+    expect(vi.mocked(fetchMatrix)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchMatrix)).toHaveBeenCalledWith()
+    expect(await screen.findByRole('group', { name: 'Whose' })).toBeTruthy()
+  })
+
+  // The owner-keyed snapshot brings NetWorthPage's 2026-08-28 stranding bug within reach:
+  // an identical-payload skip judged against the CACHE leaves the previous scope's numbers
+  // on screen forever, because returning to a warm scope always finds its own payload there.
+  it('restores the household view after visiting an owner and coming back', async () => {
+    const payload = serve()
+    const scoped = holdingsOut({
+      totals: { ...holdingsOut().totals, market_value: '99.00' },
+    })
+    // The Portfolio tile, not the hero: a fresh paint settles the hero with a count-up.
+    vi.mocked(fetchHoldings).mockImplementation((owner) =>
+      Promise.resolve(owner === 2 ? scoped : payload.holdings),
+    )
+    renderPage()
+    await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
+    await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$99.00'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
+  })
+
+  it('dims the body while the new scope is in flight', async () => {
+    serve()
+    const { container } = renderPage()
+    await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
+    await waitFor(() => expect(container.querySelector('.loading-dim.is-loading')).toBeNull())
+
+    pendAllSnapshotFetches()
+    fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
+    // Nothing warm for that scope yet: the previous payload stays up, under the dim, rather
+    // than the refetch running silently behind unchanged numbers.
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+    expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67')
+  })
+
+  it('paints an already-seen scope from the cache the moment the chip flips', async () => {
+    const payload = serve()
+    const { container } = renderPage()
+    await waitFor(() => expect(valueOf(tileFor('Portfolio'))).toBe('$812,345.67'))
+
+    setSnapshot('overview:2', {
+      ...snapshotOf(payload),
+      holdings: holdingsOut({ totals: { ...holdingsOut().totals, market_value: '99.00' } }),
+    })
+    pendAllSnapshotFetches()
+    fireEvent.click(await screen.findByRole('button', { name: 'Grace' }))
+    // Instant, before any fetch resolves — and still revalidating underneath.
+    expect(valueOf(tileFor('Portfolio'))).toBe('$99.00')
+    expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
+  })
+
+  it('says so on the two cards an owner scope cannot reach, and nothing when it is All', async () => {
+    serve()
+    renderPage('/?owner=2')
+    await screen.findByText('Net worth — Aug 2026')
+    // A hint is an InfoHint's aria-label — the only place this sentence can be read.
+    expect(
+      screen.getByRole('button', { name: /Household total — spending has no owner\./ }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('button', {
+        name: /Household history; owner scope does not apply to the weekly checkpoints\./,
+      }),
+    ).toBeTruthy()
+
+    cleanup()
+    renderPage('/?owner=all')
+    await screen.findByText('Net worth — Aug 2026')
+    expect(screen.queryByRole('button', { name: /spending has no owner/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /weekly checkpoints/ })).toBeNull()
   })
 })
