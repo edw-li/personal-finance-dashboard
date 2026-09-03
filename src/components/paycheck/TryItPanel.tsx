@@ -1,0 +1,375 @@
+import { useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { previewPaycheck } from '../../api/paycheck'
+import CompareTable, { type CompareRow } from '../../sandbox/CompareTable'
+import PresetRow from '../../sandbox/PresetRow'
+import SandboxPanel from '../../sandbox/SandboxPanel'
+import { readEntries } from '../../sandbox/scenarioUrl'
+import SliderBox from '../../sandbox/SliderBox'
+import { useSandbox, type PinResult, type SandboxSpec } from '../../sandbox/useSandbox'
+import type {
+  HsaCoverage,
+  PaycheckBreakdownOut,
+  PaycheckPreviewLines,
+  PaycheckPreviewOut,
+} from '../../types/api'
+import { canonicalAmount, isAmount } from '../../utils/amount'
+import { formatCurrency, formatDate } from '../../utils/format'
+import { currentMonthIso } from '../../utils/months'
+import AmountInput from '../AmountInput'
+import Segmented from '../shell/Segmented'
+import PacePanel from './PacePanel'
+import {
+  ESPP_MAX_PCT,
+  HSA_TIERS,
+  applySeedFor,
+  decodePaycheck,
+  encodePaycheck,
+  isEmptyPaycheck,
+  labelForPaycheck,
+  paycheckPresets,
+  toOverrides,
+  type ApplySeed,
+  type PaycheckKnob,
+  type PaycheckScenario,
+} from './paycheckScenario'
+import './pace.css'
+
+// The Paycheck "Try it" card (2026-09-03 planning-sandboxes spec §9). The scenario lives in
+// the URL (`whatif=<knob>:<wire value>`); every figure on screen is the server's — the
+// preview endpoint returns baseline, scenario and delta at three cadences, and the pace
+// strip re-renders from `pace.scenario`. Apply never posts: it hands the PAGE a pre-filled
+// profile form, and the form's own Add profile is the only write.
+const UNITS = [
+  { value: 'per_check', label: 'Per check' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'annual', label: 'Annual' },
+] as const
+type Unit = (typeof UNITS)[number]['value']
+
+// Withholding and the dental/vision deduction are COSTS: a rise reads red.
+const ROWS: CompareRow[] = [
+  { key: 'gross', label: 'Gross', kind: 'money' },
+  { key: 'trad_401k', label: 'Traditional 401(k)', kind: 'money' },
+  { key: 'dental_vision', label: 'Dental & vision', kind: 'money', invert: true },
+  { key: 'hsa', label: 'HSA', kind: 'money' },
+  { key: 'taxable', label: 'Taxable', kind: 'money' },
+  { key: 'withholding', label: 'Withholding', kind: 'money', invert: true },
+  { key: 'post_tax', label: 'Post-tax', kind: 'money' },
+  { key: 'roth_401k', label: 'Roth 401(k)', kind: 'money' },
+  { key: 'after_tax_401k', label: 'After-tax 401(k)', kind: 'money' },
+  { key: 'espp', label: 'ESPP', kind: 'money' },
+  { key: 'net_pay', label: 'Net pay', kind: 'money' },
+  { key: 'savings', label: 'Payroll savings', kind: 'money' },
+]
+
+const COVERAGE_OPTIONS: { value: HsaCoverage; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'self', label: 'Self only' },
+  { value: 'family', label: 'Family' },
+]
+
+const MIN_PAY_PERIODS = 1
+const MAX_PAY_PERIODS = 366
+
+export default function TryItPanel({
+  profileId,
+  personId,
+  breakdown,
+  onApply,
+}: {
+  /** The page's two selectors — exactly what GET /breakdown was asked with. */
+  profileId: number | null
+  personId: number | null
+  /** The check on screen: its profile is the base, its pace rows carry the limits. */
+  breakdown: PaycheckBreakdownOut
+  /** Apply: the page pre-fills its profile form with this seed. */
+  onApply: (seed: ApplySeed) => void
+}) {
+  const [params] = useSearchParams()
+  // Arriving with entries opens the panel (spec §6); otherwise closed by default (§8.1).
+  const [open, setOpen] = useState(() => readEntries(params).length > 0)
+  const [unit, setUnit] = useState<Unit>('per_check')
+  const profile = breakdown.profile
+
+  const spec = useMemo<SandboxSpec<PaycheckScenario, PaycheckPreviewOut>>(
+    () => ({
+      page: 'paycheck',
+      decode: decodePaycheck,
+      encode: encodePaycheck,
+      isEmpty: isEmptyPaycheck,
+      preview: (scenario) =>
+        previewPaycheck({ profile_id: profileId, person_id: personId, overrides: toOverrides(scenario) }),
+      baselineOf: (result) => result,
+      // A pinned row, an owner switch or a write that changes the profile in force all
+      // re-run the pins against the check now on screen.
+      dataKey: `${profileId ?? 'current'}:${personId ?? 'primary'}:${profile.id}`,
+      enabled: open,
+      labelFor: labelForPaycheck,
+    }),
+    [profileId, personId, profile.id, open],
+  )
+  const sandbox = useSandbox(spec)
+  const { scenario, result } = sandbox
+
+  const knob = (key: PaycheckKnob) => (next: string, commit: boolean) =>
+    sandbox.set(
+      (current) => {
+        const draft = { ...current }
+        if (next === '') delete draft[key]
+        else draft[key] = next
+        return draft
+      },
+      { immediate: commit },
+    )
+
+  // The scenario's own salary/periods/coverage size the presets; limits come from the pace
+  // rows already in the payload — the scenario's first (its coverage may differ), then the
+  // check's own. null → the chip is disabled with a sentence naming what to enter.
+  const limitFor = (key: string): string | null => {
+    for (const rows of [result?.pace.scenario, result?.pace.baseline, breakdown.pace]) {
+      const row = rows?.find((r) => r.key === key)
+      if (row !== undefined && row.limit !== null) return row.limit
+    }
+    return null
+  }
+  const coverage = (scenario.hsa_coverage as HsaCoverage | undefined) ?? profile.hsa_coverage
+  const presets = paycheckPresets(
+    {
+      salary: scenario.annual_salary ?? profile.annual_salary,
+      periods: Number(scenario.pay_periods_per_year ?? profile.pay_periods_per_year),
+      coverage,
+      esppPct: scenario.espp_pct ?? profile.espp_pct,
+      limitFor,
+    },
+    (patch) => sandbox.set(patch, { immediate: true }),
+  )
+
+  const block = result === null ? null : result[unit]
+  const pinSide = (r: PinResult<PaycheckPreviewOut>): PinResult<PaycheckPreviewLines> =>
+    r === 'pending' || 'error' in r ? r : r[unit].scenario
+  const nextMonth = applySeedFor(profile, scenario, currentMonthIso()).effective_date
+
+  return (
+    <SandboxPanel
+      eyebrow={`Try it — effective ${formatDate(profile.effective_date)}`}
+      hint="Move a percentage or an amount and see the check the server computes for it, against the profile shown above — nothing is saved."
+      open={open}
+      onToggle={() => setOpen((o) => !o)}
+      sandbox={sandbox}
+      closedHint={
+        <p className="drill-hint">
+          Try a different 401(k) percentage, HSA amount or withholding rate without writing a
+          profile — nothing is saved until you choose to save it as one.
+        </p>
+      }
+      presets={<PresetRow presets={presets} />}
+      staleNoun="this scenario"
+      skeletonHeight={220}
+      compare={
+        block !== null && result !== null ? (
+          <>
+            <Segmented
+              variant="toggle"
+              size="sm"
+              ariaLabel="Compare unit"
+              options={UNITS}
+              value={unit}
+              onChange={setUnit}
+            />
+            <CompareTable<PaycheckPreviewLines>
+              rows={ROWS}
+              baseline={block.baseline}
+              scenario={block.scenario}
+              valueOf={(side, key) => side[key as keyof PaycheckPreviewLines]}
+              delta={(key) => block.delta[key as keyof PaycheckPreviewLines]}
+              pins={sandbox.pins.map((pin) => ({ id: pin.id, label: pin.label, result: pinSide(sandbox.pinResults[pin.id]) }))}
+              onUnpin={sandbox.unpin}
+            />
+            {/* The engine's advisory sentences, in the waterfall's own shape — the rule lives
+                in PaycheckPage.css, which the one page that mounts this card always loads. */}
+            {result.warnings.length > 0 && (
+              <div className="paycheck-warnings">
+                {result.warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </div>
+            )}
+            {!sandbox.empty && <PacePanel items={result.pace.scenario} />}
+          </>
+        ) : null
+      }
+      apply={
+        <button
+          type="button"
+          className="button button-primary"
+          onClick={() => onApply(applySeedFor(profile, scenario, currentMonthIso()))}
+        >
+          Save as profile effective {formatDate(nextMonth)}…
+        </button>
+      }
+    >
+      <SliderBox id="tryit-trad" label="Traditional 401(k)" kind="percent" value={scenario.trad_401k_pct ?? ''} actual={profile.trad_401k_pct} min="0" max="0.5" step="0.005" onChange={knob('trad_401k_pct')} />
+      <SliderBox id="tryit-roth" label="Roth 401(k)" kind="percent" value={scenario.roth_401k_pct ?? ''} actual={profile.roth_401k_pct} min="0" max="0.5" step="0.005" onChange={knob('roth_401k_pct')} />
+      <SliderBox id="tryit-after" label="After-tax 401(k)" kind="percent" value={scenario.after_tax_401k_pct ?? ''} actual={profile.after_tax_401k_pct} min="0" max="0.5" step="0.005" onChange={knob('after_tax_401k_pct')} />
+      <SliderBox id="tryit-espp" label="ESPP" kind="percent" hint="Capped at 15% — the §423 ceiling." value={scenario.espp_pct ?? ''} actual={profile.espp_pct} min="0" max={ESPP_MAX_PCT} step="0.005" onChange={knob('espp_pct')} />
+      <SliderBox id="tryit-hsa" label="HSA per check" kind="money" value={scenario.hsa_per_check ?? ''} actual={profile.hsa_per_check} min="0" max="500" step="5" onChange={knob('hsa_per_check')} />
+      <div className="slider-box">
+        <div className="slider-box-head">
+          <span>HSA coverage</span>
+        </div>
+        <Segmented
+          variant="toggle"
+          size="sm"
+          ariaLabel="HSA coverage"
+          options={COVERAGE_OPTIONS}
+          value={coverage}
+          onChange={(value) =>
+            sandbox.set(
+              (current) => {
+                const draft = { ...current }
+                // Back on the stored tier is "not a knob any more", not a knob that agrees
+                // with the profile: the URL carries only what DIFFERS from the actual check.
+                if (value === profile.hsa_coverage) delete draft.hsa_coverage
+                else draft.hsa_coverage = value
+                return draft
+              },
+              { immediate: true },
+            )
+          }
+        />
+      </div>
+      <SliderBox
+        id="tryit-withholding"
+        label="Withholding"
+        kind="percent"
+        hint="The profile's one all-in rate — express a W-4 change here. The Taxes page's withholding card names the per-check remedy."
+        value={scenario.withholding_pct ?? ''}
+        actual={profile.withholding_pct}
+        min="0"
+        max="0.6"
+        step="0.001"
+        onChange={knob('withholding_pct')}
+      />
+      <BoxKnob
+        id="tryit-salary"
+        label="Annual salary"
+        kind="money"
+        value={scenario.annual_salary ?? ''}
+        actual={profile.annual_salary}
+        validate={(text) => (Number(text) > 0 ? null : 'Annual salary must be positive')}
+        onCommit={knob('annual_salary')}
+      />
+      <BoxKnob
+        id="tryit-periods"
+        label="Pay periods per year"
+        kind="plain"
+        value={scenario.pay_periods_per_year ?? ''}
+        actual={String(profile.pay_periods_per_year)}
+        validate={(text) => {
+          const n = Number(text)
+          return Number.isInteger(n) && n >= MIN_PAY_PERIODS && n <= MAX_PAY_PERIODS
+            ? null
+            : `pay_periods_per_year must be between ${MIN_PAY_PERIODS} and ${MAX_PAY_PERIODS}`
+        }}
+        onCommit={knob('pay_periods_per_year')}
+      />
+      <p className="drill-hint">
+        Dental &amp; vision flows through unchanged. Percentages are of gross;{' '}
+        <Link to="/taxes">the Taxes withholding card</Link> says what a rate change does to the
+        year. Coverage tiers: {HSA_TIERS.join(' · ')}.
+      </p>
+    </SandboxPanel>
+  )
+}
+
+/** A box-only knob (salary, periods): commits on blur/Enter, the router's fences in the
+ *  box's own words, a caption that resets to actual. Money boxes canonicalize ("$200,000" →
+ *  "200000") the way the profile form does; the typed text is control-local. */
+function BoxKnob({
+  id,
+  label,
+  kind,
+  value,
+  actual,
+  validate,
+  onCommit,
+}: {
+  id: string
+  label: string
+  kind: 'money' | 'plain'
+  value: string
+  actual: string
+  validate: (canonical: string) => string | null
+  onCommit: (next: string, commit: boolean) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const commit = () => {
+    if (draft === null) return
+    const text = draft.trim()
+    setDraft(null)
+    if (text === '') {
+      setError(null)
+      onCommit('', true)
+      return
+    }
+    if (!isAmount(text, { expressions: false })) {
+      setError(`${label} must be a number`)
+      return
+    }
+    const canonical = canonicalAmount(text, { expressions: false })
+    const problem = validate(canonical)
+    if (problem !== null) {
+      setError(problem)
+      return
+    }
+    setError(null)
+    onCommit(canonical, true)
+  }
+  return (
+    <div className="slider-box">
+      <div className="slider-box-head">
+        <label htmlFor={id}>{label}</label>
+        {value === '' && <span className="sandbox-badge">actual</span>}
+      </div>
+      {/* The wrapper hears the box's blur/Enter; AmountInput's own commit has not reached
+          state yet, so `draft` is the TYPED text — which this canonicalizes itself. */}
+      <div
+        className="slider-box-row"
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          }
+        }}
+      >
+        <AmountInput
+          id={id}
+          kind={kind}
+          aria-label={label}
+          aria-describedby={error !== null ? `${id}-error` : undefined}
+          value={draft ?? value}
+          placeholder={actual}
+          onValueChange={setDraft}
+        />
+        <button
+          type="button"
+          className="slider-box-actual"
+          onClick={() => {
+            setError(null)
+            onCommit('', true)
+          }}
+        >
+          actual {kind === 'money' ? formatCurrency(actual) : actual}
+        </button>
+      </div>
+      {error !== null && (
+        <p id={`${id}-error`} className="sandbox-field-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
