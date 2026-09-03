@@ -25,6 +25,7 @@ from app.schemas.net_worth import (
     SummaryOut,
     TimeseriesOut,
 )
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import mom_pct, quantize_money, require_first_of_month
 from app.services.net_worth_calc import (
     ZERO,
@@ -74,7 +75,11 @@ async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
 
 
 @router.post("/accounts", response_model=AccountOut, status_code=201)
-async def create_account(body: AccountCreate, db: AsyncSession = Depends(get_db)) -> Account:
+async def create_account(
+    body: AccountCreate,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Account:
     slug = slugify(body.name)
     # len guard: unicode lowercasing can EXPAND ('İ' -> 2 code points), so a <=120-char
     # name can slugify past String(120) — 422 here, never a DBAPIError 500.
@@ -106,7 +111,10 @@ async def create_account(body: AccountCreate, db: AsyncSession = Depends(get_db)
         parent_account_id=body.parent_account_id,
     )
     db.add(account)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(account)
+    batch.label = f"Created account {account.name}"
+    await batch.commit()
     return account
 
 
@@ -119,7 +127,10 @@ async def _get_account(db: AsyncSession, account_id: int) -> Account:
 
 @router.patch("/accounts/{account_id}", response_model=AccountOut)
 async def update_account(
-    account_id: int, body: AccountUpdate, db: AsyncSession = Depends(get_db)
+    account_id: int,
+    body: AccountUpdate,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> Account:
     account = await _get_account(db, account_id)
     # Every patchable account column is NOT NULL *except* the two in
@@ -154,14 +165,21 @@ async def update_account(
     )
     # slug is the importer's natural key — never rewritten here. A sheet-side rename is
     # the importer's job (per-run alias semantics, Plan 2 forward note).
+    before = row_image(account)
     for field, value in updates.items():
         setattr(account, field, value)
-    await db.commit()
+    batch.record_update(account, before)
+    batch.label = f"Updated account {account.name}"
+    await batch.commit()
     return account
 
 
 @router.delete("/accounts/{account_id}", status_code=204)
-async def delete_account(account_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_account(
+    account_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
     account = await _get_account(db, account_id)
     balance_count = (
         await db.execute(
@@ -175,9 +193,11 @@ async def delete_account(account_id: int, db: AsyncSession = Depends(get_db)) ->
             status_code=409,
             detail=f"account has {balance_count} balance rows — deactivate it instead",
         )
+    batch.record_delete(account)
+    batch.label = f"Deleted account {account.name}"
     await db.delete(account)
-    await db.commit()
-    return Response(status_code=204)
+    await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
 
 
 QUARTER_END_MONTHS = (3, 6, 9, 12)
@@ -358,7 +378,10 @@ async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> MonthBal
 
 @router.put("/months/{month}", response_model=MonthUpsertResult)
 async def put_month(
-    month: date, body: MonthUpsert, db: AsyncSession = Depends(get_db)
+    month: date,
+    body: MonthUpsert,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> MonthUpsertResult:
     require_first_of_month(month)
     ids = [entry.account_id for entry in body.balances]
@@ -396,6 +419,7 @@ async def put_month(
         )
         db.add(snapshot)
         await db.flush()
+        batch.record_insert(snapshot, month=month)
     else:
         provided = body.model_fields_set
         if "recorded_on" in provided:
@@ -412,28 +436,48 @@ async def put_month(
         ).scalars()
     }
     created = updated = unchanged = 0
+    new_rows: list[AccountBalance] = []
     for account_id, value in quantized.items():
         row = existing.get(account_id)
         if row is None:
-            db.add(AccountBalance(snapshot_id=snapshot.id, account_id=account_id, balance=value))
+            row = AccountBalance(snapshot_id=snapshot.id, account_id=account_id, balance=value)
+            db.add(row)
+            new_rows.append(row)
             created += 1
         elif row.balance != value:
+            before = row_image(row)
             row.balance = value
+            batch.record_update(row, before, month=month)
             updated += 1
         else:
             unchanged += 1
-    await db.commit()
+    if new_rows:
+        await db.flush()  # ids for the insert images
+        for row in new_rows:
+            batch.record_insert(row, month=month)
+    # Meta-only edits (recorded_on, notes) are deliberately not logged (spec section 9).
+    batch.label = (
+        f"Entered {month:%b %Y} balances — {created} accounts"
+        if snapshot_created
+        else f"Saved {month:%b %Y} balances — {created + updated} updated"
+    )
+    batch_id = await batch.commit()
     return MonthUpsertResult(
         month=month,
         snapshot_created=snapshot_created,
         created=created,
         updated=updated,
         unchanged=unchanged,
+        batch_id=batch_id,
     )
 
 
 @router.delete("/months/{month}", status_code=204)
-async def delete_month(month: date, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_month(
+    month: date,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
     """Remove a month wholesale (2026-08-31 spec §B2): the snapshot row goes and the FK's
     ON DELETE CASCADE takes every account_balances row with it (declared on the model, so
     create_all schemas carry it too). 404 when no snapshot exists — the wizard's paired
@@ -444,6 +488,24 @@ async def delete_month(month: date, db: AsyncSession = Depends(get_db)) -> Respo
     ).scalar_one_or_none()
     if snapshot is None:
         raise HTTPException(status_code=404, detail="no snapshot exists for this month")
+    balances = (
+        (
+            await db.execute(
+                select(AccountBalance)
+                .where(AccountBalance.snapshot_id == snapshot.id)
+                .order_by(AccountBalance.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Explicit ORM deletes rather than the FK cascade alone, so every row is IMAGED and the
+    # session holds no stale instances. Children first, parent LAST: undo replays in reverse.
+    for row in balances:
+        batch.record_delete(row, month=month)
+        await db.delete(row)
+    batch.record_delete(snapshot, month=month)
     await db.delete(snapshot)
-    await db.commit()
-    return Response(status_code=204)
+    batch.label = f"Deleted {month:%b %Y} balances"
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))
