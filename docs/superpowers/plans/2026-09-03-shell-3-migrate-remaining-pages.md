@@ -30,6 +30,8 @@
 | `src/pages/SettingsPage.tsx` (+ test) | PageFrame; card-level `FeedBanner`s |
 | `src/pages/NotFoundPage.tsx` | PageFrame |
 
+**Test hygiene for every new or extended test file in this plan:** the repo's vitest config has no `globals` and no setup file, so React Testing Library does NOT auto-clean between tests — add `afterEach(cleanup)` (the house pattern, see `src/components/PageSkeleton.test.tsx`) or role/text queries will find leftovers from earlier renders. `SkeletonCard` exposes its label as visually-hidden text, so query it with `getByText(label)`, not `getByLabelText`.
+
 **Contracts this plan relies on** (from Plans 1a/1b): `PageFrame` props `title`, `actions?`, `subheader?`, `scopeRow?`, `resource: { status, error?, busy?, fromCache?, retry? }`, `skeleton?: { tiles?, cards? }`; `ScopeBar` props `owner?: boolean | { joint: boolean; all?: boolean }`, `range?: boolean`, `month?: { mode: 'view' | 'edit'; anchor?; figures?; editHref?; selected?; onSelect? }`; `useScope(uses)` → `{ scope: { owner, range, month }, setScope }` where `scope.month` is an ISO first-of-month string or null and the URL carries `month=YYYY-MM` (legacy `YYYY-MM-DD` links are accepted and rewritten); `Segmented` props `variant`, `options`, `ariaLabel`, `value`, `onChange`, `multiple?`; `SkeletonCard` from `src/components/PageSkeleton` (`height`, `label`).
 
 ---
@@ -567,7 +569,10 @@ describe('MonthlyUpdatePage — shell frame', () => {
         }
         scopeRow={
           <>
-            <ScopeBar month={{ mode: 'edit', anchor, selected: month, onSelect: selectMonth }} />
+            <ScopeBar
+              month={{ mode: 'edit', anchor, selected: month, onSelect: selectMonth }}
+              revalidate={saveNonce}
+            />
             {!coveredMonths.has(anchor) && month !== anchor && (
               <button className="button" onClick={() => selectMonth(anchor)}>
                 <CalendarPlus size={15} /> Start {formatMonth(anchor)}
@@ -586,6 +591,8 @@ describe('MonthlyUpdatePage — shell frame', () => {
 ```
 
 Remove the `CalendarCheck` import and the old `MonthRibbon` import. `coveredMonths` stays (the Start button and `anchor` need it). The wizard's sticky bottom footer is untouched.
+
+`saveNonce` is a `useState(0)` counter the wizard bumps in its save-success path (next to `setSaved(...)`); `ScopeBar`'s `revalidate` prop re-runs its household/coverage fetches whenever the value changes, so the just-saved month's chip fills without leaving the page (the legacy wizard reloaded `coveredMonths` on every month change). Add a test: after a successful save, `fetchCoverage` is called again.
 
 - [ ] **Step 9: Update existing tests**: the heading no longer contains the icon (text unchanged); ribbon chip names now carry coverage words — use `/^Aug 2026/` prefixes; any test that clicked a ribbon chip still lands on `month=…&step=balances`. Mock `../api/coverage` for the ScopeBar.
 
