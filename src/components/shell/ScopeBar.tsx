@@ -134,7 +134,10 @@ export default function ScopeBar({ owner, range, month }: ScopeBarProps) {
   const showOwner = wantsOwner && people.length > 1
   if (!showOwner && !range && month === undefined) return null
 
-  const anchor = month?.anchor ?? currentMonthIso()
+  // The anchor is where the ribbon ENDS (a page may anchor ahead of today); `today` is what
+  // wears the ring. Only the anchor is injectable, so the ring always tracks the real clock.
+  const today = currentMonthIso()
+  const anchor = month?.anchor ?? today
 
   return (
     <div className="scope-bar">
@@ -163,6 +166,7 @@ export default function ScopeBar({ owner, range, month }: ScopeBarProps) {
         <div className="scope-bar-group">
           <MonthRibbon
             anchor={anchor}
+            today={today}
             earliest={earliest}
             coverage={ribbonCoverage}
             selected={month.mode === 'view' ? (scope.month ?? undefined) : month.selected}

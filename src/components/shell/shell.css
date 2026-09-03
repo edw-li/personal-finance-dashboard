@@ -276,12 +276,14 @@
   align-self: center;
 }
 
-.ribbon-page:hover:not(:disabled) {
+.ribbon-page:hover:not([aria-disabled="true"]) {
   background: var(--surface-2);
   color: var(--text);
 }
 
-.ribbon-page:disabled {
+/* The pagers stay real buttons at the boundary (they keep focus), so the dimming hangs off
+   aria-disabled rather than :disabled. */
+.ribbon-page[aria-disabled="true"] {
   opacity: 0.35;
   cursor: default;
 }
@@ -348,7 +350,6 @@
 
 .month-chip2.has-spending .month-chip2-dot {
   --right: var(--chart-3);
-  border-color: var(--accent);
 }
 
 .month-chip2.has-spending:not(.has-balances) .month-chip2-dot {
@@ -356,7 +357,8 @@
 }
 
 .month-chip2.is-today .month-chip2-dot {
-  box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--muted);
+  outline: 1.5px solid var(--muted);
+  outline-offset: 2px;
 }
 
 .month-chip2.selected {
@@ -369,6 +371,12 @@
   margin-left: 0.5rem;
   font-size: 0.72rem;
   white-space: nowrap;
+}
+
+.ribbon-edit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
 }
 
 @media (prefers-reduced-motion: no-preference) {
