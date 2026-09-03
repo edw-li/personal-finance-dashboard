@@ -1,5 +1,11 @@
 import { api } from './client'
-import type { CalendarResponse, CustomEventBody, CustomEventOut } from '../types/api'
+import type {
+  CalendarOverrideBody,
+  CalendarOverrideOut,
+  CalendarResponse,
+  CustomEventBody,
+  CustomEventOut,
+} from '../types/api'
 
 // Events for the INCLUSIVE [start, end] ISO-date range, sorted by (date, type, label).
 // The server 422s a reversed pair or a span past 400 days — callers pass ~3-month
@@ -21,4 +27,20 @@ export function updateCustomEvent(id: number, body: CustomEventBody): Promise<Cu
 
 export function deleteCustomEvent(id: number): Promise<void> {
   return api<void>(`/calendar/events/${id}`, { method: 'DELETE' })
+}
+
+// The user's edits on GENERATED events (2026-09-03 calendar spec §13) — keyed by the
+// event's stable key, full replace. encodeURIComponent keeps the colons path-safe.
+export function putCalendarOverride(
+  key: string,
+  body: CalendarOverrideBody,
+): Promise<CalendarOverrideOut> {
+  return api<CalendarOverrideOut>(`/calendar/overrides/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteCalendarOverride(key: string): Promise<void> {
+  return api<void>(`/calendar/overrides/${encodeURIComponent(key)}`, { method: 'DELETE' })
 }

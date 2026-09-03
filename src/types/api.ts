@@ -1401,35 +1401,90 @@ export type CalendarEventType =
   | 'tax_deadline'
   | 'update_due'
   | 'custom'
+  | 'card_fee'
+  | 'card_credit'
+  | 'card_anniversary'
 
-// One forward-looking event (2026-08-24 spec §5). No money fields in v1 — labels and
-// details carry share counts and prices as text. Sorted by (date, type, label) on the
-// server; the label carries identity (grant label, lot purchase date) so ICS UIDs built
-// from it never collide on same-day same-type events.
+/** The seven derived families plus custom — the eight chip palette slots (2026-09-03
+ *  calendar spec §7). */
+export type CalendarSource =
+  | 'rsu'
+  | 'espp'
+  | 'dividend'
+  | 'payroll'
+  | 'tax'
+  | 'card'
+  | 'ritual'
+  | 'custom'
+export type CalendarDirection = 'in' | 'out' | 'neutral'
+/** stored fact · stored parameter · quote or model */
+export type CalendarBasis = 'confirmed' | 'scheduled' | 'estimated'
+export type CalendarRecurrence = 'none' | 'weekly' | 'monthly' | 'yearly'
+
+export interface CalendarItem {
+  label: string
+  amount: string | null
+  person_id: number | null
+  detail: string | null
+}
+
+// One forward-looking event with money (2026-09-03 calendar spec §6). `key` is
+// "<source>:<entity_ref>:<date>" — stable identity, the ICS UID stem, the overrides
+// handle. Same-day vests and paydays arrive FOLDED: one event, constituents in `items`.
 export interface CalendarEvent {
   date: string // ISO YYYY-MM-DD
   type: CalendarEventType
-  label: string
+  source: CalendarSource
+  key: string
+  entity_ref: string
+  label: string // full sentence: drawer, list, ICS SUMMARY
+  short_label: string // ≤ 24 chars for the chip
   detail: string | null
-  href: string | null // null for custom events — they have no page (spec §9.3)
-  id: number | null // set only for custom events, the edit/delete handle
-  /** Set only for custom events too. When it is not null the server has already stamped
-   *  " — <name>" onto `label`, and anything that re-saves the row must strip it first
-   *  (calendarView.stripPersonSuffix). */
+  amount: string | null // 2dp decimal string; null = unknowable, never 0
+  direction: CalendarDirection
+  basis: CalendarBasis
+  items: CalendarItem[]
+  href: string | null // null for custom events — they have no page
+  id: number | null // custom rows only, the edit/delete handle
+  /** Custom rows only. When not null the server has stamped " — <name>" onto `label`;
+   *  anything that re-saves the row strips it first (calendarView.stripPersonSuffix). */
   person_id: number | null
+  /** Custom rows that recur: the series the edit form must round-trip. */
+  recurrence: CalendarRecurrence | null
+  until: string | null
+  series_start: string | null
+  // --- the user's overlay (spec §13)
+  done: boolean
+  hidden: boolean
+  note: string | null
+  amount_overridden: boolean
+}
+
+export interface SourceHealth {
+  source: CalendarSource
+  status: 'ok' | 'partial' | 'off'
+  note: string | null
 }
 
 export interface CalendarResponse {
   events: CalendarEvent[]
+  sources: SourceHealth[]
+  /** The employer quote every vest estimate rides (ISO datetime), or null. */
+  quote_as_of: string | null
 }
 
-// POST/PATCH body — full replace (the form always submits all three fields).
+// POST/PATCH body — full replace (the form always submits every field).
 export interface CustomEventBody {
   date: string
   label: string
   detail: string | null
   /** null = household. */
   person_id: number | null
+  amount: string | null
+  direction: CalendarDirection
+  recurrence: CalendarRecurrence
+  /** Inclusive series end; only with a recurrence. */
+  until: string | null
 }
 
 export interface CustomEventOut {
@@ -1439,6 +1494,22 @@ export interface CustomEventOut {
   label: string
   detail: string | null
   person_id: number | null
+  amount: string | null
+  direction: CalendarDirection
+  recurrence: CalendarRecurrence
+  until: string | null
+}
+
+/** PUT /calendar/overrides/{key} — full replace. */
+export interface CalendarOverrideBody {
+  done: boolean
+  hidden: boolean
+  note: string | null
+  amount: string | null
+}
+
+export interface CalendarOverrideOut extends CalendarOverrideBody {
+  key: string
 }
 
 // --- projection ---
@@ -1547,10 +1618,15 @@ export interface AppSettingsOut {
   swr_pct: string
   espp_ticker: string | null
   price_refresh_cron: string
+  /** Day of month (1–28) the monthly-update reminder lands on (2026-09-03 calendar spec §12). */
+  calendar_update_due_day: number
 }
 
-// PUT is full-form (the paycheck/espp whole-form law): all three settings every time.
-export type AppSettingsUpdate = AppSettingsOut
+// PUT is full-form for the three original settings; the due day is optional (omitted =
+// keep the stored value) because two Settings cards write this endpoint.
+export type AppSettingsUpdate = Omit<AppSettingsOut, 'calendar_update_due_day'> & {
+  calendar_update_due_day?: number
+}
 
 // --- overview: money flow ---
 // GET /overview/money-flow?year= (2026-08-25 spec §5) — one server-composed, reconciled

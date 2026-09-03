@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { calendarEvent } from '../../testing/calendarFixtures'
 import type { CalendarEvent } from '../../types/api'
 import {
   EVENT_COLORS,
@@ -23,12 +24,16 @@ describe('EVENT_COLORS', () => {
       offering_start: 'var(--chart-7)',
       tax_deadline: 'var(--chart-8)',
       custom: 'var(--muted)',
+      card_fee: 'var(--chart-7)',
+      card_credit: 'var(--chart-7)',
+      card_anniversary: 'var(--chart-7)',
     })
   })
 
-  it('gives every type its own slot and the legend names them all', () => {
-    expect(new Set(Object.values(EVENT_COLORS)).size).toBe(9)
-    expect(EVENT_TYPE_ORDER).toHaveLength(9)
+  // Twelve types cannot each own one of nine slots — the three card types share the
+  // card family's until Lane C replaces this map with SOURCE_COLORS (eight for eight).
+  it('names every type in the legend order', () => {
+    expect(EVENT_TYPE_ORDER).toHaveLength(12)
     for (const type of EVENT_TYPE_ORDER) {
       expect(EVENT_COLORS[type]).toBeDefined()
       expect(EVENT_TYPE_LABELS[type].length).toBeGreaterThan(0)
@@ -50,33 +55,18 @@ describe('hrefLabel', () => {
     expect(hrefLabel('/paycheck')).toBe('Paycheck')
     expect(hrefLabel('/taxes')).toBe('Taxes')
     expect(hrefLabel('/update')).toBe('Monthly update')
+    expect(hrefLabel('/credit-cards')).toBe('Credit cards')
     expect(hrefLabel('/nowhere')).toBe('page')
   })
 })
 
 describe('eventKey', () => {
   it('keys custom rows by id and computed rows by their identity triple', () => {
+    expect(eventKey(calendarEvent({ date: '2026-09-12', type: 'custom', label: 'Car', id: 41 }))).toBe(
+      'custom-41',
+    )
     expect(
-      eventKey({
-        date: '2026-09-12',
-        type: 'custom',
-        label: 'Car',
-        detail: null,
-        href: null,
-        id: 41,
-        person_id: null,
-      }),
-    ).toBe('custom-41')
-    expect(
-      eventKey({
-        date: '2026-09-16',
-        type: 'payday',
-        label: 'Payday',
-        detail: null,
-        href: '/paycheck',
-        id: null,
-        person_id: null,
-      }),
+      eventKey(calendarEvent({ date: '2026-09-16', type: 'payday', label: 'Payday' })),
     ).toBe('payday-2026-09-16-Payday')
   })
 })
@@ -84,33 +74,19 @@ describe('eventKey', () => {
 describe('groupByDate', () => {
   it('buckets same-day events together, preserving server order', () => {
     const events: CalendarEvent[] = [
-      {
-        date: '2026-09-15',
-        type: 'payday',
-        label: 'Payday',
-        detail: null,
-        href: '/paycheck',
-        id: null,
-        person_id: null,
-      },
-      {
+      calendarEvent({ date: '2026-09-15', type: 'payday', label: 'Payday' }),
+      calendarEvent({
         date: '2026-09-15',
         type: 'tax_deadline',
         label: 'Tax deadline — Q3 estimated payment',
         detail: 'Q3 estimated payment',
-        href: '/taxes',
-        id: null,
-        person_id: null,
-      },
-      {
+      }),
+      calendarEvent({
         date: '2026-09-16',
         type: 'rsu_vest',
         label: 'RSU vest — 2025 offer',
         detail: '25 sh — 2025 offer',
-        href: '/comp',
-        id: null,
-        person_id: null,
-      },
+      }),
     ]
     const grouped = groupByDate(events)
     expect([...grouped.keys()]).toEqual(['2026-09-15', '2026-09-16'])

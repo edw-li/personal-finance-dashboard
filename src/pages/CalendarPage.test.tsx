@@ -27,6 +27,7 @@ import {
   updateCustomEvent,
 } from '../api/calendar'
 import { fetchHousehold } from '../api/household'
+import { calendarEvent } from '../testing/calendarFixtures'
 import { downloadIcs } from '../utils/ics'
 
 // Wall-clock-proof fixtures (OverviewPage.test's NW_MONTHS discipline): the page boots
@@ -36,42 +37,26 @@ const DAY_15 = `${MONTH.slice(0, 8)}15`
 
 function fixtureEvents(): CalendarEvent[] {
   return [
-    {
+    calendarEvent({
       date: DAY_15,
       type: 'rsu_vest',
       label: 'RSU vest — 2025 offer',
       detail: '25 sh — 2025 offer',
-      href: '/comp',
-      id: null,
-      person_id: null,
-    },
-    {
-      date: DAY_15,
-      type: 'payday',
-      label: 'Payday',
-      detail: null,
-      href: '/paycheck',
-      id: null,
-      person_id: null,
-    },
-    {
+    }),
+    calendarEvent({ date: DAY_15, type: 'payday', label: 'Payday' }),
+    calendarEvent({
       date: addDays(DAY_15, 3),
       type: 'ex_dividend',
       label: 'Ex-dividend — NVDA',
       detail: 'NVDA',
-      href: '/portfolio',
-      id: null,
-      person_id: null,
-    },
-    {
+    }),
+    calendarEvent({
       date: DAY_15,
       type: 'custom',
       label: 'Car insurance',
       detail: 'policy 8841',
-      href: null,
       id: 41,
-      person_id: null,
-    },
+    }),
   ]
 }
 
@@ -83,7 +68,11 @@ function renderPage(
   payload: CalendarEvent[] = fixtureEvents(),
   entry = '/calendar',
 ) {
-  vi.mocked(fetchCalendar).mockResolvedValue({ events: payload } satisfies CalendarResponse)
+  vi.mocked(fetchCalendar).mockResolvedValue({
+    events: payload,
+    sources: [],
+    quote_as_of: null,
+  } satisfies CalendarResponse)
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <ToastProvider>
@@ -219,7 +208,11 @@ describe('CalendarPage', () => {
 
   it('shows the error banner with a working Retry', async () => {
     vi.mocked(fetchCalendar).mockRejectedValueOnce(new ApiError('calendar down', 500))
-    vi.mocked(fetchCalendar).mockResolvedValueOnce({ events: fixtureEvents() })
+    vi.mocked(fetchCalendar).mockResolvedValueOnce({
+      events: fixtureEvents(),
+      sources: [],
+      quote_as_of: null,
+    })
     render(
       <MemoryRouter>
         <CalendarPage />
@@ -341,6 +334,10 @@ describe('CalendarPage', () => {
       label: 'Car wash',
       detail: null,
       person_id: null,
+      amount: null,
+      direction: 'neutral',
+      recurrence: 'none',
+      until: null,
     })
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
@@ -354,6 +351,10 @@ describe('CalendarPage', () => {
       label: 'Car wash',
       detail: null,
       person_id: null,
+      amount: null,
+      direction: 'neutral',
+      recurrence: 'none',
+      until: null,
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
     // The form closes on success.
@@ -367,6 +368,10 @@ describe('CalendarPage', () => {
       label: 'Renewal',
       detail: 'policy 8841',
       person_id: null,
+      amount: null,
+      direction: 'neutral',
+      recurrence: 'none',
+      until: null,
     })
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
@@ -386,6 +391,10 @@ describe('CalendarPage', () => {
       label: 'Renewal',
       detail: 'policy 8841',
       person_id: null,
+      amount: null,
+      direction: 'neutral',
+      recurrence: 'none',
+      until: null,
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(2))
   })
@@ -429,6 +438,10 @@ describe('CalendarPage', () => {
       label: 'Car insurance',
       detail: 'policy 8841',
       person_id: null,
+      amount: null,
+      direction: 'neutral',
+      recurrence: 'none',
+      until: null,
     })
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
@@ -442,6 +455,10 @@ describe('CalendarPage', () => {
       label: 'Car insurance',
       detail: 'policy 8841',
       person_id: null,
+      amount: null,
+      direction: 'neutral',
+      recurrence: 'none',
+      until: null,
     })
     await waitFor(() => expect(vi.mocked(fetchCalendar)).toHaveBeenCalledTimes(3))
   })
@@ -504,15 +521,7 @@ describe('CalendarPage — snapshot cache (2026-08-27 spec §1)', () => {
   it('a changed revalidation payload updates the grid', async () => {
     setSnapshot(`calendar:${MONTH}`, fixtureEvents())
     renderPage([
-      {
-        date: DAY_15,
-        type: 'custom' as const,
-        label: 'Fresh from the server',
-        detail: null,
-        href: null,
-        id: 99,
-        person_id: null,
-      },
+      calendarEvent({ date: DAY_15, type: 'custom', label: 'Fresh from the server', id: 99 }),
     ])
     expect(
       Array.from(grid().querySelectorAll('button.cal-chip')).map((c) => c.textContent),
@@ -539,6 +548,7 @@ describe('CalendarPage — person tags', () => {
   it('sends the chosen person and defaults to Household', async () => {
     vi.mocked(createCustomEvent).mockResolvedValue({
       id: 99, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
+      amount: null, direction: 'neutral' as const, recurrence: 'none' as const, until: null,
     })
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
@@ -559,6 +569,7 @@ describe('CalendarPage — person tags', () => {
     })
     vi.mocked(createCustomEvent).mockResolvedValue({
       id: 99, date: DAY_15, label: 'Dentist', detail: null, person_id: null,
+      amount: null, direction: 'neutral' as const, recurrence: 'none' as const, until: null,
     })
     renderPage()
     await screen.findAllByText('RSU vest — 2025 offer')
@@ -572,10 +583,13 @@ describe('CalendarPage — person tags', () => {
 
   it('STRIPS the stamped suffix before editing — a re-save must not stamp it twice', async () => {
     renderPage([
-      {
-        date: DAY_15, type: 'custom', label: 'Dentist — Sam', detail: null, href: null,
-        id: 41, person_id: 2,
-      },
+      calendarEvent({
+        date: DAY_15,
+        type: 'custom',
+        label: 'Dentist — Sam',
+        id: 41,
+        person_id: 2,
+      }),
     ])
     await screen.findAllByText('Dentist — Sam')
     fireEvent.click(gridChip('Dentist — Sam'))
@@ -584,6 +598,7 @@ describe('CalendarPage — person tags', () => {
     expect((screen.getByLabelText('Person') as HTMLSelectElement).value).toBe('2')
     vi.mocked(updateCustomEvent).mockResolvedValue({
       id: 41, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
+      amount: null, direction: 'neutral' as const, recurrence: 'none' as const, until: null,
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(updateCustomEvent).toHaveBeenCalled())
@@ -597,12 +612,16 @@ describe('CalendarPage — person tags', () => {
     vi.mocked(deleteCustomEvent).mockResolvedValue(undefined)
     vi.mocked(createCustomEvent).mockResolvedValue({
       id: 42, date: DAY_15, label: 'Dentist', detail: null, person_id: 2,
+      amount: null, direction: 'neutral' as const, recurrence: 'none' as const, until: null,
     })
     renderPage([
-      {
-        date: DAY_15, type: 'custom', label: 'Dentist — Sam', detail: null, href: null,
-        id: 41, person_id: 2,
-      },
+      calendarEvent({
+        date: DAY_15,
+        type: 'custom',
+        label: 'Dentist — Sam',
+        id: 41,
+        person_id: 2,
+      }),
     ])
     await screen.findAllByText('Dentist — Sam')
     fireEvent.click(gridChip('Dentist — Sam'))
