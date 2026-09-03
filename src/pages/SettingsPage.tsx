@@ -13,6 +13,8 @@ import HouseholdCard from '../components/settings/HouseholdCard'
 import ImportReportView from '../components/settings/ImportReportView'
 import LimitsCard from '../components/settings/LimitsCard'
 import SystemCard from '../components/settings/SystemCard'
+import { FeedBanner } from '../components/shell/Feed'
+import PageFrame from '../components/shell/PageFrame'
 import type { AppSettingsOut, ImportReport, PersonOut } from '../types/api'
 import { isPlainDecimal, shiftPoint } from '../utils/percent'
 import '../components/panels.css'
@@ -265,268 +267,269 @@ export default function SettingsPage() {
 
   return (
     <div className="page settings-page">
-      <div className="page-header">
-        <h1>Settings</h1>
-        <div className="spacer" />
-      </div>
+      <PageFrame
+        title="Settings"
+        resource={{
+          // Ready as soon as the first load SETTLES, either way: the Appearance card below
+          // owns no request, so a settings GET that failed must not blank the page — the
+          // frame's stale line carries the message and Retry above the card that survived.
+          status: loadedOnce || error !== null ? 'ready' : 'loading',
+          error,
+          busy: loading && loadedOnce,
+          retry: () => {
+            setLoading(true)
+            load()
+          },
+        }}
+        // The page's own shape: the full-width import card over the two half-width forms.
+        skeleton={{
+          tiles: 0,
+          cards: [
+            { span: 12, height: 200 },
+            { span: 6, height: 260 },
+            { span: 6, height: 260 },
+          ],
+        }}
+      >
+        <div className="card-grid">
+          {loadedOnce && (
+            <>
+              {/* Full width: a diff of nine sheets is a table, not a form field. It shares
+                  the two forms' `loadedOnce` gate on purpose — a settings GET that failed
+                  means the API is unreachable, and an upload card that could only fail is
+                  not worth offering. */}
+              <section className="card span-12" id="import">
+                <h2 className="eyebrow">
+                  Import workbook
+                  <InfoHint text="Dry run shows the diff without writing. Apply overwrites sheet-owned rows — dividends are never touched; taxes inside sheet-covered years reset to the sheet." />
+                </h2>
+                <div className="settings-form">
+                  <label>
+                    Workbook (.xlsx)
+                    {/* Uncontrolled by design — a file input's value belongs to the browser;
+                        `file` state is what the change event handed us. */}
+                    <input
+                      className="field-input"
+                      type="file"
+                      accept=".xlsx"
+                      disabled={importBusy !== null}
+                      onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+                    />
+                  </label>
+                  <p className="settings-note">
+                    Dry run parses the workbook and shows what would change — nothing is
+                    written. Applying overwrites imported rows: taxes inputs and brackets
+                    edited here for sheet-covered years are reset to the sheet.
+                  </p>
+                  <div className="settings-actions">
+                    <button
+                      type="button"
+                      className="button"
+                      disabled={file === null || importBusy !== null}
+                      onClick={() => runImport(true)}
+                    >
+                      {importBusy === 'dry' ? 'Dry run…' : 'Dry run'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      disabled={!canApply}
+                      onClick={applyImport}
+                    >
+                      {importBusy === 'apply' ? 'Applying…' : 'Apply import'}
+                    </button>
+                  </div>
+                </div>
+                {importError && (
+                  <>
+                    <FeedBanner error={importError} />
+                    {/* Said under EVERY import failure, because the likeliest cause does not
+                        look like itself: a File is a lazy handle on a disk offset, and saving
+                        the workbook again from Excel invalidates it — the browser then fails to
+                        read the bytes at upload time and the message that surfaces is a
+                        network-looking one. Re-picking the file is the whole fix. */}
+                    <p className="settings-note">
+                      If you changed the workbook after choosing it, pick the file again.
+                    </p>
+                  </>
+                )}
+                {report && <ImportReportView report={report} />}
+                {report?.applied && (
+                  // Not a live region of its own: the report's own header announces (role=status)
+                  // at the same moment, and two regions would read the news twice.
+                  <p className="settings-note">
+                    Other pages load the new data on their next visit.
+                  </p>
+                )}
+              </section>
 
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}{' '}
-          <button
-            className="button"
-            onClick={() => {
-              setLoading(true)
-              load()
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      )}
+              {/* Data-out beside data-in (2026-08-31 audit): the snapshot download and backup
+                  trail live on this card, so it sits with the import rather than closing the
+                  page as pure status. Own fetch/error (SystemCard), same loadedOnce gate as
+                  everything here: a settings GET that failed means the API is unreachable. */}
+              <SystemCard />
 
-      {loading && !loadedOnce && <p className="empty-note">Loading…</p>}
-
-      {loadedOnce && (
-        <div className={`card-grid loading-dim${loading ? ' is-loading' : ''}`}>
-          {/* Full width: a diff of nine sheets is a table, not a form field. It shares the
-              two forms' `loadedOnce` gate on purpose — a settings GET that failed means the
-              API is unreachable, and an upload card that could only fail is not worth
-              offering. */}
-          <section className="card span-12" id="import">
-            <h2 className="eyebrow">
-              Import workbook
-              <InfoHint text="Dry run shows the diff without writing. Apply overwrites sheet-owned rows — dividends are never touched; taxes inside sheet-covered years reset to the sheet." />
-            </h2>
-            <div className="settings-form">
-              <label>
-                Workbook (.xlsx)
-                {/* Uncontrolled by design — a file input's value belongs to the browser;
-                    `file` state is what the change event handed us. */}
-                <input
-                  className="field-input"
-                  type="file"
-                  accept=".xlsx"
-                  disabled={importBusy !== null}
-                  onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
-                />
-              </label>
-              <p className="settings-note">
-                Dry run parses the workbook and shows what would change — nothing is written.
-                Applying overwrites imported rows: taxes inputs and brackets edited here for
-                sheet-covered years are reset to the sheet.
-              </p>
-              <div className="settings-actions">
-                <button
-                  type="button"
-                  className="button"
-                  disabled={file === null || importBusy !== null}
-                  onClick={() => runImport(true)}
+              <section className="card span-6" id="app-settings">
+                <h2 className="eyebrow">
+                  App settings
+                  <InfoHint text="The withdrawal rate feeds the 4% line and FI target; the ESPP ticker prices lots; the cron schedules price refreshes (applied on save)." />
+                </h2>
+                <form
+                  className="settings-form"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    save()
+                  }}
                 >
-                  {importBusy === 'dry' ? 'Dry run…' : 'Dry run'}
-                </button>
-                <button
-                  type="button"
-                  className="button button-primary"
-                  disabled={!canApply}
-                  onClick={applyImport}
+                  {/* All three boxes go read-only for the in-flight window, because the
+                      PUT response RE-SEEDS them: text typed while saving would be overwritten
+                      by the echo of the older values, next to a fresh "Saved" — which is
+                      exactly the claim this page's every-keystroke-retires-the-note rule
+                      exists to prevent. */}
+                  <label>
+                    Withdrawal rate (% / year)
+                    <input
+                      className="field-input"
+                      inputMode="decimal"
+                      value={swrPctBox}
+                      disabled={saving}
+                      onChange={(e) => editSetting(setSwrPctBox)(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    ESPP ticker
+                    <input
+                      className="field-input"
+                      value={tickerBox}
+                      disabled={saving}
+                      onChange={(e) => editSetting(setTickerBox)(e.target.value)}
+                    />
+                  </label>
+                  <p className="settings-note">
+                    Blank = ESPP page shows &apos;no ticker configured&apos;.
+                  </p>
+                  <label>
+                    Price refresh cron
+                    {/* .field-input is already monospaced (the page sheet only un-right-aligns
+                        it), which is what a cron expression wants. */}
+                    <input
+                      className="field-input"
+                      value={cronBox}
+                      disabled={saving}
+                      onChange={(e) => editSetting(setCronBox)(e.target.value)}
+                    />
+                  </label>
+                  <p className="settings-note">
+                    5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied
+                    to the live schedule on save. Must not fire more often than hourly. The Monday
+                    run also records the weekly performance point — keep Mondays covered.
+                  </p>
+                  <div className="settings-actions">
+                    <button type="submit" className="button button-primary" disabled={saving}>
+                      {saving ? 'Saving…' : 'Save settings'}
+                    </button>
+                  </div>
+                  <FeedBanner error={formError} />
+                  {savedNote && (
+                    <p className="settings-note" role="status">
+                      Saved — the schedule is applied immediately.
+                    </p>
+                  )}
+                </form>
+              </section>
+
+              <section className="card span-6" id="password">
+                <h2 className="eyebrow">
+                  Password
+                  <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
+                </h2>
+                <form
+                  className="settings-form"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    submitPassword()
+                  }}
                 >
-                  {importBusy === 'apply' ? 'Applying…' : 'Apply import'}
-                </button>
-              </div>
-            </div>
-            {importError && (
-              <>
-                <div className="error-banner" role="alert">
-                  {importError}
-                </div>
-                {/* Said under EVERY import failure, because the likeliest cause does not
-                    look like itself: a File is a lazy handle on a disk offset, and saving
-                    the workbook again from Excel invalidates it — the browser then fails to
-                    read the bytes at upload time and the message that surfaces is a
-                    network-looking one. Re-picking the file is the whole fix. */}
-                <p className="settings-note">
-                  If you changed the workbook after choosing it, pick the file again.
-                </p>
-              </>
-            )}
-            {report && <ImportReportView report={report} />}
-            {report?.applied && (
-              // Not a live region of its own: the report's own header announces (role=status)
-              // at the same moment, and two regions would read the news twice.
-              <p className="settings-note">Other pages load the new data on their next visit.</p>
-            )}
-          </section>
-
-          {/* Data-out beside data-in (2026-08-31 audit): the snapshot download and backup
-              trail live on this card, so it sits with the import rather than closing the
-              page as pure status. Own fetch/error (SystemCard), same loadedOnce gate as
-              everything here: a settings GET that failed means the API is unreachable. */}
-          <SystemCard />
-
-          <section className="card span-6" id="app-settings">
-            <h2 className="eyebrow">
-              App settings
-              <InfoHint text="The withdrawal rate feeds the 4% line and FI target; the ESPP ticker prices lots; the cron schedules price refreshes (applied on save)." />
-            </h2>
-            <form
-              className="settings-form"
-              onSubmit={(e) => {
-                e.preventDefault()
-                save()
-              }}
-            >
-              {/* All three boxes go read-only for the in-flight window, because the PUT
-                  response RE-SEEDS them: text typed while saving would be overwritten by the
-                  echo of the older values, next to a fresh "Saved" — which is exactly the
-                  claim this page's every-keystroke-retires-the-note rule exists to prevent. */}
-              <label>
-                Withdrawal rate (% / year)
-                <input
-                  className="field-input"
-                  inputMode="decimal"
-                  value={swrPctBox}
-                  disabled={saving}
-                  onChange={(e) => editSetting(setSwrPctBox)(e.target.value)}
-                />
-              </label>
-              <label>
-                ESPP ticker
-                <input
-                  className="field-input"
-                  value={tickerBox}
-                  disabled={saving}
-                  onChange={(e) => editSetting(setTickerBox)(e.target.value)}
-                />
-              </label>
-              <p className="settings-note">
-                Blank = ESPP page shows &apos;no ticker configured&apos;.
-              </p>
-              <label>
-                Price refresh cron
-                {/* .field-input is already monospaced (the page sheet only un-right-aligns
-                    it), which is what a cron expression wants. */}
-                <input
-                  className="field-input"
-                  value={cronBox}
-                  disabled={saving}
-                  onChange={(e) => editSetting(setCronBox)(e.target.value)}
-                />
-              </label>
-              <p className="settings-note">
-                5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied
-                to the live schedule on save. Must not fire more often than hourly. The Monday
-                run also records the weekly performance point — keep Mondays covered.
-              </p>
-              <div className="settings-actions">
-                <button type="submit" className="button button-primary" disabled={saving}>
-                  {saving ? 'Saving…' : 'Save settings'}
-                </button>
-              </div>
-              {formError && (
-                <div className="error-banner" role="alert">
-                  {formError}
-                </div>
-              )}
-              {savedNote && (
-                <p className="settings-note" role="status">
-                  Saved — the schedule is applied immediately.
-                </p>
-              )}
-            </form>
-          </section>
-
-          <section className="card span-6" id="password">
-            <h2 className="eyebrow">
-              Password
-              <InfoHint text="Changes your login password and signs out every other device; this one stays signed in." />
-            </h2>
-            <form
-              className="settings-form"
-              onSubmit={(e) => {
-                e.preventDefault()
-                submitPassword()
-              }}
-            >
-              <label>
-                Current password
-                <input
-                  className="field-input"
-                  type="password"
-                  autoComplete="current-password"
-                  value={currentPw}
-                  onChange={(e) => editPassword(setCurrentPw)(e.target.value)}
-                />
-              </label>
-              <label>
-                New password
-                <input
-                  className="field-input"
-                  type="password"
-                  autoComplete="new-password"
-                  value={newPw}
-                  onChange={(e) => editPassword(setNewPw)(e.target.value)}
-                />
-              </label>
-              <label>
-                Confirm new password
-                <input
-                  className="field-input"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirmPw}
-                  onChange={(e) => editPassword(setConfirmPw)(e.target.value)}
-                />
-              </label>
-              <div className="settings-actions">
-                <button type="submit" className="button button-primary" disabled={pwBusy}>
-                  {pwBusy ? 'Changing…' : 'Change password'}
-                </button>
-              </div>
-              {pwError && (
-                <div className="error-banner" role="alert">
-                  {pwError}
-                </div>
-              )}
-              {pwChanged && (
-                <p className="settings-note" role="status">
-                  Password changed.
-                </p>
-              )}
-              {/* What the change costs and what it does not: the server bumps token_version,
-                  which kills every token issued before it — including this tab's, which is
-                  why the response hands back a fresh one for changePassword to store. */}
-              <p className="settings-note">
-                Other devices are signed out; this one stays signed in.
-              </p>
-            </form>
-          </section>
+                  <label>
+                    Current password
+                    <input
+                      className="field-input"
+                      type="password"
+                      autoComplete="current-password"
+                      value={currentPw}
+                      onChange={(e) => editPassword(setCurrentPw)(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    New password
+                    <input
+                      className="field-input"
+                      type="password"
+                      autoComplete="new-password"
+                      value={newPw}
+                      onChange={(e) => editPassword(setNewPw)(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Confirm new password
+                    <input
+                      className="field-input"
+                      type="password"
+                      autoComplete="new-password"
+                      value={confirmPw}
+                      onChange={(e) => editPassword(setConfirmPw)(e.target.value)}
+                    />
+                  </label>
+                  <div className="settings-actions">
+                    <button type="submit" className="button button-primary" disabled={pwBusy}>
+                      {pwBusy ? 'Changing…' : 'Change password'}
+                    </button>
+                  </div>
+                  <FeedBanner error={pwError} />
+                  {pwChanged && (
+                    <p className="settings-note" role="status">
+                      Password changed.
+                    </p>
+                  )}
+                  {/* What the change costs and what it does not: the server bumps token_version,
+                      which kills every token issued before it — including this tab's, which is
+                      why the response hands back a fresh one for changePassword to store. */}
+                  <p className="settings-note">
+                    Other devices are signed out; this one stays signed in.
+                  </p>
+                </form>
+              </section>
+            </>
+          )}
 
           {/* Theme and density (2026-09-03 shell spec §11). Sits above the management cards
               because it is browser-local and instant — the one card here that owns no fetch
-              and no error state of its own. It still renders inside the page's `loadedOnce`
-              gate with everything else, which is the accepted cost of one grid: a settings
-              GET that failed hides the whole page, appearance included. The command palette
-              jumps straight to its #appearance anchor. */}
+              and no error state of its own, which is why it is the one card OUTSIDE the
+              `loadedOnce` gates on either side of it: when the API is unreachable the theme
+              switch (and the palette's #appearance jump) still has to work. */}
           <AppearanceCard />
 
-          {/* The three management cards (2026-08-26 spec §6). Each owns its own fetch and
-              error state (SystemCard's posture) and shares the forms' `loadedOnce` gate:
-              a settings GET that failed means the API is unreachable, and cards that could
-              only fail are not worth offering. */}
-          <HouseholdCard onPeopleChange={setPeople} />
-          <CategoriesCard />
-          <AccountsCard people={people} />
+          {loadedOnce && (
+            <>
+              {/* The three management cards (2026-08-26 spec §6). Each owns its own fetch
+                  and error state (SystemCard's posture) and shares the forms' `loadedOnce`
+                  gate: a settings GET that failed means the API is unreachable, and cards
+                  that could only fail are not worth offering. */}
+              <HouseholdCard onPeopleChange={setPeople} />
+              <CategoriesCard />
+              <AccountsCard people={people} />
 
-          {/* Contribution limits (2026-08-27 spec §5): its own fetch and error state, the
-              same loadedOnce gate as the cards above it. */}
-          <LimitsCard />
+              {/* Contribution limits (2026-08-27 spec §5): its own fetch and error state, the
+                  same loadedOnce gate as the cards above it. */}
+              <LimitsCard />
 
-          {/* Assistant key + default model (2026-09-01 spec §10): its own fetch and error
-              state, the same loadedOnce gate as the cards above it. */}
-          <AssistantCard />
+              {/* Assistant key + default model (2026-09-01 spec §10): its own fetch and error
+                  state, the same loadedOnce gate as the cards above it. */}
+              <AssistantCard />
+            </>
+          )}
         </div>
-      )}
+      </PageFrame>
     </div>
   )
 }
