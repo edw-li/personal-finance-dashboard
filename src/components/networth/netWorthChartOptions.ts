@@ -3,7 +3,7 @@
 // in NetWorthPage (it reads page state); only the parts worth unit-testing live here.
 import type { EChartsOption } from '../../charts/echarts'
 import { personSlot, slotColor } from '../../charts/entities'
-import { LINE, STACK_WASH, cents, grid, moneyAxis, monthAxis, pctAxis, stagger } from '../../charts/grammar'
+import { LINE, STACK_WASH, cents, grid, moneyAxis, monthAxis, pctAxis } from '../../charts/grammar'
 import { FOCUS, legendFor } from '../../charts/legend'
 import { GROUP_COLORS, GROUP_LABELS, GROUP_ORDER, INK, MUTED, OTHER_SERIES_COLOR } from '../../charts/theme'
 import { MARK_LINE_LABEL, MARK_LINE_STYLE, anchorMonthLabel } from '../../charts/markLine'
@@ -443,10 +443,10 @@ export function netWorthBridgeOption(
     tooltip: waterfallTooltip(steps),
     xAxis: monthAxis(steps.map((s) => s.label), { gap: true }),
     yAxis: moneyAxis(),
-    // The stagger is added HERE rather than inside charts/waterfall.ts (C1 is read-only for
-    // this lane): §11 asks every stacked bar to enter on the 12ms cascade, and conformance
-    // enforces it. C7 should fold it into waterfallSeries so the tax waterfall gets it too.
-    series: [placeholder, { ...amount, ...stagger(1) }],
+    // No local stagger: waterfallSeries carries the §11 cascade itself (C7, 2026-09-04), so
+    // the bridge and the tax waterfall enter from ONE definition. Re-spreading it here was
+    // a no-op that also hid a missing stagger in the shared builder from this chart.
+    series: [placeholder, amount],
   }
 }
 
