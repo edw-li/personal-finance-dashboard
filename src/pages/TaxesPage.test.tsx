@@ -1341,24 +1341,38 @@ describe('TaxesPage', () => {
   })
 })
 
-describe('?year= deep link (2026-08-25 spec §2d)', () => {
+// The composition card's drill is ?comp=, NOT ?year= — that one is the page's own selected
+// tax year (below). Two different questions: this card's resting state is "no drill at all",
+// which a selected year cannot say.
+describe('?comp= composition drill (2026-08-25 spec §2d)', () => {
   it('opens the year pie straight from the URL', async () => {
     const taxed2023 = summaryFor(2023)
     taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
-    renderPage('/taxes?year=2023')
+    renderPage('/taxes?comp=2023')
     expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+  })
+
+  it('drills independently of the year the PAGE is on', async () => {
+    const taxed2023 = summaryFor(2023)
+    taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
+    vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
+    renderPage('/taxes?comp=2023')
+    // The pie is 2023's while the page — and the what-if card it hands the year to — is
+    // still on the latest year. One param each, so neither can drag the other.
+    expect(await screen.findByText('Tax breakdown — 2023')).toBeTruthy()
+    expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2024')
   })
 
   it('ignores a garbled or unknown year — the trend renders as usual', async () => {
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({
       years: [summaryFor(2023), summaryFor(2024)],
     })
-    renderPage('/taxes?year=banana')
+    renderPage('/taxes?comp=banana')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     expect(screen.queryByText(/Tax breakdown —/)).toBeNull()
     cleanup()
-    renderPage('/taxes?year=1999')
+    renderPage('/taxes?comp=1999')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     expect(screen.queryByText(/Tax breakdown —/)).toBeNull()
   })
@@ -1367,14 +1381,16 @@ describe('?year= deep link (2026-08-25 spec §2d)', () => {
     const taxed2023 = summaryFor(2023)
     taxed2023.federal = { ...taxed2023.federal, tax: '1000.00' }
     vi.mocked(fetchAllTaxSummaries).mockResolvedValue({ years: [taxed2023, summaryFor(2024)] })
-    renderPage('/taxes?whatif=VTI')
+    renderPage('/taxes?whatif=sale%3A7%3A40')
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
     fireEvent.click(trendChart()) // the trend; the mock clicks 2023
     await screen.findByText('Tax breakdown — 2023')
-    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI&year=2023')
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/taxes?whatif=sale%3A7%3A40&comp=2023',
+    )
     fireEvent.click(trendChart()) // any click in detail mode returns
     await waitFor(() => expect(trendCategories()).toBe('2023,2024'))
-    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
+    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=sale%3A7%3A40')
   })
 })
 
