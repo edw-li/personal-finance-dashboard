@@ -22,6 +22,6 @@ async def import_xlsx(
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 15 MB)")
     try:
-        return await run_import(data, db, dry_run=dry_run)
+        return await run_import(data, db, dry_run=dry_run, actor=user.email)
     except InvalidWorkbookError:
         raise HTTPException(status_code=400, detail="Not a valid .xlsx workbook") from None
