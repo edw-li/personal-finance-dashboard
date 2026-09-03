@@ -6,7 +6,11 @@ import type { MoneyFlowOut } from '../../types/api'
 // DRAWS is pinned in moneyFlowOptions.test.ts.
 vi.mock('../EChart', async () => {
   const { createElement } = await import('react')
-  return { default: () => createElement('div', { 'data-testid': 'echart' }) }
+  return {
+    default: ({ ariaLabel }: { ariaLabel?: string }) =>
+      // ChartCard hands every mount its house sentence (F11) — the card test reads it.
+      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel }),
+  }
 })
 
 import MoneyFlowCard from './MoneyFlowCard'
@@ -75,6 +79,9 @@ it('renders the chart, the year chips with the active year, and the warnings lin
   expect(buttons[0].getAttribute('aria-pressed')).toBe('false')
   // Server warning sentences render verbatim, muted, under the chart.
   expect(screen.getByText('net pay entered 7/12 months')).toBeDefined()
+  // The card's chrome is ChartCard's now: an export row and the house aria sentence.
+  expect(screen.getByRole('group', { name: /Export money-flow/ })).toBeDefined()
+  expect(screen.getByLabelText(/Sankey diagram of 2026 money flow/)).toBeDefined()
   // The InfoHint explains the residual and the sources (spec §5's card copy).
   expect(screen.getByLabelText(/vest shares kept \+ ESPP contributions \+ timing/)).toBeDefined()
 })
@@ -115,7 +122,7 @@ it('joins multiple warnings with the house dot separator', () => {
 
 it('a failed fetch renders the inline error with a working Retry', () => {
   renderCard(null, true)
-  expect(screen.getByText(/Couldn't load the money flow/)).toBeDefined()
+  expect(screen.getByText("Couldn't load the money flow.")).toBeDefined()
   expect(screen.queryByTestId('echart')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Retry loading the money flow' }))
   expect(onRetry).toHaveBeenCalledTimes(1)
@@ -126,4 +133,10 @@ it('renders only the header while the first fetch is in flight', () => {
   expect(screen.getByText('Money flow')).toBeDefined()
   expect(screen.queryByTestId('echart')).toBeNull()
   expect(screen.queryByRole('group', { name: 'Money-flow year' })).toBeNull()
+})
+
+it('skeletons while the first fetch is in flight', () => {
+  renderCard(null, false)
+  // Nothing to hold under a dim on a first paint, so the card shows its own skeleton.
+  expect(document.querySelector('.chart-card-skeleton')).toBeTruthy()
 })

@@ -9,7 +9,7 @@ import {
   SEQUENTIAL_BLUE,
 } from '../../charts/theme'
 import type { MoneyFlowOut } from '../../types/api'
-import { moneyFlowOption } from './moneyFlowOptions'
+import { moneyFlowCsv, moneyFlowOption } from './moneyFlowOptions'
 
 // A conservation-consistent wire payload (sources sum to gross; the mid column sums back
 // to gross; saved = take-home − total_spend), strings exactly as the server quantizes.
@@ -414,5 +414,15 @@ describe('moneyFlowOption — the four pinned columns', () => {
       depth: 0,
       itemStyle: { color: PALETTE[0] },
     })
+  })
+})
+
+describe('moneyFlowCsv (F12)', () => {
+  it('exports nodes then links at the server figures', () => {
+    const csv = moneyFlowCsv(flowOut())
+    expect(csv.headers).toEqual(['Kind', 'Source', 'Target', 'Value'])
+    expect(csv.rows).toContainEqual(['node', 'Gross income', '', '307500.00'])
+    expect(csv.rows).toContainEqual(['link', 'Take-home cash', 'Saved', '76000.00'])
+    expect(moneyFlowCsv(flowOut({ renderable: false, reason: 'nope' })).rows).toEqual([])
   })
 })

@@ -4,7 +4,7 @@
 // through the shared factory — never a layout-derived link sum (the ±$0.01
 // reconciliation drift the paycheck sankey documents is invisible at link-width scale).
 import type { EChartsOption } from '../../charts/echarts'
-import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter } from '../../charts/sankey'
+import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from '../../charts/sankey'
 import type { SankeyLink, SankeyNode } from '../../charts/sankey'
 import {
   MUTED,
@@ -14,7 +14,9 @@ import {
   POSITIVE,
   SEQUENTIAL_BLUE,
 } from '../../charts/theme'
+import { brandTooltip } from '../../charts/tooltip'
 import type { MoneyFlowOut } from '../../types/api'
+import type { ExportTable } from '../../utils/download'
 import { formatCurrency } from '../../utils/format'
 
 // Fixed node names. Sankey nodes key on NAME, so a user category spelling one of these
@@ -260,7 +262,9 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
   const taxLines = JURISDICTION_LINES.filter((line) => flow.taxes[line.key] !== undefined)
     .map((line) => `${line.label} ${formatCurrency(flow.taxes[line.key])}`)
     .join('<br/>')
-  const formatter = (params: unknown): string => {
+  // Branded like the factory it wraps: this composition IS the grammar's sankey tooltip
+  // with one node's extended body, and conformance keys on the brand (chart spec §17).
+  const formatter = brandTooltip((params: unknown): string => {
     const p = (Array.isArray(params) ? params[0] : params) as {
       dataType?: string
       name?: string
@@ -269,10 +273,18 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
       return `<strong>${formatCurrency(flow.taxes.total)}</strong><br/>${TAXES}<br/>${taxLines}`
     }
     return base(params)
-  }
+  })
 
   return {
     tooltip: { trigger: 'item', formatter },
     series: [{ ...SANKEY_MARKS, data: nodes, links }],
   }
+}
+
+/** The flow as a table (F12) — the same nodes and links the chart draws; a refused payload
+ *  (or one the builder's own backstop refused) yields headers and no rows. */
+export function moneyFlowCsv(flow: MoneyFlowOut): ExportTable {
+  const option = moneyFlowOption(flow) as { series?: { data: SankeyNode[]; links: SankeyLink[] }[] } | null
+  const series = option?.series?.[0]
+  return series === undefined ? { headers: ['Kind', 'Source', 'Target', 'Value'], rows: [] } : sankeyCsv(series.data, series.links)
 }

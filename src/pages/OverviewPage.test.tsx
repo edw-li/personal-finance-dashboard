@@ -968,11 +968,13 @@ describe('OverviewPage failures', () => {
     // The previous snapshot survives the failure — a dashboard that blanks itself on a
     // dropped connection is worse than one that admits the numbers are a minute old.
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
-    // Three, not four: failAll fails the money-flow fetch too, and that card's whole
-    // point is to dent ITSELF — it swaps its sankey for the inline retry while the
-    // snapshot's own three charts stay up with the previous payload.
-    expect(screen.getAllByTestId('echart')).toHaveLength(3)
+    // failAll fails the money-flow fetch too, and that card dents ITSELF: on ChartCard's
+    // grammar a failure with data already on screen keeps the sankey up and adds the
+    // card-local advisory + Retry (the frame's "ready + error" rule), so all four charts
+    // stay while only the money-flow card admits it is behind.
+    expect(screen.getAllByTestId('echart')).toHaveLength(4)
     expect(screen.getByText(/Couldn't load the money flow/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry loading the money flow' })).toBeTruthy()
   })
 
   it('lets the newest snapshot win when two loads overlap', async () => {
@@ -1123,9 +1125,11 @@ describe('OverviewPage — snapshot cache (2026-08-27 spec §1)', () => {
     setSnapshot('overview:all', snapshotOf(payload))
     pendAllSnapshotFetches()
     const { container } = renderPage()
-    // The hero tile's number is up on the very first paint, with no Loading… line.
+    // The hero tile's number is up on the very first paint, with no page skeleton. (The
+    // money-flow card carries its OWN status line while its isolated fetch is in flight —
+    // that track has no seed here, and it is a card-level state, not the page's.)
     expect(valueOf(tileFor('Net worth — Aug 2026'))).toBe('$1,234,567.00')
-    expect(screen.queryByText('Loading…')).toBeNull()
+    expect(container.querySelector('.page-skeleton')).toBeNull()
     // Revalidating under the house dim, and the requests really went out.
     expect(container.querySelector('.loading-dim.is-loading')).not.toBeNull()
     expect(vi.mocked(fetchSummary)).toHaveBeenCalledTimes(1)
