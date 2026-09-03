@@ -28,9 +28,8 @@ const ROSTER = [
   'overviewNetWorthTrend',
   'overviewRecentSpend',
   'moneyFlow',
-  // C3 — Spending (spendingSmallMultiples is deliberately absent: the plan made the
-  // Compare/All mode droppable, so the roster must not fail if it was dropped. It landed,
-  // and the glob proves it anyway.)
+  // C3 — Spending (spendingSmallMultiples was the one droppable of the night — the plan
+  // let C3 ship without the Compare/All mode. It landed, so it is pinned like the rest.)
   'spendingBars',
   'spendingMonthPie',
   'spendingHeatmapRow',
@@ -38,6 +37,7 @@ const ROSTER = [
   'spendingSavings',
   'spendingTrends',
   'spendingSankey',
+  'spendingSmallMultiples',
   // C4 — Portfolio
   'portfolioHistory',
   'priceHistory',
@@ -47,6 +47,9 @@ const ROSTER = [
   // C5 — Projection + Comp/ESPP
   'projectionFan',
   'projectionLog',
+  // …and the fan carrying pinned scenarios (sandbox J, planning-sandboxes spec §11): the
+  // reference-line branch of the same builder, which the plain fan fixture never reaches.
+  'projectionPinned',
   'netWorthProjection',
   'vestingCalendar',
   'tcTrajectory',
@@ -72,6 +75,16 @@ describe('the fixture roster', () => {
     // EXIST; stated once over the whole set it is the roster's other half — a fixture that
     // is present but returns null proves nothing either.
     for (const fixture of fixtures) expect(fixture.build(), `${fixture.name} built null`).not.toBeNull()
+  })
+
+  it('names every fixture that exists — the roster is a two-way pin', () => {
+    // The other direction: a lane that ADDS a fixture must name it here. Without this the
+    // roster slowly stops describing the tree — sandbox J's `projectionPinned` had already
+    // arrived unlisted — and “the roster is the set of builders the grammar proves” stops
+    // being true. Adding the name is the whole fix; the glob generates its cases either way.
+    const names = fixtures.map((f) => f.name)
+    const unlisted = names.filter((name) => !ROSTER.includes(name))
+    expect(unlisted, `add ${unlisted.join(', ')} to ROSTER`).toEqual([])
   })
 
   it('names no fixture twice, and every fixture names itself', () => {
