@@ -64,8 +64,10 @@ def test_fee_and_anniversary_on_the_opened_on_anniversary_year_two_falls_off_5_2
 def test_no_fee_event_for_a_no_fee_card_and_no_anniversary_in_the_opening_year():
     events = card_events([venture_x(annual_fee=Decimal("0"))], YEAR_2026, TODAY)
     assert [e.type for e in events if e.type != "card_credit"] == ["card_anniversary"]
+    # Opened May 12 2024: the first anniversary is a year off, and Jan 1 2024 is BEFORE the
+    # card existed — that year's calendar-cadence reset never happened.
     opening_year = card_events([venture_x()], Window(date(2024, 1, 1), date(2024, 12, 31)), TODAY)
-    assert [e.type for e in opening_year] == ["card_credit"]  # Jan 1 2024 credit reset only
+    assert opening_year == []
 
 
 def test_credit_resets_by_cadence():

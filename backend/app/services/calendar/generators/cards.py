@@ -84,6 +84,10 @@ def card_events(cards: list[CardFacts], window: Window, today: date) -> list[Eve
                     reset = anniversary(card.opened_on, year)
                 else:
                     continue  # an anniversary reset needs an opened_on (health footer names it)
+                # The opening year's Jan 1 is BEFORE the card existed — that reset never
+                # happened, so it is not an event (the anniversary arm cannot hit this).
+                if card.opened_on is not None and reset < card.opened_on:
+                    continue
                 if window.contains(reset):
                     events.append(
                         make_event(

@@ -2,8 +2,9 @@
 are pinned in tests/calendar/ — here each type appears once to prove its loader (the
 fold's held-filter, the sold-lot filter, the cadence gate, the snapshot probe)."""
 
+import re
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from sqlalchemy import select
 
@@ -32,6 +33,43 @@ from tests.portfolio_factories import acct
 
 CALENDAR = "/api/v1/calendar"
 TODAY = date(2026, 8, 24)  # a Monday; the router's clock is product_today()
+# Feb 2026: every 2026 payment date AND the Apr 15 filing are still ahead.
+FEBRUARY = date(2026, 2, 2)
+APRIL = f"{CALENDAR}?start=2026-04-01&end=2026-04-30"
+# Every 2dp figure a detail renders, in order — the sentence and the `amount` have to be
+# the same numbers, which is the wiring the two filing-balance tests are about.
+MONEY_RE = re.compile(r"\$([\d,]+\.\d{2})")
+
+
+def money(rendered: str) -> Decimal:
+    return Decimal(rendered.replace(",", ""))
+
+
+async def seed_priceable_year(db, year: int, w2: str = "240000") -> None:
+    """A year the engine can price: the input definitions, one W-2 row and flat bracket
+    tables at column scale (test_withholding_api's shape)."""
+    await seed_tax_definitions(db)
+    db.add(TaxYear(year=year, filing_status="single"))
+    await db.flush()
+    db.add(TaxInput(year=year, key="latest_w2_income", value=Decimal(w2)))
+    for name, table in {
+        "federal": [("0.1000", "0.00")],
+        "state": [("0.0500", "0.00")],
+        "medicare": [("0.0145", "0.00")],
+        "social_security": [("0.0620", "0.00"), ("0.0000", "168600.00")],
+        "disability": [("0.0110", "0.00")],
+        "capital_gains": [("0.1500", "0.00")],
+    }.items():
+        for index, (rate, threshold) in enumerate(table, start=1):
+            db.add(
+                TaxBracket(
+                    year=year,
+                    jurisdiction=name,
+                    bracket_index=index,
+                    rate=Decimal(rate),
+                    threshold=Decimal(threshold),
+                )
+            )
 
 
 def freeze_today(monkeypatch):
@@ -796,7 +834,8 @@ async def test_calendar_card_events_and_the_card_health_row(auth_client, db, mon
     assert next(s for s in body["sources"] if s["source"] == "card") == {
         "source": "card",
         "status": "partial",
-        "note": "1 card(s) without an opened date — no fee or anniversary events",
+        "note": "1 card(s) without an opened date — no fee, anniversary or "
+        "anniversary-cadence credit events",
     }
 
 
@@ -812,30 +851,8 @@ async def test_calendar_tax_amounts_ride_the_withholding_tracker(auth_client, db
         "note": "no 2026 tax year entered — dates only",
     }
 
-    # A priceable 2026: one W-2 input, flat brackets, a semi-monthly profile (the shape
-    # test_withholding_api seeds).
-    await seed_tax_definitions(db)
-    db.add(TaxYear(year=2026, filing_status="single"))
-    await db.flush()
-    db.add(TaxInput(year=2026, key="latest_w2_income", value=Decimal("240000")))
-    for name, table in {
-        "federal": [("0.1000", "0.00")],
-        "state": [("0.0500", "0.00")],
-        "medicare": [("0.0145", "0.00")],
-        "social_security": [("0.0620", "0.00"), ("0.0000", "168600.00")],
-        "disability": [("0.0110", "0.00")],
-        "capital_gains": [("0.1500", "0.00")],
-    }.items():
-        for index, (rate, threshold) in enumerate(table, start=1):
-            db.add(
-                TaxBracket(
-                    year=2026,
-                    jurisdiction=name,
-                    bracket_index=index,
-                    rate=Decimal(rate),
-                    threshold=Decimal(threshold),
-                )
-            )
+    # A priceable 2026 plus a semi-monthly profile.
+    await seed_priceable_year(db, 2026)
     db.add(
         PaycheckProfile(
             person_id=(await seed_primary(db)).id,
@@ -945,7 +962,9 @@ async def test_one_roster_read_and_one_schedule_call_per_grant_per_get(
 ):
     """The loaders and the generators are on the same request: a roster read or a vest
     schedule computed twice is also two chances for the health footer and the events to
-    disagree."""
+    disagree. No tax year is seeded, so `_tax_facts` bails before the withholding tracker
+    (which reads the roster and schedules grants for its OWN card) and these counts are the
+    calendar loaders' own."""
     freeze_today(monkeypatch)
     db.add(
         RsuGrant(
@@ -988,3 +1007,57 @@ async def test_one_roster_read_and_one_schedule_call_per_grant_per_get(
     resp = await auth_client.get(f"{CALENDAR}?start=2026-08-01&end=2026-09-30")
     assert resp.status_code == 200
     assert (roster_reads, schedule_calls) == (1, 1)
+
+
+async def test_the_apr_15_filing_balance_survives_a_missing_current_year_row(
+    auth_client, db, monkeypatch
+):
+    """Feb 2026 with 2025 entered and 2026 not. The estimated-payment split is unknowable
+    without a current year, but what last year's return owes is a settled fact and still
+    has to land on Apr 15."""
+    monkeypatch.setattr("app.api.calendar.product_today", lambda: FEBRUARY)
+    await seed_priceable_year(db, 2025)  # no paycheck profile: the whole bill is unwithheld
+    await db.commit()
+    body = (await auth_client.get(APRIL)).json()
+    q1 = next(e for e in body["events"] if e["key"] == "tax:2026-q1:2026-04-15")
+    [balance] = MONEY_RE.findall(q1["detail"])
+    assert q1["detail"] == f"files 2025: balance ≈ ${balance}"
+    assert (money(q1["amount"]), q1["basis"]) == (money(balance), "estimated")
+    assert money(q1["amount"]) > 0
+    # The current year really is missing, and the footer still says so.
+    assert next(s for s in body["sources"] if s["source"] == "tax") == {
+        "source": "tax",
+        "status": "partial",
+        "note": "no 2026 tax year entered — dates only",
+    }
+
+
+async def test_apr_15_carries_the_prior_years_balance_beside_this_years_share(
+    auth_client, db, monkeypatch
+):
+    """The prior-year `withholding_estimate` call end to end: with BOTH years entered, Apr
+    15 is this year's Q1 share of the safe-harbor shortfall PLUS last year's balance."""
+    monkeypatch.setattr("app.api.calendar.product_today", lambda: FEBRUARY)
+    await seed_priceable_year(db, 2025)
+    await seed_priceable_year(db, 2026)
+    db.add(
+        PaycheckProfile(
+            person_id=(await seed_primary(db)).id,
+            effective_date=date(2025, 1, 1),
+            annual_salary=Decimal("240000"),
+            withholding_pct=Decimal("0.05"),
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get(APRIL)).json()
+    q1 = next(e for e in body["events"] if e["key"] == "tax:2026-q1:2026-04-15")
+    shortfall, share, balance = (money(m) for m in MONEY_RE.findall(q1["detail"]))
+    assert q1["detail"] == (
+        f"Shortfall ${shortfall:,.2f} to the current-year leg — ${share:,.2f} of it here"
+        f" · files 2025: balance ≈ ${balance:,.2f}"
+    )
+    # In February all four 2026 payment dates are ahead, so Q1 carries a truncated quarter.
+    assert share == (shortfall / 4).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    assert balance > 0
+    assert money(q1["amount"]) == share + balance
+    assert next(s for s in body["sources"] if s["source"] == "tax")["status"] == "ok"

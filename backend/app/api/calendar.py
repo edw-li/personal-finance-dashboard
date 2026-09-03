@@ -234,7 +234,8 @@ async def _card_facts(db: AsyncSession) -> tuple[list[CardFacts], SourceHealthOu
         return facts, _health(
             "card",
             "partial",
-            f"{undated} card(s) without an opened date — no fee or anniversary events",
+            f"{undated} card(s) without an opened date — no fee, anniversary or "
+            "anniversary-cadence credit events",
         )
     return facts, _health("card", "ok")
 
@@ -242,17 +243,17 @@ async def _card_facts(db: AsyncSession) -> tuple[list[CardFacts], SourceHealthOu
 async def _tax_facts(
     db: AsyncSession, window: Window, today: date
 ) -> tuple[dict[int, TaxFacts], SourceHealthOut]:
-    """ONE withholding computation for the current year when the window holds future dates,
-    plus the prior year's when Apr 15 (the filing) is ahead and inside the window — the
-    spec's "one computation per year touching the window" (§16, §20)."""
+    """At most ONE withholding computation per year touching the window (spec §16, §20):
+    the current year's whenever the window still holds future dates, and the prior year's
+    whenever Apr 15 — the filing — is both ahead and inside the window.
+
+    The filing balance comes FIRST because it is a settled fact about LAST year: a missing
+    current-year row costs the estimated-payment split and nothing else, so Apr 15 still
+    carries what the return owes."""
     if window.end < today:
         return {}, _health(
             "tax", "ok", "statutory dates; amounts are estimated for the current year only"
         )
-    try:
-        current = await withholding_estimate(db, today.year, today)
-    except HTTPException:
-        return {}, _health("tax", "partial", f"no {today.year} tax year entered — dates only")
     prior_balance: Decimal | None = None
     filing = next_business_day(date(today.year, 4, 15))
     if filing >= today and window.contains(filing):
@@ -266,6 +267,14 @@ async def _tax_facts(
             and prior.balance_projected > 0
         ):
             prior_balance = prior.balance_projected
+    try:
+        current = await withholding_estimate(db, today.year, today)
+    except HTTPException:
+        # No current year: the shortfall split is unknowable, the filing balance is not.
+        facts = TaxFacts(today.year, None, None, None, prior_balance)
+        return {today.year: facts}, _health(
+            "tax", "partial", f"no {today.year} tax year entered — dates only"
+        )
     harbor = current.safe_harbor
     if harbor is None:
         facts = TaxFacts(today.year, None, current.total.projected, None, prior_balance)
@@ -329,8 +338,10 @@ async def _load_sources(
     """Every generator input as plain values, plus the health footer and the quote stamp.
     Health rows come out in SOURCE_FAMILIES order — `card` between tax and ritual."""
     health: list[SourceHealthOut] = []
-    # ONE roster read for the whole response: the payday owners and the custom-event
-    # person stamps are the same people, and two reads are two chances to disagree.
+    # ONE roster read for these loaders: the payday owners and the custom-event person
+    # stamps are the same people, and two reads are two chances to disagree. (`_tax_facts`
+    # below reads its own inside the withholding tracker — that is the tracker's
+    # computation, not this footer's, and it is skipped entirely without a tax year.)
     people = await load_people(db)
     names = {person.id: person.name for person in people}
 
@@ -340,7 +351,9 @@ async def _load_sources(
         ).scalars()
     )
     ticker, quote, quoted_at = await _espp_quote(db)
-    # The ONE schedule pass; `vest_schedules` below hands it to the generator.
+    # The ONE schedule pass for the calendar's own events: `vest_schedules` below hands
+    # the result to the generator, so the health note and the vests agree without paying
+    # for the arithmetic twice. (The withholding tracker schedules for its own card.)
     vest_schedules, unschedulable = resolve_vests(grants)
     # BOTH gaps, not the first one found: fixing the ticker must not then reveal a refused
     # grant for the first time on the next load.
