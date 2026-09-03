@@ -39,10 +39,8 @@ const GROUP_ORDER: PaletteGroup['title'][] = [
 export const GROUP_CAP = 6
 
 /** Settings cards reachable as anchored destinations; ids match the cards' `id` attributes.
- *  `activity` and `health` are the two entries whose cards are not in this branch: they are
- *  the lifecycle lane's Activity and Data-health cards, so those anchors only land once that
- *  lane merges — until then /settings#activity opens the page with no ring, which is the
- *  same no-op the browser gives any unknown hash. */
+ *  Every id here must belong to a card that ships — a wrong one is not a type error, it just
+ *  scrolls nowhere, so paletteRegistry.test.ts reads the settings sources and pins the set. */
 export const SETTINGS_SECTIONS: { id: string; label: string; keywords: string[] }[] = [
   { id: 'import', label: 'Import workbook', keywords: ['xlsx', 'spreadsheet', 'upload', 'dry run'] },
   {

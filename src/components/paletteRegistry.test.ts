@@ -1,5 +1,13 @@
+import { readFileSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { buildEntries, groupMatches, matchEntries, type PaletteEntry } from './paletteRegistry'
+import {
+  SETTINGS_SECTIONS,
+  buildEntries,
+  groupMatches,
+  matchEntries,
+  type PaletteEntry,
+} from './paletteRegistry'
 
 const noop = () => {}
 
@@ -51,6 +59,22 @@ describe('paletteRegistry', () => {
     const holdings = grouped.find((g) => g.title === 'Holdings')
     expect(holdings?.items).toHaveLength(6)
     expect(grouped.map((g) => g.title).indexOf('Actions')).toBeLessThan(grouped.map((g) => g.title).indexOf('Pages'))
+  })
+
+  // Every lane that lands a Settings card lands its anchor with it. Without this the list
+  // rots silently: a wrong id is not a type error, and the palette hit just scrolls nowhere.
+  it('every anchored Settings section has a card wearing that id', () => {
+    const dir = path.resolve(__dirname, 'settings')
+    const sources = [
+      readFileSync(path.resolve(__dirname, '../pages/SettingsPage.tsx'), 'utf8'),
+      ...readdirSync(dir)
+        .filter((f) => f.endsWith('.tsx') && !f.endsWith('.test.tsx'))
+        .map((f) => readFileSync(path.join(dir, f), 'utf8')),
+    ]
+    const missing = SETTINGS_SECTIONS.filter(
+      (section) => !sources.some((src) => src.includes(`id="${section.id}"`)),
+    )
+    expect(missing.map((section) => section.id)).toEqual([])
   })
 
   it('reaches the Calendar feed card as an anchored Settings section', () => {
