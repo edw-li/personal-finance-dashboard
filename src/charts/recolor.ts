@@ -10,7 +10,10 @@
 //     a CSS `linear-gradient(...)` string — are not in the map and pass through;
 //   • non-plain objects (Date, typed arrays, an echarts `graphic.LinearGradient`
 //     INSTANCE) pass through by identity: a spread copy would drop their prototype and
-//     hand echarts a lookalike it no longer recognizes;
+//     hand echarts a lookalike it no longer recognizes. The cost is real for the gradient
+//     instance — its colorStops DO carry hexes and they are NOT recolored — which is why
+//     builders must write gradients as plain `{ type: 'linear', colorStops }` literals
+//     (walked like any object) and never `new echarts.graphic.LinearGradient(...)`;
 //   • functions pass through by identity, so a formatter's OUTPUT is out of reach —
 //     e.g. projectionChartOptions.ts builds tooltip HTML with PALETTE[0] baked into a
 //     style attribute, and that swatch stays dark-blue under the light theme. Colors
@@ -104,8 +107,9 @@ export function recolorOption(value: unknown, map: Map<string, string>): unknown
     // Only `{}` literals and null-prototype bags are safe to rebuild key-by-key. A Date,
     // a typed array (echarts accepts them as series data) or an echarts LinearGradient
     // INSTANCE would come back as a plain lookalike with its prototype — and so its
-    // methods and echarts' own type checks — gone. None of them can hold a token hex in
-    // an enumerable string field, so passing them through by identity costs nothing.
+    // methods and echarts' own type checks — gone. Dates and typed arrays carry no color;
+    // a gradient INSTANCE does, and it stays dark under the light theme — hence the
+    // plain-literal rule for gradients in the header comment.
     const proto: unknown = Object.getPrototypeOf(value)
     if (proto !== Object.prototype && proto !== null) return value
     const out: Record<string, unknown> = {}

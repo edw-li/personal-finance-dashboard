@@ -41,6 +41,8 @@ describe('chart theme bridge', () => {
 
   it('registers DARK for the dark palette under the same version-0 name as import time', () => {
     expect(registerThemeVersion('dark', 0)).toBe('finance')
-    expect(vi.mocked(echarts.registerTheme)).toHaveBeenCalledWith('finance', FINANCE_THEME)
+    // LAST call, not any call: echarts.ts already registered 'finance' at import, so a
+    // registerThemeVersion that registered nothing would still satisfy toHaveBeenCalledWith.
+    expect(vi.mocked(echarts.registerTheme)).toHaveBeenLastCalledWith('finance', FINANCE_THEME)
   })
 })
