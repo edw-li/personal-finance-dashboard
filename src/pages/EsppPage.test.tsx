@@ -308,6 +308,18 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+describe('EsppPage — frame', () => {
+  it('renders its title row through PageFrame, not a hand-rolled page header', async () => {
+    renderPage()
+    await screen.findByText('$10,720.49')
+
+    expect(screen.getByRole('heading', { level: 1, name: 'ESPP' })).toBeTruthy()
+    // The shell owns the title row now — the page's own header markup is gone.
+    expect(document.querySelector('.page-header')).toBeNull()
+    expect(document.querySelector('.page-frame-header')).toBeTruthy()
+  })
+})
+
 describe('EsppPage — lots', () => {
   it('renders server metrics, the quote header and every disposition badge', async () => {
     renderPage()

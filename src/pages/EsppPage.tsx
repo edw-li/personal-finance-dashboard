@@ -20,8 +20,9 @@ import { fetchPriceHistory } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
-import { SkeletonCard } from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
+import Feed, { FeedBanner } from '../components/shell/Feed'
+import PageFrame from '../components/shell/PageFrame'
 import type {
   EsppLotCreate,
   EsppLotOut,
@@ -315,11 +316,7 @@ function LotsPanel({
         set both to realize a lot, clear both to un-sell it. A sold lot is measured
         against its sale price; every other row against the quote above.
       </p>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       <form
         className="espp-form"
         onSubmit={(e) => {
@@ -627,11 +624,7 @@ function OfferingsPanel({
         your subscription price. Periods resolve to the latest offering starting on or
         before them — adding a reset re-prices everything after it automatically.
       </p>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       <form
         className="espp-form espp-knobs"
         onSubmit={(e) => {
@@ -1033,11 +1026,7 @@ function ModelerCard({
           </button>
         </div>
       </form>
-      {error && (
-        <div className="error-banner" role="alert">
-          {error}
-        </div>
-      )}
+      <FeedBanner error={error} />
       {dirtyRows.length > 0 && (
         <p className="drill-hint" role="status">
           {`${dirtyRows.length} ${
@@ -1367,103 +1356,78 @@ export default function EsppPage() {
 
   return (
     <div className="page espp-page">
-      <div className="page-header">
-        <h1>ESPP</h1>
-        <div className="spacer" />
-      </div>
-
-      {/* The modeler's $25k figure at the page top (2026-08-31 audit: the gauge sat below
-          the fold). The MODELER's chain — its year and knobs — so it can never disagree
-          with the card below; absent until that feed answers, exactly like the card. */}
-      {modeler !== null && (
-        <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
-          {/* kpi-row-lone: the lone tile must not stretch the full grid width; the modeler
-              card's own two-tile kpi-row below keeps its natural width. */}
-          <div className="kpi-row kpi-row-lone">
-            <StatTile
-              label={`$25k limit used — ${modeler.year}`}
-              value={formatCurrency(modeler.totals.total_25k_value)}
-              delta={`${formatCurrency(modeler.totals.remaining_25k)} left`}
-              tone="neutral"
-              hint="The Purchase modeler's chained total against the IRS §423 ceiling, at its current year and knobs — the gauge in that card draws the same figure long."
-            />
+      <PageFrame title="ESPP" resource={{ status: 'ready' }}>
+        {/* The modeler's $25k figure at the page top (2026-08-31 audit: the gauge sat below
+            the fold). The MODELER's chain — its year and knobs — so it can never disagree
+            with the card below; absent until that feed answers, exactly like the card. */}
+        {modeler !== null && (
+          <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
+            {/* kpi-row-lone: the lone tile must not stretch the full grid width; the modeler
+                card's own two-tile kpi-row below keeps its natural width. */}
+            <div className="kpi-row kpi-row-lone">
+              <StatTile
+                label={`$25k limit used — ${modeler.year}`}
+                value={formatCurrency(modeler.totals.total_25k_value)}
+                delta={`${formatCurrency(modeler.totals.remaining_25k)} left`}
+                tone="neutral"
+                hint="The Purchase modeler's chained total against the IRS §423 ceiling, at its current year and knobs — the gauge in that card draws the same figure long."
+              />
+            </div>
+            {/* The card's own dirty note, echoed beside the headline it disclaims — the tile
+                and the gauge must never disagree silently (2026-08-31 review round). */}
+            {modelerDirty && (
+              <p className="hint">
+                Unsaved period edits below — this figure is stale until you save &amp;
+                recalculate.
+              </p>
+            )}
           </div>
-          {/* The card's own dirty note, echoed beside the headline it disclaims — the tile
-              and the gauge must never disagree silently (2026-08-31 review round). */}
-          {modelerDirty && (
-            <p className="hint">
-              Unsaved period edits below — this figure is stale until you save &amp;
-              recalculate.
-            </p>
-          )}
-        </div>
-      )}
+        )}
 
-      {lotsError && (
-        <div className="error-banner" role="alert">
-          {/* The stale cue only when there IS something stale: a reload failure leaves the
-              previous table up, a first-load failure leaves nothing to be behind. */}
-          {lots === null ? lotsError : `${lotsError} — the table may be showing earlier data.`}{' '}
-          <button className="button" aria-label="Retry loading lots" onClick={reloadLots}>
-            Retry
-          </button>
-        </div>
-      )}
-      {lots === null ? (
-        lotsBusy && <SkeletonCard height={260} label="Loading lots…" />
-      ) : (
-        <div className={`loading-dim${lotsBusy ? ' is-loading' : ''}`}>
-          {/* NOT keyed, and a sibling of the two cards below: a modeler or offerings
-              refetch re-renders this panel with the same payload, so a half-typed row
-              survives. */}
-          <LotsPanel data={lots} offerings={offerings ?? []} onChanged={reloadLots} />
-        </div>
-      )}
+        {/* NOT keyed, and a sibling of the two cards below: a modeler or offerings refetch
+            re-renders this panel with the same payload, so a half-typed row survives. */}
+        <Feed
+          data={lots}
+          error={lotsError}
+          busy={lotsBusy}
+          staleNoun="the table"
+          retry={reloadLots}
+          retryLabel="Retry loading lots"
+          skeleton={{ height: 260, label: 'Loading lots…' }}
+        >
+          {(data) => <LotsPanel data={data} offerings={offerings ?? []} onChanged={reloadLots} />}
+        </Feed>
 
-      {offeringsError && (
-        <div className="error-banner" role="alert">
-          {offerings === null
-            ? offeringsError
-            : `${offeringsError} — the table may be showing earlier data.`}{' '}
-          <button
-            className="button"
-            aria-label="Retry loading offerings"
-            onClick={onOfferingsChanged}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-      {offerings === null ? (
-        offeringsBusy && <SkeletonCard height={220} label="Loading offerings…" />
-      ) : (
-        <div className={`loading-dim${offeringsBusy ? ' is-loading' : ''}`}>
-          <OfferingsPanel offerings={offerings} bars={bars} onChanged={onOfferingsChanged} />
-        </div>
-      )}
+        <Feed
+          data={offerings}
+          error={offeringsError}
+          busy={offeringsBusy}
+          staleNoun="the table"
+          retry={onOfferingsChanged}
+          retryLabel="Retry loading offerings"
+          skeleton={{ height: 220, label: 'Loading offerings…' }}
+        >
+          {(rows) => <OfferingsPanel offerings={rows} bars={bars} onChanged={onOfferingsChanged} />}
+        </Feed>
 
-      {modelerError !== null && (
-        <div className="error-banner" role="alert">
-          {modelerError}{' '}
-          <button className="button" aria-label="Retry the model" onClick={() => runModeler()}>
-            Retry
-          </button>
+        {/* No stale cue: the card renders its own empty state from a null payload, so there
+            is never an earlier model left behind the banner. */}
+        <FeedBanner error={modelerError} retry={() => runModeler()} retryLabel="Retry the model" />
+        <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
+          <ModelerCard
+            data={modeler}
+            knobs={knobs}
+            // The setter itself: the card hands back an updater, so a keystroke cannot
+            // spread a stale sibling over its neighbour.
+            onKnobChange={setKnobs}
+            onRun={runModeler}
+            onYearSelect={selectYear}
+            onRowsSaved={() => runModeler()}
+            onDirtyChange={setModelerDirty}
+            busy={modelerBusy}
+          />
         </div>
-      )}
-      <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
-        <ModelerCard
-          data={modeler}
-          knobs={knobs}
-          // The setter itself: the card hands back an updater, so a keystroke cannot
-          // spread a stale sibling over its neighbour.
-          onKnobChange={setKnobs}
-          onRun={runModeler}
-          onYearSelect={selectYear}
-          onRowsSaved={() => runModeler()}
-          onDirtyChange={setModelerDirty}
-          busy={modelerBusy}
-        />
-      </div>
+      </PageFrame>
     </div>
   )
 }
