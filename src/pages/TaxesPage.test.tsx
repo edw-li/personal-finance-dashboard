@@ -63,31 +63,49 @@ vi.mock('../components/EChart', async () => {
       }),
   }
 })
-// The what-if card owns two feeds and a whole test file of its own (WhatIfPanel.test.tsx
-// pins the seeding end of the deep links, and its own year-keyed remount). Here it is a
-// marker reporting the four props the page hands it — which IS this page's whole contract
-// with it, and keeps a card the page never opens from spending requests in these tests.
+// The what-if card owns three feeds and a whole test file of its own (WhatIfPanel.test.tsx
+// pins the URL grammar and its own year-keyed remount). Here it is a marker reporting the
+// props the page hands it — which IS this page's whole contract with it — plus a door onto
+// the Apply callback, and it keeps a card the page never opens from spending requests.
 vi.mock('../components/taxes/WhatIfPanel', async () => {
   const { createElement } = await import('react')
   return {
     default: ({
       year,
-      initialTicker,
-      initialLotId,
       definitions,
+      onApplyOverrides,
     }: {
       year: number
-      initialTicker?: string | null
-      initialLotId?: number | null
       definitions?: { key: string; label: string }[]
+      onApplyOverrides?: (
+        overrides: Record<string, string | null>,
+        changed: { key: string; label: string; before: string; after: string }[],
+      ) => void
     }) =>
-      createElement('div', {
-        'data-testid': 'whatif-panel',
-        'data-year': String(year),
-        'data-ticker': initialTicker ?? '',
-        'data-lot': initialLotId == null ? '' : String(initialLotId),
-        'data-defs': (definitions ?? []).map((d) => d.key).join(','),
-      }),
+      createElement(
+        'div',
+        {
+          'data-testid': 'whatif-panel',
+          'data-year': String(year),
+          'data-defs': (definitions ?? []).map((d) => d.key).join(','),
+        },
+        createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: () =>
+              onApplyOverrides?.({ annual_salary: '210000' }, [
+                {
+                  key: 'annual_salary',
+                  label: 'Annual Salary',
+                  before: '188930.00',
+                  after: '210000.00',
+                },
+              ]),
+          },
+          'Apply 1 override to 2024',
+        ),
+      ),
   }
 })
 import {
@@ -1168,44 +1186,16 @@ describe('TaxesPage', () => {
     await waitFor(() => expect(deleteYearButton().disabled).toBe(false))
   })
 
-  it('hands the what-if card the ticker a holdings deep link named', async () => {
-    renderPage('/taxes?whatif=VTI')
-    const panel = await screen.findByTestId('whatif-panel')
-
-    // Verbatim off the URL — the panel matches it against its own holdings feed, and a
-    // ticker that matches nothing is its problem, not the page's.
-    expect(panel.getAttribute('data-ticker')).toBe('VTI')
-    expect(panel.getAttribute('data-lot')).toBe('')
-    expect(panel.getAttribute('data-year')).toBe('2024')
-    // Deliberately NOT cleared: this page owns no history writes, and a reload re-seeding
-    // the same leg is the honest reading of the URL the user is sitting on.
-    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=VTI')
-  })
-
-  it('reads ?whatif-lot as a lot id, and lets a garbled one seed nothing', async () => {
-    renderPage('/taxes?whatif-lot=3')
-    const panel = await screen.findByTestId('whatif-panel')
-    expect(panel.getAttribute('data-lot')).toBe('3')
-    expect(panel.getAttribute('data-ticker')).toBe('')
-    cleanup()
-
-    // A hand-edited URL is nobody's lot: null seeds nothing and the card mounts closed, the
-    // way it does for every visitor who arrived without a link.
-    renderPage('/taxes?whatif-lot=not-a-lot')
-    expect((await screen.findByTestId('whatif-panel')).getAttribute('data-lot')).toBe('')
-  })
-
-  it('keeps the seeds on the card across a year switch', async () => {
-    renderPage('/taxes?whatif=VTI')
+  it('leaves the whatif family in the URL for the card to read, and re-keys it on a year switch', async () => {
+    renderPage('/taxes?whatif=sale%3A7%3A40')
     await screen.findByLabelText('Annual Salary')
+    // Deliberately NOT read or cleared here: the entries are the PANEL's state now
+    // (WhatIfPanel.test.tsx owns that grammar), and this page only re-keys the card by year.
+    expect(screen.getByTestId('location').textContent).toBe('/taxes?whatif=sale%3A7%3A40')
 
     fireEvent.click(screen.getByRole('button', { name: '2023' }))
     await waitFor(() => expect(vi.mocked(fetchTaxInputs)).toHaveBeenCalledWith(2023))
 
-    // The panel is keyed by year, so this is a fresh mount — and the seed is a property of
-    // the URL, not of the year, so it goes down again: the link said "model selling VTI",
-    // and it means that against whichever year is on screen.
-    //
     // waitFor, not a bare read off findByTestId: the card is on screen either way (it is the
     // PROPS that move), and the year only reaches it when the switch's three payloads land —
     // which the "was 2023 requested" wait above does not promise. Read straight, this raced
@@ -1213,7 +1203,54 @@ describe('TaxesPage', () => {
     await waitFor(() =>
       expect(screen.getByTestId('whatif-panel').getAttribute('data-year')).toBe('2023'),
     )
-    expect(screen.getByTestId('whatif-panel').getAttribute('data-ticker')).toBe('VTI')
+    // The scenario belongs to the URL, not to the year: it survives the switch to be re-run
+    // against whichever year is now on screen.
+    expect(screen.getByTestId('location').textContent).toContain('whatif=sale%3A7%3A40')
+  })
+
+  it('Apply from the what-if confirms before → after, PUTs the overrides once and remounts the inputs form', async () => {
+    // The PUT echo carries the moved salary — the remount is what puts it on screen,
+    // because InputsForm ignores prop replacement by design.
+    const echo = inputsFor(2024)
+    echo.sections[0].items[0].value = '210000.0000'
+    vi.mocked(putTaxInputs).mockResolvedValue(echo)
+    renderPage()
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    // The server's own before → after, and only for the key actually being WRITTEN.
+    expect(confirmSpy.mock.calls[0][0]).toBe(
+      "This writes 1 input to 2024's stored return and reloads the form below. Continue?\nAnnual Salary: $188,930.00 → $210,000.00",
+    )
+    await waitFor(() => expect(vi.mocked(putTaxInputs)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(putTaxInputs)).toHaveBeenCalledWith(2024, {
+      values: { annual_salary: '210000' },
+    })
+    // The same landing chain the withholding card's Apply uses: remounted form, fresh totals.
+    await waitFor(() => expect(salary().value).toBe('$210,000.00'))
+    await waitFor(() => expect(vi.mocked(fetchTaxSummary)).toHaveBeenCalledTimes(2))
+  })
+
+  it('names the unsaved edits Apply is about to discard', async () => {
+    renderPage()
+    await screen.findByTestId('whatif-panel')
+    fireEvent.change(salary(), { target: { value: '$999,000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    // ONE question, not two: the write and the discard are the same decision.
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0][0]).toContain(
+      "reloads the form below, discarding its unsaved edits. Continue?",
+    )
+    // The epoch remount threw the typed value away with the form that held it.
+    await waitFor(() => expect(salary().value).toBe('$200,000.00'))
+  })
+
+  it('a declined confirm writes nothing', async () => {
+    confirmSpy.mockReturnValue(false)
+    renderPage()
+    await screen.findByTestId('whatif-panel')
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 override to 2024' }))
+    expect(vi.mocked(putTaxInputs)).not.toHaveBeenCalled()
   })
 
   it('hands the year’s input definitions to the what-if card, deduped by key', async () => {

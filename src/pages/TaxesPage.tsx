@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import {
   cloneBrackets,
@@ -30,12 +29,14 @@ import WhatIfPanel from '../components/taxes/WhatIfPanel'
 import type { OverrideDefinition } from '../components/taxes/WhatIfPanel'
 import WithholdingPanel from '../components/taxes/WithholdingPanel'
 import type {
+  ChangedInput,
   FilingStatus,
   TaxBracketsOut,
   TaxInputsOut,
   TaxSummaryOut,
   TaxYearOut,
 } from '../types/api'
+import { formatCurrency } from '../utils/format'
 import '../components/panels.css'
 import './TaxesPage.css'
 
@@ -114,19 +115,6 @@ function detailKey(year: number, filingStatus: FilingStatus): string {
 }
 
 export default function TaxesPage() {
-  // The deep links' seeds — /taxes?whatif=TICKER from the holdings drill-in, ?whatif-lot={id}
-  // from the ESPP lots table. A plain read per render (it is a hook, not a fetch), and the
-  // params are deliberately NOT cleared: this page itself owns no history writes (the
-  // ?year drill param is CompositionPanel's, written replace-style beside these), and a
-  // reload re-seeding the same leg is the honest reading of the URL the user is sitting on.
-  const [searchParams] = useSearchParams()
-  const whatIfTicker = searchParams.get('whatif')
-  // A garbled or hand-edited ?whatif-lot= is nobody's lot: null seeds nothing and the card
-  // mounts closed as usual, rather than banner-ing about a URL nobody typed. Number(null)
-  // and Number('') are both 0, which the > 0 fence sends the same way as NaN.
-  const lotParam = Number(searchParams.get('whatif-lot'))
-  const whatIfLotId = Number.isInteger(lotParam) && lotParam > 0 ? lotParam : null
-
   // The seeded selection replicates loadYears' pick (the latest year), and the seeded
   // detail reads that year's key using ITS OWN filing status from the cached row.
   const cachedYears = getSnapshot<TaxYearOut[]>('taxes:years')
@@ -404,6 +392,36 @@ export default function TaxesPage() {
   const onVestApplied = (echo: TaxInputsOut) => {
     setInputsEpoch((n) => n + 1)
     onInputsSaved(echo) // adopts the echo, refreshes the totals and the chip counts
+  }
+
+  // The what-if's Apply (2026-09-03 planning-sandboxes spec §8.6, §10): OVERRIDES only —
+  // sale and ESPP legs are hypothetical and have nowhere to be written. One house-register
+  // confirmation lists before → after from the scenario's own `changed_inputs` (the server's
+  // numbers, not the panel's), then the EXISTING inputs PUT and the same landing chain the
+  // withholding card's Apply uses: adopt the echo, remount the form, refresh the totals and
+  // the chip counts. Never a new write path, and the unsaved-edits warning rides the same
+  // sentence rather than asking twice.
+  const applyOverrides = (overrides: Record<string, string | null>, changed: ChangedInput[]) => {
+    if (selectedYear === null) return
+    const year = selectedYear
+    const keys = Object.keys(overrides)
+    // Only the keys being written: the endpoint reports every input its run moved, including
+    // the engine's own derived rows, and listing those would promise writes nobody asked for.
+    const lines = changed
+      .filter((row) => keys.includes(row.key))
+      .map((row) => `${row.label}: ${formatCurrency(row.before)} → ${formatCurrency(row.after)}`)
+    const sentence = `This writes ${keys.length} input${keys.length === 1 ? '' : 's'} to ${year}'s stored return and reloads the form below${
+      inputsDirty ? ', discarding its unsaved edits' : ''
+    }. Continue?`
+    if (!window.confirm([sentence, ...lines].join('\n'))) return
+    setYearError(null)
+    putTaxInputs(year, { values: overrides })
+      .then((echo) => onVestApplied(echo))
+      .catch((err: unknown) => {
+        setYearError(
+          err instanceof ApiError ? err.message : `Failed to apply the overrides to ${year}`,
+        )
+      })
   }
 
   const onBracketsSaved = (echo: TaxBracketsOut) => {
@@ -750,16 +768,18 @@ export default function TaxesPage() {
                   (a stale scenario under a new year's heading would lie), while a same-year
                   reload leaves half-typed legs alone. It owns its two feeds and loads them
                   lazily on first open, so the remount costs nothing until the card is used.
-                  The seeds are handed to EVERY mount, this year's or the next one's: they are a
-                  property of the URL, not of the year, and the panel pins them at its own mount
-                  — so a year switch re-seeds the same leg against the year now on screen, which
-                  is what a link that says "model selling VTI" means. */}
+                  The panel reads the URL's `whatif` family itself — entries and the legacy
+                  ticker/lot aliases alike — and re-runs it against the year now on screen: a
+                  scenario is a property of the URL, not of the year. The three year payloads
+                  ride down for the presets, which are sized from data already on this page. */}
               <WhatIfPanel
                 key={`whatif-${d.summary.year}`}
                 year={d.summary.year}
-                initialTicker={whatIfTicker}
-                initialLotId={whatIfLotId}
                 definitions={overrideDefinitions(d.inputs)}
+                inputs={d.inputs}
+                brackets={d.brackets}
+                summary={d.summary}
+                onApplyOverrides={applyOverrides}
               />
               {/* Deliberately NOT keyed: this panel's feed is the all-years trend, which a
                   year switch does not move — remounting it would spend a request to redraw
