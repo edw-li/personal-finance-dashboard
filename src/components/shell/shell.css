@@ -1,0 +1,126 @@
+/* Shell styles — shared by the shell primitives */
+
+/* ── Month ribbon 2.0 ────────────────────────────────────────────────────── */
+
+.ribbon {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.ribbon-page {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  align-self: center;
+}
+
+.ribbon-page:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.ribbon-page:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ribbon-page:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ribbon-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.ribbon-year {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  line-height: 1;
+  margin-bottom: 2px;
+}
+
+.month-chip2 {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 7px 5px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.month-chip2:hover {
+  background: var(--surface-2);
+}
+
+.month-chip2:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Two halves: left = balances (accent), right = spending (chart slot 3, aqua). A hollow
+   ring means nothing entered; the ring stays visible under either fill. */
+.month-chip2-dot {
+  --left: transparent;
+  --right: transparent;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  background: linear-gradient(90deg, var(--left) 50%, var(--right) 50%);
+}
+
+.month-chip2.has-balances .month-chip2-dot {
+  --left: var(--accent);
+  border-color: var(--accent);
+}
+
+.month-chip2.has-spending .month-chip2-dot {
+  --right: var(--chart-3);
+  border-color: var(--accent);
+}
+
+.month-chip2.has-spending:not(.has-balances) .month-chip2-dot {
+  border-color: var(--chart-3);
+}
+
+.month-chip2.is-today .month-chip2-dot {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--muted);
+}
+
+.month-chip2.selected {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.ribbon-edit {
+  align-self: center;
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .month-chip2,
+  .ribbon-page {
+    transition:
+      background-color var(--t-fast) ease,
+      border-color var(--t-fast) ease,
+      color var(--t-fast) ease;
+  }
+}
