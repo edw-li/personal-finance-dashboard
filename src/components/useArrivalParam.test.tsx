@@ -64,7 +64,27 @@ describe('useArrivalParam', () => {
     expect(apply).toHaveBeenCalledWith('securities')
     expect(screen.getByTestId('location').textContent).toBe('/portfolio?whatif=NVDA')
   })
+
+  it('keeps the anchor it arrived with — the command is one-shot, the anchor is not', () => {
+    const apply = vi.fn()
+    render(
+      <MemoryRouter initialEntries={['/portfolio?tab=dividends#dividends']}>
+        <AnchorProbe apply={apply} />
+      </MemoryRouter>,
+    )
+    expect(apply).toHaveBeenCalledWith('dividends')
+    expect(screen.getByTestId('location').textContent).toBe('/portfolio#dividends')
+  })
 })
+
+// The two hooks strip through one shared consume step, so the anchor case is pinned on
+// both: a page reads location.hash to scroll and ring the card the link aimed at, and a
+// strip that dropped the hash would undo the arrival it just delivered.
+function AnchorProbe({ apply }: { apply: (value: string) => void }) {
+  const { pathname, search, hash } = useLocation()
+  useArrivalParam('tab', TABS, apply)
+  return <div data-testid="location">{pathname + search + hash}</div>
+}
 
 function ValueProbe({ apply }: { apply: (value: string) => void }) {
   const { pathname, search } = useLocation()
@@ -107,6 +127,23 @@ describe('useArrivalValue', () => {
     const apply = renderValueProbe('/portfolio?tab=securities&ticker=NVDA')
     expect(apply).toHaveBeenCalledWith('NVDA')
     expect(screen.getByTestId('location').textContent).toBe('/portfolio?tab=securities')
+  })
+
+  it('keeps the anchor it arrived with, like its enum twin', () => {
+    const apply = vi.fn()
+    function HashValueProbe() {
+      const { pathname, search, hash } = useLocation()
+      const stable = useCallback((value: string) => apply(value), [])
+      useArrivalValue('restore', stable)
+      return <div data-testid="location">{pathname + search + hash}</div>
+    }
+    render(
+      <MemoryRouter initialEntries={['/settings?restore=finance-export.zip#restore']}>
+        <HashValueProbe />
+      </MemoryRouter>,
+    )
+    expect(apply).toHaveBeenCalledWith('finance-export.zip')
+    expect(screen.getByTestId('location').textContent).toBe('/settings#restore')
   })
 
   // The cold-load case the palette's entity links always hit: the page cannot resolve a

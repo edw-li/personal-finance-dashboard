@@ -1,5 +1,5 @@
 import type { RestoreReport } from '../../types/api'
-import { formatDate } from '../../utils/format'
+import { formatInstantDate } from '../../utils/format'
 import '../panels.css'
 import './settings.css'
 
@@ -9,8 +9,13 @@ import './settings.css'
 // a restore of last night's snapshot is 34 unchanged tables and two that moved.
 
 function schemaLine(report: RestoreReport): string {
+  // exported_at is an INSTANT, and the Restore card asks for its date to be typed: both
+  // read it on the local clock (formatInstantDate), or the 23:30 PT nightly would be
+  // headed "Sep 4" here and listed as "Sep 3, 11:30 PM" in the select it came from.
   const from =
-    report.exported_at === null ? 'Snapshot' : `Snapshot from ${formatDate(report.exported_at)}`
+    report.exported_at === null
+      ? 'Snapshot'
+      : `Snapshot from ${formatInstantDate(report.exported_at)}`
   const head = (h: string | null) => h ?? 'none'
   return (
     `${from} · schema ${head(report.schema.snapshot_head)} · this server ` +
