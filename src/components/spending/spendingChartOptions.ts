@@ -3,8 +3,10 @@
 // option itself stays in SpendingPage (it reads page state); only the parts worth
 // unit-testing live here. Number() is display-only (format.ts's rule).
 import type { EChartsOption } from '../../charts/echarts'
-import { BAR_MARKS, LINE, compactMoney, grid, moneyAxis, monthAxis, stagger } from '../../charts/grammar'
+import { slotColor } from '../../charts/entities'
+import { BAR_MARKS, LINE, compactMoney, grid, moneyAxis, monthAxis, pctAxis, stagger } from '../../charts/grammar'
 import { legendFor } from '../../charts/legend'
+import { zeroLine } from '../../charts/markLine'
 import { budgetReference, referenceLine } from '../../charts/reference'
 import { divergingVisualMap, rowNormalize, sequentialVisualMap, vsAverage } from '../../charts/scales'
 import { INK, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
@@ -365,5 +367,96 @@ export function heatmapCsv(
   return {
     headers: ['Category', ...matrix.months],
     rows: order.map((id) => [nameById.get(id) ?? String(id), ...matrix.months.map((_, c) => byId.get(id)?.[c] ?? '')]),
+  }
+}
+
+export interface SavingsRateInput { matrix: SpendingMatrix; monthLabels: string[]; range: RangeState }
+
+/** (net pay − spend) ÷ net pay per month, above the zero line you saved. Clamped to the
+ *  savings-rate extents (A7): ceiling +100%, floor expanding to the data. */
+export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInput): EChartsOption | null {
+  if (matrix.months.length === 0) return null
+  return {
+    dataZoom: rangeZoom(matrix.months, range),
+    grid: grid('noLegend'),
+    // True value in the tooltip even when the line is clamped out of frame.
+    tooltip: axisTooltip({ unit: 'percent' }),
+    xAxis: monthAxis(monthLabels),
+    yAxis: pctAxis(),
+    series: [
+      {
+        ...LINE,
+        name: 'Savings rate (actual)',
+        color: PALETTE[0],
+        connectNulls: false,
+        markLine: zeroLine(),
+        data: matrix.savings_rate.map((v) => (v === null ? null : Number(v))),
+      },
+    ],
+  }
+}
+
+export function savingsRateCsv(
+  matrix: Pick<SpendingMatrix, 'months' | 'net_pay' | 'totals' | 'savings_rate'>,
+): ExportTable {
+  return {
+    headers: ['Month', 'Net pay', 'Spend', 'Savings rate'],
+    rows: matrix.months.map((m, i) => [m, matrix.net_pay[i] ?? '', matrix.totals[i], matrix.savings_rate[i] ?? '']),
+  }
+}
+
+export interface TrendPick { categoryId: number; slot: number }
+export interface CategoryTrendInput {
+  matrix: SpendingMatrix
+  trend: TrendPick[]
+  nameById: Map<number, string>
+  monthLabels: string[]
+  range: RangeState
+  selected: Record<string, boolean>
+}
+
+/** Up to three categories' histories on their pick slots, each with its budget as a dashed
+ *  step named "{category} budget" so the axis tooltip disambiguates when several show. */
+export function categoryTrendOption({
+  matrix, trend, nameById, monthLabels, range, selected,
+}: CategoryTrendInput): EChartsOption | null {
+  if (matrix.months.length === 0 || trend.length === 0) return null
+  const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+  const budgetsById = new Map(matrix.series.map((s) => [s.category_id, s.budgets]))
+  const name = (id: number) => nameById.get(id) ?? String(id)
+  const budgets = trend.flatMap(({ categoryId }) => {
+    const b = budgetsById.get(categoryId)
+    return b === undefined || !b.some((v) => v !== null) ? [] : [budgetReference(`${name(categoryId)} budget`, b)]
+  })
+  const series = [
+    ...trend.map(({ categoryId, slot }) => ({
+      ...LINE,
+      name: name(categoryId),
+      color: slotColor(slot),
+      connectNulls: false,
+      data: (valuesById.get(categoryId) ?? []).map((v) => (v === null ? null : Number(v))),
+    })),
+    ...budgets,
+  ]
+  return {
+    dataZoom: rangeZoom(matrix.months, range),
+    grid: grid(),
+    legend: legendFor(series.length, selected),
+    tooltip: axisTooltip({ unit: 'money', references: budgets.map((b) => b.name) }),
+    xAxis: monthAxis(monthLabels),
+    yAxis: moneyAxis(),
+    series,
+  }
+}
+
+export function categoryTrendCsv(
+  matrix: Pick<SpendingMatrix, 'months' | 'series'>,
+  trend: TrendPick[],
+  nameById: Map<number, string>,
+): ExportTable {
+  const valuesById = new Map(matrix.series.map((s) => [s.category_id, s.values]))
+  return {
+    headers: ['Month', ...trend.map((t) => nameById.get(t.categoryId) ?? String(t.categoryId))],
+    rows: matrix.months.map((m, i) => [m, ...trend.map((t) => valuesById.get(t.categoryId)?.[i] ?? '')]),
   }
 }

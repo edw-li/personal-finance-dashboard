@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { tooltipRows } from '../../testing/tooltipRows'
 import { isGrammarTooltip } from '../../charts/tooltip'
-import { GRID_VARIANTS, compactMoney } from '../../charts/grammar'
+import { GRID_VARIANTS, compactMoney, percentLabel } from '../../charts/grammar'
 import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
 import type { SpendingMatrix } from '../../types/api'
 import {
   HEATMAP_MODES,
   SUSTAINABLE_SPEND,
+  categoryTrendCsv,
+  categoryTrendOption,
   heatmapCsv,
   heatmapOption,
   heatmapRows,
   monthPieCsv,
   monthPieOption,
+  savingsRateCsv,
+  savingsRateOption,
   spendingBarsOption,
   spendingBarsTooltipFormatter,
   spendingCsv,
@@ -347,5 +351,54 @@ describe('heatmapCsv', () => {
     expect(csv.headers).toEqual(['Category', ...longMatrix().months])
     expect(csv.rows[0]).toEqual(['Rent', '100.00', '100.00', '100.00', '100.00', '100.00', '100.00', '150.00', ''])
     expect(csv.rows[2][0]).toBe('Fun')
+  })
+})
+
+describe('savingsRateOption', () => {
+  it('one blue line on the percent axis with the zero baseline, aligned on the no-legend money grid', () => {
+    const option = read(savingsRateOption({ matrix: matrixFixture(), monthLabels: LABELS, range: { preset: 'all' } })) as unknown as {
+      grid: unknown; yAxis: { min: (e: { min: number }) => number; max: (e: { max: number }) => number; axisLabel: { formatter: unknown } }
+      series: { name: string; color: string; markLine: unknown; data: unknown[]; emphasis: unknown }[]; tooltip: { formatter: (p: unknown) => string }
+    }
+    expect(option.grid).toEqual(GRID_VARIANTS.noLegend) // F8: 60 → 70
+    expect(option.yAxis.axisLabel.formatter).toBe(percentLabel)
+    expect(option.yAxis.min({ min: -1.8 })).toBe(-2)
+    expect(option.yAxis.max({ max: 0.6 })).toBe(0.6)
+    expect(option.series[0]).toMatchObject({ name: 'Savings rate (actual)', color: PALETTE[0], emphasis: { focus: 'series' } })
+    expect(option.series[0].markLine).toEqual({ silent: true, symbol: 'none', lineStyle: { color: MUTED, width: 1, type: 'solid' }, label: { show: false }, data: [{ yAxis: 0 }] })
+    expect(option.series[0].data).toEqual([0.541666667, null])
+    const rows = tooltipRows(option.tooltip.formatter([{ seriesName: 'Savings rate (actual)', seriesType: 'line', axisValueLabel: 'Jun 2026', value: 0.35, color: PALETTE[0] }]))
+    expect(rows.rows).toEqual([{ kind: 'row', label: 'Savings rate (actual)', value: '35.0%' }])
+  })
+  it('exports month, net pay, spend, rate — verbatim, blanks for nulls', () => {
+    expect(savingsRateCsv(matrixFixture())).toEqual({
+      headers: ['Month', 'Net pay', 'Spend', 'Savings rate'],
+      rows: [['2026-06-01', '6000.00', '2750.00', '0.541666667'], ['2026-07-01', '6000.00', '2000.00', '']],
+    })
+  })
+})
+
+describe('categoryTrendOption', () => {
+  const TREND = [{ categoryId: 2, slot: 1 }, { categoryId: 1, slot: 0 }]
+  it('one line per pick on its slot, budget steps as muted references after the data rows', () => {
+    const option = read(categoryTrendOption({ matrix: matrixFixture(), trend: TREND, nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: { Rent: false } }))
+    expect(option.series.map((s) => s.name)).toEqual(['Groceries <b>& more</b>', 'Rent', 'Groceries <b>& more</b> budget'])
+    expect(option.series.map((s) => s.color)).toEqual([PALETTE[1], PALETTE[0], MUTED])
+    expect(option.series[2]).toMatchObject({ id: 'budget-Groceries <b>& more</b> budget', step: 'end', lineStyle: { type: 'dashed' } })
+    expect(option.series[0].data).toEqual([600, null])
+    expect(option.grid).toEqual(GRID_VARIANTS.default)
+    expect(option.legend.selected).toEqual({ Rent: false })
+    const rows = tooltipRows(option.tooltip.formatter([
+      { seriesName: 'Groceries <b>& more</b> budget', seriesType: 'line', axisValueLabel: 'Jun 2026', value: 500, color: MUTED },
+      { seriesName: 'Groceries <b>& more</b>', seriesType: 'line', value: 600, color: PALETTE[1] },
+    ]))
+    expect(rows.rows.map((r) => [r.kind, r.label])).toEqual([['row', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt;'], ['ref', 'Groceries &lt;b&gt;&amp; more&lt;/b&gt; budget']])
+  })
+  it('is null with no picks; exports the picked categories', () => {
+    expect(categoryTrendOption({ matrix: matrixFixture(), trend: [], nameById: NAMES, monthLabels: LABELS, range: { preset: 'all' }, selected: {} })).toBeNull()
+    expect(categoryTrendCsv(matrixFixture(), TREND, NAMES)).toEqual({
+      headers: ['Month', 'Groceries <b>& more</b>', 'Rent'],
+      rows: [['2026-06-01', '600.00', '2000.00'], ['2026-07-01', '', '2000.00']],
+    })
   })
 })
