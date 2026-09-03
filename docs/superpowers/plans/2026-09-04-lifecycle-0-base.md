@@ -24,7 +24,7 @@
 | `backend/app/models/__init__.py` (modify) | register the three models |
 | `backend/alembic/versions/20260904_0900_c3a7e19d5b42_lifecycle_tables.py` (new) | the one DDL revision |
 | `backend/tests/test_models_lifecycle.py` (new) | round-trips |
-| `backend/app/services/snapshot.py` (new) | `EXPORTED_TABLES`/`EXCLUDED_TABLES`/`REDACTED_ROWS` (moved), `csv_cell`/`json_cell`/`parse_cell`, `row_dict`/`json_row`/`csv_for_rows`, `alembic_head`, `build_snapshot_zip`, data-dir paths + name grammar, `trim_directory`, `write_restore_point` |
+| `backend/app/services/snapshot.py` (new) | `EXPORTED_TABLES`/`EXCLUDED_TABLES`/`REDACTED_ROWS` (moved), `csv_cell`/`json_cell`/`parse_cell`, `row_dict`/`json_row`/`csv_for_rows`, `alembic_head`, `build_snapshot_zip`, data-dir paths + name grammar, `trim_directory`, atomic `write_file`, `write_restore_point` |
 | `backend/app/api/export.py` (modify) | thin over the service |
 | `backend/tests/test_export_api.py` (modify) | import path, pins, service≡endpoint |
 | `backend/tests/test_snapshot_service.py` (new) | cell inverse, csv_for_rows, restore points |
@@ -222,8 +222,11 @@ class UserPreference(Base):
     # Any JSON: 'dark', {"owner": "all", "range": "1y"}, ["nav:/", ...]. NOT NULL — a reset
     # DELETEs the row rather than storing a null (prefs router).
     value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    # onupdate too, not just default: §10's last-writer-wins compares this stamp across two
+    # devices, so a re-save of an existing key MUST advance it. Python-side (no server-side
+    # trigger), so the ORM writer reads the new value back without a refresh.
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, server_default=func.now()
+        DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now()
     )
 ```
 
@@ -679,6 +682,10 @@ async def test_write_restore_point_writes_trims_and_records(db):
     for _ in range(RESTORE_POINTS_KEEP + 1):
         points.append(await write_restore_point(db, actor="me@example.com"))
     names = sorted(p.name for p in restore_points_dir().iterdir())
+    # Atomic publish: the bytes land in <name>.part and os.replace renames them into place,
+    # so a finished write leaves NO .part behind — and a crashed one leaves only a .part,
+    # which matches no name pattern and can never be offered as a restorable archive.
+    assert [n for n in names if n.endswith(".part")] == []
     assert len(names) == RESTORE_POINTS_KEEP  # the oldest was trimmed
     assert names == sorted(p.name for p in points)[1:]
     assert all(RESTORE_POINT_NAME_RE.fullmatch(n) for n in names)
@@ -715,6 +722,7 @@ import asyncio
 import csv
 import io
 import json
+import os
 import re
 import zipfile
 from collections.abc import Iterable, Mapping
@@ -1038,10 +1046,19 @@ def trim_directory(directory: Path, pattern: re.Pattern[str], keep: int) -> list
     return removed
 
 
-def _write_file(directory: Path, name: str, payload: bytes, pattern: re.Pattern[str], keep: int) -> Path:
+def write_file(directory: Path, name: str, payload: bytes, pattern: re.Pattern[str], keep: int) -> Path:
+    """ATOMIC publish of one archive, then trim. The bytes land in `<name>.part` and
+    os.replace renames them into place: a crash mid-write leaves a `.part` that matches
+    NO name pattern, never a truncated ZIP that the listing would happily offer to
+    restore. os.replace is atomic within a directory on both POSIX and Windows. The trim
+    runs AFTER the replace so the new file counts toward `keep`. Sync — async callers wrap
+    it in asyncio.to_thread (the nightly snapshot job in L4 shares this writer, which is
+    why the name is public)."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
-    path.write_bytes(payload)
+    part = directory / f"{name}.part"
+    part.write_bytes(payload)
+    os.replace(part, path)
     trim_directory(directory, pattern, keep)
     return path
 
@@ -1063,7 +1080,7 @@ async def write_restore_point(db: AsyncSession, *, actor: str | None) -> Restore
     snap = await build_snapshot_zip(db)
     name = f"pre-restore-{snap.exported_at:%Y%m%d-%H%M%S-%f}.zip"
     path = await asyncio.to_thread(
-        _write_file, restore_points_dir(), name, snap.payload, RESTORE_POINT_NAME_RE, RESTORE_POINTS_KEEP
+        write_file, restore_points_dir(), name, snap.payload, RESTORE_POINT_NAME_RE, RESTORE_POINTS_KEEP
     )
     run = LifecycleRun(
         kind="restore_point",
