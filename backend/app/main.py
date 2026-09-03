@@ -17,6 +17,7 @@ from app.api import (
     credit_cards,
     espp,
     export,
+    health,
     household,
     import_,
     limits,
@@ -99,6 +100,7 @@ app.include_router(projection.router, prefix="/api/v1")
 app.include_router(app_settings.router, prefix="/api/v1")
 app.include_router(prefs.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
+app.include_router(health.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
 app.include_router(overview.router, prefix="/api/v1")
 app.include_router(assistant.router, prefix="/api/v1")
