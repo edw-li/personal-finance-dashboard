@@ -310,3 +310,53 @@ export function netWorthStackOption({
     series,
   }
 }
+
+export interface DrillPick {
+  accountId: number
+  /** The palette slot assigned when the account was picked — colour follows the entity. */
+  slot: number
+}
+
+export interface NetWorthDrillInput {
+  ts: NetWorthTimeseries
+  drill: DrillPick[]
+  range: RangeState
+  selected: Record<string, boolean>
+}
+
+/** Individual account balances over time — up to eight picks on their own slots. Aligned
+ *  with the stack above it (F8: same `endLabel` grid, same month axis, one `group`). */
+export function netWorthDrillOption({ ts, drill, range, selected }: NetWorthDrillInput): EChartsOption | null {
+  if (drill.length === 0 || ts.months.length === 0) return null
+  const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
+  const nameById = new Map(ts.accounts.map((a) => [a.id, a.name]))
+  return {
+    dataZoom: rangeZoom(ts.months, range),
+    grid: grid('endLabel'),
+    legend: legendFor(drill.length, selected),
+    tooltip: axisTooltip({ unit: 'money' }),
+    xAxis: monthAxis(ts.months.map(formatMonth)),
+    yAxis: moneyAxis(),
+    series: drill.map(({ accountId, slot }) => ({
+      ...LINE,
+      name: nameById.get(accountId) ?? String(accountId),
+      // Circles on hover only: the line is the data, the dots are the hover affordance.
+      symbol: 'circle' as const,
+      symbolSize: 8,
+      showSymbol: false,
+      color: slotColor(slot),
+      connectNulls: false,
+      data: (byId.get(accountId) ?? []).map((v) => (v === null ? null : Number(v))),
+    })),
+  }
+}
+
+/** The drill-down as a table (F12): month rows × the picked accounts, verbatim strings. */
+export function netWorthDrillCsv(ts: NetWorthTimeseries, drill: DrillPick[]): ExportTable {
+  const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
+  const nameById = new Map(ts.accounts.map((a) => [a.id, a.name]))
+  return {
+    headers: ['Month', ...drill.map((d) => nameById.get(d.accountId) ?? String(d.accountId))],
+    rows: ts.months.map((month, i) => [month, ...drill.map((d) => byId.get(d.accountId)?.[i] ?? '')]),
+  }
+}

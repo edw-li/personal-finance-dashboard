@@ -279,3 +279,46 @@ describe('netWorthStackOption — By owner and Share %', () => {
     ])
   })
 })
+
+import { netWorthDrillCsv, netWorthDrillOption } from './netWorthChartOptions'
+
+const DRILL_TS = ts({
+  accounts: [
+    { id: 10, name: 'Checking', slug: 'checking', group: 'cash', is_active: true, is_component: false } as never,
+    { id: 11, name: '401(k) <b>', slug: 'k401', group: 'pre_tax', is_active: true, is_component: false } as never,
+  ],
+  series: [
+    { account_id: 10, values: ['100.00', '110.00', '120.00'] },
+    { account_id: 11, values: ['200.00', null, '220.00'] },
+  ],
+})
+
+describe('netWorthDrillOption', () => {
+  it('one line per picked account on its slot colour, gaps kept, aligned on the end-label grid', () => {
+    const option = read(netWorthDrillOption({ ts: DRILL_TS, drill: [{ accountId: 11, slot: 2 }, { accountId: 10, slot: 0 }], range: { preset: 'all' }, selected: { Checking: false } }))
+    expect(option.series.map((s) => s.name)).toEqual(['401(k) <b>', 'Checking'])
+    expect(option.series.map((s) => s.color)).toEqual([PALETTE[2], PALETTE[0]])
+    expect(option.series[0]).toMatchObject({ type: 'line', symbol: 'circle', symbolSize: 8, showSymbol: false, connectNulls: false, lineStyle: { width: 2 }, emphasis: { focus: 'series' } })
+    expect(option.series[0].data).toEqual([200, null, 220])
+    expect(option.grid).toEqual(GRID_VARIANTS.endLabel) // F8: aligned with the stack
+    expect(option.legend.selected).toEqual({ Checking: false })
+    const rows = tooltipRows(option.tooltip.formatter([
+      { seriesName: '401(k) <b>', seriesType: 'line', axisValueLabel: 'Jul 2026', value: null, color: PALETTE[2] },
+      { seriesName: 'Checking', seriesType: 'line', value: 110, color: PALETTE[0] },
+    ]))
+    expect(rows.rows.map((r) => [r.label, r.value])).toEqual([['Checking', '$110.00']]) // the null row is dropped
+  })
+  it('returns null with nothing picked', () => {
+    expect(netWorthDrillOption({ ts: DRILL_TS, drill: [], range: { preset: 'all' }, selected: {} })).toBeNull()
+  })
+  it('exports the picked accounts month by month, blanks for gaps', () => {
+    expect(netWorthDrillCsv(DRILL_TS, [{ accountId: 10, slot: 0 }, { accountId: 11, slot: 1 }])).toEqual({
+      headers: ['Month', 'Checking', '401(k) <b>'],
+      rows: [
+        ['2026-06-01', '100.00', '200.00'],
+        ['2026-07-01', '110.00', ''],
+        ['2026-08-01', '120.00', '220.00'],
+      ],
+    })
+  })
+})
