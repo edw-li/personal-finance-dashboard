@@ -28,6 +28,7 @@ async def test_get_returns_effective_defaults_on_an_empty_table(auth_client):
         "swr_pct": "0.04",
         "espp_ticker": None,
         "price_refresh_cron": "10 13 * * mon-fri",
+        "calendar_update_due_day": 1,
     }
 
 
@@ -64,6 +65,7 @@ async def test_put_round_trips_and_stores_the_envelope(auth_client, db):
         "swr_pct": "0.045000",
         "espp_ticker": "NVDA",
         "price_refresh_cron": "10 13 * * mon-fri",
+        "calendar_update_due_day": 1,
     }
     assert (await auth_client.get(SETTINGS)).json() == r.json()
     stored = await db.get(AppSetting, "swr_pct")
@@ -84,6 +86,7 @@ async def test_put_updates_rows_that_already_exist(auth_client, db):
         "swr_pct": "0.045000",
         "espp_ticker": "NVDA",
         "price_refresh_cron": "10 13 * * mon-fri",
+        "calendar_update_due_day": 1,
     }
     assert (await db.get(AppSetting, "swr_pct")).value == {"value": "0.045000"}
     assert (await db.get(AppSetting, "espp_ticker")).value == {"value": "NVDA"}
@@ -166,3 +169,25 @@ async def test_get_reports_a_legacy_cron_verbatim_but_put_refuses_to_echo_it(aut
     r = await auth_client.put(SETTINGS, json=dict(VALID_BODY, price_refresh_cron="10 13 * * 1-5"))
     assert r.status_code == 422
     assert "day NAMES" in r.json()["detail"]
+
+
+async def test_get_reports_the_default_calendar_due_day(auth_client):
+    assert (await auth_client.get(SETTINGS)).json()["calendar_update_due_day"] == 1
+
+
+async def test_put_stores_the_due_day_and_omitting_it_keeps_the_stored_value(auth_client, db):
+    r = await auth_client.put(SETTINGS, json={**VALID_BODY, "calendar_update_due_day": 5})
+    assert r.status_code == 200, r.text
+    assert r.json()["calendar_update_due_day"] == 5
+    assert (await db.get(AppSetting, "calendar_update_due_day")).value == {"value": 5}
+    # The app-settings form does not know this field (the Calendar feed card owns it):
+    # a PUT without it must not reset the day to 1.
+    again = await auth_client.put(SETTINGS, json=VALID_BODY)
+    assert again.json()["calendar_update_due_day"] == 5
+
+
+@pytest.mark.parametrize("bad", [0, 29])
+async def test_put_rejects_a_due_day_outside_1_to_28(auth_client, bad):
+    r = await auth_client.put(SETTINGS, json={**VALID_BODY, "calendar_update_due_day": bad})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "calendar_update_due_day: must be between 1 and 28"

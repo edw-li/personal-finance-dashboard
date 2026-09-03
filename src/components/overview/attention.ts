@@ -118,17 +118,26 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
 
   // Nightly backup — PROD only (spec §3): dev boxes never back up and must not nag.
   // "Missing or older than 48h" shares backupAge with the Settings card's amber tone,
-  // evaluated at today's midnight UTC exactly as prices-stale above.
+  // evaluated at today's midnight UTC exactly as prices-stale above. The verify phase
+  // (2026-09-03 data-lifecycle spec §8) adds its verdict: a stale nag says both; a fresh
+  // dump that did not restore gets its own line. `verified` absent = an older marker, silent.
   if (data.system.environment === 'prod') {
     const { backup } = data.system
-    if (
+    const stale =
       backup === null ||
       backupAge(backup.last_success_at, new Date(`${todayIso}T00:00:00Z`)) !== 'fresh'
-    ) {
+    const unverified = backup !== null && backup.verified === false
+    if (stale) {
       items.push({
         key: 'backup-stale',
-        text: "Nightly backup hasn't run recently",
-        to: '/settings',
+        text: `Nightly backup hasn't run recently${unverified ? " and last night's was not verified" : ''}`,
+        to: '/settings#backups',
+      })
+    } else if (unverified) {
+      items.push({
+        key: 'backup-unverified',
+        text: "Last night's backup was not verified",
+        to: '/settings#backups',
       })
     }
   }

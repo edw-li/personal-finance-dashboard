@@ -452,6 +452,8 @@ export function resetPrefsStoreForTests(): void {
 }
 ```
 
+**As shipped (review round):** the dirty set is PERSISTED, under one extra localStorage key (`DIRTY_STORAGE_KEY = 'finance.prefsDirty'`, declared beside `STORAGE_KEYS` but deliberately not inside it — `PREF_KEYS` is that record's key list). It is read at store init and per key on a PATCH that succeeds, so rule 4's "retries on the next change or session" survives a reload instead of being reverted by the next adoption. That split the one set in two: `changed` (in memory, "moved since the tab opened") still wins over a GET that was already in flight, while `dirty` (persisted, "the server is behind") is what a PATCH confirms. `endSession()` (Task 3) clears both.
+
 - [ ] **Step 4: Run the test**
 
 Run: `npx vitest run src/prefs/prefsStore.test.ts`
@@ -708,6 +710,8 @@ export default function LandingRedirect({ children }: { children: ReactNode }) {
 `src/App.tsx`: add `import LandingRedirect from './prefs/LandingRedirect'` and `import SessionPrefs from './prefs/SessionPrefs'`; inside `<AuthProvider>` before `<ToastProvider>` add `<SessionPrefs />`; change the `/` route to `<Route path="/" element={<LandingRedirect><OverviewPage /></LandingRedirect>} />`.
 
 `src/pages/LoginPage.tsx`: add `import { clearLanded } from '../prefs/LandingRedirect'` and, immediately before `navigate(destination, { replace: true })` in the submit handler, add `clearLanded()` with the comment `// A fresh sign-in is a fresh arrival: the landing_page redirect applies once more.`
+
+**As shipped (review round):** `SessionPrefs` also ends the session — `prefsStore.endSession()` (clears the dirty and pending sets plus their debounce timers, sets `synced = false` and notifies `subscribeSynced`) runs when `isAuthenticated` flips true → false, tracked with a ref so a fresh load's "not signed in YET" is not mistaken for a sign-out. Without it, logout → login in the same tab left the next account being seeded from this one's keys and Appearance claiming "Synced to your account." before its GET. `landingTarget()` also became read-only: `LANDED_KEY` is now set by **Layout's** mount effect (any first page, not just `/`), because a tab that opened on `/net-worth` left the flag unset and turned the next Overview click into a redirect.
 
 - [ ] **Step 4: Run the tests, type-check**
 

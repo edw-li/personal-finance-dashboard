@@ -8,6 +8,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api import (
+    activity,
     app_settings,
     assistant,
     auth,
@@ -86,6 +87,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(import_.router, prefix="/api/v1")
+app.include_router(activity.router, prefix="/api/v1")
 app.include_router(net_worth.router, prefix="/api/v1")
 app.include_router(household.router, prefix="/api/v1")
 app.include_router(spending.router, prefix="/api/v1")

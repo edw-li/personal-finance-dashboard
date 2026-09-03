@@ -470,6 +470,7 @@ async def create_card_credit(
         label=body.label,
         annual_value=_validated_credit_value(body.annual_value),
         counts=body.counts,
+        reset_cadence=body.reset_cadence,
     )
     db.add(credit)
     await db.commit()
@@ -486,6 +487,7 @@ async def update_card_credit(
     credit.label = body.label
     credit.annual_value = _validated_credit_value(body.annual_value)
     credit.counts = body.counts
+    credit.reset_cadence = body.reset_cadence
     await db.commit()
     return credit
 

@@ -5,6 +5,7 @@ import { ApiError } from '../api/client'
 import { clearReturnTo, peekReturnTo } from '../components/shell/returnTo'
 import { LAST_EMAIL_KEY } from '../components/shell/session'
 import { useAuth } from '../contexts/AuthContext'
+import { clearLanded } from '../prefs/LandingRedirect'
 import '../components/panels.css'
 import './LoginPage.css'
 
@@ -62,6 +63,8 @@ export default function LoginPage() {
       // died; this is where the user gets it back — and where the key is finally spent, so
       // the next expiry cannot resurrect a stale destination.
       clearReturnTo()
+      // A fresh sign-in is a fresh arrival: the landing_page redirect applies once more.
+      clearLanded()
       navigate(destination, { replace: true })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Login failed')

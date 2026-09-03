@@ -71,6 +71,11 @@ class ActivityBatchOut(BaseModel):
     month: date | None
     # Row-level entries (op != 'batch'); 0 for a summary-only batch.
     rows: int
+    # False for a summary batch, a batch already undone, one whose rows a later change
+    # touched, and one an import or restore followed. NOT a guarantee: whether other rows
+    # now DEPEND on the ones an undo would delete is a question about the current data that
+    # only undo time can answer, so the POST may still refuse — the Activity card shows that
+    # 409's sentence verbatim.
     undoable: bool
     undone_by: UUID | None
 

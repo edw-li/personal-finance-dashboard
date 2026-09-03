@@ -7,6 +7,7 @@ import { fetchAccounts } from '../api/netWorth'
 import { fetchSecurities } from '../api/portfolio'
 import { fetchCategories } from '../api/spending'
 import { fetchSystemStatus } from '../api/system'
+import { LANDED_KEY } from '../prefs/LandingRedirect'
 import Layout from './Layout'
 import { prefetchRoute, warmAllRoutes } from './routeChunks'
 
@@ -234,6 +235,14 @@ describe('Layout — sidebar v2', () => {
     expect(
       screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current'),
     ).toBeNull()
+  })
+
+  // The shell mounting is the tab's ARRIVAL, whatever page it arrived on: LandingRedirect
+  // only mounts on `/`, so leaving the flag to it made a later Overview click on a tab that
+  // opened elsewhere redirect to the landing page (2026-09-03 data-lifecycle spec §10).
+  it('marks the tab as arrived on mount, from any page', () => {
+    renderShell('/spending')
+    expect(sessionStorage.getItem(LANDED_KEY)).toBe('1')
   })
 
   it('titles the document from the active destination', () => {

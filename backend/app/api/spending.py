@@ -25,6 +25,7 @@ from app.schemas.spending import (
     YearlyOut,
     YearRollup,
 )
+from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     quantize_money,
@@ -46,7 +47,9 @@ async def list_categories(db: AsyncSession = Depends(get_db)) -> list[SpendingCa
 
 @router.post("/categories", response_model=CategoryOut, status_code=201)
 async def create_category(
-    body: CategoryCreate, db: AsyncSession = Depends(get_db)
+    body: CategoryCreate,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> SpendingCategory:
     slug = slugify(body.name)
     # Same guard as accounts, at this table's String(80): unicode lowercasing can
@@ -72,7 +75,10 @@ async def create_category(
         raise HTTPException(status_code=409, detail=f"category {slug!r} already exists")
     category = SpendingCategory(name=body.name, slug=slug, sort_order=body.sort_order)
     db.add(category)
-    await db.commit()
+    await db.flush()
+    batch.record_insert(category)
+    batch.label = f"Created category {category.name}"
+    await batch.commit()
     return category
 
 
@@ -85,7 +91,10 @@ async def _get_category(db: AsyncSession, category_id: int) -> SpendingCategory:
 
 @router.patch("/categories/{category_id}", response_model=CategoryOut)
 async def update_category(
-    category_id: int, body: CategoryUpdate, db: AsyncSession = Depends(get_db)
+    category_id: int,
+    body: CategoryUpdate,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> SpendingCategory:
     category = await _get_category(db, category_id)
     # Same explicit-null guard as accounts: all patchable columns are NOT NULL.
@@ -116,14 +125,21 @@ async def update_category(
         )
         if clash is not None:
             raise HTTPException(status_code=409, detail="category name already in use")
+    before = row_image(category)
     for field, value in updates.items():
         setattr(category, field, value)
-    await db.commit()
+    batch.record_update(category, before)
+    batch.label = f"Updated category {category.name}"
+    await batch.commit()
     return category
 
 
 @router.delete("/categories/{category_id}", status_code=204)
-async def delete_category(category_id: int, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_category(
+    category_id: int,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
     category = await _get_category(db, category_id)
     row_count = (
         await db.execute(
@@ -137,9 +153,11 @@ async def delete_category(category_id: int, db: AsyncSession = Depends(get_db)) 
             status_code=409,
             detail=f"category has {row_count} monthly rows — deactivate it instead",
         )
+    batch.record_delete(category)
+    batch.label = f"Deleted category {category.name}"
     await db.delete(category)
-    await db.commit()
-    return Response(status_code=204)
+    await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
 
 
 # --- category budgets ---
@@ -178,12 +196,16 @@ async def _get_budget_row(
 
 @router.put("/categories/{category_id}/budget", response_model=list[BudgetHistoryEntry])
 async def put_category_budget(
-    category_id: int, body: BudgetPut, db: AsyncSession = Depends(get_db)
+    category_id: int,
+    body: BudgetPut,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> list[CategoryBudget]:
     """Upsert one (category, effective_month) budget row — last write wins (single-user
     TOCTOU posture, spec §3). Returns the category's FULL history, ascending by month, so
     the editor renders it without a second fetch."""
-    await _get_category(db, category_id)
+    # A named category, not a bare await: the batch label needs the name.
+    category = await _get_category(db, category_id)
     require_first_of_month(body.effective_month)
     amount: Decimal | None = None
     if body.amount is not None:
@@ -194,31 +216,40 @@ async def put_category_budget(
             raise HTTPException(status_code=422, detail="amount must be non-negative")
     existing = await _get_budget_row(db, category_id, body.effective_month)
     if existing is None:
-        db.add(
-            CategoryBudget(
-                category_id=category_id, effective_month=body.effective_month, amount=amount
-            )
+        row = CategoryBudget(
+            category_id=category_id, effective_month=body.effective_month, amount=amount
         )
+        db.add(row)
+        await db.flush()
+        batch.record_insert(row, month=body.effective_month)
     else:
+        before = row_image(existing)
         existing.amount = amount
-    await db.commit()
+        batch.record_update(existing, before, month=body.effective_month)
+    batch.label = f"Set {category.name} budget from {body.effective_month:%b %Y}"
+    await batch.commit()
     return await _budget_history(db, category_id)
 
 
 @router.delete("/categories/{category_id}/budget/{effective_month}", status_code=204)
 async def delete_category_budget(
-    category_id: int, effective_month: date, db: AsyncSession = Depends(get_db)
+    category_id: int,
+    effective_month: date,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> Response:
     """Remove one HISTORY row (fixing a mis-dated entry) — distinct from the NULL-amount
     "budget ended" marker, which is itself a stored row (spec §3)."""
-    await _get_category(db, category_id)
+    category = await _get_category(db, category_id)
     require_first_of_month(effective_month)
     row = await _get_budget_row(db, category_id, effective_month)
     if row is None:
         raise HTTPException(status_code=404, detail="budget row not found")
+    batch.record_delete(row, month=effective_month)
+    batch.label = f"Removed {category.name} budget row for {effective_month:%b %Y}"
     await db.delete(row)
-    await db.commit()
-    return Response(status_code=204)
+    await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
 
 
 def _savings_rate(net_pay: Decimal | None, total: Decimal) -> Decimal | None:
@@ -402,7 +433,10 @@ async def get_month(month: date, db: AsyncSession = Depends(get_db)) -> Spending
 
 @router.put("/months/{month}", response_model=SpendingUpsertResult)
 async def put_month(
-    month: date, body: SpendingMonthUpsert, db: AsyncSession = Depends(get_db)
+    month: date,
+    body: SpendingMonthUpsert,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
 ) -> SpendingUpsertResult:
     require_first_of_month(month)
     ids = [entry.category_id for entry in body.amounts]
@@ -448,29 +482,48 @@ async def put_month(
         ).scalars()
     }
     created = updated = unchanged = 0
+    new_rows: list[MonthlySpending] = []
     for category_id, value in quantized.items():
         row = existing.get(category_id)
         if row is None:
-            db.add(MonthlySpending(month=month, category_id=category_id, amount=value))
+            row = MonthlySpending(month=month, category_id=category_id, amount=value)
+            db.add(row)
+            new_rows.append(row)
             created += 1
         elif row.amount != value:
+            before = row_image(row)
             row.amount = value
+            batch.record_update(row, before, month=month)
             updated += 1
         else:
             unchanged += 1
+    if new_rows:
+        await db.flush()
+        for row in new_rows:
+            batch.record_insert(row, month=month)
     net_pay_cleared = False
+    net_pay_note = ""
     if net_pay_provided:
         cashflow = await db.get(MonthlyCashflow, month)
         if cashflow is None:
-            db.add(MonthlyCashflow(month=month, net_pay=net_pay_value))
+            cashflow = MonthlyCashflow(month=month, net_pay=net_pay_value)
+            db.add(cashflow)
+            await db.flush()
+            batch.record_insert(cashflow, month=month)
         else:
+            before = row_image(cashflow)
             cashflow.net_pay = net_pay_value
+            batch.record_update(cashflow, before, month=month)
+        net_pay_note = ", take-home set"
     elif net_pay_clear:
         cashflow = await db.get(MonthlyCashflow, month)
         if cashflow is not None:
+            batch.record_delete(cashflow, month=month)
             await db.delete(cashflow)
             net_pay_cleared = True
-    await db.commit()
+            net_pay_note = ", take-home cleared"
+    batch.label = f"Saved {month:%b %Y} spending — {created + updated} updated{net_pay_note}"
+    batch_id = await batch.commit()
     return SpendingUpsertResult(
         month=month,
         created=created,
@@ -478,11 +531,16 @@ async def put_month(
         unchanged=unchanged,
         net_pay_set=net_pay_provided,
         net_pay_cleared=net_pay_cleared,
+        batch_id=batch_id,
     )
 
 
 @router.delete("/months/{month}", status_code=204)
-async def delete_month(month: date, db: AsyncSession = Depends(get_db)) -> Response:
+async def delete_month(
+    month: date,
+    db: AsyncSession = Depends(get_db),
+    batch: ChangeBatch = Depends(change_batch),
+) -> Response:
     """Remove a month's spending wholesale (2026-08-31 spec §B2): every monthly_spending
     row AND the monthly_cashflow row. 404 only when NEITHER exists — a cashflow-only
     month (net pay entered, no categories) still deletes cleanly, and vice versa."""
@@ -498,8 +556,11 @@ async def delete_month(month: date, db: AsyncSession = Depends(get_db)) -> Respo
             status_code=404, detail="no spending or net pay recorded for this month"
         )
     for row in rows:
+        batch.record_delete(row, month=month)
         await db.delete(row)
     if cashflow is not None:
+        batch.record_delete(cashflow, month=month)
         await db.delete(cashflow)
-    await db.commit()
-    return Response(status_code=204)
+    batch.label = f"Deleted {month:%b %Y} spending"
+    batch_id = await batch.commit()
+    return Response(status_code=204, headers=batch_header(batch_id))

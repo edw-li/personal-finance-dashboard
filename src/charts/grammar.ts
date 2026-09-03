@@ -15,7 +15,8 @@ export const MONEY_GRID = { left: 70, right: 24, top: 40, bottom: 28 } as const
  *  top · noLegend: single series · endLabel: room for the net-worth end label · horizontal:
  *  category y-axis with 118px labels (card values, the bracket ladder) · heatmap: category
  *  y-axis + rotated month labels + the visualMap bar under them · fan: the projection's
- *  wider money labels. */
+ *  wider money labels · fanEndLabel: the fan with room for the pinned scenarios' end
+ *  labels (planning-sandboxes §11). */
 export const GRID_VARIANTS = {
   default: MONEY_GRID,
   noLegend: { left: 70, right: 24, top: 16, bottom: 28 },
@@ -23,6 +24,7 @@ export const GRID_VARIANTS = {
   horizontal: { left: 130, right: 40, top: 8, bottom: 28 },
   heatmap: { left: 130, right: 24, top: 8, bottom: 96 },
   fan: { left: 76, right: 24, top: 40, bottom: 28 },
+  fanEndLabel: { left: 76, right: 84, top: 40, bottom: 28 },
 } as const
 
 export type GridVariant = keyof typeof GRID_VARIANTS

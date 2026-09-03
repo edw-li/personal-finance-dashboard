@@ -18,32 +18,22 @@ import {
   type PaletteEntry,
 } from './paletteRegistry'
 import { useToast } from './ToastProvider'
+import { getLocal, setLocal } from '../prefs/prefsStore'
 
-const RECENT_KEY = 'commandPalette.recent'
 const RECENT_MAX = 8
 
 // The entity lists are small and change rarely; ten minutes is long enough that a sitting
 // costs one round of fetches and short enough that a rename shows up the same afternoon.
 const ENTITY_TTL_MS = 10 * 60 * 1000
 
+// Recency ranking through prefsStore: it owns the storage spelling, swallows a blocked
+// localStorage (the ranking is a nicety) and follows the account (data-lifecycle spec §10).
 function readRecent(): string[] {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]')
-    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
-  } catch {
-    return []
-  }
+  return getLocal('palette_recents') ?? []
 }
 
 function pushRecent(id: string): void {
-  try {
-    localStorage.setItem(
-      RECENT_KEY,
-      JSON.stringify([id, ...readRecent().filter((x) => x !== id)].slice(0, RECENT_MAX)),
-    )
-  } catch {
-    // Recency ranking is a nicety — a blocked localStorage must not break execution.
-  }
+  setLocal('palette_recents', [id, ...readRecent().filter((x) => x !== id)].slice(0, RECENT_MAX))
 }
 
 /**

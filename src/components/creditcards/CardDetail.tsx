@@ -125,6 +125,9 @@ export default function CardDetail({
       label,
       annual_value: canonicalAmount(amount, { expressions: false }),
       counts: true,
+      // A new credit resets with the calendar year — the common case, and the only one
+      // that lands on the calendar without an opened date on the card.
+      reset_cadence: 'calendar',
     })
       .then(() => {
         setCreditForm({ label: '', annual_value: '' })
@@ -145,6 +148,25 @@ export default function CardDetail({
       label: credit.label,
       annual_value: credit.annual_value,
       counts: !credit.counts,
+      reset_cadence: credit.reset_cadence,
+    })
+      .then(() => onChanged())
+      .catch((err: unknown) => setError(message(err, 'Update failed')))
+      .finally(() => setLocalBusy(false))
+  }
+
+  const toggleCadence = (creditId: number) => {
+    const credit = card.credits.find((c) => c.id === creditId)
+    if (!credit) return
+    setLocalBusy(true)
+    setError(null)
+    // Full-object PATCH (house style): only the cadence changes, everything else travels
+    // back verbatim.
+    updateCardCredit(creditId, {
+      label: credit.label,
+      annual_value: credit.annual_value,
+      counts: credit.counts,
+      reset_cadence: credit.reset_cadence === 'calendar' ? 'anniversary' : 'calendar',
     })
       .then(() => onChanged())
       .catch((err: unknown) => setError(message(err, 'Update failed')))
@@ -169,6 +191,7 @@ export default function CardDetail({
                 label: credit.label,
                 annual_value: credit.annual_value,
                 counts: credit.counts,
+                reset_cadence: credit.reset_cadence,
               })
                 .then(() => onChanged())
                 .catch(() => toast.error(`Could not restore the ${credit.label} credit`))
@@ -293,6 +316,21 @@ export default function CardDetail({
                 {credit.label} · {formatCurrency(credit.annual_value)}/yr
               </span>
               <span className="credit-row-actions">
+                <button
+                  type="button"
+                  className="button"
+                  aria-pressed={credit.reset_cadence === 'anniversary'}
+                  aria-label={`${credit.label} resets on the card anniversary`}
+                  title={
+                    card.opened_on === null && credit.reset_cadence === 'anniversary'
+                      ? "Needs the card's opened date to land on the calendar"
+                      : 'When the credit resets — the calendar dates its reset event by this'
+                  }
+                  disabled={anyBusy}
+                  onClick={() => toggleCadence(credit.id)}
+                >
+                  {credit.reset_cadence === 'anniversary' ? 'Resets on anniversary' : 'Resets Jan 1'}
+                </button>
                 <button
                   type="button"
                   className="button"

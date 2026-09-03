@@ -14,10 +14,10 @@ import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import ChartCard from '../components/ChartCard'
 import type { EChartEventParams } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
-import { eventKey } from '../components/calendar/calendarView'
+import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
-import { UP_NEXT_WINDOW_DAYS, upNextItems } from '../components/overview/upNext'
+import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
 import { ytdStats } from '../components/overview/ytd'
 import {
   netWorthTrendCsv,
@@ -606,29 +606,39 @@ export default function OverviewPage() {
               </h2>
               {upNextFailed ? (
                 <p className="drill-hint">Couldn&apos;t load upcoming events.</p>
-              ) : upNext === null ? null : upNextItems(upNext, todayIso()).length === 0 ? (
+              ) : upNext === null ? null : rankUpNext(upNext, todayIso()).length === 0 ? (
                 <p className="drill-hint">
                   Nothing scheduled in the next {UP_NEXT_WINDOW_DAYS} days.
                 </p>
               ) : (
-                <ul className="up-next-list">
-                  {upNextItems(upNext, todayIso()).map((event) => (
-                    <li key={eventKey(event)}>
-                      {event.href !== null ? (
-                        <NavLink to={event.href} className="up-next-link">
+                <>
+                  <ul className="up-next-list">
+                    {rankUpNext(upNext, todayIso()).map((event) => {
+                      const amount = chipAmount(event)
+                      const row = (
+                        <>
                           <span className="up-next-date">{formatDate(event.date)}</span>{' '}
                           {event.label}
-                        </NavLink>
-                      ) : (
-                        // Custom events are informational — no page to open (spec §9.2).
-                        <span className="up-next-link up-next-plain">
-                          <span className="up-next-date">{formatDate(event.date)}</span>{' '}
-                          {event.label}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                          {amount !== null && <span className="up-next-amount num">{amount}</span>}
+                        </>
+                      )
+                      return (
+                        <li key={eventKey(event)}>
+                          {event.href !== null ? (
+                            <NavLink to={event.href} className="up-next-link">
+                              {row}
+                            </NavLink>
+                          ) : (
+                            // Custom events are informational — no page to open (spec §9.2).
+                            <span className="up-next-link up-next-plain">{row}</span>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  {/* The money the window actually moves — the list is capped, this is not. */}
+                  <p className="drill-hint up-next-line">{upNextLine(upNext, todayIso())}</p>
+                </>
               )}
               <NavLink className="drill-hint" to="/calendar">
                 Open calendar →

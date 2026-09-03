@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { LastRefresh, SystemStatus } from '../../types/api'
@@ -8,9 +8,8 @@ import SystemCard from './SystemCard'
 vi.mock('../../api/system', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/system')>()),
   fetchSystemStatus: vi.fn(),
-  downloadSnapshot: vi.fn(),
 }))
-import { downloadSnapshot, fetchSystemStatus } from '../../api/system'
+import { fetchSystemStatus } from '../../api/system'
 
 const LAST_RUN: LastRefresh = {
   at: '2026-08-24T20:11:00+00:00',
@@ -51,7 +50,6 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
 
 beforeEach(() => {
   vi.mocked(fetchSystemStatus).mockResolvedValue(systemOut())
-  vi.mocked(downloadSnapshot).mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -68,7 +66,7 @@ it('renders the healthy rows verbatim', async () => {
   await screen.findByText(`${formatDateTime(LAST_RUN.at)} (scheduled) · 36 updated`)
   expect(screen.getByText(formatDateTime('2026-08-25T20:10:00+00:00'))).toBeDefined()
   expect(screen.getByText('Running')).toBeDefined()
-  const stamp = screen.getByText(`${formatDateTime(backup.last_success_at)} (1.2M)`)
+  const stamp = screen.getByText(`${formatDateTime(backup.last_success_at)} · 1.2M`)
   expect(stamp.className).toBe('')
   expect(screen.getByText('117.7 MB')).toBeDefined()
   expect(screen.getByText('e7c5a9f4b2d8')).toBeDefined()
@@ -93,7 +91,7 @@ it('tones the backup amber past 48 hours, wording unchanged', async () => {
   const backup = backupOut(72)
   vi.mocked(fetchSystemStatus).mockResolvedValue(systemOut({ backup }))
   render(<SystemCard />)
-  const stamp = await screen.findByText(`${formatDateTime(backup.last_success_at)} (1.2M)`)
+  const stamp = await screen.findByText(`${formatDateTime(backup.last_success_at)} · 1.2M`)
   expect(stamp.className).toBe('system-stale')
 })
 
@@ -102,7 +100,7 @@ it('changes the WORDING past seven days, not colour alone', async () => {
   vi.mocked(fetchSystemStatus).mockResolvedValue(systemOut({ backup }))
   render(<SystemCard />)
   const stamp = await screen.findByText(
-    `${formatDateTime(backup.last_success_at)} (1.2M) — more than a week old`,
+    `${formatDateTime(backup.last_success_at)} · 1.2M — more than a week old`,
   )
   expect(stamp.className).toBe('system-overdue')
 })
@@ -137,37 +135,6 @@ it('shows the load failure verbatim and retries into the rows', async () => {
   expect(screen.queryByRole('alert')).toBeNull()
 })
 
-it('downloads the snapshot with a busy state on the button', async () => {
-  let release: () => void = () => {}
-  vi.mocked(downloadSnapshot).mockImplementation(
-    () =>
-      new Promise<void>((resolve) => {
-        release = resolve
-      }),
-  )
-  render(<SystemCard />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Download snapshot (.zip)' }))
-  expect(downloadSnapshot).toHaveBeenCalledTimes(1)
-  const busy = screen.getByRole('button', { name: 'Preparing…' }) as HTMLButtonElement
-  expect(busy.disabled).toBe(true)
-  await act(async () => {
-    release()
-  })
-  const idle = screen.getByRole('button', { name: 'Download snapshot (.zip)' }) as HTMLButtonElement
-  expect(idle.disabled).toBe(false)
-})
-
-it('surfaces a failed export without hiding the facts', async () => {
-  vi.mocked(downloadSnapshot).mockRejectedValue(new ApiError('export blew up', 500))
-  render(<SystemCard />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Download snapshot (.zip)' }))
-  const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toContain('export blew up')
-  // The facts stay on screen — the download error is its own surface, never the card's
-  // load-error state (which unmounts SystemFacts).
-  expect(screen.getByText('Running')).toBeDefined()
-})
-
 it('renders the last-5 run trails compactly', async () => {
   vi.mocked(fetchSystemStatus).mockResolvedValue(
     systemOut({
@@ -192,4 +159,42 @@ it('renders the last-5 run trails compactly', async () => {
         `${formatDateTime('2026-08-29T20:10:00+00:00')} 40 updated`,
     ),
   ).toBeDefined()
+})
+
+// The verify phase (2026-09-03 data-lifecycle spec §8): "Last backup" now means "the dump
+// restores", and the row says so in words.
+it('reads a verified, encrypted marker as words, bytes from size_bytes', async () => {
+  const backup = {
+    ...backupOut(10),
+    size_bytes: 110_592,
+    encrypted: true,
+    retention_days: 30,
+    verified: true,
+    verified_at: hoursAgo(10),
+    row_counts: { net_worth_snapshots: 33, monthly_spending: 621, position_transactions: 210 },
+  }
+  vi.mocked(fetchSystemStatus).mockResolvedValue(systemOut({ backup }))
+  render(<SystemCard />)
+  const stamp = await screen.findByText(
+    `${formatDateTime(backup.last_success_at)} · 108.0 KB · encrypted · verified`,
+  )
+  expect(stamp.className).toBe('')
+  expect(screen.queryByRole('button', { name: 'Download snapshot (.zip)' })).toBeNull()
+})
+
+it('says NOT verified with the reason, in the overdue tone — colour is never the only channel', async () => {
+  const backup = {
+    ...backupOut(10),
+    size_bytes: 110_592,
+    encrypted: true,
+    verified: false,
+    verify_error: 'row count mismatch: live monthly_spending=621 vs restored monthly_spending=600',
+  }
+  vi.mocked(fetchSystemStatus).mockResolvedValue(systemOut({ backup }))
+  render(<SystemCard />)
+  const stamp = await screen.findByText(
+    `${formatDateTime(backup.last_success_at)} · 108.0 KB · encrypted · not verified — ` +
+      'row count mismatch: live monthly_spending=621 vs restored monthly_spending=600',
+  )
+  expect(stamp.className).toBe('system-overdue')
 })
