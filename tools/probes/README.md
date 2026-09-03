@@ -10,8 +10,9 @@ gitignored `scratchpad/`, never next to these tracked scripts.
 |---|---|---|
 | `charts-c4/`, `charts-c5/` | Static `probe.html` pages that feed the app's own `node_modules/echarts` the exact option shapes the builders emit (heat-treemap hierarchy, decals, `markArea`/`markPoint`, the piecewise price wash) | `node tools/probes/charts-c5/shoot.mjs` — no server needed |
 | `charts-c7/smoke.mjs` | The whole app: every chart route in both themes at 1600×1000, plus tooltip (axis/item/sankey), the heatmap's three modes, the heat-treemap and the log-axis fan. Fails on any console error, any bare canvas outside a `.chart-card`, and any canvas that did not actually paint | needs the dev stack — see below |
+| `sandbox-v/smoke.mjs` | The three planning sandboxes opened FROM a `whatif=` link in both themes: arrival state, a real slider drag (history must not grow), presets, pins across a reload and a year switch, both Apply doors up to their confirm, the legacy `?whatif=TICKER` and `?whatif-lot=` aliases, and the assistant's tool chip through to the page it lands on. Every mutating request outside a four-entry allowlist is aborted, so the walk cannot write | needs the dev stack — see below |
 
-## Running the C7 smoke against the dev servers (dev only)
+## Running the C7 / sandbox smokes against the dev servers (dev only)
 
 Start the stack: backend `uvicorn app.main:app --port 8000` on `127.0.0.1:8000`, `npm run dev`
 on `http://localhost:5173`. Then mint a token with the **dev seed credentials**
@@ -31,3 +32,13 @@ Prints `CHARTS SMOKE OK`, or exits 1 listing every problem. Env: `SMOKE_OUT`, `T
 `SKIP_DETAILS`. Known dev-data non-defects (a person with no paycheck profile 404ing,
 `owner=joint` holding no positions) are recorded under `knownBenign` in `report.json` rather
 than dropped, so a real regression hiding behind one stays visible.
+
+The sandbox smoke takes the same token the same way (`SMOKE_OUT=scratchpad/sandbox-smoke`,
+then `node tools/probes/sandbox-v/smoke.mjs`) and prints `SANDBOX SMOKE OK`. Its own env:
+`ONLY_STEP` (paycheck|taxes|projection|assistant), `SKIP_ASSISTANT`, `TICKER`, `ESPP_LOT`,
+`RETIRE_PERSON`, `ASSISTANT_MODEL`. Two cautions learned the hard way on 2026-09-04: the
+backend is started WITHOUT `--reload`, so a server left running from before the branch
+under test merged will answer with the old code (the assistant's tool-chip link went
+missing for exactly that reason, and nothing about the page said so) — restart it before a
+smoke; and `npm run dev` in a worktree serves THAT checkout, so point `APP_BASE` at the
+port serving the code you mean to judge.
