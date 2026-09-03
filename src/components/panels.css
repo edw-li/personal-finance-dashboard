@@ -56,7 +56,7 @@
 
 .eyebrow {
   margin: 0 0 0.75rem;
-  font-size: 0.6875rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -87,7 +87,7 @@
 }
 
 .stat-label {
-  font-size: 0.6875rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -95,15 +95,20 @@
   margin-bottom: 0.45rem;
 }
 
+/* Clamped so a $1,000,000.00 hero never overflows its tile in a split-screen window
+   (2026-09-02 audit: "$799,395.!" at 1180px); tabular numerals keep count-ups steady. */
 .stat-value {
   font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
-  font-size: 1.45rem;
+  font-size: clamp(1.1rem, 0.9rem + 0.5vw, 1.45rem);
   font-weight: 600;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .stat-tile-hero .stat-value {
-  font-size: 2.4rem;
+  font-size: clamp(1.5rem, 1rem + 1.1vw, 2.4rem);
 }
 
 .stat-delta {
@@ -172,7 +177,7 @@
 
 .data-table th {
   text-align: left;
-  font-size: 0.6875rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -203,7 +208,7 @@
   padding: 0.1rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 0.625rem;
+  font-size: 0.66rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
