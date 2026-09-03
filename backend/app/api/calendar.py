@@ -544,6 +544,14 @@ ICS_FILENAME = "financial-calendar.ics"
 FEED_BACK_DAYS = 30
 FEED_FORWARD_DAYS = 365
 LAST_USED_BUMP = timedelta(hours=1)
+# token_urlsafe(32) renders 43 characters; the window is wide either side so a future
+# token size still fits. Checked IN THE HANDLER rather than as Query(min_length=...):
+# FastAPI's 422 echoes the offending value straight back to the caller (and into any
+# error log), and a malformed token must be indistinguishable from an unknown one.
+FEED_TOKEN_MIN = 16
+FEED_TOKEN_MAX = 128
+# The one 200 body neither route declares through a response_model.
+ICS_RESPONSES: dict[int | str, dict[str, object]] = {200: {"content": {ICS_MEDIA_TYPE: {}}}}
 
 # The feed router carries NO auth dependency: the token in the URL is the credential, and a
 # calendar app holds nothing else. Included separately by main.py.
@@ -558,7 +566,7 @@ def _ics_response(text: str, extra_headers: dict[str, str]) -> Response:
     return Response(content=text.encode("utf-8"), media_type=ICS_MEDIA_TYPE, headers=extra_headers)
 
 
-@router.get("/export.ics")
+@router.get("/export.ics", responses=ICS_RESPONSES)
 async def export_ics(start: date, end: date, db: AsyncSession = Depends(get_db)) -> Response:
     """The "Add to calendar (.ics)" download: the same window fence as GET /calendar, the
     same composer, rendered once."""
@@ -570,16 +578,18 @@ async def export_ics(start: date, end: date, db: AsyncSession = Depends(get_db))
     )
 
 
-@feed_router.get("/feed.ics")
+@feed_router.get("/feed.ics", responses=ICS_RESPONSES)
 @limiter.limit(FEED_POLL)
 async def feed_ics(
     request: Request,
-    token: str = Query(min_length=16, max_length=128),
+    token: str = Query(),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """The subscription feed: 30 days back, 365 forward. Unknown or revoked tokens 404 with
     one sentence — no oracle for token existence. The body's sha256 is the ETag; a matching
     If-None-Match is a 304 with no body, which is what makes a 12-hour poll cheap."""
+    if not FEED_TOKEN_MIN <= len(token) <= FEED_TOKEN_MAX:
+        raise HTTPException(status_code=404, detail="feed not found")
     presented_hash = _hash_token(token)
     row = (
         await db.execute(

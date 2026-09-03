@@ -107,6 +107,26 @@ describe('CalendarFeedCard', () => {
     expect(await screen.findByText('Saved.')).toBeTruthy()
   })
 
+  it('re-reads the settings before the full-form PUT, so a change made elsewhere survives', async () => {
+    mount()
+    const box = (await screen.findByLabelText('Monthly update reminder day')) as HTMLInputElement
+    // The App settings card on this same page saved a new withdrawal rate AFTER this card
+    // mounted. The card's own copy is stale; the PUT must carry the current one.
+    const moved = { ...SETTINGS, swr_pct: '0.035000' }
+    vi.mocked(fetchAppSettings).mockResolvedValue(moved)
+    vi.mocked(putAppSettings).mockResolvedValue({ ...moved, calendar_update_due_day: 5 })
+    fireEvent.change(box, { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save reminder day' }))
+    await waitFor(() =>
+      expect(putAppSettings).toHaveBeenCalledWith({
+        swr_pct: '0.035000', // NOT the '0.040000' this card mounted with
+        espp_ticker: 'NVDA',
+        price_refresh_cron: '10 13 * * mon-fri',
+        calendar_update_due_day: 5,
+      }),
+    )
+  })
+
   it('refuses a day outside 1–28 without calling the API', async () => {
     mount()
     const box = await screen.findByLabelText('Monthly update reminder day')

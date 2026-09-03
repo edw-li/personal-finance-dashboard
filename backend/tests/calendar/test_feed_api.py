@@ -91,13 +91,20 @@ async def test_token_validation_and_revoke(auth_client):
 # --- feed ----------------------------------------------------------------------------------
 
 
-async def test_feed_404s_for_missing_unknown_and_revoked_tokens(client, auth_client):
-    assert (await client.get(f"{CALENDAR}/feed.ics")).status_code == 422  # token is required
-    unknown = await client.get(f"{CALENDAR}/feed.ics?token={'z' * 43}")
-    assert unknown.status_code == 404 and unknown.json()["detail"] == "feed not found"
-    token_id, plaintext = await make_token(auth_client)
+async def test_feed_404s_for_missing_unknown_short_and_revoked_tokens(client, auth_client):
+    token_id, revoked = await make_token(auth_client)
     await auth_client.delete(f"{CALENDAR}/feed-tokens/{token_id}")
-    assert (await client.get(f"{CALENDAR}/feed.ics?token={plaintext}")).status_code == 404
+    # A calendar app carries no bearer, so every assertion below must hold WITHOUT one —
+    # `auth_client` is this same client with a token on it (conftest).
+    del client.headers["Authorization"]
+    assert (await client.get(f"{CALENDAR}/feed.ics")).status_code == 422  # token is required
+    # Too short, unknown, and revoked are ONE answer: no oracle for token existence, and
+    # the malformed one is never echoed back the way a 422 would echo it.
+    for bad in ("short", "z" * 43, revoked):
+        resp = await client.get(f"{CALENDAR}/feed.ics?token={bad}")
+        assert resp.status_code == 404, bad
+        assert resp.json()["detail"] == "feed not found"
+        assert bad not in resp.text
 
 
 async def test_feed_serves_the_calendar_with_etag_and_answers_304(

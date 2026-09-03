@@ -100,7 +100,6 @@ export default function CalendarFeedCard() {
   }
 
   const saveDay = () => {
-    if (settings === null) return
     const day = Number(dayBox)
     if (!Number.isInteger(day) || day < MIN_DAY || day > MAX_DAY) {
       setDayError(`Pick a day between ${MIN_DAY} and ${MAX_DAY} — every month has one.`)
@@ -109,13 +108,13 @@ export default function CalendarFeedCard() {
     setBusy(true)
     setDayError(null)
     setSavedNote(false)
-    // The three other settings travel back VERBATIM (full-form PUT); only the day changes.
-    putAppSettings({
-      swr_pct: settings.swr_pct,
-      espp_ticker: settings.espp_ticker,
-      price_refresh_cron: settings.price_refresh_cron,
-      calendar_update_due_day: day,
-    })
+    // RE-READ, then write. The PUT is full-form, and this card's copy of the other three
+    // settings is as old as its mount — but the App settings card sits on the SAME page and
+    // writes them. Sending the mount-time snapshot would silently revert a withdrawal rate
+    // the user changed a minute ago. One extra GET on an explicit button press is the whole
+    // cost; the day is the only field this card is entitled to decide.
+    fetchAppSettings()
+      .then((current) => putAppSettings({ ...current, calendar_update_due_day: day }))
       .then((saved) => {
         // Re-seeded from the RESPONSE, like every other settings form here: the server
         // answers with what it stored, and a box holding the typed text would read as

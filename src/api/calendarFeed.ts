@@ -33,9 +33,22 @@ export async function downloadCalendarIcs(
   filename = 'financial-calendar.ics',
 ): Promise<void> {
   const token = getToken()
-  const res = await fetch(`/api/v1/calendar/export.ics?start=${start}&end=${end}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
+  let res: Response
+  try {
+    // 60 s like downloadSnapshot's, not api()'s 15: the server composes up to 400 days of
+    // derived events before it can write a byte, and a slow link must not read as a failure.
+    res = await fetch(`/api/v1/calendar/export.ics?start=${start}&end=${end}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(60_000),
+    })
+  } catch (err) {
+    // A raw fetch REJECTS on a dead network; without this the caller would see a bare
+    // TypeError instead of the ApiError every other call in this app throws (system.ts).
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new ApiError('Export timed out', 0)
+    }
+    throw new ApiError('Network error — is the server reachable?', 0)
+  }
   if (!res.ok) {
     let detail = `Export failed (${res.status})`
     try {

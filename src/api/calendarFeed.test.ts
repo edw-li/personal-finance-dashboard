@@ -58,6 +58,20 @@ describe('calendarFeed api', () => {
     )
   })
 
+  it('turns a dead network and a timeout into ApiErrors, not bare fetch rejections', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    await expect(downloadCalendarIcs('2026-08-01', '2026-10-31')).rejects.toMatchObject({
+      status: 0,
+      message: 'Network error — is the server reachable?',
+    })
+    spy.mockRejectedValue(new DOMException('timed out', 'TimeoutError'))
+    await expect(downloadCalendarIcs('2026-08-01', '2026-10-31')).rejects.toMatchObject({
+      status: 0,
+      message: 'Export timed out',
+    })
+    expect(downloadText).not.toHaveBeenCalled()
+  })
+
   it('throws an ApiError when the export fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('{"detail":"start must be on or before end"}', { status: 422 }),
