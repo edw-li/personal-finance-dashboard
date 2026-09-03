@@ -29,6 +29,10 @@ describe('AppearanceCard', () => {
     expect(screen.getByRole('button', { name: 'Compact' }).getAttribute('aria-pressed')).toBe(
       'true',
     )
+    fireEvent.click(screen.getByRole('button', { name: 'On' }))
+    expect(localStorage.getItem('finance.chartDecals')).toBe('on')
+    expect(screen.getByRole('button', { name: 'On' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Off' }).getAttribute('aria-pressed')).toBe('false')
   })
 
   it('carries the anchor id the palette jumps to', () => {
