@@ -203,6 +203,35 @@ describe('ScopeBar', () => {
     expect(screen.queryByRole('button', { name: 'Back to latest' })).toBeNull()
   })
 
+  it('month (view): the spending dot follows ENTERED months only — an empty month stays hollow', async () => {
+    // Lane A's /coverage lists entered months in `spending` (honest-numbers spec §3): August
+    // has no spending rows at all, September was saved as nineteen rows of $0.00. Neither
+    // may light the dot, and nothing here may union the two gap lists back into the set —
+    // that would put the old lie ("September has spending") straight back on the ribbon.
+    vi.mocked(fetchCoverage).mockResolvedValue({
+      balances: ['2026-07-01', '2026-08-01', '2026-09-01'],
+      spending: ['2026-07-01'],
+      net_pay: ['2026-07-01'],
+      spending_empty: ['2026-09-01'],
+      spending_missing: ['2026-08-01'],
+      net_pay_missing: ['2026-08-01', '2026-09-01'],
+      latest: { balances: '2026-09-01', spending: '2026-07-01', net_pay: '2026-07-01' },
+    })
+    mount({ month: { mode: 'view', anchor: '2026-09-01' } })
+
+    const july = await screen.findByRole('button', {
+      name: /^Jul 2026 — balances and spending entered/,
+    })
+    expect(july.classList.contains('has-spending')).toBe(true)
+    for (const month of ['Aug 2026', 'Sep 2026']) {
+      const chip = screen.getByRole('button', {
+        name: new RegExp(`^${month} — balances entered, spending missing`),
+      })
+      expect(chip.classList.contains('has-balances')).toBe(true)
+      expect(chip.classList.contains('has-spending')).toBe(false)
+    }
+  })
+
   it('month (view): the page\'s figures and Edit link reach the ribbon', async () => {
     mount(
       {
