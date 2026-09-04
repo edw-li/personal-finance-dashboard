@@ -69,9 +69,13 @@ afterEach(() => {
 describe('BackupsCard', () => {
   it('lists the stored snapshots newest first with size and age, and a Restore… link only when restorable', async () => {
     mount()
-    expect(await screen.findByRole('region', { name: 'Backups & snapshots' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Backups & snapshots' })).toBeTruthy()
     expect(document.getElementById('backups')).toBeTruthy()
-    const rows = screen.getAllByRole('listitem')
+    // Wait on the ROWS, not on the card: the region and both buttons render on the first
+    // pass, before fetchSnapshots resolves, so awaiting them waits for nothing and the
+    // sync list query below raced the resolution — it usually won, and lost under a loaded
+    // full-suite run (2026-09-03 verification).
+    const rows = await screen.findAllByRole('listitem')
     expect(rows).toHaveLength(2)
     expect(rows[0].textContent).toContain('finance-export-20260903-233000.zip')
     expect(rows[0].textContent).toContain(`${formatDateTime(NEWEST.at)} · 2.0 MB`)
@@ -120,7 +124,8 @@ describe('BackupsCard', () => {
     vi.mocked(downloadSnapshot).mockRejectedValue(new ApiError('Export timed out', 0))
     fireEvent.click(screen.getByRole('button', { name: 'Download snapshot (.zip)' }))
     expect((await banner()).textContent).toContain('Export timed out')
-    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    // Same reason as the first test: nothing awaited above is gated on the list arriving.
+    expect(await screen.findAllByRole('listitem')).toHaveLength(2)
   })
 
   it('shows the rate-limit sentence verbatim when Snapshot now is refused', async () => {
