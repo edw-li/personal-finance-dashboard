@@ -719,6 +719,13 @@ grep -n "Save balances\|Save spending\|Save month" src/pages/MonthlyUpdatePage.t
 
 Expected: each grep hits. Record any miss with the file that should have carried it — the driver still gets written, and that check fails loudly rather than being dropped. The last grep decides which button names the driver clicks (see Step 2's note 1).
 
+**OBSERVED.** Every spec string shipped, in these files: "Record this month as $0" and "…you truly spent nothing." (`MonthlyUpdatePage.tsx:1595`), "This month was saved with no spending. Enter it below, or delete the empty month." (`:1182`), `Total (incl. payroll)` (`spendingChartOptions.ts:335` as `TOTAL_RATE_SERIES`), "Take-home not yet entered (N months)" (`moneyFlowOptions.ts`), `entry-derived` + the `derived` badge (`MonthlyUpdatePage.tsx:1306,1319`). **Two misses, both resolved rather than dropped:**
+
+- `src/components/settings/CategoriesPanel.tsx` **does not exist** — lane E shipped the kind picker in `CategoriesCard.tsx` (`Segmented` with Living/Tax/Transfer at `:205`, the "recomputes ALL history" note at `:286`). The spec §8 table named a file nobody created; the driver targets the real one.
+- **No `Save balances` / `Save spending` pair.** `grep -n "Save balances\|Save spending\|Save month"` hits only `Save month` (`:1721`, with `Retry spending` as its other face at `:1720`). Lane C put the decoupling INSIDE `save()` and states it on the review step ("Spending: nothing entered — this save writes balances only.", `:1667`), which is what §4 asked for. Step 2's note 1 applies: the driver walks `Next: spending` → `Next: review` → `Save month` and keeps the network assertion verbatim.
+
+**Step 2's note 2, resolved:** the dev book already holds two parents with components (`Fidelity Traditional 401(k)` #40 over three, `Fidelity Roth 401(k)` #45 over two), so the derived branch walked for free and no scratch account was created — `report.createdAccounts` is empty in both themes.
+
 - [x] **Step 2: Write the driver**
 
 ```js
@@ -1257,7 +1264,7 @@ git commit -m "docs(verify): honest-numbers retire list with its unused-proof gr
 
 - [x] **Step 2: Tick every checkbox** in this file. A step not run is struck through with its reason on the same line, never left blank.
 
-- [ ] **Step 3: Final gate — run everything once more, on the tree as it now stands**
+- [x] **Step 3: Final gate — run everything once more, on the tree as it now stands**
 
 ```bash
 cd backend && FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest -q \
@@ -1269,7 +1276,9 @@ cd .. && npx tsc -b && npx eslint . && npx vitest run && npm run build
 
 Expected: pytest count = Task 2's + 8; ruff clean; exactly one alembic head; tsc/eslint silent; the vitest counts from Task 3; the build completes.
 
-- [ ] **Step 4: Confirm nothing left the box**
+**OBSERVED, on the tree as it stands (`b6e92d6`):** pytest `1694 passed, 1 skipped` = Task 2's `1686 passed, 1 skipped` **+ 8**, exactly; `ruff check` "All checks passed!" and `ruff format --check` "241 files already formatted"; `alembic heads` = one line, `e5a7c1d3f6b8 (head)`; `tsc -b` silent; `eslint .` exit 0 with **0 errors and 17 pre-existing `react-refresh/only-export-components` warnings** (unchanged by this program — they predate it and eslint's own exit code is 0); `vitest run` `Test Files 175 passed` / `Tests 2364 passed`, exit 0 — the count is Task 3's, and the **exit code** is the thing this lane had to fix (see `fix(tests)`); `npm run build` exit 0 with no heap flag needed — `index-*.js` 316.72 kB (gzip 101.24), `tooltip-*.js` 747.03 kB (gzip 253.44), `index-*.css` 28.11 kB (gzip 6.02), built in 8.79 s.
+
+- [x] **Step 4: Confirm nothing left the box**
 
 ```bash
 git log --oneline origin/main..main | wc -l
@@ -1279,7 +1288,9 @@ git log --oneline -8
 
 Expected: a commit count well over 300 ahead of `origin/main` and STILL UNPUSHED; a clean status; the log showing the five lane merges then this lane's four commits (`test(verify)` ×2, `chore(verify)`, `docs(verify)`).
 
-- [ ] **Step 5: Update the memory file** for this overnight run with: the five merge SHAs, the pytest/vitest counts, the before/after table as observed, the rounding verdict, the smoke's screenshot folder and `report.json` path, the dev-DB "unchanged" proof, the retire verdict, and every deviation taken.
+**OBSERVED: 70 ahead, 0 behind, still unpushed.** The "over 300" figure was written before the user pushed `4998f68` on 2026-09-03 20:45 — `origin/main` now sits on exactly this program's base commit, so 70 is the whole honest-numbers batch and nothing else. `git push` was never run in this lane. Status clean. The log shows the five lane merges then SEVEN commits, three more than planned: `test(verify)` ×2 and `docs(verify)` ×2 as written, `chore(verify)` for the smoke, plus two `fix(...)` commits the lane's own gates forced — `fix(savings)` (payroll_savings null, spec §2) and `fix(tests)` (the prefs debounce timer that made `vitest run` exit 1).
+
+- [x] **Step 5: Update the memory file** for this overnight run with: the five merge SHAs, the pytest/vitest counts, the before/after table as observed, the rounding verdict, the smoke's screenshot folder and `report.json` path, the dev-DB "unchanged" proof, the retire verdict, and every deviation taken.
 
 ---
 
