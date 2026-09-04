@@ -45,6 +45,75 @@ const HSA: AccountOut = {
   parent_account_id: null,
   person_id: 1,
 }
+// The 401(k) shape production actually has (spec §0): a parent whose balance is nothing but
+// the sum of its components, typed by hand every month for 37 months.
+const TRAD: AccountOut = {
+  id: 20,
+  name: 'Fidelity Traditional 401(k)',
+  slug: 'fidelity-traditional-401k',
+  group: 'pre_tax',
+  sort_order: 3,
+  is_active: true,
+  is_component: false,
+  parent_account_id: null,
+  person_id: 1,
+}
+const TRAD_PRETAX: AccountOut = {
+  id: 21,
+  name: 'Traditional pre-tax',
+  slug: 'traditional-pre-tax',
+  group: 'pre_tax',
+  sort_order: 4,
+  is_active: true,
+  is_component: true,
+  parent_account_id: 20,
+  person_id: 1,
+}
+const TRAD_MATCH: AccountOut = {
+  id: 22,
+  name: 'Traditional employer match',
+  slug: 'traditional-employer-match',
+  group: 'pre_tax',
+  sort_order: 5,
+  is_active: true,
+  is_component: true,
+  parent_account_id: 20,
+  person_id: 1,
+}
+// Two ways to belong to nothing: no parent at all, and a parent that has been retired.
+const ORPHAN: AccountOut = {
+  id: 23,
+  name: 'Old rollover slice',
+  slug: 'old-rollover-slice',
+  group: 'pre_tax',
+  sort_order: 6,
+  is_active: true,
+  is_component: true,
+  parent_account_id: null,
+  person_id: 1,
+}
+const CLOSED_PARENT: AccountOut = {
+  id: 24,
+  name: 'Closed 401(k)',
+  slug: 'closed-401k',
+  group: 'pre_tax',
+  sort_order: 7,
+  is_active: false,
+  is_component: false,
+  parent_account_id: null,
+  person_id: 1,
+}
+const CLOSED_SLICE: AccountOut = {
+  id: 25,
+  name: 'Closed 401(k) pre-tax',
+  slug: 'closed-401k-pre-tax',
+  group: 'pre_tax',
+  sort_order: 8,
+  is_active: true,
+  is_component: true,
+  parent_account_id: 24,
+  person_id: 1,
+}
 const BROKERAGE: PortfolioAccountOut = { id: 30, label: 'Fidelity Brokerage', person_id: 1 }
 const JOINT_ROTH: PortfolioAccountOut = { id: 31, label: 'Joint Roth', person_id: null }
 
@@ -255,4 +324,45 @@ it('keeps the net-worth roster alive when the portfolio labels fail to load', as
   expect(await screen.findByText('portfolio accounts unavailable')).toBeTruthy()
   expect(roster().getByText('Fidelity HSA')).toBeTruthy()
   expect(screen.queryByRole('table', { name: 'Portfolio accounts' })).toBeNull()
+})
+
+it('says which rows are typed and which are summed', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue([CHECKING, TRAD, TRAD_PRETAX, TRAD_MATCH])
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  expect(roster().getByRole('columnheader', { name: 'Roll-up' })).toBeTruthy()
+  // A parent with components has no balance of its own — it IS its components (spec §5).
+  expect(roster().getByText('derived: 2 components')).toBeTruthy()
+  expect(roster().getAllByText('component of Fidelity Traditional 401(k)')).toHaveLength(2)
+  // A plain account is neither summed nor summed into: only Joint Checking reads '—'.
+  expect(roster().getAllByText('—')).toHaveLength(1)
+})
+
+it('flags a component whose parent is missing or retired', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue([ORPHAN, CLOSED_PARENT, CLOSED_SLICE])
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  // Net worth sums the NON-component rows, so a component only reaches a total through a
+  // present, active parent. Both of these reach none at all.
+  const cues = roster().getAllByText('unlinked component — counts nowhere')
+  expect(cues).toHaveLength(2)
+  // Amber rides a class (--warn in the sheet); the SENTENCE is the channel that always
+  // works — colour is never alone.
+  expect(cues[0].className).toBe('accounts-link-note is-unlinked')
+  // A retired parent still says how many rows roll into it, singular.
+  expect(roster().getByText('derived: 1 component')).toBeTruthy()
+})
+
+it('still names a parent the component flag forgot', async () => {
+  // A link without the flag: the half-set pair Task 4 and lane B refuse from now on. The
+  // roster must not hide a link it can see, and must not claim a roll-up either.
+  vi.mocked(fetchAccounts).mockResolvedValue([TRAD, { ...TRAD_PRETAX, is_component: false }])
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  expect(roster().getByText('parent: Fidelity Traditional 401(k)')).toBeTruthy()
+  // The parent still counts it: the balances PUT sums over the LINK (spec §5).
+  expect(roster().getByText('derived: 1 component')).toBeTruthy()
 })

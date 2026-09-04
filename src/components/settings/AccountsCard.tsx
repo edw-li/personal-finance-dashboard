@@ -193,7 +193,56 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   }
 
   const ownerName = new Map(people.map((p) => [p.id, p.name]))
-  const accountName = new Map(accounts.map((a) => [a.id, a.name]))
+  const byId = new Map(accounts.map((a) => [a.id, a]))
+  // How many rows roll UP into each account. Counted over `parent_account_id`, which is the
+  // spec's own definition of a component (§5: "an account with at least one component
+  // (`accounts.parent_account_id = it`)") and the exact set the balances PUT sums — NOT over
+  // `is_component`, which is the rollup key rather than the link.
+  const componentCounts = new Map<number, number>()
+  for (const a of accounts) {
+    if (a.parent_account_id === null) continue
+    componentCounts.set(a.parent_account_id, (componentCounts.get(a.parent_account_id) ?? 0) + 1)
+  }
+
+  /**
+   * What the roster says about a row's place in the roll-up (2026-09-04 honest-numbers spec
+   * §5). A parent with components has no balance of its own — the wizard derives it — so the
+   * table has to say which rows are typed and which are summed, rather than printing a bare
+   * parent name that reads the same either way.
+   */
+  const rollUpNote = (account: AccountOut) => {
+    const parent =
+      account.parent_account_id === null ? undefined : byId.get(account.parent_account_id)
+    if (account.is_component) {
+      // Net worth sums the NON-component rows, so a component reaches a total only through a
+      // parent that is present and active; with the parent gone or retired its balance lands
+      // in no figure at all — hence "counts nowhere", literally. Advisory amber (--warn, the
+      // .draft-note register) and the sentence together: colour is never the only channel.
+      if (parent === undefined || !parent.is_active) {
+        return (
+          <span className="accounts-link-note is-unlinked">
+            unlinked component — counts nowhere
+          </span>
+        )
+      }
+      return <span className="accounts-link-note">component of {parent.name}</span>
+    }
+    const n = componentCounts.get(account.id) ?? 0
+    if (n > 0) {
+      return (
+        <span className="accounts-link-note">
+          derived: {n} component{n === 1 ? '' : 's'}
+        </span>
+      )
+    }
+    // A link without the flag is the half-set pair Task 4 refuses. Keep naming the parent —
+    // the roster must not hide a link it can see — but claim nothing about the roll-up: the
+    // two halves disagree about where this balance belongs, and that is the whole point.
+    if (parent !== undefined) {
+      return <span className="accounts-link-note">parent: {parent.name}</span>
+    }
+    return '—'
+  }
   // An account may not parent itself (the server 422s it); leaving it out of the select
   // means the UI never offers the mistake.
   const parentOptions = accounts.filter((a) => a.id !== editingId)
@@ -313,7 +362,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                     <th>Group</th>
                     <th>Owner</th>
                     <th className="num">Sort</th>
-                    <th>Parent</th>
+                    <th>Roll-up</th>
                     <th>Status</th>
                     <th />
                   </tr>
@@ -337,11 +386,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                           : (ownerName.get(account.person_id) ?? '—')}
                       </td>
                       <td className="num">{account.sort_order}</td>
-                      <td>
-                        {account.parent_account_id === null
-                          ? '—'
-                          : (accountName.get(account.parent_account_id) ?? '—')}
-                      </td>
+                      <td>{rollUpNote(account)}</td>
                       <td>
                         <span className="badge">{account.is_active ? 'Active' : 'Retired'}</span>
                       </td>
