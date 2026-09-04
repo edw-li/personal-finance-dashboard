@@ -624,9 +624,9 @@ export default function SpendingPage() {
             zoomWindow={zoomWindow}
             footer={
               <p className="drill-hint">
-                Tax payments and transfers to your own accounts are not living spend, so
-                neither line counts them as money gone. The old sheet's column tracked a
-                planned rate, so values differ by design.
+                Transfers to your own accounts are not counted as money gone; tax payments
+                are, on both lines. The old sheet's column tracked a planned rate, so values
+                differ by design.
               </p>
             }
           />
@@ -758,7 +758,7 @@ export default function SpendingPage() {
           <div className="card span-12">
             <h2 className="eyebrow">
               Yearly rollups
-              <InfoHint text="Category totals per calendar year, then the three kinds that make up the total, the paycheck, and both savings rates — all over the months that have BOTH spending and net pay entered (the count is the last row)." />
+              <InfoHint text="Category totals per calendar year, with Total and Net pay, over every month that has anything entered. Living spend, Tax paid, Transfers and both savings rates cover only the months with BOTH spending and net pay — the Months matched row counts them, which is why those four need not add up to Total." />
             </h2>
             <div className="yearly-scroll">
               <table className="data-table">

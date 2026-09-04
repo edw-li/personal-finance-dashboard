@@ -132,6 +132,19 @@ describe('spendingGaps — only what comes AFTER the last entered month', () => 
     expect(spendingGaps(many)).toBe('Feb missing, Mar missing, Apr missing, +2 more')
   })
 
+  it('drops an empty month the balances window never reached', () => {
+    // The server does NOT window `spending_empty` (services/coverage.py): a month saved as
+    // all $0.00 after the last snapshot is still on file, but it was never part of the book,
+    // so the footer must not report the window as waiting for it.
+    const beyond = coverageOut({
+      balances: ['2026-06-01', '2026-07-01', '2026-08-01'],
+      spending_empty: ['2026-09-01', '2026-10-01'],
+      spending_missing: ['2026-08-01'],
+      latest: { balances: '2026-08-01', spending: '2026-07-01', net_pay: '2026-07-01' },
+    })
+    expect(spendingGaps(beyond)).toBe('Aug missing')
+  })
+
   it('is empty on a fully entered window', () => {
     expect(spendingGaps(coverageOut({ spending_empty: [], spending_missing: [] }))).toBe('')
   })

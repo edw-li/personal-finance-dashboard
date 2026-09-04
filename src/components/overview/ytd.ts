@@ -34,6 +34,9 @@ export interface YtdStats {
   /** LIVING spend for the year (the server's string), falling back to the plain total on a
    *  backend older than the category kinds. */
   spend: string | null
+  /** The window `spend` was measured over — the MATCHED one, because `living_total` is
+   *  summed over matched months (services/savings.py's `rollup`); the wider entered-spending
+   *  window on the pre-kinds fallback, whose `total` really does cover every entered month. */
   spendWindow: YtdWindow | null
   netPay: string | null
   netPayWindow: YtdWindow | null
@@ -131,7 +134,11 @@ export function ytdStats(
     // living_total is the honest spend; `total` is what a pre-kinds backend sends, and it
     // is what this card printed until today — so the fallback changes nothing for it.
     spend: row?.living_total ?? row?.total ?? null,
-    spendWindow: spanOf(enteredSpend),
+    // The label follows the FIGURE, never the feed: `living_total` is summed over matched
+    // months only, so a month entered without a paycheck beside it is in neither. The
+    // fallback `total` does cover every entered month, and says so.
+    spendWindow:
+      row?.living_total === undefined ? spanOf(enteredSpend) : spanOf(matched, matchedCount),
     netPay: row?.net_pay_total ?? null,
     netPayWindow: spanOf(enteredPay),
     // A year with no matched month has NO savings figure — not a zero one.

@@ -6,7 +6,8 @@ import { MONTH_TOKEN } from '../../sandbox/scenarioUrl'
 import SliderBox from '../../sandbox/SliderBox'
 import { SEP, type Sandbox } from '../../sandbox/useSandbox'
 import type { PersonOut, ProjectionOut } from '../../types/api'
-import { formatCurrency, formatMonth } from '../../utils/format'
+import { windowWords } from '../overview/ytd'
+import { formatCurrency } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
 import {
   COMPARE_ROWS,
@@ -191,8 +192,8 @@ export default function ScenarioPanel({
             )}
             {windowed && derivedWindow !== null && (
               <span className="projection-derived">
-                over {formatMonth(derivedWindow.from)} – {formatMonth(derivedWindow.to)} (
-                {derivedWindow.months} {derivedWindow.months === 1 ? 'month' : 'months'})
+                derived over {windowWords(derivedWindow)} ({derivedWindow.months}{' '}
+                {derivedWindow.months === 1 ? 'month' : 'months'})
               </span>
             )}
           </div>

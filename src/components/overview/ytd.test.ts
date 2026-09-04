@@ -190,12 +190,30 @@ describe('ytdStats — every figure names its window (spec §3)', () => {
     expect(stats.totalSaved).toBeNull()
     // The window still comes from coverage; the count falls back to the intersection.
     expect(stats.savedWindow).toEqual({ from: '2026-01-01', to: '2026-07-01', months: 7 })
+    // …and spend, being the pre-kinds `total`, is labelled with every ENTERED month.
+    expect(stats.spendWindow).toEqual({ from: '2026-01-01', to: '2026-07-01', months: 7 })
   })
 
   it('has no savings figure at all in a year nothing matched', () => {
     const stats = ytdStats(
       ts([], []),
-      yearly([{ ...rollup(2026), months_matched: 0 }]),
+      yearly([
+        // What the server actually sends with nothing matched (services/savings.py's
+        // `rollup`): the matched sums are ZERO and the rates null — a non-zero
+        // living_total beside months_matched: 0 is a payload that cannot exist.
+        {
+          ...rollup(2026),
+          months_matched: 0,
+          living_total: '0.00',
+          tax_total: '0.00',
+          transfer_total: '0.00',
+          cash_savings: null,
+          payroll_savings: '0.00',
+          total_savings: null,
+          savings_rate: null,
+          total_savings_rate: null,
+        },
+      ]),
       [],
       coverageOut({ net_pay: [], latest: { balances: '2026-09-01', spending: '2026-07-01', net_pay: null } }),
       TODAY,
@@ -206,8 +224,29 @@ describe('ytdStats — every figure names its window (spec §3)', () => {
     expect(stats.cashRate).toBeNull()
     expect(stats.savedWindow).toBeNull()
     expect(stats.netPayWindow).toBeNull()
-    // Spend still has a window: the months were entered, they just had no paycheck beside them.
+    // Nor does spend: the $0.00 the server sends is the sum over NO matched months, and a
+    // window would tell the reader that figure covers Jan-Jul. It covers nothing.
+    expect(stats.spend).toBe('0.00')
+    expect(stats.spendWindow).toBeNull()
+  })
+
+  it('labels spend with the MATCHED window, not every month spending was entered for', () => {
+    // August has spending but no paycheck, so the server left it out of `living_total`.
+    // Naming Jan-Aug beside a Jan-Jul figure is the mislabel this pin exists to stop.
+    const stats = ytdStats(
+      ts([], []),
+      yearly([rollup(2026)]),
+      [],
+      coverageOut({
+        spending: [...JAN_TO_JUL, '2026-08-01'],
+        spending_missing: [],
+        latest: { balances: '2026-09-01', spending: '2026-08-01', net_pay: '2026-07-01' },
+      }),
+      TODAY,
+    )
     expect(stats.spendWindow).toEqual({ from: '2026-01-01', to: '2026-07-01', months: 7 })
+    // Net pay keeps its OWN window: `net_pay_total` really is every month with a paycheck.
+    expect(stats.netPayWindow).toEqual({ from: '2026-01-01', to: '2026-07-01', months: 7 })
   })
 })
 

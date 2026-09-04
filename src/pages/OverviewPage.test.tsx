@@ -897,14 +897,38 @@ describe('OverviewPage year to date', () => {
     expect(screen.queryByText('$999.00')).toBeNull()
   })
 
+  it('states the cash rate alone on a backend older than the savings service', async () => {
+    serve({
+      yearly: {
+        years: [
+          {
+            year: CURRENT_YEAR, by_category: [], total: '32000.00',
+            net_pay_total: '90000.00', savings_rate: '0.644444',
+          },
+        ],
+      },
+    })
+    renderPage()
+
+    await screen.findByText(`Year to date — ${CURRENT_YEAR}`)
+    // The word "cash" is what keeps it from being read as the total rate; a dash here
+    // would hide a figure the user's own data still supports.
+    expect(screen.getByText('64.4% cash')).toBeTruthy()
+    expect(screen.queryByText(/total/)).toBeNull()
+    const saved = screen.getByText('Saved').closest('.ytd-fact')
+    expect(saved?.querySelector('dd')?.textContent).not.toBe('—')
+  })
+
   it('dashes the savings row in a year nothing matched, rather than printing a zero', async () => {
     serve({
       coverage: coverageOut({ net_pay: [], latest: { balances: YEAR_MONTHS[6], spending: YEAR_MONTHS[6], net_pay: null } }),
       yearly: {
         years: [
           {
+            // With nothing matched the server's matched sums are ZERO and its rates null
+            // (services/savings.py's `rollup`) — the shape this row must dash on.
             year: CURRENT_YEAR, by_category: [], total: '32000.00', net_pay_total: null,
-            savings_rate: null, living_total: '27000.00', total_savings: null,
+            savings_rate: null, living_total: '0.00', total_savings: null,
             total_savings_rate: null, cash_savings: null, months_matched: 0,
           },
         ],

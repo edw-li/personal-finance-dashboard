@@ -8,6 +8,7 @@ import type {
   SystemStatus,
   TaxYearOut,
 } from '../../types/api'
+import { insideBalancesWindow } from './freshness'
 import { formatDate, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 import { backupAge, isStaleQuote } from '../../utils/staleness'
@@ -88,7 +89,11 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
     })
   }
 
-  const empty = [...(data.coverage.spending_empty ?? [])].sort()
+  // Windowed here, not on the wire: the server lists every zero-filled month on file, and
+  // one saved outside the balances window was never part of the book to begin with.
+  const empty = (data.coverage.spending_empty ?? [])
+    .filter(insideBalancesWindow(data.coverage))
+    .sort()
   if (empty.length > 0) {
     const newest = empty[empty.length - 1]
     items.push({

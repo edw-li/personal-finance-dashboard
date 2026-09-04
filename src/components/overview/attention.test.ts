@@ -390,6 +390,16 @@ describe('attentionItems — coverage honesty (honest-numbers spec §3)', () => 
     ])
   })
 
+  it('ignores an empty month past the end of the balances window', () => {
+    // Same rule as the footer's parenthetical: the server lists every zero-filled month on
+    // file, and one saved beyond the last snapshot was never part of the book.
+    expect(keys(inputs({ coverage: coverageOut({ spending_empty: ['2026-09-01'] }) }))).toEqual([])
+    // …while one INSIDE the window is still a job.
+    expect(
+      keys(inputs({ coverage: coverageOut({ spending_empty: ['2026-08-01'] }) })),
+    ).toEqual(['spending-empty'])
+  })
+
   it('says nothing on a backend older than the coverage extension', () => {
     const older: CoverageOut = {
       balances: ['2026-08-01'],

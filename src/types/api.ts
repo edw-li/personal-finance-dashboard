@@ -111,7 +111,9 @@ export interface CoverageOut {
   balances: string[]
   spending: string[]
   net_pay: string[]
-  /** Inside the window, saved with every category $0.00 and no take-home. */
+  /** Saved with every category $0.00 and no take-home. NOT windowed by the server (a
+   *  zero-filled month outside the balances window is still on file), so a reader that
+   *  NAMES one filters it — `insideBalancesWindow` in components/overview/freshness.ts. */
   spending_empty?: string[]
   /** Inside the window, no spending rows at all. */
   spending_missing?: string[]

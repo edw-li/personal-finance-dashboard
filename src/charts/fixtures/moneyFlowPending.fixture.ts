@@ -8,8 +8,9 @@ import { moneyFlowOption } from '../../components/overview/moneyFlowOptions'
 const fixture: ChartFixture = {
   name: 'moneyFlowPending',
   kind: 'sankey',
-  ariaLabel:
-    'Sankey diagram of 2026 money flow from income sources through taxes, savings and take-home cash to spending categories, with the take-home of the months not yet entered drawn as an estimate',
+  // Verbatim MoneyFlowCard's own label for this year — the mount does not reword itself
+  // when the estimate node appears (the card's hint carries that), so neither does this.
+  ariaLabel: 'Sankey diagram of 2026 money flow from income sources through taxes, savings and take-home cash to spending categories',
   exempt: ['grid', 'axis', 'legend'],
   build: () =>
     moneyFlowOption({

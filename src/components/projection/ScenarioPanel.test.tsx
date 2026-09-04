@@ -214,7 +214,7 @@ describe('ScenarioPanel', () => {
     // Both the contribution and the annual spend derive from the SAME matched window, and
     // each says so under its own knob.
     await waitFor(() =>
-      expect(screen.getAllByText('over Aug 2025 – Jul 2026 (12 months)')).toHaveLength(2),
+      expect(screen.getAllByText('derived over Aug 2025–Jul 2026 (12 months)')).toHaveLength(2),
     )
     expect(
       screen.getByText(
@@ -227,7 +227,7 @@ describe('ScenarioPanel', () => {
     preview.mockImplementation(async () => ({ ...echo, derived_window: null }))
     mount()
     await waitFor(() => expect(preview).toHaveBeenCalled())
-    expect(screen.queryByText(/^over /)).toBeNull()
+    expect(screen.queryByText(/derived over/)).toBeNull()
   })
 
   it('states that the seed is fixed and points the withdrawal rate at Settings', () => {

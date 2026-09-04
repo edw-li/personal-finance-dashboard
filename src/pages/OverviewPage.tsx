@@ -86,6 +86,13 @@ interface OverviewData {
   coverage: CoverageOut
 }
 
+/** StatTile's delta grammar for a savings rate: above zero the household kept money,
+ *  below it the household overspent. Shared by the two branches of the Saved row. */
+function rateTone(rate: string): string {
+  const value = Number(rate)
+  return value > 0 ? 'delta-positive' : value < 0 ? 'delta-negative' : ''
+}
+
 // Keyed by the fetch parameters, like every other page's: an owner scope is a DIFFERENT
 // snapshot, and one key for all of them would paint the wrong person's numbers.
 function overviewKey(owner: OwnerScope): string {
@@ -560,18 +567,24 @@ export default function OverviewPage() {
                     </dt>
                     <dd>
                       {ytd.totalRate === null ? (
-                        '—'
+                        // A backend older than the savings service knows only the cash
+                        // reading. Dashing the row would hide a rate the user's own data
+                        // still supports; the word "cash" keeps the two from being confused.
+                        ytd.cashRate === null ? (
+                          '—'
+                        ) : (
+                          <>
+                            <span className={rateTone(ytd.cashRate)}>
+                              {formatPct(ytd.cashRate, { signed: false })} cash
+                            </span>
+                            {ytd.cashSaved !== null && (
+                              <span className="ytd-sub"> {formatCurrency(ytd.cashSaved)}</span>
+                            )}
+                          </>
+                        )
                       ) : (
                         <>
-                          <span
-                            className={
-                              Number(ytd.totalRate) > 0
-                                ? 'delta-positive'
-                                : Number(ytd.totalRate) < 0
-                                  ? 'delta-negative'
-                                  : ''
-                            }
-                          >
+                          <span className={rateTone(ytd.totalRate)}>
                             {formatPct(ytd.totalRate, { signed: false })} total
                           </span>
                           <span className="ytd-sub">

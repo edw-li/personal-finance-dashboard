@@ -32,6 +32,22 @@ function latestOf(coverage: CoverageOut, key: FreshnessKey): string | null {
   return coverage.latest?.[key] ?? coverage[key][coverage[key].length - 1] ?? null
 }
 
+/**
+ * The balances window (spec §3): first snapshot month … latest, inclusive. Balances are the
+ * ritual's anchor, so a month outside them was never part of the book. The server windows
+ * `spending_missing` and `net_pay_missing` itself but NOT `spending_empty` — every surface
+ * that names an empty month filters it through here, so the footer and the strip cannot
+ * disagree about which months the window even contains.
+ */
+export function insideBalancesWindow(coverage: CoverageOut): (month: string) => boolean {
+  const months = coverage.balances
+  // No balances = no window at all, and nothing can be inside one that does not exist.
+  if (months.length === 0) return () => false
+  const first = monthIndex(months[0])
+  const last = monthIndex(months[months.length - 1])
+  return (month) => monthIndex(month) >= first && monthIndex(month) <= last
+}
+
 /** "Aug" inside the clause's own year, "Aug 2025" outside it: the clause already names the
  *  year once, and repeating it on every gap turns a footer into a paragraph. */
 function gapName(month: string, referenceYear: string | null): string {
@@ -48,9 +64,12 @@ export function spendingGaps(coverage: CoverageOut): string {
   const entered = latestOf(coverage, 'spending')
   const floor = entered === null ? 0 : monthIndex(entered)
   const reference = (entered ?? latestOf(coverage, 'balances'))?.slice(0, 4) ?? null
+  // `spending_missing` arrives windowed; `spending_empty` does not (see the field's note
+  // in types/api.ts), so only that one is filtered here.
+  const windowed = insideBalancesWindow(coverage)
   const gaps = [
     ...(coverage.spending_missing ?? []).map((month) => ({ month, word: 'missing' })),
-    ...(coverage.spending_empty ?? []).map((month) => ({ month, word: 'empty' })),
+    ...(coverage.spending_empty ?? []).filter(windowed).map((month) => ({ month, word: 'empty' })),
   ]
     .filter((gap) => monthIndex(gap.month) > floor)
     .sort((a, b) => a.month.localeCompare(b.month))
