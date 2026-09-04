@@ -943,3 +943,38 @@ async def test_projection_says_so_when_no_month_has_both_halves(auth_client, db)
         "no month has both spending and take-home on file — the contribution and annual "
         "spend could not be derived"
     ) in body["warnings"]
+
+
+async def test_derived_window_is_null_when_both_knobs_were_typed(auth_client, db):
+    """The echo describes a DERIVATION (schemas/projection.DerivedWindowOut), so it is
+    null for the same reason `contribution_breakdown` is: nothing was averaged. A window
+    printed beside two typed numbers would claim the opposite (review R1)."""
+    await _seed_book(db)
+    body = (
+        await auth_client.get("/api/v1/projection?monthly_contribution=1000&annual_spend=50000")
+    ).json()
+    assert body["derived_window"] is None
+    assert body["contribution_breakdown"] is None
+    # One typed knob still leaves the OTHER derived, so the window is what explains it.
+    half = (await auth_client.get("/api/v1/projection?annual_spend=50000")).json()
+    assert half["derived_window"]["months"] == 2
+    assert half["contribution_breakdown"] is not None
+
+
+async def test_a_spending_only_book_gets_one_warning_not_two(auth_client, db):
+    """Take-home is the missing half, and `NO_CASHFLOW_WARNING` names it exactly. The
+    matched-months sentence is for a book that has BOTH halves and never together, and a
+    "no spending history" line would be plainly false here (review R3)."""
+    this_month = await _seed_book(db, with_history=False)
+    cat = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(cat)
+    await db.flush()
+    db.add(
+        MonthlySpending(
+            month=month_add(this_month, -1), category_id=cat.id, amount=Decimal("5000.00")
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["warnings"] == ["no cashflow history — monthly contribution defaulted to 0"]
+    assert body["annual_spend"] is None and body["derived_window"] is None

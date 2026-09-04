@@ -105,4 +105,40 @@ describe('FeedBanner', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry the model' }))
     expect(retry).toHaveBeenCalled()
   })
+
+  it('offers a named action button beside the message, disabled while it is running', () => {
+    const onAction = vi.fn()
+    const { rerender } = render(
+      <FeedBanner
+        error="This month was saved with no spending."
+        action={{ label: 'Delete the empty month', onAction }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Delete the empty month' }))
+    expect(onAction).toHaveBeenCalled()
+    // A second click while the first request is in flight would DELETE twice — the second
+    // 404s and the caller would show "Delete failed" for a delete that worked.
+    rerender(
+      <FeedBanner
+        error="This month was saved with no spending."
+        action={{ label: 'Delete the empty month', onAction, disabled: true }}
+      />,
+    )
+    expect(
+      (screen.getByRole('button', { name: 'Delete the empty month' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+  })
+
+  it('renders Retry before an action when a banner offers both', () => {
+    render(
+      <FeedBanner
+        error="bad"
+        retry={() => {}}
+        retryLabel="Retry the feed"
+        action={{ label: 'Delete it', onAction: () => {} }}
+      />,
+    )
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Retry', 'Delete it'])
+  })
 })

@@ -65,7 +65,7 @@ imported back by `api/projection.py`: `(salary / pay_periods) × (trad + roth + 
 quantized to cents with ROUND_HALF_UP (the projection's `half_up2`) when it is emitted, and every
 yearly or trailing scalar is the sum of those emitted months — so a table always adds up to its
 total. `payroll_monthly` for Edward's 2026 profile is exactly 4450.925 → 4450.93 per month.
-Rates are computed from the quantized parts and rounded to 0.1 pp at the API edge. A trailing
+Rates are computed from the quantized parts and carried on the wire at the existing 6-dp `quantize_pct` precision (the pages round for display), matching today's `savings_rate`. A trailing
 mean (the money-flow pending estimate, the projection's derived figures) quantizes once, at the
 end: `mean × months`, then cents.
 

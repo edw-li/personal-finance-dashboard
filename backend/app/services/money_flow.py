@@ -4,7 +4,9 @@ Pure module — no DB, no HTTP (tax_service's posture): the router loads the yea
 tax inputs/brackets and the calendar year's spending sums, and this module turns them
 into ONE reconciled payload. Everything is full-precision Decimal; quantization is the
 schema layer's job (the taxes router's `_money` plain-quantize + `+ ZERO`, because half
-these figures are engine outputs and engine outputs are unbounded).
+these figures are engine outputs and engine outputs are unbounded). The ONE exception is
+`take_home_pending`: it is an estimate the residual subtracts, so it is rounded before the
+subtraction — see the note at its computation.
 
 Conservation is exact by construction, not by rounding luck:
 - `sources.other_income` BALANCES the sources column: engine gross_income minus the four
@@ -32,6 +34,7 @@ from app.services.tax_service import (
 from app.tax_keys import SINGLE
 
 ZERO = Decimal("0")
+CENT = Decimal("0.01")
 MONTHS_IN_YEAR = 12
 # The /spending pages' fold width (SpendingPage's TOP_N): top 7 categories by the year's
 # sum, the positive remainder folded into "Other".
@@ -87,6 +90,14 @@ NEGATIVE_RESIDUAL_REASON = (
     "Taxes, pre-tax savings and take-home cash exceed gross income for {year} by {gap} — "
     "the retained-equity residual would be negative."
 )
+# The same refusal when part of the take-home is an ESTIMATE: it is a real term of the
+# subtraction, so leaving it unnamed would send the user hunting for a data error among
+# figures that are all correct, when entering the remaining months is the actual fix.
+NEGATIVE_RESIDUAL_PENDING_REASON = (
+    "Taxes, pre-tax savings, take-home cash and the estimated {pending} of take-home not "
+    "yet entered exceed gross income for {year} by {gap} — the retained-equity residual "
+    "would be negative. Enter the year's remaining take-home to replace the estimate."
+)
 BRACKETS_MISSING_REASON = (
     "{year} is filed as {status}, and {jurisdictions} have no bracket table for that status — "
     "enter them on the Taxes page to draw its money flow."
@@ -97,7 +108,7 @@ def _display(value: Decimal) -> Decimal:
     """2dp HALF_UP for embedding a figure in a reason sentence — reasons are prose, and
     prose carries display-rounded numbers (the payload itself is quantized at the schema
     layer, where the router's `_money` also collapses signed zeros)."""
-    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 @dataclass
@@ -154,6 +165,8 @@ class MoneyFlow:
     # The year's take-home that HAS been earned but not yet entered: mean of the entered
     # months x the months still missing (2026-09-04 honest-numbers spec §3). Zero on a
     # complete year and on a year with nothing entered — there is no mean to extrapolate.
+    # Already CENTS, unlike its siblings: the residual is computed from this rounded
+    # figure, so the middle column conserves after the schema layer rounds the rest.
     take_home_pending: Decimal
     take_home_months_entered: int
     retained_equity: Decimal
@@ -230,10 +243,17 @@ def compose_money_flow(
     # A half-entered year used to dump every un-entered month of pay into the residual,
     # so "retained equity" silently meant "equity plus the take-home I have not typed in
     # yet". Naming the estimate is the honest version — the card draws it as its own
-    # muted node. ONE division, and the quantize happens at the schema edge.
+    # muted node. ONE division, quantized here rather than at the schema edge (below).
     take_home_pending = ZERO
     if 0 < net_pay_months < MONTHS_IN_YEAR:
-        take_home_pending = (net_pay_sum / net_pay_months) * (MONTHS_IN_YEAR - net_pay_months)
+        # Quantized HERE, once, rather than at the schema edge like every other figure in
+        # this module: the mean repeats, so the estimate and the residual carry mirror-
+        # image fractions, and rounding them apart at the wire sends BOTH up — the middle
+        # column then overshoots gross by a cent. Rounding before the subtraction makes
+        # the residual absorb the remainder, so conservation survives quantization.
+        take_home_pending = (
+            (net_pay_sum / net_pay_months) * (MONTHS_IN_YEAR - net_pay_months)
+        ).quantize(CENT, rounding=ROUND_HALF_UP)
     # RESIDUAL node: the middle column still sums back to gross, now with one more term.
     retained_equity = (
         gross_income - taxes.total - pre_tax_savings - take_home_cash - take_home_pending
@@ -322,7 +342,13 @@ def compose_money_flow(
     elif pre_tax_savings < 0:
         reason = NEGATIVE_PRETAX_REASON.format(year=year, pretax=_display(pre_tax_savings))
     elif retained_equity < 0:
-        reason = NEGATIVE_RESIDUAL_REASON.format(year=year, gap=_display(-retained_equity))
+        reason = (
+            NEGATIVE_RESIDUAL_PENDING_REASON.format(
+                year=year, gap=_display(-retained_equity), pending=_display(take_home_pending)
+            )
+            if take_home_pending > 0
+            else NEGATIVE_RESIDUAL_REASON.format(year=year, gap=_display(-retained_equity))
+        )
 
     return MoneyFlow(
         year=year,

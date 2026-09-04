@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { deleteMonthBalances, fetchSummary, fetchTimeseries } from './netWorth'
+import { deleteMonthBalances, fetchSummary, fetchTimeseries, putMonthBalances } from './netWorth'
 
 // Only the transport is stubbed — the query string this module builds IS the test
 // (src/api/projection.test.ts's posture).
@@ -60,4 +60,32 @@ it('deleteMonthBalances reads the change batch from the 204 header', async () =>
   ])
   vi.mocked(apiWithHeaders).mockResolvedValue({ data: undefined, headers: new Headers() })
   expect(await deleteMonthBalances('2026-09-01')).toEqual({ batchId: null })
+})
+
+// Spec §5: the balances PUT now recomputes every parent-with-components server-side and
+// echoes what it wrote. The client sends the components and reads the parents back — this
+// pins that the echo survives the typed boundary (a `derived` the type did not declare
+// would be dropped by nobody at runtime but is unreachable in TS, which is the bug).
+it('putMonthBalances ships the body verbatim and reads the derived echo back', async () => {
+  vi.mocked(api).mockResolvedValue({
+    month: '2026-09-01',
+    snapshot_created: false,
+    created: 0,
+    updated: 5,
+    unchanged: 0,
+    derived: [{ account_id: 9, balance: '194411.66' }],
+  })
+  const result = await putMonthBalances('2026-09-01', {
+    recorded_on: '2026-09-04',
+    notes: null,
+    balances: [{ account_id: 3, balance: '100.00' }],
+  })
+  expect(vi.mocked(api).mock.calls[0]).toEqual([
+    '/net-worth/months/2026-09-01',
+    {
+      method: 'PUT',
+      body: '{"recorded_on":"2026-09-04","notes":null,"balances":[{"account_id":3,"balance":"100.00"}]}',
+    },
+  ])
+  expect(result.derived).toEqual([{ account_id: 9, balance: '194411.66' }])
 })

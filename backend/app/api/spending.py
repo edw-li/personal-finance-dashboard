@@ -260,6 +260,26 @@ async def delete_category_budget(
     return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
 
 
+def _kind_split(
+    spend_rows: list[MonthlySpending], categories: list[SpendingCategory]
+) -> dict[date, dict[str, Decimal]]:
+    """Per month, the amounts summed by category KIND — the matrix's and the yearly
+    rollup's shared input to services/savings.py (spec §2).
+
+    Built from rows both routes have already loaded, so it costs no query. A row whose
+    category vanished mid-request reads as 'living', the honest default (spec §1).
+    Presence of a month in the result IS "this month has spending rows", which is what
+    `compose_months` reads to tell an empty month from a missing one.
+    """
+    kind_by_category = {c.id: c.kind for c in categories}
+    by_kind: dict[date, dict[str, Decimal]] = {row.month: {} for row in spend_rows}
+    for row in spend_rows:
+        bucket = by_kind[row.month]
+        kind = kind_by_category.get(row.category_id, LIVING)
+        bucket[kind] = bucket.get(kind, Decimal("0.00")) + row.amount
+    return by_kind
+
+
 def _resolve_budgets(
     rows: list[CategoryBudget], months: list[date]
 ) -> dict[int, list[Decimal | None]]:
@@ -326,17 +346,12 @@ async def matrix(
         for i in range(len(months))
     ]
     net_pay = [cashflow.get(month) for month in months]
-    # The kind split, from the rows already loaded — no second query. A row whose category
-    # vanished mid-request reads as 'living', the honest default (spec §1).
-    kind_by_category = {c.id: c.kind for c in categories}
-    by_kind: dict[date, dict[str, Decimal]] = {row.month: {} for row in spend_rows}
-    for row in spend_rows:
-        bucket = by_kind[row.month]
-        kind = kind_by_category.get(row.category_id, LIVING)
-        bucket[kind] = bucket.get(kind, Decimal("0.00")) + row.amount
     # One savings definition for every page (spec §2): the router does no arithmetic.
     savings_rows = compose_months(
-        months, by_kind, cashflow, await load_payroll_by_month(db, months)
+        months,
+        _kind_split(spend_rows, categories),
+        cashflow,
+        await load_payroll_by_month(db, months),
     )
     swr = await get_swr_pct(db)
     # Batched (spec §3 drive-by): two queries for every month instead of two per month.
@@ -396,13 +411,7 @@ async def yearly(db: AsyncSession = Depends(get_db)) -> YearlyOut:
     years = sorted(
         {row.month.year for row in spend_rows} | {row.month.year for row in cashflow_rows}
     )
-    # Same kind split as the matrix, from the rows already loaded (spec §2).
-    kind_by_category = {c.id: c.kind for c in categories}
-    by_kind: dict[date, dict[str, Decimal]] = {row.month: {} for row in spend_rows}
-    for row in spend_rows:
-        bucket = by_kind[row.month]
-        kind = kind_by_category.get(row.category_id, LIVING)
-        bucket[kind] = bucket.get(kind, Decimal("0.00")) + row.amount
+    by_kind = _kind_split(spend_rows, categories)
     net_pay_by_month = {row.month: row.net_pay for row in cashflow_rows}
     months = sorted(set(by_kind) | set(net_pay_by_month))
     savings_rows = compose_months(
