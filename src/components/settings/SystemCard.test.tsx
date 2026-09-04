@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
-import type { LastRefresh, SystemStatus } from '../../types/api'
+import type { CoverageOut, LastRefresh, SystemStatus } from '../../types/api'
 import { formatDateTime } from '../../utils/format'
 import SystemCard from './SystemCard'
 
@@ -10,6 +10,10 @@ vi.mock('../../api/system', async (importOriginal) => ({
   fetchSystemStatus: vi.fn(),
 }))
 import { fetchSystemStatus } from '../../api/system'
+// The freshness row reads /coverage, the same feed the Overview footer stands on — one
+// sentence, one module (components/overview/freshness.ts), two surfaces.
+vi.mock('../../api/coverage', () => ({ fetchCoverage: vi.fn() }))
+import { fetchCoverage } from '../../api/coverage'
 
 const LAST_RUN: LastRefresh = {
   at: '2026-08-24T20:11:00+00:00',
@@ -48,8 +52,24 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
   }
 }
 
+// Production's own shape on 2026-09-04: balances through September, spending entered
+// through July, August never entered, September saved as all $0.00.
+function coverageOut(over: Partial<CoverageOut> = {}): CoverageOut {
+  return {
+    balances: ['2026-07-01', '2026-08-01', '2026-09-01'],
+    spending: ['2026-06-01', '2026-07-01'],
+    net_pay: ['2026-06-01', '2026-07-01'],
+    spending_empty: ['2026-09-01'],
+    spending_missing: ['2026-08-01'],
+    net_pay_missing: ['2026-08-01', '2026-09-01'],
+    latest: { balances: '2026-09-01', spending: '2026-07-01', net_pay: '2026-07-01' },
+    ...over,
+  }
+}
+
 beforeEach(() => {
   vi.mocked(fetchSystemStatus).mockResolvedValue(systemOut())
+  vi.mocked(fetchCoverage).mockResolvedValue(coverageOut())
 })
 
 afterEach(() => {
@@ -197,4 +217,49 @@ it('says NOT verified with the reason, in the overdue tone — colour is never t
       'row count mismatch: live monthly_spending=621 vs restored monthly_spending=600',
   )
   expect(stamp.className).toBe('system-overdue')
+})
+
+// The System card's freshness line (2026-09-04 honest-numbers spec §3). It is the SAME
+// sentence the Overview footer prints, from the same pure module — two surfaces that
+// disagreed about which month the data reaches would be the dishonesty this program removes.
+it('stands each hand-entered feed on its own month, naming what the window still waits for', async () => {
+  render(<SystemCard />)
+  await screen.findByText('Balances through Sep 2026')
+  expect(screen.getByText('Spending through Jul 2026 (Aug missing, Sep empty)')).toBeDefined()
+  expect(screen.getByText('Net pay through Jul 2026')).toBeDefined()
+})
+
+it('ambers exactly the feeds a month or more behind the balances', async () => {
+  render(<SystemCard />)
+  const spending = await screen.findByText('Spending through Jul 2026 (Aug missing, Sep empty)')
+  expect(spending.className).toBe('system-stale')
+  expect(screen.getByText('Net pay through Jul 2026').className).toBe('system-stale')
+  // The anchor cannot lag itself.
+  expect(screen.getByText('Balances through Sep 2026').className).toBe('')
+})
+
+it('says a feed never started rather than calling a fresh database late', async () => {
+  vi.mocked(fetchCoverage).mockResolvedValue({
+    balances: [], spending: [], net_pay: [],
+    spending_empty: [], spending_missing: [], net_pay_missing: [],
+    latest: { balances: null, spending: null, net_pay: null },
+  })
+  render(<SystemCard />)
+  await screen.findByText('Balances — no months')
+  expect(screen.getByText('Spending — no months').className).toBe('')
+  expect(screen.getByText('Net pay — no months').className).toBe('')
+})
+
+it('banners a failed coverage read like a failed status read, and Retry refetches both', async () => {
+  // One card, one snapshot, one banner: a row standing on a coverage read that failed
+  // while the rows beside it stand on a fresh status read would be a card of two instants.
+  vi.mocked(fetchCoverage).mockRejectedValueOnce(new ApiError('coverage unavailable', 500))
+  render(<SystemCard />)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('coverage unavailable')
+  expect(screen.queryByText('Running')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  await screen.findByText('Balances through Sep 2026')
+  expect(screen.getByText('Running')).toBeDefined()
+  expect(screen.queryByRole('alert')).toBeNull()
 })

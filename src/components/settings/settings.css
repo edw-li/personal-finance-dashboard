@@ -71,8 +71,11 @@
 }
 
 /* The shared amber token (--warn, PALETTE[3]) every other stale cue already wears —
-   portfolio.css's stale quote, OverviewPage.css's strip. The backup row past 48h. */
-.system-fact dd.system-stale {
+   portfolio.css's stale quote, OverviewPage.css's strip. The backup row past 48h, and
+   (as a SPAN, because that row is several clauses in one dd) a hand-entered feed a month
+   or more behind the balances on the "Data through" row. */
+.system-fact dd.system-stale,
+.system-fact dd .system-stale {
   color: var(--warn);
 }
 
