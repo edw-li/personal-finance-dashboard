@@ -302,7 +302,10 @@ async def test_put_spending_month_net_pay_null_clears(auth_client):
 async def test_put_spending_month_net_pay_omitted_is_still_a_no_op(auth_client):
     put = "/api/v1/spending/months/2026-07-01"
     await auth_client.put(put, json={"net_pay": "5000.00", "amounts": []})
-    result = (await auth_client.put(put, json={"amounts": []})).json()
+    # A body carrying nothing at all is refused now (spec §4); say it on purpose, and the
+    # omitted net_pay is still left exactly where it was — omission is not a clear.
+    assert (await auth_client.put(put, json={"amounts": []})).status_code == 422
+    result = (await auth_client.put(put, json={"amounts": [], "confirm_zero": True})).json()
     assert result["net_pay_set"] is False
     assert result["net_pay_cleared"] is False
     assert (await auth_client.get(put)).json()["net_pay"] == "5000.00"
@@ -340,6 +343,103 @@ async def test_put_spending_month_net_pay_null_rides_along_with_amounts(auth_cli
     assert got["exists"] is True  # the month survives on its amounts alone
     assert got["net_pay"] is None
     assert {a["category_id"]: a["amount"] for a in got["amounts"]} == {food.id: "250.00"}
+
+
+async def test_put_spending_month_refuses_an_all_zero_save(auth_client, db):
+    food, rent = await _seed_spending(db)
+    put = "/api/v1/spending/months/2026-10-01"
+    zeros = [
+        {"category_id": food.id, "amount": "0"},
+        {"category_id": rent.id, "amount": "0.00"},
+    ]
+    refused = await auth_client.put(put, json={"amounts": zeros})
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == (
+        "Nothing to record: every category is $0.00 and no take-home was entered — "
+        "set confirm_zero to write an empty month on purpose"
+    )
+    # Production's Sep 2026 in one line: 19 rows of $0.00 and no net pay, which every chart
+    # then drew as a real month.
+    assert (await auth_client.get(put)).json()["exists"] is False
+
+    # The wizard's checkbox path: a month you truly spent nothing in stays recordable.
+    confirmed = await auth_client.put(put, json={"amounts": zeros, "confirm_zero": True})
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["created"] == 2
+    body = (await auth_client.get(put)).json()
+    assert body["exists"] is True
+    assert {a["category_id"]: a["amount"] for a in body["amounts"]} == {
+        food.id: "0.00",
+        rent.id: "0.00",
+    }
+
+
+async def test_put_spending_month_refuses_a_null_take_home_beside_zero_amounts(auth_client, db):
+    food, rent = await _seed_spending(db)
+    put = "/api/v1/spending/months/2026-10-01"
+    zeros = [
+        {"category_id": food.id, "amount": "0.00"},
+        {"category_id": rent.id, "amount": "0"},
+    ]
+    # An explicit null is content only when it is the WHOLE body. Paired with a page of
+    # zeros it deletes the cashflow row AND writes production's Sep 2026 (19 x $0.00),
+    # so the delete must not buy the zeros a way past the guard.
+    refused = await auth_client.put(put, json={"net_pay": None, "amounts": zeros})
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == (
+        "Nothing to record: every category is $0.00 and no take-home was entered — "
+        "set confirm_zero to write an empty month on purpose"
+    )
+    assert (await auth_client.get(put)).json()["exists"] is False
+
+    # A null ALONE still records something: it deletes the month's cashflow row.
+    entered = await auth_client.put(put, json={"net_pay": "5000.00", "amounts": []})
+    assert entered.status_code == 200, entered.text
+    alone = await auth_client.put(put, json={"net_pay": None, "amounts": []})
+    assert alone.status_code == 200, alone.text
+    assert alone.json()["net_pay_cleared"] is True
+
+    # And said on purpose, the same clear-plus-zeros body is written in full.
+    await auth_client.put(put, json={"net_pay": "5000.00", "amounts": []})
+    confirmed = await auth_client.put(
+        put, json={"net_pay": None, "amounts": zeros, "confirm_zero": True}
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["net_pay_cleared"] is True
+    assert confirmed.json()["created"] == 2
+    body = (await auth_client.get(put)).json()
+    assert body["net_pay"] is None
+    assert {a["category_id"]: a["amount"] for a in body["amounts"]} == {
+        food.id: "0.00",
+        rent.id: "0.00",
+    }
+
+
+async def test_put_spending_month_lets_through_anything_that_records_something(auth_client, db):
+    food, rent = await _seed_spending(db)
+    # One non-zero amount is content, zeros beside it or not.
+    mixed = await auth_client.put(
+        "/api/v1/spending/months/2026-10-01",
+        json={
+            "amounts": [
+                {"category_id": food.id, "amount": "0.00"},
+                {"category_id": rent.id, "amount": "2100.00"},
+            ]
+        },
+    )
+    assert mixed.status_code == 200, mixed.text
+    # Take-home alone is content: net pay saves the cashflow row and no category rows (§4).
+    pay_only = await auth_client.put(
+        "/api/v1/spending/months/2026-11-01", json={"net_pay": "6000.00", "amounts": []}
+    )
+    assert pay_only.status_code == 200, pay_only.text
+    # An EXPLICIT null records something as well — it DELETES the month's cashflow row — so
+    # the guard must not answer "nothing to record" to a body that deletes a row.
+    cleared = await auth_client.put(
+        "/api/v1/spending/months/2026-11-01", json={"net_pay": None, "amounts": []}
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["net_pay_cleared"] is True
 
 
 async def test_delete_month_removes_spending_and_cashflow(auth_client, db):

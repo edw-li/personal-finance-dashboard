@@ -79,6 +79,10 @@ class MonthUpsertResult(BaseModel):
     created: int
     updated: int
     unchanged: int
+    # Parents the server computed from their components (2026-09-04 honest-numbers spec §5).
+    # BalanceEntry — the same {account_id, balance} pair the request sends — so the wizard's
+    # read-only derived rows echo back in the shape they were typed in.
+    derived: list[BalanceEntry] = []
     # The change batch this save wrote (2026-09-03 data-lifecycle spec §9) — None until the
     # router records one, and None when nothing changed (an all-unchanged PUT logs nothing).
     batch_id: UUID | None = None
