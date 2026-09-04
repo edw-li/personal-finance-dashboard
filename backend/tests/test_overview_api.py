@@ -143,6 +143,9 @@ async def test_money_flow_composes_the_year_and_cross_checks_the_engine(
     # Calendar-year windows: 7 x 10000 net pay INSIDE the year; the prior-December rows
     # (net pay 55555, Rent 999) stay out.
     assert body["take_home_cash"] == "70000.00"
+    # 7 months entered at 10,000 -> 5 months of take-home still to enter.
+    assert body["take_home_months_entered"] == 7
+    assert body["take_home_pending"] == "50000.00"
     assert "net pay entered 7/12 months" in body["warnings"]
     assert "spending entered 2/12 months" in body["warnings"]
     # Top-7 fold + Other; Gifts folds, the refund row is excluded.
@@ -171,6 +174,7 @@ async def test_money_flow_composes_the_year_and_cross_checks_the_engine(
         Decimal(body["taxes"]["total"])
         + Decimal(body["pre_tax_savings"])
         + Decimal(body["take_home_cash"])
+        + Decimal(body["take_home_pending"])
         + Decimal(body["retained_equity"])
     )
     assert mid == Decimal(body["gross_income"])

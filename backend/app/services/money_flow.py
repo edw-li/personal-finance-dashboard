@@ -11,7 +11,8 @@ Conservation is exact by construction, not by rounding luck:
   named sources, so sources always sum to gross. It naturally carries other_income_1099,
   employer HSA, w2_other, and any stored-total-vs-component drift.
 - `retained_equity` is the RESIDUAL of the middle column: gross − taxes − pre-tax savings
-  − take-home cash (≈ vest shares kept + ESPP contributions + W-2-vs-cash timing).
+  − take-home cash − take-home not yet entered (≈ vest shares kept + ESPP contributions +
+  W-2-vs-cash timing).
 A negative balancing/residual node means the stored inputs contradict each other, and a
 sankey ribbon cannot be negative — the payload then says renderable=False with a human
 `reason` sentence (the paycheck sankey's refusal posture) while still carrying every
@@ -150,6 +151,11 @@ class MoneyFlow:
     taxes: MoneyFlowTaxes
     pre_tax_savings: Decimal
     take_home_cash: Decimal
+    # The year's take-home that HAS been earned but not yet entered: mean of the entered
+    # months x the months still missing (2026-09-04 honest-numbers spec §3). Zero on a
+    # complete year and on a year with nothing entered — there is no mean to extrapolate.
+    take_home_pending: Decimal
+    take_home_months_entered: int
     retained_equity: Decimal
     categories: list[MoneyFlowCategory]
     other_spend: Decimal | None
@@ -221,8 +227,17 @@ def compose_money_flow(
     )
     pre_tax_savings = sum((value(key) for key in PRETAX_KEYS), ZERO)
     take_home_cash = net_pay_sum
-    # RESIDUAL node: the middle column always sums back to gross.
-    retained_equity = gross_income - taxes.total - pre_tax_savings - take_home_cash
+    # A half-entered year used to dump every un-entered month of pay into the residual,
+    # so "retained equity" silently meant "equity plus the take-home I have not typed in
+    # yet". Naming the estimate is the honest version — the card draws it as its own
+    # muted node. ONE division, and the quantize happens at the schema edge.
+    take_home_pending = ZERO
+    if 0 < net_pay_months < MONTHS_IN_YEAR:
+        take_home_pending = (net_pay_sum / net_pay_months) * (MONTHS_IN_YEAR - net_pay_months)
+    # RESIDUAL node: the middle column still sums back to gross, now with one more term.
+    retained_equity = (
+        gross_income - taxes.total - pre_tax_savings - take_home_cash - take_home_pending
+    )
 
     # Top-7 + Other fold, positive-only (buildYearSlices' documented rule: a link cannot
     # be negative, so net-refund categories are excluded and the fold restates spending
@@ -326,6 +341,8 @@ def compose_money_flow(
         taxes=taxes,
         pre_tax_savings=pre_tax_savings,
         take_home_cash=take_home_cash,
+        take_home_pending=take_home_pending,
+        take_home_months_entered=net_pay_months,
         retained_equity=retained_equity,
         categories=categories,
         other_spend=other_spend,

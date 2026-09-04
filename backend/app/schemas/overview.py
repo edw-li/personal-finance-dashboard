@@ -54,8 +54,13 @@ class MoneyFlowOut(BaseModel):
     taxes: MoneyFlowTaxesOut
     pre_tax_savings: Decimal
     take_home_cash: Decimal
-    # RESIDUAL: gross − taxes − pre-tax − take-home (≈ vest shares kept + ESPP
-    # contributions + W-2-vs-cash timing).
+    # The take-home of the year's months that have NOT been entered, estimated from the
+    # mean of the ones that have (2026-09-04 honest-numbers spec §3). 0.00 on a complete
+    # year. The sankey draws it as a muted dashed node beside take-home.
+    take_home_pending: Decimal
+    take_home_months_entered: int
+    # RESIDUAL: gross − taxes − pre-tax − take-home − take-home not yet entered (≈ vest
+    # shares kept + ESPP contributions + W-2-vs-cash timing).
     retained_equity: Decimal
     # Top-7 by the year's sum, biggest first, positive-only (the /spending fold).
     categories: list[MoneyFlowCategoryOut]
