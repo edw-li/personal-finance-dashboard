@@ -29,11 +29,16 @@ from app.services.changelog import ChangeBatch, batch_header, change_batch, row_
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     quantize_money,
-    quantize_pct,
     require_first_of_month,
 )
 from app.services.net_worth_calc import get_swr_pct, investable_bases
-from app.services.savings import LIVING, compose_months, load_payroll_by_month
+from app.services.savings import (
+    LIVING,
+    MonthSavings,
+    compose_months,
+    load_payroll_by_month,
+    rollup,
+)
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
 
@@ -255,12 +260,6 @@ async def delete_category_budget(
     return Response(status_code=204, headers=batch_header(batch.id if batch.rows else None))
 
 
-def _savings_rate(net_pay: Decimal | None, total: Decimal) -> Decimal | None:
-    if net_pay is None or net_pay == 0:
-        return None
-    return quantize_pct((net_pay - total) / net_pay)
-
-
 def _resolve_budgets(
     rows: list[CategoryBudget], months: list[date]
 ) -> dict[int, list[Decimal | None]]:
@@ -397,6 +396,22 @@ async def yearly(db: AsyncSession = Depends(get_db)) -> YearlyOut:
     years = sorted(
         {row.month.year for row in spend_rows} | {row.month.year for row in cashflow_rows}
     )
+    # Same kind split as the matrix, from the rows already loaded (spec §2).
+    kind_by_category = {c.id: c.kind for c in categories}
+    by_kind: dict[date, dict[str, Decimal]] = {row.month: {} for row in spend_rows}
+    for row in spend_rows:
+        bucket = by_kind[row.month]
+        kind = kind_by_category.get(row.category_id, LIVING)
+        bucket[kind] = bucket.get(kind, Decimal("0.00")) + row.amount
+    net_pay_by_month = {row.month: row.net_pay for row in cashflow_rows}
+    months = sorted(set(by_kind) | set(net_pay_by_month))
+    savings_rows = compose_months(
+        months, by_kind, net_pay_by_month, await load_payroll_by_month(db, months)
+    )
+    rows_by_year: dict[int, list[MonthSavings]] = {}
+    for row in savings_rows:
+        rows_by_year.setdefault(row.month.year, []).append(row)
+
     rollups = []
     for year in years:
         by_category = {c.id: Decimal("0.00") for c in categories}
@@ -407,6 +422,7 @@ async def yearly(db: AsyncSession = Depends(get_db)) -> YearlyOut:
                 total += row.amount
         pay_rows = [r.net_pay for r in cashflow_rows if r.month.year == year]
         net_pay_total = sum(pay_rows, Decimal("0.00")) if pay_rows else None
+        period = rollup(rows_by_year.get(year, []))
         rollups.append(
             YearRollup(
                 year=year,
@@ -415,7 +431,15 @@ async def yearly(db: AsyncSession = Depends(get_db)) -> YearlyOut:
                 ],
                 total=total,
                 net_pay_total=net_pay_total,
-                savings_rate=_savings_rate(net_pay_total, total),
+                savings_rate=period.cash_rate,
+                months_matched=period.months_matched,
+                living_total=period.living_spend,
+                tax_total=period.tax_paid,
+                transfer_total=period.transfers,
+                cash_savings=period.cash_savings,
+                payroll_savings=period.payroll_savings,
+                total_savings=period.total_savings,
+                total_savings_rate=period.total_rate,
             )
         )
     return YearlyOut(years=rollups)

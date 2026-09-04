@@ -590,3 +590,73 @@ async def test_matrix_splits_the_month_by_kind_and_counts_payroll_savings(auth_c
     # savings_rate KEEPS its name and now means the CASH rate: 4500/8000.
     assert body["savings_rate"] == [None, "0.562500"]
     assert body["total_savings_rate"] == [None, "0.619565"]  # 5700 / (8000 + 1200)
+
+
+async def test_yearly_rollup_splits_kinds_and_counts_only_matched_months(auth_client, db):
+    await _seed_kinds_and_profile(db)
+    body = (await auth_client.get("/api/v1/spending/yearly")).json()
+    year = next(y for y in body["years"] if y["year"] == 2026)
+    # `total` and `net_pay_total` keep their meaning: every month, every kind.
+    assert year["total"] == "5500.00"
+    assert year["net_pay_total"] == "8000.00"
+    # The savings figures are the MATCHED months only — March has no take-home, so it
+    # has no honest place in a savings rate.
+    assert year["months_matched"] == 1
+    assert year["living_total"] == "3000.00"
+    assert year["tax_total"] == "500.00"
+    assert year["transfer_total"] == "1000.00"
+    assert year["cash_savings"] == "4500.00"
+    assert year["payroll_savings"] == "1200.00"
+    assert year["total_savings"] == "5700.00"
+    assert year["savings_rate"] == "0.562500"
+    assert year["total_savings_rate"] == "0.619565"
+
+
+async def test_yearly_rollup_of_a_year_with_nothing_matched(auth_client, db):
+    cat = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(cat)
+    await db.flush()
+    db.add(MonthlySpending(month=date(2026, 5, 1), category_id=cat.id, amount=Decimal("900.00")))
+    await db.commit()
+    year = (await auth_client.get("/api/v1/spending/yearly")).json()["years"][0]
+    assert year["total"] == "900.00" and year["net_pay_total"] is None
+    assert year["months_matched"] == 0
+    assert year["living_total"] == "0.00" and year["payroll_savings"] == "0.00"
+    assert year["cash_savings"] is None and year["total_savings"] is None
+    assert year["savings_rate"] is None and year["total_savings_rate"] is None
+
+
+async def test_yearly_payroll_savings_is_the_sum_of_the_matrix_months(auth_client, db):
+    """The rounding contract's invariant (spec §2, amended): a period scalar is the SUM
+    of the months the matrix showed, to the cent — 4,450.93 x 3, never 3 x 4,450.925
+    re-rounded. 204,044.40 over 24 periods is 8,501.85 gross a check; 13% + 3% + 9% of it
+    plus $100 HSA is 2,225.4625 a check, i.e. exactly 4,450.925 a month."""
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1, kind="living")
+    person = Person(name="Me", is_primary=True)
+    db.add_all([rent, person])
+    await db.flush()
+    db.add(
+        PaycheckProfile(
+            person_id=person.id,
+            effective_date=date(2025, 12, 1),
+            annual_salary=Decimal("204044.40"),
+            pay_periods_per_year=24,
+            trad_401k_pct=Decimal("0.13"),
+            after_tax_401k_pct=Decimal("0.03"),
+            espp_pct=Decimal("0.09"),
+            hsa_per_check=Decimal("100.00"),
+        )
+    )
+    for month in (date(2026, 1, 1), date(2026, 2, 1), date(2026, 3, 1)):
+        db.add(MonthlySpending(month=month, category_id=rent.id, amount=Decimal("3000.00")))
+        db.add(MonthlyCashflow(month=month, net_pay=Decimal("8000.00")))
+    await db.commit()
+
+    matrix = (await auth_client.get("/api/v1/spending/matrix")).json()
+    assert matrix["payroll_savings"] == ["4450.93", "4450.93", "4450.93"]
+    years = (await auth_client.get("/api/v1/spending/yearly")).json()["years"]
+    year = next(y for y in years if y["year"] == 2026)
+    assert year["months_matched"] == 3
+    months_sum = sum(Decimal(v) for v in matrix["payroll_savings"])
+    assert Decimal(year["payroll_savings"]) == months_sum == Decimal("13352.79")
+    assert Decimal(year["total_savings"]) == Decimal("28352.79")  # 15,000 cash + 13,352.79

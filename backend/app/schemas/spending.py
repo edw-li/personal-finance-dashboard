@@ -116,10 +116,25 @@ class YearCategoryTotal(BaseModel):
 
 class YearRollup(BaseModel):
     year: int
+    # by_category / total / net_pay_total keep today's meaning: EVERY month of the year,
+    # every kind. The savings fields below are the year's MATCHED months only (2026-09-04
+    # honest-numbers spec §2) — a rate whose numerator and denominator come from different
+    # months is the dishonesty this program removes.
     by_category: list[YearCategoryTotal]
     total: Decimal
     net_pay_total: Decimal | None
+    # The CASH rate (this field keeps its name), over matched months. Every money field
+    # below is the SUM of the emitted months the matrix showed, so the two endpoints
+    # agree to the cent (services/savings.py's rounding contract).
     savings_rate: Decimal | None
+    months_matched: int
+    living_total: Decimal
+    tax_total: Decimal
+    transfer_total: Decimal
+    cash_savings: Decimal | None
+    payroll_savings: Decimal
+    total_savings: Decimal | None
+    total_savings_rate: Decimal | None
 
 
 class YearlyOut(BaseModel):
