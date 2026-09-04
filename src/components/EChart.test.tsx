@@ -460,6 +460,22 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
     expect((lastChart() as unknown as { group: string }).group).toBe('net-worth')
   })
 
+  it('a group change re-points the LIVE instance instead of re-initializing it', () => {
+    const init = vi.mocked(chartsModule.echarts.init)
+    const { rerender } = render(<EChart ariaLabel="test chart" option={OPTION} group="spending" />)
+    const chart = lastChart()
+    const inits = init.mock.calls.length
+    // Spending's drill (SpendingPage:497) and its trend compare toggle (:664) both flip the
+    // group; disposing there throws away the canvas the bar → pie universalTransition needs.
+    rerender(<EChart ariaLabel="test chart" option={OPTION} />)
+    expect(chart.dispose).not.toHaveBeenCalled()
+    expect(init.mock.calls.length).toBe(inits)
+    expect((chart as unknown as { group: string }).group).toBe('')
+    rerender(<EChart ariaLabel="test chart" option={OPTION} group="spending" />)
+    expect(lastChart()).toBe(chart)
+    expect((chart as unknown as { group: string }).group).toBe('spending')
+  })
+
   it('does not connect a chart without a group', () => {
     render(<EChart ariaLabel="test chart" option={OPTION} />)
     expect(connect()).not.toHaveBeenCalled()

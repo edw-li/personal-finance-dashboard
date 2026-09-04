@@ -70,7 +70,9 @@ export default function EChart({
    *  six wired options hold this today (verified 2026-08-27). */
   zoomWindow?: ZoomWindow
   /** echarts.connect group (chart spec §8): same-axis siblings share axisPointer and zoom.
-   *  Set on the instance and connected in the init effect so a theme re-init re-connects. */
+   *  Applied in its OWN effect (keyed on the theme deps, so a palette re-init re-connects):
+   *  a page that toggles the group on drill keeps its instance instead of losing the canvas
+   *  the bar → pie morph runs on (spec §6). */
   group?: string
 }) {
   const { resolved, version: themeVersion } = useTheme()
@@ -115,13 +117,6 @@ export default function EChart({
     // to keep. Series colors are handled by recolorOption in the effect below, not here.
     const name = registerThemeVersion(resolved, themeVersion)
     const chart = echarts.init(el, name)
-    if (group !== undefined) {
-      // A disposed instance leaves its group by itself, and every init (theme re-inits
-      // included) reconnects — so dispose below deliberately does NOT call disconnect(),
-      // which would unlink the surviving siblings too.
-      chart.group = group
-      echarts.connect(group)
-    }
     chart.on('click', (params) => onClickRef.current?.(params as EChartEventParams))
     chart.on('mouseover', (params) => onHoverRef.current?.(params as EChartEventParams))
     // mouseout fires per-item; globalout covers fast exits that skip it — without it a
@@ -162,7 +157,21 @@ export default function EChart({
       lastStrippedRef.current = null
       if (instanceRef) instanceRef.current = null
     }
-  }, [instanceRef, resolved, themeVersion, group])
+  }, [instanceRef, resolved, themeVersion])
+
+  // `group` is deliberately NOT an init dependency (spec §6): a page that toggles the connect
+  // group mid-life must not lose its instance. Declared after the init effect so it runs on the
+  // fresh chart in the same commit (effects fire in declaration order), and keyed on the same
+  // theme deps so a palette re-init re-connects — a disposed instance leaves its group by
+  // itself, which is why the init cleanup never disconnects (that would unlink the siblings).
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    // '' is echarts' own "no group": leaving the old name on a drilled-in chart would keep
+    // relaying the siblings' axisPointer and zoom actions to a pie that cannot use them.
+    chart.group = group ?? ''
+    if (group !== undefined) echarts.connect(group)
+  }, [group, instanceRef, resolved, themeVersion])
 
   useEffect(() => {
     const chart = chartRef.current

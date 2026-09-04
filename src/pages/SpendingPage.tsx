@@ -494,7 +494,13 @@ export default function SpendingPage() {
             }
             height={340}
             zoomable={!activeDetail}
-            group={activeDetail ? undefined : 'spending'}
+            group={
+              /* Off for the drill-in pie: it has no axisPointer or zoom to share, and echarts
+                 relays every action across a connect group. Safe to toggle since 2026-09-05 —
+                 `group` has its own effect, so this re-points the live instance instead of
+                 disposing the canvas the bar → pie morph runs on. */
+              activeDetail ? undefined : 'spending'
+            }
             onClick={handleSpendChartClick}
             instanceRef={barsChartRef}
             onLegendChange={onLegendChange}
