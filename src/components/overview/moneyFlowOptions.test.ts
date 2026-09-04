@@ -43,6 +43,8 @@ function flowOut(over: Partial<MoneyFlowOut> = {}): MoneyFlowOut {
     },
     pre_tax_savings: '27300.00',
     take_home_cash: '120000.00',
+    take_home_pending: '0.00',
+    take_home_months_entered: 12,
     retained_equity: '93183.95',
     categories: [
       { name: 'Rent', amount: '24000.00' },
@@ -65,7 +67,7 @@ interface NodeLike {
   name?: string
   value?: number
   depth?: number
-  itemStyle?: { color?: string }
+  itemStyle?: { color?: string; borderColor?: string; borderWidth?: number; borderType?: string }
 }
 interface LinkLike {
   source?: string
@@ -424,5 +426,75 @@ describe('moneyFlowCsv (F12)', () => {
     expect(csv.rows).toContainEqual(['node', 'Gross income', '', '307500.00'])
     expect(csv.rows).toContainEqual(['link', 'Take-home cash', 'Saved', '76000.00'])
     expect(moneyFlowCsv(flowOut({ renderable: false, reason: 'nope' })).rows).toEqual([])
+  })
+})
+
+describe('moneyFlowOption — the take-home nobody has entered yet (spec §3)', () => {
+  // Production's own 2026 figures: seven months entered at a $6,373.09 mean, five missing.
+  const pendingFlow = () =>
+    flowOut({
+      take_home_pending: '31865.43',
+      take_home_months_entered: 7,
+      // The server has already taken the estimate out of the residual, so the mid column
+      // still sums back to gross with the new node in it.
+      retained_equity: '61318.52',
+    })
+
+  it('draws it beside take-home, muted and dashed, fed from gross', () => {
+    const series = sankeyOf(moneyFlowOption(pendingFlow())!)
+    const name = 'Take-home not yet entered (5 months)'
+    const node = series.data?.find((n) => n.name === name)
+    expect(node?.depth).toBe(2) // the take-home column, not a fifth one
+    expect(node?.value).toBe(31865.43)
+    expect(node?.itemStyle).toEqual({
+      color: MUTED,
+      borderColor: MUTED,
+      borderWidth: 1,
+      borderType: 'dashed',
+    })
+    // Straight off gross, like every other mid-column terminal — and nothing flows OUT of
+    // it: an estimate must not fan into categories as though it had been spent.
+    expect(series.links?.filter((l) => l.target === name)).toEqual([
+      { source: 'Gross income', target: name, value: 31865.43 },
+    ])
+    expect(series.links?.filter((l) => l.source === name)).toEqual([])
+  })
+
+  it('states the estimate rule in its tooltip', () => {
+    const option = moneyFlowOption(pendingFlow())!
+    const text = tooltipOf(option)({ name: 'Take-home not yet entered (5 months)' })
+    expect(text).toContain('$31,865.43')
+    expect(text).toContain('the average take-home of the 7 entered months × 5')
+  })
+
+  it('is absent from a fully entered year, and from a backend that cannot name it', () => {
+    const full = sankeyOf(moneyFlowOption(flowOut())!)
+    expect(full.data?.some((n) => n.name?.startsWith('Take-home not yet entered'))).toBe(false)
+    const older = sankeyOf(
+      moneyFlowOption(
+        flowOut({ take_home_pending: undefined, take_home_months_entered: undefined }),
+      )!,
+    )
+    expect(older.data?.some((n) => n.name?.startsWith('Take-home not yet entered'))).toBe(false)
+  })
+
+  it('says "1 month" for a single missing one, and carries the node into the export', () => {
+    const one = flowOut({
+      take_home_pending: '6373.09',
+      take_home_months_entered: 11,
+      retained_equity: '86810.86',
+    })
+    const series = sankeyOf(moneyFlowOption(one)!)
+    expect(series.data?.some((n) => n.name === 'Take-home not yet entered (1 month)')).toBe(true)
+    expect(moneyFlowCsv(one).rows).toContainEqual([
+      'node',
+      'Take-home not yet entered (1 month)',
+      '',
+      '6373.09',
+    ])
+  })
+
+  it('refuses a negative estimate rather than drawing a backwards ribbon', () => {
+    expect(moneyFlowOption(flowOut({ take_home_pending: '-1.00', take_home_months_entered: 7 }))).toBeNull()
   })
 })

@@ -6,6 +6,7 @@ import { MONTH_TOKEN } from '../../sandbox/scenarioUrl'
 import SliderBox from '../../sandbox/SliderBox'
 import { SEP, type Sandbox } from '../../sandbox/useSandbox'
 import type { PersonOut, ProjectionOut } from '../../types/api'
+import { windowWords } from '../overview/ytd'
 import { formatCurrency } from '../../utils/format'
 import { FeedBanner } from '../shell/Feed'
 import {
@@ -36,8 +37,9 @@ const LABELS: Record<ProjectionKnob, string> = {
 
 const HINTS: Partial<Record<ProjectionKnob, string>> = {
   monthly_contribution:
-    'Derived from the trailing 12 months of (net pay − spend) plus every earner\'s payroll deductions — 401(k), ESPP and HSA. RSU vests are not included; raise it to model them.',
-  annual_spend: 'Derived from the trailing 12-month spend × 12.',
+    'Derived from the months that have BOTH spending and net pay entered: (net pay − living spend − tax paid) plus every earner\'s payroll deductions — 401(k), ESPP and HSA. RSU vests are not included; raise it to model them.',
+  annual_spend:
+    'Derived from living spend over that same window, × 12. Tax payments and transfers to your own accounts are not living spend, so neither is in this figure.',
   swr: 'Derived from Settings. The FI target is annual spend ÷ this rate.',
   volatility: 'Turns the fan on; 0 turns it off.',
   inflation: 'Converts the chart to today\'s dollars; 0 reads nominal dollars.',
@@ -168,16 +170,32 @@ export default function ScenarioPanel({
         // never a bare number the reader has to trust: cash savings + payroll deductions,
         // per person. Absent on a backend older than the breakdown, and whenever the
         // derived run computed the contribution from nothing.
-        if (key !== 'monthly_contribution' || breakdown === null) return slider
+        // The echo's own arithmetic under the contribution knob, and the WINDOW under both
+        // figures the data derives (spec §3): a trailing mean is only honest beside the
+        // months it averaged, and those months are no longer "the last 12" — they are the
+        // last 12 that were entered AND paid. The window comes from the BASELINE echo, so it
+        // keeps describing the derivation even while a typed knob overrides the value.
+        const derivedWindow = baseline?.derived_window ?? null
+        const windowed = key === 'monthly_contribution' || key === 'annual_spend'
+        const showsBreakdown = key === 'monthly_contribution' && breakdown !== null
+        if (!showsBreakdown && !(windowed && derivedWindow !== null)) return slider
         return (
           <div key={key} className="slider-box">
             {slider}
-            <span className="projection-derived">
-              derived: {formatCurrency(breakdown.cash)} cash savings +{' '}
-              {formatCurrency(breakdown.payroll)} payroll deductions
-              {breakdown.by_person.length > 0 &&
-                ` (${breakdown.by_person.map((row) => `${row.name} ${formatCurrency(row.monthly)}`).join(' · ')})`}
-            </span>
+            {key === 'monthly_contribution' && breakdown !== null && (
+              <span className="projection-derived">
+                derived: {formatCurrency(breakdown.cash)} cash savings +{' '}
+                {formatCurrency(breakdown.payroll)} payroll deductions
+                {breakdown.by_person.length > 0 &&
+                  ` (${breakdown.by_person.map((row) => `${row.name} ${formatCurrency(row.monthly)}`).join(' · ')})`}
+              </span>
+            )}
+            {windowed && derivedWindow !== null && (
+              <span className="projection-derived">
+                derived over {windowWords(derivedWindow)} ({derivedWindow.months}{' '}
+                {derivedWindow.months === 1 ? 'month' : 'months'})
+              </span>
+            )}
           </div>
         )
       })}

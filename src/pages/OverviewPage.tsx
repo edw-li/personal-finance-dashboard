@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { fetchCalendar } from '../api/calendar'
 import { ApiError } from '../api/client'
+import { fetchCoverage } from '../api/coverage'
 import { fetchLots } from '../api/espp'
 import { fetchSummary, fetchTimeseries } from '../api/netWorth'
 import type { OwnerScope } from '../api/netWorth'
@@ -16,9 +17,10 @@ import type { EChartEventParams } from '../components/EChart'
 import InfoHint from '../components/InfoHint'
 import { chipAmount, eventKey } from '../components/calendar/calendarView'
 import { attentionItems } from '../components/overview/attention'
+import { freshnessClauses } from '../components/overview/freshness'
 import MoneyFlowCard from '../components/overview/MoneyFlowCard'
 import { UP_NEXT_WINDOW_DAYS, rankUpNext, upNextLine } from '../components/overview/upNext'
-import { ytdStats } from '../components/overview/ytd'
+import { windowWords, ytdStats } from '../components/overview/ytd'
 import {
   netWorthTrendCsv,
   netWorthTrendOption,
@@ -39,6 +41,7 @@ import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import type {
   CalendarEvent,
+  CoverageOut,
   DividendOut,
   EsppLotsResponse,
   HoldingsResponse,
@@ -77,6 +80,17 @@ interface OverviewData {
   yearly: SpendingYearly
   dividends: DividendOut[]
   system: SystemStatus
+  // /coverage rides it too (2026-09-04 honest-numbers spec §3): the footer, the strip and
+  // the YTD card's windows all read it, and a footer standing on a different instant from
+  // the spending tile beside it is precisely the dishonesty this program removes.
+  coverage: CoverageOut
+}
+
+/** StatTile's delta grammar for a savings rate: above zero the household kept money,
+ *  below it the household overspent. Shared by the two branches of the Saved row. */
+function rateTone(rate: string): string {
+  const value = Number(rate)
+  return value > 0 ? 'delta-positive' : value < 0 ? 'delta-negative' : ''
 }
 
 // Keyed by the fetch parameters, like every other page's: an owner scope is a DIFFERENT
@@ -212,12 +226,13 @@ export default function OverviewPage() {
       fetchYearly(),
       fetchDividends(),
       fetchSystemStatus(),
+      fetchCoverage(),
     ])
       .then(
-        ([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system]) => {
+        ([summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system, coverage]) => {
           if (seq !== seqRef.current) return
           const snapshot: OverviewData = {
-            summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system,
+            summary, ts, holdings, history, matrix, taxes, lots, taxYears, yearly, dividends, system, coverage,
           }
           setSnapshot(snapshotKey, snapshot)
           setError(null)
@@ -319,11 +334,12 @@ export default function OverviewPage() {
           lots: data.lots,
           taxYears: data.taxYears,
           system: data.system,
+          coverage: data.coverage,
         },
         todayIso(),
       )
     : []
-  const ytd = data ? ytdStats(data.ts, data.yearly, data.dividends, todayIso()) : null
+  const ytd = data ? ytdStats(data.ts, data.yearly, data.dividends, data.coverage, todayIso()) : null
   // Shown once ANY feed has history — on a fresh database the empty states below carry
   // the message, and a card of five dashes would just restate them.
   const showYtd =
@@ -484,7 +500,7 @@ export default function OverviewPage() {
               <section className="card ytd-card">
                 <h2 className="eyebrow">
                   Year to date — {ytd.year}
-                  <InfoHint text="The year so far: net-worth change since the last pre-January snapshot, plus spend, net pay, savings rate, and dividends." />
+                  <InfoHint text="The year so far, each figure over the window it was measured on: net-worth change since the last pre-January snapshot, living spend (tax payments and transfers are counted apart), net pay, savings with payroll deductions counted in, and dividends collected." />
                 </h2>
                 <dl className="ytd-facts">
                   <div className="ytd-fact">
@@ -512,24 +528,73 @@ export default function OverviewPage() {
                         </span>
                       )}
                       {ytd.anchorMonth && (
-                        <span className="ytd-sub"> since {formatMonth(ytd.anchorMonth)}</span>
+                        <span className="ytd-sub">
+                          {' '}
+                          since {formatMonth(ytd.anchorMonth)}
+                          {ytd.throughMonth !== null &&
+                            ` (through ${formatMonth(ytd.throughMonth).slice(0, 3)})`}
+                        </span>
                       )}
                     </dd>
                   </div>
                   <div className="ytd-fact">
-                    <dt>Spend</dt>
+                    <dt>
+                      Spend
+                      {ytd.spendWindow && (
+                        <span className="ytd-sub"> {windowWords(ytd.spendWindow)}</span>
+                      )}
+                    </dt>
                     <dd>{formatCurrency(ytd.spend)}</dd>
                   </div>
                   <div className="ytd-fact">
-                    <dt>Net pay</dt>
+                    <dt>
+                      Net pay
+                      {ytd.netPayWindow && (
+                        <span className="ytd-sub"> {windowWords(ytd.netPayWindow)}</span>
+                      )}
+                    </dt>
                     <dd>{formatCurrency(ytd.netPay)}</dd>
                   </div>
+                  {/* The headline is the TOTAL rate — payroll deductions are savings too
+                      (spec §2) — with cash beside it, because the two answer different
+                      questions: what the household kept, and what it could still spend. */}
                   <div className="ytd-fact">
-                    <dt>Savings rate</dt>
+                    <dt>
+                      Saved
+                      {ytd.savedWindow && (
+                        <span className="ytd-sub"> {windowWords(ytd.savedWindow)}</span>
+                      )}
+                    </dt>
                     <dd>
-                      {ytd.savingsRate === null
-                        ? '—'
-                        : formatPct(ytd.savingsRate, { signed: false })}
+                      {ytd.totalRate === null ? (
+                        // A backend older than the savings service knows only the cash
+                        // reading. Dashing the row would hide a rate the user's own data
+                        // still supports; the word "cash" keeps the two from being confused.
+                        ytd.cashRate === null ? (
+                          '—'
+                        ) : (
+                          <>
+                            <span className={rateTone(ytd.cashRate)}>
+                              {formatPct(ytd.cashRate, { signed: false })} cash
+                            </span>
+                            {ytd.cashSaved !== null && (
+                              <span className="ytd-sub"> {formatCurrency(ytd.cashSaved)}</span>
+                            )}
+                          </>
+                        )
+                      ) : (
+                        <>
+                          <span className={rateTone(ytd.totalRate)}>
+                            {formatPct(ytd.totalRate, { signed: false })} total
+                          </span>
+                          <span className="ytd-sub">
+                            {' '}
+                            {formatCurrency(ytd.totalSaved)} · cash{' '}
+                            {formatPct(ytd.cashRate, { signed: false })} (
+                            {formatCurrency(ytd.cashSaved)})
+                          </span>
+                        </>
+                      )}
                     </dd>
                   </div>
                   <div className="ytd-fact">
@@ -644,26 +709,26 @@ export default function OverviewPage() {
                 Open calendar →
               </NavLink>
             </div>
-            {/* Three different clocks: quotes move daily, snapshots and spending months are
-                hand-entered. The page says which date each half of it is standing on. */}
+            {/* Four clocks: quotes move daily, while balances, spending and net pay are
+                hand-entered and each stands on its OWN month (honest-numbers spec §3). A
+                feed a month or more behind the balances wears the same amber a stale quote
+                does — one visual language for "this number is older than it looks". */}
             <div className="overview-freshness">
               <span className={isStaleQuote(asOf) ? 'freshness stale' : 'freshness'}>
                 {/* Capitalized, a deliberate departure from PortfolioPage's lowercase pair
                     ("prices as of …" / "prices never refreshed" — a note tucked beside its
-                    Refresh button). This row is three PEER clauses separated by dots, and
-                    its other two capitalize; a lowercase third would read as a fragment. */}
+                    Refresh button). This row is four PEER clauses separated by dots, and
+                    the others capitalize; a lowercase one would read as a fragment. */}
                 {asOf ? `Prices as of ${formatDate(asOf)}` : 'Prices never refreshed'}
               </span>
-              <span aria-hidden="true">·</span>
-              <span className="freshness">
-                {summary?.month
-                  ? `Net worth through ${formatMonth(summary.month)}`
-                  : 'Net worth — no snapshots'}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="freshness">
-                {stats?.month ? `Spending through ${formatMonth(stats.month)}` : 'Spending — no months'}
-              </span>
+              {freshnessClauses(data.coverage).map((clause) => (
+                <Fragment key={clause.key}>
+                  <span aria-hidden="true">·</span>
+                  <span className={clause.lagging ? 'freshness stale' : 'freshness'}>
+                    {clause.text}
+                  </span>
+                </Fragment>
+              ))}
             </div>
           </>
         )}

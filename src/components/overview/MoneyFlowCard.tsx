@@ -29,7 +29,7 @@ export default function MoneyFlowCard({
   return (
     <ChartCard
       title={flow === null ? 'Money flow' : `Money flow — ${flow.year}`}
-      hint="Where the year's money went. Income comes from the year's tax inputs through the tax engine; take-home cash is the entered monthly net pay; the right-hand fan is the year's entered spending. Retained equity & other is the residual — ≈ vest shares kept + ESPP contributions + timing between W-2 income and cash."
+      hint="Where the year's money went. Income comes from the year's tax inputs through the tax engine; take-home cash is the entered monthly net pay; the right-hand fan is the year's entered spending. Retained equity & other is the residual — ≈ vest shares kept + ESPP contributions + timing between W-2 income and cash. A dashed node appears when some months have no net pay entered: that take-home is estimated from the months you did enter, and hovering it says how."
       ariaLabel={`Sankey diagram of ${flow?.year ?? 'the year'} money flow from income sources through taxes, savings and take-home cash to spending categories`}
       option={option}
       // The SERVER's refusal sentence, verbatim; the fallback covers only a renderable

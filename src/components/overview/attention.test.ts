@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type {
   BackupStatus,
+  CoverageOut,
   EsppLotOut,
   EsppLotsResponse,
   HoldingOut,
@@ -99,6 +100,21 @@ function systemOut(over: Partial<SystemStatus> = {}): SystemStatus {
   }
 }
 
+// The all-clear coverage: every month of the window entered on both feeds, nothing empty
+// and nothing missing — the quiet default the other suites rely on.
+function coverageOut(over: Partial<CoverageOut> = {}): CoverageOut {
+  return {
+    balances: ['2026-06-01', '2026-07-01', '2026-08-01'],
+    spending: ['2026-06-01', '2026-07-01', '2026-08-01'],
+    net_pay: ['2026-06-01', '2026-07-01', '2026-08-01'],
+    spending_empty: [],
+    spending_missing: [],
+    net_pay_missing: [],
+    latest: { balances: '2026-08-01', spending: '2026-08-01', net_pay: '2026-08-01' },
+    ...over,
+  }
+}
+
 // The all-clear baseline: current month entered, quotes fresh, everything priced, no
 // qualifying window open, the year's inputs filled, the last refresh clean.
 function inputs(over: Partial<AttentionInputs> = {}): AttentionInputs {
@@ -108,6 +124,7 @@ function inputs(over: Partial<AttentionInputs> = {}): AttentionInputs {
     lots: lotsOut([]),
     taxYears: [taxYear(2026)],
     system: systemOut(),
+    coverage: coverageOut(),
     ...over,
   }
 }
@@ -328,5 +345,76 @@ describe('attentionItems — ordering', () => {
       'espp-qualifying',
       'tax-year-missing',
     ])
+  })
+})
+
+describe('attentionItems — coverage honesty (honest-numbers spec §3)', () => {
+  it('turns a month the window never got into a wizard job for that month', () => {
+    const [item] = attentionItems(
+      inputs({ coverage: coverageOut({ spending_missing: ['2026-07-01'] }) }),
+      TODAY,
+    )
+    expect(item.key).toBe('spending-missing')
+    expect(item.text).toBe('Jul 2026 spending was never entered')
+    // Straight to the step that fixes it — the wizard reads both params.
+    expect(item.to).toBe('/update?month=2026-07-01&step=spending')
+  })
+
+  it('names a month somebody saved with nothing in it', () => {
+    const [item] = attentionItems(
+      inputs({ coverage: coverageOut({ spending_empty: ['2026-08-01'] }) }),
+      TODAY,
+    )
+    expect(item.key).toBe('spending-empty')
+    expect(item.text).toBe('Aug 2026 was saved with no spending')
+    expect(item.to).toBe('/update?month=2026-08-01&step=spending')
+  })
+
+  it('leads with the newest month of each class and counts the rest — one line per class', () => {
+    const items = attentionItems(
+      inputs({
+        coverage: coverageOut({
+          spending_missing: ['2026-04-01', '2026-05-01', '2026-07-01'],
+          spending_empty: ['2026-06-01', '2026-08-01'],
+        }),
+      }),
+      TODAY,
+    )
+    expect(items.map((i) => i.text)).toEqual([
+      'Jul 2026 spending was never entered (+2 earlier months)',
+      'Aug 2026 was saved with no spending (+1 earlier month)',
+    ])
+    expect(items.map((i) => i.to)).toEqual([
+      '/update?month=2026-07-01&step=spending',
+      '/update?month=2026-08-01&step=spending',
+    ])
+  })
+
+  it('ignores an empty month past the end of the balances window', () => {
+    // Same rule as the footer's parenthetical: the server lists every zero-filled month on
+    // file, and one saved beyond the last snapshot was never part of the book.
+    expect(keys(inputs({ coverage: coverageOut({ spending_empty: ['2026-09-01'] }) }))).toEqual([])
+    // …while one INSIDE the window is still a job.
+    expect(
+      keys(inputs({ coverage: coverageOut({ spending_empty: ['2026-08-01'] }) })),
+    ).toEqual(['spending-empty'])
+  })
+
+  it('says nothing on a backend older than the coverage extension', () => {
+    const older: CoverageOut = {
+      balances: ['2026-08-01'],
+      spending: ['2026-08-01'],
+      net_pay: ['2026-08-01'],
+    }
+    expect(keys(inputs({ coverage: older }))).toEqual([])
+  })
+
+  it('sits with the other data-entry nudges, ahead of the price items', () => {
+    const data = inputs({
+      months: ['2026-06-01', '2026-07-01'], // Aug's update is late — the existing nudge
+      coverage: coverageOut({ spending_missing: ['2026-07-01'] }),
+      holdings: holdingsOut({ as_of: null }),
+    })
+    expect(keys(data)).toEqual(['update-due', 'spending-missing', 'prices-never'])
   })
 })

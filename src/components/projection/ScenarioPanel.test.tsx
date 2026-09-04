@@ -17,6 +17,7 @@ const echo: ProjectionOut = {
   projected: ['100000.00', '104400.00'], coast: ['100000.00', '100400.00'], warnings: [], volatility: '0.15',
   inflation: '0.03', contribution_growth: '0.03', bands: null, fi_probability: '0.62', fi_month_p10: '2038-01-01',
   fi_month_p50: '2041-06-01', fi_month_p90: null, retirements: [],
+  derived_window: { from: '2025-08-01', to: '2026-07-01', months: 12 },
 }
 const people: PersonOut[] = [{ id: 1, name: 'Edward', is_primary: true }, { id: 2, name: 'Grace', is_primary: false }]
 const preview = vi.fn<(s: ProjectionScenario) => Promise<ProjectionOut>>()
@@ -197,6 +198,36 @@ describe('ScenarioPanel', () => {
     await waitFor(() => expect(preview).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: 'Reset to derived' }))
     expect(url()).toBe('/projection')
+  })
+
+  it('prints the window under both derived-from-data figures, and the contribution arithmetic', async () => {
+    preview.mockImplementation(async () => ({
+      ...echo,
+      contribution_breakdown: {
+        cash: '1200.00',
+        payroll: '2800.00',
+        total: '4000.00',
+        by_person: [{ person_id: 1, name: 'Edward', monthly: '2400.00' }],
+      },
+    }))
+    mount()
+    // Both the contribution and the annual spend derive from the SAME matched window, and
+    // each says so under its own knob.
+    await waitFor(() =>
+      expect(screen.getAllByText('derived over Aug 2025–Jul 2026 (12 months)')).toHaveLength(2),
+    )
+    expect(
+      screen.getByText(
+        'derived: $1,200.00 cash savings + $2,800.00 payroll deductions (Edward $2,400.00)',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('says nothing about a window the echo cannot name', async () => {
+    preview.mockImplementation(async () => ({ ...echo, derived_window: null }))
+    mount()
+    await waitFor(() => expect(preview).toHaveBeenCalled())
+    expect(screen.queryByText(/derived over/)).toBeNull()
   })
 
   it('states that the seed is fixed and points the withdrawal rate at Settings', () => {

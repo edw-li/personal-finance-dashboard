@@ -101,11 +101,30 @@ export interface NetWorthSummary {
 }
 
 /** Which months each hand-entered feed covers — ascending first-of-month ISO dates
- *  (GET /coverage, 2026-09-03 shell spec §7). */
+ *  (GET /coverage, 2026-09-03 shell spec §7, extended by the 2026-09-04 honest-numbers
+ *  spec §3). `spending` now lists ENTERED months only — a month with at least one non-zero
+ *  amount OR a net-pay row; a month saved as all $0.00 with no net pay is `spending_empty`,
+ *  and a month inside the balances window with no rows at all is `spending_missing`. The
+ *  four added fields are OPTIONAL for the reason `MoneyFlowTaxes.niit` documents: the live
+ *  server always sends them, and a fixture written before this program keeps compiling. */
 export interface CoverageOut {
   balances: string[]
   spending: string[]
   net_pay: string[]
+  /** Saved with every category $0.00 and no take-home. NOT windowed by the server (a
+   *  zero-filled month outside the balances window is still on file), so a reader that
+   *  NAMES one filters it — `insideBalancesWindow` in components/overview/freshness.ts. */
+  spending_empty?: string[]
+  /** Inside the window, no spending rows at all. */
+  spending_missing?: string[]
+  /** Inside the window, no monthly-cashflow row. */
+  net_pay_missing?: string[]
+  /** The newest month of each feed; `null` where that feed has none. */
+  latest?: {
+    balances: string | null
+    spending: string | null
+    net_pay: string | null
+  }
 }
 
 export interface MonthBalances {
@@ -190,10 +209,21 @@ export interface SpendingMatrix {
   series: { category_id: number; values: (string | null)[]; budgets: (string | null)[] }[]
   totals: string[]
   net_pay: (string | null)[]
+  /** The CASH rate — (net pay − living spend − tax paid) ÷ net pay (2026-09-04
+   *  honest-numbers spec §2). Same name, same arithmetic wherever every category is living. */
   savings_rate: (string | null)[]
   four_pct_rule: (string | null)[]
   /** Sum of the resolved category budgets per month; null when NO category has one. */
   total_budget: (string | null)[]
+  // The honest-numbers additions (spec §2), each aligned with `months`. Optional for the
+  // reason `MoneyFlowTaxes.niit` documents: the live server always sends them.
+  living_total?: string[]
+  tax_total?: string[]
+  transfer_total?: string[]
+  cash_savings?: (string | null)[]
+  payroll_savings?: (string | null)[]
+  total_savings?: (string | null)[]
+  total_savings_rate?: (string | null)[]
 }
 
 export interface SpendingMonth {
@@ -240,7 +270,22 @@ export interface YearRollup {
   by_category: { category_id: number; total: string }[]
   total: string
   net_pay_total: string | null
+  /** The CASH rate — (net pay − living spend − tax paid) ÷ net pay over the matched months
+   *  (2026-09-04 honest-numbers spec §2). The name is unchanged, and so is the arithmetic
+   *  wherever every category is living. */
   savings_rate: string | null
+  // The honest-numbers additions (spec §2), all over MATCHED months. Optional for the
+  // reason `MoneyFlowTaxes.niit` documents: the live server always sends them.
+  living_total?: string
+  tax_total?: string
+  transfer_total?: string
+  cash_savings?: string | null
+  payroll_savings?: string | null
+  total_savings?: string | null
+  total_savings_rate?: string | null
+  /** Months with BOTH entered spending and a net-pay row — the window every figure above
+   *  was computed over. */
+  months_matched?: number
 }
 
 export interface SpendingYearly {
@@ -1603,6 +1648,15 @@ export interface ContributionBreakdownOut {
   by_person: PayrollSavingOut[]
 }
 
+/** The window the data-derived knobs were computed over (2026-09-04 honest-numbers spec §3):
+ *  the trailing months that are BOTH entered and paid. `from`/`to` are first-of-month ISO
+ *  dates, `months` the count. A mean with no window named is a number the reader must trust. */
+export interface DerivedWindowOut {
+  from: string
+  to: string
+  months: number
+}
+
 export interface ProjectionOut {
   starting_balance: string
   /** The snapshot month the starting balance came from. */
@@ -1643,6 +1697,10 @@ export interface ProjectionOut {
   /** Present when the contribution was DERIVED, null when it was typed; absent from a
    *  backend older than 2026-09-03 — readers take it as `?? null`. */
   contribution_breakdown?: ContributionBreakdownOut | null
+  /** The window `annual_spend` and the contribution's cash half were derived over. Null when
+   *  nothing could be derived; absent from a backend older than 2026-09-04 — readers take it
+   *  as `?? null`, the `bands` posture. */
+  derived_window?: DerivedWindowOut | null
 }
 
 // --- import (mirrors backend/app/importer/report.py) ---
@@ -1741,6 +1799,14 @@ export interface MoneyFlowOut {
   taxes: MoneyFlowTaxes
   pre_tax_savings: string
   take_home_cash: string
+  /** The take-home of the year's UNENTERED months, estimated as the mean of the entered ones
+   *  × the number missing; '0.00' once all twelve are entered (2026-09-04 honest-numbers spec
+   *  §3). The server has already subtracted it from `retained_equity`, so conservation still
+   *  holds with this node in the chart. Optional for the reason `MoneyFlowTaxes.niit`
+   *  documents: the live server always sends it. */
+  take_home_pending?: string
+  /** How many of the year's twelve months have net pay entered. */
+  take_home_months_entered?: number
   /** Residual: gross − taxes − pre-tax − take-home (≈ vest shares kept + ESPP + timing). */
   retained_equity: string
   /** Top-7 by year sum, biggest first, positive-only (the /spending fold). */

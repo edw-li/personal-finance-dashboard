@@ -2,11 +2,13 @@
 // overviewChartOptions.ts posture). Everything here is derived from feeds the page
 // already holds; `todayIso` is a parameter so the rules are clock-injectable in tests.
 import type {
+  CoverageOut,
   EsppLotsResponse,
   HoldingsResponse,
   SystemStatus,
   TaxYearOut,
 } from '../../types/api'
+import { insideBalancesWindow } from './freshness'
 import { formatDate, formatMonth } from '../../utils/format'
 import { addMonths } from '../../utils/months'
 import { backupAge, isStaleQuote } from '../../utils/staleness'
@@ -25,6 +27,8 @@ export interface AttentionInputs {
   taxYears: TaxYearOut[]
   /** GET /system/status — the last refresh outcome, backup marker and environment. */
   system: SystemStatus
+  /** GET /coverage — which months each hand-entered feed actually has (spec §3). */
+  coverage: CoverageOut
 }
 
 // The ritual runs in the month's first days (recorded_on evidence), so the nudge waits a
@@ -64,6 +68,39 @@ export function attentionItems(data: AttentionInputs, todayIso: string): Attenti
       })
     }
     // A hole with the current month present is history repair, not a ritual reminder.
+  }
+
+  // Coverage honesty (spec §3). Two conditions the balances nudge above cannot see: a month
+  // inside the window that spending never got, and a month somebody saved with nothing in
+  // it. Both are the same repair — open that month's spending step — so both link straight
+  // there. ONE line per class, naming the newest month (the one still in living memory) and
+  // counting the rest, so a long backlog never turns the strip into a list.
+  const wizardStep = (month: string) => `/update?month=${month}&step=spending`
+  const older = (count: number) =>
+    count > 0 ? ` (+${count} earlier ${plural(count, 'month', 'months')})` : ''
+
+  const missing = [...(data.coverage.spending_missing ?? [])].sort()
+  if (missing.length > 0) {
+    const newest = missing[missing.length - 1]
+    items.push({
+      key: 'spending-missing',
+      text: `${formatMonth(newest)} spending was never entered${older(missing.length - 1)}`,
+      to: wizardStep(newest),
+    })
+  }
+
+  // Windowed here, not on the wire: the server lists every zero-filled month on file, and
+  // one saved outside the balances window was never part of the book to begin with.
+  const empty = (data.coverage.spending_empty ?? [])
+    .filter(insideBalancesWindow(data.coverage))
+    .sort()
+  if (empty.length > 0) {
+    const newest = empty[empty.length - 1]
+    items.push({
+      key: 'spending-empty',
+      text: `${formatMonth(newest)} was saved with no spending${older(empty.length - 1)}`,
+      to: wizardStep(newest),
+    })
   }
 
   const { as_of, totals, holdings } = data.holdings

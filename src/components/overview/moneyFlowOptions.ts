@@ -139,6 +139,7 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
     flow.retained_equity,
     flow.sources.salary_and_bonus,
     ...SOURCES.map((source) => flow.sources[source.key]),
+    ...(flow.take_home_pending === undefined ? [] : [flow.take_home_pending]),
     ...flow.categories.map((category) => category.amount),
     ...(flow.other_spend === null ? [] : [flow.other_spend]),
   ].map(Number)
@@ -189,6 +190,31 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
     if (value < A_CENT) continue
     nodes.push({ name, value, depth: 2, itemStyle: { color } })
     links.push({ source: GROSS, target: name, value })
+  }
+
+  // The take-home nobody has entered yet (spec §3). Without it, five unentered months of
+  // paychecks sit inside `retained_equity` — the residual absorbs whatever the year cannot
+  // explain, which is exactly how a data gap turns into a claim about money kept. The server
+  // subtracts the estimate from the residual and hands it over NAMED, so the chart can draw
+  // it beside take-home as what it is: muted like its neighbour (it IS take-home, just not on
+  // record), dashed because it was computed rather than entered, and saying so on hover.
+  const pending = Number(flow.take_home_pending ?? '0')
+  const entered = flow.take_home_months_entered ?? 12
+  const missingMonths = Math.max(0, 12 - entered)
+  const pendingName = `Take-home not yet entered (${missingMonths} ${missingMonths === 1 ? 'month' : 'months'})`
+  const drawsPending = missingMonths > 0 && pending >= A_CENT
+  if (drawsPending) {
+    // Claimed like any other name, but only when DRAWN: this label carries a count, so it
+    // changes from year to year — seeding it unconditionally would make a colliding
+    // category's rendering depend on how much of the year is entered.
+    taken.add(pendingName)
+    nodes.push({
+      name: pendingName,
+      value: cents(pending),
+      depth: 2,
+      itemStyle: { color: MUTED, borderColor: MUTED, borderWidth: 1, borderType: 'dashed' },
+    })
+    links.push({ source: GROSS, target: pendingName, value: cents(pending) })
   }
 
   // Take-home fans into the year's categories with the spending sankey's exact
@@ -271,6 +297,16 @@ export function moneyFlowOption(flow: MoneyFlowOut): EChartsOption | null {
     } | null
     if (p && p.dataType !== 'edge' && p.name === TAXES) {
       return `<strong>${formatCurrency(flow.taxes.total)}</strong><br/>${TAXES}<br/>${taxLines}`
+    }
+    // The estimate says out loud how it was computed; the alternative is a reader who
+    // believes a number nobody typed. Labels here are constants and digits — no user text.
+    if (drawsPending && p && p.dataType !== 'edge' && p.name === pendingName) {
+      return (
+        `<strong>${formatCurrency(cents(pending))}</strong><br/>${pendingName}<br/>` +
+        `Estimated: the average take-home of the ${entered} entered ` +
+        `${entered === 1 ? 'month' : 'months'} × ${missingMonths}. Enter those months and this ` +
+        `becomes a real figure.`
+      )
     }
     return base(params)
   })

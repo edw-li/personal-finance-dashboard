@@ -28,6 +28,9 @@ const ROSTER = [
   'overviewNetWorthTrend',
   'overviewRecentSpend',
   'moneyFlow',
+  // …and the same builder on a year whose take-home is only part entered: the muted dashed
+  // estimate node, a branch the fully-entered fixture never reaches.
+  'moneyFlowPending',
   // C3 — Spending (spendingSmallMultiples was the one droppable of the night — the plan
   // let C3 ship without the Compare/All mode. It landed, so it is pinned like the rest.)
   'spendingBars',
@@ -35,6 +38,9 @@ const ROSTER = [
   'spendingHeatmapRow',
   'spendingHeatmapVsAverage',
   'spendingSavings',
+  // …and the same builder without the server's total rate (an older backend): one muted
+  // line on the noLegend grid, a shape the two-line fixture never reaches.
+  'spendingSavingsCash',
   'spendingTrends',
   'spendingSankey',
   'spendingSmallMultiples',

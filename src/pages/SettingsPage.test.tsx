@@ -33,6 +33,12 @@ vi.mock('../api/system', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/system')>()),
   fetchSystemStatus: vi.fn(),
 }))
+// The System card's freshness row rides the same all-or-nothing read as its status rows
+// (honest-numbers spec §3), so this file arms both or the card banners instead of rendering.
+vi.mock('../api/coverage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/coverage')>()),
+  fetchCoverage: vi.fn(),
+}))
 // The three management cards each own a fetch of their own; unmocked, they would make real
 // network calls from every test in this file.
 vi.mock('../api/household', async (importOriginal) => ({
@@ -116,6 +122,7 @@ import { fetchAccounts } from '../api/netWorth'
 import { fetchPortfolioAccounts } from '../api/portfolio'
 import { fetchAppSettings, putAppSettings } from '../api/settings'
 import { fetchCategories } from '../api/spending'
+import { fetchCoverage } from '../api/coverage'
 import { fetchSystemStatus } from '../api/system'
 
 // A promise this file settles by hand — the only way to look at the page while a request
@@ -293,6 +300,7 @@ beforeEach(() => {
   vi.mocked(changePassword).mockResolvedValue(undefined)
   vi.mocked(importXlsx).mockResolvedValue(makeReport())
   vi.mocked(fetchSystemStatus).mockResolvedValue(SYSTEM)
+  vi.mocked(fetchCoverage).mockResolvedValue({ balances: [], spending: [], net_pay: [] })
   // Empty volume: the Backups card settles into its own empty note without adding a row,
   // a link or a banner to any of this file's queries.
   vi.mocked(fetchSnapshots).mockResolvedValue([])

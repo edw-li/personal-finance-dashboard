@@ -21,7 +21,16 @@ export interface SankeyNode {
    * straight across it (the paycheck chart's 2026-08-28 "mangled" report; probe in
    * scratchpad/paycheck-sankey-probe/). */
   depth?: number
-  itemStyle: { color: string }
+  /** Node fill, plus the optional dashed hairline that marks a node the chart is
+   *  ESTIMATING rather than reporting (the money-flow's unentered take-home). Every colour
+   *  here is still a theme token — conformance walks these keys. SANKEY_MARKS sets
+   *  `borderWidth: 0` for the series, so only a node that asks gets a border. */
+  itemStyle: {
+    color: string
+    borderColor?: string
+    borderWidth?: number
+    borderType?: 'dashed'
+  }
 }
 
 export interface SankeyLink {
