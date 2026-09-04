@@ -53,6 +53,10 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // Cancels the prefs store's module-global debounce timer at the end of every test FILE;
+    // without it an armed timer fires after the environment is torn down and the whole run
+    // exits 1 on an unhandled ReferenceError. See src/testing/setup.ts.
+    setupFiles: ['src/testing/setup.ts'],
     // .worktrees holds full checkouts during plan execution; without this exclude,
     // vitest runs their duplicate test files against a second React install and fails.
     exclude: [...configDefaults.exclude, '.worktrees/**', '.claude/worktrees/**'],
