@@ -8,6 +8,8 @@ from app.models import (
     MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
+    PaycheckProfile,
+    Person,
     SpendingCategory,
 )
 
@@ -537,3 +539,54 @@ async def test_category_kind_vocabulary_is_refused_at_the_api_edge(auth_client):
     assert (
         await auth_client.patch(f"/api/v1/spending/categories/{made['id']}", json={"kind": "misc"})
     ).status_code == 422
+
+
+async def _seed_kinds_and_profile(db):
+    """Mar 2026: living only, no take-home. Apr 2026: 3,000 living + 500 tax + 1,000
+    transfer against 8,000 take-home, with a profile saving 1,200.00 a month
+    (120,000 / 24 = 5,000 gross a check; 10% traditional + $100 HSA = 600 a check)."""
+    rent = SpendingCategory(name="Rent", slug="rent", sort_order=1, kind="living")
+    taxes = SpendingCategory(name="Taxes", slug="taxes", sort_order=2, kind="tax")
+    invest = SpendingCategory(name="Investments", slug="investments", sort_order=3, kind="transfer")
+    person = Person(name="Me", is_primary=True)
+    db.add_all([rent, taxes, invest, person])
+    await db.flush()
+    db.add_all(
+        [
+            PaycheckProfile(
+                person_id=person.id,
+                effective_date=date(2026, 1, 1),
+                annual_salary=Decimal("120000.00"),
+                pay_periods_per_year=24,
+                trad_401k_pct=Decimal("0.10"),
+                hsa_per_check=Decimal("100.00"),
+            ),
+            MonthlySpending(month=date(2026, 3, 1), category_id=rent.id, amount=Decimal("1000.00")),
+            MonthlySpending(month=date(2026, 4, 1), category_id=rent.id, amount=Decimal("3000.00")),
+            MonthlySpending(month=date(2026, 4, 1), category_id=taxes.id, amount=Decimal("500.00")),
+            MonthlySpending(
+                month=date(2026, 4, 1), category_id=invest.id, amount=Decimal("1000.00")
+            ),
+            MonthlyCashflow(month=date(2026, 4, 1), net_pay=Decimal("8000.00")),
+        ]
+    )
+    await db.commit()
+
+
+async def test_matrix_splits_the_month_by_kind_and_counts_payroll_savings(auth_client, db):
+    await _seed_kinds_and_profile(db)
+    body = (await auth_client.get("/api/v1/spending/matrix")).json()
+    assert body["months"] == ["2026-03-01", "2026-04-01"]
+    # `totals` keeps its meaning: every category, every kind.
+    assert body["totals"] == ["1000.00", "4500.00"]
+    assert body["living_total"] == ["1000.00", "3000.00"]
+    assert body["tax_total"] == ["0.00", "500.00"]
+    assert body["transfer_total"] == ["0.00", "1000.00"]
+    # March has no take-home: no savings, no rates, and NO payroll either — a month
+    # nobody entered pay for has no deductions on record.
+    assert body["cash_savings"] == [None, "4500.00"]
+    assert body["payroll_savings"] == ["0.00", "1200.00"]
+    assert body["total_savings"] == [None, "5700.00"]
+    # savings_rate KEEPS its name and now means the CASH rate: 4500/8000.
+    assert body["savings_rate"] == [None, "0.562500"]
+    assert body["total_savings_rate"] == [None, "0.619565"]  # 5700 / (8000 + 1200)

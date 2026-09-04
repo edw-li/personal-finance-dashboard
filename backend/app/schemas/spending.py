@@ -86,12 +86,27 @@ class MatrixOut(BaseModel):
     months: list[date]
     categories: list[CategoryOut]
     series: list[CategorySeries]
+    # EVERY category, every kind — the spending page's total line, unchanged.
     totals: list[Decimal]
     net_pay: list[Decimal | None]
+    # The CASH savings rate (2026-09-04 honest-numbers spec §2): this field keeps its name
+    # and is identical to the old one wherever every category is 'living'.
     savings_rate: list[Decimal | None]
     four_pct_rule: list[Decimal | None]
     # Sum of the resolved category budgets per month; None when NO category has one.
     total_budget: list[Decimal | None]
+    # The kind split and both savings definitions, aligned with `months`. Every money
+    # array is CENTS (services/savings.py's rounding contract), so a period scalar
+    # elsewhere in the API is the plain sum of these months.
+    living_total: list[Decimal]
+    tax_total: list[Decimal]
+    transfer_total: list[Decimal]
+    cash_savings: list[Decimal | None]
+    # Never null: 0.00 for a month with no take-home entered (no pay on file means no
+    # deductions on file), so the array always sums.
+    payroll_savings: list[Decimal]
+    total_savings: list[Decimal | None]
+    total_savings_rate: list[Decimal | None]
 
 
 class YearCategoryTotal(BaseModel):

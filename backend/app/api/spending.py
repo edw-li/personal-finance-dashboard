@@ -33,6 +33,7 @@ from app.services.money import (
     require_first_of_month,
 )
 from app.services.net_worth_calc import get_swr_pct, investable_bases
+from app.services.savings import LIVING, compose_months, load_payroll_by_month
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
 
@@ -326,7 +327,18 @@ async def matrix(
         for i in range(len(months))
     ]
     net_pay = [cashflow.get(month) for month in months]
-    savings = [_savings_rate(net_pay[i], totals[i]) for i in range(len(months))]
+    # The kind split, from the rows already loaded — no second query. A row whose category
+    # vanished mid-request reads as 'living', the honest default (spec §1).
+    kind_by_category = {c.id: c.kind for c in categories}
+    by_kind: dict[date, dict[str, Decimal]] = {row.month: {} for row in spend_rows}
+    for row in spend_rows:
+        bucket = by_kind[row.month]
+        kind = kind_by_category.get(row.category_id, LIVING)
+        bucket[kind] = bucket.get(kind, Decimal("0.00")) + row.amount
+    # One savings definition for every page (spec §2): the router does no arithmetic.
+    savings_rows = compose_months(
+        months, by_kind, cashflow, await load_payroll_by_month(db, months)
+    )
     swr = await get_swr_pct(db)
     # Batched (spec §3 drive-by): two queries for every month instead of two per month.
     bases = await investable_bases(db, months)
@@ -356,9 +368,16 @@ async def matrix(
         ],
         totals=totals,
         net_pay=net_pay,
-        savings_rate=savings,
+        savings_rate=[row.cash_rate for row in savings_rows],
         four_pct_rule=four_pct,
         total_budget=total_budget,
+        living_total=[row.living_spend for row in savings_rows],
+        tax_total=[row.tax_paid for row in savings_rows],
+        transfer_total=[row.transfers for row in savings_rows],
+        cash_savings=[row.cash_savings for row in savings_rows],
+        payroll_savings=[row.payroll_savings for row in savings_rows],
+        total_savings=[row.total_savings for row in savings_rows],
+        total_savings_rate=[row.total_rate for row in savings_rows],
     )
 
 
