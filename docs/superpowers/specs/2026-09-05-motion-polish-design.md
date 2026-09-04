@@ -23,10 +23,19 @@ conversation 2026-09-05. Read-only audit artefacts: session scratchpad `ux-pass/
 --t-xfade:  180ms   (skeleton → content cross-fade)
 --t-nav:    200ms   (nav indicator slide)
 --ease-out: cubic-bezier(0.2, 0, 0, 1)
---reveal-floor: 0.62    (edge brightness)
---reveal-range: 35%     (of the card's entry over which it reaches 1.0)
---reveal-rise: 4px      (position-linked rise over the same range)
+--reveal-floor: 0.45    (edge brightness; was 0.62)
+--reveal-range: 45%     (of the card's entry over which it reaches 1.0; was 35%)
+--reveal-rise: 6px      (position-linked rise over the same range; was 4px)
+--busy-dim: 0.7         (.loading-dim.is-loading; was a literal 0.55)
 ```
+
+Revised 2026-09-05 after the first build was seen: at 0.62 the shadow was invisible against
+the page's own contrast, and 0.62 vs the busy dim's 0.55 made "below the fold" and "refetching"
+the same grey. The floor is now a real step down, the range wide enough that the brightening is
+a gradient rather than a flick at the edge, and the busy dim is a token beside it so the
+invariant can be pinned: **PLACE is always darker than STATE**, by at least a fifth of the
+scale (`motion.test.ts`). `--busy-dim` is deliberately NOT in the reduce block — a status
+colour is not motion.
 
 Every duration in the shell, cards, toasts, palette and drawer reads a token; the hard-coded
 values found by the audit (toast 160/140, palette 120/140, drawer 160, `.loading-dim` 0.15s,
@@ -62,7 +71,8 @@ CSS scroll-driven animation, no JS:
 ```
 @property --reveal { syntax: '<number>'; inherits: false; initial-value: 1 }
 @supports (animation-timeline: view()) {
-  .page-frame-body .card { animation: reveal linear both; animation-timeline: view();
+  .page-frame-body .card { animation: reveal linear both;
+    animation-timeline: view(var(--sticky-inset, 0px) 0px);
     animation-range: entry 0% entry var(--reveal-range), exit calc(100% - var(--reveal-range)) exit 100%; }
 }
 @keyframes reveal { from { --reveal: var(--reveal-floor); --rise: var(--reveal-rise) } to { --reveal: 1; --rise: 0px } }
@@ -74,6 +84,19 @@ bottom edge at load rises in with the cascade and settles at its position value 
 Exempt (never dimmed): the header, scope row, toasts, palette, drawers, modals, the sticky entry
 footer of the wizard. Off in print and under reduced motion. Browsers without `view()` timelines
 show full brightness. Two CSS variables tune it; the spec values are the defaults.
+
+**The timelines are inset by the sticky scope row** (added 2026-09-05, same review as the token
+revision above). A `view()` timeline measures against the scrollport, but the top 50–70px of
+this one is under `.page-frame-scope`: un-inset, a card scrolled back UP finished its exit range
+while still hidden behind the row and emerged at full brightness, so the top-edge mirror existed
+and was never seen. Both timelines take a block-axis START inset — `view(var(--sticky-inset, 0px)
+0px)`, end inset 0 because the bottom of the viewport IS the bottom of the content — and
+`PageFrame` writes `--sticky-inset` on `.page-frame-body` from the scope row's `offsetHeight`
+under a `ResizeObserver` (density toggle, a row that wraps). The `0px` fallback is the value at
+first paint before that effect runs and the permanent value on a page with no scope row; the
+effect clears the property on unmount so a stale inset cannot outlive its row. Verified in Edge
+152: `var()` parses inside `view()`, computes to `view(57px 0px)` and re-resolves live when the
+variable changes, so no static-class fallback is needed.
 
 ## 5. Sliding nav indicator
 
@@ -108,7 +131,9 @@ nav; on route change it moves to the active link with `transform: translateY()` 
   Net-worth ghost tiles/cards match the real 115px tiles and 491px chart card and ghost the owner line.
 - Skeleton → content is a cross-fade: content mounts in place under the skeleton overlay; the
   skeleton fades out and the content fades in over `--t-xfade` (a `.xfade` wrapper in `Feed`),
-  no height change. `.loading-dim` uses `--t-fast` and is gated by reduced motion.
+  no height change. `.loading-dim` uses `--t-fast` and is gated by reduced motion; its busy
+  opacity is `--busy-dim` (0.7, was a literal 0.55) — a token so §1's invariant holds, since the
+  scroll shadow's floor must always be the darker of the two.
 - Budget: layout shift ≤ 0.05 on every page in the smoke (paycheck, ESPP, comp, net worth are the
   known offenders at 0.15–0.22).
 
@@ -144,7 +169,10 @@ Unit: `useStagger` indices; `@property`/keyframe presence pinned by CSS tests (`
 route change (fake `getBoundingClientRect`). Smoke (`tools/probes/motion-v/`): per-frame paint
 deltas prove ≥ 300ms of chart entrance on Net worth/Taxes/Portfolio; `#main` non-empty on every frame
 after each nav click; CLS ≤ 0.05 per page; indicator transform changes over ~200ms; InfoHint under a
-stuck row fully inside the viewport; `--reveal` ≈ 0.62 on the card at the bottom edge and 1 mid-page;
+stuck row fully inside the viewport; `--reveal` ≈ 0.45 on the card at the bottom edge and 1 mid-page,
+and — the inset's own proof — a scroll back UP that reads ≈ 0.45 on the card whose bottom edge has
+just cleared the STUCK scope row, rising to 1 once ~45% of it is visible BELOW the row (the top edge
+of the viewport is the wrong ruler now; the row's underside is the right one);
 reduced-motion emulation: no animations, floor 1; error banner copy on a stubbed 500.
 
 ## 11. Lanes
