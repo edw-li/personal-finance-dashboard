@@ -445,3 +445,63 @@ def test_a_split_that_does_not_sum_to_the_salary_node_is_refused_with_a_warning(
         "per-person salary rows sum to 210000.00, not the year's 220000.00 — "
         "showing one salary node"
     ) in flow.warnings
+
+
+def test_take_home_pending_estimates_the_months_not_yet_entered():
+    # Production's 2026: 44,611.60 of take-home over Jan-Jul.
+    flow = compose(net_pay_sum=D("44611.60"), net_pay_months=7)
+    assert flow.take_home_months_entered == 7
+    # mean(entered) x (12 - entered) = 6,373.0857... x 5, quantized ONCE at the wire.
+    assert flow.take_home_pending.quantize(D("0.01"), rounding=ROUND_HALF_UP) == D("31865.43")
+    # The residual now sheds it: money already earned is not "retained equity".
+    assert flow.retained_equity == (
+        flow.gross_income
+        - flow.taxes.total
+        - flow.pre_tax_savings
+        - flow.take_home_cash
+        - flow.take_home_pending
+    )
+
+
+def test_take_home_pending_is_zero_on_a_full_year_and_on_an_empty_one():
+    full = compose()  # 12/12 entered
+    assert full.take_home_pending == D("0") and full.take_home_months_entered == 12
+    # Nothing entered: there is no mean to extrapolate from, so the node stays shut.
+    empty = compose(net_pay_sum=D("0"), net_pay_months=0)
+    assert empty.take_home_pending == D("0") and empty.take_home_months_entered == 0
+
+
+def test_the_pending_estimate_is_quantized_before_the_residual_takes_it():
+    """A repeating mean must not be rounded TWICE, independently (review R2).
+
+    8 months of an odd-cent total: the mean is 5,576.45125, so the pending node is
+    22,305.805 and the residual carries the mirror-image .195 — round the two apart at
+    the wire and BOTH go up, and the middle column overshoots gross by a cent. Quantizing
+    the estimate in the service makes the residual absorb the remainder instead.
+    """
+    flow = compose(net_pay_sum=D("44611.61"), net_pay_months=8)
+    assert flow.take_home_pending == D("22305.81")  # already cents, not 22305.805
+
+    # Conservation AT THE WIRE: quantize every middle-column term independently, exactly
+    # as the router's `_money` does, and the column must still sum to gross to the cent.
+    def money(value):
+        return value.quantize(D("0.01"), rounding=ROUND_HALF_UP)
+
+    assert (
+        money(flow.taxes.total)
+        + money(flow.pre_tax_savings)
+        + money(flow.take_home_cash)
+        + money(flow.take_home_pending)
+        + money(flow.retained_equity)
+    ) == money(flow.gross_income)
+
+
+def test_a_negative_residual_names_the_pending_estimate_that_helped_cause_it():
+    """With half the year un-entered the estimate is a REAL term of the subtraction, so
+    a refusal that lists only the typed figures would send the user hunting for a data
+    error in numbers that are all correct."""
+    flow = compose(net_pay_sum=D("200000.00"), net_pay_months=6)
+    assert flow.renderable is False
+    assert flow.take_home_pending == D("200000.00")
+    assert "take-home not yet entered" in flow.reason
+    assert "200000.00" in flow.reason

@@ -167,3 +167,34 @@ async def test_preview_summarizes_sections_with_row_counts(db):
     assert names[0] == "household"
     spending = next(s for s in sections if s["name"] == "spending")
     assert spending["rows"] >= 1
+
+
+async def test_spending_context_carries_both_savings_definitions(db):
+    await _seed_two_spending_months(db)
+    section = (await build_context(db, route="/spending", search={}, view={}))["spending"]
+    assert section["living_total"] == ["2000.00", "2100.00"]
+    assert section["tax_total"] == ["0.00", "0.00"]
+    assert section["transfer_total"] == ["0.00", "0.00"]
+    assert section["cash_savings"] == ["5000.00", "4900.00"]
+    assert section["payroll_savings"] == ["0.00", "0.00"]  # no paycheck profile on file
+    assert section["total_savings"] == ["5000.00", "4900.00"]
+    assert section["savings_rate"] == ["0.714286", "0.700000"]
+    assert section["total_savings_rate"] == ["0.714286", "0.700000"]
+    # The yearly rollup rides along with its new fields, so the model can quote a year.
+    assert section["yearly"]["years"][0]["months_matched"] == 2
+
+
+async def test_household_context_carries_the_latest_savings_figures(db):
+    await _seed_two_spending_months(db)
+    spending = (await build_context(db, route="/nonexistent", search={}, view={}))["household"][
+        "spending"
+    ]
+    assert spending["latest_month"] == "2026-08-01"
+    assert spending["latest_total"] == "2100.00"
+    assert spending["latest_living_spend"] == "2100.00"
+    assert spending["latest_tax_paid"] == "0.00"
+    assert spending["latest_transfers"] == "0.00"
+    assert spending["latest_savings_rate"] == "0.700000"
+    assert spending["latest_payroll_savings"] == "0.00"
+    assert spending["latest_total_savings"] == "4900.00"
+    assert spending["latest_total_savings_rate"] == "0.700000"

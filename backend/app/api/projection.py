@@ -2,13 +2,18 @@
 
 One computed GET in the ESPP-modeler shape: what-if knobs arrive as query params, every
 knob NOT provided is seeded from the data the app already holds — the latest investable
-balance (net_worth_calc's own rule, the 4%-line's base), the trailing-12 mean of
-(net pay − spend) PLUS every earner's payroll-deducted savings as the contribution
+balance (net_worth_calc's own rule, the 4%-line's base), the mean cash savings of the
+MATCHED window PLUS every earner's payroll-deducted savings as the contribution
 (2026-09-03: 401(k), ESPP and HSA money never reaches net pay, so the cash-only derivation
-understated the stream by thousands a month and called FI unreachable), the trailing-12 mean
-spend ×12 as the annual spend, and the stored SWR — and the response echoes the values
-actually used, so the page's form seeds from the echo. A derived contribution also echoes
-its `contribution_breakdown` so the page can say what it added up.
+understated the stream by thousands a month and called FI unreachable), that same window's
+mean LIVING spend ×12 as the annual spend, and the stored SWR — and the response echoes the
+values actually used, so the page's form seeds from the echo. A derived contribution also
+echoes its `contribution_breakdown` so the page can say what it added up.
+
+The MATCHED window (2026-09-04 honest-numbers spec §3) is the last TRAILING_MONTHS months
+that carry BOTH spending rows and take-home, from services/savings.py. Before it the two
+derivations averaged DIFFERENT windows, and the spend mean counted a balances-only save's
+zero-filled month as a month of spending nothing. `derived_window` echoes what was used.
 
 The three ASSUMPTION knobs (volatility, inflation, contribution growth) have no data to
 derive from, so an absent one takes a planning default instead (the DEFAULT_* constants
@@ -31,7 +36,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -42,9 +47,10 @@ from app.api.deps import get_current_user
 # second copy of either rule here could only drift.
 from app.api.paycheck import MIN_PAY_PERIODS, PAY_PERIODS_MESSAGE, _default_profile
 from app.database import get_db
-from app.models import MonthlyCashflow, MonthlySpending, NetWorthSnapshot
+from app.models import NetWorthSnapshot
 from app.schemas.projection import (
     ContributionBreakdownOut,
+    DerivedWindowOut,
     PayrollSavingOut,
     ProjectionOut,
     RetirementOut,
@@ -52,9 +58,10 @@ from app.schemas.projection import (
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import get_swr_pct, investable_base
-from app.services.paycheck_calc import MONTHS_PER_YEAR, PAYROLL_SAVING_KEYS, breakdown, half_up2
+from app.services.paycheck_calc import breakdown, half_up2
 from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
+from app.services.savings import load_month_savings, matched_months, payroll_monthly
 
 router = APIRouter(
     prefix="/projection", tags=["projection"], dependencies=[Depends(get_current_user)]
@@ -104,71 +111,20 @@ NO_CASHFLOW_WARNING = "no cashflow history — monthly contribution defaulted to
 NO_CASHFLOW_PAYROLL_WARNING = (
     "no cashflow history — the monthly contribution is payroll deductions alone"
 )
-# PAYROLL_SAVING_KEYS: imported from paycheck_calc (shared with the paycheck preview).
+# The saving-lines arithmetic itself lives in services/savings.payroll_monthly, which every
+# page that says "saved" reads (2026-09-04 honest-numbers spec §2); this router is a caller.
 NO_SPEND_WARNING = "no spending history — provide an annual spend to model the FI target"
 NO_SWR_WARNING = "withdrawal rate is 0 — no FI target to model"
+NO_MATCHED_MONTHS_WARNING = (
+    "no month has both spending and take-home on file — the contribution and annual "
+    "spend could not be derived"
+)
 
 
 def _months_from(start: date, count: int) -> list[date]:
     """count+1 first-of-month dates starting at `start` — the series' shared axis."""
     base = start.year * 12 + (start.month - 1)
     return [date((base + i) // 12, (base + i) % 12 + 1, 1) for i in range(count + 1)]
-
-
-async def _trailing_annual_spend(db: AsyncSession) -> Decimal | None:
-    """Mean of the last TRAILING_MONTHS monthly totals, ×12; None (no rows) and 0 (all
-    zeros) both mean there is nothing to make an FI target of."""
-    rows = (
-        await db.execute(
-            select(MonthlySpending.month, func.sum(MonthlySpending.amount))
-            .group_by(MonthlySpending.month)
-            .order_by(MonthlySpending.month.desc())
-            .limit(TRAILING_MONTHS)
-        )
-    ).all()
-    if not rows:
-        return None
-    mean = sum((Decimal(total) for _, total in rows), Decimal(0)) / len(rows)
-    return mean * 12
-
-
-async def _trailing_savings(db: AsyncSession) -> Decimal | None:
-    """Mean of (net pay − that month's spend) over the last TRAILING_MONTHS months WITH a
-    net pay on file; None with no cashflow history at all. Spend totals are queried for
-    exactly those months, so a spending history longer than the cashflow one cannot skew
-    the pairing."""
-    cash = (
-        (
-            await db.execute(
-                select(MonthlyCashflow)
-                .order_by(MonthlyCashflow.month.desc())
-                .limit(TRAILING_MONTHS)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not cash:
-        return None
-    months = [row.month for row in cash]
-    spend_rows = (
-        await db.execute(
-            select(MonthlySpending.month, func.sum(MonthlySpending.amount))
-            .where(MonthlySpending.month.in_(months))
-            .group_by(MonthlySpending.month)
-        )
-    ).all()
-    spend_by_month = {month: Decimal(total) for month, total in spend_rows}
-    total = sum((row.net_pay - spend_by_month.get(row.month, ZERO) for row in cash), Decimal(0))
-    return total / len(cash)
-
-
-def _payroll_monthly(profile) -> Decimal:
-    """One profile's payroll-deducted savings per MONTH, at full precision: the five saving
-    lines of `breakdown` per check × the profile's cadence ÷ 12 (the `monthly_net` rule)."""
-    lines = breakdown(profile)
-    per_check = sum((lines[key] for key in PAYROLL_SAVING_KEYS), Decimal(0))
-    return per_check * Decimal(profile.pay_periods_per_year) / MONTHS_PER_YEAR
 
 
 async def _payroll_savings(
@@ -194,7 +150,7 @@ async def _payroll_savings(
                 "payroll savings left out of the contribution"
             )
             continue
-        monthly = half_up2(_payroll_monthly(profile))
+        monthly = half_up2(payroll_monthly(profile))
         if monthly <= ZERO:
             continue
         rows.append(PayrollSavingOut(person_id=person.id, name=person.name, monthly=monthly))
@@ -272,7 +228,7 @@ async def _resolve_retirements(
         # The deductions stop with the paycheck too — the same figure the derived
         # contribution added for this person, so a retirement removes exactly what the
         # profile put in. Non-negative by construction (pcts and riders are fenced ≥ 0).
-        drop += half_up2(_payroll_monthly(profile))
+        drop += half_up2(payroll_monthly(profile))
         rows.append(
             RetirementOut(person_id=person_id, name=person.name, month=month, monthly_drop=drop)
         )
@@ -321,16 +277,48 @@ async def projection(
             raise HTTPException(status_code=422, detail=RETURN_MESSAGE)
         annual_return = quantize_pct(annual_return)
 
+    # ONE window for both derivations (spec §3): the last twelve months with spending rows
+    # AND take-home. Before this, the spend mean and the savings mean averaged DIFFERENT
+    # months — and the spend mean counted a zero-filled month as a month of no spending.
+    savings_rows = await load_month_savings(db)
+    window = matched_months(savings_rows, TRAILING_MONTHS)
+    has_cashflow = any(row.net_pay is not None for row in savings_rows)
+    has_spending = any(row.has_spending_rows for row in savings_rows)
+    # Read BEFORE the two blocks below overwrite the knobs with their resolved values.
+    derives = monthly_contribution is None or annual_spend is None
+    # The echo describes a DERIVATION, so it is null when the user typed both knobs —
+    # `contribution_breakdown`'s rule exactly. A window printed beside two typed numbers
+    # would claim something was averaged when nothing was.
+    derived_window = (
+        DerivedWindowOut(from_month=window[0].month, to_month=window[-1].month, months=len(window))
+        if window and derives
+        else None
+    )
+    if not window and has_cashflow and has_spending and derives:
+        # BOTH halves are on file and no month carries both — the one case the more
+        # specific sentences below cannot describe. A book missing a half is named by
+        # NO_CASHFLOW_WARNING or NO_SPEND_WARNING instead, so nothing says it twice.
+        warnings.append(NO_MATCHED_MONTHS_WARNING)
+
     contribution_breakdown: ContributionBreakdownOut | None = None
     if monthly_contribution is None:
-        cash = await _trailing_savings(db)
         payroll, by_person, payroll_warnings = await _payroll_savings(db, today)
         warnings.extend(payroll_warnings)
-        if cash is None:
+        if not window:
             cash_part = ZERO
-            warnings.append(NO_CASHFLOW_WARNING if payroll <= ZERO else NO_CASHFLOW_PAYROLL_WARNING)
+            if not has_cashflow:
+                warnings.append(
+                    NO_CASHFLOW_WARNING if payroll <= ZERO else NO_CASHFLOW_PAYROLL_WARNING
+                )
         else:
-            cash_part = cash.quantize(CENT, rounding=ROUND_HALF_UP)
+            # Every matched row has a cash figure by construction (net pay is on file).
+            # Sum the EMITTED month figures, divide, quantize ONCE at the end — the
+            # savings service's rounding contract, so this mean is the same money the
+            # matrix printed.
+            total_cash = sum(
+                (row.cash_savings for row in window if row.cash_savings is not None), Decimal(0)
+            )
+            cash_part = (total_cash / len(window)).quantize(CENT, rounding=ROUND_HALF_UP)
         # Both halves are cents already, so the sum needs no second rounding; quantize
         # anyway so a Decimal('0') cash part still echoes as "0.00".
         monthly_contribution = (cash_part + payroll).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -343,10 +331,22 @@ async def projection(
         )
 
     if annual_spend is None:
-        derived_spend = await _trailing_annual_spend(db)
+        # LIVING spend only (spec §2): an income-tax payment and a transfer to a brokerage
+        # are both money that must not inflate an FI target. Sum the EMITTED months,
+        # divide, x12, quantize ONCE — never a rounded mean multiplied out.
+        derived_spend = (
+            None
+            if not window
+            else sum((row.living_spend for row in window), Decimal(0)) / len(window) * 12
+        )
         if derived_spend is None or derived_spend <= 0:
             annual_spend = None
-            warnings.append(NO_SPEND_WARNING)
+            # Only when there is genuinely nothing to average. A book that HAS spending
+            # but no matched month is already explained — by NO_MATCHED_MONTHS_WARNING
+            # when take-home exists, by NO_CASHFLOW_WARNING when it does not — and
+            # "no spending history" would there be flatly untrue.
+            if not has_spending:
+                warnings.append(NO_SPEND_WARNING)
         else:
             annual_spend = derived_spend.quantize(CENT, rounding=ROUND_HALF_UP)
     else:
@@ -502,4 +502,5 @@ async def projection(
         fi_month_p50=fi_month_p50,
         fi_month_p90=fi_month_p90,
         retirements=retirements,
+        derived_window=derived_window,
     )

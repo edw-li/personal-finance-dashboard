@@ -1,6 +1,8 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
+from sqlalchemy import select
+
 from app.models import (
     Account,
     AccountBalance,
@@ -879,3 +881,100 @@ def test_project_ignores_a_drop_past_the_horizon():
         Decimal("0"),
         [(99, Decimal("40.00"))],
     ) == project(Decimal("1000.00"), Decimal("100.00"), Decimal("0"), 3, Decimal("0"))
+
+
+async def test_projection_annual_spend_is_living_spend_over_the_matched_window(auth_client, db):
+    this_month = await _seed_book(db)
+    taxes = SpendingCategory(name="Taxes", slug="taxes", sort_order=2, kind="tax")
+    db.add(taxes)
+    await db.flush()
+    db.add(
+        MonthlySpending(
+            month=month_add(this_month, -1), category_id=taxes.id, amount=Decimal("1200.00")
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection")).json()
+    # An income-tax payment is not living cost, so the FI target does not grow by it...
+    assert body["annual_spend"] == "60000.00"  # mean(6000, 4000) x 12, unchanged
+    # ...but it WAS paid out of take-home, so cash savings fall: mean(1800, 5000).
+    assert body["monthly_contribution"] == "3400.00"
+    assert body["derived_window"] == {
+        "from": month_add(this_month, -2).isoformat(),
+        "to": month_add(this_month, -1).isoformat(),
+        "months": 2,
+    }
+
+
+async def test_projection_ignores_a_zero_filled_month_with_no_take_home(auth_client, db):
+    this_month = await _seed_book(db)
+    rent = (await db.execute(select(SpendingCategory))).scalars().one()
+    # The audit's headline: a balances-only save wrote $0.00 for every category this
+    # month. It has no take-home, so it is not a matched month and cannot drag the mean.
+    db.add(MonthlySpending(month=this_month, category_id=rent.id, amount=Decimal("0.00")))
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["annual_spend"] == "60000.00"  # NOT mean(0, 6000, 4000) x 12 = 40000.00
+    assert body["monthly_contribution"] == "4000.00"
+    assert body["derived_window"]["months"] == 2
+    assert body["derived_window"]["to"] == month_add(this_month, -1).isoformat()
+
+
+async def test_projection_says_so_when_no_month_has_both_halves(auth_client, db):
+    this_month = await _seed_book(db, with_history=False)
+    cat = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(cat)
+    await db.flush()
+    # Spending in one month, take-home in another: data everywhere, nothing to average.
+    db.add_all(
+        [
+            MonthlySpending(
+                month=month_add(this_month, -2), category_id=cat.id, amount=Decimal("5000.00")
+            ),
+            MonthlyCashflow(month=month_add(this_month, -1), net_pay=Decimal("9000.00")),
+        ]
+    )
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["derived_window"] is None
+    assert body["monthly_contribution"] == "0.00"
+    assert body["annual_spend"] is None
+    assert (
+        "no month has both spending and take-home on file — the contribution and annual "
+        "spend could not be derived"
+    ) in body["warnings"]
+
+
+async def test_derived_window_is_null_when_both_knobs_were_typed(auth_client, db):
+    """The echo describes a DERIVATION (schemas/projection.DerivedWindowOut), so it is
+    null for the same reason `contribution_breakdown` is: nothing was averaged. A window
+    printed beside two typed numbers would claim the opposite (review R1)."""
+    await _seed_book(db)
+    body = (
+        await auth_client.get("/api/v1/projection?monthly_contribution=1000&annual_spend=50000")
+    ).json()
+    assert body["derived_window"] is None
+    assert body["contribution_breakdown"] is None
+    # One typed knob still leaves the OTHER derived, so the window is what explains it.
+    half = (await auth_client.get("/api/v1/projection?annual_spend=50000")).json()
+    assert half["derived_window"]["months"] == 2
+    assert half["contribution_breakdown"] is not None
+
+
+async def test_a_spending_only_book_gets_one_warning_not_two(auth_client, db):
+    """Take-home is the missing half, and `NO_CASHFLOW_WARNING` names it exactly. The
+    matched-months sentence is for a book that has BOTH halves and never together, and a
+    "no spending history" line would be plainly false here (review R3)."""
+    this_month = await _seed_book(db, with_history=False)
+    cat = SpendingCategory(name="Rent", slug="rent", sort_order=1)
+    db.add(cat)
+    await db.flush()
+    db.add(
+        MonthlySpending(
+            month=month_add(this_month, -1), category_id=cat.id, amount=Decimal("5000.00")
+        )
+    )
+    await db.commit()
+    body = (await auth_client.get("/api/v1/projection")).json()
+    assert body["warnings"] == ["no cashflow history — monthly contribution defaulted to 0"]
+    assert body["annual_spend"] is None and body["derived_window"] is None
