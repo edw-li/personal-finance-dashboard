@@ -363,8 +363,12 @@ it('still names a parent the component flag forgot', async () => {
   await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   expect(roster().getByText('parent: Fidelity Traditional 401(k)')).toBeTruthy()
-  // The parent still counts it: the balances PUT sums over the LINK (spec §5).
-  expect(roster().getByText('derived: 1 component')).toBeTruthy()
+  // And the parent is NOT derived: `derived_parent_balances` skips a child that is not
+  // flagged `is_component`, so the server never sums this link and the wizard still asks for
+  // the parent's balance by hand. "derived: 1 component" here would promise a roll-up that
+  // nothing performs.
+  expect(roster().getByText('—')).toBeTruthy()
+  expect(roster().queryByText('derived: 1 component')).toBeNull()
 })
 
 it('refuses a component with no parent, in the server\'s own sentence', async () => {

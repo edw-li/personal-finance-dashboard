@@ -211,13 +211,15 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
 
   const ownerName = new Map(people.map((p) => [p.id, p.name]))
   const byId = new Map(accounts.map((a) => [a.id, a]))
-  // How many rows roll UP into each account. Counted over `parent_account_id`, which is the
-  // spec's own definition of a component (§5: "an account with at least one component
-  // (`accounts.parent_account_id = it`)") and the exact set the balances PUT sums — NOT over
-  // `is_component`, which is the rollup key rather than the link.
+  // How many rows roll UP into each account, by the SERVER's rule rather than a looser one:
+  // `derived_parent_balances` (backend/app/services/derived_accounts.py) sums a child only
+  // when it is flagged `is_component` AND linked, so a legacy row carrying the link alone is
+  // derived by nobody. Counting that row here would tell the reader a parent is summed while
+  // the balances PUT still expects it typed by hand and the wizard still renders it as an
+  // input — the roster must not promise a roll-up nothing performs (spec §5).
   const componentCounts = new Map<number, number>()
   for (const a of accounts) {
-    if (a.parent_account_id === null) continue
+    if (a.parent_account_id === null || !a.is_component) continue
     componentCounts.set(a.parent_account_id, (componentCounts.get(a.parent_account_id) ?? 0) + 1)
   }
 

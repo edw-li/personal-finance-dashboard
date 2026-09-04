@@ -265,13 +265,23 @@ export default function CategoriesCard() {
                   </tbody>
                 </table>
               </div>
-              <p className="settings-note">
-                Living: money that left the household — food, housing, a loan payment you
-                must fund each month. Tax: an income-tax payment made from take-home, like
-                the April bill; payroll withholding is not here, it never reaches net pay.
-                Transfer: money that stayed yours — a brokerage or savings deposit, extra
-                principal — part of net worth, not spend.
-              </p>
+              {/* ONE line per kind (spec §1): the three definitions are read while deciding
+                  a single row's picker, so they have to be scannable side by side, not
+                  buried in a paragraph the reader has to parse to find their case. */}
+              <ul className="settings-note">
+                <li>
+                  Living: money that left the household — food, housing, a loan payment you
+                  must fund each month.
+                </li>
+                <li>
+                  Tax: an income-tax payment made from take-home — the April bill, estimated
+                  payments; payroll withholding is not here, it never reaches net pay.
+                </li>
+                <li>
+                  Transfer: money that stayed yours — a brokerage or savings deposit, extra
+                  principal — part of net worth, not spend.
+                </li>
+              </ul>
               <p className="settings-note">
                 Changing a kind recomputes ALL history: every month, chart and projection
                 that reads it moves, not just this one. The change is recorded in Activity.
