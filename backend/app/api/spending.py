@@ -73,7 +73,9 @@ async def create_category(
     )
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"category {slug!r} already exists")
-    category = SpendingCategory(name=body.name, slug=slug, sort_order=body.sort_order)
+    category = SpendingCategory(
+        name=body.name, slug=slug, sort_order=body.sort_order, kind=body.kind
+    )
     db.add(category)
     await db.flush()
     batch.record_insert(category)

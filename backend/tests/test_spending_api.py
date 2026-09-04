@@ -504,3 +504,36 @@ async def test_get_month_resolves_budgets_for_arbitrary_months(auth_client, db):
     await auth_client.put(url, json={"amount": None, "effective_month": "2026-05-01"})
     body = (await auth_client.get("/api/v1/spending/months/2026-05-01")).json()
     assert body["budgets"] == []
+
+
+async def test_category_kind_round_trips_through_create_list_and_patch(auth_client):
+    default = (await auth_client.post("/api/v1/spending/categories", json={"name": "Food"})).json()
+    assert default["kind"] == "living"  # omitted kind is the honest default
+
+    created = await auth_client.post(
+        "/api/v1/spending/categories", json={"name": "Taxes", "kind": "tax"}
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["kind"] == "tax"
+
+    listed = (await auth_client.get("/api/v1/spending/categories")).json()
+    assert {c["name"]: c["kind"] for c in listed} == {"Food": "living", "Taxes": "tax"}
+
+    patched = await auth_client.patch(
+        f"/api/v1/spending/categories/{default['id']}", json={"kind": "transfer"}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["kind"] == "transfer"
+    # A kind change must not disturb the row's other columns.
+    assert patched.json()["name"] == "Food" and patched.json()["is_active"] is True
+
+
+async def test_category_kind_vocabulary_is_refused_at_the_api_edge(auth_client):
+    bad = await auth_client.post(
+        "/api/v1/spending/categories", json={"name": "Savings", "kind": "savings"}
+    )
+    assert bad.status_code == 422
+    made = (await auth_client.post("/api/v1/spending/categories", json={"name": "Pets"})).json()
+    assert (
+        await auth_client.patch(f"/api/v1/spending/categories/{made['id']}", json={"kind": "misc"})
+    ).status_code == 422
