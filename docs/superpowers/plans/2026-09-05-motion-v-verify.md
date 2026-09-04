@@ -75,7 +75,7 @@ Expected: EMPTY. If it prints anything, run `cd backend && FINANCE_TEST_DB=finan
 
 **Files:** create `tools/probes/motion-v/smoke.mjs`
 
-- [ ] **Step 1: Head + the three instruments.** The instruments are the UX-pass probes' own, so every number this lane reports is directly comparable with the audit's.
+- [x] **Step 1: Head + the three instruments.** The instruments are the UX-pass probes' own, so every number this lane reports is directly comparable with the audit's. (One instrument fix: the shift observer records each source's PATH and its before/after rect, not just a class name — `div.xfade-veil` alone cannot say which block moved, and naming the block is the whole value of a CLS failure.)
 
 ```js
 // tools/probes/motion-v/smoke.mjs — the motion & polish smoke (lane V, 2026-09-05 spec §10).
@@ -126,7 +126,7 @@ const INIT = `(() => {
 })()`
 ```
 
-- [ ] **Step 2: The fence and the per-theme context.** `mutate` is the only mutable piece: the errors step flips it to 422 to provoke a validation message that never reaches the server. The per-theme loop then follows honest-V verbatim — `const page = await (await makeContext(theme)).newPage()`, console/`pageerror` drains filtered by `NOISE`, and `shot(name)` writing `${theme}-${name}.png` into `OUT` and pushing to `files`.
+- [x] **Step 2: The fence and the per-theme context.** `mutate` is the only mutable piece: the errors step flips it to 422 to provoke a validation message that never reaches the server. The per-theme loop then follows honest-V verbatim — `const page = await (await makeContext(theme)).newPage()`, console/`pageerror` drains filtered by `NOISE`, and `shot(name)` writing `${theme}-${name}.png` into `OUT` and pushing to `files`.
 
 ```js
 const browser = await chromium.launch({ executablePath: EDGE, headless: true, args: ['--no-sandbox', '--disable-gpu', '--force-device-scale-factor=1'] }); let mutate = { status: 200, body: '{}' }
@@ -150,7 +150,7 @@ async function makeContext(theme, reducedMotion = 'no-preference') {
 
 **Files:** modify `tools/probes/motion-v/smoke.mjs`
 
-- [ ] **Step 1: Entrance, route hold, CLS, indicator**
+- [x] **Step 1: Entrance, route hold, CLS, indicator** — three driving deviations, each in the driver's header: the entrance's per-card sequence carries its own frame time (the draft indexed the unfiltered frame list with a filtered index), the walk scrolls to the first mounted-but-unpainted chart inside the paint window (M1's one-shot holds every chart under 20% visible — at 1440×900 that is all of Taxes and Portfolio), and each CLS route is loaded TWICE with the worst reported (Paycheck's shift is a race).
 
 ```js
 // A. chart entrances last (audit: 1–2 frames). Cold load per route, so the entrance IS the first paint.
@@ -181,7 +181,7 @@ const ind = (await page.evaluate(() => window.__trace)).filter((r) => r.tf !== n
 check(theme, 'indicator', 'the nav indicator transform changes over ~200ms', ind.length > 0 && moves.length >= 4 && span >= 120 && span <= 400, { samples: ind.length, moves: moves.length, spanMs: span }); await shot('nav-indicator')
 ```
 
-- [ ] **Step 2: The hint under a stuck row, the reveal dial, the below-fold chart**
+- [x] **Step 2: The hint under a stuck row, the reveal dial, the below-fold chart** — three more: the hint is PARKED 24px under the stuck row (nothing sits there at a fixed scroll of 420 on /net-worth), the reveal parking corrects its own scroll twice (the reveal's own ±4px transform is inside `getBoundingClientRect`, so one computed scroll lands ~7px off and leaves no card straddling the edge) and reads only top-level cards, and "has not painted" counts a container with no canvas at all — zrender builds the canvas on the first render, so a held paint has none.
 
 ```js
 // E. an InfoHint under the STUCK scope row stays inside the viewport.
@@ -219,7 +219,7 @@ else { const read = (i) => page.evaluate((n) => { const c = document.querySelect
   check(theme, 'belowfold', 'it draws once scrolled into view (one-shot)', post.painted === true && post.setOptions > pre.setOptions, { pre, post }); await shot('belowfold-drawn') }
 ```
 
-- [ ] **Step 3: Drill, theme swap, reduced motion, error grammar**
+- [x] **Step 3: Drill, theme swap, reduced motion, error grammar** — the drill hunts for a click point that actually drills (0.82/0.75 misses this book's bars; 0.60/0.70 lands) and records it, the theme swap is undone after it is measured so later shots match their file names, and the Settings validation message is read off the card's own `.error-banner` (it sits at the FOOT of the form, past the first 400 characters).
 
 ```js
 // H. the Spending month drill: no dispose, no blank frame (the bar→pie universalTransition morph).
@@ -265,7 +265,7 @@ if (STEPS.includes('errors')) {
   await shot('settings-validation'); mutate = { status: 200, body: '{}' } }
 ```
 
-- [ ] **Step 4: The exit.** No sweep — the fence answered every write from memory — so the exit says so out loud, and a future edit that opens a hole shows up as a fenced write with no owner.
+- [x] **Step 4: The exit.** No sweep — the fence answered every write from memory — so the exit says so out loud, and a future edit that opens a hole shows up as a fenced write with no owner.
 
 ```js
 } finally { writeFileSync(path.join(OUT, 'report.json'), JSON.stringify({ ...report, files }, null, 1)); await browser.close() }
@@ -278,9 +278,9 @@ console.log('MOTION SMOKE OK')
 
 **Files:** modify `tools/probes/README.md`
 
-- [ ] **Step 1: Add one table row and one recipe** in the shape of the honest-V section: what it draws (the eleven motion claims of spec §10), that it needs the dev stack with uvicorn restarted, that it is READ-ONLY unlike honest-V (the fence, not a sweep), and its env list (`SMOKE_OUT`, `TOKEN_FILE`, `APP_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`, `ONLY_STEP`).
+- [x] **Step 1: Add one table row and one recipe** in the shape of the honest-V section: what it draws (the eleven motion claims of spec §10), that it needs the dev stack with uvicorn restarted, that it is READ-ONLY unlike honest-V (the fence, not a sweep), and its env list (`SMOKE_OUT`, `TOKEN_FILE`, `APP_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`, `ONLY_STEP`).
 
-- [ ] **Step 2: Mint a token and run both themes**
+- [x] **Step 2: Mint a token and run both themes** — 103 ok / 3 failed / 8 noted; 38 PNGs + `report.json` in the session scratchpad `motion-smoke/`; `writesBlocked` holds exactly the two Settings POSTs and `prefsWrites` the four theme PATCHes, nothing else. Exit 1 on the three CLS failures above, which are the lane's output.
 
 ```bash
 OUT="C:/Users/edyli/AppData/Local/Temp/claude/C--Users-edyli-personal-finance-dashboard/bf88100a-fee8-48d7-845e-35cc94efd91a/scratchpad/motion-smoke"
@@ -293,7 +293,7 @@ TOKEN_FILE="$OUT/token.txt" SMOKE_OUT="$OUT" node tools/probes/motion-v/smoke.mj
 
 Expected: the checks line, then `MOTION SMOKE OK`, exit 0; `$OUT/report.json` with `problems: []`, `prefsWrites` holding the theme-swap PATCH as stubbed, `writesBlocked` holding the Settings submit (answered 422 by the fence, never sent) and nothing else, and ~30 PNGs (15 per theme). Exit 1 prints every failed check with its observed value — copy those verbatim into Results; a verify lane's failures are its output, not its embarrassment.
 
-- [ ] **Step 3: Commit the driver**
+- [x] **Step 3: Commit the driver** — `b1ca363`.
 
 ```bash
 git add tools/probes/motion-v/smoke.mjs tools/probes/README.md
@@ -304,9 +304,9 @@ git commit -m "test(probe): the motion smoke — entrances, route hold, CLS, ind
 
 **Files:** modify this plan
 
-- [ ] **Step 1: Fill the Results table** with OBSERVED values — the four gate counts, each entrance's `span`/`changes`, each route's CLS with its worst shift source, the indicator span, the three `--reveal` readings, the worst nav hold, and every failed check beside the lane that owns it.
-- [ ] **Step 2: Tick every checkbox** in this file; a step not run is struck through with its reason on the same line, never left blank.
-- [ ] **Step 3: Final gate on the tree as it now stands**
+- [x] **Step 1: Fill the Results table** with OBSERVED values — the four gate counts, each entrance's `span`/`changes`, each route's CLS with its worst shift source, the indicator span, the three `--reveal` readings, the worst nav hold, and every failed check beside the lane that owns it.
+- [x] **Step 2: Tick every checkbox** in this file; a step not run is struck through with its reason on the same line, never left blank.
+- [x] **Step 3: Final gate on the tree as it now stands**
 
 ```bash
 npx tsc -b && npx eslint . && npx vitest run && npm run build
@@ -315,26 +315,66 @@ git status --short && git log --oneline -6 && git log --oneline origin/main..mai
 
 Expected: the Task 2 counts unchanged (this lane touched no `src/` file); a clean status; the four lane merges plus this lane's two commits; a non-zero ahead count that was never pushed.
 
-- [ ] **Step 4: Update the memory file** for this overnight run: the four merge SHAs, the gate counts, the smoke's screenshot folder and `report.json` path, every deviation, and the morning notes below.
+- [x] **Step 4: Update the memory file** for this overnight run: the four merge SHAs, the gate counts, the smoke's screenshot folder and `report.json` path, every deviation, and the morning notes below.
 
 ---
 
 ## Results (filled by Task 6)
 
+Smoke: `SMOKE_OUT=…/scratchpad/motion-smoke`, both themes, 1440×900 — **103 checks ok, 3 failed, 8
+noted**, 38 PNGs + `report.json`. Fenced: the two Settings POSTs (one per theme, answered 422 from
+memory, never sent); stubbed: four `PATCH /prefs` (the theme swap and its undo, per theme). Nothing
+was written. The three failures are all CLS and all the same shape — a block above the fold that
+appears from nothing when its payload lands — and each is named against its owner below.
+
 | Gate / check | Baseline (`e52f435` / 2026-09-05 audit) | Observed |
 |---|---|---|
-| `npx tsc -b` / `npx eslint .` | silent / exit 0, 17 warnings | |
-| `npx vitest run` / `npm run build` | 175 files, 2364 tests / index 316.72 kB, css 28.11 kB | |
-| Entrance span+changes: Net worth / Taxes / Portfolio | 1–2 frames | |
-| Nav (13 links): blank frames / worst hold | blank frame on first visit | |
-| CLS: paycheck / espp / comp / net worth / overview | 0.15–0.22 | |
-| Indicator slide span / InfoHint under stuck row (in-viewport + hit test) | none (per-link box-shadow) / clipped by the scope row | |
-| `--reveal` bottom edge / mid / top edge | n/a | |
-| Below-fold deferral / drill disposes / theme-swap replays | n/a / n/a / replayed | |
-| Reduced motion: tokens / floor / chart animation | n/a | |
-| ESPP 500 banners / Settings Retry count | 3 banners / Retry shown | |
+| `npx tsc -b` / `npx eslint .` | silent / exit 0, 17 warnings | silent, exit 0 / exit 0 with **18** — one NEW, `InfoHint.tsx:21 hintLabel` (M4), the same `react-refresh/only-export-components` class as the other 17 |
+| `npx vitest run` / `npm run build` | 175 files, 2364 tests / index 316.72 kB, css 28.11 kB | **180 files / 2437 tests** before this lane's fix, **180 / 2439** after; build exit 0, `index-*.js` 319.55 kB (gzip 102.10), `index-*.css` **32.39 kB** (gzip 7.06) — +4.3 kB of CSS for four lanes' motion, skeleton, indicator and hint blocks |
+| Entrance span+changes: Net worth / Taxes / Portfolio | 1–2 frames | **468 ms / 26 deltas**, **466 / 27**, **421 / 26** (light: 462/26, 467/27, 436/27). Taxes and Portfolio have NO chart 20 % on screen at 1440×900, so their entrance is the one-shot's, measured after the driver scrolls to it |
+| Nav (13 links): blank frames / worst hold | blank frame on first visit | **0 blank frames** in 26 clicks (13 × 2 themes); the old page holds **57–95 ms** before the new title paints; `.route-fallback` never appeared |
+| CLS: paycheck / espp / comp / net worth / overview | 0.15–0.22 | worst of two cold loads per theme: **0.0489 / 0.0451** ✅, **0.0365 / 0.0364** ✅ (was 0.104 — fixed here, `b093518`), **0.083 / 0.0559** ❌, **0.0084 / 0.0086** ✅, **0.0001 / 0** ✅ — plus ONE light-theme Paycheck load at **0.3922** ❌ (the same route scored 0.049 on its other load: it is a race, see below) |
+| Indicator slide span / InfoHint under stuck row (in-viewport + hit test) | none (per-link box-shadow) / clipped by the scope row | **224 ms** dark / **194 ms** light, 12 transform steps from `translateY(18.7)` to `translateY(185.4)` / bubble at `[118,227]×[419,699]` inside 1440×900, `is-below` **true**, `elementFromPoint` hits the bubble — the flip clears the row, not the z-index (9) |
+| `--reveal` bottom edge / mid / top edge | n/a | **0.6366** / **1** / **0.6375**, floor `0.62`, identical in both themes |
+| Below-fold deferral / drill disposes / theme-swap replays | n/a / n/a / replayed | "Allocation by industry" is mounted with **no canvas and 0 setOptions** until scrolled to, then **painted with exactly 1** / **0 disposes** across the bar→pie morph, **0 blank frames** in 134 sampled frames / the only `setOption` after a swap carries `animationDuration: 0` — no replay |
+| Reduced motion: tokens / floor / chart animation | n/a | `--t-page/-enter/-stagger/-xfade/-nav` all **0ms**; `--reveal-floor: 1` and every card reads 1; **0** timed animations running; every chart `setOption` carries `animation: false` |
+| ESPP 500 banners / Settings Retry count | 3 banners / Retry shown | **ONE** banner — "Couldn't load the lots, the offerings and the model — the server had a problem (HTTP 500)" with one Retry / **0** Retry buttons on the fenced 422, which reads "Value error, name is required" inline |
 
----
+### The three failed checks, beside the lane that owns them
+
+1. **`cls: Comp` 0.0559–0.083 (both themes) — M3, and NOT fixable by a number.** The vesting-tiles
+   ghost reserves `FEED_SKELETON.compVesting` (131 px + its 16 px row margin); `VestingTiles` returns
+   `null` when the book has no RSU grants (`VestingSchedulePanel.tsx:114`), which this dev book does
+   not, so the ghost collapses to zero and everything below it jumps up 147 px. On a book WITH grants
+   the ghost stands where the tiles land and this shift does not exist. A smaller ghost cannot fix it
+   (the real box is 0 here); the choice is a product one — tiles that render a zero-state, or no ghost
+   for a block whose height is unknowable before its payload. The dark run's extra 0.0077 is the
+   trajectory chart card resizing (244 → 193 → 342) as its own option lands.
+2. **`cls: Paycheck` 0.3922 on ONE of two light loads — M2's shell, the batch's largest shift.** The
+   `.page-frame-scope` row is empty (0 px) until `ScopeBar`'s household fetch answers, then becomes
+   50 px and moves `.page-frame-body` from y=74 to y=140 — 66 px with the whole viewport below it.
+   Whether that beats the first body paint is a race: the same route scored 0.049 on its other load
+   and 0.0489/0.0451 in dark. Paycheck is the worst case because the owner chips are its ONLY scope
+   control (on Net worth the row is already tall, hence 0.0084). Candidate fixes, all with a
+   trade-off the batch's owner should pick: a ghost chip group in `ScopeBar` while the household is
+   in flight (perfect for a 2-person book, a small collapse on a 1-person one); a `min-height` on
+   `.page-frame-scope` for pages that declare an owner control (same trade); or seeding
+   `shell:household` from localStorage so a reload starts warm (against `snapshotCache`'s stated
+   "a reload starts clean on purpose").
+3. **`cls: ESPP` was 0.104 — FIXED in this lane (`b093518`).** The modeler's $25k strip appeared out
+   of nothing at the top of the body and moved every card below it down 118 px. `PageSkeleton` now
+   exports `SkeletonTileRow` (sharing one `GhostTile` with the page-level skeleton) and `EsppPage`
+   reserves the strip while `modeler === null && modelerBusy`. Measured 0.104 → **0.0365**.
+
+### Noted, not failed
+
+- **8 notes**, all console: the dev book answers `404 GET /api/v1/paycheck/breakdown?person_id=2`
+  (the partner has no paycheck profile — the same known non-defect `tools/probes/README.md` records
+  for the C7 smoke), and the errors step's own stubbed 500s and fenced 422. No script error, no
+  `pageerror`, in either theme.
+- The reveal's `mid` reading is `null` at the top-edge parking by construction (three tall cards
+  leave no wholly-visible card between the edges); it is read at the bottom-edge parking, where it
+  is 1.
 
 ## Production notes for the morning
 
@@ -346,4 +386,12 @@ Expected: the Task 2 counts unchanged (this lane touched no `src/` file); a clea
 - **The soft shadow is the product of two dials.** A card at either viewport edge sits at 62 % brightness and rises to full as it scrolls in. Header, scope row, toasts, palette, drawers, modals and the wizard's sticky footer are exempt; print and reduced motion turn it off entirely; a browser without `view()` timelines shows everything at full brightness.
 - **Error copy changed shape.** Every failed load reads `Couldn't load {noun} — {detail}`, with 5xx spelled "the server had a problem (HTTP {status})" and network failures "you're offline or the server is unreachable". ESPP, Paycheck and Comp show ONE banner for a multi-part failure instead of two or three. Settings validation messages no longer offer Retry — a Retry button now means "the load failed", nothing else.
 - **With OS Reduce Motion on, expect none of it**: zero durations, no stagger, no reveal, no chart entrance (Windows Settings › Accessibility › Visual effects toggles either face).
+- **Two shifts this lane could not close, and one it did.** ESPP's $25k strip now reserves its box
+  (`b093518`), so that page settles instead of jumping 118 px. Comp still jumps 147 px on a cold load
+  BECAUSE this dev book has no RSU grants — on the real book, which has them, that shift should not
+  appear; check it once on production and tell the next lane. Paycheck's scope row (the Me/Partner
+  chips) is empty until the household answers and then pushes the page down 66 px: it happens on
+  perhaps one cold load in three, and it is the largest layout shift left in the app (CLS 0.39 when
+  it loses the race). Both are decisions, not bugs to hand to an implementer blind — the options are
+  in this file's Results.
 - **Watch for, on the real book:** a first paint that feels slower than 09-04 (the hold is meant to keep the OLD page on screen, never a blank), a chart that never draws after being scrolled to, and any card that still jumps as data lands — the last is a skeleton whose reserved height is wrong for production's shape, a per-call-site fix in `Feed`/`ChartCard`, not a token.
