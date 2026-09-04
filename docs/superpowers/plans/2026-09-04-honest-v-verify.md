@@ -487,7 +487,7 @@ Every figure below is derived from the census in Task 5 and nothing else. The BE
 | 2026 living | 45608.58 − 5044.00 | `40564.58` |
 | 2026 net pay Jan–Jul | Σ | `44611.60` |
 | cash savings 2026 | 44611.60 − 40564.58 − 5044.00 | `-996.98` |
-| cash rate 2026 | −996.98 ÷ 44611.60 | `-0.022347` (−2.2%) |
+| cash rate 2026 | −996.98 ÷ 44611.60 | `-0.022348` (−2.2%) — **corrected 2026-09-04**: this row said `-0.022347`, a truncation; −0.0223479991… at six places HALF_UP is `-0.022348`, which is what the wire emits |
 | payroll monthly | (188930 ÷ 24) × (0.13 + 0 + 0.03 + 0.11) + 100 = 2225.4625 per check, × 24 ÷ 12 = 4450.925, emitted at cents HALF_UP | `4450.93` per month |
 | payroll savings 2026 | 4450.93 × 7 matched months (Σ of the emitted months) | `31156.51` |
 | total savings 2026 | 31156.51 + (−996.98) | `30159.53` |
@@ -500,7 +500,7 @@ Every figure below is derived from the census in Task 5 and nothing else. The BE
 >
 > **The one exception is a MEAN, which quantizes once at the end.** The spec's §3 prose reads "$6,373.09 × 5 = $31,865.43" — but 6373.09 × 5 is 31,865.45. The correct figure comes from the UNROUNDED mean (44611.60 ÷ 7 = 6373.085714…) times 5, quantized once: `31,865.43`. If the assertion observes `31865.45`, `services/money_flow.py` is rounding the mean before multiplying. That is the defect, not the test.
 
-- [ ] **Step 1: The BEFORE column**
+- [x] **Step 1: The BEFORE column**
 
 Append:
 
@@ -533,7 +533,7 @@ async def test_before_the_program_the_zero_month_and_the_tax_bill_are_counted(ce
     assert Decimal(april) == Decimal("9802.63")   # one number, the tax invisible inside it
 ```
 
-- [ ] **Step 2: The AFTER column — coverage**
+- [x] **Step 2: The AFTER column — coverage**
 
 ```python
 async def test_after_coverage_tells_the_truth_about_august_and_september(census, auth_client):
@@ -550,7 +550,7 @@ async def test_after_coverage_tells_the_truth_about_august_and_september(census,
     assert body["balances"][0] == "2025-08-01" and body["balances"][-1] == "2026-09-01"
 ```
 
-- [ ] **Step 3: The AFTER column — the matrix's per-kind arrays and April**
+- [x] **Step 3: The AFTER column — the matrix's per-kind arrays and April**
 
 ```python
 async def test_after_april_splits_into_living_and_tax(census, auth_client):
@@ -574,7 +574,7 @@ async def test_after_april_splits_into_living_and_tax(census, auth_client):
 
 (`-1955.23` = 5251.59 − 7206.82, by the spec §2 formula `net_pay − living_spend − tax_paid`; a month that outspent its pay is negative. If lane A signed it the other way, that is a defect against §2, not a literal to flip.)
 
-- [ ] **Step 4: The AFTER column — the 2026 yearly rollup**
+- [x] **Step 4: The AFTER column — the 2026 yearly rollup**
 
 ```python
 async def test_after_2026_rollup_counts_payroll_and_matches_only_seven_months(census, auth_client):
@@ -586,7 +586,7 @@ async def test_after_2026_rollup_counts_payroll_and_matches_only_seven_months(ce
     assert year["tax_total"] == "5044.00"
     assert year["transfer_total"] == "0.00"
     assert year["cash_savings"] == "-996.98"
-    assert year["savings_rate"] == "-0.022347"    # the name kept, the meaning = cash rate
+    assert year["savings_rate"] == "-0.022348"    # corrected: HALF_UP, not truncated
     assert year["payroll_savings"] == "31156.51"  # Σ of the emitted months: 4450.93 x 7
     assert year["total_savings"] == "30159.53"
     assert year["total_savings_rate"] == "0.398050"  # 30159.53 / 75768.11
@@ -626,7 +626,7 @@ async def test_after_the_rollup_scalars_equal_the_sum_of_the_months_they_cover(
         assert sum(months, Decimal("0")) == Decimal(year[field]), field
 ```
 
-- [ ] **Step 5: The AFTER column — the projection's window and FI target**
+- [x] **Step 5: The AFTER column — the projection's window and FI target**
 
 ```python
 async def test_after_the_fi_target_is_built_from_living_spend_over_the_matched_window(
@@ -646,7 +646,7 @@ async def test_after_the_fi_target_is_built_from_living_spend_over_the_matched_w
     print("projection start_month", body["start_month"], "base_month", body["base_month"])
 ```
 
-- [ ] **Step 6: The AFTER column — the money-flow pending node**
+- [x] **Step 6: The AFTER column — the money-flow pending node**
 
 ```python
 async def test_after_money_flow_names_the_five_months_nobody_has_entered(census, auth_client):
@@ -667,7 +667,7 @@ async def test_after_money_flow_names_the_five_months_nobody_has_entered(census,
     assert body["renderable"] is True, body["reason"]
 ```
 
-- [ ] **Step 7: Run the whole module and record every number**
+- [x] **Step 7: Run the whole module and record every number**
 
 ```bash
 FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest tests/verify -q -s
@@ -675,7 +675,7 @@ FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest tests/verify 
 
 Expected: **8 passed** and the two printed clock-coupled dates. Any failure is a real finding: copy the assertion, the observed value and the derivation row it contradicts into the report — a verify lane's failures are its output, not its embarrassment.
 
-- [ ] **Step 8: The module runs inside the ordinary suite too**
+- [x] **Step 8: The module runs inside the ordinary suite too**
 
 ```bash
 FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest -q
@@ -683,7 +683,7 @@ FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest -q
 
 Expected: the Task 2 count **+ 8**. If pytest does not collect `tests/verify/`, its `testpaths`/`norecursedirs` needs the directory — check with `grep -n "testpaths\|norecursedirs\|\[tool.pytest" backend/pyproject.toml` and fix it there rather than renaming the folder.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add backend/tests/verify/test_honest_before_after.py
@@ -1227,18 +1227,18 @@ Expected: no diff, `DEV DB UNCHANGED`. A diff means the sweep missed something: 
 
 The honest-numbers program adds fields and rules; it replaces no module. The spec's §8 says "deletions deferred (none expected)". Prove it rather than assume it.
 
-- [ ] **Step 1: Run each grep and record the result beside its row**
+- [x] **Step 1: Run each grep and record the result beside its row**
 
 | Candidate the program could have orphaned | Proof it is still used (expect hits) | Result |
 |---|---|---|
-| `api/projection.py::_payroll_monthly` (spec §2 moves the arithmetic into `services/savings.py` and imports it back) | `grep -rn "_payroll_monthly\|payroll_monthly" backend/app` — expect the definition in `services/savings.py` and an import in `api/projection.py`, and NO surviving private copy | |
-| `api/projection.py::_trailing_annual_spend` / `_trailing_savings` (superseded by the matched-window derivation of §3) | `grep -rn "_trailing_annual_spend\|_trailing_savings" backend/app backend/tests` | |
-| `services/health_checks.py::check_zero_filled_spending`'s own zero-month query (spec §3: it reads the shared helper now) | `grep -rn "check_zero_filled_spending" backend/app backend/tests` and `grep -n "^def \|^async def " backend/app/services/savings.py` | |
-| `MatrixOut.savings_rate` — KEPT by name, meaning changed; not a retirement | `grep -rn "savings_rate" src backend/app` — expect hits in both, and confirm no `cash_rate` alias was added beside it | |
-| `src/utils/spending.ts` savings helpers, if lane D moved the rate arithmetic server-side | `grep -rn "savingsRate\|savings_rate" src/utils src/components/spending` | |
-| The wizard's combined-save path (`balancesLeg` / "Retry spending") if lane C replaced it | `grep -n "balancesLeg\|Retry spending\|Save month" src/pages/MonthlyUpdatePage.tsx` | |
+| `api/projection.py::_payroll_monthly` (spec §2 moves the arithmetic into `services/savings.py` and imports it back) | `grep -rn "_payroll_monthly\|payroll_monthly" backend/app` — expect the definition in `services/savings.py` and an import in `api/projection.py`, and NO surviving private copy | **IN USE.** Defined once (`services/savings.py:103`), imported by `api/projection.py:64` and called at :153 and :231; `services/paycheck_calc.py:43` documents why the import goes this way. No `_payroll_monthly` survives |
+| `api/projection.py::_trailing_annual_spend` / `_trailing_savings` (superseded by the matched-window derivation of §3) | `grep -rn "_trailing_annual_spend\|_trailing_savings" backend/app backend/tests` | **ALREADY GONE — zero hits anywhere.** Lane A replaced them in place with `load_month_savings` + `matched_months`. Nothing to retire: an orphan is code that survives unused, and this is code that no longer exists |
+| `services/health_checks.py::check_zero_filled_spending`'s own zero-month query (spec §3: it reads the shared helper now) | `grep -rn "check_zero_filled_spending" backend/app backend/tests` and `grep -n "^def \|^async def " backend/app/services/savings.py` | **IN USE.** Defined at `health_checks.py:71`, wired at :337, pinned by three cases in `test_health_checks.py`; it now takes a `Coverage` argument instead of running its own query, and `savings.py` exports the eight helpers the rest reads |
+| `MatrixOut.savings_rate` — KEPT by name, meaning changed; not a retirement | `grep -rn "savings_rate" src backend/app` — expect hits in both, and confirm no `cash_rate` alias was added beside it | **KEPT.** Hits in twelve `src/` files and in `schemas/spending.py` (`savings_rate` beside `total_savings_rate`, both nullable). NO `cash_rate` on the wire — the name lives only as a `MonthSavings`/`PeriodSavings` dataclass field inside `services/savings.py` |
+| `src/utils/spending.ts` savings helpers, if lane D moved the rate arithmetic server-side | `grep -rn "savingsRate\|savings_rate" src/utils src/components/spending` | **IN USE.** `savingsRateOption` / `savingsRateCsv` (`spendingChartOptions.ts:345,386`) read both server rates and compute none of their own; no dead helper left in `src/utils` |
+| The wizard's combined-save path (`balancesLeg` / "Retry spending") if lane C replaced it | `grep -n "balancesLeg\|Retry spending\|Save month" src/pages/MonthlyUpdatePage.tsx` | **IN USE, renamed.** `balancesLeg` is now the `legs` state (`MonthlyUpdatePage.tsx:306`), read at :696, :848, :1202-1209 and :1719; "Retry spending" and "Save month" are the two faces of the one primary. Lane C decoupled the LEGS inside `save()`, it did not replace the path |
 
-- [ ] **Step 2: Write the verdict**
+- [x] **Step 2: Write the verdict**
 
 If every row has hits, write **"Retire list: EMPTY — the program added rules, it replaced no module"** into the section at the bottom of this file. If a row is orphaned, list it there with its grep output and the test that pins it (the test dies WITH the code it pins — deleting the source alone turns a green suite red). **Nothing is deleted tonight either way.**
 
@@ -1313,7 +1313,11 @@ After the migration runs on production and the app restarts, these are the figur
 
 ## Retire at the end of the night
 
-*(Filled in by Task 9. Expected verdict: EMPTY. Nothing is deleted tonight regardless.)*
+**Retire list: EMPTY — the program added rules, it replaced no module.** Every one of Task 9's
+six candidates still has callers and tests; the greps are recorded in that table's Result
+column. The one row with no hits at all, `_trailing_annual_spend` / `_trailing_savings`, is not
+an orphan either: lane A replaced the arithmetic in place, so there is no surviving code to
+delete. Nothing was deleted tonight.
 
 ---
 
