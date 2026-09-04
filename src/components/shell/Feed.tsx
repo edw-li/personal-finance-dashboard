@@ -57,15 +57,21 @@ export default function Feed<T extends NonNullable<unknown>>({
 /** The alert Feed renders its banner through; exported bare for errors that are not about a
  *  feed's freshness: form validation, a save that failed, a what-if that would not compute.
  *  Renders nothing for any falsy error — the pages' `{error && …}` guard says the same thing,
- *  and an empty message is reachable (an ApiError built from an HTTP/2 empty statusText). */
+ *  and an empty message is reachable (an ApiError built from an HTTP/2 empty statusText).
+ *
+ *  `retry` re-runs the fetch behind the banner; `action` is for a banner whose fix is
+ *  something else entirely (the wizard's "Delete the empty month" — calling that Retry would
+ *  be a lie). Both may appear; Retry comes first, because it is the cheaper answer. */
 export function FeedBanner({
   error,
   retry,
   retryLabel,
+  action,
 }: {
   error?: string | null
   retry?: () => void
   retryLabel?: string
+  action?: { label: string; onAction: () => void; disabled?: boolean }
 }) {
   if (!error) return null
   return (
@@ -76,6 +82,19 @@ export function FeedBanner({
           {' '}
           <button type="button" className="button" aria-label={retryLabel} onClick={retry}>
             Retry
+          </button>
+        </>
+      )}
+      {action !== undefined && (
+        <>
+          {' '}
+          <button
+            type="button"
+            className="button"
+            disabled={action.disabled}
+            onClick={action.onAction}
+          >
+            {action.label}
           </button>
         </>
       )}
