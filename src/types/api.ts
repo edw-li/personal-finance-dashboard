@@ -1771,6 +1771,14 @@ export interface MoneyFlowOut {
   taxes: MoneyFlowTaxes
   pre_tax_savings: string
   take_home_cash: string
+  /** The take-home of the year's UNENTERED months, estimated as the mean of the entered ones
+   *  × the number missing; '0.00' once all twelve are entered (2026-09-04 honest-numbers spec
+   *  §3). The server has already subtracted it from `retained_equity`, so conservation still
+   *  holds with this node in the chart. Optional for the reason `MoneyFlowTaxes.niit`
+   *  documents: the live server always sends it. */
+  take_home_pending?: string
+  /** How many of the year's twelve months have net pay entered. */
+  take_home_months_entered?: number
   /** Residual: gross − taxes − pre-tax − take-home (≈ vest shares kept + ESPP + timing). */
   retained_equity: string
   /** Top-7 by year sum, biggest first, positive-only (the /spending fold). */

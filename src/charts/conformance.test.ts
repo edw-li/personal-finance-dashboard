@@ -28,6 +28,9 @@ const ROSTER = [
   'overviewNetWorthTrend',
   'overviewRecentSpend',
   'moneyFlow',
+  // …and the same builder on a year whose take-home is only part entered: the muted dashed
+  // estimate node, a branch the fully-entered fixture never reaches.
+  'moneyFlowPending',
   // C3 — Spending (spendingSmallMultiples was the one droppable of the night — the plan
   // let C3 ship without the Compare/All mode. It landed, so it is pinned like the rest.)
   'spendingBars',
