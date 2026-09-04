@@ -1417,6 +1417,90 @@ it('shows the server refusal verbatim when an emptying save skips the box', asyn
   expect(screen.getByRole('button', { name: 'Retry spending' })).toBeTruthy()
 })
 
+// --- the empty-month repair (2026-09-04 honest-numbers spec §4) ---------------------------
+
+// Production's Sep 2026 shape: rows that exist and are all $0.00, and no take-home.
+const EMPTY_MONTH = {
+  month: '2026-08-01', exists: true, net_pay: null,
+  amounts: [{ category_id: 7, amount: '0.00' }], budgets: [],
+}
+
+it('flags a month that was saved with no spending, and offers the delete', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue(EMPTY_MONTH)
+  renderWizard()
+  expect(
+    await screen.findByText(
+      'This month was saved with no spending. Enter it below, or delete the empty month.',
+    ),
+  ).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Delete the empty month' })).toBeTruthy()
+})
+
+it('says nothing about an empty month when the month has spending', async () => {
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  expect(screen.queryByText(/saved with no spending/)).toBeNull()
+})
+
+it('treats a month with not a single row as missing, not empty', async () => {
+  // No amount rows and no take-home is the MISSING shape (spec §3), not the empty one:
+  // there is nothing for the repair delete to remove, so offering it would 404 on the
+  // click and report "Delete failed" about a month that was already clean.
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: null, amounts: [], budgets: [],
+  })
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  expect(screen.queryByText(/saved with no spending/)).toBeNull()
+})
+
+it('deletes only the spending rows, offers Undo, and leaves the balances snapshot alone', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue(EMPTY_MONTH)
+  vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: 'b-empty' })
+  vi.mocked(lifecycleApi.undoBatch).mockResolvedValue({
+    type: 'batch', batch_id: 'u-9', at: '2026-09-04T09:00:00+00:00', source: 'undo', actor: null,
+    label: 'Undid: Deleted Aug 2026 spending', month: '2026-08-01', rows: 1, undoable: true,
+    undone_by: null,
+  })
+  renderWizardAt('/update?month=2026-08-01')
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete the empty month' }))
+  await waitFor(() =>
+    expect(spendingApi.deleteSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      source: 'repair',
+    }),
+  )
+  // The month keeps its net worth: only the spending half was empty.
+  expect(netWorthApi.deleteMonthBalances).not.toHaveBeenCalled()
+  await screen.findByText("Deleted Aug 2026's empty spending rows — balances untouched.")
+  // Coverage moved (the spending feed is gone), so the ribbon has to re-read it.
+  await waitFor(() => expect(vi.mocked(fetchCoverage).mock.calls.length).toBeGreaterThan(1))
+  fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+  await waitFor(() => expect(lifecycleApi.undoBatch).toHaveBeenCalledWith('b-empty'))
+  await screen.findByText("Undone — Aug 2026's rows are back.")
+})
+
+it('surfaces a failed repair instead of pretending the month is clean', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue(EMPTY_MONTH)
+  vi.mocked(spendingApi.deleteSpendingMonth).mockRejectedValue(new ApiError('db exploded', 500))
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete the empty month' }))
+  expect(await screen.findByText('Delete failed: db exploded — retry')).toBeTruthy()
+  // The banner stays: the month is still empty.
+  expect(screen.getByText(/saved with no spending/)).toBeTruthy()
+})
+
+it('drops the banner the moment the month is given real spending', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue(EMPTY_MONTH)
+  renderWizard()
+  await screen.findByText(/saved with no spending/)
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await enterSpending()
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  expect(screen.queryByText(/saved with no spending/)).toBeNull()
+})
+
 describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => {
   it('renders the month title without an icon, the steps under it, and the ribbon in the scope row', async () => {
     renderPage('/update?month=2026-09-01')

@@ -213,6 +213,11 @@ export default function MonthlyUpdatePage() {
   // snapshot — a draft is typed work, this is consent about the save in front of you, and a
   // week-old "yes" resurrecting over fresh data is exactly the failure the drafts avoid.
   const [recordZero, setRecordZero] = useState(false)
+  // The LOADED month is an empty one (spec §3): rows exist, every amount is $0.00 and there
+  // is no take-home. Read from the month payload rather than from /coverage — the wizard
+  // already holds the answer, and a second source could disagree with the boxes on screen.
+  const [emptyMonth, setEmptyMonth] = useState(false)
+  const [repairing, setRepairing] = useState(false)
   // What the server seeded for the month on screen, serialized — the draft machinery's
   // reference point. Carries its OWN month so a mid-switch render can never write the old
   // month's values under the new month's key.
@@ -302,6 +307,14 @@ export default function MonthlyUpdatePage() {
           spendMonth.net_pay !== null || spendMonth.amounts.some((a) => Number(a.amount) !== 0),
         )
         setRecordZero(false)
+        setEmptyMonth(
+          spendMonth.exists &&
+            spendMonth.net_pay === null &&
+            // At least one row: a month with NO rows at all is missing, not empty, and the
+            // repair delete would 404 on it.
+            spendMonth.amounts.length > 0 &&
+            spendMonth.amounts.every((a) => Number(a.amount) === 0),
+        )
         setMonthBudgets(
           Object.fromEntries(spendMonth.budgets.map((b) => [b.category_id, b.amount])),
         )
@@ -600,6 +613,9 @@ export default function MonthlyUpdatePage() {
         // so a month that had a take-home still has it, and an empty month is still empty.
         setHadNetPay(canonNetPay !== '')
         setHadSpending(canonNetPay !== '' || anyAmountEntered)
+        // A leg that wrote all zeros with no take-home (the confirm_zero path) leaves the
+        // month empty on purpose — and an empty month still says so, which is the point.
+        setEmptyMonth(canonNetPay === '' && !anyAmountEntered)
       }
       setBaseline({
         month,
@@ -683,6 +699,46 @@ export default function MonthlyUpdatePage() {
       )
     } finally {
       setDeleting(false)
+    }
+  }
+
+  // Spec §4 repair: the empty month's one-click fix — the SAME call the Data-health card's
+  // zero-month repair makes (`source: 'repair'`, so the change log labels it a repair and the
+  // Activity card can still undo it). Balances are untouched by design: the snapshot is the
+  // ritual's anchor, and the month keeps its net worth.
+  const deleteEmptySpending = async () => {
+    setRepairing(true)
+    setError(null)
+    try {
+      const { batchId } = await deleteSpendingMonth(month, { source: 'repair' })
+      const repaired = month
+      toast.success(
+        `Deleted ${formatMonth(repaired)}'s empty spending rows — balances untouched.`,
+        batchId === null
+          ? undefined
+          : {
+              action: {
+                label: 'Undo',
+                onAction: () =>
+                  void undoBatches([batchId], `Undone — ${formatMonth(repaired)}'s rows are back.`, () => {
+                    setLoading(true)
+                    setLoadNonce((n) => n + 1)
+                  }),
+              },
+            },
+      )
+      setEmptyMonth(false)
+      // The spending feed is gone: the ribbon must re-read coverage, and the form must
+      // re-seed (the zeros it is showing no longer exist).
+      setCoverageNonce((n) => n + 1)
+      setLoading(true)
+      setLoadNonce((n) => n + 1)
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? `Delete failed: ${err.message} — retry` : 'Delete failed — retry',
+      )
+    } finally {
+      setRepairing(false)
     }
   }
 
@@ -897,6 +953,18 @@ export default function MonthlyUpdatePage() {
         resource={{ status: 'ready' }}
       >
         <FeedBanner error={error} />
+        {emptyMonth && (
+          // Spec §4: the repair prompt for a month that was saved with no spending — the
+          // wizard is where the fix lives, so the banner carries both routes out of it.
+          <FeedBanner
+            error="This month was saved with no spending. Enter it below, or delete the empty month."
+            action={{
+              label: 'Delete the empty month',
+              onAction: () => void deleteEmptySpending(),
+              disabled: repairing,
+            }}
+          />
+        )}
         {restored && (
           // Advisory, not an error: nothing failed — work was preserved. The discard button
           // is the only way to decline it; saving is the way to accept it.
