@@ -1355,6 +1355,68 @@ it('the receipt belongs to the visit — switching months clears it', async () =
   await waitFor(() => expect(screen.queryByText(/month saved/i)).toBeNull())
 })
 
+it('the $0 checkbox records an empty month on purpose, and is the only source of confirm_zero', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const box = (await screen.findByLabelText('Record this month as $0')) as HTMLInputElement
+  expect(box.checked).toBe(false)
+  expect(
+    screen.getByText(
+      'Writes $0.00 for every category — use it for a month you truly spent nothing.',
+    ),
+  ).toBeTruthy()
+  fireEvent.click(box)
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  // The pre-save note is gone: this save WILL write the spending leg.
+  expect(
+    screen.queryByText('Spending: nothing entered — this save writes balances only.'),
+  ).toBeNull()
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() =>
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [{ category_id: 7, amount: '0.00' }],
+      confirm_zero: true,
+    }),
+  )
+})
+
+it('forgets the $0 intent on a month switch — consent is about one save', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.click(await screen.findByLabelText('Record this month as $0'))
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  // A month switch always lands on the balances step; walk back to the checkbox.
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  expect(
+    ((await screen.findByLabelText('Record this month as $0')) as HTMLInputElement).checked,
+  ).toBe(false)
+})
+
+it('shows the server refusal verbatim when an emptying save skips the box', async () => {
+  // Lane B's guard: all-zero amounts with the take-home cleared and no confirm_zero. The
+  // wizard must not swallow the sentence that says how to proceed.
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: '9000.00', amounts: [], budgets: [],
+  })
+  vi.mocked(spendingApi.putSpendingMonth).mockRejectedValue(
+    new ApiError(
+      'Nothing to record: every category is $0.00 and no take-home was entered — set confirm_zero to write an empty month on purpose',
+      422,
+    ),
+  )
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe(
+    'Balances saved. Spending failed — Retry saves only spending. Nothing to record: every category is $0.00 and no take-home was entered — set confirm_zero to write an empty month on purpose',
+  )
+  expect(screen.getByRole('button', { name: 'Retry spending' })).toBeTruthy()
+})
+
 describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => {
   it('renders the month title without an icon, the steps under it, and the ribbon in the scope row', async () => {
     renderPage('/update?month=2026-09-01')

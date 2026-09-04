@@ -209,6 +209,10 @@ export default function MonthlyUpdatePage() {
   // writes: a correction that zeroes a category must land rather than be skipped as "nothing
   // entered". Server-derived like `matrix` — deliberately NOT part of the draft snapshot.
   const [hadSpending, setHadSpending] = useState(false)
+  // Spec §4: the deliberate empty month. Unchecked by default and NOT part of the draft
+  // snapshot — a draft is typed work, this is consent about the save in front of you, and a
+  // week-old "yes" resurrecting over fresh data is exactly the failure the drafts avoid.
+  const [recordZero, setRecordZero] = useState(false)
   // What the server seeded for the month on screen, serialized — the draft machinery's
   // reference point. Carries its OWN month so a mid-switch render can never write the old
   // month's values under the new month's key.
@@ -297,6 +301,7 @@ export default function MonthlyUpdatePage() {
         setHadSpending(
           spendMonth.net_pay !== null || spendMonth.amounts.some((a) => Number(a.amount) !== 0),
         )
+        setRecordZero(false)
         setMonthBudgets(
           Object.fromEntries(spendMonth.budgets.map((b) => [b.category_id, b.amount])),
         )
@@ -433,7 +438,8 @@ export default function MonthlyUpdatePage() {
   )
   // A month nobody entered must stay un-entered: 19 rows of $0.00 read as a real month of
   // spending nothing in every chart, average and projection window (spec §0).
-  const willWriteSpending = hadSpending || anyAmountEntered || netPay.trim() !== ''
+  const willWriteSpending =
+    hadSpending || anyAmountEntered || netPay.trim() !== '' || recordZero
 
   // Sums the COMMITTED values, not the raw ones: a cell still holding "$1,600" or "=200+50"
   // (no blur yet — jsdom clicks and Ctrl+Enter never fire one) would read as NaN → 0 and
@@ -547,6 +553,12 @@ export default function MonthlyUpdatePage() {
           // omitting would silently keep the stale figure in every savings-rate denominator.
           body.net_pay = null
         }
+        if (recordZero) {
+          // Only the checkbox may confirm an empty month — the key is ABSENT otherwise, so a
+          // body the user did not consent to is refused by the server rather than waved
+          // through by a client-side default.
+          body.confirm_zero = true
+        }
         spendingLeg = { status: 'saved', result: await putSpendingMonth(month, body) }
       } else {
         spendingLeg = { status: 'skipped', reason: 'nothing entered.' }
@@ -596,10 +608,10 @@ export default function MonthlyUpdatePage() {
       setRestored(false)
     } catch (err) {
       if (leg === 'spending') {
-        // Truth-telling (A8): the balances PUT COMMITTED before this failure — the old
-        // "nothing was lost" banner lied in both directions. State remembers the landed leg,
-        // so the primary (now "Retry spending") re-attempts only what failed.
-        setError('Balances saved. Spending failed — Retry saves only spending.')
+        // Truth-telling (A8), plus the server's own words when it had any: a 422 from the
+        // empty-month guard is an instruction ("set confirm_zero"), not noise to swallow.
+        const why = err instanceof ApiError ? ` ${err.message}` : ''
+        setError(`Balances saved. Spending failed — Retry saves only spending.${why}`)
       } else {
         setError(err instanceof ApiError ? err.message : 'Saving failed — nothing was lost, retry')
       }
@@ -691,6 +703,7 @@ export default function MonthlyUpdatePage() {
     // Same reason the step change clears them: the note counts the OLD month's rows.
     setPasteNote(null)
     setDeleteArm('')
+    setRecordZero(false)
     setFlashIds(new Set())
     setParams(() => new URLSearchParams({ month: m, step: 'balances' }))
   }
@@ -1226,6 +1239,19 @@ export default function MonthlyUpdatePage() {
                 })}
               </tbody>
             </table>
+            {/* Spec §4: the ONLY way a month of $0.00 rows gets written on purpose. The
+                sentence under it is the whole explanation — this control has no other cue. */}
+            <label className="entry-zero-confirm">
+              <input
+                type="checkbox"
+                checked={recordZero}
+                onChange={(e) => setRecordZero(e.target.checked)}
+              />
+              Record this month as $0
+            </label>
+            <p className="drill-hint">
+              Writes $0.00 for every category — use it for a month you truly spent nothing.
+            </p>
             {pasteNote && (
               <p className="drill-hint" role="status" aria-live="polite">
                 {pasteNote}
