@@ -34,7 +34,7 @@ Nothing under `src/`, `backend/app/` or `alembic/` is edited by this lane. If a 
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: The tree**
+- [x] **Step 1: The tree**
 
 Run, from the repo root:
 
@@ -44,7 +44,7 @@ git status --short && git log --oneline -12
 
 Expected: `git status --short` prints NOTHING; the log shows the five lane merges (A, B, C, D, E) on top of `4998f68`. If a lane is missing, STOP — this plan's numbers assume all five.
 
-- [ ] **Step 2: The pieces each lane promised**
+- [x] **Step 2: The pieces each lane promised**
 
 ```bash
 ls backend/app/services/savings.py
@@ -59,7 +59,7 @@ grep -n "derived_window" backend/app/schemas/projection.py
 
 Expected: `savings.py` exists; every grep prints at least one line. A silent grep names the lane that did not land its wire field — record it and stop rather than writing assertions against a field that is not there.
 
-- [ ] **Step 3: One alembic head**
+- [x] **Step 3: One alembic head**
 
 Run, from `backend/`:
 
@@ -160,7 +160,7 @@ Expected: a `tax` row containing `Taxes`, a `living` row with the rest, and a `t
 
 The seeder is real code, so it gets real TDD: an integrity test that fails against an empty seeder, then the seeder, then green. Only after the fixture is proven to BE the census do the §7 assertions go in (Task 6).
 
-- [ ] **Step 1: RED — the integrity test, with the seeder stubbed out**
+- [x] **Step 1: RED — the integrity test, with the seeder stubbed out**
 
 ```bash
 mkdir -p backend/tests/verify && printf '' > backend/tests/verify/__init__.py
@@ -330,7 +330,7 @@ FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest tests/verify/
 
 Expected: **FAILS** — a `TypeError`/`InvalidOperation` on `Decimal(None)` from the empty sum, because `seed_census` seeds nothing. That failure is the RED step; record its first line.
 
-- [ ] **Step 2: GREEN — write the seeder**
+- [x] **Step 2: GREEN — write the seeder**
 
 Replace `seed_census`'s body:
 
@@ -456,7 +456,7 @@ Expected: **1 passed**. If `test_the_fixture_is_the_census` still fails, the fai
 
 Record which branch was taken.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add backend/tests/verify/__init__.py backend/tests/verify/test_honest_before_after.py
