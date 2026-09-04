@@ -71,8 +71,13 @@ describe('ghost parity (motion spec §7)', () => {
     const page = (name: string) => readFileSync(path.join(__dirname, '..', 'pages', `${name}.tsx`), 'utf8')
     expect(page('PaycheckPage')).toContain('height: FEED_SKELETON.paycheckBreakdown')
     expect(page('CompPage')).toContain('height: FEED_SKELETON.compVesting')
+    expect(page('CompPage')).toContain('height: FEED_SKELETON.compEvents')
     expect(page('EsppPage')).toContain('height: FEED_SKELETON.esppLots')
     expect(page('EsppPage')).toContain('height: FEED_SKELETON.esppOfferings')
-    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(360, { zoomable: true }))')
+    // All three cards, at the boxes they really occupy — an unghosted third card let the page
+    // grow under the reader when the summary landed.
+    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(360, { controls: true, zoomable: true }))')
+    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(280))')
+    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(280, { zoomable: true, footer: true }))')
   })
 })

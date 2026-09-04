@@ -393,7 +393,16 @@ grep -rn "skeleton={{ height: [0-9]" src/pages/PaycheckPage.tsx src/pages/CompPa
 grep -rn "chart-card-row" src/components/panels.css src/components/ChartCard.tsx
 ```
 
-Expected: nothing from the first two (the hard-coded dim duration and the hand-written ghost heights are gone); the third lists the three `min-height` rules, the `flow-root` rule and the three wrappers — a row declared in the component but not in the CSS reserves nothing.
+Expected: the first grep matches only the comment that records what was retired (`/* The dim was a hard-coded 0.15s … */`), no rule; the third lists the `min-height` rules, the `flow-root` rule and the three wrappers — a row declared in the component but not in the CSS reserves nothing.
+
+**Follow-ups left open (2026-09-05 review):** the second grep still matches two Feed call sites this
+lane never sized, because they are below the first viewport and their loaded blocks were not
+measured: `CompPage.tsx:642` (`height: 280`, the vesting schedule — RsuGrantsPanel stacked over
+VestingSchedulePanel) and `PaycheckPage.tsx:1155` (`height: 240`, the profiles table and its
+carry-forward form). `CompPage.tsx:604` (comp events) WAS measured and is now
+`FEED_SKELETON.compEvents`. Measuring the other two means reading each panel's loaded markup the
+way `FEED_SKELETON` names its terms; inventing a number instead would be exactly the unverifiable
+literal the pin exists to stop.
 
 - [ ] **Step 3: Confirm the commits, then commit any stragglers** — `git log --oneline main..HEAD` shows four, one per task, newest first, nothing pushed; then `git add -A && git commit -m "chore(motion-m3): verify pass — lint and call-site fixes"` for a fifth, or "nothing to commit, working tree clean".
 

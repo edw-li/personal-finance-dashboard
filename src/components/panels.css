@@ -322,8 +322,19 @@
 .xfade-veil {
   position: absolute;
   inset: 0;
+  /* The ghost is sized by the content underneath it, which can be shorter than the block the
+     skeleton drew: clip rather than let a stray ghost row hang past the card it is leaving. */
+  overflow: hidden;
   pointer-events: none;
   animation: xfade-out var(--t-xfade, 180ms) var(--ease-out, ease) both;
+}
+
+/* The veil's ghost is ALREADY on screen — it is the skeleton the reader has been looking at. Left
+   on .loading-fallback's delayed appear it would start at opacity 0 and spend its whole 180ms life
+   invisible, so the swap read skeleton → blank → fade-in: the very flash this removes. */
+.xfade-veil .loading-fallback {
+  opacity: 1;
+  animation: none;
 }
 
 /* A ghost mid-exit must not also pulse: two animations on one element read as a glitch. */
@@ -519,7 +530,7 @@
    happen to agree; src/components/skeletonMetrics.ts mirrors them and its test pins the pair. */
 .page-skeleton {
   --m-stat-tile: 115px;
-  --m-owner-strip: 57px;
+  --m-owner-strip: 41px;
 }
 
 /* Parity with the loaded blocks (motion spec §7): a ghost tile must stand as tall as the real
@@ -639,6 +650,9 @@
    PortfolioPage's Holdings header — a table, not a chart. */
 
 .chart-card-header {
+  /* Pinned, so a card with small controls, large ones or none at all reserves the SAME header row
+     — otherwise skeletonMetrics.chartCardBox could only be right for one of the three. */
+  min-height: var(--m-header-row);
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -651,6 +665,7 @@
 }
 
 .chart-card-controls {
+  min-height: var(--m-header-controls);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -669,7 +684,9 @@
    the skeleton leaves in its place, so the card is the same height before and after the data lands.
    src/components/skeletonMetrics.ts mirrors these numbers and its test pins the pair. */
 .chart-card {
-  --m-export-row: 40px;
+  --m-header-row: 15px;
+  --m-header-controls: 30px;
+  --m-export-row: 34px;
   --m-zoom-row: 21px;
   --m-caption-row: 26px;
 }
@@ -683,6 +700,13 @@
 
 .chart-card-row-export {
   min-height: var(--m-export-row);
+}
+
+/* The row owns the gap now. The menu's own 0.4rem top margin used to COLLAPSE into the header's
+   0.75rem; inside the flow-root above it cannot, so it was adding 6.4px to every loaded chart card
+   that no skeleton reserved. Zeroed here, the reserved row IS the spacing. */
+.chart-card-row-export .chart-export {
+  margin: 0;
 }
 
 .chart-card-row-zoom {

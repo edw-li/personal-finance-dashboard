@@ -601,7 +601,7 @@ export default function CompPage() {
           staleNoun="the table"
           retry={reload}
           retryLabel="Retry loading comp events"
-          skeleton={{ height: 240, label: 'Loading comp events…' }}
+          skeleton={{ height: FEED_SKELETON.compEvents, label: 'Loading comp events…' }}
         >
           {(rows) => <EventsPanel events={rows} onChanged={onEventsChanged} />}
         </Feed>
