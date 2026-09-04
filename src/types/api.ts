@@ -1620,6 +1620,15 @@ export interface ContributionBreakdownOut {
   by_person: PayrollSavingOut[]
 }
 
+/** The window the data-derived knobs were computed over (2026-09-04 honest-numbers spec §3):
+ *  the trailing months that are BOTH entered and paid. `from`/`to` are first-of-month ISO
+ *  dates, `months` the count. A mean with no window named is a number the reader must trust. */
+export interface DerivedWindowOut {
+  from: string
+  to: string
+  months: number
+}
+
 export interface ProjectionOut {
   starting_balance: string
   /** The snapshot month the starting balance came from. */
@@ -1660,6 +1669,10 @@ export interface ProjectionOut {
   /** Present when the contribution was DERIVED, null when it was typed; absent from a
    *  backend older than 2026-09-03 — readers take it as `?? null`. */
   contribution_breakdown?: ContributionBreakdownOut | null
+  /** The window `annual_spend` and the contribution's cash half were derived over. Null when
+   *  nothing could be derived; absent from a backend older than 2026-09-04 — readers take it
+   *  as `?? null`, the `bands` posture. */
+  derived_window?: DerivedWindowOut | null
 }
 
 // --- import (mirrors backend/app/importer/report.py) ---
