@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { CARD_CHROME, CHART_CARD_ROWS, FEED_SKELETON, OWNER_STRIP, STAT_TILE, XFADE_MS, chartCardBox, ghostCardBody } from './skeletonMetrics'
+import { CARD_CHROME, CHART_CARD_ROWS, FEED_SKELETON, OWNER_STRIP, STAT_TILE, chartCardBox, ghostCardBody } from './skeletonMetrics'
 
 const CSS = readFileSync(path.join(__dirname, 'panels.css'), 'utf8')
 describe('skeletonMetrics', () => {
@@ -21,7 +21,7 @@ describe('skeletonMetrics', () => {
     expect(CSS).toContain('min-height: var(--m-header-controls)')
     // --t-xfade is M2's token; until it lands the fallback in panels.css IS the twin of XFADE_MS,
     // and the timer that drops the veil must not outlive the animation that hides it.
-    expect(CSS).toContain(`var(--t-xfade, ${XFADE_MS}ms)`)
+    expect(CSS).toContain(`var(--t-xfade)`)
   })
   it('converts an outer box to a ghost BODY (never negative), sizes a chart card, derives each feed', () => {
     expect([ghostCardBody(491), ghostCardBody(20)]).toEqual([491 - CARD_CHROME, 0])

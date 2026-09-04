@@ -22,6 +22,9 @@
   border-top-color: var(--accent);
 }
 @media (prefers-reduced-motion: no-preference) {
+  /* Literal, not a token: an INFINITE spinner's period is a rate, not a grammar duration,
+     and reading a --t-* would freeze it mid-turn under reduce — which is exactly why
+     motion.test.ts's literal sweep exempts `infinite` (spec §1). */
   .splash-spinner {
     animation: splash-spin 0.9s linear infinite;
   }

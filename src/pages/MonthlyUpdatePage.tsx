@@ -40,6 +40,7 @@ import { canonicalAmount, isAmount } from '../utils/amount'
 import { formatCurrency, formatMonth, formatPct } from '../utils/format'
 import { addMonths, currentMonthIso } from '../utils/months'
 import { classifyPaste, matchLabel } from '../utils/paste'
+import { MOTION_MS } from '../theme/motion'
 import { typicalSpend } from '../utils/spending'
 import '../components/panels.css'
 import './MonthlyUpdatePage.css'
@@ -574,7 +575,7 @@ export default function MonthlyUpdatePage() {
   // sets state (a set here would re-run the effect on its own write).
   useEffect(() => {
     if (flashIds.size === 0) return
-    const timer = setTimeout(() => setFlashIds(new Set()), 700)
+    const timer = setTimeout(() => setFlashIds(new Set()), MOTION_MS.flash)
     return () => clearTimeout(timer)
   }, [flashIds])
 

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MOTION_MS } from '../theme/motion'
 import ToastProvider, { useToast } from './ToastProvider'
 
 function Host({ onUndo }: { onUndo?: () => void }) {
@@ -36,10 +37,11 @@ const region = () =>
   document.querySelector('.toast-region:not(.toast-region-alert)') as HTMLElement
 const alertRegion = () => document.querySelector('.toast-region-alert') as HTMLElement
 
-// ToastProvider's LEAVE_MS plus a hair. Every dismissal — manual, auto or via an action —
-// now spends this window in the DOM wearing .toast-leaving before the entry is dropped,
-// so any assertion that a toast is GONE has to spend it too.
-const EXIT_WINDOW_MS = 200
+// ToastProvider's LEAVE_MS plus a hair, DERIVED from the same token the exit animation
+// reads (toast.css's --t-fast) so this window can never drift from it. Every dismissal —
+// manual, auto or via an action — spends it in the DOM wearing .toast-leaving before the
+// entry is dropped, so any assertion that a toast is GONE has to spend it too.
+const EXIT_WINDOW_MS = MOTION_MS.fast + 20
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -180,7 +182,7 @@ describe('ToastProvider', () => {
   })
 
   // Every timer this provider owns has to die WITH it. A dismissal in flight when the tree
-  // unmounts left a ~160 ms removal ticking on; in a full-suite run it landed after jsdom
+  // unmounts left a LEAVE_MS removal ticking on; in a full-suite run it landed after jsdom
   // had been torn down and threw "window is not defined" from a file that had already
   // passed — invisible to any single-file run.
   it('clears every pending timer on unmount', () => {

@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import PageSkeleton from '../PageSkeleton'
+import { useStagger } from '../useStagger'
 import '../panels.css'
 import './shell.css'
 
@@ -81,6 +82,9 @@ export default function PageFrame({
   }, [hasScopeRow])
 
   const hasData = resource.status === 'ready'
+  // The cascade is the PAYLOAD's, not the skeleton's: tagging waits for `ready`, so the
+  // groups measured are the real cards at the positions they actually occupy.
+  const bodyRef = useStagger<HTMLDivElement>(hasData)
   const showSkeleton = resource.status === 'loading'
   const showErrorOnly = resource.status === 'error'
   const staleError = hasData && resource.error ? resource.error : null
@@ -100,34 +104,41 @@ export default function PageFrame({
           <div className={`page-frame-scope${stuck ? ' is-stuck' : ''}`}>{scopeRow}</div>
         </>
       )}
-      {/* The whole spec, spread: PageSkeleton owns the defaults, so a prop added there reaches every
-          page without a second forwarding list to keep in step. */}
-      {showSkeleton && <PageSkeleton {...skeleton} />}
-      {showErrorOnly && (
-        <div className="error-banner" role="alert">
-          {resource.error ?? 'Something went wrong.'}{' '}
-          {resource.retry !== undefined && (
-            <button type="button" className="button" onClick={resource.retry}>
-              Retry
-            </button>
-          )}
-        </div>
-      )}
-      {hasData && (
-        <>
-          {staleError !== null && (
-            <p className="page-frame-stale" role="status">
-              Showing earlier data — {staleError}
-              {resource.retry !== undefined && (
-                <button type="button" className="button" onClick={resource.retry}>
-                  Retry
-                </button>
-              )}
-            </p>
-          )}
-          <div className={`loading-dim${resource.busy ? ' is-loading' : ''}`}>{children}</div>
-        </>
-      )}
+      {/* The content region, and the only part of the page that animates in (2026-09-05
+          spec §2): the title row and the scope row above are identical on every page and the
+          eye is already on them, so they appear at once. ONE wrapper around all three
+          lifecycle branches, not one per branch — the entrance then runs once per page mount
+          instead of replaying when the skeleton gives way to the payload. */}
+      <div className="page-frame-body" ref={bodyRef}>
+        {/* The whole spec, spread: PageSkeleton owns the defaults, so a prop added there reaches
+            every page without a second forwarding list to keep in step. */}
+        {showSkeleton && <PageSkeleton {...skeleton} />}
+        {showErrorOnly && (
+          <div className="error-banner" role="alert">
+            {resource.error ?? 'Something went wrong.'}{' '}
+            {resource.retry !== undefined && (
+              <button type="button" className="button" onClick={resource.retry}>
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+        {hasData && (
+          <>
+            {staleError !== null && (
+              <p className="page-frame-stale" role="status">
+                Showing earlier data — {staleError}
+                {resource.retry !== undefined && (
+                  <button type="button" className="button" onClick={resource.retry}>
+                    Retry
+                  </button>
+                )}
+              </p>
+            )}
+            <div className={`loading-dim${resource.busy ? ' is-loading' : ''}`}>{children}</div>
+          </>
+        )}
+      </div>
     </PageFrameContext.Provider>
   )
 }

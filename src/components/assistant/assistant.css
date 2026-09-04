@@ -360,7 +360,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .assistant-drawer {
-    animation: assistant-drawer-in 160ms ease-out;
+    animation: assistant-drawer-in var(--t-fast) ease-out;
   }
 
   @keyframes assistant-drawer-in {
@@ -370,6 +370,9 @@
     }
   }
 
+  /* Literal, not a token: an INFINITE spinner's period is a rate, not a grammar
+     duration, and index.css's reduce block zeroes every --t-*, which would freeze this
+     mid-turn instead of shortening it (spec §1). The no-preference gate already hides it. */
   .assistant-spinner {
     animation: assistant-spin 700ms linear infinite;
   }

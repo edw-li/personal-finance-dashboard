@@ -119,9 +119,9 @@ describe('Feed cross-fade (motion spec §7)', () => {
   })
   it('pins the CSS: one token for the dim, inside the no-preference gate', () => {
     const css = readFileSync(path.join(__dirname, '..', 'panels.css'), 'utf8').replace(/\s+/g, ' ')
-    expect(css).toContain('@media (prefers-reduced-motion: no-preference) { .loading-dim { transition: opacity var(--t-fast, 120ms) ease; } }')
+    expect(css).toContain('@media (prefers-reduced-motion: no-preference) { .loading-dim { transition: opacity var(--t-fast) ease; } }')
     expect(css).not.toContain('transition: opacity 0.15s ease')
-    expect(css).toContain(`var(--t-xfade, ${XFADE_MS}ms)`)
+    expect(css).toContain(`var(--t-xfade)`)
     // The veil IS the skeleton the reader was already looking at; left on .loading-fallback's
     // 250ms-delayed appear it fades in from nothing and the swap flashes blank instead.
     expect(css).toContain('.xfade-veil .loading-fallback { opacity: 1; animation: none; }')

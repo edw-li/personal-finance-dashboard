@@ -93,6 +93,55 @@ export default function Layout() {
     window.scrollTo(0, 0)
   }, [pathname])
 
+  // ONE accent bar for the whole nav (2026-09-05 spec §5), measured rather than assumed:
+  // rows are not a fixed height (section headings, the compact density, a label that
+  // wraps), so a CSS-only bar would hard-code a rhythm and drift the day a destination is
+  // added. Reads only — no state, so a measurement can never cost a render — and the
+  // writes are ref writes inside an effect, which is where they belong.
+  const navRef = useRef<HTMLElement>(null)
+  const indicatorRef = useRef<HTMLDivElement>(null)
+  // Whether a measurement has already been committed. The FIRST placement is where the bar
+  // LIVES, not a move: a cold load onto /spending would otherwise sweep the accent down
+  // five rows over --t-nav before the reader has read anything.
+  const placedRef = useRef(false)
+  useEffect(() => {
+    const place = () => {
+      const nav = navRef.current
+      const bar = indicatorRef.current
+      if (nav === null || bar === null) return
+      const active = nav.querySelector<HTMLElement>('a.active')
+      if (active === null) {
+        // A route no nav entry owns (the 404, a deep link): a bar left where it was would
+        // claim the reader is on a page they are not.
+        bar.style.opacity = '0'
+        return
+      }
+      // data-placed goes on BEFORE the style writes below and only from the second
+      // placement onwards: Layout.css hangs the transition on that attribute, so the
+      // opening measurement lands instantly and every later one — a route change, a
+      // density reflow, a resize — animates in the same style change that moves the bar.
+      if (placedRef.current) bar.dataset.placed = ''
+      const box = active.getBoundingClientRect()
+      bar.style.opacity = '1'
+      bar.style.height = `${box.height}px`
+      bar.style.transform = `translateY(${box.top - nav.getBoundingClientRect().top}px)`
+      placedRef.current = true
+    }
+    place()
+    window.addEventListener('resize', place)
+    // Rows also move without the window doing anything — the density toggle rescales the
+    // root font, and neither pathname nor viewport changes when it does. Guarded for jsdom
+    // and old browsers (PageFrame's IntersectionObserver idiom): without it the bar simply
+    // waits for the next navigation.
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => place())
+    if (navRef.current !== null) observer?.observe(navRef.current)
+    return () => {
+      window.removeEventListener('resize', place)
+      observer?.disconnect()
+    }
+  }, [pathname])
+
   // Warm every route chunk during idle time so in-app navigation never waits on the
   // network for JS. Hover/focus prefetch below covers the pre-idle window. import()
   // memoizes, so re-mounts re-warm for free (no-ops).
@@ -139,7 +188,10 @@ export default function Layout() {
             <span>Search or jump…</span>
             <kbd aria-label={isMac ? 'Command K' : 'Control K'}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
           </button>
-          <nav aria-label="Primary">
+          <nav aria-label="Primary" ref={navRef}>
+            {/* Decorative: aria-current already announces the current page, and a second
+                announcement would read the same fact twice. */}
+            <div className="nav-indicator" ref={indicatorRef} aria-hidden="true" />
             {NAV_SECTIONS.map((section, index) => (
               <div className="nav-section" key={section.heading ?? `ungrouped-${index}`}>
                 {section.heading !== null && (
@@ -168,24 +220,22 @@ export default function Layout() {
         {/* tabIndex -1: focusable by the skip link and the navigation hand-off above,
             never part of the tab order itself. */}
         <main id="main" tabIndex={-1} className="content" ref={mainRef}>
-          {/* Route chunks resolve here — the sidebar must not unmount while one loads, and a
-              chunk that never arrives must not blank the app (RouteBoundary). The fallback's
-              class is .route-fallback, not panels.css's .empty-note: panels.css reaches the
-              entry chunk only INCIDENTALLY (the assistant drawer below imports it), and a
-              fallback that leans on a neighbor's import staying put is one refactor from
-              rendering unstyled.
-
-              key={pathname} remounts the boundary on navigation, which is what makes the retry
-              real: React.lazy memoizes the rejected import, so re-rendering the FAILED route
-              just rethrows the cached rejection (status -1) — Reload stays the only fix for the
-              stale-deploy case. A different pathname is a different lazy payload with its own
-              untouched status, so navigating away genuinely re-attempts. Without the key, one
-              transient blip would latch the boundary and lock every other route behind it. */}
-          <RouteBoundary key={pathname}>
-            <Suspense fallback={<p className="route-fallback" role="status">Loading…</p>}>
+          {/* ONE Suspense, OUTSIDE the boundary, which now carries resetKey instead of key
+              (2026-09-05 spec §2). Keyed, the subtree was a fresh MOUNT on every navigation
+              and React shows a fallback for a mount even inside a transition: #main blanked
+              for a frame on every click. Unkeyed it is an UPDATE — react-router-dom 7 wraps
+              its state in startTransition — so the old page stays committed until the new
+              chunk resolves. The retry stays real without the key: React.lazy memoizes the
+              rejected import, so returning to the route that threw rethrows and the alert
+              comes straight back, while resetKey clears the boundary on the way out.
+              .route-fallback, not panels.css's .empty-note: panels.css reaches the entry
+              chunk only INCIDENTALLY (the drawer imports it), and a fallback that leans on a
+              neighbor's import staying put is one refactor from rendering unstyled. */}
+          <Suspense fallback={<p className="route-fallback" role="status">Loading…</p>}>
+            <RouteBoundary resetKey={pathname}>
               <Outlet />
-            </Suspense>
-          </RouteBoundary>
+            </RouteBoundary>
+          </Suspense>
         </main>
         <CommandPalette />
         {/* Beside the palette, and last for the same reason: both are app-wide overlays that

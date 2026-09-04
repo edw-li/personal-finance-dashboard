@@ -47,19 +47,23 @@ it('swaps in an alert with a Reload affordance when a child throws', () => {
   expect(errorLog).toHaveBeenCalled()
 })
 
-// Layout passes key={pathname}; this pins the half of that contract the component owns —
-// a failed boundary must not survive its own remount. (React.lazy's memoized rejection is
-// what makes the key necessary at all: only a DIFFERENT payload can actually be retried.)
-it('clears the failed state when remounted under a new key', () => {
+// Layout passes resetKey={pathname}; this pins the half of that contract the component
+// owns — a failed boundary must clear itself the moment the reader navigates. A PROP, not
+// a `key`: keying remounted the Suspense subtree above the boundary, and React shows a
+// fallback for a MOUNT even inside a transition, which blanked #main for a frame on every
+// click (2026-09-05 spec §2). The retry stays real without the key because React.lazy
+// memoizes a rejected import: a different pathname is a different payload with its own
+// untouched status, so returning to the route that threw rethrows and the alert comes back.
+it('clears the failed state when resetKey changes, without a remount', () => {
   silenceReactErrorLog()
   const { rerender } = render(
-    <RouteBoundary key="/spending">
+    <RouteBoundary resetKey="/spending">
       <Bomb />
     </RouteBoundary>
   )
   screen.getByRole('alert')
   rerender(
-    <RouteBoundary key="/taxes">
+    <RouteBoundary resetKey="/taxes">
       <p>page content</p>
     </RouteBoundary>
   )

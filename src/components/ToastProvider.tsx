@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react'
 import type { ReactNode } from 'react'
+import { MOTION_MS } from '../theme/motion'
 import './toast.css'
 
 export interface ToastAction {
@@ -39,9 +40,11 @@ interface ToastEntry {
 // Long enough to read and reach Undo, short enough never to queue up (hover pauses it).
 const AUTO_DISMISS_MS = 6000
 
-// The exit animation's length plus a hair; removal is timer-driven (not animationend)
-// so reduced-motion and jsdom behave identically.
-const LEAVE_MS = 160
+// The exit animation IS --t-fast (toast.css), so the timer that removes the node reads
+// the same number rather than re-typing it; removal is timer-driven (not animationend) so
+// reduced-motion and jsdom behave identically — under `reduce` the toast simply lingers
+// unanimated for this window, which is invisible.
+const LEAVE_MS = MOTION_MS.fast
 
 // The deliberate INVERSE of useAuth's throw: toasts are an ambient layer, and a host
 // rendered without it — every pre-existing direct-render test of the four delete hosts —

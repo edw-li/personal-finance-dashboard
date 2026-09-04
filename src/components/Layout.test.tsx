@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { lazy, type ReactElement } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSnapshots } from '../api/snapshotCache'
@@ -449,5 +450,129 @@ describe('Layout — shell boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'to home' }))
     expect(screen.getByText('home body')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
+describe('Layout — route transition', () => {
+  // A chunk this test decides when to resolve — the only way to observe the frame between
+  // the click and the payload, which is where the blank used to be.
+  let resolveSpending: ((m: { default: () => ReactElement }) => void) | null = null
+  const LazySpending = lazy(
+    () => new Promise<{ default: () => ReactElement }>((r) => { resolveSpending = r }),
+  )
+
+  it('holds the old page while the next chunk is pending, then swaps', async () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<div>home body</div>} />
+            <Route path="/spending" element={<LazySpending />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    )
+    await act(async () => { fireEvent.click(screen.getByRole('link', { name: 'Spending' })) })
+    // Suspense sits OUTSIDE an unkeyed boundary, so this is an update: React keeps the
+    // committed tree, #main never empties and the fallback is never reached.
+    expect(screen.getByText('home body')).toBeTruthy()
+    expect(screen.queryByText('Loading…')).toBeNull()
+    await act(async () => { resolveSpending?.({ default: () => <div>spending body</div> }) })
+    expect(await screen.findByText('spending body')).toBeTruthy()
+  })
+})
+
+describe('Layout — nav indicator', () => {
+  // jsdom does no layout: one stub gives the nav a zero origin and each link a `row`-tall
+  // slot, so the bar's transform is arithmetic a test can state.
+  let row = 40
+  beforeEach(() => {
+    row = 40
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (this.tagName === 'NAV') return { top: 0, height: 520 } as DOMRect
+      const nav = this.tagName === 'A' ? this.closest('nav') : null
+      if (nav === null) return { top: 0, height: 0 } as DOMRect
+      const links = Array.from(nav.querySelectorAll('a'))
+      return { top: links.indexOf(this as HTMLAnchorElement) * row, height: 36 } as DOMRect
+    })
+  })
+
+  it('parks one accent bar on the active link and slides it on a route change', () => {
+    renderShell()
+    const bar = document.querySelector<HTMLElement>('.nav-indicator')
+    // Overview is the first link, so the bar starts at the nav's own top.
+    expect(bar?.style.transform).toBe('translateY(0px)')
+    expect(bar?.style.height).toBe('36px')
+    expect(bar?.style.opacity).toBe('1')
+    fireEvent.click(screen.getByRole('link', { name: 'Spending' })) // the fifth link
+    expect(bar?.style.transform).toBe('translateY(160px)')
+  })
+
+  // Rendered OUTSIDE <Routes> so it survives the swap to a page no nav entry owns.
+  function StrayProbe() {
+    const navigate = useNavigate()
+    return <button onClick={() => navigate('/nothing')}>to nothing</button>
+  }
+
+  it('hides the bar on a route no destination owns rather than pointing at the wrong page', () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <StrayProbe />
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<div>home body</div>} />
+            <Route path="*" element={<div>nothing here</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    )
+    const bar = document.querySelector<HTMLElement>('.nav-indicator')
+    expect(bar?.style.opacity).toBe('1')
+    fireEvent.click(screen.getByRole('button', { name: 'to nothing' }))
+    // Not "left where it was": a parked bar would still claim the reader is on Overview.
+    expect(bar?.style.opacity).toBe('0')
+  })
+
+  it('lands the opening measurement, and only then lets the bar transition', () => {
+    renderShell('/spending')
+    const bar = document.querySelector<HTMLElement>('.nav-indicator')
+    // Already parked on the fifth row — a cold load must not SWEEP down to it, so the
+    // attribute Layout.css hangs the transition on is deliberately still absent here.
+    expect(bar?.style.transform).toBe('translateY(160px)')
+    expect(bar?.hasAttribute('data-placed')).toBe(false)
+    fireEvent.click(screen.getByRole('link', { name: 'Overview' }))
+    // The SECOND placement is a move the reader should see, so the attribute goes on in
+    // the same style change that shifts the bar — which is when a transition may run.
+    expect(bar?.getAttribute('data-placed')).toBe('')
+    expect(bar?.style.transform).toBe('translateY(0px)')
+  })
+
+  it('re-measures when the nav reflows — the density toggle moves rows with no route change', () => {
+    // jsdom has no ResizeObserver; this stub hands the test the callback Layout registers.
+    let notify: (() => void) | null = null
+    vi.stubGlobal(
+      'ResizeObserver',
+      vi.fn((cb: () => void) => ({
+        observe: () => { notify = cb },
+        disconnect: () => {},
+        unobserve: () => {},
+      })),
+    )
+    renderShell('/spending')
+    const bar = document.querySelector<HTMLElement>('.nav-indicator')
+    expect(bar?.style.transform).toBe('translateY(160px)')
+    row = 50
+    act(() => notify?.())
+    expect(bar?.style.transform).toBe('translateY(200px)')
+  })
+
+  it('re-measures on resize — nav rows move when the window does', () => {
+    renderShell('/spending')
+    row = 50
+    fireEvent(window, new Event('resize'))
+    const bar = document.querySelector<HTMLElement>('.nav-indicator')
+    expect(bar?.style.transform).toBe('translateY(200px)')
   })
 })

@@ -37,10 +37,22 @@
   --diverge-7: #2f6bb8;
   --diverge-8: #4a8ee6;
   --diverge-9: #7fb2f0;
-  /* Motion tokens (2026-08-27 spec §4). Consumed only inside
-     prefers-reduced-motion: no-preference blocks — under `reduce` nothing reads them. */
+  /* Motion tokens (2026-09-05 spec §1; mirrored in src/theme/motion.ts, which
+     motion.test.ts pins). Unlike the 2026-08-27 pair these are also read OUTSIDE
+     no-preference blocks: the reduce block at the foot of this file zeroes every one, so a
+     rule states its duration once and is still instant for a reader who asked for that. */
   --t-fast: 120ms;
-  --t-page: 180ms;
+  --t-page: 240ms;
+  --t-enter: 240ms;
+  --t-stagger: 40ms;
+  --t-xfade: 180ms;
+  --t-nav: 200ms;
+  --t-flash: 700ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  /* Scroll-linked reveal's dials (spec §4); panels.css reads all three. */
+  --reveal-floor: 0.62;
+  --reveal-range: 35%;
+  --reveal-rise: 4px;
   /* Density: comfortable is the pre-2026-09 geometry; compact scales the root font and the
      card/table padding (shell spec §11). */
   --density-card-pad: 1.1rem 1.25rem 1.25rem;
@@ -120,4 +132,23 @@ a {
 
 button {
   font: inherit;
+}
+
+/* One switch for the whole grammar. Rules gated by `no-preference` never see these values;
+   rules that read a token unconditionally — the nav indicator, the paste flash,
+   .loading-dim, the delayed fallbacks — become instant here instead of each carrying a
+   reduced-motion twin. The reveal's dials flatten with them, which is what makes the
+   scroll-linked animation a no-op even where it still runs. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0ms;
+    --t-page: 0ms;
+    --t-enter: 0ms;
+    --t-stagger: 0ms;
+    --t-xfade: 0ms;
+    --t-nav: 0ms;
+    --t-flash: 0ms;
+    --reveal-floor: 1;
+    --reveal-rise: 0px;
+  }
 }

@@ -300,7 +300,7 @@
 /* The dim was a hard-coded 0.15s (motion spec §1): one token, and only where motion is welcome. */
 @media (prefers-reduced-motion: no-preference) {
   .loading-dim {
-    transition: opacity var(--t-fast, 120ms) ease;
+    transition: opacity var(--t-fast) ease;
   }
 }
 
@@ -316,7 +316,7 @@
 }
 
 .xfade.is-fading > .loading-dim {
-  animation: xfade-in var(--t-xfade, 180ms) var(--ease-out, ease) both;
+  animation: xfade-in var(--t-xfade) var(--ease-out, ease) both;
 }
 
 .xfade-veil {
@@ -326,7 +326,7 @@
      skeleton drew: clip rather than let a stray ghost row hang past the card it is leaving. */
   overflow: hidden;
   pointer-events: none;
-  animation: xfade-out var(--t-xfade, 180ms) var(--ease-out, ease) both;
+  animation: xfade-out var(--t-xfade) var(--ease-out, ease) both;
 }
 
 /* The veil's ghost is ALREADY on screen — it is the skeleton the reader has been looking at. Left
@@ -565,12 +565,15 @@
 }
 
 /* Delayed appearance: anything that resolves inside the delay shows NOTHING — flashing
-   a fallback for 80ms reads clunkier than the wait it fills. Opacity, not display, so
+   a fallback for 80ms reads clunkier than the wait it fills. The 300ms threshold is
+   2026-09-05 spec §2's, shared with Layout.css's route fallback, and stays a literal
+   because a threshold is not a duration; the fade reads --t-page. Opacity, not display, so
    the appear can fade. Deliberately outside the reduced-motion gate: a delayed fade-in
-   is appearance, not movement; the pulse below is movement and stays gated. */
+   is appearance, not movement; the pulse below is movement and stays gated (and the reduce
+   block zeroes --t-page, so it appears instantly there). */
 .loading-fallback {
   opacity: 0;
-  animation: fallback-appear 200ms ease 250ms forwards;
+  animation: fallback-appear var(--t-page) ease 300ms forwards;
 }
 
 @keyframes fallback-appear {
@@ -580,6 +583,8 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  /* Literal, not a token: an INFINITE pulse's period is a rate, not a grammar duration —
+     a zeroed --t-* would freeze it mid-breath rather than shorten it (spec §1). */
   .skeleton {
     animation: skeleton-pulse 1.4s ease-in-out infinite;
   }
@@ -635,20 +640,10 @@
     transition: background-color var(--t-fast) ease;
   }
 
-  /* Page entrance: one fade-rise per navigation. RouteBoundary is keyed by pathname
-     (Layout.tsx), so the .page element remounts exactly once per route change — the
-     animation never replays on data refetches. transform is paint-only; EChart's
-     ResizeObserver sees no size change. */
-  .page {
-    animation: page-enter var(--t-page) ease-out;
-  }
-
-  @keyframes page-enter {
-    from {
-      opacity: 0;
-      transform: translateY(6px);
-    }
-  }
+  /* The whole-page entrance that used to live here is gone (2026-09-05 spec §2): it faded
+     the title row too, it was justified by the key={pathname} Layout no longer passes, and
+     two fade-rises on one navigation read as a stutter. shell.css animates
+     .page-frame-body — the content region alone — instead. */
 }
 
 /* Whole-row click targets (the NetWorthPage accounts-table recipe): hover names the
@@ -827,4 +822,119 @@
   margin-top: 0.5rem;
   max-height: 320px;
   overflow: auto;
+}
+
+/* ── Motion: entrance, stagger, scroll-linked reveal (2026-09-05 spec §3/§4) ───────── */
+
+/* Registered so they can be ANIMATED: an unregistered custom property has no type, so a
+   keyframe on it would jump between its values instead of interpolating. Each initial
+   value is the "nothing is moving" state — what a browser with no view() timeline, print,
+   and a reduced-motion reader all render. */
+@property --enter { syntax: '<number>'; inherits: false; initial-value: 1; }
+@property --reveal { syntax: '<number>'; inherits: false; initial-value: 1; }
+
+/* The two dials the stagger sets are registered for a second reason: `inherits: false`.
+   Unregistered they inherited from a tagged card straight into the .kpi-row and .card
+   nested inside it, which then ran their own entrance on top of their parent's — the fade
+   squared to 0.38 and the travel doubled to 16px (review probe, Edge). Registered, an
+   element that does not declare them takes the initial value below, which is "no
+   entrance"; the nested-group rule at the foot of the media block stops the animation
+   itself, for the browsers where @property is not supported at all. */
+@property --enter-dur { syntax: '<time>'; inherits: false; initial-value: 0s; }
+@property --stagger-i { syntax: '<integer>'; inherits: false; initial-value: 0; }
+
+/* THE motion surface, and it carries OPACITY ONLY. A permanent transform — even the
+   identity translateY(0px) the dials resolved to at rest — makes every card a stacking
+   context and a containing block, which overpainted InfoHint bubbles and ECharts' DOM
+   tooltips the moment they crossed a card edge (review probe). The travel therefore lives
+   in the keyframes, and `backwards` fill lets a finished animation fall back to THIS rule,
+   where no transform is declared at all.
+   Exempt by construction: header, scope row, toasts, palette and drawers all live outside
+   .page-frame-body. Exempt by selector: the wizard's entry cards, whose .entry-footer
+   rides the viewport bottom — a transformed ancestor drags a position:sticky child along
+   with its own translate and strands the live totals mid-page. Brightness stays the
+   PRODUCT of the two dials, so a card entering while it straddles the bottom edge settles
+   at its position value with no snap. */
+.page-frame-body .card:not(:has(.entry-footer)),
+.page-frame-body .kpi-row {
+  opacity: calc(var(--reveal) * var(--enter));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page-frame-body .card:not(:has(.entry-footer)),
+  .page-frame-body .kpi-row {
+    animation-name: card-enter;
+    animation-duration: var(--enter-dur);
+    animation-timing-function: var(--ease-out);
+    /* `backwards`, not `both`: the entrance must hold its start state through the stagger
+       delay and then GET OUT OF THE WAY. A forwards fill would keep applying the `to`
+       keyframe for the life of the page, which is exactly the permanent transform the
+       base rule above just gave up. An untagged group runs 0s and so never fills at all. */
+    animation-fill-mode: backwards;
+    animation-delay: calc(var(--stagger-i, 0) * var(--t-stagger));
+  }
+
+  /* attr() still cannot be read as a <number>, so six groups are six rules — and six is
+     the cap: STAGGER_CAP is 5 and useStagger clamps every later group to it. */
+  .page-frame-body [data-stagger] { --enter-dur: var(--t-enter); }
+  .page-frame-body [data-stagger='0'] { --stagger-i: 0; }
+  .page-frame-body [data-stagger='1'] { --stagger-i: 1; }
+  .page-frame-body [data-stagger='2'] { --stagger-i: 2; }
+  .page-frame-body [data-stagger='3'] { --stagger-i: 3; }
+  .page-frame-body [data-stagger='4'] { --stagger-i: 4; }
+  .page-frame-body [data-stagger='5'] { --stagger-i: 5; }
+
+  /* The entrance travels on `translate`, the reveal below on `transform`: two INDEPENDENT
+     transform properties the browser already composes (translate is applied first), so a
+     card straddling the bottom edge at load rises by both at once. animation-composition
+     cannot do this job — it is per ANIMATION, not per property, so `add` would also reach
+     --enter, where 1 + 0 reads 1 and the fade never happens. */
+  @keyframes card-enter { from { --enter: 0; translate: 0 8px; } to { --enter: 1; translate: none; } }
+
+  /* Scroll-linked reveal, no JS: below-the-fold content rests at --reveal-floor and
+     brightens as it enters. Nested inside the no-preference gate (so `reduce` never
+     reaches it) and inside @supports (so a browser without view() timelines shows full
+     brightness). The entrance is repeated as the FIRST animation of every comma list:
+     one element cannot carry two animation-name declarations, and this rule would
+     replace the entrance rather than join it. */
+  @supports (animation-timeline: view()) {
+    .page-frame-body .card:not(:has(.entry-footer)) {
+      animation-name: card-enter, reveal-in, reveal-out;
+      animation-duration: var(--enter-dur), auto, auto;
+      animation-timing-function: var(--ease-out), linear, linear;
+      /* reveal-out fills `none`: with any fill its own `from` (--reveal: 1) would apply
+         through the before-phase and, being later in the list, cancel reveal-in's dimming
+         on every card that has not reached the top edge yet. reveal-in fills `backwards`
+         only — AFTER its range the card is fully revealed, which is the base rule's own
+         value, so a forwards fill would buy nothing and cost the transform-free rest. */
+      animation-fill-mode: backwards, backwards, none;
+      animation-delay: calc(var(--stagger-i, 0) * var(--t-stagger)), 0s, 0s;
+      animation-timeline: auto, view(), view();
+      animation-range: normal, entry 0% entry var(--reveal-range), exit calc(100% - var(--reveal-range)) exit 100%;
+    }
+
+    @keyframes reveal-in {
+      from { --reveal: var(--reveal-floor); transform: translateY(var(--reveal-rise)); }
+      to { --reveal: 1; transform: none; }
+    }
+
+    @keyframes reveal-out {
+      from { --reveal: 1; transform: none; }
+      to { --reveal: var(--reveal-floor); transform: translateY(calc(-1 * var(--reveal-rise))); }
+    }
+  }
+
+  /* A group nested inside another rides its parent's entrance and its parent's reveal:
+     running its own would square the fade (0.62 × 0.62 = 0.38) and double the travel.
+     OUTSIDE @supports, because the nesting is just as real in a browser with no view()
+     timeline, and AFTER it, because these selectors tie at 0-3-0 with both rules above and
+     only source order breaks that tie. */
+  .page-frame-body .card .card,
+  .page-frame-body .card .kpi-row { animation-name: none; }
+}
+
+/* Ink on paper never dims, and print has no scroller for a view() timeline to read. */
+@media print {
+  .page-frame-body .card,
+  .page-frame-body .kpi-row { opacity: 1; transform: none; translate: none; animation: none; }
 }
