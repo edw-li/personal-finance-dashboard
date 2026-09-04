@@ -294,11 +294,68 @@
 }
 
 .loading-dim {
-  transition: opacity 0.15s ease;
+  opacity: 1;
+}
+
+/* The dim was a hard-coded 0.15s (motion spec §1): one token, and only where motion is welcome. */
+@media (prefers-reduced-motion: no-preference) {
+  .loading-dim {
+    transition: opacity var(--t-fast, 120ms) ease;
+  }
 }
 
 .loading-dim.is-loading {
   opacity: 0.55;
+}
+
+/* Skeleton → content cross-fade (motion spec §7): the content mounts in its final box and the ghost
+   lies over it, so the swap is a fade, never a jump. `.is-fading` gates the incoming half — content
+   that was never behind a ghost must not fade in on every render. */
+.xfade {
+  position: relative;
+}
+
+.xfade.is-fading > .loading-dim {
+  animation: xfade-in var(--t-xfade, 180ms) var(--ease-out, ease) both;
+}
+
+.xfade-veil {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: xfade-out var(--t-xfade, 180ms) var(--ease-out, ease) both;
+}
+
+/* A ghost mid-exit must not also pulse: two animations on one element read as a glitch. */
+.xfade-veil .skeleton {
+  animation: none;
+}
+
+@keyframes xfade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes xfade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xfade.is-fading > .loading-dim,
+  .xfade-veil {
+    animation: none;
+  }
 }
 
 /* Series-picker chips (spending category trends + net-worth account drill-down). */

@@ -1,5 +1,8 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { XFADE_MS } from '../skeletonMetrics'
 import Feed, { FeedBanner } from './Feed'
 
 // No `globals: true` in vite.config.ts, so RTL never registers its own auto-cleanup —
@@ -84,6 +87,41 @@ describe('Feed', () => {
     )
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByText('rows')).toBeTruthy()
+  })
+})
+
+describe('Feed cross-fade (motion spec §7)', () => {
+  const props = { busy: false, staleNoun: 'the table', skeleton: { height: 200, label: 'Loading rows…' } }
+  beforeEach(() => { vi.stubGlobal('matchMedia', () => ({ matches: false })) })
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+  it('holds the ghost OVER the content for one --t-xfade, drops it, and re-arms', () => {
+    vi.useFakeTimers()
+    const { rerender } = render(<Feed {...props} data={null} busy>{() => <p>rows</p>}</Feed>)
+    rerender(<Feed {...props} data={{ n: 1 }}>{() => <p>rows</p>}</Feed>)
+    expect(screen.getByText('rows')).toBeTruthy() // content and ghost coexist, in ONE box
+    expect(document.querySelector('.xfade.is-fading .xfade-veil')?.getAttribute('aria-hidden')).toBe('true')
+    act(() => { vi.advanceTimersByTime(XFADE_MS) })
+    expect(document.querySelector('.xfade-veil')).toBeNull()
+    rerender(<Feed {...props} data={null} busy>{() => <p>rows</p>}</Feed>) // a scope change…
+    rerender(<Feed {...props} data={{ n: 2 }}>{() => <p>rows</p>}</Feed>) // …and the next arrival fades too
+    expect(document.querySelector('.xfade-veil')).toBeTruthy()
+  })
+  it('does not fade content that was never behind a ghost', () => {
+    render(<Feed {...props} data={{ n: 1 }}>{() => <p>rows</p>}</Feed>)
+    expect(document.querySelector('.xfade.is-fading')).toBeNull()
+  })
+  it('swaps instantly under prefers-reduced-motion — no veil, no fade class', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    const { rerender } = render(<Feed {...props} data={null} busy>{() => <p>rows</p>}</Feed>)
+    rerender(<Feed {...props} data={{ n: 1 }}>{() => <p>rows</p>}</Feed>)
+    expect(document.querySelector('.xfade-veil')).toBeNull()
+    expect([document.querySelector('.xfade.is-fading'), screen.queryByText('rows')?.textContent]).toEqual([null, 'rows'])
+  })
+  it('pins the CSS: one token for the dim, inside the no-preference gate', () => {
+    const css = readFileSync(path.join(__dirname, '..', 'panels.css'), 'utf8').replace(/\s+/g, ' ')
+    expect(css).toContain('@media (prefers-reduced-motion: no-preference) { .loading-dim { transition: opacity var(--t-fast, 120ms) ease; } }')
+    expect(css).not.toContain('transition: opacity 0.15s ease')
+    expect(css).toContain('var(--t-xfade, 180ms)')
   })
 })
 

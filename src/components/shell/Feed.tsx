@@ -1,5 +1,8 @@
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { SkeletonCard } from '../PageSkeleton'
+import { XFADE_MS } from '../skeletonMetrics'
+import { useReducedMotion } from '../useReducedMotion'
 import '../panels.css'
 
 // A card-level feed's three states, in the grammar the multi-feed pages (Comp, ESPP,
@@ -39,6 +42,22 @@ export default function Feed<T extends NonNullable<unknown>>({
   children,
   empty,
 }: FeedProps<T>) {
+  const reduced = useReducedMotion()
+  const [seenNull, setSeenNull] = useState(data === null)
+  const [fading, setFading] = useState(false)
+  // Adopting the arrival during RENDER is the house pattern (NetWorthPage:186) and the only correct
+  // moment: the first frame that paints the content must ALREADY carry the ghost over it, or the
+  // skeleton blinks out a frame before the data draws — which is the flash this removes.
+  if ((data === null) !== seenNull) {
+    setSeenNull(data === null)
+    setFading(data !== null && !reduced)
+  }
+  // The veil outlives the fade by nothing; the timer's CALLBACK sets the state, never the effect body.
+  useEffect(() => {
+    if (!fading) return
+    const id = setTimeout(() => setFading(false), XFADE_MS)
+    return () => clearTimeout(id)
+  }, [fading])
   // the stale cue only when there IS something stale: a reload failure leaves the previous
   // table up, a first-load failure leaves nothing to be behind
   const banner = !error ? null : data === null ? error : `${error} — ${staleNoun} may be showing earlier data.`
@@ -48,7 +67,15 @@ export default function Feed<T extends NonNullable<unknown>>({
       {data === null ? (
         busy ? <SkeletonCard height={skeleton.height} label={skeleton.label} /> : (empty ?? null)
       ) : (
-        <div className={`loading-dim${busy ? ' is-loading' : ''}`}>{children(data)}</div>
+        <div className={`xfade${fading ? ' is-fading' : ''}`}>
+          <div className={`loading-dim${busy ? ' is-loading' : ''}`}>{children(data)}</div>
+          {/* The outgoing ghost, absolutely over the content that already occupies its box: it fades
+              out, the content fades in, the height never changes. No label — the status line
+              belonged to the skeleton that just left. */}
+          {fading && (
+            <div className="xfade-veil" aria-hidden="true"><SkeletonCard height={skeleton.height} label="" /></div>
+          )}
+        </div>
       )}
     </>
   )
