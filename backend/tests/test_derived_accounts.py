@@ -5,7 +5,12 @@ from app.services.derived_accounts import derived_parent_balances
 
 
 def account(
-    account_id: int, *, component: bool = False, parent: int | None = None, name: str | None = None
+    account_id: int,
+    *,
+    component: bool = False,
+    parent: int | None = None,
+    name: str | None = None,
+    active: bool = True,
 ) -> Account:
     # mapped_column(default=...) only fires at flush, so every flag is passed explicitly:
     # an unset is_component would be None here, not False, and could hide a real bug.
@@ -15,7 +20,7 @@ def account(
         slug=f"account-{account_id}",
         group="pre_tax",
         sort_order=account_id,
-        is_active=True,
+        is_active=active,
         is_component=component,
         parent_account_id=parent,
     )
@@ -61,6 +66,18 @@ def test_a_linked_child_that_is_not_flagged_is_not_summed():
     assert derived_parent_balances(
         [parent, unflagged, flagged], {2: Decimal("100.00"), 3: Decimal("5.00")}
     ) == {1: Decimal("5.00")}
+
+
+def test_an_inactive_component_with_a_value_still_counts():
+    # is_active is an ENTRY rule (the wizard stops offering the row), never a money rule:
+    # a deactivated bucket's stored balance is still in the parent's total that month, so
+    # dropping it here would understate the parent by money that is still on the books.
+    parent = account(1)
+    live = account(2, component=True, parent=1)
+    closed = account(3, component=True, parent=1, active=False)
+    assert derived_parent_balances(
+        [parent, live, closed], {2: Decimal("100.00"), 3: Decimal("50.50")}
+    ) == {1: Decimal("150.50")}
 
 
 def test_a_flagged_component_with_no_parent_link_is_ignored():

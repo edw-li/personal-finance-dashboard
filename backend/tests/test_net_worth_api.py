@@ -558,6 +558,47 @@ async def test_put_month_logs_the_derived_value(auth_client, db):
     assert parent_row.op == "insert" and parent_row.after["balance"] == "150.50"
 
 
+async def test_put_month_derives_from_an_inactive_component_that_has_history(auth_client, db):
+    parent, employer, rollover = await _seed_parent_and_components(db)
+    # Deactivated LAST month, its balance still on the books: is_active is an ENTRY rule
+    # (the wizard stops offering the row), never a money rule.
+    rollover.is_active = False
+    snapshot = NetWorthSnapshot(month=date(2026, 5, 1))
+    db.add(snapshot)
+    await db.flush()
+    db.add(
+        AccountBalance(snapshot_id=snapshot.id, account_id=rollover.id, balance=Decimal("50.50"))
+    )
+    await db.commit()
+
+    resp = await auth_client.put(
+        "/api/v1/net-worth/months/2026-05-01",
+        json={"balances": [{"account_id": employer.id, "balance": "100.00"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    # Active submitted + inactive stored: dropping the inactive row would understate the
+    # parent by exactly the money that is still there.
+    assert resp.json()["derived"] == [{"account_id": parent.id, "balance": "150.50"}]
+    read = {
+        b["account_id"]: b["balance"]
+        for b in (await auth_client.get("/api/v1/net-worth/months/2026-05-01")).json()["balances"]
+    }
+    assert read[parent.id] == "150.50"
+
+    # ...and a typed parent is judged against that same sum, inactive component included.
+    disagreeing = await auth_client.put(
+        "/api/v1/net-worth/months/2026-05-01",
+        json={
+            "balances": [
+                {"account_id": employer.id, "balance": "100.00"},
+                {"account_id": parent.id, "balance": "100.00"},
+            ]
+        },
+    )
+    assert disagreeing.status_code == 422
+    assert "(150.50)" in disagreeing.json()["detail"]
+
+
 async def test_put_month_leaves_a_parent_alone_when_no_component_was_recorded(auth_client, db):
     parent, _employer, _rollover = await _seed_parent_and_components(db)
     cash = Account(name="Cash", slug="cash", group="cash", sort_order=9, is_component=False)
@@ -794,6 +835,20 @@ async def test_an_account_that_already_disagrees_is_left_alone(auth_client, db):
     assert resp.json()["sort_order"] == 7
     assert resp.json()["is_component"] is True  # still half a fact, and still untouched
     assert resp.json()["parent_account_id"] is None
+
+    # Repairing it is one PATCH: the rule judges the RESULTING row, so supplying the
+    # MISSING half is accepted — a legacy row must never be a dead end.
+    parent = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Aggregate 401(k)", "group": "pre_tax"}
+        )
+    ).json()
+    repaired = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{legacy.id}", json={"parent_account_id": parent["id"]}
+    )
+    assert repaired.status_code == 200, repaired.text
+    assert repaired.json()["parent_account_id"] == parent["id"]
+    assert repaired.json()["is_component"] is True
 
 
 async def test_account_defaults_to_joint_when_no_owner_is_sent(auth_client):

@@ -28,6 +28,11 @@ def derived_parent_balances(
     every rollup excludes on (services/net_worth_calc), so a linked-but-unflagged child
     still counts on its own — summing it into its parent as well would double-count it.
 
+    `is_active` is NOT consulted. It is an ENTRY rule — the wizard stops offering a
+    deactivated row — never a money rule: a closed bucket's stored balance is still part of
+    its parent's total for the months it was recorded in, and skipping it here would
+    understate the parent by money that is still on the books.
+
     A parent with no component value in the mapping is ABSENT from the result, not zero: a
     month nobody recorded a component for has nothing to derive from, and a 0.00 written
     there would erase a hand-typed history value (spec §6 — the drift check reports, never

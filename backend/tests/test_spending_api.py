@@ -372,6 +372,47 @@ async def test_put_spending_month_refuses_an_all_zero_save(auth_client, db):
     }
 
 
+async def test_put_spending_month_refuses_a_null_take_home_beside_zero_amounts(auth_client, db):
+    food, rent = await _seed_spending(db)
+    put = "/api/v1/spending/months/2026-10-01"
+    zeros = [
+        {"category_id": food.id, "amount": "0.00"},
+        {"category_id": rent.id, "amount": "0"},
+    ]
+    # An explicit null is content only when it is the WHOLE body. Paired with a page of
+    # zeros it deletes the cashflow row AND writes production's Sep 2026 (19 x $0.00),
+    # so the delete must not buy the zeros a way past the guard.
+    refused = await auth_client.put(put, json={"net_pay": None, "amounts": zeros})
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == (
+        "Nothing to record: every category is $0.00 and no take-home was entered — "
+        "set confirm_zero to write an empty month on purpose"
+    )
+    assert (await auth_client.get(put)).json()["exists"] is False
+
+    # A null ALONE still records something: it deletes the month's cashflow row.
+    entered = await auth_client.put(put, json={"net_pay": "5000.00", "amounts": []})
+    assert entered.status_code == 200, entered.text
+    alone = await auth_client.put(put, json={"net_pay": None, "amounts": []})
+    assert alone.status_code == 200, alone.text
+    assert alone.json()["net_pay_cleared"] is True
+
+    # And said on purpose, the same clear-plus-zeros body is written in full.
+    await auth_client.put(put, json={"net_pay": "5000.00", "amounts": []})
+    confirmed = await auth_client.put(
+        put, json={"net_pay": None, "amounts": zeros, "confirm_zero": True}
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["net_pay_cleared"] is True
+    assert confirmed.json()["created"] == 2
+    body = (await auth_client.get(put)).json()
+    assert body["net_pay"] is None
+    assert {a["category_id"]: a["amount"] for a in body["amounts"]} == {
+        food.id: "0.00",
+        rent.id: "0.00",
+    }
+
+
 async def test_put_spending_month_lets_through_anything_that_records_something(auth_client, db):
     food, rent = await _seed_spending(db)
     # One non-zero amount is content, zeros beside it or not.

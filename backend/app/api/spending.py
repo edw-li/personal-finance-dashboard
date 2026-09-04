@@ -468,10 +468,14 @@ async def put_month(
         raise HTTPException(status_code=422, detail="net_pay must be non-negative")
     # Spec §4: every category $0.00 with no take-home is what put a fake $0 month on
     # production's Sep 2026 — refuse it unless the client says it means it. An EXPLICIT
-    # net_pay null still passes: that body DOES record something (it deletes the month's
-    # cashflow row), so answering "nothing to record" would be a lie about it.
+    # net_pay null passes only when it is the WHOLE body: that body records something (it
+    # deletes the month's cashflow row) and writes no zeros. Beside a page of zeros the
+    # same null would clear the take-home AND store 19 rows of $0.00 — Sep 2026 exactly —
+    # so the delete must not buy those zeros a way past the guard.
     if not (
-        body.confirm_zero or net_pay_clear or records_something(quantized.values(), net_pay_value)
+        body.confirm_zero
+        or (net_pay_clear and not quantized)
+        or records_something(quantized.values(), net_pay_value)
     ):
         raise HTTPException(status_code=422, detail=EMPTY_MONTH_REFUSAL)
     if ids:

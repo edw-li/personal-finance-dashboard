@@ -415,6 +415,14 @@ async def put_month(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> MonthUpsertResult:
+    """Upsert a month's balances, deriving every parent-with-components as it writes.
+
+    Note for readers of the counts and the change log: ANY put on a month that holds
+    components re-derives its parents, so a meta-only or single-row save can report extra
+    `updated` rows (and log them) for parents nobody typed. That is deliberate — a month
+    you touch is left consistent — and it is why a save's row count can exceed the
+    payload's length.
+    """
     require_first_of_month(month)
     ids = [entry.account_id for entry in body.balances]
     if len(set(ids)) != len(ids):
@@ -452,7 +460,9 @@ async def put_month(
     )
     # Spec §5: a parent with components has no balance of its own — it IS the sum of its
     # components this month. The payload wins; a component the payload leaves out falls back
-    # to what the month already stores, and one absent from both contributes nothing.
+    # to what the month already stores, and one absent from both contributes nothing. Every
+    # flagged+linked component with a value counts, ACTIVE OR NOT: deactivation stops future
+    # entry, it does not remove the money a closed bucket still holds this month.
     merged = {account_id: row.balance for account_id, row in existing.items()} | quantized
     derived = derived_parent_balances(accounts, merged)
     for parent_id, total in sorted(derived.items()):
