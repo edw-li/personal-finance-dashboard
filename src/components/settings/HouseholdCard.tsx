@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError } from '../../api/client'
+import { ApiError, describeError } from '../../api/client'
 import { createPerson, fetchHousehold, putMarriageDate, updatePerson } from '../../api/household'
 import type { PersonOut } from '../../types/api'
 import InfoHint from '../InfoHint'
@@ -26,7 +26,10 @@ export default function HouseholdCard({
 }) {
   const [people, setPeople] = useState<PersonOut[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
+  // failure is fixed by asking again; a refused save or a typo is not.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [newName, setNewName] = useState('')
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -43,12 +46,12 @@ export default function HouseholdCard({
         setPeople(h.people)
         onPeopleChange(h.people)
         setDateBox(h.marriage_date ?? '')
-        setError(null)
+        setLoadError(null)
         setLoaded(true)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(message(err, 'Could not load the household.'))
+        setLoadError(describeError(err, 'the household'))
       })
   }
 
@@ -63,11 +66,11 @@ export default function HouseholdCard({
   const addPerson = () => {
     const name = newName.trim()
     if (!name) {
-      setError('Enter a name for the new household member.')
+      setFormError('Enter a name for the new household member.')
       return
     }
     setBusy(true)
-    setError(null)
+    setFormError(null)
     createPerson(name)
       .then(() => {
         // Only a SUCCESS clears the box: retyping a name after a 409 would be a punishment
@@ -75,7 +78,7 @@ export default function HouseholdCard({
         setNewName('')
         load()
       })
-      .catch((err: unknown) => setError(message(err, 'Could not add the member.')))
+      .catch((err: unknown) => setFormError(message(err, 'Could not add the member.')))
       .finally(() => setBusy(false))
   }
 
@@ -83,24 +86,24 @@ export default function HouseholdCard({
     if (editingId === null) return
     const name = editName.trim()
     if (!name) {
-      setError('Enter a name.')
+      setFormError('Enter a name.')
       return
     }
     setBusy(true)
-    setError(null)
+    setFormError(null)
     updatePerson(editingId, name)
       .then(() => {
         setEditingId(null)
         setEditName('')
         load()
       })
-      .catch((err: unknown) => setError(message(err, 'Could not rename.')))
+      .catch((err: unknown) => setFormError(message(err, 'Could not rename.')))
       .finally(() => setBusy(false))
   }
 
   const saveDate = () => {
     setBusy(true)
-    setError(null)
+    setFormError(null)
     setSavedNote(false)
     // Explicit null, never undefined (the client module says why).
     putMarriageDate(dateBox.trim() === '' ? null : dateBox)
@@ -109,7 +112,7 @@ export default function HouseholdCard({
         setDateBox(saved.marriage_date ?? '')
         setSavedNote(true)
       })
-      .catch((err: unknown) => setError(message(err, 'Could not save the marriage date.')))
+      .catch((err: unknown) => setFormError(message(err, 'Could not save the marriage date.')))
       .finally(() => setBusy(false))
   }
 
@@ -119,8 +122,8 @@ export default function HouseholdCard({
         Household
         <InfoHint text="Who this dashboard tracks. Accounts point at these people; an account with no owner is joint. The primary member can be renamed but never changed or removed." />
       </h2>
-      <FeedBanner error={error} retry={load} />
-      {!loaded && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the household" />
+      {!loaded && loadError === null && <p className="empty-note">Loading…</p>}
       {loaded && (
         <>
           <ul className="household-people">
@@ -190,7 +193,7 @@ export default function HouseholdCard({
                 disabled={busy}
                 onChange={(e) => {
                   setNewName(e.target.value)
-                  setError(null)
+                  setFormError(null)
                 }}
               />
             </label>
@@ -200,6 +203,9 @@ export default function HouseholdCard({
               </button>
             </div>
           </form>
+          {/* Between the two forms on purpose: both write through this one slot, so a
+              banner inside either would sit above or below the other's button. */}
+          <FeedBanner error={formError} />
           <form
             className="settings-card-form"
             onSubmit={(e) => {

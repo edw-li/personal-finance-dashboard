@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError } from '../../api/client'
+import { ApiError, describeError } from '../../api/client'
 import { cloneLimits, fetchLimits, putLimits } from '../../api/limits'
 import type { LimitsOut } from '../../types/api'
 import AmountInput from '../AmountInput'
@@ -36,7 +36,10 @@ export default function LimitsCard() {
   const [year, setYear] = useState(currentYear)
   const [items, setItems] = useState<LimitsOut['items'] | null>(null)
   const [boxes, setBoxes] = useState<Record<string, string>>({})
-  const [error, setError] = useState<string | null>(null)
+  // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
+  // failure is fixed by asking again; a refused save or a typo is not.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [savedNote, setSavedNote] = useState(false)
   const seqRef = useRef(0)
@@ -51,7 +54,7 @@ export default function LimitsCard() {
         if (seq !== seqRef.current) return
         setItems(payload.items)
         setBoxes(boxesFor(payload))
-        setError(null)
+        setLoadError(null)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
@@ -59,7 +62,7 @@ export default function LimitsCard() {
         // content is about one year, and boxes left standing under a new year's heading
         // would offer to save last year's numbers into it.
         setItems(null)
-        setError(message(err, 'Could not load contribution limits.'))
+        setLoadError(describeError(err, 'the contribution limits'))
       })
   }
 
@@ -71,7 +74,8 @@ export default function LimitsCard() {
   const pickYear = (next: number) => {
     if (next === year) return
     setSavedNote(false)
-    setError(null)
+    setFormError(null)
+    setLoadError(null)
     setYear(next)
   }
 
@@ -80,7 +84,7 @@ export default function LimitsCard() {
     // Every keystroke retires the sentence under the form: it describes the values that
     // WERE in the boxes (SettingsPage's rule).
     setSavedNote(false)
-    setError(null)
+    setFormError(null)
   }
 
   const save = () => {
@@ -95,7 +99,7 @@ export default function LimitsCard() {
       }),
     )
     setBusy(true)
-    setError(null)
+    setFormError(null)
     setSavedNote(false)
     putLimits(year, { values })
       .then((payload) => {
@@ -106,13 +110,13 @@ export default function LimitsCard() {
         setBoxes(boxesFor(payload))
         setSavedNote(true)
       })
-      .catch((err: unknown) => setError(message(err, 'Could not save the limits.')))
+      .catch((err: unknown) => setFormError(message(err, 'Could not save the limits.')))
       .finally(() => setBusy(false))
   }
 
   const clone = () => {
     setBusy(true)
-    setError(null)
+    setFormError(null)
     setSavedNote(false)
     cloneLimits(year, year - 1)
       .then((payload) => {
@@ -149,8 +153,12 @@ export default function LimitsCard() {
           </button>
         ))}
       </div>
-      <FeedBanner error={error} retry={() => load(year)} />
-      {items === null && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner
+        error={loadError}
+        retry={() => load(year)}
+        retryLabel="Retry loading the contribution limits"
+      />
+      {items === null && loadError === null && <p className="empty-note">Loading…</p>}
       {items !== null && (
         <form
           className="settings-card-form"
@@ -184,6 +192,7 @@ export default function LimitsCard() {
               {`Clone from ${year - 1}`}
             </button>
           </div>
+          <FeedBanner error={formError} />
           {savedNote && (
             <p className="settings-note" role="status">
               Saved.

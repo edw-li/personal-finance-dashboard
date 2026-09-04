@@ -1,5 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../../api/client'
 
 const fetchAssistantSettings = vi.fn()
 const putAssistantSettings = vi.fn()
@@ -191,5 +192,24 @@ describe('AssistantCard', () => {
     await waitFor(() =>
       expect(screen.getByText('Key rejected or the catalog was unreachable.')).toBeTruthy(),
     )
+  })
+
+  it('renders a refused save inline with no Retry beside it (motion spec §9)', async () => {
+    fetchAssistantSettings.mockResolvedValue({
+      key: { configured: false, source: null },
+      default_model: 'kimi-k3',
+    })
+    putAssistantSettings.mockRejectedValue(new ApiError('key rejected', 422))
+    render(<AssistantCard />)
+    await waitFor(() => expect(screen.getByLabelText(/nvidia api key/i)).toBeTruthy())
+    fireEvent.change(screen.getByLabelText(/nvidia api key/i), {
+      target: { value: 'nvapi-typo' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /save assistant settings/i }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe('key rejected')
+    // Retry re-runs the FETCH — it cannot fix a key the catalog refused.
+    expect(within(alert).queryByRole('button')).toBeNull()
   })
 })

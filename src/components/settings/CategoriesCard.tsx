@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError } from '../../api/client'
+import { ApiError, describeError } from '../../api/client'
 import {
   createCategory,
   deleteCategory,
@@ -41,7 +41,10 @@ function message(err: unknown, fallback: string): string {
 export default function CategoriesCard() {
   const [categories, setCategories] = useState<CategoryOut[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
+  // failure is fixed by asking again; a refused save or a typo is not.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<CategoryFormState>(EMPTY_CATEGORY)
@@ -54,12 +57,12 @@ export default function CategoriesCard() {
       .then((rows) => {
         if (seq !== seqRef.current) return
         setCategories(rows)
-        setError(null)
+        setLoadError(null)
         setLoaded(true)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(message(err, 'Could not load categories.'))
+        setLoadError(describeError(err, 'the categories'))
       })
   }
 
@@ -70,7 +73,7 @@ export default function CategoriesCard() {
 
   const setText = (field: keyof CategoryFormState) => (value: string) => {
     setForm((f) => ({ ...f, [field]: value }))
-    setError(null)
+    setFormError(null)
   }
 
   const cancelEdit = () => {
@@ -81,29 +84,29 @@ export default function CategoriesCard() {
   const submit = () => {
     const name = form.name.trim()
     if (!name) {
-      setError('Category name is required.')
+      setFormError('Category name is required.')
       return
     }
     const body = { name, sort_order: Number(form.sort_order) || 0 }
     setBusy(true)
-    setError(null)
+    setFormError(null)
     const request = editingId !== null ? updateCategory(editingId, body) : createCategory(body)
     request
       .then(() => {
         cancelEdit()
         load()
       })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
+      .catch((err: unknown) => setFormError(message(err, 'Save failed')))
       .finally(() => setBusy(false))
   }
 
   // ONLY is_active on the wire: the name and position are untouched columns here.
   const toggleActive = (category: CategoryOut) => {
     setBusy(true)
-    setError(null)
+    setFormError(null)
     updateCategory(category.id, { is_active: !category.is_active })
       .then(() => load())
-      .catch((err: unknown) => setError(message(err, 'Update failed')))
+      .catch((err: unknown) => setFormError(message(err, 'Update failed')))
       .finally(() => setBusy(false))
   }
 
@@ -114,10 +117,10 @@ export default function CategoriesCard() {
   const setKind = (category: CategoryOut, next: CategoryKind) => {
     if (next === category.kind) return
     setBusy(true)
-    setError(null)
+    setFormError(null)
     updateCategory(category.id, { kind: next })
       .then(() => load())
-      .catch((err: unknown) => setError(message(err, 'Update failed')))
+      .catch((err: unknown) => setFormError(message(err, 'Update failed')))
       .finally(() => setBusy(false))
   }
 
@@ -140,8 +143,8 @@ export default function CategoriesCard() {
         Spending categories
         <InfoHint text="The spending matrix's rows. Retire keeps a category out of the wizard without losing its history; delete only works while a category has no monthly rows. The slug never changes — it is the workbook importer's key." />
       </h2>
-      <FeedBanner error={error} retry={load} />
-      {!loaded && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the categories" />
+      {!loaded && loadError === null && <p className="empty-note">Loading…</p>}
       {loaded && (
         <>
           <form
@@ -178,6 +181,7 @@ export default function CategoriesCard() {
                 </button>
               )}
             </div>
+            <FeedBanner error={formError} />
           </form>
           {categories.length === 0 ? (
             <p className="empty-note">No categories yet — add the first one above.</p>
@@ -228,7 +232,7 @@ export default function CategoriesCard() {
                             disabled={busy}
                             onClick={() => {
                               setEditingId(category.id)
-                              setError(null)
+                              setFormError(null)
                               setForm({
                                 name: category.name,
                                 sort_order: String(category.sort_order),

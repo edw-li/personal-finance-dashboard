@@ -321,7 +321,11 @@ it('keeps the net-worth roster alive when the portfolio labels fail to load', as
   await screen.findByRole('table', { name: 'Net-worth accounts' })
 
   // Two tables from two routers: one being down must not empty the other.
-  expect(await screen.findByText('portfolio accounts unavailable')).toBeTruthy()
+  expect(
+    await screen.findByText(
+      "Couldn't load the portfolio accounts — the server had a problem (HTTP 503)",
+    ),
+  ).toBeTruthy()
   expect(roster().getByText('Fidelity HSA')).toBeTruthy()
   expect(screen.queryByRole('table', { name: 'Portfolio accounts' })).toBeNull()
 })
@@ -432,4 +436,27 @@ it('clears the refusal as soon as the pair is fixed', async () => {
       'is_component needs parent_account_id — name the account it folds into',
     ),
   ).toBeNull()
+})
+
+it('renders a validation error inline with no Retry beside it (motion spec §9)', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('Account name is required.')
+  // Retry re-runs the FETCH: here it would invite a re-send of a form the client refused.
+  expect(within(alert).queryByRole('button')).toBeNull()
+})
+
+it('names the card in the load banner and keeps Retry there', async () => {
+  vi.mocked(fetchAccounts)
+    .mockRejectedValueOnce(new ApiError('accounts unavailable', 503))
+    .mockResolvedValue([CHECKING])
+  render(<AccountsCard people={[ME]} />)
+  expect(
+    await screen.findByText("Couldn't load the accounts — the server had a problem (HTTP 503)"),
+  ).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading the accounts' }))
+  expect(await screen.findByRole('table', { name: 'Net-worth accounts' })).toBeTruthy()
 })

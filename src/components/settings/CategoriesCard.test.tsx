@@ -134,10 +134,12 @@ it('banners a failed load and refetches on Retry', async () => {
     .mockResolvedValue([GROCERIES])
   render(<CategoriesCard />)
 
-  expect(await screen.findByText('categories unavailable')).toBeTruthy()
+  expect(
+    await screen.findByText("Couldn't load the categories — the server had a problem (HTTP 503)"),
+  ).toBeTruthy()
   expect(screen.queryByRole('table')).toBeNull()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading the categories' }))
   expect(await screen.findByRole('table')).toBeTruthy()
   expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2)
 })
@@ -223,4 +225,15 @@ it('banners a refused kind change and leaves the row on its old kind', async () 
       .getByRole('button', { name: 'Living' })
       .getAttribute('aria-pressed'),
   ).toBe('true')
+})
+
+it('renders a validation error inline with no Retry beside it (motion spec §9)', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+  fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('Category name is required.')
+  // Retry re-runs the FETCH: here it would invite a re-send of a form the client refused.
+  expect(within(alert).queryByRole('button')).toBeNull()
 })
