@@ -3,7 +3,7 @@ import path from 'node:path'
 import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup } from '@testing-library/react'
-import PageSkeleton, { SkeletonCard } from './PageSkeleton'
+import PageSkeleton, { SkeletonCard, SkeletonTileRow } from './PageSkeleton'
 
 afterEach(cleanup)
 
@@ -65,6 +65,22 @@ describe('ghost parity (motion spec §7)', () => {
     expect(document.querySelector('.skeleton-strip')?.getAttribute('aria-hidden')).toBe('true')
     rerender(<PageSkeleton tiles={2} />)
     expect(document.querySelector('.skeleton-strip')).toBeNull()
+  })
+  it('reserves a lone KPI row on its own, with the SAME tile the page skeleton draws', () => {
+    // ESPP's $25k strip has no page-level skeleton above it: its box is reserved here or the
+    // page moves 118px when the modeler answers (2026-09-05 lane V smoke, cls/espp).
+    render(<SkeletonTileRow lone label="Loading the $25k headline…" />)
+    const row = document.querySelector('.kpi-row')
+    expect(row?.className).toContain('kpi-row-lone')
+    expect(row?.getAttribute('aria-hidden')).toBe('true')
+    expect(row?.querySelectorAll('.stat-tile.skeleton-tile .skeleton').length).toBe(3)
+    expect(screen.getByRole('status').textContent).toBe('Loading the $25k headline…')
+    // …and it rides the same delay every other ghost does, so a fast answer shows nothing.
+    expect(document.querySelector('.loading-fallback')).not.toBeNull()
+    cleanup()
+    render(<SkeletonTileRow tiles={3} />)
+    expect(document.querySelectorAll('.stat-tile.skeleton-tile').length).toBe(3)
+    expect(document.querySelector('.kpi-row')?.className).not.toContain('kpi-row-lone')
   })
   it('leaves no hand-written ghost height at the call sites this lane owns', () => {
     // A literal here is a number nobody can check against the block it stands in for.

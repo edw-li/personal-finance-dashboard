@@ -20,6 +20,7 @@ import { fetchPriceHistory } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import AmountInput from '../components/AmountInput'
 import InfoHint from '../components/InfoHint'
+import { SkeletonTileRow } from '../components/PageSkeleton'
 import StatTile from '../components/StatTile'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
@@ -1383,6 +1384,12 @@ export default function EsppPage() {
         {/* The modeler's $25k figure at the page top (2026-08-31 audit: the gauge sat below
             the fold). The MODELER's chain — its year and knobs — so it can never disagree
             with the card below; absent until that feed answers, exactly like the card. */}
+        {/* …and its BOX is reserved while that feed is in flight: a strip that appears out of
+            nothing moved every card below it down 118px on each cold load (2026-09-05 lane V
+            smoke, `cls/espp` 0.06 of the page's 0.10). */}
+        {modeler === null && modelerBusy && (
+          <SkeletonTileRow lone label="Loading the $25k headline…" />
+        )}
         {modeler !== null && (
           <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
             {/* kpi-row-lone: the lone tile must not stretch the full grid width; the modeler

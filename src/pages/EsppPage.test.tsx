@@ -321,6 +321,22 @@ describe('EsppPage — frame', () => {
     expect(document.querySelector('.page-header')).toBeNull()
     expect(document.querySelector('.page-frame-header')).toBeTruthy()
   })
+
+  it('reserves the $25k headline strip while the modeler is in flight', async () => {
+    // The strip used to appear out of nothing when that feed answered, moving every card
+    // below it down 118px on a cold load (2026-09-05 lane V smoke, cls/espp).
+    let land: (value: EsppModelerOut) => void = () => {}
+    vi.mocked(fetchModeler).mockReturnValue(new Promise<EsppModelerOut>((resolve) => { land = resolve }))
+    renderPage()
+
+    expect(await screen.findByText('Loading the $25k headline…')).toBeTruthy()
+    expect(document.querySelectorAll('.kpi-row-lone .stat-tile.skeleton-tile').length).toBe(1)
+
+    await act(async () => { land(modelerResponse()) })
+    await waitFor(() => expect(document.querySelector('.skeleton-tile')).toBeNull())
+    // …and exactly one lone row is left standing where the ghost stood.
+    expect(document.querySelectorAll('.kpi-row-lone').length).toBe(1)
+  })
 })
 
 describe('EsppPage — lots', () => {
