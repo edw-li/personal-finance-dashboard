@@ -513,6 +513,32 @@
   height: 1.45rem;
 }
 
+/* The boxes the real layout occupies: a 76px tile ghost under a 115px tile moved every page's
+   first paint by 39px a row (motion spec §7). One variable per row, read by the REAL row and by
+   the empty twin the skeleton leaves in its place — parity by construction, not two numbers that
+   happen to agree; src/components/skeletonMetrics.ts mirrors them and its test pins the pair. */
+.page-skeleton {
+  --m-stat-tile: 115px;
+  --m-owner-strip: 57px;
+}
+
+/* Parity with the loaded blocks (motion spec §7): a ghost tile must stand as tall as the real
+   .stat-tile it is replaced by, delta line and all — the --m-* variables above hold the numbers. */
+.skeleton-tile {
+  min-height: var(--m-stat-tile);
+}
+
+.skeleton-delta {
+  width: 50%;
+  height: 0.8rem;
+  margin-top: 0.35rem;
+}
+
+.skeleton-strip {
+  min-height: var(--m-owner-strip);
+  margin: 0 0 1rem;
+}
+
 /* Delayed appearance: anything that resolves inside the delay shows NOTHING — flashing
    a fallback for 80ms reads clunkier than the wait it fills. Opacity, not display, so
    the appear can fade. Deliberately outside the reduced-motion gate: a delayed fade-in
@@ -526,15 +552,6 @@
   to {
     opacity: 1;
   }
-}
-
-/* The boxes the real layout occupies: a 76px tile ghost under a 115px tile moved every page's
-   first paint by 39px a row (motion spec §7). One variable per row, read by the REAL row and by
-   the empty twin the skeleton leaves in its place — parity by construction, not two numbers that
-   happen to agree; src/components/skeletonMetrics.ts mirrors them and its test pins the pair. */
-.page-skeleton {
-  --m-stat-tile: 115px;
-  --m-owner-strip: 57px;
 }
 
 @media (prefers-reduced-motion: no-preference) {

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup } from '@testing-library/react'
@@ -51,5 +53,26 @@ describe('SkeletonCard', () => {
     expect(card.className).toContain('loading-fallback')
     expect(card.querySelector('[aria-hidden="true"]')).not.toBeNull()
     expect((card.querySelector('.skeleton-body') as HTMLElement).style.height).toBe('260px')
+  })
+})
+
+describe('ghost parity (motion spec §7)', () => {
+  it('draws tiles at the real tile box — delta line included — and the owner strip on request', () => {
+    const { rerender } = render(<PageSkeleton tiles={2} strip />)
+    const tiles = document.querySelectorAll('.kpi-row .stat-tile.skeleton-tile')
+    expect(tiles.length).toBe(2)
+    expect(tiles[0].querySelectorAll('.skeleton').length).toBe(3) // label, value, delta
+    expect(document.querySelector('.skeleton-strip')?.getAttribute('aria-hidden')).toBe('true')
+    rerender(<PageSkeleton tiles={2} />)
+    expect(document.querySelector('.skeleton-strip')).toBeNull()
+  })
+  it('leaves no hand-written ghost height at the call sites this lane owns', () => {
+    // A literal here is a number nobody can check against the block it stands in for.
+    const page = (name: string) => readFileSync(path.join(__dirname, '..', 'pages', `${name}.tsx`), 'utf8')
+    expect(page('PaycheckPage')).toContain('height: FEED_SKELETON.paycheckBreakdown')
+    expect(page('CompPage')).toContain('height: FEED_SKELETON.compVesting')
+    expect(page('EsppPage')).toContain('height: FEED_SKELETON.esppLots')
+    expect(page('EsppPage')).toContain('height: FEED_SKELETON.esppOfferings')
+    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(360, { zoomable: true }))')
   })
 })

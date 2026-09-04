@@ -100,7 +100,9 @@ export default function PageFrame({
           <div className={`page-frame-scope${stuck ? ' is-stuck' : ''}`}>{scopeRow}</div>
         </>
       )}
-      {showSkeleton && <PageSkeleton tiles={skeleton.tiles ?? 0} cards={skeleton.cards ?? []} />}
+      {/* The whole spec, spread: PageSkeleton owns the defaults, so a prop added there reaches every
+          page without a second forwarding list to keep in step. */}
+      {showSkeleton && <PageSkeleton {...skeleton} />}
       {showErrorOnly && (
         <div className="error-banner" role="alert">
           {resource.error ?? 'Something went wrong.'}{' '}

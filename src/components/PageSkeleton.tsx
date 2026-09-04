@@ -10,9 +10,12 @@ import './panels.css'
 export default function PageSkeleton({
   tiles = 0,
   cards = [],
+  strip = false,
 }: {
   tiles?: number
   cards?: { span: 4 | 6 | 8 | 12; height?: number }[]
+  /** Net worth's per-owner strip under the tiles — ghosted, or the tiles jump when it lands. */
+  strip?: boolean
 }) {
   return (
     <div className="page-skeleton loading-fallback">
@@ -22,13 +25,17 @@ export default function PageSkeleton({
       {tiles > 0 && (
         <div className="kpi-row" aria-hidden="true">
           {Array.from({ length: tiles }, (_, i) => (
-            <div className="stat-tile" key={i}>
+            /* The real tile carries a delta line: a two-block ghost measured 76 against its 115, so
+               every KPI row dropped 39px when the data landed (2026-09-05 audit). */
+            <div className="stat-tile skeleton-tile" key={i}>
               <div className="skeleton skeleton-label" />
               <div className="skeleton skeleton-value" />
+              <div className="skeleton skeleton-delta" />
             </div>
           ))}
         </div>
       )}
+      {strip && <div className="skeleton-strip" aria-hidden="true"><div className="skeleton skeleton-label" /></div>}
       {cards.length > 0 && (
         <div className="card-grid" aria-hidden="true">
           {cards.map((card, i) => (
