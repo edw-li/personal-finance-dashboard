@@ -147,7 +147,13 @@ export default function EChart({
     chartRef.current = chart
     lastStrippedRef.current = null
     if (instanceRef) instanceRef.current = chart
-    const observer = new ResizeObserver(() => chart.resize())
+    // The browser fires this the moment observe() is called, carrying the size the chart was
+    // just init'ed at; resize() there restarts every animator, killing the entrance (spec §6).
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth !== chart.getWidth() || el.clientHeight !== chart.getHeight()) {
+        chart.resize()
+      }
+    })
     observer.observe(el)
     return () => {
       observer.disconnect()

@@ -9,6 +9,10 @@ interface FakeChartLike {
   getDataURL: ReturnType<typeof vi.fn>
   getOption: ReturnType<typeof vi.fn>
   dispatchAction: ReturnType<typeof vi.fn>
+  dispose: ReturnType<typeof vi.fn>
+  resize: ReturnType<typeof vi.fn>
+  getWidth: ReturnType<typeof vi.fn>
+  getHeight: ReturnType<typeof vi.fn>
 }
 
 // House law keeps real echarts out of jsdom (no canvas). The engine is stubbed at the
@@ -23,6 +27,9 @@ vi.mock('../charts/echarts', () => {
     dispose = vi.fn()
     resize = vi.fn()
     dispatchAction = vi.fn()
+    // jsdom's container is 0×0, so a fake answering 0 is a chart already at its element's size.
+    getWidth = vi.fn(() => 0)
+    getHeight = vi.fn(() => 0)
     getDataURL = vi.fn(() => 'data:image/png;base64,PNG')
     getOption = vi.fn(() => ({ dataZoom: [{ startValue: 3, endValue: 9 }] }))
     on(event: string, handler: (params?: unknown) => void) {
@@ -74,11 +81,17 @@ function lastChart(): FakeChartLike {
 
 const OPTION = {} as EChartsOption
 
+// The browser fires a ResizeObserver's callback the moment observe() is called; these are
+// the captured callbacks, so a test can fire that notification itself.
+let resizeNotify: (() => void)[] = []
+
 beforeEach(() => {
+  resizeNotify = []
   // jsdom has no ResizeObserver; the wrapper observes its container on mount.
   vi.stubGlobal(
     'ResizeObserver',
     class {
+      constructor(cb: () => void) { resizeNotify.push(cb) }
       observe() {}
       unobserve() {}
       disconnect() {}
@@ -477,5 +490,21 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
     act(() => { media.matches = true; listeners.forEach((l) => l()) })
     const last = chart.setOption.mock.calls.at(-1) as [Record<string, unknown>]
     expect(last[0].animation).toBe(false)
+  })
+})
+
+describe('EChart resize guard (spec §6)', () => {
+  it('ignores the notification that only echoes the size the engine already holds', () => {
+    render(<EChart ariaLabel="test chart" option={OPTION} />)
+    resizeNotify.forEach((fire) => fire())
+    // resize() mid-entrance restarts every animator from frame 0 — why entrances have never been seen.
+    expect(lastChart().resize).not.toHaveBeenCalled()
+  })
+  it('resizes when the element and the engine disagree', () => {
+    render(<EChart ariaLabel="test chart" option={OPTION} />)
+    const chart = lastChart()
+    chart.getWidth.mockReturnValue(800) // the element is still jsdom's 0-wide
+    resizeNotify.forEach((fire) => fire())
+    expect(chart.resize).toHaveBeenCalledTimes(1)
   })
 })
