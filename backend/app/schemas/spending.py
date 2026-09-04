@@ -106,8 +106,10 @@ class MatrixOut(BaseModel):
     tax_total: list[Decimal]
     transfer_total: list[Decimal]
     cash_savings: list[Decimal | None]
-    # Never null: 0.00 for a month with no take-home entered (no pay on file means no
-    # deductions on file), so the array always sums.
+    # Null, like its three siblings, for a month with no take-home entered: no pay on file
+    # means no deductions on file, and $0.00 would read as "saved nothing" rather than
+    # "nobody said" (spec §2). The YEARLY scalar stays non-null — it only ever sums matched
+    # months, every one of which has pay.
     payroll_savings: list[Decimal | None]
     total_savings: list[Decimal | None]
     total_savings_rate: list[Decimal | None]
