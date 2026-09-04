@@ -69,6 +69,28 @@ async def _validate_links(
             )
 
 
+def _check_component_link(is_component: bool | None, parent_account_id: int | None) -> None:
+    """`is_component` and `parent_account_id` are two halves of ONE fact (2026-09-04
+    honest-numbers spec §5): the flag is the key every rollup excludes on, the link is the
+    parent the money folds into. Half of it produces the Settings card's "unlinked component
+    — counts nowhere" row, or a component that is silently double-counted, so a request that
+    sets one without the other is refused NAMING the missing half.
+
+    Rows that already disagree are not touched: this fires only when a request supplies one
+    of the two, so a legacy account keeps its shape until someone edits that part of it.
+    """
+    if is_component and parent_account_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="is_component needs parent_account_id — name the account it folds into",
+        )
+    if parent_account_id is not None and not is_component:
+        raise HTTPException(
+            status_code=422,
+            detail="parent_account_id needs is_component — a linked account must be a component",
+        )
+
+
 @router.get("/accounts", response_model=list[AccountOut])
 async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
     result = await db.execute(select(Account).order_by(Account.sort_order, Account.id))
@@ -102,6 +124,7 @@ async def create_account(
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"account {slug!r} already exists")
     await _validate_links(db, body.person_id, body.parent_account_id, None)
+    _check_component_link(body.is_component, body.parent_account_id)
     account = Account(
         name=body.name,
         slug=slug,
@@ -164,6 +187,14 @@ async def update_account(
     await _validate_links(
         db, updates.get("person_id"), updates.get("parent_account_id"), account_id
     )
+    if "is_component" in updates or "parent_account_id" in updates:
+        # Judge the row the PATCH would LEAVE BEHIND, not the keys it happens to carry:
+        # `updates` already drops explicit nulls for every column except the two nullable
+        # ones, so an unlink really is in here and an `is_component: null` really is not.
+        _check_component_link(
+            updates.get("is_component", account.is_component),
+            updates.get("parent_account_id", account.parent_account_id),
+        )
     # slug is the importer's natural key — never rewritten here. A sheet-side rename is
     # the importer's job (per-run alias semantics, Plan 2 forward note).
     before = row_image(account)

@@ -52,6 +52,11 @@ async def test_create_account_conflicts_on_slug(auth_client):
 
 
 async def test_patch_account_updates_fields_not_slug(auth_client, db):
+    parent = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Fleet", "group": "other"}
+        )
+    ).json()
     created = (
         await auth_client.post(
             "/api/v1/net-worth/accounts", json={"name": "Vehicle(s)", "group": "other"}
@@ -59,13 +64,21 @@ async def test_patch_account_updates_fields_not_slug(auth_client, db):
     ).json()
     resp = await auth_client.patch(
         f"/api/v1/net-worth/accounts/{created['id']}",
-        json={"name": "Vehicles", "is_component": True, "is_active": False},
+        json={
+            "name": "Vehicles",
+            # Both halves of the component fact travel together now (spec §5): the flag is
+            # the rollup key, the link is where the money lands.
+            "is_component": True,
+            "parent_account_id": parent["id"],
+            "is_active": False,
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["name"] == "Vehicles"
     assert body["slug"] == "vehicle-s"  # slug is the importer's natural key — immutable
     assert body["is_component"] is True
+    assert body["parent_account_id"] == parent["id"]
     assert body["is_active"] is False
 
 
@@ -630,13 +643,15 @@ async def test_account_owner_and_parent_round_trip(auth_client, db):
     assert child["is_component"] is True
 
     # An explicit null is a WRITE on these two columns: retag to joint, unlink the parent.
+    # Unlinking drops the component flag in the same body — half the fact is a 422 (spec §5).
     resp = await auth_client.patch(
         f"/api/v1/net-worth/accounts/{child['id']}",
-        json={"person_id": None, "parent_account_id": None},
+        json={"person_id": None, "parent_account_id": None, "is_component": False},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["person_id"] is None
     assert resp.json()["parent_account_id"] is None
+    assert resp.json()["is_component"] is False
 
     # ...while an OMITTED key still leaves the column exactly where it was.
     resp = await auth_client.patch(
@@ -694,6 +709,91 @@ async def test_account_link_validation(auth_client, db):
             f"/api/v1/net-worth/accounts/{created['id']}", json={"person_id": 999}
         )
     ).status_code == 422
+
+
+async def test_account_component_halves_must_travel_together(auth_client, db):
+    parent = (
+        await auth_client.post(
+            "/api/v1/net-worth/accounts", json={"name": "Fidelity Roth 401(k)", "group": "pre_tax"}
+        )
+    ).json()
+
+    flagged_only = await auth_client.post(
+        "/api/v1/net-worth/accounts",
+        json={"name": "Loose Bucket", "group": "pre_tax", "is_component": True},
+    )
+    assert flagged_only.status_code == 422
+    assert flagged_only.json()["detail"] == (
+        "is_component needs parent_account_id — name the account it folds into"
+    )
+
+    linked_only = await auth_client.post(
+        "/api/v1/net-worth/accounts",
+        json={"name": "Linked Bucket", "group": "pre_tax", "parent_account_id": parent["id"]},
+    )
+    assert linked_only.status_code == 422
+    assert linked_only.json()["detail"] == (
+        "parent_account_id needs is_component — a linked account must be a component"
+    )
+
+    both = await auth_client.post(
+        "/api/v1/net-worth/accounts",
+        json={
+            "name": "After-tax 401(k)",
+            "group": "pre_tax",
+            "is_component": True,
+            "parent_account_id": parent["id"],
+        },
+    )
+    assert both.status_code == 201, both.text
+    child = both.json()
+
+    # PATCH judges the RESULTING row, not just the keys the body carries.
+    assert (
+        await auth_client.patch(
+            f"/api/v1/net-worth/accounts/{child['id']}", json={"parent_account_id": None}
+        )
+    ).status_code == 422
+    assert (
+        await auth_client.patch(
+            f"/api/v1/net-worth/accounts/{child['id']}", json={"is_component": False}
+        )
+    ).status_code == 422
+    unlinked = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{child['id']}",
+        json={"is_component": False, "parent_account_id": None},
+    )
+    assert unlinked.status_code == 200, unlinked.text
+    assert unlinked.json()["is_component"] is False
+    assert unlinked.json()["parent_account_id"] is None
+    # ...and the flag can only come back with a link attached.
+    assert (
+        await auth_client.patch(
+            f"/api/v1/net-worth/accounts/{child['id']}", json={"is_component": True}
+        )
+    ).status_code == 422
+
+
+async def test_an_account_that_already_disagrees_is_left_alone(auth_client, db):
+    # Legacy rows (importer-made, or hand-SQL) can carry half the fact. The rule guards the
+    # WRITE; existing drift is lane A's health rule to report, never this router's to rewrite.
+    legacy = Account(
+        name="Orphaned Bucket",
+        slug="orphaned-bucket",
+        group="pre_tax",
+        sort_order=4,
+        is_component=True,
+        parent_account_id=None,
+    )
+    db.add(legacy)
+    await db.commit()
+    resp = await auth_client.patch(
+        f"/api/v1/net-worth/accounts/{legacy.id}", json={"sort_order": 7}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["sort_order"] == 7
+    assert resp.json()["is_component"] is True  # still half a fact, and still untouched
+    assert resp.json()["parent_account_id"] is None
 
 
 async def test_account_defaults_to_joint_when_no_owner_is_sent(auth_client):
