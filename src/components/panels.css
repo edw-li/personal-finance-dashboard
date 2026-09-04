@@ -600,6 +600,25 @@
   --m-caption-row: 26px;
 }
 
+/* flow-root, not overflow:hidden: a block formatting context keeps the child's margins INSIDE the
+   reserved row (an escaping 0.4rem makes the loaded row taller than its twin) without clipping the
+   segmented buttons' focus ring. */
+.chart-card-row {
+  display: flow-root;
+}
+
+.chart-card-row-export {
+  min-height: var(--m-export-row);
+}
+
+.chart-card-row-zoom {
+  min-height: var(--m-zoom-row);
+}
+
+.chart-card-row-caption {
+  min-height: var(--m-caption-row);
+}
+
 .chart-card-skeleton {
   border-radius: 8px;
 }

@@ -7,13 +7,14 @@ vi.mock('./EChart', async () => {
   const { createElement } = await import('react')
   return {
     default: ({ ariaLabel, animateEntrance = true, group, height }: { ariaLabel?: string; animateEntrance?: boolean; group?: string; height?: number }) =>
-      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height) }),
+      createElement('div', { 'data-testid': 'echart', 'aria-label': ariaLabel, 'data-animate': String(animateEntrance), 'data-group': group ?? '', 'data-height': String(height), style: { height } }),
   }
 })
 vi.mock('../utils/download', () => ({ toCsv: vi.fn(() => 'CSV'), downloadDataUrl: vi.fn(), downloadText: vi.fn() }))
 
 import ChartCard from './ChartCard'
 import PageFrame from './shell/PageFrame'
+import { CHART_CARD_ROWS } from './skeletonMetrics'
 
 const OPTION = { series: [] } as EChartsOption
 const base = { title: 'Net worth', hint: 'What it shows.', ariaLabel: 'Line chart of net worth', empty: 'No snapshots yet.', exportName: 'net-worth' }
@@ -94,5 +95,35 @@ describe('ChartCard chrome', () => {
     expect(screen.getByRole('button', { name: 'Table' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: 'Table' }))
     expect(screen.queryByRole('table')).toBeNull()
+  })
+})
+
+describe('ChartCard reserved rows (motion spec §7)', () => {
+  const rows = () => Array.from(document.querySelectorAll('.chart-card-row')).map((r) => r.className)
+  const full = { ...base, height: 280, zoomable: true, controls: <button>Monthly</button>, footer: <p className="drill-hint">Click a bar.</p> }
+  // jsdom lays nothing out, so "did it move?" is asked of what the card DECLARES: an inline height,
+  // or a --m-* row whose px value panels.css fixes (Task 1 pins the two together).
+  const ROW_PX: Record<string, number> = { 'chart-card-row-export': CHART_CARD_ROWS.exportRow, 'chart-card-row-zoom': CHART_CARD_ROWS.zoom, 'chart-card-row-caption': CHART_CARD_ROWS.caption }
+  const reserved = (el: Element): number =>
+    parseFloat((el as HTMLElement).style.height || '0') ||
+    Array.from(el.classList).map((cls) => ROW_PX[cls]).find((px) => px !== undefined) ||
+    Array.from(el.children).reduce((sum, kid) => sum + reserved(kid), 0)
+  it('declares the same rows AND the same total height with a skeleton up as loaded (CLS pin)', () => {
+    const card = () => document.querySelector('section.chart-card') as HTMLElement
+    const { rerender } = render(<ChartCard {...full} option={null} busy />)
+    const loading = rows()
+    expect(loading).toEqual(['chart-card-row chart-card-row-export', 'chart-card-row chart-card-row-zoom', 'chart-card-row chart-card-row-caption'])
+    expect(document.querySelector('.chart-card-header .chart-card-controls')).toBeTruthy()
+    expect((document.querySelector('.chart-card-skeleton') as HTMLElement).style.height).toBe('280px')
+    expect(reserved(card())).toBe(280 + CHART_CARD_ROWS.exportRow + CHART_CARD_ROWS.zoom + CHART_CARD_ROWS.caption)
+    rerender(<ChartCard {...full} option={OPTION} />)
+    expect(rows()).toEqual(loading) // same rows, same order — only their CONTENTS arrive with the data
+    expect(reserved(card())).toBe(280 + CHART_CARD_ROWS.exportRow + CHART_CARD_ROWS.zoom + CHART_CARD_ROWS.caption)
+    expect(document.querySelector('.chart-card-row-export .chart-export')).toBeTruthy()
+    expect(document.querySelector('.chart-card-row-zoom .chart-zoom-hint')).toBeTruthy()
+  })
+  it('reserves only the rows the card actually declares', () => {
+    render(<ChartCard {...base} option={null} busy />) // no zoom, no footer
+    expect(rows()).toEqual(['chart-card-row chart-card-row-export'])
   })
 })

@@ -119,21 +119,29 @@ export default function ChartCard({
           </div>
         )}
       </div>
-      {option !== null && (
-        <ChartExportMenu
-          config={{ name: exportName, csv, title, caption }}
-          getChart={() => chartRef.current}
-          tableShown={showTable}
-          onToggleTable={csv === undefined ? undefined : () => setTableOpen((open) => !open)}
-        />
-      )}
+      {/* Rows the card reserves in EVERY state (spec §7). The export row and the zoom caption used
+          to mount WITH the option, so the card grew the instant data landed and shoved the next
+          card down the page; the twin is the same element with nothing in it, and panels.css
+          gives both their height. */}
+      <div className="chart-card-row chart-card-row-export">
+        {option !== null && (
+          <ChartExportMenu
+            config={{ name: exportName, csv, title, caption }}
+            getChart={() => chartRef.current}
+            tableShown={showTable}
+            onToggleTable={csv === undefined ? undefined : () => setTableOpen((open) => !open)}
+          />
+        )}
+      </div>
       {option !== null && error !== null && (
         <p className="chart-card-error" role="status">{error}</p>
       )}
       {body}
-      {zoomable && option !== null && <ChartZoomHint />}
+      {zoomable && (
+        <div className="chart-card-row chart-card-row-zoom">{option !== null && <ChartZoomHint />}</div>
+      )}
       {showTable && csv !== undefined && <ChartTable table={csv()} caption={`${title} — data table`} />}
-      {footer}
+      {footer !== undefined && <div className="chart-card-row chart-card-row-caption">{footer}</div>}
     </section>
   )
 }
