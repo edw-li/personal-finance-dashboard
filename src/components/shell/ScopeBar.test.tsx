@@ -8,7 +8,8 @@ import { fetchCoverage } from '../../api/coverage'
 import { fetchHousehold } from '../../api/household'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../../api/snapshotCache'
 import { hintLabel } from '../InfoHint'
-import ScopeBar, { HOUSEHOLD_SNAPSHOT } from './ScopeBar'
+import type { HouseholdOut } from '../../types/api'
+import ScopeBar, { HOUSEHOLD_SIZE_KEY, HOUSEHOLD_SNAPSHOT } from './ScopeBar'
 
 function Url() {
   const l = useLocation()
@@ -53,6 +54,9 @@ const DEFAULT_SOLO = 'Each person has their own view; nothing here is shared.'
 
 beforeEach(() => {
   localStorage.clear()
+  // The remembered household size lives here and jsdom keeps sessionStorage alive across
+  // the tests in a file: one test's one-person book would silence the next one's ghost.
+  sessionStorage.clear()
   clearSnapshots()
   vi.mocked(fetchHousehold).mockResolvedValue(HOUSEHOLD)
   vi.mocked(fetchCoverage).mockResolvedValue({
@@ -279,5 +283,72 @@ describe('ScopeBar', () => {
   it('renders nothing at all when no control is declared', () => {
     const { container } = mount({})
     expect(container.querySelector('.scope-bar')).toBeNull()
+  })
+})
+
+// A page whose ONLY scope control is the owner chips (Paycheck, Overview) has a 0px sticky row
+// until the household answers and a ~50px one after: 66px of body travel, CLS 0.39 on the load
+// that lost the race (motion lane V, 2026-09-05). These pin the reservation and what it costs.
+describe('ScopeBar — the row reserves its height while the household loads', () => {
+  /** The unknown state, held still: a household fetch that never answers. */
+  const inFlight = () =>
+    vi.mocked(fetchHousehold).mockReturnValue(new Promise<HouseholdOut>(() => {}))
+
+  it('stands a ghost of the row while the household is unknown', () => {
+    inFlight()
+    const { container } = mount({ owner: { joint: false, all: false } })
+    const ghost = container.querySelector('.scope-bar-ghost')
+    expect(ghost).toBeTruthy()
+    // A reserved box, not a control: nothing in it is announced, named or focusable.
+    expect(ghost?.getAttribute('aria-hidden')).toBe('true')
+    expect(ghost?.querySelector('button, [role]')).toBeNull()
+    expect(container.querySelector('.scope-bar')).toBeNull()
+  })
+
+  it('stands no ghost for a page that declares no owner control', () => {
+    inFlight()
+    const { container } = mount({})
+    expect(container.querySelector('.scope-bar-ghost')).toBeNull()
+    expect(fetchHousehold).not.toHaveBeenCalled()
+  })
+
+  it('swaps the ghost for the real chips once the household lands', async () => {
+    const { container } = mount({ owner: true })
+    expect(container.querySelector('.scope-bar-ghost')).toBeTruthy()
+    await screen.findByRole('group', { name: 'Whose' })
+    // Replaced in place. jsdom lays nothing out, so the two HEIGHTS are pinned where they are
+    // declared — one panels.css rule both selectors read (skeletonMetrics.test.ts).
+    expect(container.querySelector('.scope-bar-ghost')).toBeNull()
+    expect(container.querySelector('.scope-bar')).toBeTruthy()
+  })
+
+  it('skips the ghost when this tab already knows the household is one person', () => {
+    sessionStorage.setItem(HOUSEHOLD_SIZE_KEY, '1')
+    inFlight()
+    const { container } = mount({ owner: true })
+    // No chips are coming, so reserving room for them IS the shift — the other way up.
+    expect(container.querySelector('.scope-bar-ghost')).toBeNull()
+  })
+
+  it('remembers the size it last saw, so a one-person book pays the ghost once per tab', async () => {
+    vi.mocked(fetchHousehold).mockResolvedValue(ALONE)
+    mount({ owner: true })
+    await waitFor(() => expect(sessionStorage.getItem(HOUSEHOLD_SIZE_KEY)).toBe('1'))
+  })
+
+  it('leaves the row TRULY empty for a one-person household — what `:empty` hides', async () => {
+    vi.mocked(fetchHousehold).mockResolvedValue(ALONE)
+    const { container } = mount({ owner: true })
+    await waitFor(() => expect(container.querySelector('.scope-bar-ghost')).toBeNull())
+    // Not a 0-height node — NO node, which is what shell.css's `:empty` rule matches to keep
+    // the sticky row from taking space and drawing its hairline over nothing.
+    expect(container.querySelector('.scope-bar, .scope-bar-ghost')).toBeNull()
+  })
+
+  it('drops the ghost when the household fetch fails — a reserved box is not forever', async () => {
+    vi.mocked(fetchHousehold).mockRejectedValue(new Error('offline'))
+    const { container } = mount({ owner: true })
+    expect(container.querySelector('.scope-bar-ghost')).toBeTruthy()
+    await waitFor(() => expect(container.querySelector('.scope-bar-ghost')).toBeNull())
   })
 })

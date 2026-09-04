@@ -79,6 +79,29 @@ const OWNER_HINT_SOLO = 'Each person has their own view; nothing here is shared.
 export const HOUSEHOLD_SNAPSHOT = 'shell:household'
 export const COVERAGE_SNAPSHOT = 'shell:coverage'
 
+/** Remembered per TAB — sessionStorage, not the in-memory snapshot cache, which starts clean on
+ *  every reload by design. A household SIZE is not page data: it decides only whether this row
+ *  has an owner control coming and therefore room to reserve, so a one-person book pays for the
+ *  ghost below once per tab and never again. */
+export const HOUSEHOLD_SIZE_KEY = 'finance.householdSize'
+
+function rememberHouseholdSize(size: number): void {
+  try {
+    sessionStorage.setItem(HOUSEHOLD_SIZE_KEY, String(size))
+  } catch {
+    /* storage disabled or full: the ghost simply shows again on the next load */
+  }
+}
+
+function lastKnownHouseholdSize(): number | null {
+  try {
+    const raw = sessionStorage.getItem(HOUSEHOLD_SIZE_KEY)
+    return raw === null ? null : Number(raw)
+  } catch {
+    return null
+  }
+}
+
 function ownerFromValue(value: string): OwnerScope {
   if (value === 'all') return null
   if (value === 'joint') return 'joint'
@@ -99,6 +122,10 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
   const [coverage, setCoverage] = useState<CoverageOut | null>(
     () => getSnapshot<CoverageOut>(COVERAGE_SNAPSHOT) ?? null,
   )
+  // Read ONCE per mount: this decides the first paint only, and a size another page rewrote
+  // mid-flight must not pull the ghost out from under a load that is still running.
+  const [lastKnownSize] = useState(lastKnownHouseholdSize)
+  const [householdSettled, setHouseholdSettled] = useState(false)
 
   const wantsOwner = owner !== undefined && owner !== false
   useEffect(() => {
@@ -106,11 +133,18 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
     fetchHousehold()
       .then((data) => {
         setSnapshot(HOUSEHOLD_SNAPSHOT, data)
+        rememberHouseholdSize(data.people.length)
         setHousehold(data)
       })
       .catch(() => {
         /* keep whatever the snapshot had: the URL still carries the truth and the page's own
            resource reports outages */
+      })
+      .finally(() => {
+        // Settled either way. The ghost below reserves room for chips that are COMING, and a
+        // fetch that failed is bringing none — left up, it would park a pulsing bar in the
+        // sticky row for the life of the page.
+        setHouseholdSettled(true)
       })
   }, [wantsOwner, revalidate])
 
@@ -176,7 +210,22 @@ export default function ScopeBar({ owner, ownerHint, range, month, revalidate }:
 
   const monthGroupRef = useRef<HTMLDivElement | null>(null)
   const showOwner = wantsOwner && people.length > 1
-  if (!showOwner && !range && month === undefined) return null
+  if (!showOwner && !range && month === undefined) {
+    // Nothing to render YET is not nothing to render. While the household is unknown the owner
+    // chips may still be coming, and the sticky row goes 0px (`:empty`, shell.css) to ~50px when
+    // they land, taking the whole body 66px down with it — CLS 0.39 on Paycheck, whose ONLY
+    // scope control they are (motion lane V, 2026-09-05). A ghost of the row's own height holds
+    // the space until the answer is in. A book this tab already knows to be one person skips
+    // it: there no chips are coming, and reserving room for them would BE the shift, upside
+    // down. It is replaced in place, and collapses without animation if the answer is one.
+    if (!wantsOwner || household !== null || householdSettled || lastKnownSize === 1) return null
+    return (
+      <div className="scope-bar-ghost" aria-hidden="true">
+        <span className="skeleton scope-bar-ghost-label" />
+        <span className="skeleton scope-bar-ghost-chips" />
+      </div>
+    )
+  }
 
   // The anchor is where the ribbon ENDS (a page may anchor ahead of today); `today` is what
   // wears the ring. Only the anchor is injectable, so the ring always tracks the real clock.

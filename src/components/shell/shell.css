@@ -152,7 +152,12 @@
 
 /* A declared scope row can still render nothing (a one-person household hides the owner control
    and the page declared no other control): an empty sticky row must not take space or draw its
-   hairline. `:empty` matches because ScopeBar returns null, leaving no DOM nodes in the slot. */
+   hairline. `:empty` matches because ScopeBar returns null, leaving no DOM nodes in the slot.
+   While the household is still UNKNOWN the slot is NOT empty — ScopeBar stands a ghost of the
+   row's own height in it (panels.css, --m-scope-row) — so this rule only ever hides a row with
+   nothing coming. The row itself keeps no min-height: the reservation belongs to the ghost, or
+   every page that declares a scope row would stand 50px whether or not it has chips to put
+   there. */
 .page-frame-scope:empty {
   display: none;
 }

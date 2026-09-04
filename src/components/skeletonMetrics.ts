@@ -20,6 +20,12 @@ export const TILE_ROW = STAT_TILE + 16
  *  .skeleton-strip's `margin`, not part of this number: counting it twice stood the ghost 16px
  *  taller than the strip and pushed both charts down when the summary landed. */
 export const OWNER_STRIP = 41
+/** The scope row's INNER box — mirrored as --m-scope-row in panels.css, read by the real
+ *  .scope-bar and by the ghost ScopeBar stands in the row while the household is still unknown.
+ *  It is the Segmented control's own box: 1px border twice + 0.35rem padding twice + a 12.8px
+ *  line box = 30.2 measured, rounded like every other twin here; the same number
+ *  --m-header-controls reserves for the very same control inside a chart card. */
+export const SCOPE_ROW = 30
 /** Rows a ChartCard reserves whether or not the option landed — mirrored as --m-header-row /
  *  --m-header-controls / --m-export-row / --m-zoom-row / --m-caption-row in panels.css, which the
  *  test pins. The two header rows are min-heights on the REAL header, so a card with small controls

@@ -564,6 +564,43 @@
   margin: 0 0 1rem;
 }
 
+/* The scope row's box (motion lane V, 2026-09-05). The sticky row is 0px until ScopeBar's
+   household fetch answers and ~50px once the owner chips land: on Paycheck, whose ONLY scope
+   control they are, that moved the whole body down 66px and scored CLS 0.39 on the load that
+   lost the race. One variable, read by the REAL bar and by the ghost that stands in for it, so
+   the row is the same height before and after the household lands. 30px is the Segmented
+   control's box — 1px border twice, 0.35rem padding twice and a 12.8px line box — the same
+   number --m-header-controls reserves for the same control; src/components/skeletonMetrics.ts
+   mirrors it and its test pins the pair. */
+.scope-bar,
+.scope-bar-ghost {
+  --m-scope-row: 30px;
+  min-height: var(--m-scope-row);
+}
+
+/* No transition on the way out: the ghost is REPLACED in place by the chips, and when the
+   household turns out to be one person the row simply collapses (shell.css's `:empty`) — a 50px
+   row sliding shut is the same shift again, only slower. The blocks inside pulse because they
+   are .skeletons; that is their appearance, not this row's exit. */
+.scope-bar-ghost {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* Where the "Whose" label and its chips land. A ghost's WIDTH shifts nothing — only the height
+   above is arithmetic — so these two are the look. */
+.scope-bar-ghost-label {
+  width: 46px;
+  height: 0.6875rem;
+}
+
+.scope-bar-ghost-chips {
+  width: 112px;
+  height: var(--m-scope-row);
+  border-radius: 8px;
+}
+
 /* Delayed appearance: anything that resolves inside the delay shows NOTHING — flashing
    a fallback for 80ms reads clunkier than the wait it fills. The 300ms threshold is
    2026-09-05 spec §2's, shared with Layout.css's route fallback, and stays a literal
