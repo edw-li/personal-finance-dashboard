@@ -1602,6 +1602,225 @@ it('autofocuses the first TYPABLE cell when the table opens on a derived parent'
   expect(document.activeElement).toBe(first)
 })
 
+// --- the 2026-09-04 review: history without component rows, and the is_component key ------
+
+// An EXISTING month, so the wizard is editing history: which component rows that month
+// actually stores is exactly what decides derived-vs-typed.
+function withStoredMonth(balances: { account_id: string | number; balance: string }[]) {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([
+    account,
+    parent401k,
+    preTaxPart,
+    afterTaxPart,
+  ])
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-08-01',
+    recorded_on: null,
+    notes: null,
+    balances: month === '2026-08-01' ? (balances as { account_id: number; balance: string }[]) : [],
+  }))
+}
+
+async function saveTheMonth() {
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+}
+
+it('keeps a parent TYPED on an existing month that stores no component rows', async () => {
+  withStoredMonth([
+    { account_id: 1, balance: '1500.00' },
+    { account_id: 8, balance: '1000.00' },
+  ])
+  renderWizard()
+  // Deriving here would print $0.00 over a total someone typed by hand — and then SAVE it.
+  // A real BOX holding the stored total — '$1,000.00' is AmountInput's blurred echo of the
+  // same '1000.00' state (Checking is the autofocused cell, so this one shows formatted).
+  const parent = (await screen.findByLabelText('Fidelity 401(k)')) as HTMLInputElement
+  expect(parent.value).toBe('$1,000.00')
+  expect(
+    (screen.getByText('Fidelity 401(k)').closest('tr') as HTMLElement).className,
+  ).not.toContain('entry-derived')
+
+  await saveTheMonth()
+  await waitFor(() =>
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        // The never-typed components stay OUT: their seeded $0.00 rows are precisely what
+        // would flip this row to a derived $0.00 on the next visit.
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 8, balance: '1000.00' },
+        ],
+      }),
+    ),
+  )
+})
+
+it('derives a parent on an existing month that stores even one component row', async () => {
+  withStoredMonth([
+    { account_id: 1, balance: '1500.00' },
+    { account_id: 8, balance: '1000.00' },
+    { account_id: 9, balance: '600.00' },
+  ])
+  renderWizard()
+  const row = (await screen.findByText('Fidelity 401(k)')).closest('tr') as HTMLElement
+  expect(row.className).toContain('entry-derived')
+  // 600 stored, plus a sibling with no row of its own at 0.00 — the stored 1,000 total is
+  // NOT what this month is worth once its components speak.
+  expect(within(row).getAllByRole('cell')[2].textContent).toBe('$600.00')
+
+  await saveTheMonth()
+  await waitFor(() =>
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 9, balance: '600.00' },
+          { account_id: 10, balance: '0.00' },
+        ],
+      }),
+    ),
+  )
+})
+
+it('hands a hand-typed parent over to its components the moment one is entered', async () => {
+  withStoredMonth([
+    { account_id: 1, balance: '1500.00' },
+    { account_id: 8, balance: '1000.00' },
+  ])
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText(/^401\(k\) pre-tax/), {
+    target: { value: '700.00' },
+  })
+  // The row IS the sum from this keystroke on — shipping the typed total AND a component
+  // is the server's 422 ("derived from its components").
+  const row = screen.getByText('Fidelity 401(k)').closest('tr') as HTMLElement
+  expect(row.className).toContain('entry-derived')
+  expect(within(row).getAllByRole('cell')[2].textContent).toBe('$700.00')
+
+  await saveTheMonth()
+  await waitFor(() =>
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 9, balance: '700.00' },
+          { account_id: 10, balance: '0.00' },
+        ],
+      }),
+    ),
+  )
+})
+
+it('ignores a linked account that is not flagged as a component', async () => {
+  // `is_component` is the rollup key on both sides of the wire (lane B's server, lane E's
+  // Accounts card): a parent_account_id set WITHOUT it must not drive a derived preview
+  // the server will never write.
+  withComponents([account, parent401k, { ...preTaxPart, is_component: false }])
+  renderWizard()
+  // A real BOX holding the stored total — '$1,000.00' is AmountInput's blurred echo of the
+  // same '1000.00' state (Checking is the autofocused cell, so this one shows formatted).
+  const parent = (await screen.findByLabelText('Fidelity 401(k)')) as HTMLInputElement
+  expect(parent.value).toBe('$1,000.00')
+  expect(
+    (screen.getByText('Fidelity 401(k)').closest('tr') as HTMLElement).className,
+  ).not.toContain('entry-derived')
+})
+
+const retiredPart = {
+  id: 11, name: '401(k) legacy', slug: 'k-legacy', group: 'pre_tax' as const,
+  sort_order: 9, is_active: false, is_component: true, parent_account_id: 8, person_id: 1,
+}
+
+it('counts a retired component that still has a row, and never sends it back', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue([
+    account, parent401k, preTaxPart, retiredPart,
+  ])
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-08-01',
+    recorded_on: null,
+    notes: null,
+    balances:
+      month === '2026-08-01'
+        ? [
+            { account_id: 1, balance: '1500.00' },
+            { account_id: 8, balance: '1000.00' },
+            { account_id: 9, balance: '600.00' },
+            { account_id: 11, balance: '400.00' },
+          ]
+        : [],
+  }))
+  renderWizard()
+  // The server derives from every flagged component that HAS a value this month, active or
+  // not (it falls back to a row it was not sent), so the retired one rides along read-only —
+  // off screen its parent's total would be $400 of nowhere.
+  const retired = (await screen.findByText('401(k) legacy')).closest('tr') as HTMLElement
+  expect(within(retired).getByText('inactive')).toBeTruthy()
+  expect(within(retired).queryByRole('textbox')).toBeNull()
+  expect(within(retired).getAllByRole('cell')[2].textContent).toBe('$400.00')
+  const parentRow = screen.getByText('Fidelity 401(k)').closest('tr') as HTMLElement
+  expect(parentRow.className).toContain('entry-derived')
+  expect(within(parentRow).getAllByRole('cell')[2].textContent).toBe('$1,000.00')
+
+  await saveTheMonth()
+  await waitFor(() =>
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        // Neither the derived parent nor the retired row: the client may not re-assert a
+        // figure it does not let anyone edit.
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 9, balance: '600.00' },
+        ],
+      }),
+    ),
+  )
+})
+
+it('does not flag the month it just recorded as $0 on purpose', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.click(await screen.findByLabelText('Record this month as $0'))
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  // The receipt is the answer to a deliberate empty month; repeating the repair prompt in
+  // the same breath would argue with the choice just made. The next VISIT still flags it —
+  // the month really is empty, and by then the receipt is gone.
+  expect(screen.queryByText(/saved with no spending/)).toBeNull()
+})
+
+it('lands the caret on the first cell after the repair instead of on the body', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue(EMPTY_MONTH)
+  vi.mocked(spendingApi.deleteSpendingMonth).mockResolvedValue({ batchId: null })
+  renderWizardAt('/update?month=2026-08-01')
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete the empty month' }))
+  await waitFor(() => expect(screen.queryByText(/saved with no spending/)).toBeNull())
+  // The button the click landed on is gone with the rows it repaired; leaving the caret on
+  // <body> restarts the next Tab at the top of the page.
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Checking')))
+})
+
+it('ties the $0 checkbox to the sentence that explains it', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  const box = await screen.findByLabelText('Record this month as $0')
+  // The sentence is the control's whole explanation, so it has to reach a screen reader as
+  // the control's description, not as a paragraph that happens to sit nearby.
+  const hint = document.getElementById(box.getAttribute('aria-describedby') ?? '')
+  expect(hint?.textContent).toBe(
+    'Writes $0.00 for every category — use it for a month you truly spent nothing.',
+  )
+})
+
 describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => {
   it('renders the month title without an icon, the steps under it, and the ribbon in the scope row', async () => {
     renderPage('/update?month=2026-09-01')

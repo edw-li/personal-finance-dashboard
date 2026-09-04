@@ -132,23 +132,77 @@ function balancesSentence(result: MonthUpsertResult): string {
   )
 }
 
+function spendingSentence(leg: NonNullable<SaveLegs['spending']>): string {
+  if (leg.status === 'skipped') return `Spending: skipped — ${leg.reason}`
+  const { created, updated, unchanged } = leg.result
+  return (
+    `Spending: ${rowsWord(created + updated + unchanged)} (${created} added, ` +
+    `${updated} changed, ${unchanged} unchanged).` +
+    // A DELETION the user asked for by blanking a box: the counts never mention the cashflow
+    // row that just went away, so the receipt says it — from the server's own flag, not from
+    // what we hoped we sent.
+    (leg.result.net_pay_cleared ? ' Household take-home cleared.' : '')
+  )
+}
+
 // ── Derived parents (2026-09-04 honest-numbers spec §5) ──────────────────────────────
 // An account with at least one component has NO balance of its own: its value for the month
-// IS the sum of its components' cells. Only components that are ON SCREEN count — a parent
-// whose components are all inactive keeps its own box, because there would be nothing to sum
-// (the server's drift check owns that case, and never rewrites).
+// IS the sum of its components' cells.
+//
+// `is_component && parent_account_id` is the rollup key on BOTH sides of the wire — lane B's
+// server and lane E's Accounts card use the same pair — so a link set without the flag is an
+// unfinished edit, not a component, and must never drive a preview the server will not write.
+// A component whose parent is not on screen derives nothing; it is just a row.
+//
+// `is_active` is deliberately NOT consulted: the server derives from every flagged component
+// that HAS a value for the month, submitted or stored, so a RETIRED component still carrying
+// a row for this month is part of the total. The caller decides which rows are on screen (see
+// `visibleAccounts`), and this walk sums whatever it is handed.
+//
+// NOT folded into `nestComponents`: that walk deliberately keys on `parent_account_id` alone
+// (it is about where a row RENDERS, and an unflagged link still renders under its parent) and
+// returns an order, not a map. Sharing them would make one of the two wrong.
 function componentsOf(accounts: AccountOut[]): Map<number, number[]> {
   const byParent = new Map<number, number[]>()
   const present = new Set(accounts.map((a) => a.id))
   for (const account of accounts) {
-    // A component whose parent is not on screen derives nothing — it is just a row.
-    if (account.parent_account_id === null || !present.has(account.parent_account_id)) continue
+    if (
+      !account.is_component ||
+      account.parent_account_id === null ||
+      !present.has(account.parent_account_id)
+    ) {
+      continue
+    }
     byParent.set(account.parent_account_id, [
       ...(byParent.get(account.parent_account_id) ?? []),
       account.id,
     ])
   }
   return byParent
+}
+
+// The parents that actually render as a live sum, given the ones this month keeps as
+// HAND-TYPED rows (see `typedParents` below).
+function derivationFor(
+  byParent: Map<number, number[]>,
+  typed: Set<number>,
+): Map<number, number[]> {
+  if (typed.size === 0) return byParent
+  return new Map([...byParent].filter(([parentId]) => !typed.has(parentId)))
+}
+
+// Writing into a component hands its hand-typed parent over to the sum. Returns the SAME set
+// when nothing changed, so a caller can skip a pointless state write.
+function handOver(accounts: AccountOut[], typed: Set<number>, written: number[]): Set<number> {
+  if (typed.size === 0) return typed
+  const parentOf = new Map(accounts.map((a) => [a.id, a.parent_account_id]))
+  const handed = written
+    .map((id) => parentOf.get(id))
+    .filter((parentId): parentId is number => parentId != null && typed.has(parentId))
+  if (handed.length === 0) return typed
+  const next = new Set(typed)
+  for (const parentId of handed) next.delete(parentId)
+  return next
 }
 
 // Rewrites every derived parent's entry INSIDE the balances record, rather than overlaying it
@@ -172,19 +226,6 @@ function deriveParents(
     next[parentId] = (cents / 100).toFixed(2)
   }
   return next
-}
-
-function spendingSentence(leg: NonNullable<SaveLegs['spending']>): string {
-  if (leg.status === 'skipped') return `Spending: skipped — ${leg.reason}`
-  const { created, updated, unchanged } = leg.result
-  return (
-    `Spending: ${rowsWord(created + updated + unchanged)} (${created} added, ` +
-    `${updated} changed, ${unchanged} unchanged).` +
-    // A DELETION the user asked for by blanking a box: the counts never mention the cashflow
-    // row that just went away, so the receipt says it — from the server's own flag, not from
-    // what we hoped we sent.
-    (leg.result.net_pay_cleared ? ' Household take-home cleared.' : '')
-  )
 }
 
 function readDraft(month: string): { raw: string; draft: WizardDraft } | null {
@@ -258,6 +299,13 @@ export default function MonthlyUpdatePage() {
   // The LOADED month is an empty one (spec §3): rows exist, every amount is $0.00 and there
   // is no take-home. Read from the month payload rather than from /coverage — the wizard
   // already holds the answer, and a second source could disagree with the boxes on screen.
+  // The parents this month renders as HAND-TYPED rows instead of derived ones (2026-09-04
+  // review). A month that ALREADY EXISTS and stores no row for any of a parent's components
+  // had its total typed by hand before the components existed: deriving it would print $0.00
+  // over a real figure and the save would then overwrite the stored total with zeros. Empty
+  // for a month being entered fresh — there is no history to protect and the Δ column tells
+  // the story. The first write into one of its components hands the row over to the sum.
+  const [typedParents, setTypedParents] = useState<Set<number>>(new Set())
   const [emptyMonth, setEmptyMonth] = useState(false)
   const [repairing, setRepairing] = useState(false)
   // What the server seeded for the month on screen, serialized — the draft machinery's
@@ -337,8 +385,26 @@ export default function MonthlyUpdatePage() {
         setLegs(null)
         // Nested order: component inputs sit right after their aggregate's input
         // (the group filter below preserves it — components share the parent's group).
-        const activeAccounts = nestComponents(accountList.filter((a) => a.is_active))
-        setAccounts(activeAccounts)
+        //
+        // The rows on screen are the ACTIVE accounts plus one deliberate extra: a RETIRED
+        // component that still carries a row for this month. The server derives a parent from
+        // every flagged component that has a value for the month — submitted or stored — so
+        // such a row is part of its parent's total, and leaving it off screen would make that
+        // total unexplainable. It renders read-only and is never sent back (the server falls
+        // back to the stored value); its parent must be on screen or it explains nothing.
+        const storedIds = new Set(thisMonth.balances.map((b) => b.account_id))
+        const activeIds = new Set(accountList.filter((a) => a.is_active).map((a) => a.id))
+        const visibleAccounts = nestComponents(
+          accountList.filter(
+            (a) =>
+              a.is_active ||
+              (a.is_component &&
+                a.parent_account_id !== null &&
+                activeIds.has(a.parent_account_id) &&
+                storedIds.has(a.id)),
+          ),
+        )
+        setAccounts(visibleAccounts)
         setCategories(categoryList.filter((c) => c.is_active))
         setMonthExisted(thisMonth.exists)
         setCoveredMonths(new Set(timeseries.months))
@@ -365,13 +431,24 @@ export default function MonthlyUpdatePage() {
         // ritual starts from last month's numbers); otherwise 0.00.
         const source = thisMonth.exists ? thisMonth.balances : priorMonth.balances
         const byId = new Map(source.map((b) => [b.account_id, b.balance]))
-        const byParent = componentsOf(activeAccounts)
+        const byParent = componentsOf(visibleAccounts)
+        // THIS month's own rows decide, never the prior month's: a parent none of whose
+        // components has a stored row here keeps the total someone typed by hand.
+        const handTyped = !thisMonth.exists
+          ? new Set<number>()
+          : new Set(
+              [...byParent]
+                .filter(([, childIds]) => !childIds.some((id) => storedIds.has(id)))
+                .map(([parentId]) => parentId),
+            )
+        setTypedParents(handTyped)
+        const seedDerivation = derivationFor(byParent, handTyped)
         // The parent's SEED is its components' sum, not the stored figure: a snapshot that
         // drifted must show the truth the save will write. Taken BEFORE the baseline below,
         // or the draft machinery would file a phantom draft for work nobody typed.
         const seededBalances = deriveParents(
-          byParent,
-          Object.fromEntries(activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
+          seedDerivation,
+          Object.fromEntries(visibleAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
         )
         // Reset on EVERY month load — stale notes/date must never leak into another
         // month's save (the next PUT would silently write them there).
@@ -415,9 +492,9 @@ export default function MonthlyUpdatePage() {
         setBalances(
           draft
             ? deriveParents(
-                byParent,
+                seedDerivation,
                 Object.fromEntries(
-                  activeAccounts.map((a) => [
+                  visibleAccounts.map((a) => [
                     a.id,
                     draft.balances?.[String(a.id)] ?? seededBalances[a.id],
                   ]),
@@ -492,11 +569,22 @@ export default function MonthlyUpdatePage() {
   // paste target list, the autofocus pick, the validity check and the PUT payload. Deriving
   // it in five places is how those five drift apart.
   const componentsByParent = useMemo(() => componentsOf(accounts), [accounts])
+  // …minus the ones this month keeps hand-typed. Everything downstream — the row renderer,
+  // the paste targets, the autofocus pick, the validity check and the PUT payload — reads
+  // THIS map, so a hand-typed row behaves like an ordinary cell everywhere at once.
+  const derivedByParent = useMemo(
+    () => derivationFor(componentsByParent, typedParents),
+    [componentsByParent, typedParents],
+  )
+  // The rows with no box: a derived parent (its cells own the figure) and a retired component
+  // that only rides along to explain its parent's total. Neither is typed, pasted, focused,
+  // validated or sent.
+  const isReadOnlyRow = (a: AccountOut) => derivedByParent.has(a.id) || !a.is_active
 
   // A derived row has no box, so it has nothing to validate — and its value is always
   // canonical by construction.
   const balancesValid = accounts.every(
-    (a) => componentsByParent.has(a.id) || isAmount(balances[a.id] ?? ''),
+    (a) => isReadOnlyRow(a) || isAmount(balances[a.id] ?? ''),
   )
   const amountsValid =
     categories.every((c) => isAmount(amounts[c.id] ?? '')) &&
@@ -606,7 +694,14 @@ export default function MonthlyUpdatePage() {
           // Spec §5: a parent with components is derived server-side from the components in
           // this very payload. Sending one would at best be noise and at worst a 422.
           balances: accounts
-            .filter((a) => !componentsByParent.has(a.id))
+            // A boxless row is never sent: a derived parent is the server's own sum, and a
+            // retired component is already stored — the server falls back to that value, so
+            // echoing it back would be the client re-asserting a figure it cannot edit.
+            .filter((a) => !isReadOnlyRow(a))
+            // …nor a HAND-TYPED parent's components, which this month has never entered:
+            // shipping their seeded $0.00 would create exactly the rows that flip the row to
+            // a derived $0.00 on the next visit, silently zeroing the stored total.
+            .filter((a) => a.parent_account_id === null || !typedParents.has(a.parent_account_id))
             .map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
         })
       }
@@ -676,9 +771,11 @@ export default function MonthlyUpdatePage() {
         // so a month that had a take-home still has it, and an empty month is still empty.
         setHadNetPay(canonNetPay !== '')
         setHadSpending(canonNetPay !== '' || anyAmountEntered)
-        // A leg that wrote all zeros with no take-home (the confirm_zero path) leaves the
-        // month empty on purpose — and an empty month still says so, which is the point.
-        setEmptyMonth(canonNetPay === '' && !anyAmountEntered)
+        // A leg that wrote all zeros with no take-home leaves the month empty — but NOT when
+        // the user just ticked the box to say so: the receipt is the answer to a deliberate
+        // empty month, and repeating the repair prompt in the same breath would argue with
+        // the choice they made one click ago. The next VISIT flags it, receipt gone.
+        setEmptyMonth(canonNetPay === '' && !anyAmountEntered && !recordZero)
       }
       setBaseline({
         month,
@@ -792,7 +889,10 @@ export default function MonthlyUpdatePage() {
       )
       setEmptyMonth(false)
       // The spending feed is gone: the ribbon must re-read coverage, and the form must
-      // re-seed (the zeros it is showing no longer exist).
+      // re-seed (the zeros it is showing no longer exist). The re-seed is also what re-homes
+      // the caret: the button just clicked unmounts with the banner it sat in, and remounting
+      // the step body runs the first typable cell's autoFocus — so focus lands on a cell
+      // rather than falling back to <body>, where the next Tab would restart at the top.
       setCoverageNonce((n) => n + 1)
       setLoading(true)
       setLoadNonce((n) => n + 1)
@@ -869,7 +969,7 @@ export default function MonthlyUpdatePage() {
   )
   // The first TYPABLE row: focus() on a derived row's cell would find nothing, and the step
   // would open with the caret nowhere.
-  const firstBalanceId = orderedBalanceRows.find((a) => !componentsByParent.has(a.id))?.id
+  const firstBalanceId = orderedBalanceRows.find((a) => !isReadOnlyRow(a))?.id
 
   // Range paste (spec §4.1): the PARENT owns the entry state, so the scope container does
   // the filling — an AmountInput cannot write its siblings. A single-cell clipboard
@@ -882,7 +982,10 @@ export default function MonthlyUpdatePage() {
     e: ClipboardEvent<HTMLDivElement>,
     rows: { id: number; name: string }[],
     idOf: (rowId: number) => string,
-    setRecord: (updater: (cur: Record<number, string>) => Record<number, string>) => void,
+    // The fills themselves, not an updater: the balances step needs to know WHICH cells the
+    // paste wrote (a pasted component hands its hand-typed parent over, exactly like a
+    // keystroke does), and an opaque updater hides that.
+    setRecord: (fills: Record<number, string>) => void,
   ) => {
     const cell = (e.target as HTMLElement).closest<HTMLInputElement>('input[data-entry-cell]')
     // A paste that lands in a NON-cell field is that field's own: the Notes box legitimately
@@ -936,7 +1039,7 @@ export default function MonthlyUpdatePage() {
       }
       overflow = plan.skipped
     }
-    if (Object.keys(fills).length > 0) setRecord((cur) => ({ ...cur, ...fills }))
+    if (Object.keys(fills).length > 0) setRecord(fills)
     setFlashIds(flashed)
     const parts = [`Pasted ${Object.keys(fills).length} of ${rows.length} values`]
     if (unmatched.length > 0) {
@@ -949,6 +1052,20 @@ export default function MonthlyUpdatePage() {
     setPasteNote(parts.join(' · '))
   }
 
+  // Every balance write goes through here — a keystroke, a paste, a sign flip — so the
+  // handover can never be forgotten by one of them. Writing into a component of a HAND-TYPED
+  // parent hands that row over to its cells on this very write: from here the parent IS the
+  // sum, and the save sends the components instead of the total (sending both is the
+  // server's 422). The map is built from the set we are about to store, because the memo
+  // above still holds the pre-write one.
+  const writeBalances = (fills: Record<number, string>) => {
+    const handedOver = handOver(accounts, typedParents, Object.keys(fills).map(Number))
+    if (handedOver !== typedParents) setTypedParents(handedOver)
+    setBalances((cur) =>
+      deriveParents(derivationFor(componentsByParent, handedOver), { ...cur, ...fills }),
+    )
+  }
+
   // Committed value of one cell for the live columns — the preview memo's rule.
   const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
 
@@ -956,14 +1073,10 @@ export default function MonthlyUpdatePage() {
   // float round-tripping (a re-serialized double could alter digits). Only reachable
   // while the committed value is > 0, so the result is always the negative twin; the
   // setBalances write marks the draft dirty exactly like typing would.
-  const flipSign = (accountId: number) =>
-    setBalances((cur) => {
-      const canon = canonicalAmount(cur[accountId] ?? '')
-      return deriveParents(componentsByParent, {
-        ...cur,
-        [accountId]: canon.startsWith('-') ? canon.slice(1) : `-${canon}`,
-      })
-    })
+  const flipSign = (accountId: number) => {
+    const canon = canonicalAmount(balances[accountId] ?? '')
+    writeBalances({ [accountId]: canon.startsWith('-') ? canon.slice(1) : `-${canon}` })
+  }
 
   // Live subtotal + its prior twin for ANY row set (components excluded, exactly like net
   // worth) — one helper now serves the per-group rows and the per-owner section above them.
@@ -1069,9 +1182,9 @@ export default function MonthlyUpdatePage() {
                 // Spec §5: a derived row is not a paste target. Filtering here (not inside
                 // handlePaste) keeps the positional walk's slot count honest — "3 of 3", not
                 // "3 of 4 with one silently shifted".
-                orderedBalanceRows.filter((a) => !componentsByParent.has(a.id)),
+                orderedBalanceRows.filter((a) => !isReadOnlyRow(a)),
                 (id) => `bal-${id}`,
-                (updater) => setBalances((cur) => deriveParents(componentsByParent, updater(cur))),
+                writeBalances,
               )
             }
           >
@@ -1144,7 +1257,8 @@ export default function MonthlyUpdatePage() {
                               const prior = priorBalances[account.id]
                               const delta =
                                 prior === undefined ? null : committed(value) - Number(prior)
-                              const derived = componentsByParent.has(account.id)
+                              const derived = derivedByParent.has(account.id)
+                              const readOnly = isReadOnlyRow(account)
                               return (
                                 <tr
                                   key={account.id}
@@ -1153,12 +1267,16 @@ export default function MonthlyUpdatePage() {
                                   <td
                                     className={account.is_component ? 'entry-component' : undefined}
                                   >
-                                    {derived ? (
+                                    {readOnly ? (
                                       // No <label>: there is no control to point at. The badge
-                                      // is the row's whole explanation (spec §5).
+                                      // is the row's whole explanation (spec §5) — "derived"
+                                      // for a parent its cells add up to, "inactive" for a
+                                      // retired component the server still counts this month.
                                       <span>
                                         {account.name}
-                                        <span className="badge">derived</span>
+                                        <span className="badge">
+                                          {derived ? 'derived' : 'inactive'}
+                                        </span>
                                       </span>
                                     ) : (
                                       <label htmlFor={`bal-${account.id}`}>
@@ -1173,9 +1291,11 @@ export default function MonthlyUpdatePage() {
                                     {prior === undefined ? '—' : formatCurrency(prior)}
                                   </td>
                                   <td className="num entry-cell-col">
-                                    {derived ? (
-                                      // The live sum of the component cells below it, written
-                                      // by the same state update that fills any of them.
+                                    {readOnly ? (
+                                      // A derived parent shows the live sum of the cells below
+                                      // it, written by the same state update that fills any of
+                                      // them; a retired component shows the figure already
+                                      // stored for the month, which nobody may edit here.
                                       <span className="entry-derived-value">
                                         {formatCurrency(committed(value))}
                                       </span>
@@ -1193,16 +1313,11 @@ export default function MonthlyUpdatePage() {
                                           autoFocus={account.id === firstBalanceId}
                                           value={value}
                                           onValueChange={(next) =>
-                                            setBalances((cur) =>
-                                              // Spec §5: a component's keystroke IS its
-                                              // parent's value — ONE write, so the row, the
-                                              // subtotals and the live net worth can never
-                                              // show three different answers.
-                                              deriveParents(componentsByParent, {
-                                                ...cur,
-                                                [account.id]: next,
-                                              }),
-                                            )
+                                            // Spec §5: a component's keystroke IS its
+                                            // parent's value — ONE write, so the row, the
+                                            // subtotals and the live net worth can never
+                                            // show three different answers.
+                                            writeBalances({ [account.id]: next })
                                           }
                                         />
                                         {/* A1 (2026-08-31 tier-1): advisory amber, NEVER a gate —
@@ -1324,7 +1439,11 @@ export default function MonthlyUpdatePage() {
           <div
             className="card"
             data-entry-scope=""
-            onPaste={(e) => handlePaste(e, categories, (id) => `amt-${id}`, setAmounts)}
+            onPaste={(e) =>
+              handlePaste(e, categories, (id) => `amt-${id}`, (fills) =>
+                setAmounts((cur) => ({ ...cur, ...fills })),
+              )
+            }
           >
             <h2 className="eyebrow">
               Spending & take-home
@@ -1426,11 +1545,12 @@ export default function MonthlyUpdatePage() {
               <input
                 type="checkbox"
                 checked={recordZero}
+                aria-describedby="record-zero-hint"
                 onChange={(e) => setRecordZero(e.target.checked)}
               />
               Record this month as $0
             </label>
-            <p className="drill-hint">
+            <p className="drill-hint" id="record-zero-hint">
               Writes $0.00 for every category — use it for a month you truly spent nothing.
             </p>
             {pasteNote && (
