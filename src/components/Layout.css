@@ -66,6 +66,9 @@
 .sidebar-search:hover { color: var(--text); border-color: var(--muted); }
 
 .sidebar nav {
+  /* The positioning context for .nav-indicator below — the bar is measured against this
+     element's own top, so it must be the one the bar is offset from. */
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.45rem; /* between sections; the old 2px per-link rhythm lives inside them */
@@ -102,12 +105,31 @@
   color: var(--text);
 }
 
-/* Active ≠ hover: a 3px accent inset + accent icon on top of the hover surface, so the
-   current page stays legible even under the pointer. */
+/* Active ≠ hover: the hover surface plus an accent icon, so the current page stays
+   legible even under the pointer. The 3px accent edge is no longer an inset shadow per
+   link — one shared .nav-indicator slides to it instead (2026-09-05 spec §5), which is
+   what makes the accent travel rather than blink from row to row. */
 .nav-link.active {
   background: var(--surface-2);
   color: var(--text);
-  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ONE accent bar for the whole nav, placed by Layout's measuring effect (spec §5).
+   Transparent until that effect runs, and on a route no destination owns, so it never
+   flashes at the top of the sidebar before its first measurement; opacity is deliberately
+   not transitioned, because appearing is not moving. The durations are read
+   unconditionally: index.css's reduce block zeroes --t-nav, which places the bar instantly
+   for a reader who asked for less motion. */
+.nav-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--t-nav) var(--ease-out), height var(--t-nav) var(--ease-out);
 }
 
 .nav-link.active svg {

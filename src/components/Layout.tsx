@@ -93,6 +93,35 @@ export default function Layout() {
     window.scrollTo(0, 0)
   }, [pathname])
 
+  // ONE accent bar for the whole nav (2026-09-05 spec §5), measured rather than assumed:
+  // rows are not a fixed height (section headings, the compact density, a label that
+  // wraps), so a CSS-only bar would hard-code a rhythm and drift the day a destination is
+  // added. Reads only — no state, so a measurement can never cost a render — and the
+  // writes are ref writes inside an effect, which is where they belong.
+  const navRef = useRef<HTMLElement>(null)
+  const indicatorRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const place = () => {
+      const nav = navRef.current
+      const bar = indicatorRef.current
+      if (nav === null || bar === null) return
+      const active = nav.querySelector<HTMLElement>('a.active')
+      if (active === null) {
+        // A route no nav entry owns (the 404, a deep link): a bar left where it was would
+        // claim the reader is on a page they are not.
+        bar.style.opacity = '0'
+        return
+      }
+      const box = active.getBoundingClientRect()
+      bar.style.opacity = '1'
+      bar.style.height = `${box.height}px`
+      bar.style.transform = `translateY(${box.top - nav.getBoundingClientRect().top}px)`
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [pathname])
+
   // Warm every route chunk during idle time so in-app navigation never waits on the
   // network for JS. Hover/focus prefetch below covers the pre-idle window. import()
   // memoizes, so re-mounts re-warm for free (no-ops).
@@ -139,7 +168,10 @@ export default function Layout() {
             <span>Search or jump…</span>
             <kbd aria-label={isMac ? 'Command K' : 'Control K'}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
           </button>
-          <nav aria-label="Primary">
+          <nav aria-label="Primary" ref={navRef}>
+            {/* Decorative: aria-current already announces the current page, and a second
+                announcement would read the same fact twice. */}
+            <div className="nav-indicator" ref={indicatorRef} aria-hidden="true" />
             {NAV_SECTIONS.map((section, index) => (
               <div className="nav-section" key={section.heading ?? `ungrouped-${index}`}>
                 {section.heading !== null && (
