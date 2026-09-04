@@ -284,20 +284,20 @@ async def projection(
     window = matched_months(savings_rows, TRAILING_MONTHS)
     has_cashflow = any(row.net_pay is not None for row in savings_rows)
     has_spending = any(row.has_spending_rows for row in savings_rows)
+    # Read BEFORE the two blocks below overwrite the knobs with their resolved values.
+    derives = monthly_contribution is None or annual_spend is None
+    # The echo describes a DERIVATION, so it is null when the user typed both knobs —
+    # `contribution_breakdown`'s rule exactly. A window printed beside two typed numbers
+    # would claim something was averaged when nothing was.
     derived_window = (
-        None
-        if not window
-        else DerivedWindowOut(
-            from_month=window[0].month, to_month=window[-1].month, months=len(window)
-        )
+        DerivedWindowOut(from_month=window[0].month, to_month=window[-1].month, months=len(window))
+        if window and derives
+        else None
     )
-    if (
-        not window
-        and (has_cashflow or has_spending)
-        and (monthly_contribution is None or annual_spend is None)
-    ):
-        # Data on both sides, no month carrying both: say so rather than let a knob
-        # quietly read 0 as if the book were empty.
+    if not window and has_cashflow and has_spending and derives:
+        # BOTH halves are on file and no month carries both — the one case the more
+        # specific sentences below cannot describe. A book missing a half is named by
+        # NO_CASHFLOW_WARNING or NO_SPEND_WARNING instead, so nothing says it twice.
         warnings.append(NO_MATCHED_MONTHS_WARNING)
 
     contribution_breakdown: ContributionBreakdownOut | None = None
@@ -341,9 +341,11 @@ async def projection(
         )
         if derived_spend is None or derived_spend <= 0:
             annual_spend = None
-            # An EMPTY book still gets the old sentence; a book with data but no matched
-            # month already carries NO_MATCHED_MONTHS_WARNING, which says more.
-            if NO_MATCHED_MONTHS_WARNING not in warnings:
+            # Only when there is genuinely nothing to average. A book that HAS spending
+            # but no matched month is already explained — by NO_MATCHED_MONTHS_WARNING
+            # when take-home exists, by NO_CASHFLOW_WARNING when it does not — and
+            # "no spending history" would there be flatly untrue.
+            if not has_spending:
                 warnings.append(NO_SPEND_WARNING)
         else:
             annual_spend = derived_spend.quantize(CENT, rounding=ROUND_HALF_UP)
