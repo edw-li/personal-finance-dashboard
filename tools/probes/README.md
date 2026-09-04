@@ -13,6 +13,7 @@ gitignored `scratchpad/`, never next to these tracked scripts.
 | `calendar-e/smoke.mjs` | The calendar in both themes: the month grid, the cash-flow strip, the source-health footer, the list view, the `?add=` deep link, Overview’s “Up next” and the Settings feed card — then the write paths (override, custom-event add/edit/delete/Undo), the “Add to calendar (.ics)” download and a live feed token (200 → 304 → 404 after revoke). Every row it writes it removes | needs the dev stack — see below |
 | `sandbox-v/smoke.mjs` | The three planning sandboxes opened FROM a `whatif=` link in both themes: arrival state, a real slider drag (history must not grow), presets, pins across a reload and a year switch, both Apply doors up to their confirm, the legacy `?whatif=TICKER` and `?whatif-lot=` aliases, and the assistant's tool chip through to the page it lands on. Every mutating request outside a four-entry allowlist is aborted, so the walk cannot write | needs the dev stack — see below |
 | `honest-v/smoke.mjs` | The honest-numbers program end to end in both themes: the wizard's per-step saves (a balances-only save must fire NO spending PUT), the deliberate `$0` door and the repair banner it produces, read-only derived parent rows, Overview's coverage footer and its two new attention items, Spending's savings card and kind columns, the Projection window echo, the money-flow pending-take-home node and the Settings kind picker. The only smoke that WRITES — always to the scratch month `2019-01`, swept before each theme and again in a `finally` | needs the dev stack — see below |
+| `motion-v/smoke.mjs` | The eleven motion claims of the 2026-09-05 spec §10, in both themes: chart entrances measured as PAINT DELTAS (≥300ms, where the audit found 1–2 frames), `#main` non-empty on every frame of all 13 nav clicks, CLS per page, the nav indicator's ~200ms slide, an InfoHint parked under the STUCK scope row, `--reveal` at both viewport edges and mid-page, a below-fold chart that waits to be seen and then draws once, the Spending drill morphing without a dispose, a theme swap that does not replay the entrance, reduced-motion emulation, and the error grammar on a stubbed 500. READ-ONLY BY CONSTRUCTION — a write fence, not a sweep | needs the dev stack — see below |
 
 ## Running the C7 / sandbox smokes against the dev servers (dev only)
 
@@ -110,3 +111,35 @@ reports as partly entered. Two labels live only on a CANVAS and so are pinned by
 instead: the savings chart's legend words (`spendingChartOptions.test.ts`) and the sankey node
 name — for the latter the driver opens the card's **Table** twin, which exports one row per
 node, and reads the string there.
+
+## Running the motion smoke (dev only)
+
+Same stack and the same dev seed credentials. This one is **read-only by construction**: the
+fence in `makeContext` continues GET/HEAD/OPTIONS and answers every other `/api/v1/**` call
+from memory (`PATCH /prefs` included, so a theme swap never rewrites the account's settings),
+recording each one under `writesBlocked`. There is no sweep because there is nothing to undo —
+a Playwright timeout halfway through leaves the dev book exactly as it was. Restart uvicorn
+first all the same, for the same reason the other smokes give.
+
+```bash
+OUT=scratchpad/motion-smoke && mkdir -p "$OUT"
+curl -s http://127.0.0.1:8000/api/v1/auth/login -H 'content-type: application/json'   -d '{"email":"admin@example.com","password":"changeme123"}'   | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).access_token))" > "$OUT/token.txt"
+TOKEN_FILE=$OUT/token.txt SMOKE_OUT=$OUT node tools/probes/motion-v/smoke.mjs
+```
+
+Prints `MOTION SMOKE OK`, or exits 1 listing every failed check with its observed numbers. Env:
+`SMOKE_OUT`, `TOKEN_FILE`, `APP_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`,
+`ONLY_STEP` (entrance|nav|cls|indicator|hint|reveal|belowfold|drill|themeswap|reduced|errors).
+Roughly four minutes per theme at 1440×900; ~17 PNGs and `report.json` per theme.
+
+Its instruments are the 2026-09-05 UX-pass probes' own, so every number is comparable with the
+audit's: a per-frame rAF tracer that hashes each chart canvas, a buffered `layout-shift`
+observer, and an ECharts prototype wrapper that logs every `setOption`/`dispose` with its
+animation fields. Two things the driver does that a reader should expect: the entrance step
+SCROLLS to the first mounted-but-unpainted chart inside its paint window (M1's one-shot holds
+the first paint of any chart less than 20% on screen, which at 1440×900 is every chart on
+Taxes and Portfolio), and the reveal step parks the page by correcting its own scroll twice —
+the reveal's `translateY(±4px)` is inside `getBoundingClientRect`, so one computed scroll lands
+7px off and leaves no card straddling the edge at all. A bare "Failed to load resource" console
+line is recorded as a NOTE with its URL (the dev book's `/paycheck/breakdown?person_id=2` 404
+is the same known non-defect the C7 smoke lists); anything else in the console still fails.
