@@ -28,7 +28,7 @@ Nothing under `src/` is edited here. A failing check belongs to the lane that ow
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: The tree**
+- [x] **Step 1: The tree** — clean status; `d1e0d84 Merge branch 'motion-m2'`, `7b3403e` (M3), `a984224` (M4), `01ba33e` (M1) on top of `5512e0c`.
 
 ```bash
 git status --short && git log --oneline -8
@@ -36,7 +36,7 @@ git status --short && git log --oneline -8
 
 Expected: `git status --short` prints NOTHING; the log shows four lane merges on top of `5512e0c` ("docs(spec): motion & polish batch …").
 
-- [ ] **Step 2: The pieces each lane promised** — a silent grep names the lane that did not land its hook; the matching check below is still run, so it fails loudly instead of being dropped.
+- [x] **Step 2: The pieces each lane promised** (two greps had stale PATHS, not stale code: the chart component is `src/components/EChart.tsx`, not `src/charts/`, and `describeError` is used by six Settings cards + MonthlyUpdate — the multi-part pages compose `describeLoadFailures`/`errorDetail` instead, so `src/pages/` counts 2, not >10) — a silent grep names the lane that did not land its hook; the matching check below is still run, so it fails loudly instead of being dropped.
 
 ```bash
 grep -n "t-page\|t-enter\|t-stagger\|t-xfade\|t-nav\|reveal-floor\|reveal-range\|reveal-rise" src/index.css
@@ -55,7 +55,7 @@ Expected: every grep prints at least one line and the `wc -l` prints more than 1
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: Run all four, in order, from the repo root**
+- [x] **Step 1: Run all four, in order, from the repo root** — tsc silent exit 0; eslint exit 0 with **18** warnings (17 baseline + ONE new: `src/components/InfoHint.tsx:21` `hintLabel`, M4's helper export — same benign `react-refresh/only-export-components` class as the other 17); vitest **180 files / 2437 tests passed**, no flake this run; build exit 0.
 
 ```bash
 npx tsc -b && npx eslint . && npx vitest run && npm run build
@@ -63,7 +63,7 @@ npx tsc -b && npx eslint . && npx vitest run && npm run build
 
 Expected: `tsc` silent; `eslint` exit 0 (17 pre-existing `react-refresh/only-export-components` warnings are the baseline — a NEW warning is a finding); `vitest` prints `Test Files N passed` / `Tests M passed`, M above the `e52f435` baseline of **175 files / 2364 tests** by the lanes' §10 additions (stagger indices, the CSS `@property`/keyframe pins, EChart resize guard + first-visible deferral + stable group, ChartCard skeleton parity, InfoHint flip, the `describeError` table, per-card form-vs-load errors, the wizard error resource, indicator position) — record both; `npm run build` exits 0 with the chunk table (baseline `index-*.js` 316.72 kB gzip 101.24, `index-*.css` 28.11 kB gzip 6.02 — CSS growing by more than ~3 kB deserves a look, the motion block is small).
 
-- [ ] **Step 2: The backend was not in scope — prove it rather than re-running its suite**
+- [x] **Step 2: The backend was not in scope — prove it rather than re-running its suite** — `git diff --stat 5512e0c..HEAD -- backend/ alembic/` printed NOTHING; the backend suite was not re-run.
 
 ```bash
 git diff --stat 5512e0c..HEAD -- backend/ alembic/
