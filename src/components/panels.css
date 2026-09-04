@@ -534,20 +534,10 @@
     transition: background-color var(--t-fast) ease;
   }
 
-  /* Page entrance: one fade-rise per navigation. RouteBoundary is keyed by pathname
-     (Layout.tsx), so the .page element remounts exactly once per route change — the
-     animation never replays on data refetches. transform is paint-only; EChart's
-     ResizeObserver sees no size change. */
-  .page {
-    animation: page-enter var(--t-page) ease-out;
-  }
-
-  @keyframes page-enter {
-    from {
-      opacity: 0;
-      transform: translateY(6px);
-    }
-  }
+  /* The whole-page entrance that used to live here is gone (2026-09-05 spec §2): it faded
+     the title row too, it was justified by the key={pathname} Layout no longer passes, and
+     two fade-rises on one navigation read as a stutter. shell.css animates
+     .page-frame-body — the content region alone — instead. */
 }
 
 /* Whole-row click targets (the NetWorthPage accounts-table recipe): hover names the

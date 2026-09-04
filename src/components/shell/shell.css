@@ -421,3 +421,21 @@
 .scope-bar-group .eyebrow {
   margin: 0;
 }
+
+/* The page's entrance (2026-09-05 spec §2). The title row and the scope row appear at
+   once — identical on every page, and the eye is already on them — and only the content
+   region fades and rises. `both` fill lands on the `to` keyframe, which is the element's
+   own `transform: none`, so a finished body is not a containing block for the wizard's
+   viewport-sticky entry footer. */
+@media (prefers-reduced-motion: no-preference) {
+  .page-frame-body {
+    animation: page-body-in var(--t-page) var(--ease-out) both;
+  }
+
+  @keyframes page-body-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+}

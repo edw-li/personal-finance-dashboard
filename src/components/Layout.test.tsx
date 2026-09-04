@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { lazy, type ReactElement } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSnapshots } from '../api/snapshotCache'
@@ -449,5 +450,34 @@ describe('Layout — shell boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'to home' }))
     expect(screen.getByText('home body')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
+describe('Layout — route transition', () => {
+  // A chunk this test decides when to resolve — the only way to observe the frame between
+  // the click and the payload, which is where the blank used to be.
+  let resolveSpending: ((m: { default: () => ReactElement }) => void) | null = null
+  const LazySpending = lazy(
+    () => new Promise<{ default: () => ReactElement }>((r) => { resolveSpending = r }),
+  )
+
+  it('holds the old page while the next chunk is pending, then swaps', async () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<div>home body</div>} />
+            <Route path="/spending" element={<LazySpending />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    )
+    await act(async () => { fireEvent.click(screen.getByRole('link', { name: 'Spending' })) })
+    // Suspense sits OUTSIDE an unkeyed boundary, so this is an update: React keeps the
+    // committed tree, #main never empties and the fallback is never reached.
+    expect(screen.getByText('home body')).toBeTruthy()
+    expect(screen.queryByText('Loading…')).toBeNull()
+    await act(async () => { resolveSpending?.({ default: () => <div>spending body</div> }) })
+    expect(await screen.findByText('spending body')).toBeTruthy()
   })
 })

@@ -168,24 +168,22 @@ export default function Layout() {
         {/* tabIndex -1: focusable by the skip link and the navigation hand-off above,
             never part of the tab order itself. */}
         <main id="main" tabIndex={-1} className="content" ref={mainRef}>
-          {/* Route chunks resolve here — the sidebar must not unmount while one loads, and a
-              chunk that never arrives must not blank the app (RouteBoundary). The fallback's
-              class is .route-fallback, not panels.css's .empty-note: panels.css reaches the
-              entry chunk only INCIDENTALLY (the assistant drawer below imports it), and a
-              fallback that leans on a neighbor's import staying put is one refactor from
-              rendering unstyled.
-
-              key={pathname} remounts the boundary on navigation, which is what makes the retry
-              real: React.lazy memoizes the rejected import, so re-rendering the FAILED route
-              just rethrows the cached rejection (status -1) — Reload stays the only fix for the
-              stale-deploy case. A different pathname is a different lazy payload with its own
-              untouched status, so navigating away genuinely re-attempts. Without the key, one
-              transient blip would latch the boundary and lock every other route behind it. */}
-          <RouteBoundary key={pathname}>
-            <Suspense fallback={<p className="route-fallback" role="status">Loading…</p>}>
+          {/* ONE Suspense, OUTSIDE the boundary, which now carries resetKey instead of key
+              (2026-09-05 spec §2). Keyed, the subtree was a fresh MOUNT on every navigation
+              and React shows a fallback for a mount even inside a transition: #main blanked
+              for a frame on every click. Unkeyed it is an UPDATE — react-router-dom 7 wraps
+              its state in startTransition — so the old page stays committed until the new
+              chunk resolves. The retry stays real without the key: React.lazy memoizes the
+              rejected import, so returning to the route that threw rethrows and the alert
+              comes straight back, while resetKey clears the boundary on the way out.
+              .route-fallback, not panels.css's .empty-note: panels.css reaches the entry
+              chunk only INCIDENTALLY (the drawer imports it), and a fallback that leans on a
+              neighbor's import staying put is one refactor from rendering unstyled. */}
+          <Suspense fallback={<p className="route-fallback" role="status">Loading…</p>}>
+            <RouteBoundary resetKey={pathname}>
               <Outlet />
-            </Suspense>
-          </RouteBoundary>
+            </RouteBoundary>
+          </Suspense>
         </main>
         <CommandPalette />
         {/* Beside the palette, and last for the same reason: both are app-wide overlays that

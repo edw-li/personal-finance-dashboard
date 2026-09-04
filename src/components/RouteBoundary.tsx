@@ -6,7 +6,14 @@ import './Layout.css'
 // tab fetching old hashed filenames after a redeploy, or a network blip. Pre-split, an
 // open tab kept running its bundle and this state was unreachable. Reload re-fetches
 // index.html and the fresh hashes.
-interface Props { children: ReactNode }
+interface Props {
+  children: ReactNode
+  /** Layout's `pathname`. A PROP, not a `key`: keying this boundary made every navigation
+   *  a fresh MOUNT of the Suspense subtree above it, and React shows a fallback for a
+   *  mount even inside a transition — #main blanked for a frame on every click
+   *  (2026-09-05 spec §2). */
+  resetKey?: string
+}
 interface State { failed: boolean }
 
 export default class RouteBoundary extends Component<Props, State> {
@@ -14,6 +21,12 @@ export default class RouteBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(): State {
     return { failed: true }
+  }
+
+  // ShellErrorBoundary's idiom. A navigation is a fresh attempt: the route that threw is
+  // gone, so holding the fallback up strands the reader on a page they already left.
+  componentDidUpdate(prev: Props) {
+    if (this.state.failed && this.props.resetKey !== prev.resetKey) this.setState({ failed: false })
   }
 
   render() {

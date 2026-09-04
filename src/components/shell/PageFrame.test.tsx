@@ -47,6 +47,11 @@ describe('PageFrame', () => {
     expect(screen.getByText('as of Sep 2026')).toBeTruthy()
     expect(screen.getByText('body')).toBeTruthy()
     expect(document.querySelector('.page-frame-scope')).toBeNull()
+    // The entrance animates the content region ONLY: the title row and the scope row
+    // appear at once, so neither may sit inside the wrapper (2026-09-05 spec §2).
+    const body = document.querySelector('.page-frame-body')
+    expect(body?.textContent).toContain('body')
+    expect(document.querySelector('.page-frame-body .page-frame-header')).toBeNull()
   })
 
   it('loading with no data: header, scope row and the skeleton — no children', () => {

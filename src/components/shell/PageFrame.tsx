@@ -100,32 +100,39 @@ export default function PageFrame({
           <div className={`page-frame-scope${stuck ? ' is-stuck' : ''}`}>{scopeRow}</div>
         </>
       )}
-      {showSkeleton && <PageSkeleton tiles={skeleton.tiles ?? 0} cards={skeleton.cards ?? []} />}
-      {showErrorOnly && (
-        <div className="error-banner" role="alert">
-          {resource.error ?? 'Something went wrong.'}{' '}
-          {resource.retry !== undefined && (
-            <button type="button" className="button" onClick={resource.retry}>
-              Retry
-            </button>
-          )}
-        </div>
-      )}
-      {hasData && (
-        <>
-          {staleError !== null && (
-            <p className="page-frame-stale" role="status">
-              Showing earlier data — {staleError}
-              {resource.retry !== undefined && (
-                <button type="button" className="button" onClick={resource.retry}>
-                  Retry
-                </button>
-              )}
-            </p>
-          )}
-          <div className={`loading-dim${resource.busy ? ' is-loading' : ''}`}>{children}</div>
-        </>
-      )}
+      {/* The content region, and the only part of the page that animates in (2026-09-05
+          spec §2): the title row and the scope row above are identical on every page and the
+          eye is already on them, so they appear at once. ONE wrapper around all three
+          lifecycle branches, not one per branch — the entrance then runs once per page mount
+          instead of replaying when the skeleton gives way to the payload. */}
+      <div className="page-frame-body">
+        {showSkeleton && <PageSkeleton tiles={skeleton.tiles ?? 0} cards={skeleton.cards ?? []} />}
+        {showErrorOnly && (
+          <div className="error-banner" role="alert">
+            {resource.error ?? 'Something went wrong.'}{' '}
+            {resource.retry !== undefined && (
+              <button type="button" className="button" onClick={resource.retry}>
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+        {hasData && (
+          <>
+            {staleError !== null && (
+              <p className="page-frame-stale" role="status">
+                Showing earlier data — {staleError}
+                {resource.retry !== undefined && (
+                  <button type="button" className="button" onClick={resource.retry}>
+                    Retry
+                  </button>
+                )}
+              </p>
+            )}
+            <div className={`loading-dim${resource.busy ? ' is-loading' : ''}`}>{children}</div>
+          </>
+        )}
+      </div>
     </PageFrameContext.Provider>
   )
 }
