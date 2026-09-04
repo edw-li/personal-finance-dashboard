@@ -225,34 +225,104 @@ try {
 
     // F. the reveal dial, parked so entry/exit progress is ~0: the reading must be the FLOOR,
     //    not "somewhere dim". Top-level cards only — a nested one runs no reveal at all.
+    //    The two edges are NOT the viewport's two edges: panels.css insets both view()
+    //    timelines by --sticky-inset (spec §4), so the bottom edge is the viewport's but the
+    //    top edge is the STUCK scope row's UNDERSIDE. Parking a card 4px under the viewport
+    //    top would bury it behind the row, past the end of its exit range, where reveal-out's
+    //    `fill: none` leaves it reading 1 — a pass for the wrong reason.
+    //    The floor is read from the page, never retyped here: it is a token, and a smoke that
+    //    hard-codes it fails on the tuning pass instead of on the regression.
     if (STEPS.includes('reveal')) {
       await page.goto(BASE + '/net-worth', { waitUntil: 'networkidle' }); await sleep(2500)
-      // The parking corrects itself: the reveal's own `transform: translateY(±4px)` is inside
+      const floor = await page.evaluate(() => +getComputedStyle(document.documentElement).getPropertyValue('--reveal-floor'))
+      const near = (v, want) => v !== null && v !== undefined && Math.abs(v - want) <= 0.05
+      // The parking corrects itself: the reveal's own `transform: translateY(±6px)` is inside
       // getBoundingClientRect, so a single scrollTo computed from the rect lands ~7px off and
       // leaves NO card straddling the edge at all. Two corrections converge to the pixel.
       const reveal = async (mode) => page.evaluate((m) => {
         const cards = [...document.querySelectorAll('.page-frame-body .card')].filter((c) => c.parentElement === null || c.parentElement.closest('.card') === null)
         if (!cards.length) return null
+        // Sticky at top: 0, so the row's bottom IS the line the timelines are inset to. Zero
+        // on a page that declares no scope row, which is exactly the un-inset geometry.
+        const rowEl = document.querySelector('.page-frame-scope'); const rowBottom = rowEl ? Math.round(rowEl.getBoundingClientRect().bottom) : 0
         const low = cards.find((x) => x.getBoundingClientRect().top + scrollY > innerHeight) ?? cards.at(-1); const r = low.getBoundingClientRect()
-        if (m === 'park-bottom') { scrollTo(0, r.top + scrollY - innerHeight + 4); return null }   // 4px of the card visible at the bottom
-        if (m === 'park-top') { scrollTo(0, r.top + scrollY + r.height - 4); return null }         // 4px of it left at the top
+        if (m === 'park-bottom') { scrollTo(0, r.top + scrollY - innerHeight + 4); return null }              // 4px of the card visible at the bottom
+        if (m === 'park-top') { scrollTo(0, r.top + scrollY + r.height - rowBottom - 4); return null }        // 4px of it left BELOW the row
         if (m === 'fix-bottom') { scrollBy(0, low.getBoundingClientRect().top - (innerHeight - 4)); return null }
-        if (m === 'fix-top') { scrollBy(0, low.getBoundingClientRect().bottom - 4); return null }
+        if (m === 'fix-top') { scrollBy(0, low.getBoundingClientRect().bottom - rowBottom - 4); return null }
         const val = (x) => +getComputedStyle(x).getPropertyValue('--reveal'); const box = (x) => x.getBoundingClientRect()
-        const edge = cards.find((x) => box(x).top < innerHeight && box(x).bottom > innerHeight), top = cards.find((x) => box(x).top < 0 && box(x).bottom > 0)
+        const edge = cards.find((x) => box(x).top < innerHeight && box(x).bottom > innerHeight), top = cards.find((x) => box(x).top < rowBottom && box(x).bottom > rowBottom)
         // "Mid-page" is simply a card wholly on screen: past its entry range, before its exit
-        // range, which is where the grammar promises full brightness.
-        const mid = cards.find((x) => box(x).top >= 0 && box(x).bottom <= innerHeight)
+        // range, which is where the grammar promises full brightness. "On screen" starts under
+        // the row for the same reason the top edge does.
+        const mid = cards.find((x) => box(x).top >= rowBottom && box(x).bottom <= innerHeight)
         return { edge: edge ? val(edge) : null, top: top ? val(top) : null, mid: mid ? val(mid) : null, floor: getComputedStyle(document.documentElement).getPropertyValue('--reveal-floor').trim(), cards: cards.length,
+          stuck: !!document.querySelector('.page-frame-scope.is-stuck'), rowBottom,
+          inset: getComputedStyle(document.querySelector('.page-frame-body')).getPropertyValue('--sticky-inset').trim(),
           rects: cards.map((x) => [Math.round(box(x).top), Math.round(box(x).bottom)]) }
       }, mode)
       await reveal('park-bottom'); await sleep(400); await reveal('fix-bottom'); await sleep(300); await reveal('fix-bottom'); await sleep(400); const rev = await reveal('read')
-      check(theme, 'reveal', 'the card straddling the bottom edge sits at the floor (0.62 ±0.05)', !!rev && rev.edge !== null && Math.abs(rev.edge - 0.62) <= 0.05, rev)
+      check(theme, 'reveal', `the card straddling the bottom edge sits at the floor (${floor} ±0.05)`, !!rev && near(rev.edge, floor), rev)
       check(theme, 'reveal', 'a mid-page card is fully bright (1.0)', !!rev && rev.mid !== null && rev.mid >= 0.99, rev)
+      // The inset is PageFrame's measurement of this page's own row; 0px would mean the effect
+      // never ran and every top-edge reading below would be measuring the old geometry.
+      check(theme, 'reveal', 'PageFrame wrote the sticky row height onto the body', !!rev && /^\d+(\.\d+)?px$/.test(rev.inset) && parseFloat(rev.inset) > 0, rev && { inset: rev.inset, rowBottom: rev.rowBottom })
       await shot('reveal-bottom-edge')
       await reveal('park-top'); await sleep(400); await reveal('fix-top'); await sleep(300); await reveal('fix-top'); await sleep(400); const rev2 = await reveal('read')
-      check(theme, 'reveal', 'the card straddling the TOP edge mirrors the floor (0.62 ±0.05)', !!rev2 && rev2.top !== null && Math.abs(rev2.top - 0.62) <= 0.05, rev2)
+      check(theme, 'reveal', `the card straddling the row's underside mirrors the floor (${floor} ±0.05)`, !!rev2 && near(rev2.top, floor), rev2)
       await shot('reveal-top-edge')
+
+      // The scroll-UP walk, and the inset's own proof (spec §4, §10). Before the inset a card
+      // coming back from the top had finished its exit range at the VIEWPORT's top edge — one
+      // row-height higher — so it emerged from under the sticky row already at full brightness
+      // and the mirror was never seen. One card is followed from the moment its bottom clears
+      // the row to the point where 45% of it is showing below it, reading --reveal AND the
+      // opacity it actually paints at (they are the same number only while --enter is 1, so
+      // both are recorded rather than one inferred from the other).
+      const upTarget = await page.evaluate(async () => {
+        const wait = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+        scrollTo(0, document.documentElement.scrollHeight); await wait(); await wait()
+        const rowEl = document.querySelector('.page-frame-scope'); const rowBottom = rowEl ? rowEl.getBoundingClientRect().bottom : 0
+        const cards = [...document.querySelectorAll('.page-frame-body .card')].filter((c) => c.parentElement.closest('.card') === null)
+        // The card that will emerge FIRST on the way back up: the lowest one already entirely
+        // above the row's underside. Tagged, so the walk below follows THAT card and not
+        // whichever one happens to be there after a scroll.
+        const target = [...cards].reverse().find((c) => c.getBoundingClientRect().bottom <= rowBottom)
+        if (!target) return null
+        target.dataset.revealUp = '1'
+        const h2 = target.querySelector('h2, h3')
+        return { title: h2 ? h2.textContent.trim().slice(0, 40) : null, height: Math.round(target.getBoundingClientRect().height), rowBottom: Math.round(rowBottom) }
+      })
+      if (!upTarget) note(theme, 'reveal', 'no card had fully exited above the row at the document bottom', null)
+      else {
+        // Fractions of the card's OWN height showing below the row: the exit range is one card
+        // height long, so --reveal-range 45% means full brightness at 45% shown.
+        const parkUp = async (f) => page.evaluate(async (frac) => {
+          const wait = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+          const target = document.querySelector('.page-frame-body .card[data-reveal-up]')
+          const rowB = () => { const r = document.querySelector('.page-frame-scope'); return r ? r.getBoundingClientRect().bottom : 0 }
+          const h = target.getBoundingClientRect().height, want = Math.round(h * frac)
+          for (let i = 0; i < 3; i += 1) { scrollBy(0, target.getBoundingClientRect().bottom - rowB() - want); await wait() }
+          await wait()
+          const cs = getComputedStyle(target); const shown = Math.round(target.getBoundingClientRect().bottom - rowB())
+          return { wantPct: Math.round(frac * 100), shownPx: shown, shownPct: Math.round((shown / h) * 100), reveal: +cs.getPropertyValue('--reveal'), opacity: +cs.opacity,
+            stuck: !!document.querySelector('.page-frame-scope.is-stuck'), rowBottom: Math.round(rowB()) }
+        }, f)
+        const steps = []
+        for (const f of [0.01, 0.15, 0.3, 0.45, 0.6]) {
+          steps.push(await parkUp(f)); await sleep(250)
+          // 1% is where the CLAIM is read (the floor, with 5px of card showing); 15% is where
+          // the eye can see it — a 5px sliver photographs as nothing — and 45% is the arrival.
+          if (f === 0.01 || f === 0.15 || f === 0.45) await shot(`reveal-up-${Math.round(f * 100)}pct`)
+        }
+        note(theme, 'reveal', 'scroll-up walk: --reveal and opacity as the card emerges below the stuck row', { target: upTarget, steps })
+        const emerging = steps[0], full = steps.find((s) => s.shownPct >= 45) ?? steps.at(-1)
+        check(theme, 'reveal', `emerging below the stuck row it reads the floor (${floor} ±0.05), in --reveal AND in painted opacity`,
+          near(emerging.reveal, floor) && near(emerging.opacity, floor), emerging)
+        check(theme, 'reveal', 'it is fully bright once ~45% of it shows below the row', full.shownPct >= 45 && full.reveal >= 0.99 && full.opacity >= 0.99, full)
+        // Monotonic, so the walk is a gradient and not two states with a jump between them.
+        check(theme, 'reveal', 'and it brightens monotonically on the way up', steps.every((s, i) => i === 0 || s.reveal >= steps[i - 1].reveal - 0.01), steps)
+      }
       drain('reveal')
     }
 
