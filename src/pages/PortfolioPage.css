@@ -52,6 +52,9 @@
 .tab-row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: no-preference) {
+  /* Literal, not a token: an INFINITE spinner's period is a rate, not a grammar duration,
+     and reading a --t-* would freeze it mid-turn under reduce — which is exactly why
+     motion.test.ts's literal sweep exempts `infinite` (spec §1). */
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 }

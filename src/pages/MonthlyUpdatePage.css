@@ -45,7 +45,8 @@
   border-color: var(--negative);
 }
 
-/* Paste feedback: filled cells flash once (0.7s, matching the class's decay timer) while
+/* Paste feedback: filled cells flash once (--t-flash, the same MOTION_MS.flash the
+   class's decay timer in MonthlyUpdatePage.tsx reads) while
    the status line narrates the fill. Same pair as taxes.css's — a copy by design, like
    .field-input.invalid above; @keyframes are global, so the two must stay identical. The
    `from` is declared twice on purpose: color-mix wants Chrome 111+/Safari 16.2, past this
@@ -63,7 +64,7 @@
 }
 
 .field-input.pasted-flash {
-  animation: pasted-flash 0.7s ease-out;
+  animation: pasted-flash var(--t-flash) ease-out;
 }
 
 /* The single-column entry table: Tab/Enter walk straight down one visual column,

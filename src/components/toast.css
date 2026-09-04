@@ -103,11 +103,11 @@
    unanimated for that window before it goes, which is invisible and harmless. */
 @media (prefers-reduced-motion: no-preference) {
   .toast {
-    animation: toast-in 160ms ease-out;
+    animation: toast-in var(--t-fast) ease-out;
   }
 
   .toast.toast-leaving {
-    animation: toast-out 140ms ease-in forwards;
+    animation: toast-out var(--t-fast) ease-in forwards;
   }
 
   @keyframes toast-in {

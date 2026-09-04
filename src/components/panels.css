@@ -294,7 +294,9 @@
 }
 
 .loading-dim {
-  transition: opacity 0.15s ease;
+  /* Token, not a literal: the reduce block zeroes --t-fast, so the dim is instant for a
+     reader who asked for that (spec §7). */
+  transition: opacity var(--t-fast) ease;
 }
 
 .loading-dim.is-loading {
@@ -457,12 +459,15 @@
 }
 
 /* Delayed appearance: anything that resolves inside the delay shows NOTHING — flashing
-   a fallback for 80ms reads clunkier than the wait it fills. Opacity, not display, so
+   a fallback for 80ms reads clunkier than the wait it fills. The 300ms threshold is
+   2026-09-05 spec §2's, shared with Layout.css's route fallback, and stays a literal
+   because a threshold is not a duration; the fade reads --t-page. Opacity, not display, so
    the appear can fade. Deliberately outside the reduced-motion gate: a delayed fade-in
-   is appearance, not movement; the pulse below is movement and stays gated. */
+   is appearance, not movement; the pulse below is movement and stays gated (and the reduce
+   block zeroes --t-page, so it appears instantly there). */
 .loading-fallback {
   opacity: 0;
-  animation: fallback-appear 200ms ease 250ms forwards;
+  animation: fallback-appear var(--t-page) ease 300ms forwards;
 }
 
 @keyframes fallback-appear {
@@ -472,6 +477,8 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  /* Literal, not a token: an INFINITE pulse's period is a rate, not a grammar duration —
+     a zeroed --t-* would freeze it mid-breath rather than shorten it (spec §1). */
   .skeleton {
     animation: skeleton-pulse 1.4s ease-in-out infinite;
   }

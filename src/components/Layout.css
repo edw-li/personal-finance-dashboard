@@ -127,11 +127,13 @@
   font-size: 0.85rem;
   padding: 1.5rem 0;
   text-align: center;
-  /* Appears only after ~250ms: a chunk that lands faster never flashes the fallback.
-     Own keyframes, not panels.css's fallback-appear — this file must stay standalone
-     (the note above). */
+  /* The 300ms threshold (2026-09-05 spec §2): the fallback is REACHED only when a chunk
+     truly takes longer than that, and a chunk that lands sooner never flashes it. The
+     delay stays a literal — a threshold is not a duration — while the fade reads --t-page,
+     which the reduce block zeroes. Own keyframes, not panels.css's fallback-appear: this
+     file must stay standalone (the note above). */
   opacity: 0;
-  animation: route-fallback-appear 200ms ease 250ms forwards;
+  animation: route-fallback-appear var(--t-page) ease 300ms forwards;
 }
 
 @keyframes route-fallback-appear {

@@ -15,6 +15,7 @@ import { canonicalAmount, isAmount } from '../../utils/amount'
 import { formatCurrency } from '../../utils/format'
 import { classifyPaste, matchLabel } from '../../utils/paste'
 import { FeedBanner } from '../shell/Feed'
+import { MOTION_MS } from '../../theme/motion'
 import './taxes.css'
 
 // The three sections the seed ships (tax_keys.SECTIONS). A section added later still
@@ -210,7 +211,7 @@ export default function InputsForm({
   // sets state (a set here would re-run the effect on its own write).
   useEffect(() => {
     if (flashIds.size === 0) return
-    const timer = setTimeout(() => setFlashIds(new Set()), 700)
+    const timer = setTimeout(() => setFlashIds(new Set()), MOTION_MS.flash)
     return () => clearTimeout(timer)
   }, [flashIds])
 
