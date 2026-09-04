@@ -133,11 +133,45 @@ grep -rn 'SkeletonCard' src/pages
 
 ### Task 5: Full verification
 
-- [ ] **Frontend:** `npx tsc -b && npx eslint . && npx vitest run && npm run build` — all green (a lone `waitFor` timeout under load is a known flake: re-run that file alone once).
-- [ ] **Backend:** from `backend/`, `.venv/Scripts/python.exe -m pytest -q` with `FINANCE_TEST_DB=finance_test_shell4` — all green; `alembic heads` shows exactly one head (`b8e4d17c2a90`).
-- [ ] **Dev DB:** `alembic upgrade head` against the dev database (adds `users.token_version`); log in once to confirm the new `ver` claim is issued and `POST /auth/renew` returns 200.
-- [ ] **Smoke, both themes:** with backend + frontend running, run the headless walk over all routes — `/`, `/?owner=2`, `/net-worth`, `/net-worth?month=<an entered month>&range=ytd`, `/spending`, `/spending?month=<month>`, `/portfolio?owner=joint`, `/credit-cards`, `/paycheck?owner=2`, `/update`, `/comp`, `/espp`, `/taxes`, `/projection`, `/calendar`, `/settings#appearance`, `/nope` — first with `localStorage.finance.theme='dark'`, then `'light'`, then once with `finance.density='compact'`. For each: no console errors, a `.page-frame-header h1`, the sticky row present where the spec says (`.page-frame-scope` on Net worth, Spending, Portfolio, Credit cards, Monthly update, Overview), `is-stuck` after `window.scrollTo(0, 1200)` on Net worth, ECharts canvases painted (non-blank pixels) under both themes, palette (Ctrl+K) opens and finds "Appearance", and the sidebar footer shows the build hash and health. Save screenshots to the session scratchpad under `shell-smoke/<theme>/<route>.png`.
-- [ ] **Record** the results (counts, any flake, any visual nit) in the memory note for the batch.
+- [x] **Frontend:** green — `tsc -b` clean, `eslint .` clean (18 react-refresh warnings, 0 errors),
+  `vitest run` **174 files / 2272 tests passed**, `npm run build` 2562 modules, largest chunks
+  `tooltip` 747 kB (gzip 253 kB) and `index` 317 kB (gzip 101 kB). The first full run failed one
+  file; it was NOT the load flake this line anticipates but a wrong await sentinel in
+  `BackupsCard.test.tsx`, fixed in `f22768d` (proof: with the mock resolving on a 60 ms timer the
+  old form reproduces the failure and the new form passes).
+- [x] **Backend:** green — `FINANCE_TEST_DB=finance_test_final … pytest -q` → **1625 passed, 1
+  skipped** in 907 s; `ruff check app tests` and `ruff format --check app tests` (232 files) clean.
+  `alembic heads` shows exactly one head, now **`d4f6b8c0e2a5`** — the `b8e4d17c2a90` written here
+  was Plan 4's own head; the chart/calendar/sandbox/data-lifecycle programs landed migrations after
+  it.
+- [x] **Dev DB:** already at head — `alembic current` = `d4f6b8c0e2a5 (head)` and `alembic check`
+  reports "No new upgrade operations detected", so no migration was written. Login with the dev seed
+  credentials issued a working token (the whole smoke ran on it).
+- [x] **Smoke, both themes:** ran the shell walk (a copy under `scratchpad/final-smoke/`, with a
+  `PATCH /prefs` stub added — see below) over all 17 routes × 4 passes = **68 records**. Clean:
+  every route has exactly one `.page-frame-header h1`, zero legacy `.page-header`, the sticky row
+  wherever the page composes one, `is-stuck` true after `scrollTo(0, 1200)` on both Net-worth
+  routes, correct `data-theme`/`data-density` in all four passes, sidebar footer build hash +
+  health pill, Ctrl+K opening on "Appearance", the footer theme toggle flipping and repainting
+  every canvas, `#appearance` scrolled into view and Compact/Comfortable working. **128/136 canvases
+  painted**; the 8 misses are one ECharts *layer* canvas of the Spending heatmap in each pass (the
+  heatmap itself paints — 202 colors — and the 04:15 baseline shows the identical shape, so it is
+  the probe's pixel heuristic meeting an overlay layer, not a blank chart). Only console errors:
+  the known paycheck 404 (3 per pass, person without a profile).
+
+  Two things worth carrying forward. **(1)** The dev Vite server was as stale as the backend: the
+  first run failed 3× per route with `504 (Outdated Optimize Dep)` on all 68 records, because
+  `npm run dev` had been running since before tonight's merges. Restarting it and clearing
+  `node_modules/.vite` returned the walk to the 04:15 baseline exactly. The probes README warns
+  about the un-`--reload`ed backend; the dev server's dep optimizer is the same trap.
+  **(2)** The shell walk predates the account-owned preferences, so it needed the `PATCH /prefs`
+  stub the other drivers carry: it clicks the sidebar theme toggle and Settings' Compact button,
+  and without the stub those 16 PATCHes rewrite the dev account (verified after the run — the
+  account still holds only `theme: dark`, with no `density` key). GET is stubbed too, or the
+  server's stored theme overrides the pass's and the light pass screenshots dark.
+
+  Original text: run the headless walk over all routes — `/`, `/?owner=2`, `/net-worth`, `/net-worth?month=<an entered month>&range=ytd`, `/spending`, `/spending?month=<month>`, `/portfolio?owner=joint`, `/credit-cards`, `/paycheck?owner=2`, `/update`, `/comp`, `/espp`, `/taxes`, `/projection`, `/calendar`, `/settings#appearance`, `/nope` — first with `localStorage.finance.theme='dark'`, then `'light'`, then once with `finance.density='compact'`. For each: no console errors, a `.page-frame-header h1`, the sticky row present where the spec says (`.page-frame-scope` on Net worth, Spending, Portfolio, Credit cards, Monthly update, Overview), `is-stuck` after `window.scrollTo(0, 1200)` on Net worth, ECharts canvases painted (non-blank pixels) under both themes, palette (Ctrl+K) opens and finds "Appearance", and the sidebar footer shows the build hash and health. Save screenshots to the session scratchpad under `shell-smoke/<theme>/<route>.png`.
+- [x] **Record** the results — reported to the coordinator, who owns the memory note.
 
 ---
 
