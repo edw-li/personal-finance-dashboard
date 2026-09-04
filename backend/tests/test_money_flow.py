@@ -445,3 +445,27 @@ def test_a_split_that_does_not_sum_to_the_salary_node_is_refused_with_a_warning(
         "per-person salary rows sum to 210000.00, not the year's 220000.00 — "
         "showing one salary node"
     ) in flow.warnings
+
+
+def test_take_home_pending_estimates_the_months_not_yet_entered():
+    # Production's 2026: 44,611.60 of take-home over Jan-Jul.
+    flow = compose(net_pay_sum=D("44611.60"), net_pay_months=7)
+    assert flow.take_home_months_entered == 7
+    # mean(entered) x (12 - entered) = 6,373.0857... x 5, quantized ONCE at the wire.
+    assert flow.take_home_pending.quantize(D("0.01"), rounding=ROUND_HALF_UP) == D("31865.43")
+    # The residual now sheds it: money already earned is not "retained equity".
+    assert flow.retained_equity == (
+        flow.gross_income
+        - flow.taxes.total
+        - flow.pre_tax_savings
+        - flow.take_home_cash
+        - flow.take_home_pending
+    )
+
+
+def test_take_home_pending_is_zero_on_a_full_year_and_on_an_empty_one():
+    full = compose()  # 12/12 entered
+    assert full.take_home_pending == D("0") and full.take_home_months_entered == 12
+    # Nothing entered: there is no mean to extrapolate from, so the node stays shut.
+    empty = compose(net_pay_sum=D("0"), net_pay_months=0)
+    assert empty.take_home_pending == D("0") and empty.take_home_months_entered == 0

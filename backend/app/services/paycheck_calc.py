@@ -37,10 +37,10 @@ WATERFALL_KEYS = (
 )
 # The paycheck lines that are SAVINGS — money that leaves the check but lands in an account
 # the household owns. Dental/vision and withholding are costs; employer match is not
-# modeled (limit_check.py's caveat); the take-home itself is what the projection's
-# `_trailing_savings` nets against spend, so it is deliberately not in this tuple. Lives
-# here (not in api/projection.py) because the paycheck preview sums it too, and the
-# projection router already imports from this module — the reverse import would be a cycle.
+# modeled (limit_check.py's caveat); the take-home itself is what services/savings.py nets
+# against spend as `cash_savings`, so it is deliberately not in this tuple. Lives here (not
+# in a caller) because the paycheck preview sums it too and services/savings.py reads it for
+# `payroll_monthly` — an import the other way would be a cycle.
 PAYROLL_SAVING_KEYS = ("trad_401k", "roth_401k", "after_tax_401k", "espp", "hsa")
 
 

@@ -1,8 +1,13 @@
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# The write side's vocabulary (2026-09-04 honest-numbers spec §1). CategoryOut deliberately
+# types `kind` as a plain str: a GET must never 422 on a value the database already holds.
+CategoryKind = Literal["living", "tax", "transfer"]
 
 
 class CategoryOut(BaseModel):
@@ -13,18 +18,21 @@ class CategoryOut(BaseModel):
     slug: str
     sort_order: int
     is_active: bool
+    kind: str
 
 
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     # int32-safe and generous; sheet column indexes top out at 20.
     sort_order: int = Field(default=0, ge=0, le=1_000_000)
+    kind: CategoryKind = "living"
 
 
 class CategoryUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     sort_order: int | None = Field(default=None, ge=0, le=1_000_000)
     is_active: bool | None = None
+    kind: CategoryKind | None = None
 
 
 class AmountEntry(BaseModel):
@@ -78,12 +86,27 @@ class MatrixOut(BaseModel):
     months: list[date]
     categories: list[CategoryOut]
     series: list[CategorySeries]
+    # EVERY category, every kind — the spending page's total line, unchanged.
     totals: list[Decimal]
     net_pay: list[Decimal | None]
+    # The CASH savings rate (2026-09-04 honest-numbers spec §2): this field keeps its name
+    # and is identical to the old one wherever every category is 'living'.
     savings_rate: list[Decimal | None]
     four_pct_rule: list[Decimal | None]
     # Sum of the resolved category budgets per month; None when NO category has one.
     total_budget: list[Decimal | None]
+    # The kind split and both savings definitions, aligned with `months`. Every money
+    # array is CENTS (services/savings.py's rounding contract), so a period scalar
+    # elsewhere in the API is the plain sum of these months.
+    living_total: list[Decimal]
+    tax_total: list[Decimal]
+    transfer_total: list[Decimal]
+    cash_savings: list[Decimal | None]
+    # Never null: 0.00 for a month with no take-home entered (no pay on file means no
+    # deductions on file), so the array always sums.
+    payroll_savings: list[Decimal]
+    total_savings: list[Decimal | None]
+    total_savings_rate: list[Decimal | None]
 
 
 class YearCategoryTotal(BaseModel):
@@ -93,10 +116,25 @@ class YearCategoryTotal(BaseModel):
 
 class YearRollup(BaseModel):
     year: int
+    # by_category / total / net_pay_total keep today's meaning: EVERY month of the year,
+    # every kind. The savings fields below are the year's MATCHED months only (2026-09-04
+    # honest-numbers spec §2) — a rate whose numerator and denominator come from different
+    # months is the dishonesty this program removes.
     by_category: list[YearCategoryTotal]
     total: Decimal
     net_pay_total: Decimal | None
+    # The CASH rate (this field keeps its name), over matched months. Every money field
+    # below is the SUM of the emitted months the matrix showed, so the two endpoints
+    # agree to the cent (services/savings.py's rounding contract).
     savings_rate: Decimal | None
+    months_matched: int
+    living_total: Decimal
+    tax_total: Decimal
+    transfer_total: Decimal
+    cash_savings: Decimal | None
+    payroll_savings: Decimal
+    total_savings: Decimal | None
+    total_savings_rate: Decimal | None
 
 
 class YearlyOut(BaseModel):

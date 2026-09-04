@@ -105,6 +105,8 @@ def _money_flow_out(flow: MoneyFlow) -> MoneyFlowOut:
         ),
         pre_tax_savings=_money(flow.pre_tax_savings),
         take_home_cash=_money(flow.take_home_cash),
+        take_home_pending=_money(flow.take_home_pending),
+        take_home_months_entered=flow.take_home_months_entered,
         retained_equity=_money(flow.retained_equity),
         categories=[
             MoneyFlowCategoryOut(name=entry.name, amount=_money(entry.amount))

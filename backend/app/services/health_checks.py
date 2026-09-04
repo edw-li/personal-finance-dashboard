@@ -7,20 +7,20 @@ Thresholds are twins of src/utils/staleness.ts; test_health_checks pins them."""
 import asyncio
 from datetime import UTC, date, datetime, time, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     AccountBalance,
     AppSetting,
     LatestPrice,
-    MonthlyCashflow,
     MonthlySpending,
     NetWorthSnapshot,
     Security,
 )
 from app.schemas.lifecycle import HealthCheckOut, HealthFixOut
 from app.schemas.system import BackupStatusOut
+from app.services.coverage import Coverage, load_coverage
 from app.services.snapshot import SNAPSHOT_NAME_RE, snapshot_stamp, snapshots_dir
 
 STALE_QUOTE_DAYS = 4  # staleness.ts STALE_AFTER_DAYS
@@ -44,17 +44,35 @@ def _months_back(month: date, n: int) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
-async def check_zero_filled_spending(db: AsyncSession) -> HealthCheckOut:
-    zero_months = (
-        await db.execute(
-            select(MonthlySpending.month)
-            .group_by(MonthlySpending.month)
-            .having(func.max(func.abs(MonthlySpending.amount)) == 0)
-            .order_by(MonthlySpending.month)
-        )
-    ).scalars()
-    cashflow_months = set((await db.execute(select(MonthlyCashflow.month))).scalars())
-    months = [month for month in zero_months if month not in cashflow_months]
+def _month_gap(
+    check_id: str, title: str, months: list[date], step: str, verb: str
+) -> HealthCheckOut:
+    """A warn-level "these months are not on file" card with a link into the wizard's
+    step for the FIRST of them. Shared by every gap rule so one sentence shape, one
+    severity and one link format cover them all."""
+    if not months:
+        return _ok(check_id, title)
+    first = months[0]
+    return HealthCheckOut(
+        id=check_id,
+        severity="warn",
+        title=title,
+        detail=f"{', '.join(_label(m) for m in months)}: {verb}.",
+        count=len(months),
+        months=months,
+        fix=HealthFixOut(
+            kind="link",
+            to=f"/update?month={first.isoformat()}&step={step}",
+            label=f"Enter {_label(first)} {step}",
+        ),
+    )
+
+
+def check_zero_filled_spending(coverage: Coverage) -> HealthCheckOut:
+    """Months saved with rows that are ALL $0.00 and no take-home — the audit's phantom
+    month. `coverage.empty` is the shared definition (2026-09-04 honest-numbers spec §3),
+    so this card, the footer and the ribbon can never disagree."""
+    months = coverage.empty
     if not months:
         return _ok("zero_filled_spending", "Spending months carry real amounts")
     plural = "s" if len(months) > 1 else ""
@@ -71,6 +89,34 @@ async def check_zero_filled_spending(db: AsyncSession) -> HealthCheckOut:
         fix=HealthFixOut(
             kind="action", action="delete_spending_month", label="Delete the zero-filled month"
         ),
+    )
+
+
+def check_spending_gap(coverage: Coverage) -> HealthCheckOut:
+    """Months inside the BALANCES window with no spending rows and no take-home.
+
+    Distinct from `balances_without_spending`, which reads the trailing twelve COMPLETE
+    months and needs a snapshot in the month itself: this one covers the whole window the
+    balances span, which is what the footer and the attention list quote.
+    """
+    return _month_gap(
+        "spending_gap",
+        "Spending months never entered",
+        coverage.missing,
+        "spending",
+        "balances cover this month but no spending or take-home was ever entered",
+    )
+
+
+def check_net_pay_without_spending(coverage: Coverage) -> HealthCheckOut:
+    """Take-home saved alone. The month is ENTERED, and its living spend is 0 — so
+    without this card it would read as the most frugal month on record (spec §6)."""
+    return _month_gap(
+        "net_pay_without_spending",
+        "Take-home entered, spending missing",
+        coverage.net_pay_without_spending,
+        "spending",
+        "take-home was entered but no spending row exists",
     )
 
 
@@ -95,33 +141,15 @@ async def check_coverage_gaps(
     without_spending = sorted(balances - spending)
     without_balances = sorted(spending - balances)
 
-    def gap(check_id: str, title: str, months: list[date], step: str, verb: str) -> HealthCheckOut:
-        if not months:
-            return _ok(check_id, title)
-        first = months[0]
-        return HealthCheckOut(
-            id=check_id,
-            severity="warn",
-            title=title,
-            detail=f"{', '.join(_label(m) for m in months)}: {verb}.",
-            count=len(months),
-            months=months,
-            fix=HealthFixOut(
-                kind="link",
-                to=f"/update?month={first.isoformat()}&step={step}",
-                label=f"Enter {_label(first)} {step}",
-            ),
-        )
-
     return (
-        gap(
+        _month_gap(
             "balances_without_spending",
             "Balances entered, spending missing",
             without_spending,
             "spending",
             "balances were saved but no spending row exists",
         ),
-        gap(
+        _month_gap(
             "spending_without_balances",
             "Spending entered, balances missing",
             without_balances,
@@ -302,9 +330,13 @@ def check_snapshot(*, now: datetime, snapshot_enabled: bool) -> HealthCheckOut:
 async def run_checks(
     db: AsyncSession, *, now: datetime, environment: str, snapshot_enabled: bool
 ) -> list[HealthCheckOut]:
+    # ONE coverage read for the three rules that share its definition.
+    coverage = await load_coverage(db)
     without_spending, without_balances = await check_coverage_gaps(db, today=now.date())
     return [
-        await check_zero_filled_spending(db),
+        check_zero_filled_spending(coverage),
+        check_spending_gap(coverage),
+        check_net_pay_without_spending(coverage),
         without_spending,
         without_balances,
         await check_stale_quotes(db, now=now),

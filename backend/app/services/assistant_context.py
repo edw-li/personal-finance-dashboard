@@ -91,6 +91,11 @@ async def _household(db: AsyncSession, search: dict, view: dict) -> dict:
     current_year = date.today().year
     tax_summaries = await get_all_summaries(db=db)
     tax = next((y for y in tax_summaries.years if y.year == current_year), None)
+
+    def latest(values: list):
+        """The focus month's value, or None on an empty book — one guard, nine fields."""
+        return values[latest_index] if latest_index >= 0 else None
+
     return {
         "today": date.today().isoformat(),
         "people": [{"id": p.id, "name": p.name, "is_primary": p.is_primary} for p in people],
@@ -106,9 +111,17 @@ async def _household(db: AsyncSession, search: dict, view: dict) -> dict:
             "prices_as_of_oldest_quote": port.as_of,
         },
         "spending": {
-            "latest_month": spend.months[latest_index] if latest_index >= 0 else None,
-            "latest_total": spend.totals[latest_index] if latest_index >= 0 else None,
-            "latest_savings_rate": spend.savings_rate[latest_index] if latest_index >= 0 else None,
+            "latest_month": latest(spend.months),
+            "latest_total": latest(spend.totals),
+            # The savings vocabulary the pages use (2026-09-04 honest-numbers spec §2):
+            # the assistant must not invent a second definition of "saved".
+            "latest_living_spend": latest(spend.living_total),
+            "latest_tax_paid": latest(spend.tax_total),
+            "latest_transfers": latest(spend.transfer_total),
+            "latest_savings_rate": latest(spend.savings_rate),
+            "latest_payroll_savings": latest(spend.payroll_savings),
+            "latest_total_savings": latest(spend.total_savings),
+            "latest_total_savings_rate": latest(spend.total_savings_rate),
         },
         "tax_current_year": None
         if tax is None or tax.totals is None
@@ -190,6 +203,13 @@ def _spending_builder(window: int):
             "totals": _tail(m.totals, window),
             "net_pay": _tail(m.net_pay, window),
             "savings_rate": _tail(m.savings_rate, window),
+            "living_total": _tail(m.living_total, window),
+            "tax_total": _tail(m.tax_total, window),
+            "transfer_total": _tail(m.transfer_total, window),
+            "cash_savings": _tail(m.cash_savings, window),
+            "payroll_savings": _tail(m.payroll_savings, window),
+            "total_savings": _tail(m.total_savings, window),
+            "total_savings_rate": _tail(m.total_savings_rate, window),
             "focused_month": m.months[focus_index] if m.months else None,
             "movers": _movers(m.months, m.series, names, focus_index) if m.months else [],
             "yearly": y,

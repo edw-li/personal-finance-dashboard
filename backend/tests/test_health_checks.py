@@ -12,6 +12,7 @@ from app.models import (
     Security,
     SpendingCategory,
 )
+from app.services.coverage import load_coverage
 from app.services.health_checks import (
     BACKUP_ERROR_DAYS,
     BACKUP_WARN_HOURS,
@@ -20,7 +21,9 @@ from app.services.health_checks import (
     check_backup,
     check_coverage_gaps,
     check_identical_snapshot,
+    check_net_pay_without_spending,
     check_snapshot,
+    check_spending_gap,
     check_stale_quotes,
     check_zero_filled_spending,
     run_checks,
@@ -65,7 +68,7 @@ async def test_zero_filled_spending_names_the_phantom_month_with_a_repair_action
         ]
     )
     await db.commit()
-    check = await check_zero_filled_spending(db)
+    check = check_zero_filled_spending(await load_coverage(db))
     assert check.severity == "error" and check.count == 1 and check.months == [date(2026, 9, 1)]
     assert check.title == "Zero-filled spending month"
     assert "Sep 2026" in check.detail
@@ -75,7 +78,7 @@ async def test_zero_filled_spending_names_the_phantom_month_with_a_repair_action
         MonthlySpending.__table__.delete().where(MonthlySpending.month == date(2026, 9, 1))
     )
     await db.commit()
-    assert (await check_zero_filled_spending(db)).severity == "ok"
+    assert check_zero_filled_spending(await load_coverage(db)).severity == "ok"
 
 
 async def test_coverage_gaps_look_back_twelve_months_and_skip_the_current(db):
@@ -239,10 +242,12 @@ def test_snapshot_check_reads_the_stored_files():
     assert check_snapshot(now=NOW, snapshot_enabled=True).severity == "ok"
 
 
-async def test_run_checks_returns_the_seven_in_order(db):
+async def test_run_checks_returns_the_nine_in_order(db):
     checks = await run_checks(db, now=NOW, environment="dev", snapshot_enabled=False)
     assert [c.id for c in checks] == [
         "zero_filled_spending",
+        "spending_gap",
+        "net_pay_without_spending",
         "balances_without_spending",
         "spending_without_balances",
         "stale_quotes",
@@ -250,4 +255,57 @@ async def test_run_checks_returns_the_seven_in_order(db):
         "backup",
         "snapshot",
     ]
-    assert [c.severity for c in checks] == ["ok", "ok", "ok", "ok", "ok", "info", "ok"]
+    assert [c.severity for c in checks] == [
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+        "info",
+        "ok",
+    ]
+
+
+async def test_spending_gap_names_months_missing_inside_the_balances_window(db):
+    food, _rent = await categories(db)
+    db.add_all(
+        [
+            NetWorthSnapshot(month=date(2026, 7, 1)),
+            NetWorthSnapshot(month=date(2026, 9, 1)),
+            MonthlySpending(month=date(2026, 7, 1), category_id=food.id, amount=Decimal("400.00")),
+            # September was saved with balances only: 19 rows of $0.00, no take-home.
+            MonthlySpending(month=date(2026, 9, 1), category_id=food.id, amount=Decimal("0.00")),
+        ]
+    )
+    await db.commit()
+    coverage = await load_coverage(db)
+
+    gap = check_spending_gap(coverage)
+    assert gap.severity == "warn" and gap.count == 1
+    assert gap.months == [date(2026, 8, 1)]  # nothing at all on file, and inside the window
+    assert gap.fix.to == "/update?month=2026-08-01&step=spending"
+    # The empty September belongs to the zero-filled check; neither claims the other's month.
+    assert check_zero_filled_spending(coverage).months == [date(2026, 9, 1)]
+
+
+async def test_spending_gap_is_ok_when_the_window_is_covered(db):
+    food, _rent = await categories(db)
+    db.add_all(
+        [
+            NetWorthSnapshot(month=date(2026, 7, 1)),
+            MonthlySpending(month=date(2026, 7, 1), category_id=food.id, amount=Decimal("400.00")),
+        ]
+    )
+    await db.commit()
+    assert check_spending_gap(await load_coverage(db)).severity == "ok"
+
+
+async def test_net_pay_without_spending_refuses_to_read_as_a_frugal_month(db):
+    db.add(MonthlyCashflow(month=date(2026, 8, 1), net_pay=Decimal("6373.09")))
+    await db.commit()
+    check = check_net_pay_without_spending(await load_coverage(db))
+    assert check.severity == "warn" and check.months == [date(2026, 8, 1)]
+    assert check.fix.to == "/update?month=2026-08-01&step=spending"
+    assert "take-home was entered but no spending row exists" in check.detail

@@ -85,3 +85,30 @@ async def test_category_budget_cascades_with_its_category(db):
     await db.delete(cat)
     await db.commit()
     assert (await db.execute(select(CategoryBudget))).scalars().all() == []
+
+
+async def test_category_kind_defaults_to_living_and_is_constrained(db):
+    cat = SpendingCategory(name="Groceries", slug="groceries", sort_order=1)
+    db.add(cat)
+    await db.commit()
+    # The default is the honest one: a category nobody classified is money that LEFT
+    # the household, so an un-migrated book keeps reading exactly as it does today.
+    assert cat.kind == "living"
+
+    taxes = SpendingCategory(name="Taxes", slug="taxes", sort_order=2, kind="tax")
+    moves = SpendingCategory(name="Investments", slug="investments", sort_order=3, kind="transfer")
+    db.add_all([taxes, moves])
+    await db.commit()
+    rows = (
+        (await db.execute(select(SpendingCategory).order_by(SpendingCategory.sort_order)))
+        .scalars()
+        .all()
+    )
+    assert [r.kind for r in rows] == ["living", "tax", "transfer"]
+
+
+async def test_category_kind_vocabulary_is_enforced_by_the_database(db):
+    db.add(SpendingCategory(name="Mystery", slug="mystery", sort_order=9, kind="savings"))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
