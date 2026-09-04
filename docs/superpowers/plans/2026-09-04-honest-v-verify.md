@@ -488,16 +488,17 @@ Every figure below is derived from the census in Task 5 and nothing else. The BE
 | 2026 net pay Jan–Jul | Σ | `44611.60` |
 | cash savings 2026 | 44611.60 − 40564.58 − 5044.00 | `-996.98` |
 | cash rate 2026 | −996.98 ÷ 44611.60 | `-0.022347` (−2.2%) |
-| payroll monthly | (188930 ÷ 24) × (0.13 + 0 + 0.03 + 0.11) + 100 = 2225.4625 per check, × 24 ÷ 12 | `4450.92` per month (see the rounding note) |
-| payroll savings 2026 | 4450.92 × 7 matched months | `31156.44` |
-| total savings 2026 | 31156.44 + (−996.98) | `30159.46` |
-| total rate 2026 | 30159.46 ÷ (44611.60 + 31156.44) | `0.398050` (39.8%) |
+| payroll monthly | (188930 ÷ 24) × (0.13 + 0 + 0.03 + 0.11) + 100 = 2225.4625 per check, × 24 ÷ 12 = 4450.925, emitted at cents HALF_UP | `4450.93` per month |
+| payroll savings 2026 | 4450.93 × 7 matched months (Σ of the emitted months) | `31156.51` |
+| total savings 2026 | 31156.51 + (−996.98) | `30159.53` |
+| total rate 2026 | 30159.53 ÷ (44611.60 + 31156.51 = 75768.11) | `0.398050` (39.8%) |
 | take-home pending 2026 | (44611.60 ÷ 7) × (12 − 7), quantized ONCE at the end | `31865.43` |
 
-> **Two rounding traps, named before they are hit.**
+> **The rounding rule (spec §2/§7, decided 2026-09-04).** **Per-month wire figures are quantized to cents ROUND_HALF_UP when emitted (`half_up2`, the house rule `api/projection.py` already applies); yearly and trailing SCALARS are the SUM of those emitted months.** So `payroll_monthly` here is exactly `4450.925` — a half-cent — and it reaches the wire as `4450.93`, seven of which make the 2026 payroll total `31,156.51`, total savings `30,159.53` and the rate denominator `75,768.11`.
 >
-> 1. **Quantize once.** The spec's §3 prose reads "$6,373.09 × 5 = $31,865.43" — but 6373.09 × 5 is 31,865.45. The correct figure comes from the UNROUNDED mean (44611.60 ÷ 7 = 6373.085714…) times 5, quantized once: 31,865.43. If the assertion observes `31865.45`, `services/money_flow.py` is rounding the mean before multiplying. That is the defect, not the test.
-> 2. **`payroll_monthly` is one cent per month wide.** `(188930/24) × 0.27 + 100 = 2225.4625`, so the monthly figure is exactly `4450.925` — a half-cent. Today's shipped `api/projection.py::_payroll_monthly` sends it through `paycheck_calc.half_up2` (ROUND_HALF_UP) and gets **4450.93**, which over 7 matched months gives total savings **30,159.53** — seven cents above the spec table's **30,159.46** (= 7 × 4450.92). **Assert the spec table.** If the run reads `30159.53`, do not bend the service to the doc and do not bend the doc to the service silently: record it under **"Rounding verdict"** in the Production expectations section with all three candidates — `.46` (per-month HALF_EVEN, or per-line rounding of the four savings lines: 1023.37 + 236.16 + 865.93 + 100.00 = 2225.46), `.50` (quantizing the seven-month SUM once), `.53` (per-month HALF_UP, today's house rule) — and apply this deciding rule: **the `YearRollup` scalar must equal Σ of the `MatrixOut.payroll_savings` months it covers**, because the Spending page prints both and a rollup that disagrees with its own columns is the exact dishonesty this program exists to remove. Whichever value survives that rule is the one to keep; the loser gets a one-line correction appended to the spec's §7 table in the morning, not tonight.
+> The invariant that makes this checkable, and the one to assert if a figure ever disagrees: **the `YearRollup` scalar equals Σ of the `MatrixOut` months it covers.** The Spending page prints both, and a rollup that disagrees with its own columns is the exact dishonesty this program exists to remove.
+>
+> **The one exception is a MEAN, which quantizes once at the end.** The spec's §3 prose reads "$6,373.09 × 5 = $31,865.43" — but 6373.09 × 5 is 31,865.45. The correct figure comes from the UNROUNDED mean (44611.60 ÷ 7 = 6373.085714…) times 5, quantized once: `31,865.43`. If the assertion observes `31865.45`, `services/money_flow.py` is rounding the mean before multiplying. That is the defect, not the test.
 
 - [ ] **Step 1: The BEFORE column**
 
@@ -565,7 +566,7 @@ async def test_after_april_splits_into_living_and_tax(census, auth_client):
     assert body["cash_savings"][empty] is None      # no net pay => no savings figure at all
     assert body["payroll_savings"][empty] is None   # spec §2: nobody entered pay, no deductions
     jan = body["months"].index("2026-01-01")
-    assert body["payroll_savings"][jan] == "4450.92"
+    assert body["payroll_savings"][jan] == "4450.93"   # 4450.925 emitted at cents HALF_UP
     assert body["cash_savings"][jan] == "-1955.23"  # 5251.59 - 7206.82
     aug25 = body["months"].index("2025-08-01")
     assert body["payroll_savings"][aug25] == "0.00"  # no profile in force before 2026-01-01
@@ -586,11 +587,43 @@ async def test_after_2026_rollup_counts_payroll_and_matches_only_seven_months(ce
     assert year["transfer_total"] == "0.00"
     assert year["cash_savings"] == "-996.98"
     assert year["savings_rate"] == "-0.022347"    # the name kept, the meaning = cash rate
-    assert year["payroll_savings"] == "31156.44"  # 4450.92 x 7 — see the rounding note
-    assert year["total_savings"] == "30159.46"
-    assert year["total_savings_rate"] == "0.398050"
-    # The 2026-08-17 profile is in force for NO matched month (1st-of-month rule, spec §6).
-    assert Decimal(year["payroll_savings"]) / 7 == Decimal("4450.92")
+    assert year["payroll_savings"] == "31156.51"  # Σ of the emitted months: 4450.93 x 7
+    assert year["total_savings"] == "30159.53"
+    assert year["total_savings_rate"] == "0.398050"  # 30159.53 / 75768.11
+    # The 2026-08-17 profile is in force for NO matched month (1st-of-month rule, spec §6),
+    # and the scalar is the SUM of the emitted months, never a re-rounded raw total.
+    assert Decimal(year["payroll_savings"]) / 7 == Decimal("4450.93")
+
+
+async def test_after_the_rollup_scalars_equal_the_sum_of_the_months_they_cover(
+    census, auth_client
+):
+    """The deciding invariant of the rounding rule (spec §2/§7): a yearly scalar IS the sum
+    of the emitted per-month figures. The Spending page prints both, so a rollup that
+    disagrees with its own columns would be the very dishonesty this program removes."""
+    matrix = (await auth_client.get(MATRIX)).json()
+    year = next(
+        y for y in (await auth_client.get(YEARLY)).json()["years"] if y["year"] == 2026
+    )
+    # MATCHED months only (spec §2: "its totals and both rates are computed over matched
+    # months only") — a month is matched when it has spend rows AND net pay, so the empty
+    # September (net_pay None) drops out and August, having no column at all, never appears.
+    rows = [
+        i
+        for i, m in enumerate(matrix["months"])
+        if m.startswith("2026-") and matrix["net_pay"][i] is not None
+    ]
+    assert len(rows) == year["months_matched"] == 7
+    for field in (
+        "living_total",
+        "tax_total",
+        "transfer_total",
+        "cash_savings",
+        "payroll_savings",
+        "total_savings",
+    ):
+        months = [Decimal(matrix[field][i]) for i in rows]
+        assert sum(months, Decimal("0")) == Decimal(year[field]), field
 ```
 
 - [ ] **Step 5: The AFTER column — the projection's window and FI target**
@@ -640,7 +673,7 @@ async def test_after_money_flow_names_the_five_months_nobody_has_entered(census,
 FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest tests/verify -q -s
 ```
 
-Expected: **7 passed** and the two printed clock-coupled dates. Any failure is a real finding: copy the assertion, the observed value and the derivation row it contradicts into the report — a verify lane's failures are its output, not its embarrassment.
+Expected: **8 passed** and the two printed clock-coupled dates. Any failure is a real finding: copy the assertion, the observed value and the derivation row it contradicts into the report — a verify lane's failures are its output, not its embarrassment.
 
 - [ ] **Step 8: The module runs inside the ordinary suite too**
 
@@ -648,7 +681,7 @@ Expected: **7 passed** and the two printed clock-coupled dates. Any failure is a
 FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest -q
 ```
 
-Expected: the Task 2 count **+ 7**. If pytest does not collect `tests/verify/`, its `testpaths`/`norecursedirs` needs the directory — check with `grep -n "testpaths\|norecursedirs\|\[tool.pytest" backend/pyproject.toml` and fix it there rather than renaming the folder.
+Expected: the Task 2 count **+ 8**. If pytest does not collect `tests/verify/`, its `testpaths`/`norecursedirs` needs the directory — check with `grep -n "testpaths\|norecursedirs\|\[tool.pytest" backend/pyproject.toml` and fix it there rather than renaming the folder.
 
 - [ ] **Step 9: Commit**
 
@@ -1234,7 +1267,7 @@ cd backend && FINANCE_TEST_DB=finance_test_hv .venv/Scripts/python.exe -m pytest
 cd .. && npx tsc -b && npx eslint . && npx vitest run && npm run build
 ```
 
-Expected: pytest count = Task 2's + 7; ruff clean; exactly one alembic head; tsc/eslint silent; the vitest counts from Task 3; the build completes.
+Expected: pytest count = Task 2's + 8; ruff clean; exactly one alembic head; tsc/eslint silent; the vitest counts from Task 3; the build completes.
 
 - [ ] **Step 4: Confirm nothing left the box**
 
@@ -1260,8 +1293,8 @@ After the migration runs on production and the app restarts, these are the figur
 |---|---|---|
 | Projection › Assumptions › annual spend | `$65,779.14` — mean of the last 12 months WITH ROWS (Sep 2025–Sep 2026, the `$0` September included) | `$65,009.77` — living spend over the matched window **Aug 2025 – Jul 2026 (12 months)**, printed as the derived window |
 | Projection › FI target (4% SWR) | `$1,644,478.50` | `$1,625,244.25` |
-| Spending › 2026 rollup › savings | one rate, `−2.2%` | **Total `+$30,159.46` (39.8%)** beside **Cash `−$996.98` (−2.2%)**, both over `months_matched = 7` |
-| Spending › 2026 rollup › columns | one `total` | living `$40,564.58` · tax `$5,044.00` · transfer `$0.00` · net pay `$44,611.60` · payroll `$31,156.44` |
+| Spending › 2026 rollup › savings | one rate, `−2.2%` | **Total `+$30,159.53` (39.8%)** beside **Cash `−$996.98` (−2.2%)**, both over `months_matched = 7` |
+| Spending › 2026 rollup › columns | one `total` | living `$40,564.58` · tax `$5,044.00` · transfer `$0.00` · net pay `$44,611.60` · payroll `$31,156.51` (Σ of the emitted months, 4,450.93 × 7) |
 | Spending › April 2026 | `$9,802.63` spend; the month reads −48% | `$4,758.63` living **+** `$5,044.00` tax, badged `tax` |
 | Overview › footer | "Spending through Sep 2026" | "Balances through Sep 2026 · Spending through Jul 2026 (Aug missing, Sep empty) · Net pay through Jul 2026", amber |
 | Overview › attention | the balances nudge only | **+** "August 2026 spending was never entered" **+** "September 2026 was saved with no spending" |
@@ -1270,7 +1303,7 @@ After the migration runs on production and the app restarts, these are the figur
 | Wizard › Fidelity 401(k) rows | 2 typed totals + 5 components | 5 components + 2 read-only `derived` rows carrying the live sum |
 | Health › parent/component drift | (no such check) | 0 months — production was clean at census time; a non-zero count is NEW drift, not a false positive |
 
-**Rounding verdict:** *(fill in — `30,159.46` as asserted, or the observed value with Task 6's deciding rule applied and the one-line spec §7 correction the morning should make.)*
+**Rounding rule (spec §2/§7, settled 2026-09-04):** per-month wire figures are quantized to cents ROUND_HALF_UP when emitted (`half_up2`); yearly and trailing scalars are the SUM of those emitted months; a MEAN quantizes once at the end. Hence payroll `4,450.93`/month → `31,156.51` for 2026, total savings `30,159.53` over a `75,768.11` denominator (39.8%), and money-flow pending `31,865.43`. The invariant that keeps it honest — and the one `test_after_the_rollup_scalars_equal_the_sum_of_the_months_they_cover` asserts — is that every `YearRollup` scalar equals Σ of the `MatrixOut` months it covers.
 
 **Clock-coupled, recorded not asserted:** the projection's `start_month` / `base_month`, as printed by Task 6 Step 7.
 
@@ -1292,6 +1325,6 @@ After the migration runs on production and the app restarts, these are the figur
 
 **Placeholders.** Two, both deliberate and both carrying the command that resolves them, because they depend on markup lanes C–E have not written yet: the wizard's step-save button labels (Task 7 Step 2, note 1 — the assertion is on the network, so a different label changes the click, not the proof) and whether the dev book already holds a parent-with-components (note 2, with the create-and-sweep fallback written out). The session scratchpad id in Task 8 Step 3 is `<session>` because it is issued at runtime, and the README gives the in-repo alternative. Everything else — every command, every expected output, every literal in the fixture and every assertion — is complete.
 
-**Arithmetic consistency.** Every figure derives from the Task 5 constants and was checked twice: 70,053.77 over the 12 real months; minus April's 5,044.00 = 65,009.77 living, ÷ 0.04 = 1,625,244.25. The trailing-12 "before" window drops Aug 2025 and admits the `$0` September for 65,779.14, ÷ 0.04 = 1,644,478.50 — **exactly** the spec's own before-column figure, which is the proof that this fixture is the same book the spec was written against. 2026: 45,608.58 spend − 5,044.00 tax = 40,564.58 living against 44,611.60 net pay = −996.98 cash (−2.2%); payroll 4,450.92 × 7 = 31,156.44 → total 30,159.46 → 39.8%. Money flow: 44,611.60 ÷ 7 × 5 = 31,865.43 when quantized once. The one place this plan does not simply trust the spec is `payroll_monthly`'s half-cent, where today's shipped `half_up2` would produce 30,159.53 — Task 6's note names all three candidate values, the deciding rule (the rollup scalar must equal Σ of the months it prints beside it), and the fact that the correction goes into the spec in the morning rather than into the service tonight.
+**Arithmetic consistency.** Every figure derives from the Task 5 constants and was checked twice: 70,053.77 over the 12 real months; minus April's 5,044.00 = 65,009.77 living, ÷ 0.04 = 1,625,244.25. The trailing-12 "before" window drops Aug 2025 and admits the `$0` September for 65,779.14, ÷ 0.04 = 1,644,478.50 — **exactly** the spec's own before-column figure, which is the proof that this fixture is the same book the spec was written against. 2026: 45,608.58 spend − 5,044.00 tax = 40,564.58 living against 44,611.60 net pay = −996.98 cash (−2.2%); payroll 4,450.925/month emitted at cents HALF_UP = 4,450.93, × 7 = 31,156.51 → total 30,159.53 over a 75,768.11 denominator → 39.8%. Money flow: 44,611.60 ÷ 7 × 5 = 31,865.43, the mean quantized once. The rounding rule is spec §2/§7's, settled 2026-09-04 (per-month HALF_UP on emission; yearly/trailing scalars are the SUM of the emitted months; means quantize once at the end), and Task 6 Step 4 asserts its deciding invariant directly — every `YearRollup` scalar equals Σ of the `MatrixOut` months it covers.
 
 **Type consistency.** Field names are the spec §2/§3/§4/§5 wire names — `living_total`, `tax_total`, `transfer_total`, `cash_savings`, `payroll_savings`, `total_savings`, `total_savings_rate`, `savings_rate` (kept, now = cash rate), `months_matched`, `spending_empty`, `spending_missing`, `net_pay_missing`, `latest`, `derived_window`, `take_home_pending`, `take_home_months_entered`, `derived`, `confirm_zero`, `kind` — and Task 1 Step 2 greps for every one of them before a single assertion is written, so a renamed field fails preflight rather than a test.
