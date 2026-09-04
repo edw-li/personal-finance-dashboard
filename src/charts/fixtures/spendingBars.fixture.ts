@@ -19,6 +19,13 @@ export const MATRIX: SpendingMatrix = {
   savings_rate: ['0.541666667', '0.57', '0.557377'],
   four_pct_rule: ['4100.50', '4100.50', '4200.00'],
   total_budget: ['500.00', '500.00', '500.00'],
+  living_total: ['2600.00', '2480.00', '2610.00'],
+  tax_total: ['150.00', '100.00', '90.00'],
+  transfer_total: ['0.00', '0.00', '0.00'],
+  cash_savings: ['3250.00', '3420.00', '3400.00'],
+  payroll_savings: ['1000.00', '1000.00', '1000.00'],
+  total_savings: ['4250.00', '4420.00', '4400.00'],
+  total_savings_rate: ['0.607142857', '0.631428571', '0.619718310'],
 }
 export const NAMES = new Map(MATRIX.categories.map((c) => [c.id, c.name]))
 export const LABELS = ['Jun 2026', 'Jul 2026', 'Aug 2026']

@@ -7,7 +7,7 @@
 //   spendingBarsOption   + spendingCsv       — the stacked months under the net-pay line
 //   monthPieOption       + monthPieCsv       — the drill-in month, morphing from the bars
 //   heatmapRows / heatmapOption + heatmapCsv — month x category in three readings (F1)
-//   savingsRateOption    + savingsRateCsv    — (net pay - spend) / net pay per month
+//   savingsRateOption    + savingsRateCsv    — the total savings rate over the cash one
 //   categoryTrendOption  + categoryTrendCsv  — up to three picks with their budget steps
 //   categorySmallMultiplesOption             — every category as its own tiny line
 // The flow sankey keeps its own file (spendingSankeyOptions.ts). SpendingPage now holds
@@ -329,38 +329,74 @@ export function heatmapCsv(
   }
 }
 
+/** The two savings words (2026-09-04 honest-numbers spec §2). Payroll deductions are money
+ *  the household saved without ever seeing it as cash, so the headline line counts them;
+ *  the muted line answers the other question — what was left of the paycheck. */
+export const TOTAL_RATE_SERIES = 'Total (incl. payroll)'
+export const CASH_RATE_SERIES = 'Cash'
+
 export interface SavingsRateInput { matrix: SpendingMatrix; monthLabels: string[]; range: RangeState }
 
-/** (net pay − spend) ÷ net pay per month, above the zero line you saved. Clamped to the
- *  savings-rate extents (A7): ceiling +100%, floor expanding to the data. */
+/** Rates over months with net pay; nulls break the line (connectNulls false). Clamped
+ *  savings-rate extents (A7): ceiling +100%, floor expanding to the data. TWO lines when the
+ *  server sends the total rate, one when it does not — the fallback is exactly the chart
+ *  this card drew before the savings service, so an older backend degrades to the truth it
+ *  can still tell rather than to a blank. */
 export function savingsRateOption({ matrix, monthLabels, range }: SavingsRateInput): EChartsOption | null {
   if (matrix.months.length === 0) return null
+  const total = matrix.total_savings_rate
+  const numbers = (values: (string | null)[]) => values.map((v) => (v === null ? null : Number(v)))
+  const series = [
+    ...(total === undefined
+      ? []
+      : [
+          {
+            ...LINE,
+            name: TOTAL_RATE_SERIES,
+            color: PALETTE[0],
+            connectNulls: false,
+            markLine: zeroLine(),
+            data: numbers(total),
+          },
+        ]),
+    {
+      ...LINE,
+      name: CASH_RATE_SERIES,
+      color: MUTED,
+      connectNulls: false,
+      // The baseline belongs to whichever series leads — drawn twice it doubles its own ink.
+      ...(total === undefined ? { markLine: zeroLine() } : {}),
+      data: numbers(matrix.savings_rate),
+    },
+  ]
   return {
     dataZoom: rangeZoom(matrix.months, range),
-    grid: grid('noLegend'),
-    // True value in the tooltip even when the line is clamped out of frame.
+    grid: grid(total === undefined ? 'noLegend' : 'default'),
+    ...(total === undefined ? {} : { legend: legendFor(series.length) }),
+    // True value in the tooltip even when a line is clamped out of frame.
     tooltip: axisTooltip({ unit: 'percent' }),
     xAxis: monthAxis(monthLabels),
     yAxis: pctAxis(),
-    series: [
-      {
-        ...LINE,
-        name: 'Savings rate (actual)',
-        color: PALETTE[0],
-        connectNulls: false,
-        markLine: zeroLine(),
-        data: matrix.savings_rate.map((v) => (v === null ? null : Number(v))),
-      },
-    ],
+    series,
   }
 }
 
+/** The chart as a table (F12): both rates the lines draw, with the two spend figures that
+ *  explain the gap between them. Verbatim server strings; blanks for absent, never '0.00'. */
 export function savingsRateCsv(
-  matrix: Pick<SpendingMatrix, 'months' | 'net_pay' | 'totals' | 'savings_rate'>,
+  matrix: Pick<SpendingMatrix, 'months' | 'net_pay' | 'totals' | 'savings_rate'> &
+    Partial<Pick<SpendingMatrix, 'living_total' | 'total_savings_rate'>>,
 ): ExportTable {
   return {
-    headers: ['Month', 'Net pay', 'Spend', 'Savings rate'],
-    rows: matrix.months.map((m, i) => [m, matrix.net_pay[i] ?? '', matrix.totals[i], matrix.savings_rate[i] ?? '']),
+    headers: ['Month', 'Net pay', 'Living spend', 'Total spend', 'Cash rate', 'Total rate'],
+    rows: matrix.months.map((m, i) => [
+      m,
+      matrix.net_pay[i] ?? '',
+      matrix.living_total?.[i] ?? '',
+      matrix.totals[i],
+      matrix.savings_rate[i] ?? '',
+      matrix.total_savings_rate?.[i] ?? '',
+    ]),
   }
 }
 

@@ -35,6 +35,9 @@ const ROSTER = [
   'spendingHeatmapRow',
   'spendingHeatmapVsAverage',
   'spendingSavings',
+  // …and the same builder without the server's total rate (an older backend): one muted
+  // line on the noLegend grid, a shape the two-line fixture never reaches.
+  'spendingSavingsCash',
   'spendingTrends',
   'spendingSankey',
   'spendingSmallMultiples',

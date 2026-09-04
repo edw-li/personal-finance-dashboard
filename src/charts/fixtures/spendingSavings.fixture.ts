@@ -5,7 +5,8 @@ import { LABELS, MATRIX } from './spendingBars.fixture'
 const fixture: ChartFixture = {
   name: 'spendingSavings',
   kind: 'cartesian',
-  ariaLabel: 'Line chart of the monthly savings rate around a zero baseline',
+  ariaLabel:
+    'Line chart of the monthly total savings rate over the cash rate, around a zero baseline',
   build: () => savingsRateOption({ matrix: MATRIX, monthLabels: LABELS, range: { preset: 'all' } }),
 }
 export default fixture

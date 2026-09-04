@@ -60,7 +60,7 @@ vi.mock('../components/EChart', async () => {
         'data-zoom': JSON.stringify(option.dataZoom?.[0] ?? null),
         'data-pct-sample':
           option.tooltip?.formatter?.([
-            { seriesName: 'Savings rate (actual)', seriesType: 'line', value: 0.35 },
+            { seriesName: 'Total (incl. payroll)', seriesType: 'line', value: 0.35 },
           ]) ?? '',
         // A6: the bar stacks' raw data arrays — the absent-month gap pin reads them.
         'data-bar-data': JSON.stringify(
@@ -565,7 +565,7 @@ describe('SpendingPage — section order (2026-08-31 audit)', () => {
     renderPage()
     await screen.findByText('Where Jul 2026 went')
     const budgets = screen.getByRole('heading', { name: /Budgets — / })
-    const savings = screen.getByRole('heading', { name: /Savings rate \(actual\)/ })
+    const savings = screen.getByRole('heading', { name: /^Savings rate$/ })
     const trends = screen.getByRole('heading', { name: /Category trends/ })
     const heatmap = screen.getByRole('heading', { name: /Month × category heatmap/ })
     const yearly = screen.getByRole('heading', { name: /Yearly rollups/ })

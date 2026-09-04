@@ -193,10 +193,21 @@ export interface SpendingMatrix {
   series: { category_id: number; values: (string | null)[]; budgets: (string | null)[] }[]
   totals: string[]
   net_pay: (string | null)[]
+  /** The CASH rate — (net pay − living spend − tax paid) ÷ net pay (2026-09-04
+   *  honest-numbers spec §2). Same name, same arithmetic wherever every category is living. */
   savings_rate: (string | null)[]
   four_pct_rule: (string | null)[]
   /** Sum of the resolved category budgets per month; null when NO category has one. */
   total_budget: (string | null)[]
+  // The honest-numbers additions (spec §2), each aligned with `months`. Optional for the
+  // reason `MoneyFlowTaxes.niit` documents: the live server always sends them.
+  living_total?: string[]
+  tax_total?: string[]
+  transfer_total?: string[]
+  cash_savings?: (string | null)[]
+  payroll_savings?: (string | null)[]
+  total_savings?: (string | null)[]
+  total_savings_rate?: (string | null)[]
 }
 
 export interface SpendingMonth {

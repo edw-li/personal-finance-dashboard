@@ -445,9 +445,9 @@ export default function SpendingPage() {
               hint="Mean monthly spend over the 12 entered months ending with the viewed one."
             />
             <StatTile
-              label="Savings rate (actual)"
+              label="Savings rate — cash"
               value={kpis.savings === null ? '—' : formatPct(kpis.savings, { signed: false })}
-              hint="(net pay − spend) ÷ net pay for the viewed month."
+              hint="(net pay − living spend − tax paid) ÷ net pay for the viewed month. Payroll deductions are not in this one — the chart below draws both readings."
             />
             <StatTile
               label="Net pay"
@@ -506,7 +506,7 @@ export default function SpendingPage() {
               activeDetail && matrix ? (
                 <p className="drill-hint">
                   Total {formatCurrency(matrix.totals[detailIndex])} · Net pay{' '}
-                  {formatCurrency(matrix.net_pay[detailIndex])} · Savings{' '}
+                  {formatCurrency(matrix.net_pay[detailIndex])} · Cash savings{' '}
                   {matrix.savings_rate[detailIndex] === null
                     ? '—'
                     : formatPct(matrix.savings_rate[detailIndex], { signed: false })}{' '}
@@ -602,9 +602,9 @@ export default function SpendingPage() {
               the never-windowed full-history pair (heatmap, yearly) closes the page. */}
           <ChartCard
             span={6}
-            title="Savings rate (actual)"
-            hint="(net pay − spend) ÷ net pay each month; above the zero line you saved, below it you overspent."
-            ariaLabel="Line chart of the monthly savings rate around a zero baseline"
+            title="Savings rate"
+            hint="Two readings of the same month. Total counts the payroll deductions — 401(k), ESPP, HSA — that never reach your take-home; Cash is what was left of the paycheck: (net pay − living spend − tax paid) ÷ net pay. Above the zero line you saved, below it you overspent."
+            ariaLabel="Line chart of the monthly total and cash savings rates around a zero baseline"
             option={savingsOption}
             empty="No months entered yet."
             exportName="savings-rate"
@@ -616,7 +616,8 @@ export default function SpendingPage() {
             zoomWindow={zoomWindow}
             footer={
               <p className="drill-hint">
-                (net pay − spend) ÷ net pay, per month. The old sheet's column tracked a
+                Tax payments and transfers to your own accounts are not living spend, so
+                neither line counts them as money gone. The old sheet's column tracked a
                 planned rate, so values differ by design.
               </p>
             }

@@ -15,6 +15,8 @@ import {
   heatmapRows,
   monthPieCsv,
   monthPieOption,
+  CASH_RATE_SERIES,
+  TOTAL_RATE_SERIES,
   savingsRateCsv,
   savingsRateOption,
   spendingBarsOption,
@@ -85,6 +87,13 @@ export function matrixFixture(over: Partial<SpendingMatrix> = {}): SpendingMatri
     savings_rate: ['0.541666667', null],
     four_pct_rule: ['4100.50', '4100.50'],
     total_budget: ['500.00', '500.00'],
+    living_total: ['2600.00', '2000.00'],
+    tax_total: ['150.00', '0.00'],
+    transfer_total: ['0.00', '0.00'],
+    cash_savings: ['3250.00', null],
+    payroll_savings: ['1000.00', null],
+    total_savings: ['4250.00', null],
+    total_savings_rate: ['0.607142857', null],
     ...over,
   }
 }
@@ -308,25 +317,62 @@ describe('heatmapCsv', () => {
 })
 
 describe('savingsRateOption', () => {
-  it('one blue line on the percent axis with the zero baseline, aligned on the no-legend money grid', () => {
-    const option = read(savingsRateOption({ matrix: matrixFixture(), monthLabels: LABELS, range: { preset: 'all' } })) as unknown as {
-      grid: unknown; yAxis: { min: (e: { min: number }) => number; max: (e: { max: number }) => number; axisLabel: { formatter: unknown } }
-      series: { name: string; color: string; markLine: unknown; data: unknown[]; emphasis: unknown }[]; tooltip: { formatter: (p: unknown) => string }
+  const savings = (over: Partial<SpendingMatrix> = {}) =>
+    read(
+      savingsRateOption({ matrix: matrixFixture(over), monthLabels: LABELS, range: { preset: 'all' } }),
+    ) as unknown as {
+      grid: unknown
+      legend: { type: string } | undefined
+      yAxis: { min: (e: { min: number }) => number; max: (e: { max: number }) => number; axisLabel: { formatter: unknown } }
+      series: { name: string; color: string; markLine: unknown; data: unknown[]; emphasis: unknown }[]
+      tooltip: { formatter: (p: unknown) => string }
     }
-    expect(option.grid).toEqual(GRID_VARIANTS.noLegend) // F8: 60 → 70
+
+  it('draws the total rate over a muted cash line, the legend spelling both out', () => {
+    const option = savings()
+    expect(option.grid).toEqual(GRID_VARIANTS.default) // the legend row needs the top gutter
+    expect(option.legend?.type).toBe('plain')
+    expect(option.series.map((s) => s.name)).toEqual([TOTAL_RATE_SERIES, CASH_RATE_SERIES])
+    // The WORDS are the point: "rate" alone never said which of the two it meant.
+    expect(TOTAL_RATE_SERIES).toBe('Total (incl. payroll)')
+    expect(CASH_RATE_SERIES).toBe('Cash')
+    expect(option.series[0]).toMatchObject({ color: PALETTE[0], emphasis: { focus: 'series' } })
+    expect(option.series[1].color).toBe(MUTED)
+    expect(option.series[0].data).toEqual([0.607142857, null])
+    expect(option.series[1].data).toEqual([0.541666667, null])
+    // The zero baseline is drawn ONCE, by the leading series.
+    expect(option.series[0].markLine).toEqual({
+      silent: true, symbol: 'none', lineStyle: { color: MUTED, width: 1, type: 'solid' },
+      label: { show: false }, data: [{ yAxis: 0 }],
+    })
+    expect(option.series[1].markLine).toBeUndefined()
     expect(option.yAxis.axisLabel.formatter).toBe(percentLabel)
     expect(option.yAxis.min({ min: -1.8 })).toBe(-2)
     expect(option.yAxis.max({ max: 0.6 })).toBe(0.6)
-    expect(option.series[0]).toMatchObject({ name: 'Savings rate (actual)', color: PALETTE[0], emphasis: { focus: 'series' } })
-    expect(option.series[0].markLine).toEqual({ silent: true, symbol: 'none', lineStyle: { color: MUTED, width: 1, type: 'solid' }, label: { show: false }, data: [{ yAxis: 0 }] })
-    expect(option.series[0].data).toEqual([0.541666667, null])
-    const rows = tooltipRows(option.tooltip.formatter([{ seriesName: 'Savings rate (actual)', seriesType: 'line', axisValueLabel: 'Jun 2026', value: 0.35, color: PALETTE[0] }]))
-    expect(rows.rows).toEqual([{ kind: 'row', label: 'Savings rate (actual)', value: '35.0%' }])
+    const rows = tooltipRows(
+      option.tooltip.formatter([
+        { seriesName: TOTAL_RATE_SERIES, seriesType: 'line', axisValueLabel: 'Jun 2026', value: 0.35, color: PALETTE[0] },
+      ]),
+    )
+    expect(rows.rows).toEqual([{ kind: 'row', label: TOTAL_RATE_SERIES, value: '35.0%' }])
   })
-  it('exports month, net pay, spend, rate — verbatim, blanks for nulls', () => {
+
+  it('falls back to the lone cash line on a backend older than the savings service', () => {
+    const option = savings({ total_savings_rate: undefined })
+    expect(option.series.map((s) => s.name)).toEqual([CASH_RATE_SERIES])
+    expect(option.grid).toEqual(GRID_VARIANTS.noLegend)
+    expect(option.legend).toBeUndefined()
+    // The baseline follows the leading series, whichever one that is.
+    expect(option.series[0].markLine).not.toBeUndefined()
+  })
+
+  it('exports month, net pay, living and total spend, and both rates — blanks for nulls', () => {
     expect(savingsRateCsv(matrixFixture())).toEqual({
-      headers: ['Month', 'Net pay', 'Spend', 'Savings rate'],
-      rows: [['2026-06-01', '6000.00', '2750.00', '0.541666667'], ['2026-07-01', '6000.00', '2000.00', '']],
+      headers: ['Month', 'Net pay', 'Living spend', 'Total spend', 'Cash rate', 'Total rate'],
+      rows: [
+        ['2026-06-01', '6000.00', '2600.00', '2750.00', '0.541666667', '0.607142857'],
+        ['2026-07-01', '6000.00', '2000.00', '2000.00', '', ''],
+      ],
     })
   })
 })
