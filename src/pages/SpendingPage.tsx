@@ -391,6 +391,14 @@ export default function SpendingPage() {
     [matrix],
   )
 
+  // The non-living categories, named once for the two full-history surfaces (spec §1): the
+  // heatmap draws every row while the rollup's living total leaves these out, and a
+  // difference like that has to be said out loud rather than discovered.
+  const nonLiving = useMemo(
+    () => (matrix?.categories ?? []).filter((category) => category.kind !== 'living'),
+    [matrix],
+  )
+
   return (
     <div className="page">
       <PageFrame
@@ -735,12 +743,22 @@ export default function SpendingPage() {
                 </button>
               ) : undefined
             }
+            footer={
+              nonLiving.length === 0 ? undefined : (
+                <p className="drill-hint">
+                  Not living spend:{' '}
+                  {nonLiving.map((category) => `${category.name} (${category.kind})`).join(' · ')} —
+                  these rows are drawn here, but the savings figures and the year's living
+                  total leave them out.
+                </p>
+              )
+            }
           />
 
           <div className="card span-12">
             <h2 className="eyebrow">
               Yearly rollups
-              <InfoHint text="Category totals per calendar year, with net pay and that year's savings rate." />
+              <InfoHint text="Category totals per calendar year, then the three kinds that make up the total, the paycheck, and both savings rates — all over the months that have BOTH spending and net pay entered (the count is the last row)." />
             </h2>
             <div className="yearly-scroll">
               <table className="data-table">
@@ -757,7 +775,17 @@ export default function SpendingPage() {
                 <tbody>
                   {matrix?.categories.map((category) => (
                     <tr key={category.id}>
-                      <td>{category.name}</td>
+                      <td>
+                        {category.name}
+                        {/* The kind is the REASON this row is missing from living spend, so
+                            it belongs on the same line as the numbers (spec §1). */}
+                        {category.kind !== 'living' && (
+                          <>
+                            {' '}
+                            <span className="badge">{category.kind}</span>
+                          </>
+                        )}
+                      </td>
                       {yearly?.years.map((y) => {
                         const cell = y.by_category.find((c) => c.category_id === category.id)
                         return (
@@ -770,6 +798,30 @@ export default function SpendingPage() {
                   ))}
                 </tbody>
                 <tfoot>
+                  <tr>
+                    <td>Living spend</td>
+                    {yearly?.years.map((y) => (
+                      <td key={y.year} className="num">
+                        {formatCurrency(y.living_total)}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Tax paid</td>
+                    {yearly?.years.map((y) => (
+                      <td key={y.year} className="num">
+                        {formatCurrency(y.tax_total)}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Transfers</td>
+                    {yearly?.years.map((y) => (
+                      <td key={y.year} className="num">
+                        {formatCurrency(y.transfer_total)}
+                      </td>
+                    ))}
+                  </tr>
                   <tr>
                     <td style={{ fontWeight: 600 }}>Total</td>
                     {yearly?.years.map((y) => (
@@ -787,10 +839,26 @@ export default function SpendingPage() {
                     ))}
                   </tr>
                   <tr>
-                    <td>Savings rate</td>
+                    <td>Savings rate — total</td>
                     {yearly?.years.map((y) => (
                       <td key={y.year} className="num">
-                        {y.savings_rate === null ? '—' : formatPct(y.savings_rate, { signed: false })}
+                        {formatPct(y.total_savings_rate, { signed: false })}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Savings rate — cash</td>
+                    {yearly?.years.map((y) => (
+                      <td key={y.year} className="num">
+                        {formatPct(y.savings_rate, { signed: false })}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Months matched</td>
+                    {yearly?.years.map((y) => (
+                      <td key={y.year} className="num">
+                        {y.months_matched ?? '—'}
                       </td>
                     ))}
                   </tr>

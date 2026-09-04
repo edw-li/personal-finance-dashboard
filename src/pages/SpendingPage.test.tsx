@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
@@ -131,7 +131,15 @@ const YEARLY: SpendingYearly = {
       ],
       total: '5330.00',
       net_pay_total: '12000.00',
-      savings_rate: '0.555833333',
+      savings_rate: '0.568333333',
+      living_total: '4000.00',
+      tax_total: '1180.00',
+      transfer_total: '150.00',
+      cash_savings: '6820.00',
+      payroll_savings: '2000.00',
+      total_savings: '8820.00',
+      total_savings_rate: '0.630000',
+      months_matched: 7,
     },
   ],
 }
@@ -621,5 +629,62 @@ describe('SpendingPage — the ribbon\u2019s edit link', () => {
     await screen.findByText(/Spending breakdown — Jun 2026/)
     const edit = await screen.findByRole('link', { name: 'Edit Jun 2026 in the wizard' })
     expect(edit.getAttribute('href')).toBe('/update?month=2026-06-01&step=spending')
+  })
+})
+
+describe('SpendingPage — the honest rollup (spec §1/§2)', () => {
+  // Three kinds on one page: rent is living, the April tax bill is not spend at all, and a
+  // brokerage transfer is money that stayed the household's.
+  const withKinds = () =>
+    matrixFixture({
+      categories: [
+        { id: 1, name: 'Rent', slug: 'rent', sort_order: 0, is_active: true, kind: 'living' },
+        { id: 2, name: 'Taxes', slug: 'taxes', sort_order: 1, is_active: true, kind: 'tax' },
+        { id: 3, name: 'Investments', slug: 'investments', sort_order: 2, is_active: true, kind: 'transfer' },
+      ],
+    })
+
+  const rollup = () =>
+    screen.getByRole('heading', { name: /Yearly rollups/ }).closest('.card') as HTMLElement
+
+  it('breaks the year into living, tax and transfers, with both rates over the matched months', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: /Yearly rollups/ })
+    const row = (label: string) => within(rollup()).getByText(label).closest('tr')
+    expect(row('Living spend')?.textContent).toContain('$4,000.00')
+    expect(row('Tax paid')?.textContent).toContain('$1,180.00')
+    expect(row('Transfers')?.textContent).toContain('$150.00')
+    expect(row('Net pay')?.textContent).toContain('$12,000.00')
+    expect(row('Savings rate — total')?.textContent).toContain('63.0%')
+    expect(row('Savings rate — cash')?.textContent).toContain('56.8%')
+    // The window every figure above was computed over — named, not implied.
+    expect(row('Months matched')?.textContent).toContain('7')
+  })
+
+  it('badges every non-living category so its exclusion is visible, never silent', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(withKinds())
+    renderPage()
+    await screen.findByRole('heading', { name: /Yearly rollups/ })
+    expect(within(rollup()).getByText('Taxes').closest('tr')?.textContent).toContain('tax')
+    expect(within(rollup()).getByText('Investments').closest('tr')?.textContent).toContain(
+      'transfer',
+    )
+    // Living is the norm — badging it would make the exception invisible again.
+    expect(within(rollup()).getByText('Rent').closest('tr')?.querySelector('.badge')).toBeNull()
+  })
+
+  it('names the non-living categories under the heatmap too', async () => {
+    vi.mocked(fetchMatrix).mockResolvedValue(withKinds())
+    renderPage()
+    await screen.findByRole('heading', { name: /Month × category heatmap/ })
+    expect(
+      screen.getByText(/Not living spend: Taxes \(tax\) · Investments \(transfer\)/),
+    ).toBeTruthy()
+  })
+
+  it('says nothing under the heatmap when every category is living', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: /Month × category heatmap/ })
+    expect(screen.queryByText(/Not living spend/)).toBeNull()
   })
 })
