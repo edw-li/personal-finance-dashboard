@@ -11,6 +11,7 @@ vi.mock('echarts/core', async (importOriginal) => {
 })
 
 import { echarts, registerThemeVersion, themeName } from './echarts'
+import { MOTION } from './motion'
 import { FINANCE_THEME, OTHER_SERIES_COLOR, PALETTE, buildTheme } from './theme'
 
 describe('chart theme bridge', () => {
@@ -35,6 +36,9 @@ describe('chart theme bridge', () => {
       expect(theme.animationDurationUpdate).toBe(300)
       expect(theme.animationEasingUpdate).toBe('cubicInOut')
       expect(theme.tooltip.className).toBe('chart-tip')
+      // A block keyed by series type is the only place the house clock can win for these four.
+      for (const type of ['sankey', 'pie', 'treemap', 'line'] as const) expect(theme[type]).toEqual(MOTION)
+      expect(theme.tooltip.transitionDuration).toBe(0.12)
     }
   })
 

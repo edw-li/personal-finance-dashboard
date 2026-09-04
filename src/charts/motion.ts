@@ -22,6 +22,18 @@ export const MOTION = {
 // NOT the fix either: ScatterChart IS registered (the net-worth note markers), but a
 // still dot loses the live ping's one meaning — "this reading is now" — which the ripple
 // carries and a plain marker does not.
+/** ECharts gives every series a 'pointer' cursor whether or not a click does anything, so a
+ *  chart with no `onClick` promises a drill-in it lacks. An explicit cursor is left alone. */
+export function defaultCursor(option: EChartsOption): EChartsOption {
+  const series = (option as { series?: unknown }).series
+  if (series === undefined) return option
+  const blunt = (one: unknown): unknown => {
+    const s = one as { cursor?: string } | null
+    return s !== null && typeof s === 'object' && s.cursor === undefined ? { ...s, cursor: 'default' } : one
+  }
+  return { ...option, series: Array.isArray(series) ? series.map(blunt) : blunt(series) } as EChartsOption
+}
+
 export function quiesceRipples(option: EChartsOption): EChartsOption {
   const series = (option as { series?: unknown }).series
   if (series === undefined) return option

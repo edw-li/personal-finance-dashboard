@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { echarts, registerThemeVersion } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
-import { quiesceRipples } from '../charts/motion'
+import { defaultCursor, quiesceRipples } from '../charts/motion'
 import { lightFromDark, recolorOption } from '../charts/recolor'
 import type { ZoomWindow } from '../charts/timeZoom'
 import { useChartDecals } from './useChartDecals'
@@ -206,6 +206,10 @@ export default function EChart({
     return () => observer.disconnect()
   }, [])
 
+  // The PRESENCE of a handler, never its identity: pages pass inline closures, and a fresh
+  // function each render must never repaint the chart.
+  const clickable = onClick !== undefined
+
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
@@ -224,6 +228,7 @@ export default function EChart({
       __theme: resolved,
       __decals: decals,
       __reduced: reducedMotion,
+      __clickable: clickable,
     })
     // Zoom-only fast path (spec Addendum §A2): same option apart from the window → an
     // animated dataZoom ACTION morphs the series on the live instance; the notMerge
@@ -264,7 +269,8 @@ export default function EChart({
     // Builders stay theme-blind (charts/recolor.ts). Dark is the identity.
     const themed =
       resolved === 'light' ? (recolorOption(option, lightFromDark) as EChartsOption) : option
-    const base = reducedMotion ? quiesceRipples(themed) : themed
+    const pointed = clickable ? themed : defaultCursor(themed)
+    const base = reducedMotion ? quiesceRipples(pointed) : pointed
     // The mount's ONE entrance: the first paint animates in, and everything after it — a
     // revalidation, a scope change, the theme re-init that rebuilds the instance — repaints
     // already-drawn. Only the ENTRANCE duration is zeroed, so update animation still runs
@@ -277,7 +283,13 @@ export default function EChart({
           // Decals ride echarts' aria component; its own label generation is OFF because it
           // would overwrite the container's house aria-label with a generated sentence.
           ...(decals ? { aria: { enabled: true, label: { enabled: false }, decal: { show: true } } } : {}),
-          ...(reducedMotion ? { animation: false } : entrance ? {} : { animationDuration: 0 }),
+          ...(reducedMotion
+            ? {
+                animation: false,
+                // notMerge: a bare tooltip object here would drop the page's own formatter.
+                tooltip: { ...(base as { tooltip?: object }).tooltip, transitionDuration: 0 },
+              }
+            : entrance ? {} : { animationDuration: 0 }),
         },
         { notMerge: true },
       )
@@ -299,7 +311,7 @@ export default function EChart({
     // useMemo their options. `themeVersion` cannot move without `resolved` today
     // (ThemeProvider bumps it only when the palette changes); it is listed because the
     // init effect keys on it, and the two must not drift.
-  }, [option, animateEntrance, zoomWindow, resolved, themeVersion, reducedMotion, decals])
+  }, [option, animateEntrance, zoomWindow, resolved, themeVersion, reducedMotion, decals, clickable])
 
   return (
     <div

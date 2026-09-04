@@ -582,3 +582,24 @@ describe('EChart first paint waits for visibility (spec §6)', () => {
     expect(after.animationDuration).toBe(0)
   })
 })
+
+describe('EChart cursor and tooltip motion (spec §6)', () => {
+  const bar = { series: [{ type: 'bar' }], tooltip: { formatter: () => 'x' } } as EChartsOption
+  const applied = () => lastChart().setOption.mock.calls[0][0] as
+    { series: { cursor?: string }[]; tooltip: { transitionDuration?: number; formatter?: unknown } }
+  it('a chart with no onClick paints series that do not pretend to be clickable', () => {
+    render(<EChart ariaLabel="test chart" option={bar} />)
+    expect(applied().series[0].cursor).toBe('default')
+  })
+  it('an onClick leaves the pointer alone', () => {
+    render(<EChart ariaLabel="test chart" option={bar} onClick={vi.fn()} />)
+    expect(applied().series[0].cursor).toBeUndefined()
+  })
+  it('under reduce the tooltip snaps, keeping the page’s own formatter', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(<EChart ariaLabel="test chart" option={bar} />)
+    // notMerge: a bare `tooltip: { transitionDuration: 0 }` would drop the formatter with it.
+    expect(applied().tooltip.transitionDuration).toBe(0)
+    expect(typeof applied().tooltip.formatter).toBe('function')
+  })
+})

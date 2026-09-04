@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EChartsOption } from './echarts'
-import { MOTION, quiesceRipples } from './motion'
+import { MOTION, defaultCursor, quiesceRipples } from './motion'
 
 // No component is RENDERED here (echarts does not draw in jsdom — house law); this pins
 // the pure transform EChart.tsx applies under prefers-reduced-motion.
@@ -85,5 +85,14 @@ describe('MOTION', () => {
       animationDurationUpdate: 300,
       animationEasingUpdate: 'cubicInOut',
     })
+  })
+})
+
+describe('defaultCursor', () => {
+  it('blunts every series that has not asked for a cursor and leaves the ones that have', () => {
+    const out = defaultCursor(optionWith([{ type: 'line' }, { type: 'bar', cursor: 'pointer' }]))
+    expect(seriesOf(out).map((s) => (s as { cursor?: string }).cursor)).toEqual(['default', 'pointer'])
+    expect(defaultCursor(optionWith({ type: 'pie' }))).toEqual({ series: { type: 'pie', cursor: 'default' } })
+    expect(defaultCursor({} as EChartsOption)).toEqual({})
   })
 })
