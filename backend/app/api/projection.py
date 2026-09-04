@@ -52,9 +52,10 @@ from app.schemas.projection import (
 from app.services.money import quantize_money, quantize_pct
 from app.services.montecarlo import SIMULATIONS, reach_percentile, simulate
 from app.services.net_worth_calc import get_swr_pct, investable_base
-from app.services.paycheck_calc import MONTHS_PER_YEAR, PAYROLL_SAVING_KEYS, breakdown, half_up2
+from app.services.paycheck_calc import breakdown, half_up2
 from app.services.people import load_people
 from app.services.projection import CENT, first_reaching, project
+from app.services.savings import payroll_monthly
 
 router = APIRouter(
     prefix="/projection", tags=["projection"], dependencies=[Depends(get_current_user)]
@@ -104,7 +105,8 @@ NO_CASHFLOW_WARNING = "no cashflow history — monthly contribution defaulted to
 NO_CASHFLOW_PAYROLL_WARNING = (
     "no cashflow history — the monthly contribution is payroll deductions alone"
 )
-# PAYROLL_SAVING_KEYS: imported from paycheck_calc (shared with the paycheck preview).
+# The saving-lines arithmetic itself lives in services/savings.payroll_monthly, which every
+# page that says "saved" reads (2026-09-04 honest-numbers spec §2); this router is a caller.
 NO_SPEND_WARNING = "no spending history — provide an annual spend to model the FI target"
 NO_SWR_WARNING = "withdrawal rate is 0 — no FI target to model"
 
@@ -163,14 +165,6 @@ async def _trailing_savings(db: AsyncSession) -> Decimal | None:
     return total / len(cash)
 
 
-def _payroll_monthly(profile) -> Decimal:
-    """One profile's payroll-deducted savings per MONTH, at full precision: the five saving
-    lines of `breakdown` per check × the profile's cadence ÷ 12 (the `monthly_net` rule)."""
-    lines = breakdown(profile)
-    per_check = sum((lines[key] for key in PAYROLL_SAVING_KEYS), Decimal(0))
-    return per_check * Decimal(profile.pay_periods_per_year) / MONTHS_PER_YEAR
-
-
 async def _payroll_savings(
     db: AsyncSession, today: date
 ) -> tuple[Decimal, list[PayrollSavingOut], list[str]]:
@@ -194,7 +188,7 @@ async def _payroll_savings(
                 "payroll savings left out of the contribution"
             )
             continue
-        monthly = half_up2(_payroll_monthly(profile))
+        monthly = half_up2(payroll_monthly(profile))
         if monthly <= ZERO:
             continue
         rows.append(PayrollSavingOut(person_id=person.id, name=person.name, monthly=monthly))
@@ -272,7 +266,7 @@ async def _resolve_retirements(
         # The deductions stop with the paycheck too — the same figure the derived
         # contribution added for this person, so a retirement removes exactly what the
         # profile put in. Non-negative by construction (pcts and riders are fenced ≥ 0).
-        drop += half_up2(_payroll_monthly(profile))
+        drop += half_up2(payroll_monthly(profile))
         rows.append(
             RetirementOut(person_id=person_id, name=person.name, month=month, monthly_drop=drop)
         )
