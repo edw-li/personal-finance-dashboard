@@ -6,6 +6,7 @@ import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type {
   CalendarEvent,
   CalendarEventType,
+  CoverageOut,
   DividendOut,
   EsppLotOut,
   EsppLotsResponse,
@@ -144,6 +145,36 @@ function monthsFrom(start: string, count: number): string[] {
 }
 
 const SPEND_MONTHS = monthsFrom('2025-08-01', 12) // …through Jul 2026
+
+// The footer and the YTD windows read /coverage, and both are compared against the RUN's
+// own year (the CURRENT_YEAR rule above) — a hard-coded 2026 fixture would start failing on
+// the next New Year's Day, the stale-fixture class this file already guards against.
+const YEAR_MONTHS = monthsFrom(`${CURRENT_YEAR}-01-01`, 7) // Jan … Jul
+const AUG = `${CURRENT_YEAR}-08-01`
+const SEP = `${CURRENT_YEAR}-09-01`
+
+function coverageOut(over: Partial<CoverageOut> = {}): CoverageOut {
+  return {
+    balances: [...YEAR_MONTHS],
+    spending: [...YEAR_MONTHS],
+    net_pay: [...YEAR_MONTHS],
+    spending_empty: [],
+    spending_missing: [],
+    net_pay_missing: [],
+    latest: { balances: YEAR_MONTHS[6], spending: YEAR_MONTHS[6], net_pay: YEAR_MONTHS[6] },
+    ...over,
+  }
+}
+
+// Production on 2026-09-04: balances through September, spending entered through July,
+// August never entered, September saved as all $0.00.
+const LAGGING = coverageOut({
+  balances: [...YEAR_MONTHS, AUG, SEP],
+  spending_empty: [SEP],
+  spending_missing: [AUG],
+  net_pay_missing: [AUG, SEP],
+  latest: { balances: SEP, spending: YEAR_MONTHS[6], net_pay: YEAR_MONTHS[6] },
+})
 
 function summaryOut(over: Partial<NetWorthSummary> = {}): NetWorthSummary {
   return {
@@ -357,6 +388,7 @@ interface Payload {
   yearly: SpendingYearly
   dividends: DividendOut[]
   system: SystemStatus
+  coverage: CoverageOut
   flow: MoneyFlowOut
 }
 
@@ -380,6 +412,7 @@ function serve(over: Partial<Payload> = {}): Payload {
     yearly: { years: [] },
     dividends: [],
     system: systemOut(),
+    coverage: coverageOut(),
     flow: moneyFlowOut(),
     ...over,
   }
@@ -394,6 +427,7 @@ function serve(over: Partial<Payload> = {}): Payload {
   vi.mocked(fetchYearly).mockResolvedValue(payload.yearly)
   vi.mocked(fetchDividends).mockResolvedValue(payload.dividends)
   vi.mocked(fetchSystemStatus).mockResolvedValue(payload.system)
+  vi.mocked(fetchCoverage).mockResolvedValue(payload.coverage)
   vi.mocked(fetchCalendar).mockResolvedValue({
     events: upNextEvents(),
     sources: [],
@@ -416,6 +450,7 @@ function failAll(message = 'overview unavailable'): void {
   vi.mocked(fetchYearly).mockImplementation(boom)
   vi.mocked(fetchDividends).mockImplementation(boom)
   vi.mocked(fetchSystemStatus).mockImplementation(boom)
+  vi.mocked(fetchCoverage).mockImplementation(boom)
   vi.mocked(fetchCalendar).mockImplementation(boom)
   vi.mocked(fetchMoneyFlow).mockImplementation(boom)
 }
@@ -495,6 +530,7 @@ function snapshotOf(payload: Payload) {
     yearly: payload.yearly,
     dividends: payload.dividends,
     system: payload.system,
+    coverage: payload.coverage,
   }
 }
 
@@ -520,6 +556,7 @@ function pendAllSnapshotFetches(): void {
   vi.mocked(fetchYearly).mockImplementation(pending)
   vi.mocked(fetchDividends).mockImplementation(pending)
   vi.mocked(fetchSystemStatus).mockImplementation(pending)
+  vi.mocked(fetchCoverage).mockImplementation(pending)
 }
 
 afterEach(() => {
@@ -762,7 +799,7 @@ describe('OverviewPage charts', () => {
 })
 
 describe('OverviewPage freshness', () => {
-  it('dates the quotes, the last snapshot and the last spending month', async () => {
+  it('dates the quotes and stands each hand-entered feed on its own month', async () => {
     const quoted = daysAgo(1)
     serve({ holdings: holdingsOut({ as_of: quoted }) })
     renderPage()
@@ -770,8 +807,26 @@ describe('OverviewPage freshness', () => {
     const prices = await screen.findByText(`Prices as of ${formatDate(quoted)}`)
     // Yesterday's bar is not stale — no amber.
     expect(prices.className).not.toContain('stale')
-    expect(screen.getByText('Net worth through Aug 2026')).toBeTruthy()
-    expect(screen.getByText('Spending through Jul 2026')).toBeTruthy()
+    expect(screen.getByText(`Balances through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
+    expect(screen.getByText(`Spending through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
+    expect(screen.getByText(`Net pay through ${formatMonth(YEAR_MONTHS[6])}`)).toBeTruthy()
+    // Level feeds: nothing ambers.
+    expect(document.querySelectorAll('.overview-freshness .stale')).toHaveLength(0)
+  })
+
+  it('names the months the window is still waiting for and ambers the feeds that lag', async () => {
+    serve({ coverage: LAGGING })
+    renderPage()
+
+    const spending = await screen.findByText(
+      `Spending through ${formatMonth(YEAR_MONTHS[6])} (Aug missing, Sep empty)`,
+    )
+    expect(spending.className).toContain('stale')
+    const balances = screen.getByText(`Balances through ${formatMonth(SEP)}`)
+    expect(balances.className).not.toContain('stale')
+    expect(screen.getByText(`Net pay through ${formatMonth(YEAR_MONTHS[6])}`).className).toContain(
+      'stale',
+    )
   })
 
   it('ambers a quote date that has gone stale — and the strip says the same thing', async () => {
@@ -789,7 +844,7 @@ describe('OverviewPage freshness', () => {
 })
 
 describe('OverviewPage year to date', () => {
-  it('states the year facts from the yearly rollup and the dividend log', async () => {
+  it('leads with the total rate, names every window, and reads living spend', async () => {
     serve({
       yearly: {
         years: [
@@ -799,6 +854,14 @@ describe('OverviewPage year to date', () => {
             total: '32000.00',
             net_pay_total: '90000.00',
             savings_rate: '0.644444',
+            living_total: '27000.00',
+            tax_total: '4000.00',
+            transfer_total: '1000.00',
+            cash_savings: '58000.00',
+            payroll_savings: '12000.00',
+            total_savings: '70000.00',
+            total_savings_rate: '0.686274',
+            months_matched: 7,
           },
         ],
       },
@@ -819,13 +882,39 @@ describe('OverviewPage year to date', () => {
     renderPage()
 
     await screen.findByText(`Year to date — ${CURRENT_YEAR}`)
-    // The spending figures are the SERVER's yearly rollup, verbatim.
-    expect(screen.getByText('$32,000.00')).toBeTruthy()
+    // Living spend, not the raw total that carries April's tax bill.
+    expect(screen.getByText('$27,000.00')).toBeTruthy()
+    expect(screen.queryByText('$32,000.00')).toBeNull()
     expect(screen.getByText('$90,000.00')).toBeTruthy()
-    expect(screen.getByText('64.4%')).toBeTruthy()
+    // The headline rate is the TOTAL one; cash rides beside it.
+    expect(screen.getByText('68.6% total')).toBeTruthy()
+    expect(screen.getByText(/\$70,000\.00 · cash 64\.4% \(\$58,000\.00\)/)).toBeTruthy()
+    // Every figure names its window (spec §3).
+    expect(screen.getAllByText('Jan–Jul')).toHaveLength(3)
+    expect(screen.getByText(/since .* \(through Sep\)/)).toBeTruthy()
     // The dividend sum is this year's payments only.
     expect(screen.getByText('$120.50')).toBeTruthy()
     expect(screen.queryByText('$999.00')).toBeNull()
+  })
+
+  it('dashes the savings row in a year nothing matched, rather than printing a zero', async () => {
+    serve({
+      coverage: coverageOut({ net_pay: [], latest: { balances: YEAR_MONTHS[6], spending: YEAR_MONTHS[6], net_pay: null } }),
+      yearly: {
+        years: [
+          {
+            year: CURRENT_YEAR, by_category: [], total: '32000.00', net_pay_total: null,
+            savings_rate: null, living_total: '27000.00', total_savings: null,
+            total_savings_rate: null, cash_savings: null, months_matched: 0,
+          },
+        ],
+      },
+    })
+    renderPage()
+
+    await screen.findByText(`Year to date — ${CURRENT_YEAR}`)
+    const saved = screen.getByText('Saved').closest('.ytd-fact')
+    expect(saved?.querySelector('dd')?.textContent).toBe('—')
   })
 
   it('stays off a fresh database — the empty states already carry the message', async () => {
@@ -889,6 +978,24 @@ describe('OverviewPage attention strip', () => {
     // Exactly the four conditions above — nothing else invented itself an item.
     expect(strip.querySelectorAll('a')).toHaveLength(4)
   })
+
+  it('turns the coverage gaps into wizard links for those months', async () => {
+    serve({ coverage: LAGGING })
+    renderPage()
+
+    await screen.findByRole('navigation', { name: 'Needs attention' })
+    // The strip appends its own arrow glyph, so the accessible name is matched, not equalled.
+    expect(
+      screen
+        .getByRole('link', { name: new RegExp(`^${formatMonth(AUG)} spending was never entered`) })
+        .getAttribute('href'),
+    ).toBe(`/update?month=${AUG}&step=spending`)
+    expect(
+      screen
+        .getByRole('link', { name: new RegExp(`^${formatMonth(SEP)} was saved with no spending`) })
+        .getAttribute('href'),
+    ).toBe(`/update?month=${SEP}&step=spending`)
+  })
 })
 
 describe('OverviewPage on an empty database', () => {
@@ -915,6 +1022,10 @@ describe('OverviewPage on an empty database', () => {
       history: historyOut({ dates: [], market_value: [], cost_basis: [], sp500: [], benchmark: [] }),
       matrix: matrixOut({ months: [], totals: [] }),
       taxes: { years: [] },
+      coverage: coverageOut({
+        balances: [], spending: [], net_pay: [],
+        latest: { balances: null, spending: null, net_pay: null },
+      }),
       flow: moneyFlowOut({
         renderable: false,
         reason:
@@ -940,11 +1051,14 @@ describe('OverviewPage on an empty database', () => {
     // The money-flow card refuses with the SERVER's sentence — no fourth chart.
     expect(screen.getByText(/No tax inputs are stored for 2031/)).toBeTruthy()
 
-    // Capitalized (unlike PortfolioPage's lowercase note): three peer clauses in one row,
-    // and the other two start with a capital.
+    // Capitalized (unlike PortfolioPage's lowercase note): four peer clauses in one row,
+    // and the other three start with a capital. A feed that never started says so — a
+    // fresh database is not a late one, so none of these wears the amber.
     expect(screen.getByText('Prices never refreshed')).toBeTruthy()
-    expect(screen.getByText('Net worth — no snapshots')).toBeTruthy()
+    expect(screen.getByText('Balances — no months')).toBeTruthy()
     expect(screen.getByText('Spending — no months')).toBeTruthy()
+    expect(screen.getByText('Net pay — no months')).toBeTruthy()
+    expect(document.querySelectorAll('.overview-freshness .stale')).toHaveLength(0)
   })
 })
 
