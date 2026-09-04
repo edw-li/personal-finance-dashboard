@@ -4,7 +4,7 @@ from unittest.mock import ANY
 
 from sqlalchemy import func, select
 
-from app.models import Account, AccountBalance, NetWorthSnapshot, Person
+from app.models import Account, AccountBalance, ChangeLog, NetWorthSnapshot, Person
 
 
 async def test_net_worth_requires_auth(client):
@@ -281,6 +281,8 @@ async def test_put_month_creates_snapshot_and_upserts(auth_client, db):
         "created": 2,
         "updated": 0,
         "unchanged": 0,
+        # No account here has components, so the server derived nothing (spec §5).
+        "derived": [],
         # The creating PUT now logs a change batch (2026-09-03 data-lifecycle spec section 9).
         "batch_id": ANY,
     }
@@ -304,6 +306,7 @@ async def test_put_month_creates_snapshot_and_upserts(auth_client, db):
         "created": 0,
         "updated": 1,
         "unchanged": 0,
+        "derived": [],
         "batch_id": ANY,
     }
     assert resp.json()["batch_id"] is not None  # one balance changed, so a batch was logged
@@ -387,6 +390,181 @@ async def test_put_month_refuses_empty_create_but_allows_meta_update(auth_client
     read = (await auth_client.get(put)).json()
     assert read["notes"] == "meta only"
     assert len(read["balances"]) == 1
+
+
+async def _seed_parent_and_components(db) -> tuple[Account, Account, Account]:
+    """Production's shape: an aggregate 401(k) and the two buckets that make it up."""
+    parent = Account(
+        name="Fidelity Traditional 401(k)",
+        slug="fidelity-traditional-401-k",
+        group="pre_tax",
+        sort_order=1,
+        is_component=False,
+    )
+    db.add(parent)
+    await db.flush()
+    employer = Account(
+        name="Employer Match",
+        slug="employer-match",
+        group="pre_tax",
+        sort_order=2,
+        is_component=True,
+        parent_account_id=parent.id,
+    )
+    rollover = Account(
+        name="Reverse Rollover",
+        slug="reverse-rollover",
+        group="pre_tax",
+        sort_order=3,
+        is_component=True,
+        parent_account_id=parent.id,
+    )
+    db.add_all([employer, rollover])
+    await db.commit()
+    return parent, employer, rollover
+
+
+async def test_put_month_derives_the_parent_from_its_components(auth_client, db):
+    parent, employer, rollover = await _seed_parent_and_components(db)
+    put = "/api/v1/net-worth/months/2026-05-01"
+    resp = await auth_client.put(
+        put,
+        json={
+            "balances": [
+                {"account_id": employer.id, "balance": "100.00"},
+                {"account_id": rollover.id, "balance": "50.50"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The parent was never sent and still got a row: three written, not two.
+    assert body["created"] == 3
+    assert body["derived"] == [{"account_id": parent.id, "balance": "150.50"}]
+    read = {b["account_id"]: b["balance"] for b in (await auth_client.get(put)).json()["balances"]}
+    assert read[parent.id] == "150.50"
+
+    # A component the payload leaves out falls back to the row this month already stores.
+    second = await auth_client.put(
+        put, json={"balances": [{"account_id": employer.id, "balance": "200.00"}]}
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["derived"] == [{"account_id": parent.id, "balance": "250.50"}]
+    assert second.json()["updated"] == 2  # the component, and the parent it derives
+    read = {b["account_id"]: b["balance"] for b in (await auth_client.get(put)).json()["balances"]}
+    assert read[parent.id] == "250.50" and read[rollover.id] == "50.50"
+
+
+async def test_put_month_accepts_a_parent_that_agrees_and_refuses_one_that_disagrees(
+    auth_client, db
+):
+    parent, employer, rollover = await _seed_parent_and_components(db)
+    put = "/api/v1/net-worth/months/2026-05-01"
+    agreeing = await auth_client.put(
+        put,
+        json={
+            "balances": [
+                {"account_id": employer.id, "balance": "100.00"},
+                {"account_id": rollover.id, "balance": "50.00"},
+                {"account_id": parent.id, "balance": "150.00"},
+            ]
+        },
+    )
+    assert agreeing.status_code == 200, agreeing.text
+    # Accepted and ignored: the same number arrived twice, so there is nothing to argue about.
+    assert agreeing.json()["created"] == 3
+    assert agreeing.json()["derived"] == [{"account_id": parent.id, "balance": "150.00"}]
+
+    disagreeing = await auth_client.put(
+        put,
+        json={
+            "balances": [
+                {"account_id": employer.id, "balance": "100.00"},
+                {"account_id": rollover.id, "balance": "50.00"},
+                {"account_id": parent.id, "balance": "999.00"},
+            ]
+        },
+    )
+    assert disagreeing.status_code == 422
+    assert disagreeing.json()["detail"] == (
+        "Fidelity Traditional 401(k) is derived from its components (150.00); "
+        "leave it out or send the components"
+    )
+    read = {b["account_id"]: b["balance"] for b in (await auth_client.get(put)).json()["balances"]}
+    assert read[parent.id] == "150.00"  # the refusal wrote nothing
+
+
+async def test_put_month_derivation_refusal_creates_no_snapshot(auth_client, db):
+    parent, employer, _rollover = await _seed_parent_and_components(db)
+    refused = await auth_client.put(
+        "/api/v1/net-worth/months/2026-07-01",
+        json={
+            "balances": [
+                {"account_id": employer.id, "balance": "10.00"},
+                {"account_id": parent.id, "balance": "11.00"},
+            ]
+        },
+    )
+    assert refused.status_code == 422
+    # Validation runs before the snapshot is minted — a rejected body leaves no month behind
+    # (the app and this test share one session, so even an unflushed insert would show up).
+    assert (await auth_client.get("/api/v1/net-worth/months/2026-07-01")).json()["exists"] is False
+    count = (await db.execute(select(func.count()).select_from(NetWorthSnapshot))).scalar_one()
+    assert count == 0
+
+
+async def test_put_month_logs_the_derived_value(auth_client, db):
+    parent, employer, rollover = await _seed_parent_and_components(db)
+    resp = await auth_client.put(
+        "/api/v1/net-worth/months/2026-05-01",
+        json={
+            "balances": [
+                {"account_id": employer.id, "balance": "100.00"},
+                {"account_id": rollover.id, "balance": "50.50"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    logged = list(
+        (
+            await db.execute(
+                select(ChangeLog)
+                .where(ChangeLog.batch_id == resp.json()["batch_id"])
+                .order_by(ChangeLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    parent_row = next(
+        row
+        for row in logged
+        if row.table_name == "account_balances" and row.after["account_id"] == parent.id
+    )
+    # Undo must restore what the server STORED, not a number nobody sent.
+    assert parent_row.op == "insert" and parent_row.after["balance"] == "150.50"
+
+
+async def test_put_month_leaves_a_parent_alone_when_no_component_was_recorded(auth_client, db):
+    parent, _employer, _rollover = await _seed_parent_and_components(db)
+    cash = Account(name="Cash", slug="cash", group="cash", sort_order=9, is_component=False)
+    snapshot = NetWorthSnapshot(month=date(2024, 1, 1))
+    db.add_all([cash, snapshot])
+    await db.flush()
+    db.add(AccountBalance(snapshot_id=snapshot.id, account_id=parent.id, balance=Decimal("999")))
+    await db.commit()
+
+    resp = await auth_client.put(
+        "/api/v1/net-worth/months/2024-01-01",
+        json={"balances": [{"account_id": cash.id, "balance": "5.00"}]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["derived"] == []  # nothing to derive from — history is not rewritten
+    read = {
+        b["account_id"]: b["balance"]
+        for b in (await auth_client.get("/api/v1/net-worth/months/2024-01-01")).json()["balances"]
+    }
+    assert read[parent.id] == "999.00"
 
 
 async def test_delete_month_removes_snapshot_and_cascades_balances(auth_client, db):

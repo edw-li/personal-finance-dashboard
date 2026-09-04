@@ -26,6 +26,7 @@ from app.schemas.net_worth import (
     TimeseriesOut,
 )
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.derived_accounts import derived_parent_balances
 from app.services.money import mom_pct, quantize_money, require_first_of_month
 from app.services.net_worth_calc import (
     ZERO,
@@ -392,15 +393,53 @@ async def put_month(
         entry.account_id: quantize_money(entry.balance, f"balance[account_id={entry.account_id}]")
         for entry in body.balances
     }
-    if ids:
-        known = set((await db.execute(select(Account.id).where(Account.id.in_(ids)))).scalars())
-        missing = sorted(set(ids) - known)
-        if missing:
-            raise HTTPException(status_code=422, detail=f"unknown account_id(s): {missing}")
+    # The whole table, not just the submitted ids: derivation needs every account's
+    # is_component/parent_account_id, and the refusal sentence needs the parent's NAME.
+    accounts = list((await db.execute(select(Account))).scalars().all())
+    by_id = {account.id: account for account in accounts}
+    missing = sorted(set(ids) - set(by_id))
+    if missing:
+        raise HTTPException(status_code=422, detail=f"unknown account_id(s): {missing}")
 
     snapshot = (
         await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == month))
     ).scalar_one_or_none()
+    # The month's stored rows are read BEFORE the snapshot is created: a derivation refusal
+    # must not leave a flushed snapshot behind, and the tests share one session with the app,
+    # so even an uncommitted insert would be visible to the next request.
+    existing = (
+        {}
+        if snapshot is None
+        else {
+            row.account_id: row
+            for row in (
+                await db.execute(
+                    select(AccountBalance).where(AccountBalance.snapshot_id == snapshot.id)
+                )
+            ).scalars()
+        }
+    )
+    # Spec §5: a parent with components has no balance of its own — it IS the sum of its
+    # components this month. The payload wins; a component the payload leaves out falls back
+    # to what the month already stores, and one absent from both contributes nothing.
+    merged = {account_id: row.balance for account_id, row in existing.items()} | quantized
+    derived = derived_parent_balances(accounts, merged)
+    for parent_id, total in sorted(derived.items()):
+        submitted = quantized.get(parent_id)
+        if submitted is not None and submitted != total:
+            # Storing a typed total that contradicts the components on the same screen is
+            # exactly the drift this program removes — name the value the server would keep.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{by_id[parent_id].name} is derived from its components ({total}); "
+                    "leave it out or send the components"
+                ),
+            )
+    # A parent submitted EQUAL to the sum is accepted and ignored: the union below simply
+    # writes the derived value, which is the same number.
+    to_write = quantized | derived
+
     snapshot_created = snapshot is None
     if snapshot is None:
         if not body.balances:
@@ -427,17 +466,9 @@ async def put_month(
         if "notes" in provided:
             snapshot.notes = body.notes
 
-    existing = {
-        row.account_id: row
-        for row in (
-            await db.execute(
-                select(AccountBalance).where(AccountBalance.snapshot_id == snapshot.id)
-            )
-        ).scalars()
-    }
     created = updated = unchanged = 0
     new_rows: list[AccountBalance] = []
-    for account_id, value in quantized.items():
+    for account_id, value in to_write.items():
         row = existing.get(account_id)
         if row is None:
             row = AccountBalance(snapshot_id=snapshot.id, account_id=account_id, balance=value)
@@ -468,6 +499,10 @@ async def put_month(
         created=created,
         updated=updated,
         unchanged=unchanged,
+        derived=[
+            BalanceEntry(account_id=account_id, balance=value)
+            for account_id, value in sorted(derived.items())
+        ],
         batch_id=batch_id,
     )
 
