@@ -72,6 +72,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [portfolioAccounts, setPortfolioAccounts] = useState<PortfolioAccountOut[]>([])
   const [portfolioLoaded, setPortfolioLoaded] = useState(false)
   const [portfolioError, setPortfolioError] = useState<string | null>(null)
+  // The roster's loadError/formError split, for the second feed: a retag the server
+  // REFUSED is not fixed by asking for the labels again (2026-09-05 motion spec §9).
+  const [portfolioFormError, setPortfolioFormError] = useState<string | null>(null)
   const [portfolioBusy, setPortfolioBusy] = useState(false)
   const portfolioSeqRef = useRef(0)
   const toast = useToast()
@@ -112,10 +115,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // select has to send null on purpose.
   const retagPortfolioAccount = (account: PortfolioAccountOut, value: string) => {
     setPortfolioBusy(true)
-    setPortfolioError(null)
+    setPortfolioFormError(null)
     patchPortfolioAccount(account.id, { person_id: value === '' ? null : Number(value) })
       .then(() => loadPortfolio())
-      .catch((err: unknown) => setPortfolioError(message(err, 'Could not retag the account.')))
+      .catch((err: unknown) => setPortfolioFormError(message(err, 'Could not retag the account.')))
       .finally(() => setPortfolioBusy(false))
   }
 
@@ -520,6 +523,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                 </tbody>
               </table>
             </div>
+            {/* Inline under the table the select lives in, and with NO Retry: the failure is a
+                write the server refused, which asking for the labels again cannot fix. */}
+            <FeedBanner error={portfolioFormError} />
             <p className="settings-note">
               A new account label typed on a transaction or dividend is created owned by{' '}
               {primaryName} — re-tag it here. The labels themselves are fixed: they identify

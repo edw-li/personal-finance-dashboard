@@ -16,6 +16,24 @@ const TEXT = 'Assets minus liabilities from the latest monthly snapshot.'
 const LABEL = 'About Assets minus liabilities from…'
 
 const hintButton = () => screen.getByRole('button', { name: LABEL })
+
+/** jsdom lays nothing out, so the placement tests below hand the component its geometry:
+ *  where the hint sits, and where (if anywhere) the sticky scope row does. */
+function lay({ hintTop, row }: { hintTop: number; row?: { top: number; bottom: number } }) {
+  document.body.innerHTML =
+    row === undefined ? '' : '<div class="page-frame-scope is-stuck"></div>'
+  const box = (top: number, bottom: number) => ({
+    left: 20, right: 36, top, bottom, width: 16, height: bottom - top, x: 20, y: top,
+    toJSON: () => ({}),
+  })
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains('page-frame-scope')
+      ? box(row?.top ?? 0, row?.bottom ?? 0)
+      : box(hintTop, hintTop + 16)
+  })
+}
 const wrap = () => document.querySelector('.info-hint-wrap') as HTMLElement
 
 describe('InfoHint', () => {
@@ -155,41 +173,34 @@ describe('InfoHint', () => {
 
   it('opens BELOW when the sticky scope row would cover the bubble', () => {
     // The row pins at top:0 (shell.css); a hint in the first card opened upward INTO it and
-    // was unreadable. jsdom lays nothing out, so the rect IS the input — one stub serves both.
-    const at = (top: number) =>
-      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
-        left: 20, right: 36, top, bottom: top + 16, width: 16, height: 16, x: 20, y: top, toJSON: () => ({}),
-      })
-    document.body.innerHTML = '<div class="page-frame-scope"></div>'
-    at(400)
+    // was unreadable. jsdom lays nothing out, so the rects ARE the inputs — keyed on the
+    // element so the row and the hint can be placed independently. RTL's cleanup only removes
+    // the containers it mounted, so the row has to be cleared by hand between cases.
+    lay({ hintTop: 400, row: { top: 0, bottom: 16 } })
     const { unmount } = render(<InfoHint text={TEXT} />)
     fireEvent.click(hintButton())
     expect(screen.getByRole('tooltip').className).not.toContain('is-below')
     unmount()
-    at(0) // under the row: 0 < 96 (bubble) + 16 (row) + 8 (air)
+    lay({ hintTop: 0, row: { top: 0, bottom: 16 } }) // 0 < 96 (bubble) + 16 (row) + 8 (air)
     render(<InfoHint text={TEXT} />)
     fireEvent.click(hintButton())
     expect(screen.getByRole('tooltip').className).toContain('is-below')
   })
 
-  it("counts a STUCK scope row's own height, because it cannot be painted over", () => {
+  it("measures from the stuck row's BOTTOM, which is the y the bubble has to clear", () => {
     // The scroll-reveal transform makes every card its own stacking context, so a bubble
     // inside one paints with the CARD among the row's siblings — z-index cannot lift it over
-    // the pinned row. Opening BELOW is the fix, so the ROW'S HEIGHT has to be in the sum:
-    // 110px of headroom clears a 96px bubble on its own, and does not clear it under a
-    // 16px row (96 + 16 + 8 = 120).
-    // RTL's cleanup only removes the containers it mounted, so the previous test's hand-built
-    // row would still be here and this half would prove nothing.
-    document.body.innerHTML = ''
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
-      left: 20, right: 36, top: 110, bottom: 126, width: 16, height: 16, x: 20, y: 110, toJSON: () => ({}),
-    })
+    // the pinned row, and opening BELOW is the only fix. Which makes the row's position
+    // load-bearing: 110px of headroom clears a 96px bubble on its own, and does NOT clear it
+    // above a row whose bottom edge is at 56 (96 + 56 + 8 = 160). A row 16px tall sitting at
+    // y=40 would pass a height-based sum (96 + 16 + 8 = 120) with the bubble drawn over it.
+    lay({ hintTop: 130 })
     const { unmount } = render(<InfoHint text={TEXT} />)
     fireEvent.click(hintButton())
     expect(screen.getByRole('tooltip').className).not.toContain('is-below')
     unmount()
 
-    document.body.innerHTML = '<div class="page-frame-scope is-stuck"></div>'
+    lay({ hintTop: 130, row: { top: 40, bottom: 56 } })
     render(<InfoHint text={TEXT} />)
     fireEvent.click(hintButton())
     expect(screen.getByRole('tooltip').className).toContain('is-below')

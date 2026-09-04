@@ -157,15 +157,20 @@ describe('ScopeBar', () => {
     await screen.findByRole('button', { name: 'Grace' })
     // One glyph, not two: the page's sentence REPLACES the shell's, it does not join it.
     expect(container.querySelectorAll('.scope-bar-group button.info-hint').length).toBe(1)
-    expect(container.querySelector('button.info-hint')?.getAttribute('aria-label')).toBe(
-      hintLabel(OWNER_HINT),
-    )
+    // The button is named by its first four words now (motion spec §8) and the shell's default
+    // answer opens with the very same four — so only the BUBBLE can tell them apart. Escape
+    // after reading: a pinned bubble would make the next `getByRole('tooltip')` ambiguous.
+    const sentence = () => {
+      fireEvent.click(container.querySelector('button.info-hint') as HTMLElement)
+      const text = screen.getByRole('tooltip').textContent
+      fireEvent.keyDown(window, { key: 'Escape' })
+      return text
+    }
+    expect(sentence()).toBe(OWNER_HINT)
     // Drop the prop and the shell's own sentence is back.
     rescope({ owner: true })
     expect(screen.getByRole('group', { name: 'Whose' })).toBeTruthy()
-    expect(container.querySelector('button.info-hint')?.getAttribute('aria-label')).toBe(
-      hintLabel(DEFAULT_JOINT),
-    )
+    expect(sentence()).toBe(DEFAULT_JOINT)
   })
 
   it('drops the owner hint with the chips for a one-person household', async () => {

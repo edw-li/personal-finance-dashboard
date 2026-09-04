@@ -1185,7 +1185,9 @@ export default function MonthlyUpdatePage() {
         // The wizard is a FORM, not a feed — its SAVE failures are banners inside it. Its
         // LOAD is a lifecycle like any other page's, so it goes through the frame.
         resource={
-          loadError !== null
+          // `!loading` retires it the instant a month switch (or a Retry) starts a new load:
+          // the banner is about the month being LEFT, and the load chain clears it on arrival.
+          loadError !== null && !loading
             ? { status: 'error', error: loadError, retry: retryLoad }
             : { status: 'ready' }
         }

@@ -48,8 +48,10 @@ export default function InfoHint({ text }: { text: string }) {
     if (el !== null) {
       const rect = el.getBoundingClientRect()
       setFlip(rect.left + BUBBLE_MAX_PX > window.innerWidth)
-      // Measured, not assumed: pages without a scope row (Settings) have nothing to clear.
-      const row = document.querySelector(STUCK_ROW_SELECTOR)?.getBoundingClientRect().height ?? 0
+      // Its BOTTOM edge, not its height: that is the y the bubble has to clear, and the two
+      // are only equal while the row is pinned at 0. Measured, not assumed — pages without a
+      // scope row (Settings) have nothing to clear.
+      const row = document.querySelector(STUCK_ROW_SELECTOR)?.getBoundingClientRect().bottom ?? 0
       setBelow(rect.top < BUBBLE_EST_H_PX + row + EDGE_GAP_PX)
     }
     setOpen(true)

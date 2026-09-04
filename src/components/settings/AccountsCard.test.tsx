@@ -460,3 +460,20 @@ it('names the card in the load banner and keeps Retry there', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Retry loading the accounts' }))
   expect(await screen.findByRole('table', { name: 'Net-worth accounts' })).toBeTruthy()
 })
+
+it('renders a refused retag inline under the labels, with no Retry (motion spec §9)', async () => {
+  vi.mocked(patchPortfolioAccount).mockRejectedValue(
+    new ApiError('owner must be a household member', 422),
+  )
+  render(<AccountsCard people={[ME, PARTNER]} />)
+  await screen.findByRole('table', { name: 'Portfolio accounts' })
+
+  fireEvent.change(screen.getByLabelText('Owner for Fidelity Brokerage'), {
+    target: { value: '2' },
+  })
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('owner must be a household member')
+  // Retry re-runs the labels FETCH; it cannot fix a PATCH the server refused.
+  expect(within(alert).queryByRole('button')).toBeNull()
+})

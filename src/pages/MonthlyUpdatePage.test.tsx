@@ -628,6 +628,20 @@ it('offers a Retry instead of a dead form when the month fails to load', async (
   expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
 })
 
+it('retires a load failure the moment the ribbon moves to another month', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockRejectedValueOnce(
+    new ApiError('accounts unavailable', 503),
+  )
+  renderWizard()
+  await screen.findByRole('alert')
+
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  // Synchronously, before the new load answers: the sentence described the month being LEFT,
+  // and leaving it standing over the new one would be a lie.
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(await screen.findByLabelText('Checking')).toBeTruthy()
+})
+
 it('still enters the month when the typical-history fetch fails', async () => {
   vi.mocked(spendingApi.fetchMatrix).mockRejectedValue(new Error('matrix down'))
   renderWizard()
