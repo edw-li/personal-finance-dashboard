@@ -189,10 +189,14 @@ it('banners a failed load and refetches on Retry', async () => {
     .mockResolvedValue(payload(YEAR))
   render(<LimitsCard />)
 
-  expect(await screen.findByText('limits unavailable')).toBeTruthy()
+  expect(
+    await screen.findByText(
+      "Couldn't load the contribution limits — the server had a problem (HTTP 503)",
+    ),
+  ).toBeTruthy()
   expect(screen.queryByLabelText('401(k) elective deferral')).toBeNull()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading the contribution limits' }))
   expect(await screen.findByLabelText('401(k) elective deferral')).toBeTruthy()
   expect(vi.mocked(fetchLimits)).toHaveBeenCalledTimes(2)
 })
@@ -201,4 +205,16 @@ it('says the app ships no values of its own', async () => {
   render(<LimitsCard />)
   const card = within(await screen.findByRole('region', { name: 'Contribution limits' }))
   expect(card.getByText(/publishes new figures every year/i)).toBeTruthy()
+})
+
+it('renders a refused save inline with no Retry beside it (motion spec §9)', async () => {
+  vi.mocked(putLimits).mockRejectedValue(new ApiError('limit must be positive', 422))
+  render(<LimitsCard />)
+  await screen.findByLabelText('401(k) elective deferral')
+  fireEvent.click(screen.getByRole('button', { name: 'Save limits' }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('limit must be positive')
+  // Retry re-runs the FETCH — it cannot fix a write the server refused.
+  expect(within(alert).queryByRole('button')).toBeNull()
 })

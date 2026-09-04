@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError } from '../api/client'
+import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
 import {
   createEvent,
   deleteEvent,
@@ -460,7 +460,10 @@ function EventsPanel({
 export default function CompPage() {
   const cachedEvents = getSnapshot<CompEventOut[]>('comp:events')
   const [events, setEvents] = useState<CompEventOut[] | null>(cachedEvents ?? null)
-  const [error, setError] = useState<string | null>(null)
+  // Both *Error slots hold an `errorDetail` DETAIL, not a sentence: the page composes one
+  // banner from them below (2026-09-05 motion spec §9). Named for its feed, too — with two
+  // of them a bare `error` no longer says which.
+  const [eventsError, setEventsError] = useState<string | null>(null)
   const [busy, setBusy] = useState(true)
   // false once a revalidation actually CHANGES the data — the chart may animate again.
   const [fromCache, setFromCache] = useState(cachedEvents !== undefined)
@@ -487,7 +490,7 @@ export default function CompPage() {
         if (seq !== seqRef.current) return
         const previous = getSnapshot<CompEventOut[]>('comp:events')
         setSnapshot('comp:events', data)
-        setError(null)
+        setEventsError(null)
         // Identical payload: nothing re-renders, the chart stays still (spec §1).
         if (previous !== undefined && JSON.stringify(previous) === JSON.stringify(data)) return
         setFromCache(false)
@@ -499,7 +502,7 @@ export default function CompPage() {
         // and dropping them would also destroy a half-typed row in the panel's form
         // (EsppPage's same-entity rule). The banner appends the stale cue only when a
         // table is actually still on screen.
-        setError(message(err, 'Failed to load comp events'))
+        setEventsError(errorDetail(err))
       })
       .finally(() => {
         if (seq === seqRef.current) setBusy(false)
@@ -521,7 +524,7 @@ export default function CompPage() {
         if (seq !== scheduleSeq.current) return
         // The previous payload is KEPT, like the events feed: a failed reload describes the
         // same grants, and dropping them would destroy a half-typed row in the grants form.
-        setScheduleError(message(err, 'Failed to load the vesting schedule'))
+        setScheduleError(errorDetail(err))
       })
       .finally(() => {
         if (seq === scheduleSeq.current) setScheduleBusy(false)
@@ -536,7 +539,7 @@ export default function CompPage() {
   // "We are fetching" flips live in the handlers that cause a fetch, never in the effect.
   const reload = () => {
     setBusy(true)
-    setError(null)
+    setEventsError(null)
     load()
   }
 
@@ -564,24 +567,34 @@ export default function CompPage() {
     [events, tcLegend],
   )
 
+  // The schedule leads: its tiles are the page's most prominent stale surface (2026-08-31 review).
+  const loadBanner = describeLoadFailures([
+    { noun: 'the vesting schedule', detail: scheduleError, stale: schedule !== null },
+    { noun: 'the comp events', detail: eventsError, stale: events !== null },
+  ])
+  const retryFailedLoads = () => {
+    if (scheduleError !== null) reloadSchedule()
+    if (eventsError !== null) reload()
+  }
+
   return (
     <div className="page comp-page">
       {/* Nothing is loaded page-wide: the two feeds below own their own lifecycles, so the
           frame is only the title row. */}
       <PageFrame title="Comp" resource={{ status: 'ready', fromCache }}>
-        {/* The schedule feed's banner leads its OWN tiles (2026-08-31 review round): after a
-            failed reload the strip below is the page's most prominent stale surface, and the
-            "may be showing earlier data" cue has to sit beside it, not below the fold with
-            the schedule card. The headline tiles themselves are the 2026-08-31 audit's; the
-            no-grants branch is VestingTiles' own (it renders nothing — the panel's empty
-            state carries the message). */}
+        {/* The page's ONE banner, leading the schedule's OWN tiles (2026-08-31 review round):
+            after a failed reload the strip below is the page's most prominent stale surface,
+            and the "showing earlier data" cue has to sit beside it, not below the fold with
+            the schedule card. */}
+        <FeedBanner error={loadBanner} retry={retryFailedLoads} />
+
+        {/* The headline tiles are the 2026-08-31 audit's; the no-grants branch is
+            VestingTiles' own (it renders nothing — the panel's empty state carries the
+            message). */}
         <Feed
           data={schedule}
-          error={scheduleError}
           busy={scheduleBusy}
           staleNoun="the schedule"
-          retry={reloadSchedule}
-          retryLabel="Retry loading the vesting schedule"
           // Its own sentence, not the schedule card's: two identical hidden labels would
           // read out one after the other while the one feed behind them loads.
           skeleton={{ height: 96, label: 'Loading vesting totals…' }}
@@ -595,11 +608,8 @@ export default function CompPage() {
             re-renders it with a replaced array, so its half-typed row survives. */}
         <Feed
           data={events}
-          error={error}
           busy={busy}
           staleNoun="the table"
-          retry={reload}
-          retryLabel="Retry loading comp events"
           skeleton={{ height: 240, label: 'Loading comp events…' }}
         >
           {(rows) => <EventsPanel events={rows} onChanged={onEventsChanged} />}
@@ -628,7 +638,7 @@ export default function CompPage() {
           }
         />
 
-        {/* No `error` here: the schedule's banner already leads the tiles above, and one
+        {/* No `error` here: the page's banner already leads the tiles above, and one
             failure must not print two alerts. One payload, one dim — the grants table IS the
             schedule card's input, and a bright form beside a card that says it may be stale
             would invite an edit against figures that are already gone. NOT keyed, like the

@@ -82,8 +82,12 @@ it('renders the chart, the year chips with the active year, and the warnings lin
   // The card's chrome is ChartCard's now: an export row and the house aria sentence.
   expect(screen.getByRole('group', { name: /Export money-flow/ })).toBeDefined()
   expect(screen.getByLabelText(/Sankey diagram of 2026 money flow/)).toBeDefined()
-  // The InfoHint explains the residual and the sources (spec §5's card copy).
-  expect(screen.getByLabelText(/vest shares kept \+ ESPP contributions \+ timing/)).toBeDefined()
+  // The InfoHint explains the residual and the sources (spec §5's card copy) — in its BUBBLE,
+  // since the button is named by its first four words now (motion spec §8).
+  fireEvent.click(screen.getByRole('button', { name: /^About Where the year's money/ }))
+  expect(screen.getByRole('tooltip').textContent).toMatch(
+    /vest shares kept \+ ESPP contributions \+ timing/,
+  )
 })
 
 it('hands a chip press to onYearChange', () => {

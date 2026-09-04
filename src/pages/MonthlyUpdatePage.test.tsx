@@ -611,6 +611,37 @@ it('a post-save blur never resurrects a phantom draft', async () => {
   expect(sessionStorage.getItem('finance-update-draft:2026-08-01')).toBeNull()
 })
 
+it('offers a Retry instead of a dead form when the month fails to load', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockRejectedValueOnce(
+    new ApiError('accounts unavailable', 503),
+  )
+  renderWizard()
+  expect(
+    await screen.findByText("Couldn't load this month — the server had a problem (HTTP 503)"),
+  ).toBeTruthy()
+  // The dead form is the bug: boxes seeded with nothing, offering to save them over a real
+  // month. Nothing below the banner until the load answers — PageFrame renders children only
+  // while the resource is ready, so the step bodies and the step buttons go with it.
+  expect(screen.queryByLabelText('Checking')).toBeNull()
+  expect(screen.queryByRole('button', { name: /next: spending/i })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  expect(((await screen.findByLabelText('Checking')) as HTMLInputElement).value).toBe('1500.00')
+})
+
+it('retires a load failure the moment the ribbon moves to another month', async () => {
+  vi.mocked(netWorthApi.fetchAccounts).mockRejectedValueOnce(
+    new ApiError('accounts unavailable', 503),
+  )
+  renderWizard()
+  await screen.findByRole('alert')
+
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  // Synchronously, before the new load answers: the sentence described the month being LEFT,
+  // and leaving it standing over the new one would be a lie.
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(await screen.findByLabelText('Checking')).toBeTruthy()
+})
+
 it('still enters the month when the typical-history fetch fails', async () => {
   vi.mocked(spendingApi.fetchMatrix).mockRejectedValue(new Error('matrix down'))
   renderWizard()

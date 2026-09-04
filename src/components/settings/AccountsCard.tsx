@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError } from '../../api/client'
+import { ApiError, describeError } from '../../api/client'
 import { createAccount, deleteAccount, fetchAccounts, updateAccount } from '../../api/netWorth'
 import { fetchPortfolioAccounts, patchPortfolioAccount } from '../../api/portfolio'
 import { GROUP_LABELS, GROUP_ORDER } from '../../charts/theme'
@@ -58,7 +58,10 @@ function message(err: unknown, fallback: string): string {
 export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [accounts, setAccounts] = useState<AccountOut[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
+  // failure is fixed by asking again; a refused save or a typo is not.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<AccountFormState>(EMPTY_ACCOUNT)
@@ -69,6 +72,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const [portfolioAccounts, setPortfolioAccounts] = useState<PortfolioAccountOut[]>([])
   const [portfolioLoaded, setPortfolioLoaded] = useState(false)
   const [portfolioError, setPortfolioError] = useState<string | null>(null)
+  // The roster's loadError/formError split, for the second feed: a retag the server
+  // REFUSED is not fixed by asking for the labels again (2026-09-05 motion spec §9).
+  const [portfolioFormError, setPortfolioFormError] = useState<string | null>(null)
   const [portfolioBusy, setPortfolioBusy] = useState(false)
   const portfolioSeqRef = useRef(0)
   const toast = useToast()
@@ -79,12 +85,12 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       .then((rows) => {
         if (seq !== seqRef.current) return
         setAccounts(rows)
-        setError(null)
+        setLoadError(null)
         setLoaded(true)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(message(err, 'Could not load accounts.'))
+        setLoadError(describeError(err, 'the accounts'))
       })
   }
 
@@ -99,7 +105,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       })
       .catch((err: unknown) => {
         if (seq !== portfolioSeqRef.current) return
-        setPortfolioError(message(err, 'Could not load portfolio accounts.'))
+        setPortfolioError(describeError(err, 'the portfolio accounts'))
       })
   }
 
@@ -109,10 +115,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // select has to send null on purpose.
   const retagPortfolioAccount = (account: PortfolioAccountOut, value: string) => {
     setPortfolioBusy(true)
-    setPortfolioError(null)
+    setPortfolioFormError(null)
     patchPortfolioAccount(account.id, { person_id: value === '' ? null : Number(value) })
       .then(() => loadPortfolio())
-      .catch((err: unknown) => setPortfolioError(message(err, 'Could not retag the account.')))
+      .catch((err: unknown) => setPortfolioFormError(message(err, 'Could not retag the account.')))
       .finally(() => setPortfolioBusy(false))
   }
 
@@ -125,12 +131,12 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const setText =
     (field: 'name' | 'person_id' | 'sort_order' | 'parent_account_id') => (value: string) => {
       setForm((f) => ({ ...f, [field]: value }))
-      setError(null)
+      setFormError(null)
     }
 
   const startEdit = (account: AccountOut) => {
     setEditingId(account.id)
-    setError(null)
+    setFormError(null)
     setForm({
       name: account.name,
       group: account.group,
@@ -150,15 +156,15 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   const submit = () => {
     const name = form.name.trim()
     if (!name) {
-      setError('Account name is required.')
+      setFormError('Account name is required.')
       return
     }
     if (form.is_component && form.parent_account_id === '') {
-      setError(COMPONENT_NEEDS_PARENT)
+      setFormError(COMPONENT_NEEDS_PARENT)
       return
     }
     if (!form.is_component && form.parent_account_id !== '') {
-      setError(PARENT_NEEDS_COMPONENT)
+      setFormError(PARENT_NEEDS_COMPONENT)
       return
     }
     // ALL SIX keys, every time: a blank owner or parent must CLEAR the column, and PATCH
@@ -173,14 +179,14 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       parent_account_id: form.parent_account_id === '' ? null : Number(form.parent_account_id),
     }
     setBusy(true)
-    setError(null)
+    setFormError(null)
     const request = editingId !== null ? updateAccount(editingId, body) : createAccount(body)
     request
       .then(() => {
         cancelEdit()
         load()
       })
-      .catch((err: unknown) => setError(message(err, 'Save failed')))
+      .catch((err: unknown) => setFormError(message(err, 'Save failed')))
       .finally(() => setBusy(false))
   }
 
@@ -188,10 +194,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   // whole row back would let a stale render overwrite a concurrent edit (CardsPanel's rule).
   const toggleActive = (account: AccountOut) => {
     setBusy(true)
-    setError(null)
+    setFormError(null)
     updateAccount(account.id, { is_active: !account.is_active })
       .then(() => load())
-      .catch((err: unknown) => setError(message(err, 'Update failed')))
+      .catch((err: unknown) => setFormError(message(err, 'Update failed')))
       .finally(() => setBusy(false))
   }
 
@@ -275,8 +281,8 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         Accounts
         <InfoHint text="The net-worth roster. Owner blank = joint. Retire keeps an account out of the wizard and the charts without losing its history; delete only works while an account has no balances. The slug never changes — it is the workbook importer's key." />
       </h2>
-      <FeedBanner error={error} retry={load} />
-      {!loaded && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the accounts" />
+      {!loaded && loadError === null && <p className="empty-note">Loading…</p>}
       {loaded && (
         <>
           <form
@@ -355,7 +361,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                 checked={form.is_component}
                 onChange={(e) => {
                   setForm((f) => ({ ...f, is_component: e.target.checked }))
-                  setError(null)
+                  setFormError(null)
                 }}
               />
               Component of the parent
@@ -370,6 +376,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                 </button>
               )}
             </div>
+            <FeedBanner error={formError} />
           </form>
           {accounts.length === 0 ? (
             <p className="empty-note">No accounts yet — add the first one above.</p>
@@ -462,7 +469,11 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
         Portfolio accounts
         <InfoHint text="The account labels your transactions and dividends are filed under. Owner blank = joint; a person's Portfolio view is their own labels plus the joint ones. Labels are fixed here — they are the positions' identity." />
       </h3>
-      <FeedBanner error={portfolioError} retry={loadPortfolio} />
+      <FeedBanner
+        error={portfolioError}
+        retry={loadPortfolio}
+        retryLabel="Retry loading the portfolio accounts"
+      />
       {!portfolioLoaded && portfolioError === null && (
         <p className="empty-note">Loading portfolio accounts…</p>
       )}
@@ -512,6 +523,9 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                 </tbody>
               </table>
             </div>
+            {/* Inline under the table the select lives in, and with NO Retry: the failure is a
+                write the server refused, which asking for the labels again cannot fix. */}
+            <FeedBanner error={portfolioFormError} />
             <p className="settings-note">
               A new account label typed on a transaction or dividend is created owned by{' '}
               {primaryName} — re-tag it here. The labels themselves are fixed: they identify

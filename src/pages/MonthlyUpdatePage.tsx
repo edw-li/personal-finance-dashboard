@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import type { ClipboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarPlus } from 'lucide-react'
-import { ApiError } from '../api/client'
+import { ApiError, describeError } from '../api/client'
 import {
   deleteMonthBalances,
   fetchAccounts,
@@ -294,6 +294,9 @@ export default function MonthlyUpdatePage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Separate from `error`, which carries SAVE failures: a failed load leaves no seed, so it
+  // is a lifecycle the frame owns, not a banner over a form (2026-09-05 motion spec §9).
+  const [loadError, setLoadError] = useState<string | null>(null)
   // Bumped whenever THIS page changes what /coverage would say — a save fills a month, a
   // delete empties one — and handed to the scope row as `revalidate`, so the ribbon re-reads
   // coverage and the chip follows without leaving the page. (The legacy wizard got this for
@@ -399,6 +402,7 @@ export default function MonthlyUpdatePage() {
         householdData,
       ]) => {
         setError(null)
+        setLoadError(null)
         setLegs(null)
         // Nested order: component inputs sit right after their aggregate's input
         // (the group filter below preserves it — components share the parent's group).
@@ -545,7 +549,7 @@ export default function MonthlyUpdatePage() {
         setRestored(draft !== null)
       })
       .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Failed to load month data')
+        setLoadError(describeError(err, 'this month'))
       })
       .finally(() => setLoading(false))
   }, [month, loadNonce])
@@ -938,6 +942,14 @@ export default function MonthlyUpdatePage() {
     }
   }
 
+  // A failed load leaves NO seed, so the form would be empty boxes offering to save themselves
+  // over a real month (PortfolioPage rule); the nonce re-runs the [month, loadNonce] effect.
+  const retryLoad = () => {
+    setLoadError(null)
+    setLoading(true)
+    setLoadNonce((n) => n + 1)
+  }
+
   const stepIndex = STEPS.indexOf(step)
 
   // Month change refetches via the [month] dep — flip the fetch state here, in the
@@ -1170,9 +1182,15 @@ export default function MonthlyUpdatePage() {
             )}
           </>
         }
-        // The wizard is a FORM, not a feed: its own `loading` gates the step bodies below and
-        // its errors are save failures, not a lifecycle the frame could retry.
-        resource={{ status: 'ready' }}
+        // The wizard is a FORM, not a feed — its SAVE failures are banners inside it. Its
+        // LOAD is a lifecycle like any other page's, so it goes through the frame.
+        resource={
+          // `!loading` retires it the instant a month switch (or a Retry) starts a new load:
+          // the banner is about the month being LEFT, and the load chain clears it on arrival.
+          loadError !== null && !loading
+            ? { status: 'error', error: loadError, retry: retryLoad }
+            : { status: 'ready' }
+        }
       >
         <FeedBanner error={error} />
         {emptyMonth && (

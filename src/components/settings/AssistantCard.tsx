@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError } from '../../api/client'
+import { ApiError, describeError } from '../../api/client'
 import {
   fetchAssistantModels,
   fetchAssistantSettings,
@@ -34,7 +34,10 @@ const MODEL_OPTIONS: { key: string; label: string }[] = [
  */
 export default function AssistantCard() {
   const [settings, setSettings] = useState<AssistantSettingsOut | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  // Two slots, because they have two different answers (2026-09-05 motion spec §9): a load
+  // failure is fixed by asking again; a refused save or a typo is not.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [keyBox, setKeyBox] = useState('')
   const [modelBox, setModelBox] = useState('kimi-k3')
   const [busy, setBusy] = useState(false)
@@ -66,11 +69,11 @@ export default function AssistantCard() {
         setSettings(payload)
         setModelBox(payload.default_model)
         setKeyBox('')
-        setError(null)
+        setLoadError(null)
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return
-        setError(message(err, 'Could not load assistant settings.'))
+        setLoadError(describeError(err, 'the assistant settings'))
       })
   }
 
@@ -86,7 +89,7 @@ export default function AssistantCard() {
     if (modelBox !== settings.default_model) body.default_model = modelBox
     if (Object.keys(body).length === 0) return
     setBusy(true)
-    setError(null)
+    setFormError(null)
     setSavedNote(false)
     putAssistantSettings(body)
       .then((payload) => {
@@ -94,13 +97,13 @@ export default function AssistantCard() {
         setSavedNote(true)
         setProbe(null) // a new key invalidates the last probe's verdict
       })
-      .catch((err: unknown) => setError(message(err, 'Could not save assistant settings.')))
+      .catch((err: unknown) => setFormError(message(err, 'Could not save assistant settings.')))
       .finally(() => setBusy(false))
   }
 
   const removeOverride = () => {
     setBusy(true)
-    setError(null)
+    setFormError(null)
     setSavedNote(false)
     putAssistantSettings({ api_key: null })
       .then((payload) => {
@@ -108,7 +111,7 @@ export default function AssistantCard() {
         setSavedNote(true)
         setProbe(null)
       })
-      .catch((err: unknown) => setError(message(err, 'Could not remove the saved key.')))
+      .catch((err: unknown) => setFormError(message(err, 'Could not remove the saved key.')))
       .finally(() => setBusy(false))
   }
 
@@ -129,8 +132,12 @@ export default function AssistantCard() {
         Assistant
         <InfoHint text="The ✦ assistant is powered by NVIDIA's API catalog under your key. .env's NVIDIA_API_KEY is the baseline; a key saved here overrides it." />
       </h2>
-      <FeedBanner error={error} retry={load} />
-      {settings === null && error === null && <p className="empty-note">Loading…</p>}
+      <FeedBanner
+        error={loadError}
+        retry={load}
+        retryLabel="Retry loading the assistant settings"
+      />
+      {settings === null && loadError === null && <p className="empty-note">Loading…</p>}
       {settings !== null && key !== null && (
         <form
           className="settings-card-form"
@@ -204,6 +211,7 @@ export default function AssistantCard() {
               {probing ? 'Testing…' : 'Test key'}
             </button>
           </div>
+          <FeedBanner error={formError} />
           {savedNote && (
             <p className="settings-note" role="status">
               Saved.

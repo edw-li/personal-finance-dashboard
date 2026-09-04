@@ -6,6 +6,23 @@ import './panels.css'
 // widest it can get run off the right edge?", so the number has to be the CSS one.
 const BUBBLE_MAX_PX = 280
 
+// The tallest a 280px bubble gets in practice (five lines + padding). Over-estimating only
+// sends a borderline hint downward, which is readable; under-estimating hides it under the row.
+const BUBBLE_EST_H_PX = 96
+// The scope row (shell.css: position: sticky; top: 0; z-index: 8) covers the top of the
+// page while pinned, so "does it fit above?" has to mean "above the ROW". This measurement
+// is the fix, not the bubble's z-index: the scroll-reveal transform makes every card its own
+// stacking context, so a bubble inside a card can never out-paint the row.
+const STUCK_ROW_SELECTOR = '.page-frame-scope'
+const EDGE_GAP_PX = 8 // air between the bubble and whatever it must clear
+
+/** The button's NAME: four words, so the sentence is read once — as the bubble, through
+ *  `aria-describedby`. The whole sentence here made a reader say it twice (spec §8). */
+export function hintLabel(text: string): string {
+  const words = text.split(/\s+/).filter((w) => w !== '')
+  return words.length <= 4 ? `About ${text}` : `About ${words.slice(0, 4).join(' ')}…`
+}
+
 // A pointer crossing a row of tiles must not strobe three bubbles on its way past.
 const HOVER_DELAY_MS = 150
 
@@ -19,6 +36,7 @@ export default function InfoHint({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   const [pinned, setPinned] = useState(false)
   const [flip, setFlip] = useState(false)
+  const [below, setBelow] = useState(false)
   const wrapRef = useRef<HTMLSpanElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -27,7 +45,15 @@ export default function InfoHint({ text }: { text: string }) {
   // paints — no flash on the wrong edge, and no setState from an effect body.
   const openNow = useCallback(() => {
     const el = wrapRef.current
-    if (el !== null) setFlip(el.getBoundingClientRect().left + BUBBLE_MAX_PX > window.innerWidth)
+    if (el !== null) {
+      const rect = el.getBoundingClientRect()
+      setFlip(rect.left + BUBBLE_MAX_PX > window.innerWidth)
+      // Its BOTTOM edge, not its height: that is the y the bubble has to clear, and the two
+      // are only equal while the row is pinned at 0. Measured, not assumed — pages without a
+      // scope row (Settings) have nothing to clear.
+      const row = document.querySelector(STUCK_ROW_SELECTOR)?.getBoundingClientRect().bottom ?? 0
+      setBelow(rect.top < BUBBLE_EST_H_PX + row + EDGE_GAP_PX)
+    }
     setOpen(true)
   }, [])
 
@@ -80,7 +106,7 @@ export default function InfoHint({ text }: { text: string }) {
       <button
         type="button"
         className="info-hint"
-        aria-label={text}
+        aria-label={hintLabel(text)}
         aria-expanded={open}
         aria-describedby={open ? id : undefined}
         onFocus={openNow}
@@ -95,7 +121,11 @@ export default function InfoHint({ text }: { text: string }) {
         <Info size={13} aria-hidden="true" />
       </button>
       {open && (
-        <span id={id} role="tooltip" className={`info-hint-bubble${flip ? ' is-flipped' : ''}`}>
+        <span
+          id={id}
+          role="tooltip"
+          className={`info-hint-bubble${flip ? ' is-flipped' : ''}${below ? ' is-below' : ''}`}
+        >
           {text}
         </span>
       )}

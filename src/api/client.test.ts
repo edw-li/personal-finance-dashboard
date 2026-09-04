@@ -4,6 +4,9 @@ import {
   ApiError,
   apiReadOnly,
   apiWithHeaders,
+  describeError,
+  describeLoadFailures,
+  errorDetail,
   expireSession,
   setAfterResponseHook,
   setToken,
@@ -407,5 +410,47 @@ describe('api — preferences invalidation', () => {
     setSnapshot('overview', 1)
     await api('/import/snapshot?dry_run=false', { method: 'POST', body: new FormData() })
     expect(getSnapshot('overview')).toBeUndefined()
+  })
+})
+
+const SERVER = 'the server had a problem (HTTP 503)'
+const part = (noun: string, detail: string | null, stale = false) => ({ noun, detail, stale })
+describe('the error grammar (motion spec §9)', () => {
+  // A 4xx body is a sentence the API wrote FOR a human — paraphrasing it would lose the one
+  // thing it knows (which row collided, which field was wrong). A 5xx body is the server
+  // talking to itself, and status 0 is the client's own network signal.
+  it.each([
+    [new ApiError('lots unavailable', 503), SERVER],
+    [new ApiError('boom', 500), 'the server had a problem (HTTP 500)'],
+    [new ApiError("account 'checking' exists", 409), "account 'checking' exists"],
+    [new ApiError('', 404), 'HTTP 404'], // HTTP/2 carries no reason phrase
+    [new ApiError('Network error — is the server reachable?', 0), "you're offline or the server is unreachable"],
+    [new ApiError('Request timed out', 0), 'the request timed out'],
+    [new Error('kaboom'), 'kaboom'],
+    ['a string nobody threw on purpose', 'something went wrong'],
+  ] as [unknown, string][])('maps %o to its detail and its sentence', (err, detail) => {
+    expect(errorDetail(err)).toBe(detail)
+    expect(describeError(err, 'the lots')).toBe(`Couldn't load the lots — ${detail}`)
+  })
+
+  it('takes the caller fallback only for a non-Error', () => {
+    expect(errorDetail('?', 'the model refused')).toBe('the model refused')
+    expect(errorDetail(new Error('kaboom'), 'the model refused')).toBe('kaboom')
+  })
+
+  it('collapses parallel load failures into one sentence', () => {
+    expect(describeLoadFailures([part('the lots', null)])).toBeNull()
+    expect(describeLoadFailures([part('the lots', SERVER)])).toBe(`Couldn't load the lots — ${SERVER}`)
+    // One reason is said once; two are named per part (one "server problem" over a 404 lies).
+    expect(
+      describeLoadFailures([part('the lots', SERVER), part('the offerings', null), part('the model', SERVER)]),
+    ).toBe(`Couldn't load the lots and the model — ${SERVER}`)
+    expect(describeLoadFailures([part('the lots', SERVER), part('the offerings', 'gone')])).toBe(
+      `Couldn't load the lots and the offerings — the lots: ${SERVER}; the offerings: gone`,
+    )
+    // The reason's own trailing stop is absorbed — never "gone.. Showing".
+    expect(describeLoadFailures([part('the lots', 'gone.', true), part('the model', 'gone.')])).toBe(
+      "Couldn't load the lots and the model — gone. Showing earlier data for the lots.",
+    )
   })
 })

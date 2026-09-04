@@ -1,5 +1,6 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { hintLabel } from './InfoHint'
 import StatTile from './StatTile'
 
 afterEach(cleanup)
@@ -104,7 +105,7 @@ describe('StatTile hint', () => {
     render(<StatTile label="Net worth" value="$1.00" hint={HINT} />)
     const button = document.querySelector('.stat-label button.info-hint')
     expect(button).toBeTruthy()
-    expect(button?.getAttribute('aria-label')).toBe(HINT)
+    expect(button?.getAttribute('aria-label')).toBe(hintLabel(HINT))
     // The label's own words survive untouched — the hint adds no text node, so every page
     // test that queries the label by text keeps matching.
     expect(document.querySelector('.stat-label')?.textContent).toBe('Net worth')

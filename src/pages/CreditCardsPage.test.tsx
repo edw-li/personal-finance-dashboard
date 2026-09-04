@@ -607,16 +607,13 @@ describe('CreditCardsPage — card ownership', () => {
     await screen.findByRole('group', { name: 'Whose' })
     const scopeRow = container.querySelector('.page-frame-scope') as HTMLElement
     expect(scopeRow.querySelectorAll('.info-hint').length).toBe(1)
-    // InfoHint carries its sentence as the button's accessible name.
-    expect(
-      screen.getByRole('button', {
-        name: /A person's view is their own cards plus the joint ones/,
-      }),
-    ).toBeTruthy()
+    // The button is named by its first four words now (motion spec §8), and the shell's
+    // default answer opens with the very same four — so the cards words only show in the bubble.
+    fireEvent.click(scopeRow.querySelector('button.info-hint') as HTMLElement)
+    const sentence = screen.getByRole('tooltip').textContent ?? ''
+    expect(sentence).toContain("A person's view is their own cards plus the joint ones")
     // ...and not the shell's generic default, which says "accounts".
-    expect(
-      screen.queryByRole('button', { name: /their own accounts plus the joint ones/ }),
-    ).toBeNull()
+    expect(sentence).not.toContain('their own accounts plus the joint ones')
   })
 
   it('shows the owner per row and defaults a NEW card to the primary person', async () => {

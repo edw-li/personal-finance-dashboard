@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
 import type { HouseholdOut, PersonOut } from '../../types/api'
@@ -114,11 +114,24 @@ it('banners a failed load and refetches on Retry', async () => {
     .mockResolvedValue(household())
   render(<HouseholdCard onPeopleChange={vi.fn()} />)
 
-  expect(await screen.findByText('household unavailable')).toBeTruthy()
+  expect(
+    await screen.findByText("Couldn't load the household — the server had a problem (HTTP 503)"),
+  ).toBeTruthy()
   // A first load that failed knows nothing about the household — no forms are offered.
   expect(screen.queryByLabelText('Marriage date')).toBeNull()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading the household' }))
   expect(await screen.findByLabelText('Marriage date')).toBeTruthy()
   expect(vi.mocked(fetchHousehold)).toHaveBeenCalledTimes(2)
+})
+
+it('renders a validation error inline with no Retry beside it (motion spec §9)', async () => {
+  render(<HouseholdCard onPeopleChange={vi.fn()} />)
+  await screen.findByText('Me')
+  fireEvent.click(screen.getByRole('button', { name: 'Add member' }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('Enter a name for the new household member.')
+  // Retry re-runs the FETCH: here it would invite a re-send of a form the client refused.
+  expect(within(alert).queryByRole('button')).toBeNull()
 })

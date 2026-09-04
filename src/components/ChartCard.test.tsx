@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { EChartsOption } from '../charts/echarts'
+import { hintLabel } from './InfoHint'
 
 // The engine never draws in jsdom: the page tests' mock shape, so this file pins the CARD.
 vi.mock('./EChart', async () => {
@@ -63,7 +64,7 @@ describe('ChartCard chrome', () => {
     const section = document.querySelector('section.card.chart-card.span-6') as HTMLElement
     expect(section).toBeTruthy()
     expect(section.querySelector('h2.eyebrow')?.textContent).toBe('Net worth')
-    expect(section.querySelector('h2.eyebrow button.info-hint')?.getAttribute('aria-label')).toBe('What it shows.')
+    expect(section.querySelector('h2.eyebrow button.info-hint')?.getAttribute('aria-label')).toBe(hintLabel('What it shows.'))
     const controls = section.querySelector('.chart-card-controls') as HTMLElement
     expect(controls.textContent).toBe('MonthlyAll months')
     expect(screen.getByText('ctrl+scroll to zoom · drag to pan')).toBeTruthy()

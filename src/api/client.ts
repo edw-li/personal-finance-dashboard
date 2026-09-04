@@ -49,6 +49,56 @@ export class ApiError extends Error {
   }
 }
 
+/** The detail half of the house's error sentence, in words this app owns. A 5xx body is the
+ *  server talking to itself; status 0 is this module's own network/timeout signal (see
+ *  requestWithHeaders). Everything else is already a sentence the API wrote for a human and
+ *  passes through — it names the row or field that failed, which no paraphrase can. */
+export function errorDetail(err: unknown, fallback = 'something went wrong'): string {
+  if (err instanceof ApiError) {
+    if (err.status >= 500) return `the server had a problem (HTTP ${err.status})`
+    if (err.status === 0)
+      return err.message === 'Request timed out'
+        ? 'the request timed out'
+        : "you're offline or the server is unreachable"
+    return err.message === '' ? `HTTP ${err.status}` : err.message
+  }
+  return err instanceof Error && err.message !== '' ? err.message : fallback
+}
+
+/** One grammar for every load failure in the app (2026-09-05 motion spec §9): the noun the
+ *  user was waiting for, then why. `noun` carries its own article — "the lots". */
+export function describeError(err: unknown, noun: string, fallback?: string): string {
+  return `Couldn't load ${noun} — ${errorDetail(err, fallback)}`
+}
+
+/** One part of a page that loads several in parallel: `detail` is an `errorDetail` string
+ *  (null = it answered, and the page keeps it for its own prose), `stale` = still on screen. */
+export interface LoadFailure {
+  noun: string
+  detail: string | null
+  stale?: boolean
+}
+
+/** …and one banner for all of them: which parts failed, why, and what is now stale. Three
+ *  alerts stacked down a page read as three outages; they are almost always one. */
+export function describeLoadFailures(parts: LoadFailure[]): string | null {
+  const failed = parts.filter((p): p is LoadFailure & { detail: string } => p.detail !== null)
+  if (failed.length === 0) return null
+  const reasons = [...new Set(failed.map((p) => p.detail))]
+  const why =
+    reasons.length === 1 ? reasons[0] : failed.map((p) => `${p.noun}: ${p.detail}`).join('; ')
+  const head = `Couldn't load ${joinNouns(failed.map((p) => p.noun))} — ${why}`
+  const stale = failed.filter((p) => p.stale === true).map((p) => p.noun)
+  if (stale.length === 0) return head
+  // The reason may end in a stop of its own (the server does); absorbing it stops "gone.. Showing".
+  return `${head.replace(/[.\s]+$/, '')}. Showing earlier data for ${joinNouns(stale)}.`
+}
+
+function joinNouns(nouns: string[]): string {
+  if (nouns.length <= 1) return nouns[0] ?? ''
+  return `${nouns.slice(0, -1).join(', ')} and ${nouns[nouns.length - 1]}`
+}
+
 // Which snapshot-key FAMILIES a mutation can have moved (2026-09-03 shell spec §13). Keys
 // are `<family>` or `<family>:…`, so the map is read as a prefix on the PATH and a family
 // prefix on the KEY. `shell` rides /spending and /net-worth because the scope ribbon caches

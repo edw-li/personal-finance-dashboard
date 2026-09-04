@@ -697,10 +697,11 @@ describe('CompPage — loading', () => {
     vi.mocked(fetchEvents).mockRejectedValueOnce(new ApiError('comp unavailable', 503))
     render(<CompPage />)
 
-    expect(await screen.findByText('comp unavailable')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading comp events' }))
+    expect(await screen.findByText("Couldn't load the comp events — the server had a problem (HTTP 503)")).toBeTruthy()
+    // One banner for the page needs no disambiguating label (motion spec §9).
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByText('$601,854.46')).toBeTruthy()
-    expect(screen.queryByText('comp unavailable')).toBeNull()
+    expect(screen.queryByText("Couldn't load the comp events — the server had a problem (HTTP 503)")).toBeNull()
   })
 
   it('keeps the table (and the typed row) when a RELOAD fails, and says so', async () => {
@@ -715,7 +716,9 @@ describe('CompPage — loading', () => {
     await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
 
     expect(
-      await screen.findByText('comp unavailable — the table may be showing earlier data.'),
+      await screen.findByText(
+        "Couldn't load the comp events — the server had a problem (HTTP 503). Showing earlier data for the comp events.",
+      ),
     ).toBeTruthy()
     expect(screen.getByText('$601,854.46')).toBeTruthy()
     expect(field('Notes').value).toBe('half-typed event')
@@ -1237,6 +1240,11 @@ describe('CompPage — RSU grant writes', () => {
   })
 })
 
+// The page's one banner after a schedule RELOAD failed with the tiles still up
+// (motion spec §9's grammar, spelled out here rather than imported — these tests pin WORDS).
+const SCHEDULE_STALE =
+  "Couldn't load the vesting schedule — the server had a problem (HTTP 503). Showing earlier data for the vesting schedule."
+
 describe('CompPage — shell frame', () => {
   it('renders through PageFrame and keeps both feeds’ strings', async () => {
     vi.mocked(fetchVestingSchedule)
@@ -1252,14 +1260,27 @@ describe('CompPage — shell frame', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete the FY26 refresh grant' }))
     await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2))
 
-    // The shared Feed prints this page's own sentence, to the word.
-    expect((await screen.findByRole('alert')).textContent).toBe(
-      'vesting unavailable — the schedule may be showing earlier data. Retry',
-    )
+    // The page's ONE banner prints the house sentence, to the word.
+    expect((await screen.findByRole('alert')).textContent).toBe(`${SCHEDULE_STALE} Retry`)
   })
 })
 
 describe('CompPage — the two feeds are independent', () => {
+  it('collapses both failed loads into one banner with one Retry', async () => {
+    vi.mocked(fetchEvents).mockRejectedValueOnce(new ApiError('comp unavailable', 503))
+    vi.mocked(fetchVestingSchedule).mockRejectedValueOnce(new ApiError('comp unavailable', 503))
+    render(<CompPage />)
+    // One reason behind both, so it is said once — above the tiles it disclaims.
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(
+      "Couldn't load the vesting schedule and the comp events — the server had a problem " +
+        '(HTTP 503) Retry',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(vi.mocked(fetchEvents)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2)
+  })
+
   it('banners a schedule failure with a Retry while the events card still renders', async () => {
     vi.mocked(fetchVestingSchedule).mockRejectedValueOnce(
       new ApiError('vesting unavailable', 503),
@@ -1267,15 +1288,17 @@ describe('CompPage — the two feeds are independent', () => {
     vi.mocked(fetchVestingSchedule).mockResolvedValue(SCHEDULE)
     render(<CompPage />)
 
-    expect(await screen.findByText('vesting unavailable')).toBeTruthy()
+    expect(
+      await screen.findByText("Couldn't load the vesting schedule — the server had a problem (HTTP 503)"),
+    ).toBeTruthy()
     // The other feed answered: a 503 on one entity must not blank the other.
     expect(await screen.findByText('$601,854.46')).toBeTruthy()
     // Nothing stale behind a FIRST-load failure, so no stale cue.
-    expect(screen.queryByText(/the schedule may be showing earlier data/)).toBeNull()
+    expect(screen.queryByText(/Showing earlier data/)).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading the vesting schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByText('Vesting schedule')).toBeTruthy()
-    expect(screen.queryByText('vesting unavailable')).toBeNull()
+    expect(screen.queryByText("Couldn't load the vesting schedule — the server had a problem (HTTP 503)")).toBeNull()
   })
 
   it('keeps the schedule up when a RELOAD of it fails, and says so', async () => {
@@ -1289,15 +1312,13 @@ describe('CompPage — the two feeds are independent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete the FY26 refresh grant' }))
     await waitFor(() => expect(vi.mocked(fetchVestingSchedule)).toHaveBeenCalledTimes(2))
 
-    expect(
-      await screen.findByText('vesting unavailable — the schedule may be showing earlier data.'),
-    ).toBeTruthy()
+    expect(await screen.findByText(SCHEDULE_STALE)).toBeTruthy()
     expect(within(tile('Unvested')).getByText('1,230 sh')).toBeTruthy()
     expect(field('Label').value).toBe('half-typed grant')
     // The stale cue leads the page's most prominent figures (2026-08-31 review round):
     // the banner sits ABOVE the hoisted tiles it disclaims, not below the fold.
     expectInDocumentOrder(
-      screen.getByText('vesting unavailable — the schedule may be showing earlier data.'),
+      screen.getByText(SCHEDULE_STALE),
       screen.getByText('Next vest'),
     )
   })

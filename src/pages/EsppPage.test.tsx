@@ -282,6 +282,9 @@ const confirmSpy = vi.spyOn(window, 'confirm')
 // into the what-if card, and a Link has no meaning outside one.
 const renderPage = () => render(<EsppPage />, { wrapper: MemoryRouter })
 
+// The detail half of the house's load-failure sentence for a 503 (motion spec §9).
+const SERVER = 'the server had a problem (HTTP 503)'
+
 beforeEach(() => {
   clearSnapshots()
   vi.mocked(fetchLots).mockResolvedValue(lotsResponse())
@@ -595,10 +598,27 @@ describe('EsppPage — lots', () => {
     renderPage()
 
     // No stale cue on a FIRST load: there is no table on screen to be behind.
-    expect(await screen.findByText('lots unavailable')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading lots' }))
+    expect(await screen.findByText(`Couldn't load the lots — ${SERVER}`)).toBeTruthy()
+    // One banner for the page needs no disambiguating label (motion spec §9).
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByText('$10,720.49')).toBeTruthy()
-    expect(screen.queryByText('lots unavailable')).toBeNull()
+    expect(screen.queryByText(`Couldn't load the lots — ${SERVER}`)).toBeNull()
+  })
+
+  it('collapses two failed loads into one banner with one Retry', async () => {
+    vi.mocked(fetchLots).mockRejectedValueOnce(new ApiError('lots unavailable', 503))
+    vi.mocked(fetchOfferings).mockRejectedValueOnce(new ApiError('offerings gone', 404))
+    renderPage()
+    // One alert, not three: three stacked banners read as three outages.
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(
+      "Couldn't load the lots and the offerings — the lots: the server had a problem " +
+        '(HTTP 503); the offerings: offerings gone Retry',
+    )
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(fetchOfferings)).toHaveBeenCalledTimes(2)
   })
 
   it('says the table may be behind when a RELOAD fails, and keeps the rows', async () => {
@@ -613,7 +633,9 @@ describe('EsppPage — lots', () => {
     await waitFor(() => expect(vi.mocked(fetchLots)).toHaveBeenCalledTimes(2))
 
     expect(
-      await screen.findByText('lots unavailable — the table may be showing earlier data.'),
+      await screen.findByText(
+        `Couldn't load the lots — ${SERVER}. Showing earlier data for the lots.`,
+      ),
     ).toBeTruthy()
     // ...and it IS still showing them, half-typed row and all.
     expect(screen.getByText('$10,720.49')).toBeTruthy()
@@ -1216,9 +1238,11 @@ describe('EsppPage — modeler', () => {
     )
     renderPage()
 
+    // The 422's own sentence rides through the house grammar untouched: it names the two
+    // knobs to fill in, which no paraphrase could (motion spec §9).
     expect(
       await screen.findByText(
-        'no live price for NVDA; pass subscription_price and purchase_fmv',
+        "Couldn't load the model — no live price for NVDA; pass subscription_price and purchase_fmv",
       ),
     ).toBeTruthy()
     expect(screen.getByText('$10,720.49')).toBeTruthy()
