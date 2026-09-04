@@ -108,7 +108,7 @@ class MatrixOut(BaseModel):
     cash_savings: list[Decimal | None]
     # Never null: 0.00 for a month with no take-home entered (no pay on file means no
     # deductions on file), so the array always sums.
-    payroll_savings: list[Decimal]
+    payroll_savings: list[Decimal | None]
     total_savings: list[Decimal | None]
     total_savings_rate: list[Decimal | None]
 

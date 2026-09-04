@@ -147,7 +147,7 @@ def test_the_emitted_month_rounds_half_up_and_a_period_sums_those_months():
             # entered pay for has no deductions on record (spec §2).
             {LIVING: D("3000.00"), TAX: D("500.00"), TRANSFER: D("1000.00")},
             None,
-            ("3000.00", "500.00", "1000.00", "0.00", None, None, None, None),
+            ("3000.00", "500.00", "1000.00", None, None, None, None, None),
         ),
         (
             # net_pay = 0: savings computed, both rates None (the division guard).

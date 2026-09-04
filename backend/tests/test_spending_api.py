@@ -685,7 +685,7 @@ async def test_matrix_splits_the_month_by_kind_and_counts_payroll_savings(auth_c
     # March has no take-home: no savings, no rates, and NO payroll either — a month
     # nobody entered pay for has no deductions on record.
     assert body["cash_savings"] == [None, "4500.00"]
-    assert body["payroll_savings"] == ["0.00", "1200.00"]
+    assert body["payroll_savings"] == [None, "1200.00"]
     assert body["total_savings"] == [None, "5700.00"]
     # savings_rate KEEPS its name and now means the CASH rate: 4500/8000.
     assert body["savings_rate"] == [None, "0.562500"]

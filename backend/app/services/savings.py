@@ -12,6 +12,7 @@ Per calendar month with a spending or cashflow row:
     transfers       = same over 'transfer' (money that stayed yours)
     cash_savings    = net_pay - living_spend - tax_paid       (None without net pay)
     payroll_savings = per person, the saving lines of the profile in force on the 1st
+                                                              (None without net pay)
     total_savings   = cash_savings + payroll_savings          (None without net pay)
     cash_rate       = cash_savings / net_pay                  (None without net pay, or 0)
     total_rate      = total_savings / (net_pay + payroll_savings)          (same guard)
@@ -60,7 +61,10 @@ class MonthSavings:
     tax_paid: Decimal
     transfers: Decimal
     net_pay: Decimal | None
-    payroll_savings: Decimal
+    # None, not 0.00, when net_pay is None: a month nobody entered pay for has no
+    # deductions ON RECORD, and printing $0.00 saved for it is the exact dishonesty this
+    # program removes. Every sibling savings figure is None there too (spec §2).
+    payroll_savings: Decimal | None
     cash_savings: Decimal | None
     total_savings: Decimal | None
     cash_rate: Decimal | None
@@ -153,14 +157,14 @@ def month_savings(
     payroll = half_up2(payroll)
     if net_pay is None:
         # No pay on file means no deductions on file either (spec §2): payroll savings
-        # are 0, not last month's guess.
+        # are UNKNOWN — None, not 0.00 and not last month's guess.
         return MonthSavings(
             month=month,
             living_spend=living,
             tax_paid=tax,
             transfers=transfer,
             net_pay=None,
-            payroll_savings=ZERO,
+            payroll_savings=None,
             cash_savings=None,
             total_savings=None,
             cash_rate=None,
@@ -212,7 +216,9 @@ def rollup(rows: Sequence[MonthSavings]) -> PeriodSavings:
     tax = sum((row.tax_paid for row in matched), ZERO)
     transfer = sum((row.transfers for row in matched), ZERO)
     net_pay = sum((row.net_pay for row in matched if row.net_pay is not None), ZERO)
-    payroll = sum((row.payroll_savings for row in matched), ZERO)
+    # `matched` implies net_pay is not None, so payroll is never None here; the guard
+    # states that rather than relying on the reader to re-derive it.
+    payroll = sum((row.payroll_savings for row in matched if row.payroll_savings is not None), ZERO)
     if not matched:
         return PeriodSavings(0, living, tax, transfer, net_pay, payroll, None, None, None, None)
     cash = net_pay - living - tax
