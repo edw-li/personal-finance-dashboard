@@ -101,11 +101,28 @@ export interface NetWorthSummary {
 }
 
 /** Which months each hand-entered feed covers — ascending first-of-month ISO dates
- *  (GET /coverage, 2026-09-03 shell spec §7). */
+ *  (GET /coverage, 2026-09-03 shell spec §7, extended by the 2026-09-04 honest-numbers
+ *  spec §3). `spending` now lists ENTERED months only — a month with at least one non-zero
+ *  amount OR a net-pay row; a month saved as all $0.00 with no net pay is `spending_empty`,
+ *  and a month inside the balances window with no rows at all is `spending_missing`. The
+ *  four added fields are OPTIONAL for the reason `MoneyFlowTaxes.niit` documents: the live
+ *  server always sends them, and a fixture written before this program keeps compiling. */
 export interface CoverageOut {
   balances: string[]
   spending: string[]
   net_pay: string[]
+  /** Inside the window, saved with every category $0.00 and no take-home. */
+  spending_empty?: string[]
+  /** Inside the window, no spending rows at all. */
+  spending_missing?: string[]
+  /** Inside the window, no monthly-cashflow row. */
+  net_pay_missing?: string[]
+  /** The newest month of each feed; `null` where that feed has none. */
+  latest?: {
+    balances: string | null
+    spending: string | null
+    net_pay: string | null
+  }
 }
 
 export interface MonthBalances {
