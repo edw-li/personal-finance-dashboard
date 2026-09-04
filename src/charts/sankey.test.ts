@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { MOTION } from './motion'
 import { SANKEY_MARKS, claimNodeName, makeSankeyTooltipFormatter, sankeyCsv } from './sankey'
 import type { SankeyLink, SankeyNode } from './sankey'
 import { INK } from './theme'
@@ -43,6 +44,9 @@ describe('SANKEY_MARKS', () => {
     expect(SANKEY_MARKS.lineStyle).toEqual({ color: 'source', opacity: 0.3 })
     expect(SANKEY_MARKS.emphasis).toEqual({ focus: 'adjacency' })
     expect(SANKEY_MARKS.label).toEqual({ color: INK })
+    // A sankey's own defaultOption (1000ms 'linear') out-ranks the theme's top-level clock,
+    // so the marks both flow builders spread must restate the house block themselves.
+    expect(SANKEY_MARKS).toMatchObject(MOTION)
   })
 })
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { echarts, registerThemeVersion } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
-import { quiesceRipples } from '../charts/motion'
+import { defaultCursor, pinSeriesMotion, quiesceRipples } from '../charts/motion'
 import { lightFromDark, recolorOption } from '../charts/recolor'
 import type { ZoomWindow } from '../charts/timeZoom'
 import { useChartDecals } from './useChartDecals'
@@ -70,7 +70,9 @@ export default function EChart({
    *  six wired options hold this today (verified 2026-08-27). */
   zoomWindow?: ZoomWindow
   /** echarts.connect group (chart spec §8): same-axis siblings share axisPointer and zoom.
-   *  Set on the instance and connected in the init effect so a theme re-init re-connects. */
+   *  Applied in its OWN effect (keyed on the theme deps, so a palette re-init re-connects):
+   *  a page that toggles the group on drill keeps its instance instead of losing the canvas
+   *  the bar → pie morph runs on (spec §6). */
   group?: string
 }) {
   const { resolved, version: themeVersion } = useTheme()
@@ -86,6 +88,13 @@ export default function EChart({
   // "nothing else changed" proof). Reset whenever the chart itself is rebuilt — a fresh
   // instance has no applied option to be equal to.
   const lastStrippedRef = useRef<string | null>(null)
+  // Has this MOUNT ever painted? Unlike lastStrippedRef this survives the init effect, so a
+  // palette re-init repaints already-drawn instead of replaying the entrance (spec §6).
+  const paintedOnceRef = useRef(false)
+  // The first paint, held until the card is on screen; latest-wins, and the init cleanup drops
+  // it because the chart its closure captured is being disposed.
+  const pendingPaintRef = useRef<(() => void) | null>(null)
+  const visibleRef = useRef(false) // opened once, by the observer below or by its absence
   const onClickRef = useRef(onClick)
   const onHoverRef = useRef(onHover)
   const onHoverEndRef = useRef(onHoverEnd)
@@ -115,13 +124,6 @@ export default function EChart({
     // to keep. Series colors are handled by recolorOption in the effect below, not here.
     const name = registerThemeVersion(resolved, themeVersion)
     const chart = echarts.init(el, name)
-    if (group !== undefined) {
-      // A disposed instance leaves its group by itself, and every init (theme re-inits
-      // included) reconnects — so dispose below deliberately does NOT call disconnect(),
-      // which would unlink the surviving siblings too.
-      chart.group = group
-      echarts.connect(group)
-    }
     chart.on('click', (params) => onClickRef.current?.(params as EChartEventParams))
     chart.on('mouseover', (params) => onHoverRef.current?.(params as EChartEventParams))
     // mouseout fires per-item; globalout covers fast exits that skip it — without it a
@@ -147,16 +149,66 @@ export default function EChart({
     chartRef.current = chart
     lastStrippedRef.current = null
     if (instanceRef) instanceRef.current = chart
-    const observer = new ResizeObserver(() => chart.resize())
+    // The browser fires this the moment observe() is called, carrying the size the chart was
+    // just init'ed at; resize() there restarts every animator, killing the entrance (spec §6).
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth !== chart.getWidth() || el.clientHeight !== chart.getHeight()) {
+        chart.resize()
+      }
+    })
     observer.observe(el)
     return () => {
       observer.disconnect()
       chart.dispose()
       chartRef.current = null
       lastStrippedRef.current = null
+      pendingPaintRef.current = null
       if (instanceRef) instanceRef.current = null
     }
-  }, [instanceRef, resolved, themeVersion, group])
+  }, [instanceRef, resolved, themeVersion])
+
+  // `group` is deliberately NOT an init dependency (spec §6): a page that toggles the connect
+  // group mid-life must not lose its instance. Declared after the init effect so it runs on the
+  // fresh chart in the same commit (effects fire in declaration order), and keyed on the same
+  // theme deps so a palette re-init re-connects — a disposed instance leaves its group by
+  // itself, which is why the init cleanup never disconnects (that would unlink the siblings).
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    // '' is echarts' own "no group": leaving the old name on a drilled-in chart would keep
+    // relaying the siblings' axisPointer and zoom actions to a pie that cannot use them.
+    chart.group = group ?? ''
+    if (group !== undefined) echarts.connect(group)
+  }, [group, instanceRef, resolved, themeVersion])
+
+  // A chart below the fold used to spend its entrance off-screen and was already still by the
+  // time it was scrolled to. One-shot gate (spec §6): the first animated paint waits until 20%
+  // of the canvas is on screen. Guarded like PageFrame's sentinel — no observer, no waiting.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      visibleRef.current = true
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // The initial delivery reports a sliver as intersecting, so the RATIO is the gate.
+        if (!entries.some((e) => e.isIntersecting && e.intersectionRatio >= 0.2)) return
+        observer.disconnect() // opened once per mount, never closed again
+        visibleRef.current = true
+        const pending = pendingPaintRef.current
+        pendingPaintRef.current = null
+        pending?.()
+      },
+      { threshold: 0.2 },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  // The PRESENCE of a handler, never its identity: pages pass inline closures, and a fresh
+  // function each render must never repaint the chart.
+  const clickable = onClick !== undefined
 
   useEffect(() => {
     const chart = chartRef.current
@@ -176,6 +228,7 @@ export default function EChart({
       __theme: resolved,
       __decals: decals,
       __reduced: reducedMotion,
+      __clickable: clickable,
     })
     // Zoom-only fast path (spec Addendum §A2): same option apart from the window → an
     // animated dataZoom ACTION morphs the series on the live instance; the notMerge
@@ -216,22 +269,51 @@ export default function EChart({
     // Builders stay theme-blind (charts/recolor.ts). Dark is the identity.
     const themed =
       resolved === 'light' ? (recolorOption(option, lightFromDark) as EChartsOption) : option
-    const base = reducedMotion ? quiesceRipples(themed) : themed
-    chart.setOption(
-      {
-        ...base,
-        // Decals ride echarts' aria component; its own label generation is OFF because it
-        // would overwrite the container's house aria-label with a generated sentence.
-        ...(decals ? { aria: { enabled: true, label: { enabled: false }, decal: { show: true } } } : {}),
-        ...(reducedMotion
-          ? { animation: false }
-          : !animateEntrance
-            ? { animationDuration: 0 }
-            : {}),
-      },
-      { notMerge: true },
-    )
-    lastStrippedRef.current = stripped
+    const pointed = clickable ? themed : defaultCursor(themed)
+    const base = reducedMotion ? quiesceRipples(pointed) : pointed
+    // The mount's ONE entrance: the first paint animates in, and everything after it — a
+    // revalidation, a scope change, the theme re-init that rebuilds the instance — repaints
+    // already-drawn. Only the ENTRANCE duration is zeroed, so update animation still runs
+    // (zoom morphs, Projection's trend-span toggles — Addendum §A2).
+    const entrance = animateEntrance && !paintedOnceRef.current
+    // Restated on EVERY series, not only at the root: buildTheme's per-type blocks and
+    // SANKEY_MARKS' own MOTION are merged INTO the series, and echarts reads the series
+    // first — a root-only rule leaves line/pie/sankey/treemap replaying the 450ms entrance
+    // on every cached revisit, and leaves treemap animating under reduce (proved against
+    // the engine in charts/motion.ssr.test.ts).
+    const still = reducedMotion ? { animation: false } : entrance ? null : { animationDuration: 0 }
+    const painted = still === null ? base : pinSeriesMotion(base, still)
+    const apply = () => {
+      chart.setOption(
+        {
+          ...painted,
+          // Decals ride echarts' aria component; its own label generation is OFF because it
+          // would overwrite the container's house aria-label with a generated sentence.
+          ...(decals ? { aria: { enabled: true, label: { enabled: false }, decal: { show: true } } } : {}),
+          ...(reducedMotion
+            ? {
+                animation: false,
+                // notMerge: a bare tooltip object here would drop the page's own formatter.
+                tooltip: { ...(painted as { tooltip?: object }).tooltip, transitionDuration: 0 },
+              }
+            : entrance ? {} : { animationDuration: 0 }),
+        },
+        { notMerge: true },
+      )
+      paintedOnceRef.current = true
+      lastStrippedRef.current = stripped
+    }
+    // Only an animated first paint waits: a cached or reduced-motion paint has no entrance to
+    // protect, and the zoom fast path cannot fire meanwhile (lastStrippedRef stays null).
+    if (entrance && !reducedMotion && !visibleRef.current) {
+      pendingPaintRef.current = apply
+      return
+    }
+    // A paint that happens NOW supersedes any held one: without this, a chart still below
+    // the fold that takes a cached repaint (a scope flip) would redraw the OLD scope's data
+    // when the observer finally ran the stale closure.
+    pendingPaintRef.current = null
+    apply()
     // `resolved` and `themeVersion` mirror the init effect's theme deps: that effect
     // disposes and rebuilds the instance on a palette change, and a rebuilt chart holds NO
     // option, so this effect must re-run in the same commit (effects fire in declaration
@@ -240,7 +322,7 @@ export default function EChart({
     // useMemo their options. `themeVersion` cannot move without `resolved` today
     // (ThemeProvider bumps it only when the palette changes); it is listed because the
     // init effect keys on it, and the two must not drift.
-  }, [option, animateEntrance, zoomWindow, resolved, themeVersion, reducedMotion, decals])
+  }, [option, animateEntrance, zoomWindow, resolved, themeVersion, reducedMotion, decals, clickable])
 
   return (
     <div

@@ -61,6 +61,11 @@ export function buildTheme(t: ThemeTokens) {
   return {
     // The house clock (chart spec §11): entrance 450ms cubicOut, update 300ms cubicInOut.
     ...MOTION,
+    // SeriesModel.mergeDefaultAndTheme merges theme[seriesType] into a series BEFORE that
+    // series' own defaultOption — and those defaults (sankey 1000ms 'linear', pie 1000ms
+    // 'cubicInOut', treemap 900ms 'quinticInOut', line 'linear') are why the clock above never
+    // reached these four. One object, four keys: echarts clones what it merges.
+    sankey: MOTION, pie: MOTION, treemap: MOTION, line: MOTION,
     color: [...t.palette],
     backgroundColor: 'transparent',
     textStyle: { color: t.muted, fontFamily: FONT_FAMILY },
@@ -86,6 +91,9 @@ export function buildTheme(t: ThemeTokens) {
       // The grammar's tooltip rows (charts/tooltip.ts) are styled by panels.css under this
       // class; a theme-level className means even a non-grammar tooltip inherits the box.
       className: 'chart-tip',
+      // 0.12s of follow instead of echarts' 0.4s of lag: the box tracks the cursor rather
+      // than swimming after it. EChart zeroes it under reduce, where the preference is known.
+      transitionDuration: 0.12,
       backgroundColor: t.surface2,
       borderColor: t.axisLine,
       borderWidth: 1,

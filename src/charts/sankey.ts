@@ -5,6 +5,7 @@
 import type { SankeySeriesOption } from 'echarts/charts'
 import type { ExportTable } from '../utils/download'
 import { escapeHtml, formatCurrency } from '../utils/format'
+import { MOTION } from './motion'
 import { INK } from './theme'
 import { brandTooltip } from './tooltip'
 
@@ -64,6 +65,10 @@ export function claimNodeName(name: string, taken: Set<string>): string {
 
 export const SANKEY_MARKS: SankeySeriesOption = {
   type: 'sankey',
+  // Restated on the series because a sankey's own defaultOption out-ranks the theme's top-level
+  // clock; buildTheme's per-type block covers a sankey built without these marks, which are
+  // what both flow builders actually spread.
+  ...MOTION,
   orient: 'horizontal',
   nodeWidth: 12,
   // 14, raised from the spec's original 8 (2026-08-25): adjacent label CENTERS sit at

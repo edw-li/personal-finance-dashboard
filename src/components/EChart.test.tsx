@@ -9,6 +9,10 @@ interface FakeChartLike {
   getDataURL: ReturnType<typeof vi.fn>
   getOption: ReturnType<typeof vi.fn>
   dispatchAction: ReturnType<typeof vi.fn>
+  dispose: ReturnType<typeof vi.fn>
+  resize: ReturnType<typeof vi.fn>
+  getWidth: ReturnType<typeof vi.fn>
+  getHeight: ReturnType<typeof vi.fn>
 }
 
 // House law keeps real echarts out of jsdom (no canvas). The engine is stubbed at the
@@ -23,6 +27,9 @@ vi.mock('../charts/echarts', () => {
     dispose = vi.fn()
     resize = vi.fn()
     dispatchAction = vi.fn()
+    // jsdom's container is 0×0, so a fake answering 0 is a chart already at its element's size.
+    getWidth = vi.fn(() => 0)
+    getHeight = vi.fn(() => 0)
     getDataURL = vi.fn(() => 'data:image/png;base64,PNG')
     getOption = vi.fn(() => ({ dataZoom: [{ startValue: 3, endValue: 9 }] }))
     on(event: string, handler: (params?: unknown) => void) {
@@ -74,11 +81,17 @@ function lastChart(): FakeChartLike {
 
 const OPTION = {} as EChartsOption
 
+// The browser fires a ResizeObserver's callback the moment observe() is called; these are
+// the captured callbacks, so a test can fire that notification itself.
+let resizeNotify: (() => void)[] = []
+
 beforeEach(() => {
+  resizeNotify = []
   // jsdom has no ResizeObserver; the wrapper observes its container on mount.
   vi.stubGlobal(
     'ResizeObserver',
     class {
+      constructor(cb: () => void) { resizeNotify.push(cb) }
       observe() {}
       unobserve() {}
       disconnect() {}
@@ -177,6 +190,21 @@ describe('EChart animateEntrance (2026-08-27 spec §1)', () => {
     const [option] = chart.setOption.mock.calls[0] as [Record<string, unknown>]
     expect(option.animationDuration).toBe(0)
     expect('animation' in option).toBe(false)
+  })
+
+  it('a cached paint restates the rule on every SERIES, not just the root', () => {
+    render(<EChart
+      ariaLabel="test chart"
+      option={{ series: [{ type: 'line', data: [1] }, { type: 'pie', data: [] }] } as EChartsOption}
+      animateEntrance={false}
+    />)
+    const [option] = lastChart().setOption.mock.calls[0] as [
+      { series: { animationDuration?: number }[] },
+    ]
+    // buildTheme's per-type blocks are merged INTO each series and out-rank the root key
+    // (charts/motion.ssr.test.ts proves it against the engine), so a root-only 0 would let
+    // line/pie/sankey/treemap replay their 450ms entrance on every cached revisit.
+    expect(option.series.map((s) => s.animationDuration)).toEqual([0, 0])
   })
 
   it('animateEntrance defaults on (no forced animation flag)', () => {
@@ -447,6 +475,22 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
     expect((lastChart() as unknown as { group: string }).group).toBe('net-worth')
   })
 
+  it('a group change re-points the LIVE instance instead of re-initializing it', () => {
+    const init = vi.mocked(chartsModule.echarts.init)
+    const { rerender } = render(<EChart ariaLabel="test chart" option={OPTION} group="spending" />)
+    const chart = lastChart()
+    const inits = init.mock.calls.length
+    // Spending's drill (SpendingPage:497) and its trend compare toggle (:664) both flip the
+    // group; disposing there throws away the canvas the bar → pie universalTransition needs.
+    rerender(<EChart ariaLabel="test chart" option={OPTION} />)
+    expect(chart.dispose).not.toHaveBeenCalled()
+    expect(init.mock.calls.length).toBe(inits)
+    expect((chart as unknown as { group: string }).group).toBe('')
+    rerender(<EChart ariaLabel="test chart" option={OPTION} group="spending" />)
+    expect(lastChart()).toBe(chart)
+    expect((chart as unknown as { group: string }).group).toBe('spending')
+  })
+
   it('does not connect a chart without a group', () => {
     render(<EChart ariaLabel="test chart" option={OPTION} />)
     expect(connect()).not.toHaveBeenCalled()
@@ -463,6 +507,18 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
     expect('aria' in (lastChart().setOption.mock.calls[0] as [Record<string, unknown>])[0]).toBe(false)
   })
 
+  it('under reduce every series is stilled, not just the root option', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(<EChart
+      ariaLabel="test chart"
+      option={{ series: [{ type: 'treemap', data: [] }] } as EChartsOption}
+    />)
+    const [applied] = lastChart().setOption.mock.calls[0] as [{ series: { animation?: boolean }[] }]
+    // treemap's own defaultOption carries animation: true, which out-ranks the root flag —
+    // the OS preference has to be restated on the series to be obeyed (motion.ssr.test.ts).
+    expect(applied.series[0].animation).toBe(false)
+  })
+
   it('re-applies animation: false when the OS preference flips while mounted', () => {
     let listeners: (() => void)[] = []
     const media = {
@@ -477,5 +533,125 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
     act(() => { media.matches = true; listeners.forEach((l) => l()) })
     const last = chart.setOption.mock.calls.at(-1) as [Record<string, unknown>]
     expect(last[0].animation).toBe(false)
+  })
+})
+
+describe('EChart resize guard (spec §6)', () => {
+  it('ignores the notification that only echoes the size the engine already holds', () => {
+    render(<EChart ariaLabel="test chart" option={OPTION} />)
+    resizeNotify.forEach((fire) => fire())
+    // resize() mid-entrance restarts every animator from frame 0 — why entrances have never been seen.
+    expect(lastChart().resize).not.toHaveBeenCalled()
+  })
+  it('resizes when the element and the engine disagree', () => {
+    render(<EChart ariaLabel="test chart" option={OPTION} />)
+    const chart = lastChart()
+    chart.getWidth.mockReturnValue(800) // the element is still jsdom's 0-wide
+    resizeNotify.forEach((fire) => fire())
+    expect(chart.resize).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('EChart first paint waits for visibility (spec §6)', () => {
+  type IOEntry = { isIntersecting: boolean; intersectionRatio: number }
+  let notify: ((entries: IOEntry[]) => void)[] = []
+  let disconnects: ReturnType<typeof vi.fn>[] = []
+  let armedWith: (IntersectionObserverInit | undefined)[] = []
+  // jsdom has no IntersectionObserver, so only this describe has one — every other case in
+  // the file keeps painting synchronously, which is the no-observer contract below.
+  beforeEach(() => {
+    notify = []
+    disconnects = []
+    armedWith = []
+    vi.stubGlobal('IntersectionObserver', vi.fn((
+      cb: (entries: IOEntry[]) => void,
+      options?: IntersectionObserverInit,
+    ) => {
+      const disconnect = vi.fn()
+      disconnects.push(disconnect)
+      armedWith.push(options)
+      return { observe: () => notify.push(cb), disconnect, unobserve: () => {} }
+    }))
+  })
+  it('arms the observer at the 20% threshold the ratio gate reads', () => {
+    render(<EChart ariaLabel="test chart" option={OPTION} />)
+    // Without it the browser only reports the 0% crossing, so a card revealed slowly would
+    // paint on its first stray pixel and the ratio gate would never see a second delivery.
+    expect(armedWith[0]).toEqual({ threshold: 0.2 })
+  })
+  it('a paint that happens NOW drops the held one — no stale redraw on scroll-in', () => {
+    const bars = (v: number) => ({ series: [{ type: 'bar', data: [v] }] }) as EChartsOption
+    const { rerender } = render(<EChart ariaLabel="test chart" option={bars(1)} />)
+    const chart = lastChart()
+    expect(chart.setOption).not.toHaveBeenCalled() // held: the card is still below the fold
+    // A cached scope flip paints straight away, and the held closure carries the OLD scope.
+    rerender(<EChart ariaLabel="test chart" option={bars(2)} animateEntrance={false} />)
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 1 }]))
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    const [last] = chart.setOption.mock.calls.at(-1) as [{ series: { data: number[] }[] }]
+    expect(last.series[0].data).toEqual([2])
+  })
+  it('holds the first animated paint until 20% of the canvas is on screen, once', () => {
+    render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} />)
+    const chart = lastChart()
+    expect(chart.setOption).not.toHaveBeenCalled()
+    // isIntersecting alone is not the gate: a 5%-visible chart is reported as intersecting.
+    notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 0.05 }]))
+    expect(chart.setOption).not.toHaveBeenCalled()
+    notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 0.6 }]))
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    const [first] = chart.setOption.mock.calls[0] as [Record<string, unknown>]
+    expect('animationDuration' in first).toBe(false)
+    expect(disconnects[0]).toHaveBeenCalled() // one-shot: scrolling away never re-arms it
+  })
+  it('a cached paint never waits — it has no entrance to protect', () => {
+    render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} animateEntrance={false} />)
+    const [only] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
+    expect(only.animationDuration).toBe(0)
+  })
+  it('the entrance is the mount’s only one — the next paint is already-drawn', () => {
+    const bars = (v: number) => ({ series: [{ type: 'bar', data: [v] }] }) as EChartsOption
+    const { rerender } = render(<EChart ariaLabel="test chart" option={bars(1)} />)
+    const chart = lastChart()
+    notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 1 }]))
+    rerender(<EChart ariaLabel="test chart" option={bars(2)} />)
+    const last = chart.setOption.mock.calls.at(-1) as [Record<string, unknown>]
+    expect(last[0].animationDuration).toBe(0)
+  })
+  it('with no observer nothing waits, and a theme re-init repaints already-drawn', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined)
+    function Harness() {
+      const { setTheme } = useTheme()
+      return (<><button onClick={() => setTheme('light')}>go light</button><EChart ariaLabel="test chart" option={OPTION} /></>)
+    }
+    render(<ThemeProvider><Harness /></ThemeProvider>)
+    const [first] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
+    expect('animationDuration' in first).toBe(false)
+    act(() => screen.getByText('go light').click())
+    await waitFor(() => expect(instances.length).toBe(2))
+    const [after] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
+    expect(after.animationDuration).toBe(0)
+  })
+})
+
+describe('EChart cursor and tooltip motion (spec §6)', () => {
+  const bar = { series: [{ type: 'bar' }], tooltip: { formatter: () => 'x' } } as EChartsOption
+  const applied = () => lastChart().setOption.mock.calls[0][0] as
+    { series: { cursor?: string }[]; tooltip: { transitionDuration?: number; formatter?: unknown } }
+  it('a chart with no onClick paints series that do not pretend to be clickable', () => {
+    render(<EChart ariaLabel="test chart" option={bar} />)
+    expect(applied().series[0].cursor).toBe('default')
+  })
+  it('an onClick leaves the pointer alone', () => {
+    render(<EChart ariaLabel="test chart" option={bar} onClick={vi.fn()} />)
+    expect(applied().series[0].cursor).toBeUndefined()
+  })
+  it('under reduce the tooltip snaps, keeping the page’s own formatter', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(<EChart ariaLabel="test chart" option={bar} />)
+    // notMerge: a bare `tooltip: { transitionDuration: 0 }` would drop the formatter with it.
+    expect(applied().tooltip.transitionDuration).toBe(0)
+    expect(typeof applied().tooltip.formatter).toBe('function')
   })
 })
