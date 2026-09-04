@@ -231,7 +231,22 @@ export interface YearRollup {
   by_category: { category_id: number; total: string }[]
   total: string
   net_pay_total: string | null
+  /** The CASH rate — (net pay − living spend − tax paid) ÷ net pay over the matched months
+   *  (2026-09-04 honest-numbers spec §2). The name is unchanged, and so is the arithmetic
+   *  wherever every category is living. */
   savings_rate: string | null
+  // The honest-numbers additions (spec §2), all over MATCHED months. Optional for the
+  // reason `MoneyFlowTaxes.niit` documents: the live server always sends them.
+  living_total?: string
+  tax_total?: string
+  transfer_total?: string
+  cash_savings?: string | null
+  payroll_savings?: string | null
+  total_savings?: string | null
+  total_savings_rate?: string | null
+  /** Months with BOTH entered spending and a net-pay row — the window every figure above
+   *  was computed over. */
+  months_matched?: number
 }
 
 export interface SpendingYearly {
