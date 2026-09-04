@@ -61,7 +61,11 @@ git rm src/components/MonthRibbon.tsx src/components/MonthRibbon.test.tsx src/co
 
 - [x] **Step 3: Check** `npx vitest run && npx tsc -b && npm run build` → green; the build's CSS size should drop a little.
 
-- [x] **Step 4: Commit** `git commit -am "chore(shell): remove the page-header, old ribbon/segmented/range-chip and owner-row CSS"`
+- [x] **Step 4: Commit** — only the pre-shell `.month-ribbon`/`.month-chip` rules turned out to be
+  dead, so what shipped is `105d380 chore(shell): remove the pre-shell month-ribbon CSS from
+  panels.css`. The `.page-header`/`.spacer` and `.segmented*` rules were KEPT (live users, see
+  the note below); `.range-chips*`, the per-page owner-row classes and `.header-actions` had no
+  rule left to remove.
 
 ---
 
@@ -71,7 +75,7 @@ git rm src/components/MonthRibbon.tsx src/components/MonthRibbon.test.tsx src/co
 > different file and stays). Task 2: only the old `.month-ribbon`/`.month-chip` rules were
 > dead. KEPT, because a grep found a live user — `.page-header` / `h1` / `.spacer`
 > (`creditcards/CardDetail.tsx:258,266`, mounted by `CreditCardsPage.tsx:350`); `.segmented*`
-> (eight non-shell call sites render the bare class, and `shell/Segmented.tsx:3` documents the
+> (seven non-shell call sites render the bare class, and `shell/Segmented.tsx:3` documents the
 > panels-then-shell layering on purpose); `.loading-fallback` (`PageSkeleton.tsx:18,59`).
 > `.range-chips*`, the per-page owner-row classes and `.header-actions` had no rule left in any
 > stylesheet. Tasks 3-5 remain UNDONE.

@@ -12,7 +12,7 @@ import ThemeProvider from './shell/ThemeProvider'
 import ToastProvider from './ToastProvider'
 import { DARK, LIGHT } from '../theme/tokens'
 import { captionedPng, dataUrlToBlob } from '../charts/exportImage'
-import { downloadDataUrl, downloadText } from '../utils/download'
+import { downloadDataUrl, downloadText, toCsv } from '../utils/download'
 
 const chart = { getDataURL: vi.fn(() => 'data:image/png;base64,RAW') }
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); localStorage.clear() })
@@ -108,7 +108,11 @@ describe('ChartExportMenu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Table' }))
     expect(onToggleTable).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'CSV' }))
-    expect(csv).toHaveBeenCalledTimes(1)
+    expect(csv).toHaveBeenCalledTimes(1) // lazy: rows built on click, never on render
+    // Argument-ORDER pin, carried here when the menu moved out of EChart: toCsv(headers, rows).
+    // The mock answers 'CSV' whatever it is handed, so a swapped pair would slip past every
+    // other assertion in this file.
+    expect(toCsv).toHaveBeenCalledWith(['A'], [[1]])
     expect(downloadText).toHaveBeenCalledWith('CSV', 'demo.csv', 'text/csv;charset=utf-8')
   })
 })

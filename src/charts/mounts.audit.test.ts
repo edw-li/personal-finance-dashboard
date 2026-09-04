@@ -112,9 +112,9 @@ export function emptyNoteChartFallbacks(text: string): number {
   return offenders
 }
 
-// The page-level copies of the card's header row. Every one of these is a `.css` rule that
-// no `.tsx` may reach for again; the stylesheets keep the dead rules until the morning's
-// deletion pass, so this walk covers the MARKUP only.
+// The page-level copies of the card's header row. The rules themselves are gone — the
+// 2026-09-03 retire pass deleted the last of them (fa526b4) — so this walk is what stops a
+// new file from reaching for a class name that no stylesheet would style any more.
 const PAGE_CHART_HEADER =
   /className="[^"]*\b(?:networth-chart-header|networth-chart-controls|spending-chart-header|tax-chart-header|projection-chart-header|projection-chart-card)\b/
 
