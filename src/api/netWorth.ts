@@ -3,8 +3,8 @@ import type {
   AccountCreate,
   AccountOut,
   AccountUpdate,
-  BalanceEntry,
   MonthBalances,
+  MonthUpsert,
   MonthUpsertResult,
   NetWorthSummary,
   NetWorthTimeseries,
@@ -66,11 +66,7 @@ export function fetchMonthBalances(month: string): Promise<MonthBalances> {
   return api<MonthBalances>(`/net-worth/months/${month}`)
 }
 
-export function putMonthBalances(
-  month: string,
-  // notes: null CLEARS a saved note server-side; undefined leaves it untouched.
-  body: { recorded_on?: string; notes?: string | null; balances: BalanceEntry[] },
-): Promise<MonthUpsertResult> {
+export function putMonthBalances(month: string, body: MonthUpsert): Promise<MonthUpsertResult> {
   return api<MonthUpsertResult>(`/net-worth/months/${month}`, {
     method: 'PUT',
     body: JSON.stringify(body),
