@@ -25,7 +25,7 @@ export default function ProtectedRoute() {
   if (isLoading || (!isAuthenticated && authError !== null)) {
     return (
       <div className="splash" role="status" aria-live="polite">
-        <div className="splash-wordmark">Finance</div>
+        <div className="splash-wordmark">Personal finance</div>
         {isLoading && showSpinner && (
           // role="img": an aria-label on a bare div is not exposed to a screen reader, so
           // without it the spinner announces nothing at all.

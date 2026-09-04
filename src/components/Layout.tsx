@@ -177,7 +177,7 @@ export default function Layout() {
           Skip to content
         </a>
         <aside className="sidebar">
-          <div className="sidebar-title">Finance</div>
+          <div className="sidebar-title">Personal finance</div>
           {/* The palette's only visible affordance (2026-09-03 shell spec §9): Ctrl/Cmd+K was
               undiscoverable, so the sidebar says it out loud. A button, not an input — the
               real search box is the palette's own, and two boxes would fight for the caret.

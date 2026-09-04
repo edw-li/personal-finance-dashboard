@@ -48,7 +48,7 @@ afterEach(() => {
 // visitor saw nothing at all until /auth/me answered (up to the 15 s timeout).
 it('shows the wordmark at once and the spinner only once the wait is worth naming', () => {
   renderRoute()
-  expect(screen.getByText('Finance')).toBeTruthy()
+  expect(screen.getByText('Personal finance')).toBeTruthy()
   expect(screen.queryByLabelText('Connecting…')).toBeNull()
   act(() => {
     vi.advanceTimersByTime(300)
