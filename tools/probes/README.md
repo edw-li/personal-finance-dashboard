@@ -12,6 +12,7 @@ gitignored `scratchpad/`, never next to these tracked scripts.
 | `charts-c7/smoke.mjs` | The whole app: every chart route in both themes at 1600×1000, plus tooltip (axis/item/sankey), the heatmap's three modes, the heat-treemap and the log-axis fan. Fails on any console error, any bare canvas outside a `.chart-card`, and any canvas that did not actually paint | needs the dev stack — see below |
 | `calendar-e/smoke.mjs` | The calendar in both themes: the month grid, the cash-flow strip, the source-health footer, the list view, the `?add=` deep link, Overview’s “Up next” and the Settings feed card — then the write paths (override, custom-event add/edit/delete/Undo), the “Add to calendar (.ics)” download and a live feed token (200 → 304 → 404 after revoke). Every row it writes it removes | needs the dev stack — see below |
 | `sandbox-v/smoke.mjs` | The three planning sandboxes opened FROM a `whatif=` link in both themes: arrival state, a real slider drag (history must not grow), presets, pins across a reload and a year switch, both Apply doors up to their confirm, the legacy `?whatif=TICKER` and `?whatif-lot=` aliases, and the assistant's tool chip through to the page it lands on. Every mutating request outside a four-entry allowlist is aborted, so the walk cannot write | needs the dev stack — see below |
+| `honest-v/smoke.mjs` | The honest-numbers program end to end in both themes: the wizard's per-step saves (a balances-only save must fire NO spending PUT), the deliberate `$0` door and the repair banner it produces, read-only derived parent rows, Overview's coverage footer and its two new attention items, Spending's savings card and kind columns, the Projection window echo, the money-flow pending-take-home node and the Settings kind picker. The only smoke that WRITES — always to the scratch month `2019-01`, swept before each theme and again in a `finally` | needs the dev stack — see below |
 
 ## Running the C7 / sandbox smokes against the dev servers (dev only)
 
@@ -78,3 +79,34 @@ under test merged will answer with the old code (the assistant's tool-chip link 
 missing for exactly that reason, and nothing about the page said so) — restart it before a
 smoke; and `npm run dev` in a worktree serves THAT checkout, so point `APP_BASE` at the
 port serving the code you mean to judge.
+
+## Running the honest-numbers smoke (dev only)
+
+Same stack and the same dev seed credentials (`admin@example.com` / `changeme123` — dev
+database only, never a real one). Restart uvicorn first: it runs WITHOUT `--reload`, so a
+server started before lanes A/B merged answers with the old code and every new wire field
+reads as missing.
+
+```bash
+OUT=scratchpad/honest-smoke && mkdir -p "$OUT"
+curl -s http://127.0.0.1:8000/api/v1/auth/login -H 'content-type: application/json'   -d '{"email":"admin@example.com","password":"changeme123"}'   | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).access_token))" > "$OUT/token.txt"
+TOKEN_FILE=$OUT/token.txt SMOKE_OUT=$OUT node tools/probes/honest-v/smoke.mjs
+```
+
+Prints `HONEST SMOKE OK`, or exits 1 listing every problem. Env: `SMOKE_OUT`, `TOKEN_FILE`,
+`APP_BASE`, `API_BASE`, `EDGE_PATH`, `PLAYWRIGHT_CORE`, `ONLY_THEME`, `ONLY_STEP`
+(wizard|overview|spending|projection|moneyflow|settings), `SCRATCH_MONTH`. It writes to the
+dev database on purpose — the wizard's save is the subject — into `SCRATCH_MONTH` only
+(default `2019-01-01`, a month the dev book has never used); it sweeps that month from the
+spending and balances tables before EACH theme and again in a `finally`, then re-reads the
+month to prove it is gone. `PATCH /prefs` is stubbed, so a run never rewrites the account's
+settings.
+
+Three of its checks read the dev book rather than a literal, because the dev database is not
+production's: the coverage wording is derived from a live `GET /coverage` (the rule under test
+is "the newest gap is named", not which month it is), the YTD windows are asserted only for a
+fact that has a figure, and the money-flow pending node is driven to whichever year the wire
+reports as partly entered. Two labels live only on a CANVAS and so are pinned by unit tests
+instead: the savings chart's legend words (`spendingChartOptions.test.ts`) and the sankey node
+name — for the latter the driver opens the card's **Table** twin, which exports one row per
+node, and reads the string there.

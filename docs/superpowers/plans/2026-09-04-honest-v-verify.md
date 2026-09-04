@@ -703,7 +703,7 @@ House pattern: `tools/probes/sandbox-v/smoke.mjs`. Copy its header block, its pl
 - **This walk WRITES.** The wizard's per-step save is the feature under test, so there is no write fence. Instead every mutating request is RECORDED into `report.writes`, the walk only ever targets the scratch month `2019-01-01`, and a `finally` sweep deletes that month from both tables and removes any account it created. `PATCH /prefs` stays stubbed — a smoke does not get to rewrite the account's theme.
 - **Selectors are the SPEC's own copy**, not invented test ids: "Record this month as $0", "This month was saved with no spending.", "derived", "Total (incl. payroll)", "Cash", "Take-home not yet entered". If a string does not match, lane C/D/E shipped different words than the spec approved — that is a finding, recorded with the observed text, not a selector to loosen.
 
-- [ ] **Step 1: Confirm the strings the driver will hunt for actually shipped**
+- [x] **Step 1: Confirm the strings the driver will hunt for actually shipped**
 
 ```bash
 grep -rn "Record this month as" src/
@@ -719,7 +719,7 @@ grep -n "Save balances\|Save spending\|Save month" src/pages/MonthlyUpdatePage.t
 
 Expected: each grep hits. Record any miss with the file that should have carried it — the driver still gets written, and that check fails loudly rather than being dropped. The last grep decides which button names the driver clicks (see Step 2's note 1).
 
-- [ ] **Step 2: Write the driver**
+- [x] **Step 2: Write the driver**
 
 ```js
 // tools/probes/honest-v/smoke.mjs — the honest-numbers browser smoke (lane V Task 7,
@@ -1131,7 +1131,7 @@ curl -s -H "authorization: Bearer $(cat $TOKEN_FILE)" http://127.0.0.1:8000/api/
 
 Non-empty → the derived branch walks for free. Empty → add, at the top of the wizard step, POSTs that create one parent and two components, push their ids into `report.createdAccounts` (the sweep already deletes them), and record that the branch ran.
 
-- [ ] **Step 3: README**
+- [x] **Step 3: README**
 
 Add one row to the tool table in `tools/probes/README.md`:
 
@@ -1163,7 +1163,7 @@ and this recipe after the calendar one:
 > re-reads the month to prove it is gone. `PATCH /prefs` is stubbed, so a run never rewrites
 > the account's settings.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tools/probes/honest-v/smoke.mjs tools/probes/README.md
