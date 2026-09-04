@@ -493,6 +493,16 @@ function tileFor(label: string | RegExp): HTMLElement {
   return tile as HTMLElement
 }
 
+// A hint's SENTENCE lives in its bubble, not its accessible name (motion spec §8: the button
+// is named by its first four words so a reader hears the sentence once). Open it, read it,
+// then Escape — leaving one pinned would make the next `getByRole('tooltip')` ambiguous.
+function hintText(name: RegExp): string {
+  fireEvent.click(screen.getByRole('button', { name }))
+  const text = screen.getByRole('tooltip').textContent ?? ''
+  fireEvent.keyDown(window, { key: 'Escape' })
+  return text
+}
+
 function valueOf(tile: HTMLElement): string {
   return tile.querySelector('.stat-value')?.textContent ?? ''
 }
@@ -1528,21 +1538,20 @@ describe('OverviewPage — shell frame and owner scope', () => {
     serve()
     renderPage('/?owner=2')
     await screen.findByText('Net worth — Aug 2026')
-    // A hint is an InfoHint's aria-label — the only place this sentence can be read.
-    expect(
-      screen.getByRole('button', { name: /Household total — spending has no owner\./ }),
-    ).toBeTruthy()
-    expect(
-      screen.getByRole('button', {
-        name: /Household history; owner scope does not apply to the weekly checkpoints\./,
-      }),
-    ).toBeTruthy()
+    // The hint's button is named by its first four words now (motion spec §8), and this
+    // caveat is APPENDED to a sentence — so the only place it can be read is the bubble.
+    expect(hintText(/^About The latest entered month's/)).toContain(
+      'Household total — spending has no owner.',
+    )
+    expect(hintText(/^About Portfolio value vs cost/)).toContain(
+      'Household history; owner scope does not apply to the weekly checkpoints.',
+    )
 
     cleanup()
     renderPage('/?owner=all')
     await screen.findByText('Net worth — Aug 2026')
-    expect(screen.queryByRole('button', { name: /spending has no owner/ })).toBeNull()
-    expect(screen.queryByRole('button', { name: /weekly checkpoints/ })).toBeNull()
+    expect(hintText(/^About The latest entered month's/)).not.toContain('spending has no owner')
+    expect(hintText(/^About Portfolio value vs cost/)).not.toContain('weekly checkpoints')
   })
 })
 

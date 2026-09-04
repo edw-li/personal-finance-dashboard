@@ -7,6 +7,7 @@ vi.mock('../../api/coverage', () => ({ fetchCoverage: vi.fn() }))
 import { fetchCoverage } from '../../api/coverage'
 import { fetchHousehold } from '../../api/household'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../../api/snapshotCache'
+import { hintLabel } from '../InfoHint'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from './ScopeBar'
 
 function Url() {
@@ -140,7 +141,7 @@ describe('ScopeBar', () => {
     await screen.findByRole('button', { name: 'Grace' })
     // Beside the chips, not loose in the bar: the sentence explains THAT control.
     const hint = container.querySelector('.scope-bar-group button.info-hint')
-    expect(hint?.getAttribute('aria-label')).toBe(DEFAULT_JOINT)
+    expect(hint?.getAttribute('aria-label')).toBe(hintLabel(DEFAULT_JOINT))
   })
 
   it('drops the Joint half of the default on a page with no Joint chip', async () => {
@@ -148,7 +149,7 @@ describe('ScopeBar', () => {
     await screen.findByRole('button', { name: 'Grace' })
     expect(screen.queryByRole('button', { name: 'Joint' })).toBeNull()
     const hint = container.querySelector('.scope-bar-group button.info-hint')
-    expect(hint?.getAttribute('aria-label')).toBe(DEFAULT_SOLO)
+    expect(hint?.getAttribute('aria-label')).toBe(hintLabel(DEFAULT_SOLO))
   })
 
   it("prints the page's own sentence in place of the default when it sends one", async () => {
@@ -156,12 +157,14 @@ describe('ScopeBar', () => {
     await screen.findByRole('button', { name: 'Grace' })
     // One glyph, not two: the page's sentence REPLACES the shell's, it does not join it.
     expect(container.querySelectorAll('.scope-bar-group button.info-hint').length).toBe(1)
-    expect(container.querySelector('button.info-hint')?.getAttribute('aria-label')).toBe(OWNER_HINT)
+    expect(container.querySelector('button.info-hint')?.getAttribute('aria-label')).toBe(
+      hintLabel(OWNER_HINT),
+    )
     // Drop the prop and the shell's own sentence is back.
     rescope({ owner: true })
     expect(screen.getByRole('group', { name: 'Whose' })).toBeTruthy()
     expect(container.querySelector('button.info-hint')?.getAttribute('aria-label')).toBe(
-      DEFAULT_JOINT,
+      hintLabel(DEFAULT_JOINT),
     )
   })
 

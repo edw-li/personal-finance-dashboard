@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
+import { hintLabel } from '../components/InfoHint'
 import { clearSnapshots, setSnapshot } from '../api/snapshotCache'
 import type {
   AllocationDimension,
@@ -680,10 +681,10 @@ it('mounts performance, the heat-treemap, the donut and dividends through ChartC
 it("overrides the shell's default answer to Whose with the portfolio one", async () => {
   renderPage()
   await screen.findByRole('group', { name: 'Whose' })
-  // InfoHint carries its sentence as the button's accessible name, so the override is
-  // readable without opening the bubble — and the shell's default must NOT be what shows.
-  expect(screen.getByRole('button', { name: OWNER_HINT })).toBeTruthy()
-  expect(screen.queryByRole('button', { name: /Each person has their own view/ })).toBeNull()
+  // The button is named by its first four words now (motion spec §8) and the shell's default
+  // answer opens with the very same four — so the OVERRIDE only shows in the bubble.
+  fireEvent.click(screen.getByRole('button', { name: hintLabel(OWNER_HINT) }))
+  expect(screen.getByRole('tooltip').textContent).toBe(OWNER_HINT)
 })
 
 it('says the performance card is household-wide only while a scope is active', async () => {
@@ -692,7 +693,7 @@ it('says the performance card is household-wide only while a scope is active', a
   // Nothing is scoped on All, so the caveat would be noise.
   expect(screen.queryByText(HOUSEHOLD_HINT)).toBeNull()
   // ...though the scope row's own answer is up the whole time.
-  expect(screen.getByRole('button', { name: OWNER_HINT })).toBeTruthy()
+  expect(screen.getByRole('button', { name: hintLabel(OWNER_HINT) })).toBeTruthy()
 
   fireEvent.click(chip('Sam'))
   expect(await screen.findByText(HOUSEHOLD_HINT)).toBeTruthy()

@@ -1,26 +1,28 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import InfoHint from './InfoHint'
+import InfoHint, { hintLabel } from './InfoHint'
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
 })
 
-// The hint is a real disclosure now (2026-09-03 shell spec §13): the authored text still
-// rides `aria-label` for screen readers, but the visible bubble is a rendered element —
-// so what is pinned here is the pair staying in sync AND the open/pin/dismiss contract
-// the CSS-only `::after` could never express (no Escape, no pinning, no edge flip).
+// The hint is a real disclosure now (2026-09-03 shell spec §13): the visible bubble is a
+// rendered element, so what is pinned here is the open/pin/dismiss contract the CSS-only
+// `::after` could never express (no Escape, no pinning, no edge flip).
 const TEXT = 'Assets minus liabilities from the latest monthly snapshot.'
+// The BUTTON is named short; the sentence is the bubble's, and the bubble is what
+// `aria-describedby` points at — so a screen reader hears it once, not twice (motion spec §8).
+const LABEL = 'About Assets minus liabilities from…'
 
-const hintButton = () => screen.getByRole('button', { name: TEXT })
+const hintButton = () => screen.getByRole('button', { name: LABEL })
 const wrap = () => document.querySelector('.info-hint-wrap') as HTMLElement
 
 describe('InfoHint', () => {
   it('names the button with the text and shows no bubble until it is asked for', () => {
     render(<InfoHint text={TEXT} />)
     const button = hintButton()
-    expect(button.getAttribute('aria-label')).toBe(TEXT)
+    expect(button.getAttribute('aria-label')).toBe(LABEL)
     expect(button.className).toContain('info-hint')
     expect(button.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByRole('tooltip')).toBeNull()
@@ -139,5 +141,34 @@ describe('InfoHint', () => {
     render(<InfoHint text={TEXT} />)
     fireEvent.click(hintButton())
     expect(screen.getByRole('tooltip').className).toContain('is-flipped')
+  })
+
+  it('names the button with four words and keeps short hints whole', () => {
+    expect(hintLabel(TEXT)).toBe(LABEL)
+    expect(hintLabel('What it shows.')).toBe('About What it shows.')
+    render(<InfoHint text={TEXT} />)
+    fireEvent.click(hintButton())
+    // Focus opens the bubble, so the full sentence still arrives — once, as the description.
+    expect(hintButton().getAttribute('aria-describedby')).toBe(screen.getByRole('tooltip').id)
+    expect(screen.getByRole('tooltip').textContent).toBe(TEXT)
+  })
+
+  it('opens BELOW when the sticky scope row would cover the bubble', () => {
+    // The row pins at top:0 (shell.css); a hint in the first card opened upward INTO it and
+    // was unreadable. jsdom lays nothing out, so the rect IS the input — one stub serves both.
+    const at = (top: number) =>
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        left: 20, right: 36, top, bottom: top + 16, width: 16, height: 16, x: 20, y: top, toJSON: () => ({}),
+      })
+    document.body.innerHTML = '<div class="page-frame-scope"></div>'
+    at(400)
+    const { unmount } = render(<InfoHint text={TEXT} />)
+    fireEvent.click(hintButton())
+    expect(screen.getByRole('tooltip').className).not.toContain('is-below')
+    unmount()
+    at(0) // under the row: 0 < 96 (bubble) + 16 (row) + 8 (air)
+    render(<InfoHint text={TEXT} />)
+    fireEvent.click(hintButton())
+    expect(screen.getByRole('tooltip').className).toContain('is-below')
   })
 })

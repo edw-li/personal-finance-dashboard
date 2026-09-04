@@ -535,8 +535,12 @@ describe('ProjectionPage', () => {
     expect(
       screen.getByText(/reads in today's dollars by default \(inflation is modelled\)/),
     ).toBeTruthy()
-    // The knobs card's own hint rides in the ⓘ's aria-label (shell spec §5).
-    expect(screen.getByLabelText(/Blank knobs are derived from your data/)).toBeTruthy()
+    // The knobs card's own hint rides in the ⓘ's BUBBLE: the button is named by its first
+    // four words so a reader hears the sentence once (motion spec §8).
+    fireEvent.click(screen.getByRole('button', { name: /^About Every knob the projection/ }))
+    expect(screen.getByRole('tooltip').textContent).toMatch(
+      /Blank knobs are derived from your data/,
+    )
   })
 
   it('runs the Monte Carlo knobs shifted back to fractions', async () => {
@@ -724,7 +728,7 @@ describe('ProjectionPage', () => {
     await loaded()
 
     const fiHint = tileFor('FI target').querySelector('.stat-label button.info-hint')
-    expect(fiHint?.getAttribute('aria-label')).toMatch(/^Annual spend ÷ withdrawal rate/)
+    expect(fiHint?.getAttribute('aria-label')).toMatch(/^About Annual spend ÷ withdrawal/)
     expect(
       screen.getByText('Net worth over time (projected)').querySelector('button.info-hint'),
     ).toBeTruthy()
