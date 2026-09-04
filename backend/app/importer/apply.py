@@ -46,6 +46,7 @@ from app.models import (
 from app.seed import seed_tax_definitions
 from app.services.people import load_people, primary_person
 from app.services.portfolio_accounts import resolve_portfolio_account
+from app.services.spending_guard import records_something
 from app.services.tax_service import FOLDED_TO_BASE_CG
 from app.tax_keys import PER_PERSON_KEYS, SINGLE
 
@@ -436,6 +437,18 @@ async def apply_spending(db: AsyncSession, parsed: ParsedSpending, report: Sheet
     }
     existing_cashflow = {c.month: c for c in (await db.execute(select(MonthlyCashflow))).scalars()}
     for month_row in parsed.months:
+        if not records_something(month_row.amounts.values(), month_row.net_pay):
+            # Spec §4: a sheet row of zeros with no net pay is not a $0 month. Skipping it
+            # here IS the importer's confirm_zero — True only for a row carrying a net pay
+            # figure or a non-zero amount, and never for a month the sheet does not have
+            # (those never reach this loop: the parser drops all-blank rows as templates).
+            # Rows already stored for such a month are left alone; the importer never
+            # deletes, and lane A's health rule is what reports them.
+            report.warnings.append(
+                f"Spending {month_row.month.isoformat()[:7]}: every category is 0 and no "
+                "net pay — month skipped (nothing to record)"
+            )
+            continue
         for category_name, amount in month_row.amounts.items():
             category = categories_by_name.get(category_name)
             if category is None:

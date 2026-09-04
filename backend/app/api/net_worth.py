@@ -26,6 +26,7 @@ from app.schemas.net_worth import (
     TimeseriesOut,
 )
 from app.services.changelog import ChangeBatch, batch_header, change_batch, row_image
+from app.services.derived_accounts import derived_parent_balances
 from app.services.money import mom_pct, quantize_money, require_first_of_month
 from app.services.net_worth_calc import (
     ZERO,
@@ -68,6 +69,28 @@ async def _validate_links(
             )
 
 
+def _check_component_link(is_component: bool | None, parent_account_id: int | None) -> None:
+    """`is_component` and `parent_account_id` are two halves of ONE fact (2026-09-04
+    honest-numbers spec §5): the flag is the key every rollup excludes on, the link is the
+    parent the money folds into. Half of it produces the Settings card's "unlinked component
+    — counts nowhere" row, or a component that is silently double-counted, so a request that
+    sets one without the other is refused NAMING the missing half.
+
+    Rows that already disagree are not touched: this fires only when a request supplies one
+    of the two, so a legacy account keeps its shape until someone edits that part of it.
+    """
+    if is_component and parent_account_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="is_component needs parent_account_id — name the account it folds into",
+        )
+    if parent_account_id is not None and not is_component:
+        raise HTTPException(
+            status_code=422,
+            detail="parent_account_id needs is_component — a linked account must be a component",
+        )
+
+
 @router.get("/accounts", response_model=list[AccountOut])
 async def list_accounts(db: AsyncSession = Depends(get_db)) -> list[Account]:
     result = await db.execute(select(Account).order_by(Account.sort_order, Account.id))
@@ -101,6 +124,7 @@ async def create_account(
     if existing is not None:
         raise HTTPException(status_code=409, detail=f"account {slug!r} already exists")
     await _validate_links(db, body.person_id, body.parent_account_id, None)
+    _check_component_link(body.is_component, body.parent_account_id)
     account = Account(
         name=body.name,
         slug=slug,
@@ -163,6 +187,14 @@ async def update_account(
     await _validate_links(
         db, updates.get("person_id"), updates.get("parent_account_id"), account_id
     )
+    if "is_component" in updates or "parent_account_id" in updates:
+        # Judge the row the PATCH would LEAVE BEHIND, not the keys it happens to carry:
+        # `updates` already drops explicit nulls for every column except the two nullable
+        # ones, so an unlink really is in here and an `is_component: null` really is not.
+        _check_component_link(
+            updates.get("is_component", account.is_component),
+            updates.get("parent_account_id", account.parent_account_id),
+        )
     # slug is the importer's natural key — never rewritten here. A sheet-side rename is
     # the importer's job (per-run alias semantics, Plan 2 forward note).
     before = row_image(account)
@@ -383,6 +415,14 @@ async def put_month(
     db: AsyncSession = Depends(get_db),
     batch: ChangeBatch = Depends(change_batch),
 ) -> MonthUpsertResult:
+    """Upsert a month's balances, deriving every parent-with-components as it writes.
+
+    Note for readers of the counts and the change log: ANY put on a month that holds
+    components re-derives its parents, so a meta-only or single-row save can report extra
+    `updated` rows (and log them) for parents nobody typed. That is deliberate — a month
+    you touch is left consistent — and it is why a save's row count can exceed the
+    payload's length.
+    """
     require_first_of_month(month)
     ids = [entry.account_id for entry in body.balances]
     if len(set(ids)) != len(ids):
@@ -392,15 +432,55 @@ async def put_month(
         entry.account_id: quantize_money(entry.balance, f"balance[account_id={entry.account_id}]")
         for entry in body.balances
     }
-    if ids:
-        known = set((await db.execute(select(Account.id).where(Account.id.in_(ids)))).scalars())
-        missing = sorted(set(ids) - known)
-        if missing:
-            raise HTTPException(status_code=422, detail=f"unknown account_id(s): {missing}")
+    # The whole table, not just the submitted ids: derivation needs every account's
+    # is_component/parent_account_id, and the refusal sentence needs the parent's NAME.
+    accounts = list((await db.execute(select(Account))).scalars().all())
+    by_id = {account.id: account for account in accounts}
+    missing = sorted(set(ids) - set(by_id))
+    if missing:
+        raise HTTPException(status_code=422, detail=f"unknown account_id(s): {missing}")
 
     snapshot = (
         await db.execute(select(NetWorthSnapshot).where(NetWorthSnapshot.month == month))
     ).scalar_one_or_none()
+    # The month's stored rows are read BEFORE the snapshot is created: a derivation refusal
+    # must not leave a flushed snapshot behind, and the tests share one session with the app,
+    # so even an uncommitted insert would be visible to the next request.
+    existing = (
+        {}
+        if snapshot is None
+        else {
+            row.account_id: row
+            for row in (
+                await db.execute(
+                    select(AccountBalance).where(AccountBalance.snapshot_id == snapshot.id)
+                )
+            ).scalars()
+        }
+    )
+    # Spec §5: a parent with components has no balance of its own — it IS the sum of its
+    # components this month. The payload wins; a component the payload leaves out falls back
+    # to what the month already stores, and one absent from both contributes nothing. Every
+    # flagged+linked component with a value counts, ACTIVE OR NOT: deactivation stops future
+    # entry, it does not remove the money a closed bucket still holds this month.
+    merged = {account_id: row.balance for account_id, row in existing.items()} | quantized
+    derived = derived_parent_balances(accounts, merged)
+    for parent_id, total in sorted(derived.items()):
+        submitted = quantized.get(parent_id)
+        if submitted is not None and submitted != total:
+            # Storing a typed total that contradicts the components on the same screen is
+            # exactly the drift this program removes — name the value the server would keep.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{by_id[parent_id].name} is derived from its components ({total}); "
+                    "leave it out or send the components"
+                ),
+            )
+    # A parent submitted EQUAL to the sum is accepted and ignored: the union below simply
+    # writes the derived value, which is the same number.
+    to_write = quantized | derived
+
     snapshot_created = snapshot is None
     if snapshot is None:
         if not body.balances:
@@ -427,17 +507,9 @@ async def put_month(
         if "notes" in provided:
             snapshot.notes = body.notes
 
-    existing = {
-        row.account_id: row
-        for row in (
-            await db.execute(
-                select(AccountBalance).where(AccountBalance.snapshot_id == snapshot.id)
-            )
-        ).scalars()
-    }
     created = updated = unchanged = 0
     new_rows: list[AccountBalance] = []
-    for account_id, value in quantized.items():
+    for account_id, value in to_write.items():
         row = existing.get(account_id)
         if row is None:
             row = AccountBalance(snapshot_id=snapshot.id, account_id=account_id, balance=value)
@@ -468,6 +540,10 @@ async def put_month(
         created=created,
         updated=updated,
         unchanged=unchanged,
+        derived=[
+            BalanceEntry(account_id=account_id, balance=value)
+            for account_id, value in sorted(derived.items())
+        ],
         batch_id=batch_id,
     )
 

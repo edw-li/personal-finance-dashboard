@@ -39,6 +39,7 @@ from app.services.savings import (
     load_payroll_by_month,
     rollup,
 )
+from app.services.spending_guard import EMPTY_MONTH_REFUSAL, records_something
 
 router = APIRouter(prefix="/spending", tags=["spending"], dependencies=[Depends(get_current_user)])
 
@@ -519,6 +520,18 @@ async def put_month(
         # Take-home pay can't be negative; a typo'd minus sign would flip the
         # savings-rate denominator into flattering nonsense (Task 7 review).
         raise HTTPException(status_code=422, detail="net_pay must be non-negative")
+    # Spec §4: every category $0.00 with no take-home is what put a fake $0 month on
+    # production's Sep 2026 — refuse it unless the client says it means it. An EXPLICIT
+    # net_pay null passes only when it is the WHOLE body: that body records something (it
+    # deletes the month's cashflow row) and writes no zeros. Beside a page of zeros the
+    # same null would clear the take-home AND store 19 rows of $0.00 — Sep 2026 exactly —
+    # so the delete must not buy those zeros a way past the guard.
+    if not (
+        body.confirm_zero
+        or (net_pay_clear and not quantized)
+        or records_something(quantized.values(), net_pay_value)
+    ):
+        raise HTTPException(status_code=422, detail=EMPTY_MONTH_REFUSAL)
     if ids:
         known = set(
             (

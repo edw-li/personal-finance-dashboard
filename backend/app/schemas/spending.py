@@ -45,6 +45,10 @@ class AmountEntry(BaseModel):
 class SpendingMonthUpsert(BaseModel):
     net_pay: Decimal | None = None
     amounts: list[AmountEntry] = []
+    # Spec §4: an all-zero month with no take-home is refused unless the client SAYS it
+    # means it (the wizard's "Record this month as $0" checkbox). Default False, so an
+    # older client cannot write an empty month by omission.
+    confirm_zero: bool = False
 
 
 class SpendingMonthOut(BaseModel):
