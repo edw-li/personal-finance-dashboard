@@ -471,6 +471,15 @@
   }
 }
 
+/* The boxes the real layout occupies: a 76px tile ghost under a 115px tile moved every page's
+   first paint by 39px a row (motion spec §7). One variable per row, read by the REAL row and by
+   the empty twin the skeleton leaves in its place — parity by construction, not two numbers that
+   happen to agree; src/components/skeletonMetrics.ts mirrors them and its test pins the pair. */
+.page-skeleton {
+  --m-stat-tile: 115px;
+  --m-owner-strip: 57px;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .skeleton {
     animation: skeleton-pulse 1.4s ease-in-out infinite;
@@ -580,6 +589,15 @@
   margin: 0 0 0.5rem;
   color: var(--warn);
   font-size: 0.8rem;
+}
+
+/* Reserved rows (motion spec §7): one variable per row, read by the REAL row and by the empty twin
+   the skeleton leaves in its place, so the card is the same height before and after the data lands.
+   src/components/skeletonMetrics.ts mirrors these numbers and its test pins the pair. */
+.chart-card {
+  --m-export-row: 40px;
+  --m-zoom-row: 21px;
+  --m-caption-row: 26px;
 }
 
 .chart-card-skeleton {
