@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ApiError } from '../api/client'
+import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
 import {
   createLot,
   createOffering,
@@ -1197,6 +1197,8 @@ export default function EsppPage() {
   const [lots, setLots] = useState<EsppLotsResponse | null>(
     () => getSnapshot<EsppLotsResponse>('espp:lots') ?? null,
   )
+  // The three *Error slots hold an `errorDetail` DETAIL, not a sentence: the page composes
+  // one banner from all three below (2026-09-05 motion spec §9).
   const [lotsError, setLotsError] = useState<string | null>(null)
   const [lotsBusy, setLotsBusy] = useState(true)
 
@@ -1256,7 +1258,7 @@ export default function EsppPage() {
         if (seq !== lotsSeq.current) return
         // The previous payload is KEPT: a failed reload here describes the same lots, and
         // dropping them would also destroy a half-typed row in the panel's form.
-        setLotsError(message(err, 'Failed to load ESPP lots'))
+        setLotsError(errorDetail(err))
       })
       .finally(() => {
         if (seq === lotsSeq.current) setLotsBusy(false)
@@ -1276,7 +1278,7 @@ export default function EsppPage() {
       })
       .catch((err: unknown) => {
         if (seq !== offeringsSeq.current) return
-        setOfferingsError(message(err, 'Failed to load offerings'))
+        setOfferingsError(errorDetail(err))
       })
       .finally(() => {
         if (seq === offeringsSeq.current) setOfferingsBusy(false)
@@ -1306,7 +1308,7 @@ export default function EsppPage() {
         // Dropped, unlike the lots: a chain shown under knobs that did not produce it is
         // a lie. The knobs and the year survive in page state.
         setModeler(null)
-        setModelerError(message(err, 'Failed to run the model'))
+        setModelerError(errorDetail(err))
       })
       .finally(() => {
         if (seq === modelerSeq.current) setModelerBusy(false)
@@ -1357,9 +1359,26 @@ export default function EsppPage() {
     runModeler()
   }
 
+  // ONE banner for three parallel loads (spec §9): only the parts that failed, and only the
+  // ones still showing earlier data.
+  const loadBanner = describeLoadFailures([
+    { noun: 'the lots', detail: lotsError, stale: lots !== null },
+    { noun: 'the offerings', detail: offeringsError, stale: offerings !== null },
+    { noun: 'the model', detail: modelerError, stale: modeler !== null },
+  ])
+
+  // …and ONE Retry for every part that failed: the user asked for the page, not for a feed.
+  // An offerings retry re-prices the chain, so it covers the modeler too.
+  const retryFailedLoads = () => {
+    if (lotsError !== null) reloadLots()
+    if (offeringsError !== null) onOfferingsChanged()
+    else if (modelerError !== null) runModeler()
+  }
+
   return (
     <div className="page espp-page">
       <PageFrame title="ESPP" resource={{ status: 'ready' }}>
+        <FeedBanner error={loadBanner} retry={retryFailedLoads} />
         {/* The modeler's $25k figure at the page top (2026-08-31 audit: the gauge sat below
             the fold). The MODELER's chain — its year and knobs — so it can never disagree
             with the card below; absent until that feed answers, exactly like the card. */}
@@ -1391,11 +1410,8 @@ export default function EsppPage() {
             re-renders this panel with the same payload, so a half-typed row survives. */}
         <Feed
           data={lots}
-          error={lotsError}
           busy={lotsBusy}
           staleNoun="the table"
-          retry={reloadLots}
-          retryLabel="Retry loading lots"
           skeleton={{ height: 260, label: 'Loading lots…' }}
         >
           {(data) => <LotsPanel data={data} offerings={offerings ?? []} onChanged={reloadLots} />}
@@ -1403,19 +1419,13 @@ export default function EsppPage() {
 
         <Feed
           data={offerings}
-          error={offeringsError}
           busy={offeringsBusy}
           staleNoun="the table"
-          retry={onOfferingsChanged}
-          retryLabel="Retry loading offerings"
           skeleton={{ height: 220, label: 'Loading offerings…' }}
         >
           {(rows) => <OfferingsPanel offerings={rows} bars={bars} onChanged={onOfferingsChanged} />}
         </Feed>
 
-        {/* No stale cue: the card renders its own empty state from a null payload, so there
-            is never an earlier model left behind the banner. */}
-        <FeedBanner error={modelerError} retry={() => runModeler()} retryLabel="Retry the model" />
         <div className={`loading-dim${modelerBusy ? ' is-loading' : ''}`}>
           <ModelerCard
             data={modeler}

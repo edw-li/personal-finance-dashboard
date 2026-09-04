@@ -424,7 +424,7 @@ describe('PaycheckPage — the waterfall', () => {
 
     // A FIRST-load failure: the bare sentence, with no stale cue, because there is no
     // earlier waterfall for one to be about.
-    expect(await screen.findByText('breakdown unavailable')).toBeTruthy()
+    expect(await screen.findByText("Couldn't load the breakdown — the server had a problem (HTTP 503)")).toBeTruthy()
     // Independent loads: the table answered and is untouched.
     expect(screen.getByText('$188,930.00')).toBeTruthy()
   })
@@ -442,7 +442,7 @@ describe('PaycheckPage — the waterfall', () => {
     // says so rather than leaving the old figures passing for the ones just asked for.
     expect(
       await screen.findByText(
-        'breakdown unavailable — this breakdown may be showing earlier data.',
+        "Couldn't load the breakdown — the server had a problem (HTTP 503). Showing earlier data for the breakdown.",
       ),
     ).toBeTruthy()
     // Kept, and still named — which is what makes keeping it honest.
@@ -807,10 +807,11 @@ describe('PaycheckPage — loading', () => {
     vi.mocked(fetchProfiles).mockRejectedValueOnce(new ApiError('profiles unavailable', 503))
     render(<PaycheckPage />, { wrapper: MemoryRouter })
 
-    expect(await screen.findByText('profiles unavailable')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading profiles' }))
+    expect(await screen.findByText("Couldn't load the profiles — the server had a problem (HTTP 503)")).toBeTruthy()
+    // One banner for the page needs no disambiguating label (motion spec §9).
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByText('$188,930.00')).toBeTruthy()
-    expect(screen.queryByText('profiles unavailable')).toBeNull()
+    expect(screen.queryByText("Couldn't load the profiles — the server had a problem (HTTP 503)")).toBeNull()
   })
 
   it('says the table may be behind when a RELOAD fails, and keeps the rows', async () => {
@@ -827,7 +828,9 @@ describe('PaycheckPage — loading', () => {
     await waitFor(() => expect(vi.mocked(fetchProfiles)).toHaveBeenCalledTimes(2))
 
     expect(
-      await screen.findByText('profiles unavailable — the table may be showing earlier data.'),
+      await screen.findByText(
+        "Couldn't load the profiles — the server had a problem (HTTP 503). Showing earlier data for the profiles.",
+      ),
     ).toBeTruthy()
     expect(screen.getByText('$188,930.00')).toBeTruthy()
     expect(field('Notes').value).toBe('half-typed profile')

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError } from '../api/client'
+import { ApiError, describeLoadFailures, errorDetail } from '../api/client'
 import {
   createProfile,
   deleteProfile,
@@ -708,6 +708,9 @@ export default function PaycheckPage() {
   const [profiles, setProfiles] = useState<PaycheckProfileOut[] | null>(
     () => getSnapshot<PaycheckProfileOut[]>('paycheck:profiles') ?? null,
   )
+  // Both *Error slots hold an `errorDetail` DETAIL, not a sentence: the page composes one
+  // banner from them below, and the breakdown's 404 prose keeps the server's own words
+  // (2026-09-05 motion spec §9).
   const [profilesError, setProfilesError] = useState<string | null>(null)
   const [profilesBusy, setProfilesBusy] = useState(true)
 
@@ -824,7 +827,7 @@ export default function PaycheckPage() {
         // and dropping them would also destroy a half-typed row in the panel's form
         // (EsppPage's same-entity rule). The banner appends the stale cue only when a
         // table is actually still on screen.
-        setProfilesError(message(err, 'Failed to load paycheck profiles'))
+        setProfilesError(errorDetail(err))
       })
       .finally(() => {
         if (seq === profilesSeq.current) setProfilesBusy(false)
@@ -905,7 +908,7 @@ export default function PaycheckPage() {
         // under the cue below still says whose it is.
         if (missing) setBreakdown(null)
         setBreakdownMissing(missing)
-        setBreakdownError(message(err, 'Failed to load the paycheck breakdown'))
+        setBreakdownError(errorDetail(err))
       })
       .finally(() => {
         if (seq === breakdownSeq.current) setBreakdownBusy(false)
@@ -1051,6 +1054,23 @@ export default function PaycheckPage() {
     setHouseholdNonce((n) => n + 1)
   }
 
+  // ONE banner for the page's two parallel loads (spec §9), with ONE Retry for whichever
+  // parts failed: the user asked for the page, not for a feed.
+  const loadBanner = describeLoadFailures([
+    // A 404 is not recoverable here: the empty state carries it, and a Retry over "add a profile"
+    // answers the wrong question.
+    {
+      noun: 'the breakdown',
+      detail: breakdownMissing ? null : breakdownError,
+      stale: breakdown !== null,
+    },
+    { noun: 'the profiles', detail: profilesError, stale: profiles !== null },
+  ])
+  const retryFailedLoads = () => {
+    if (!breakdownMissing && breakdownError !== null) reselect(selection.profileId)
+    if (profilesError !== null) reloadProfiles()
+  }
+
   return (
     <div className="page paycheck-page">
       <PageFrame
@@ -1063,6 +1083,8 @@ export default function PaycheckPage() {
         // every ChartCard under it reads to render still (spec §1).
         resource={{ status: 'ready', fromCache }}
       >
+        <FeedBanner error={loadBanner} retry={retryFailedLoads} />
+
         {/* TWO OR MORE answers or nothing: one person's net is not a household take-home, and
             printing it as one would be a half-truth (spec §6). It sits OUTSIDE the per-check
             card on purpose — it is not part of any one person's waterfall, and it does not
@@ -1088,11 +1110,8 @@ export default function PaycheckPage() {
             the form below, not a Retry. */}
         <Feed
           data={breakdownMissing ? null : breakdown}
-          error={breakdownMissing ? null : breakdownError}
           busy={breakdownBusy && !breakdownMissing}
           staleNoun="this breakdown"
-          retry={() => reselect(selection.profileId)}
-          retryLabel="Retry the breakdown"
           skeleton={{ height: 320, label: 'Loading the breakdown…' }}
           empty={
             breakdownMissing ? (
@@ -1146,11 +1165,8 @@ export default function PaycheckPage() {
 
         <Feed
           data={profiles}
-          error={profilesError}
           busy={profilesBusy}
           staleNoun="the table"
-          retry={reloadProfiles}
-          retryLabel="Retry loading profiles"
           skeleton={{ height: 240, label: 'Loading profiles…' }}
         >
           {/* The render prop's argument is only proof that `profiles` is non-null: the table
