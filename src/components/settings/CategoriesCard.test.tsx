@@ -141,3 +141,86 @@ it('banners a failed load and refetches on Retry', async () => {
   expect(await screen.findByRole('table')).toBeTruthy()
   expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2)
 })
+
+it('shows each category kind on a three-way picker', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  const groceries = within(screen.getByRole('group', { name: 'Kind for Groceries' }))
+  expect(groceries.getByRole('button', { name: 'Living' }).getAttribute('aria-pressed')).toBe(
+    'true',
+  )
+  expect(groceries.getByRole('button', { name: 'Tax' }).getAttribute('aria-pressed')).toBe('false')
+  expect(groceries.getByRole('button', { name: 'Transfer' }).getAttribute('aria-pressed')).toBe(
+    'false',
+  )
+  // The picker READS the row, it does not hold its own copy: Taxes must land on Tax.
+  const taxes = within(screen.getByRole('group', { name: 'Kind for Taxes' }))
+  expect(taxes.getByRole('button', { name: 'Tax' }).getAttribute('aria-pressed')).toBe('true')
+  expect(taxes.getByRole('button', { name: 'Living' }).getAttribute('aria-pressed')).toBe('false')
+})
+
+it('PATCHes the kind alone and re-reads the list', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Kind for Groceries' })).getByRole('button', {
+      name: 'Transfer',
+    }),
+  )
+
+  await waitFor(() => expect(vi.mocked(updateCategory)).toHaveBeenCalledTimes(1))
+  // ONLY kind on the wire — toggleActive's rule: sending the name and position back would
+  // let a stale render overwrite a concurrent edit.
+  expect(vi.mocked(updateCategory).mock.calls[0]).toEqual([5, { kind: 'transfer' }])
+  await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(2))
+})
+
+it('does not PATCH when the kind a row already has is clicked again', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Kind for Taxes' })).getByRole('button', {
+      name: 'Tax',
+    }),
+  )
+
+  // Segmented reports every click, including one on the active button. A PATCH that changes
+  // nothing would still write a change-log batch offering to "undo" a no-op.
+  await waitFor(() => expect(vi.mocked(fetchCategories)).toHaveBeenCalledTimes(1))
+  expect(vi.mocked(updateCategory)).not.toHaveBeenCalled()
+})
+
+it('spells out what each kind means and that a change moves ALL history', async () => {
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  expect(screen.getByText(/Living: money that left the household/)).toBeTruthy()
+  expect(screen.getByText(/Tax: an income-tax payment made from take-home/)).toBeTruthy()
+  expect(screen.getByText(/Transfer: money that stayed yours/)).toBeTruthy()
+  expect(screen.getByText(/Changing a kind recomputes ALL history/)).toBeTruthy()
+})
+
+it('banners a refused kind change and leaves the row on its old kind', async () => {
+  vi.mocked(updateCategory).mockRejectedValue(
+    new ApiError('kind must be one of: living, tax, transfer', 422),
+  )
+  render(<CategoriesCard />)
+  await screen.findByRole('table')
+
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Kind for Groceries' })).getByRole('button', {
+      name: 'Tax',
+    }),
+  )
+
+  expect(await screen.findByText('kind must be one of: living, tax, transfer')).toBeTruthy()
+  // No optimistic local copy: a refused change must leave Groceries reading Living.
+  expect(
+    within(screen.getByRole('group', { name: 'Kind for Groceries' }))
+      .getByRole('button', { name: 'Living' })
+      .getAttribute('aria-pressed'),
+  ).toBe('true')
+})

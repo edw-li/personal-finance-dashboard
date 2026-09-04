@@ -441,3 +441,11 @@
   padding: 0.3rem 0.6rem;
   font-size: 0.78rem;
 }
+
+/* --- category kinds + account roll-up cues (2026-09-04 honest-numbers spec §1, §5) --- */
+
+/* The kind picker lives in a table cell. Without this the three-button group breaks across
+   lines on a narrow card and the column's width jumps as the pressed label changes. */
+.category-table td .segmented {
+  white-space: nowrap;
+}
