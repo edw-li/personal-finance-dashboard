@@ -19,7 +19,7 @@
 **Files:**
 - Delete: `src/components/MonthRibbon.tsx`, `src/components/MonthRibbon.test.tsx`, `src/components/RangeChips.tsx` (+ `RangeChips.test.tsx` if present), `src/pages/PlaceholderPage.tsx` (+ test if present)
 
-- [ ] **Step 1: Prove they are unreferenced**
+- [x] **Step 1: Prove they are unreferenced**
 
 ```bash
 grep -rn "components/MonthRibbon'\|from './MonthRibbon'\|components/RangeChips'\|from './RangeChips'\|PlaceholderPage" src --include=*.ts --include=*.tsx | grep -v "^src/components/MonthRibbon\|^src/components/RangeChips\|^src/pages/PlaceholderPage"
@@ -27,16 +27,16 @@ grep -rn "components/MonthRibbon'\|from './MonthRibbon'\|components/RangeChips'\
 
 Expected: no output. (The shell's ribbon is `src/components/shell/MonthRibbon.tsx` — the path filter above excludes only the OLD files; a hit on `shell/MonthRibbon` is fine and must NOT be deleted.) If anything still imports an old file, stop and migrate that importer first (it is a Plan 3 miss).
 
-- [ ] **Step 2: Delete**
+- [x] **Step 2: Delete**
 
 ```bash
 git rm src/components/MonthRibbon.tsx src/components/MonthRibbon.test.tsx src/components/RangeChips.tsx src/pages/PlaceholderPage.tsx
 # plus RangeChips.test.tsx / PlaceholderPage.test.tsx if they exist
 ```
 
-- [ ] **Step 3: Check** `npx tsc -b && npx vitest run src/components` → green.
+- [x] **Step 3: Check** `npx tsc -b && npx vitest run src/components` → green.
 
-- [ ] **Step 4: Commit** `git commit -m "chore(shell): retire the old MonthRibbon, RangeChips and PlaceholderPage"`
+- [x] **Step 4: Commit** `git commit -m "chore(shell): retire the old MonthRibbon, RangeChips and PlaceholderPage"`
 
 ---
 
@@ -45,7 +45,7 @@ git rm src/components/MonthRibbon.tsx src/components/MonthRibbon.test.tsx src/co
 **Files:**
 - Modify: `src/components/panels.css`, `src/pages/NetWorthPage.css`, `src/pages/PaycheckPage.css`, `src/pages/PortfolioPage.css`, `src/pages/CreditCardsPage.css`, `src/pages/SpendingPage.css` (whichever still carry the rules below)
 
-- [ ] **Step 1: For each selector, grep for users before deleting**
+- [x] **Step 1: For each selector, grep for users before deleting**
 
 | Selector(s) | Grep | Delete when |
 |---|---|---|
@@ -57,13 +57,24 @@ git rm src/components/MonthRibbon.tsx src/components/MonthRibbon.test.tsx src/co
 | `.header-actions` (Portfolio) | `grep -rn 'header-actions' src --include=*.tsx` | no hits |
 | `.loading-fallback` (Calendar) | `grep -rn 'loading-fallback' src` | no hits |
 
-- [ ] **Step 2: Delete the dead rules**; leave anything still referenced.
+- [x] **Step 2: Delete the dead rules**; leave anything still referenced.
 
-- [ ] **Step 3: Check** `npx vitest run && npx tsc -b && npm run build` → green; the build's CSS size should drop a little.
+- [x] **Step 3: Check** `npx vitest run && npx tsc -b && npm run build` → green; the build's CSS size should drop a little.
 
-- [ ] **Step 4: Commit** `git commit -am "chore(shell): remove the page-header, old ribbon/segmented/range-chip and owner-row CSS"`
+- [x] **Step 4: Commit** `git commit -am "chore(shell): remove the page-header, old ribbon/segmented/range-chip and owner-row CSS"`
 
 ---
+
+
+> **Deletion pass 2026-09-03 (branch `retire-pass`).** Every grep re-run on the merged tree
+> before deleting. Task 1: all four files deleted (no importer; `shell/MonthRibbon.tsx` is a
+> different file and stays). Task 2: only the old `.month-ribbon`/`.month-chip` rules were
+> dead. KEPT, because a grep found a live user — `.page-header` / `h1` / `.spacer`
+> (`creditcards/CardDetail.tsx:258,266`, mounted by `CreditCardsPage.tsx:350`); `.segmented*`
+> (eight non-shell call sites render the bare class, and `shell/Segmented.tsx:3` documents the
+> panels-then-shell layering on purpose); `.loading-fallback` (`PageSkeleton.tsx:18,59`).
+> `.range-chips*`, the per-page owner-row classes and `.header-actions` had no rule left in any
+> stylesheet. Tasks 3-5 remain UNDONE.
 
 ### Task 3: Success-criteria sweep (spec §5)
 

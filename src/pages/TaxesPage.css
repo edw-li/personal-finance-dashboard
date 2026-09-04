@@ -44,7 +44,7 @@
 
 /* The year's filing status. Its own row under the chips, because it is a sentence ABOUT the
    selected year rather than another year to select; the control itself is panels.css's
-   .segmented (RangeChips' treatment) and is not redefined here. */
+   .segmented and is not redefined here. */
 .filing-status-row {
   display: flex;
   align-items: center;

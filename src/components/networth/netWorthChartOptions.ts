@@ -13,7 +13,7 @@ import { axisTooltip } from '../../charts/tooltip'
 import { waterfallCsv, waterfallSeries, waterfallSteps, waterfallTooltip } from '../../charts/waterfall'
 import type { AccountGroup, NetWorthTimeseries, PersonOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { escapeHtml, formatCurrency, formatCurrencyCompact, formatMonth } from '../../utils/format'
+import { escapeHtml, formatCurrencyCompact, formatMonth } from '../../utils/format'
 
 /** The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
  * the legend, the tooltip branch and the series stay in lockstep (moved verbatim from
@@ -23,61 +23,6 @@ export const NOTES_SERIES = 'Notes'
 /** The net-worth line's series name. A constant because the drill has to RESERVE it (see
  * stackSeriesNames) — two spellings would let the reservation drift from the series. */
 export const NET_WORTH_SERIES = 'Net worth'
-
-interface AxisTooltipParam {
-  seriesName?: string
-  marker?: string
-  axisValueLabel?: string
-  value?: unknown
-  data?: unknown
-}
-
-/**
- * The stacked chart's axis tooltip: asset-group rows, then their SUBTOTAL (2026-08-25
- * spec §2b — liabilities and the net-worth line already render as their own rows), then
- * the rest in series order. A full formatter, not valueFormatter: the Notes series
- * carries TEXT — and note text is USER TEXT, so escapeHtml is mandatory (SpendingPage's
- * rule). Money rows keep the currency treatment; a padded null still reads as a dash.
- */
-export function netWorthStackedTooltipFormatter(
-  assetNames: string[],
-): (params: unknown) => string {
-  const assets = new Set(assetNames)
-  return (params: unknown) => {
-    const list = (Array.isArray(params) ? params : [params]) as AxisTooltipParam[]
-    if (list.length === 0) return ''
-    const head = `<strong>${list[0].axisValueLabel ?? ''}</strong>`
-    const assetLines: string[] = []
-    const otherLines: string[] = []
-    let assetTotal = 0
-    for (const p of list) {
-      if (p.seriesName === NOTES_SERIES) {
-        const note = (p.data as { note?: string } | undefined)?.note ?? ''
-        otherLines.push(`${p.marker ?? ''}${escapeHtml(note)}`)
-        continue
-      }
-      const raw = Array.isArray(p.value) ? p.value[1] : p.value
-      const finite = typeof raw === 'number' && Number.isFinite(raw)
-      const line = `${p.marker ?? ''}${p.seriesName ?? ''}: ${finite ? formatCurrency(raw) : '—'}`
-      if (assets.has(p.seriesName ?? '')) {
-        assetLines.push(line)
-        if (finite) assetTotal += raw
-      } else {
-        otherLines.push(line)
-      }
-    }
-    return [
-      head,
-      ...assetLines,
-      // Only when an asset row actually printed — a hover with the stack legend-hidden
-      // has nothing to subtotal.
-      ...(assetLines.length > 0
-        ? [`<strong>Assets: ${formatCurrency(assetTotal)}</strong>`]
-        : []),
-      ...otherLines,
-    ].join('<br/>')
-  }
-}
 
 /** The stacked chart as a table (2026-08-25 spec §2a): month rows × the seven fixed
  * groups + net worth, verbatim server strings in the palette's own group order. */

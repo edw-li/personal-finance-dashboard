@@ -2,11 +2,11 @@
 // builders belong in a module the tests can call directly, and the Overview page needs the
 // donut too — a second copy would be two things to keep in step.
 import type { EChartsOption } from '../../charts/echarts'
-import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SEQUENTIAL_BLUE, SURFACE } from '../../charts/theme'
+import { DIVERGING, INK, MUTED, OTHER_SERIES_COLOR, PALETTE, SURFACE } from '../../charts/theme'
 import { itemTooltip } from '../../charts/tooltip'
 import type { AllocationResponse, HoldingOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { escapeHtml, formatCurrency, formatCurrencyCompact, formatPct } from '../../utils/format'
+import { formatCurrencyCompact, formatPct } from '../../utils/format'
 
 export const TYPE_LABELS: Record<string, string> = {
   etf: 'ETF', mutual_fund: 'Mutual fund', stock: 'Stock', private: 'Private',
@@ -18,61 +18,6 @@ export const TYPE_LABELS: Record<string, string> = {
 // the holdings table still shows the row with its warning (Task 4 review M5).
 export function positiveSlices(data: AllocationResponse) {
   return data.slices.filter((s) => Number(s.market_value) > 0)
-}
-
-export function treemapOption(data: AllocationResponse): EChartsOption {
-  const slices = positiveSlices(data)
-  const max = Math.max(...slices.map((s) => Number(s.market_value)), 1)
-  // Share base = the DRAWN total (donutOption's posture): oversold slices are filtered
-  // out above, and a percentage must describe the areas actually on screen.
-  const total = slices.reduce((sum, s) => sum + Number(s.market_value), 0)
-  const share = (value: number) => formatPct(total > 0 ? value / total : 0, { signed: false })
-  return {
-    tooltip: {
-      formatter: (params) => {
-        // `TopLevelFormatterParams` is `CallbackDataParams | CallbackDataParams[]`;
-        // item-trigger only ever passes the single form (SpendingPage's idiom).
-        const p = Array.isArray(params) ? params[0] : params
-        // The treemap's implicit ROOT node answers hovers on the gaps between cells,
-        // carrying an EMPTY name and the whole book's value — ": $773.2K" is not a
-        // slice, so it gets no tooltip at all.
-        if (!p.name) return ''
-        const value = Number(p.value)
-        return `<strong>${formatCurrency(value)}</strong> · ${share(value)}<br/>${escapeHtml(p.name)}`
-      },
-    },
-    series: [
-      {
-        type: 'treemap',
-        roam: false,
-        nodeClick: false,
-        breadcrumb: { show: false },
-        // Direct labels — name, compact value, share — truncated to the cell: hover-only
-        // numbers make the map a hunt (the waterfall's rule). Canvas TEXT, not tooltip
-        // HTML, so industry names need no escaping here.
-        label: {
-          show: true,
-          fontSize: 11,
-          overflow: 'truncate' as const,
-          formatter: (p: { name?: string; value?: unknown }) =>
-            `${p.name ?? ''}\n${formatCurrencyCompact(p.value as number)} · ${share(Number(p.value))}`,
-        },
-        itemStyle: { borderColor: SURFACE, borderWidth: 2, gapWidth: 2 },
-        data: slices.map((s) => {
-          const idx = 3 + Math.round((Number(s.market_value) / max) * 8)
-          return {
-            name: s.key,
-            value: Number(s.market_value),
-            // Light ramp end needs a dark label: #fff on SEQUENTIAL_BLUE[11] is 1.32:1,
-            // violating the theme's >=3:1 promise. SURFACE clears 3:1 from idx 6 up;
-            // INK covers the dark half (Task 14 review I1).
-            label: { color: idx >= 6 ? SURFACE : INK },
-            itemStyle: { color: SEQUENTIAL_BLUE[idx] },
-          }
-        }),
-      },
-    ],
-  }
 }
 
 // Donut: top-3 slices wear palette slots 1-3, the rest fold into a gray Other
@@ -123,7 +68,7 @@ export function donutOption(data: AllocationResponse, labels: boolean): EChartsO
 // --- the heat-treemap (chart spec F5) --------------------------------------------------
 // Industry → ticker: AREA is market value (the one thing a treemap encodes honestly) and
 // FILL is a signed performance figure on the diverging ramp — two channels, two questions,
-// one map. The old flat `treemapOption` above stays exported until C7 retires it.
+// one map.
 
 export type HeatMetric = 'unrealized' | 'day'
 export const HEAT_METRICS: { value: HeatMetric; label: string }[] = [

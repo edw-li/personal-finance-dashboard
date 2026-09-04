@@ -17,7 +17,6 @@ import {
   TAX_COLORS,
   TAX_LABELS,
   TAX_SERIES_IDS,
-  WATERFALL_CATEGORIES,
   ladderCsv,
   marginalLadderOption,
   taxTrendCsv,
@@ -228,7 +227,6 @@ describe('waterfallOption', () => {
       'Gross', 'Federal', 'State', 'Medicare', 'Soc. Sec.', 'SDI', 'Cap. gains', 'NIIT',
       'Take-home',
     ])
-    expect(categoriesOf(option)).toEqual([...WATERFALL_CATEGORIES])
   })
 
   it('drops the NIIT step — and only that step — on a year the surcharge never touches', () => {
@@ -236,9 +234,9 @@ describe('waterfallOption', () => {
     // bars instead of gaining a $0 step. The six sheet jurisdictions always draw, zero or
     // not (2026 has no capital gains and still gets its bar) — their absence would read
     // as missing data rather than as a tax that did not apply.
-    expect(categoriesOf(waterfallOption(summaryFixture(2026)))).toEqual(
-      WATERFALL_CATEGORIES.filter((c) => c !== 'NIIT'),
-    )
+    expect(categoriesOf(waterfallOption(summaryFixture(2026)))).toEqual([
+      'Gross', 'Federal', 'State', 'Medicare', 'Soc. Sec.', 'SDI', 'Cap. gains', 'Take-home',
+    ])
   })
 
   it('pins the invisible placeholders to the 2024 running remainders', () => {

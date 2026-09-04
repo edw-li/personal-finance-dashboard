@@ -76,9 +76,6 @@ export const TAX_COLORS = [
   SEQUENTIAL_BLUE[11],
 ] as const
 
-// full vocabulary — the builder skips the NIIT step when the year has none
-export const WATERFALL_CATEGORIES = ['Gross', ...TAX_LABELS, 'Take-home'] as const
-
 // Stable ids shared by the trend's seven stacks and the drill-in pie: universalTransition
 // keys on id across notMerge setOption calls, so the year's segments morph into slices
 // and back out (SpendingPage's `cat-${id}` idiom). Index in TAX_LABELS is the identity.

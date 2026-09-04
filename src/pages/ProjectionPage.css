@@ -2,42 +2,6 @@
    .card, .kpi-row, .stat-tile, .button, .field-input, .error-banner, .empty-note,
    .drill-hint, .loading-dim) lives in panels.css and is not redefined here. */
 
-.projection-chart-card {
-  margin-bottom: 1rem;
-}
-
-/* Eyebrow + the trend-span chips on one line (the networth-chart-header shape, copied by
-   design — per-page stylesheets never import each other). */
-.projection-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-/* The knobs form: the espp-form shape (labels over inputs, auto-fit), copied by design —
-   per-page stylesheets never import each other. */
-.projection-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px 16px;
-  align-items: end;
-}
-
-.projection-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.projection-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
 /* Advisory sentences about what the model ran with — the tax-warnings register: nothing
    failed, so never an error banner. */
 .projection-warnings {
@@ -58,18 +22,9 @@
   color: var(--muted);
 }
 
-/* The derived-contribution arithmetic under its knob: a caption, not a control. */
-.projection-form .projection-derived {
-  display: block;
-  margin-top: 0.3rem;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: var(--muted);
-}
-
-/* The same caption where the knob now lives — inside ScenarioPanel's sandbox controls
-   (2026-09-03 planning-sandboxes spec §11). The .projection-form copy above is retired
-   with the form itself. */
+/* The derived-contribution arithmetic under its knob: a caption, not a control. It lives
+   inside ScenarioPanel's sandbox controls (2026-09-03 planning-sandboxes spec §11); the
+   .projection-form copy was retired with the form itself. */
 .sandbox-controls .projection-derived {
   display: block;
   margin-top: 0.3rem;

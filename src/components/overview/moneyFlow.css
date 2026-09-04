@@ -1,6 +1,2 @@
 /* Money-flow card chrome (2026-08-25 spec §5). The chips reuse panels.css's .segmented
-   grammar (RangeChips' family); only the breathing room under the eyebrow lives here. */
-
-.money-flow-years {
-  margin-bottom: 0.75rem;
-}
+   grammar; ChartCard owns the row they sit in now, so only the sankey's own rules remain. */

@@ -76,7 +76,8 @@ describe('rangeZoom', () => {
   })
 
   it('a fresh preset-only state (the chips) snaps the window away', () => {
-    // RangeChips hand back {preset} with NO window — that IS the snap-back contract.
+    // The range chips (ScopeBar's, since shell-1b) hand back {preset} with NO
+    // window — that IS the snap-back contract.
     const [snapped] = rangeZoom(MONTHS, { preset: 'all' })
     expect(snapped.startValue).toBe(0)
     expect(snapped.endValue).toBeUndefined()

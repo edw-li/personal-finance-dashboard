@@ -4,8 +4,9 @@
    control and the sidebar footer. */
 
 /* Segmented: the one "pick one of N" control. `.segmented` is the same name panels.css
-   used for RangeChips and the hand-rolled groups, so an unmigrated page keeps its look
-   until Plan 4 deletes the old rule. */
+   uses for the hand-rolled groups (ChartExportMenu, RewardsMatrix, LimitsCard, the taxes
+   and ESPP pickers), which still render the bare class — panels.css first, shell.css
+   second, so both look alike. Plan 4 kept the panels.css rule for exactly that reason. */
 .segmented {
   display: inline-flex;
   border: 1px solid var(--border);

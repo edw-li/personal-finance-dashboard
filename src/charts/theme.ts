@@ -48,8 +48,6 @@ export const OTHER_SERIES_COLOR = DARK.otherSeries
 
 export const INK = DARK.text
 export const MUTED = DARK.muted
-export const GRID_LINE = DARK.gridLine // one step off the card surface, solid hairline
-export const AXIS_LINE = DARK.axisLine
 export const SURFACE = DARK.surface
 export const SURFACE_2 = DARK.surface2
 export const POSITIVE = DARK.positive

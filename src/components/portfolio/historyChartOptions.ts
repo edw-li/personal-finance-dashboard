@@ -181,49 +181,8 @@ export function buildEventMarkers(
     })
 }
 
-// The axis-tooltip param subset both formatters read is the grammar's own
+// The axis-tooltip param subset eventLines reads is the grammar's own
 // (charts/tooltip.ts AxisTooltipParam, imported above) — one shape, one definition.
-
-function rowValue(value: unknown): number | null {
-  // Line rows carry plain numbers (null on the padded live category); the live
-  // effectScatter carries a [category, value] pair.
-  const raw = Array.isArray(value) ? value[1] : value
-  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
-}
-
-// Exported for tests. Skipping null rows is the point: on the live category the three
-// lines are padding-null and would each print a dash row under the default formatter.
-// The Events row expands into its clustered event lines (count first when > 1) rather
-// than printing its y — that y is chart geometry, not a figure. Series names and date
-// labels are app-generated; EVENT TEXT carries tickers (server text), so it is escaped.
-export function historyTooltipFormatter(params: unknown): string {
-  const list = (Array.isArray(params) ? params : [params]) as AxisTooltipParam[]
-  const rows: { param: AxisTooltipParam; value: number }[] = []
-  const eventLines: string[] = []
-  for (const param of list) {
-    if (param.seriesName === EVENTS_SERIES) {
-      const events =
-        (param.data as { events?: { text: string }[] } | undefined)?.events ?? []
-      if (events.length > 1) eventLines.push(`<strong>${events.length} events</strong>`)
-      for (const event of events) {
-        eventLines.push(`${param.marker ?? ''} ${escapeHtml(event.text)}`)
-      }
-      continue
-    }
-    const value = rowValue(param.value)
-    if (value !== null) rows.push({ param, value })
-  }
-  if (rows.length === 0 && eventLines.length === 0) return ''
-  const header = list.find((p) => p.axisValueLabel)?.axisValueLabel ?? ''
-  return [
-    `<strong>${header}</strong>`,
-    ...rows.map(
-      ({ param, value }) =>
-        `${param.marker ?? ''} ${param.seriesName ?? ''}&nbsp;&nbsp;${formatCurrency(value)}`,
-    ),
-    ...eventLines,
-  ].join('<br/>')
-}
 
 /** The Events row's tooltip lines: a count first when clustered, then each event's text —
  *  tickers are server text, so escaped (the annotation callback escapes its own output). */
@@ -353,7 +312,7 @@ export function portfolioHistoryOption(
     // No scale:true — a washed area over a visible axis needs the honest zero baseline.
     yAxis: moneyAxis(),
     // F7: the Events row expands into its clustered lines instead of printing a y that is
-    // chart geometry, not a figure. historyTooltipFormatter stays exported and tested (C7).
+    // chart geometry, not a figure — axisTooltip does it through the annotations hook.
     tooltip: axisTooltip({
       unit: 'money',
       annotationSeries: [EVENTS_SERIES],

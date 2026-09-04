@@ -1,21 +1,5 @@
 /* drill-hint and loading-dim are shared utilities — they live in panels.css. */
 
-.networth-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-/* Up to three segmented controls side by side (stack-by + time range + granularity);
-   wraps on narrow. */
-.networth-chart-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
 /* D5: the per-owner split of the latest snapshot, under the KPI row. Typography borrowed
    from the withholding card's facts list — the house shape for a few labelled figures. */
 .networth-owner-strip {

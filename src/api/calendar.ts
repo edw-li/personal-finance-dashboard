@@ -40,7 +40,3 @@ export function putCalendarOverride(
     body: JSON.stringify(body),
   })
 }
-
-export function deleteCalendarOverride(key: string): Promise<void> {
-  return api<void>(`/calendar/overrides/${encodeURIComponent(key)}`, { method: 'DELETE' })
-}
