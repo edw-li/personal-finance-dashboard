@@ -19,6 +19,8 @@ async def test_health_shape_on_a_bare_database(auth_client):
     ids = [c["id"] for c in body["checks"]]
     assert ids == [
         "zero_filled_spending",
+        "spending_gap",
+        "net_pay_without_spending",
         "balances_without_spending",
         "spending_without_balances",
         "stale_quotes",
