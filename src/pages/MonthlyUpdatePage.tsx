@@ -79,6 +79,13 @@ interface WizardDraft {
   netPay: string
   recordedOn: string
   notes: string
+  /** The parents this month keeps HAND-TYPED (2026-09-04 review). A handover — the first
+   *  keystroke in a component of such a parent — is typed work like any other: restoring the
+   *  cells while putting the parent back as a typed box would drop those very cells from the
+   *  next save, and DISCARDING without putting it back leaves a derived row printing a stale
+   *  total over $0.00 components. Optional so a draft written before this field still parses;
+   *  such a draft simply keeps the month's load-time set. */
+  typedParents?: number[]
 }
 
 const DRAFT_PREFIX = 'finance-update-draft:'
@@ -96,8 +103,18 @@ function snapshotOf(
   netPay: string,
   recordedOn: string,
   notes: string,
+  typedParents: Set<number>,
 ): string {
-  return JSON.stringify({ balances, amounts, netPay, recordedOn, notes })
+  return JSON.stringify({
+    balances,
+    amounts,
+    netPay,
+    recordedOn,
+    notes,
+    // SORTED: a Set iterates in insertion order, so the same month reached two ways would
+    // otherwise serialize two different strings and every load would look dirty.
+    typedParents: [...typedParents].sort((a, b) => a - b),
+  })
 }
 
 // ── What this visit's save wrote ─────────────────────────────────────────────────────
@@ -441,7 +458,6 @@ export default function MonthlyUpdatePage() {
                 .filter(([, childIds]) => !childIds.some((id) => storedIds.has(id)))
                 .map(([parentId]) => parentId),
             )
-        setTypedParents(handTyped)
         const seedDerivation = derivationFor(byParent, handTyped)
         // The parent's SEED is its components' sum, not the stored figure: a snapshot that
         // drifted must show the truth the save will write. Taken BEFORE the baseline below,
@@ -485,14 +501,24 @@ export default function MonthlyUpdatePage() {
           seededNetPay,
           seededRecordedOn,
           seededNotes,
+          handTyped,
         )
         const stored = readDraft(month)
         const draft = stored !== null && stored.raw !== seedSnapshot ? stored.draft : null
         if (stored !== null && draft === null) sessionStorage.removeItem(draftKey(month))
+        // A draft may only REMOVE parents from the load-time set — that is all a handover
+        // does. The SERVER decides which parents still have no component rows, so an older
+        // draft can never resurrect a hand-typed row for a month that has since gained them.
+        const draftTyped =
+          draft?.typedParents === undefined
+            ? handTyped
+            : new Set([...handTyped].filter((id) => draft.typedParents?.includes(id)))
+        setTypedParents(draftTyped)
+        const draftDerivation = derivationFor(byParent, draftTyped)
         setBalances(
           draft
             ? deriveParents(
-                seedDerivation,
+                draftDerivation,
                 Object.fromEntries(
                   visibleAccounts.map((a) => [
                     a.id,
@@ -532,13 +558,13 @@ export default function MonthlyUpdatePage() {
   // the effect-body rule has nothing to say.
   useEffect(() => {
     if (loading || baseline === null || baseline.month !== month) return
-    const current = snapshotOf(balances, amounts, netPay, recordedOn, notes)
+    const current = snapshotOf(balances, amounts, netPay, recordedOn, notes, typedParents)
     if (current === baseline.data) {
       sessionStorage.removeItem(draftKey(baseline.month))
     } else {
       sessionStorage.setItem(draftKey(baseline.month), current)
     }
-  }, [balances, amounts, netPay, recordedOn, notes, baseline, month, loading])
+  }, [balances, amounts, netPay, recordedOn, notes, typedParents, baseline, month, loading])
 
   // The flash is a one-shot: the timer callback clears it, so the effect body itself never
   // sets state (a set here would re-run the effect on its own write).
@@ -552,7 +578,14 @@ export default function MonthlyUpdatePage() {
   const discardDraft = () => {
     if (baseline === null || baseline.month !== month) return
     const seed = JSON.parse(baseline.data) as WizardDraft
-    setBalances(seed.balances as Record<number, string>)
+    // The hand-typed parents come back WITH the figures (2026-09-04 review): a component
+    // typed during the visit handed its parent over, and restoring the seed while leaving
+    // that handover standing would render the row derived over a stale total whose cells
+    // read $0.00 — and then save the zeros over the stored figure.
+    writeBalances(
+      () => seed.balances as Record<number, string>,
+      new Set(seed.typedParents ?? []),
+    )
     setAmounts(seed.amounts as Record<number, string>)
     setNetPay(seed.netPay)
     setRecordedOn(seed.recordedOn)
@@ -779,7 +812,7 @@ export default function MonthlyUpdatePage() {
       }
       setBaseline({
         month,
-        data: snapshotOf(canonBalances, canonAmounts, canonNetPay, recordedOn, notes),
+        data: snapshotOf(canonBalances, canonAmounts, canonNetPay, recordedOn, notes, typedParents),
       })
       setRestored(false)
     } catch (err) {
@@ -1052,19 +1085,27 @@ export default function MonthlyUpdatePage() {
     setPasteNote(parts.join(' · '))
   }
 
-  // Every balance write goes through here — a keystroke, a paste, a sign flip — so the
-  // handover can never be forgotten by one of them. Writing into a component of a HAND-TYPED
-  // parent hands that row over to its cells on this very write: from here the parent IS the
-  // sum, and the save sends the components instead of the total (sending both is the
-  // server's 422). The map is built from the set we are about to store, because the memo
-  // above still holds the pre-write one.
-  const writeBalances = (fills: Record<number, string>) => {
-    const handedOver = handOver(accounts, typedParents, Object.keys(fills).map(Number))
-    if (handedOver !== typedParents) setTypedParents(handedOver)
-    setBalances((cur) =>
-      deriveParents(derivationFor(componentsByParent, handedOver), { ...cur, ...fills }),
-    )
+  // Every balance write lands here, and it stores the record and the hand-typed parent set
+  // TOGETHER: deriving with a set other than the one that ends up on screen is exactly how
+  // the row and the payload come to disagree. The map is built from the set being stored,
+  // because the memo above still holds the pre-write one.
+  const writeBalances = (
+    update: (cur: Record<number, string>) => Record<number, string>,
+    typed: Set<number>,
+  ) => {
+    if (typed !== typedParents) setTypedParents(typed)
+    setBalances((cur) => deriveParents(derivationFor(componentsByParent, typed), update(cur)))
   }
+
+  // A cell write — a keystroke, a paste, a sign flip — so the handover can never be forgotten
+  // by one of them. Writing into a component of a HAND-TYPED parent hands that row over to
+  // its cells on this very write: from here the parent IS the sum, and the save sends the
+  // components instead of the total (sending both is the server's 422).
+  const fillBalances = (fills: Record<number, string>) =>
+    writeBalances(
+      (cur) => ({ ...cur, ...fills }),
+      handOver(accounts, typedParents, Object.keys(fills).map(Number)),
+    )
 
   // Committed value of one cell for the live columns — the preview memo's rule.
   const committed = (raw: string | undefined) => Number(canonicalAmount(raw ?? '')) || 0
@@ -1075,7 +1116,7 @@ export default function MonthlyUpdatePage() {
   // setBalances write marks the draft dirty exactly like typing would.
   const flipSign = (accountId: number) => {
     const canon = canonicalAmount(balances[accountId] ?? '')
-    writeBalances({ [accountId]: canon.startsWith('-') ? canon.slice(1) : `-${canon}` })
+    fillBalances({ [accountId]: canon.startsWith('-') ? canon.slice(1) : `-${canon}` })
   }
 
   // Live subtotal + its prior twin for ANY row set (components excluded, exactly like net
@@ -1184,7 +1225,7 @@ export default function MonthlyUpdatePage() {
                 // "3 of 4 with one silently shifted".
                 orderedBalanceRows.filter((a) => !isReadOnlyRow(a)),
                 (id) => `bal-${id}`,
-                writeBalances,
+                fillBalances,
               )
             }
           >
@@ -1317,7 +1358,7 @@ export default function MonthlyUpdatePage() {
                                             // parent's value — ONE write, so the row, the
                                             // subtotals and the live net worth can never
                                             // show three different answers.
-                                            writeBalances({ [account.id]: next })
+                                            fillBalances({ [account.id]: next })
                                           }
                                         />
                                         {/* A1 (2026-08-31 tier-1): advisory amber, NEVER a gate —

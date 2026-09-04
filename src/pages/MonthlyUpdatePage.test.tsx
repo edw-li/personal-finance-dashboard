@@ -1725,6 +1725,82 @@ it('hands a hand-typed parent over to its components the moment one is entered',
   )
 })
 
+it('a restored draft keeps the handover, so the entered component still ships', async () => {
+  withStoredMonth([
+    { account_id: 1, balance: '1500.00' },
+    { account_id: 8, balance: '1000.00' },
+  ])
+  const first = renderWizard()
+  fireEvent.change(await screen.findByLabelText(/^401\(k\) pre-tax/), {
+    target: { value: '700.00' },
+  })
+  first.unmount()
+
+  renderWizard()
+  await screen.findByText(/restored unsaved entries/i)
+  // Still the sum: putting the parent back as a typed box while restoring the cells under it
+  // would drop the very component the draft exists to preserve.
+  const row = screen.getByText('Fidelity 401(k)').closest('tr') as HTMLElement
+  expect(row.className).toContain('entry-derived')
+  expect(within(row).getAllByRole('cell')[2].textContent).toBe('$700.00')
+
+  await saveTheMonth()
+  await waitFor(() =>
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 9, balance: '700.00' },
+          { account_id: 10, balance: '0.00' },
+        ],
+      }),
+    ),
+  )
+})
+
+it('discarding a restored draft puts the hand-typed parent back', async () => {
+  withStoredMonth([
+    { account_id: 1, balance: '1500.00' },
+    { account_id: 8, balance: '1000.00' },
+  ])
+  const first = renderWizard()
+  // Dirty something that is NOT a component, so visit two opens with the Discard affordance
+  // and the parent still hand-typed.
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  first.unmount()
+
+  renderWizard()
+  await screen.findByText(/restored unsaved entries/i)
+  // NOW hand the parent over, then change your mind.
+  fireEvent.change(await screen.findByLabelText(/^401\(k\) pre-tax/), {
+    target: { value: '700.00' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: /discard restored entries/i }))
+
+  // Back to the month as STORED. A discard that restored the figures but left the handover
+  // standing would render a derived row printing $1,000.00 over cells that read $0.00 — and
+  // then save the zeros, which is the clobber the typed row exists to stop.
+  const parent = (await screen.findByLabelText('Fidelity 401(k)')) as HTMLInputElement
+  expect(parent.value).toBe('$1,000.00')
+  expect(
+    (screen.getByText('Fidelity 401(k)').closest('tr') as HTMLElement).className,
+  ).not.toContain('entry-derived')
+
+  await saveTheMonth()
+  await waitFor(() =>
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 8, balance: '1000.00' },
+        ],
+      }),
+    ),
+  )
+})
+
 it('ignores a linked account that is not flagged as a component', async () => {
   // `is_component` is the rollup key on both sides of the wire (lane B's server, lane E's
   // Accounts card): a parent_account_id set WITHOUT it must not drive a derived preview
