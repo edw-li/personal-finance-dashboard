@@ -458,6 +458,29 @@ async def test_apply_spending_duplicate_slug_is_report_error(db):
     assert any("share slug" in e for e in report.errors)
 
 
+async def test_apply_spending_skips_a_sheet_month_that_records_nothing(db):
+    from tests.workbook_builder import default_spending_rows
+
+    rows = default_spending_rows()
+    # Explicit zeros with no net pay — the sheet's own version of production's Sep 2026.
+    # The parser deliberately KEEPS sheet zeros (a real $0 category is data), so only the
+    # applier can tell "spent nothing" from "never entered".
+    rows[5] = [date(2024, 3, 1), 0.0, 0.0, 0.0, None, None, None]
+    report = SheetReport()
+    await apply_spending(db, parse_spending(sheets(spending=rows)["Spending"]), report)
+    await db.commit()
+    assert report.entities["monthly_spending"].creates == 4  # January and February only
+    assert report.entities["monthly_cashflow"].creates == 2
+    assert any("2024-03" in w and "nothing to record" in w for w in report.warnings)
+    march = list(
+        (await db.execute(select(MonthlySpending).where(MonthlySpending.month == date(2024, 3, 1))))
+        .scalars()
+        .all()
+    )
+    assert march == []
+    assert (await db.get(MonthlyCashflow, date(2024, 3, 1))) is None
+
+
 async def test_apply_net_worth_warns_on_db_account_missing_from_sheet(db):
     from tests.workbook_builder import default_net_worth_rows
 
