@@ -535,6 +535,39 @@ describe('Layout — nav indicator', () => {
     expect(bar?.style.opacity).toBe('0')
   })
 
+  it('lands the opening measurement, and only then lets the bar transition', () => {
+    renderShell('/spending')
+    const bar = document.querySelector<HTMLElement>('.nav-indicator')
+    // Already parked on the fifth row — a cold load must not SWEEP down to it, so the
+    // attribute Layout.css hangs the transition on is deliberately still absent here.
+    expect(bar?.style.transform).toBe('translateY(160px)')
+    expect(bar?.hasAttribute('data-placed')).toBe(false)
+    fireEvent.click(screen.getByRole('link', { name: 'Overview' }))
+    // The SECOND placement is a move the reader should see, so the attribute goes on in
+    // the same style change that shifts the bar — which is when a transition may run.
+    expect(bar?.getAttribute('data-placed')).toBe('')
+    expect(bar?.style.transform).toBe('translateY(0px)')
+  })
+
+  it('re-measures when the nav reflows — the density toggle moves rows with no route change', () => {
+    // jsdom has no ResizeObserver; this stub hands the test the callback Layout registers.
+    let notify: (() => void) | null = null
+    vi.stubGlobal(
+      'ResizeObserver',
+      vi.fn((cb: () => void) => ({
+        observe: () => { notify = cb },
+        disconnect: () => {},
+        unobserve: () => {},
+      })),
+    )
+    renderShell('/spending')
+    const bar = document.querySelector<HTMLElement>('.nav-indicator')
+    expect(bar?.style.transform).toBe('translateY(160px)')
+    row = 50
+    act(() => notify?.())
+    expect(bar?.style.transform).toBe('translateY(200px)')
+  })
+
   it('re-measures on resize — nav rows move when the window does', () => {
     renderShell('/spending')
     row = 50

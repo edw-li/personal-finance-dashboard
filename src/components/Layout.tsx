@@ -100,6 +100,10 @@ export default function Layout() {
   // writes are ref writes inside an effect, which is where they belong.
   const navRef = useRef<HTMLElement>(null)
   const indicatorRef = useRef<HTMLDivElement>(null)
+  // Whether a measurement has already been committed. The FIRST placement is where the bar
+  // LIVES, not a move: a cold load onto /spending would otherwise sweep the accent down
+  // five rows over --t-nav before the reader has read anything.
+  const placedRef = useRef(false)
   useEffect(() => {
     const place = () => {
       const nav = navRef.current
@@ -112,14 +116,30 @@ export default function Layout() {
         bar.style.opacity = '0'
         return
       }
+      // data-placed goes on BEFORE the style writes below and only from the second
+      // placement onwards: Layout.css hangs the transition on that attribute, so the
+      // opening measurement lands instantly and every later one — a route change, a
+      // density reflow, a resize — animates in the same style change that moves the bar.
+      if (placedRef.current) bar.dataset.placed = ''
       const box = active.getBoundingClientRect()
       bar.style.opacity = '1'
       bar.style.height = `${box.height}px`
       bar.style.transform = `translateY(${box.top - nav.getBoundingClientRect().top}px)`
+      placedRef.current = true
     }
     place()
     window.addEventListener('resize', place)
-    return () => window.removeEventListener('resize', place)
+    // Rows also move without the window doing anything — the density toggle rescales the
+    // root font, and neither pathname nor viewport changes when it does. Guarded for jsdom
+    // and old browsers (PageFrame's IntersectionObserver idiom): without it the bar simply
+    // waits for the next navigation.
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => place())
+    if (navRef.current !== null) observer?.observe(navRef.current)
+    return () => {
+      window.removeEventListener('resize', place)
+      observer?.disconnect()
+    }
   }, [pathname])
 
   // Warm every route chunk during idle time so in-app navigation never waits on the

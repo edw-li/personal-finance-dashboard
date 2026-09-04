@@ -684,25 +684,33 @@
    value is the "nothing is moving" state — what a browser with no view() timeline, print,
    and a reduced-motion reader all render. */
 @property --enter { syntax: '<number>'; inherits: false; initial-value: 1; }
-@property --enter-y { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --reveal { syntax: '<number>'; inherits: false; initial-value: 1; }
-@property --rise { syntax: '<length>'; inherits: false; initial-value: 0px; }
 
-/* Inherited default: a group useStagger never tagged runs a 0s entrance, which is no
-   entrance. The tagged rule sets it ON the element, and an own declaration beats an
-   inherited one — no specificity race with the surface rule below. */
-.page-frame-body { --enter-dur: 0s; }
+/* The two dials the stagger sets are registered for a second reason: `inherits: false`.
+   Unregistered they inherited from a tagged card straight into the .kpi-row and .card
+   nested inside it, which then ran their own entrance on top of their parent's — the fade
+   squared to 0.38 and the travel doubled to 16px (review probe, Edge). Registered, an
+   element that does not declare them takes the initial value below, which is "no
+   entrance"; the nested-group rule at the foot of the media block stops the animation
+   itself, for the browsers where @property is not supported at all. */
+@property --enter-dur { syntax: '<time>'; inherits: false; initial-value: 0s; }
+@property --stagger-i { syntax: '<integer>'; inherits: false; initial-value: 0; }
 
-/* THE motion surface. Exempt by construction: header, scope row, toasts, palette and
-   drawers all live outside .page-frame-body. Exempt by selector: the wizard's entry cards,
-   whose .entry-footer rides the viewport bottom — a transformed ancestor is a containing
-   block, and it drags a position:sticky child along with its own translate, stranding the
-   live totals mid-page. Brightness is the PRODUCT of the two dials, so
-   a card entering while it straddles the bottom edge settles with no snap. */
+/* THE motion surface, and it carries OPACITY ONLY. A permanent transform — even the
+   identity translateY(0px) the dials resolved to at rest — makes every card a stacking
+   context and a containing block, which overpainted InfoHint bubbles and ECharts' DOM
+   tooltips the moment they crossed a card edge (review probe). The travel therefore lives
+   in the keyframes, and `backwards` fill lets a finished animation fall back to THIS rule,
+   where no transform is declared at all.
+   Exempt by construction: header, scope row, toasts, palette and drawers all live outside
+   .page-frame-body. Exempt by selector: the wizard's entry cards, whose .entry-footer
+   rides the viewport bottom — a transformed ancestor drags a position:sticky child along
+   with its own translate and strands the live totals mid-page. Brightness stays the
+   PRODUCT of the two dials, so a card entering while it straddles the bottom edge settles
+   at its position value with no snap. */
 .page-frame-body .card:not(:has(.entry-footer)),
 .page-frame-body .kpi-row {
   opacity: calc(var(--reveal) * var(--enter));
-  transform: translateY(calc(var(--rise) + var(--enter-y)));
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -711,7 +719,11 @@
     animation-name: card-enter;
     animation-duration: var(--enter-dur);
     animation-timing-function: var(--ease-out);
-    animation-fill-mode: both;
+    /* `backwards`, not `both`: the entrance must hold its start state through the stagger
+       delay and then GET OUT OF THE WAY. A forwards fill would keep applying the `to`
+       keyframe for the life of the page, which is exactly the permanent transform the
+       base rule above just gave up. An untagged group runs 0s and so never fills at all. */
+    animation-fill-mode: backwards;
     animation-delay: calc(var(--stagger-i, 0) * var(--t-stagger));
   }
 
@@ -725,7 +737,12 @@
   .page-frame-body [data-stagger='4'] { --stagger-i: 4; }
   .page-frame-body [data-stagger='5'] { --stagger-i: 5; }
 
-  @keyframes card-enter { from { --enter: 0; --enter-y: 8px; } to { --enter: 1; --enter-y: 0px; } }
+  /* The entrance travels on `translate`, the reveal below on `transform`: two INDEPENDENT
+     transform properties the browser already composes (translate is applied first), so a
+     card straddling the bottom edge at load rises by both at once. animation-composition
+     cannot do this job — it is per ANIMATION, not per property, so `add` would also reach
+     --enter, where 1 + 0 reads 1 and the fade never happens. */
+  @keyframes card-enter { from { --enter: 0; translate: 0 8px; } to { --enter: 1; translate: none; } }
 
   /* Scroll-linked reveal, no JS: below-the-fold content rests at --reveal-floor and
      brightens as it enters. Nested inside the no-preference gate (so `reduce` never
@@ -738,32 +755,39 @@
       animation-name: card-enter, reveal-in, reveal-out;
       animation-duration: var(--enter-dur), auto, auto;
       animation-timing-function: var(--ease-out), linear, linear;
-      /* reveal-out fills `none`: with `both` its own `from` (--reveal: 1) would apply
+      /* reveal-out fills `none`: with any fill its own `from` (--reveal: 1) would apply
          through the before-phase and, being later in the list, cancel reveal-in's dimming
-         on every card that has not reached the top edge yet. */
-      animation-fill-mode: both, both, none;
+         on every card that has not reached the top edge yet. reveal-in fills `backwards`
+         only — AFTER its range the card is fully revealed, which is the base rule's own
+         value, so a forwards fill would buy nothing and cost the transform-free rest. */
+      animation-fill-mode: backwards, backwards, none;
       animation-delay: calc(var(--stagger-i, 0) * var(--t-stagger)), 0s, 0s;
       animation-timeline: auto, view(), view();
       animation-range: normal, entry 0% entry var(--reveal-range), exit calc(100% - var(--reveal-range)) exit 100%;
     }
 
-    /* A card inside a card would square the floor (0.62 × 0.62 = 0.38). */
-    .page-frame-body .card .card { animation-name: none; }
-
     @keyframes reveal-in {
-      from { --reveal: var(--reveal-floor); --rise: var(--reveal-rise); }
-      to { --reveal: 1; --rise: 0px; }
+      from { --reveal: var(--reveal-floor); transform: translateY(var(--reveal-rise)); }
+      to { --reveal: 1; transform: none; }
     }
 
     @keyframes reveal-out {
-      from { --reveal: 1; --rise: 0px; }
-      to { --reveal: var(--reveal-floor); --rise: calc(-1 * var(--reveal-rise)); }
+      from { --reveal: 1; transform: none; }
+      to { --reveal: var(--reveal-floor); transform: translateY(calc(-1 * var(--reveal-rise))); }
     }
   }
+
+  /* A group nested inside another rides its parent's entrance and its parent's reveal:
+     running its own would square the fade (0.62 × 0.62 = 0.38) and double the travel.
+     OUTSIDE @supports, because the nesting is just as real in a browser with no view()
+     timeline, and AFTER it, because these selectors tie at 0-3-0 with both rules above and
+     only source order breaks that tie. */
+  .page-frame-body .card .card,
+  .page-frame-body .card .kpi-row { animation-name: none; }
 }
 
 /* Ink on paper never dims, and print has no scroller for a view() timeline to read. */
 @media print {
   .page-frame-body .card,
-  .page-frame-body .kpi-row { opacity: 1; transform: none; animation: none; }
+  .page-frame-body .kpi-row { opacity: 1; transform: none; translate: none; animation: none; }
 }

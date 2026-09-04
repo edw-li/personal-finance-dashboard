@@ -1,4 +1,10 @@
 .layout {
+  /* The active icon's tint is a SECOND element's color, so the .nav-link transition above
+     never reaches it: without this the glyph snapped to the accent while the bar was still
+     sliding towards it (spec §5). */
+  .nav-link svg {
+    transition: color var(--t-fast) ease;
+  }
   display: flex;
   min-height: 100vh;
 }
@@ -117,9 +123,7 @@
 /* ONE accent bar for the whole nav, placed by Layout's measuring effect (spec §5).
    Transparent until that effect runs, and on a route no destination owns, so it never
    flashes at the top of the sidebar before its first measurement; opacity is deliberately
-   not transitioned, because appearing is not moving. The durations are read
-   unconditionally: index.css's reduce block zeroes --t-nav, which places the bar instantly
-   for a reader who asked for less motion. */
+   not transitioned, because appearing is not moving. */
 .nav-indicator {
   position: absolute;
   left: 0;
@@ -129,6 +133,14 @@
   background: var(--accent);
   opacity: 0;
   pointer-events: none;
+}
+
+/* Only once Layout has placed the bar at least once. Without the gate the opening
+   measurement is itself a transition, and a cold load onto a page five rows down sweeps
+   the accent past every destination above it. The durations are read unconditionally:
+   index.css's reduce block zeroes --t-nav, which places the bar instantly for a reader who
+   asked for less motion. */
+.nav-indicator[data-placed] {
   transition: transform var(--t-nav) var(--ease-out), height var(--t-nav) var(--ease-out);
 }
 
@@ -149,11 +161,14 @@
   font-size: 0.85rem;
   padding: 1.5rem 0;
   text-align: center;
-  /* The 300ms threshold (2026-09-05 spec §2): the fallback is REACHED only when a chunk
-     truly takes longer than that, and a chunk that lands sooner never flashes it. The
-     delay stays a literal — a threshold is not a duration — while the fade reads --t-page,
-     which the reduce block zeroes. Own keyframes, not panels.css's fallback-appear: this
-     file must stay standalone (the note above). */
+  /* The 300ms threshold (2026-09-05 spec §2). In-app navigation never reaches this at
+     all: the Suspense sits outside an unkeyed boundary, so React Router's startTransition
+     keeps the OLD page committed until the chunk resolves. What is left is the INITIAL
+     mount (or a hard reload) on a route whose chunk takes longer than 300ms — anything
+     faster shows nothing rather than flashing. The delay stays a literal, because a
+     threshold is not a duration, while the fade reads --t-page, which the reduce block
+     zeroes. Own keyframes, not panels.css's fallback-appear: this file must stay
+     standalone (the note above). */
   opacity: 0;
   animation: route-fallback-appear var(--t-page) ease 300ms forwards;
 }
@@ -246,4 +261,5 @@
       border-color var(--t-fast) ease,
       color var(--t-fast) ease;
   }
+
 }

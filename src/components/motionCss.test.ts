@@ -11,21 +11,52 @@ const read = (p: string) =>
     .replace(/\s+/g, ' ')
 const panels = read('panels.css')
 
-it('registers the four dials and multiplies them into one opacity', () => {
+/** The text between `opener`'s own `{` and the `}` that closes it — containment, not mere
+ *  adjacency, so a rule cannot pass a pin by sitting next to the at-rule it must be in. */
+function inside(css: string, opener: string): string {
+  const start = css.indexOf(opener)
+  expect(start, opener).toBeGreaterThan(-1)
+  const open = css.indexOf('{', start)
+  let depth = 0
+  for (let i = open; i < css.length; i += 1) {
+    if (css[i] === '{') depth += 1
+    else if (css[i] === '}' && (depth -= 1) === 0) return css.slice(open + 1, i)
+  }
+  throw new Error(`unclosed ${opener}`)
+}
+
+it('registers the four dials and multiplies the two brightness ones into one opacity', () => {
   const dials = [
-    ['--enter', '<number>', '1'], ['--enter-y', '<length>', '0px'],
-    ['--reveal', '<number>', '1'], ['--rise', '<length>', '0px'],
+    ['--enter', '<number>', '1'], ['--reveal', '<number>', '1'],
+    // Registered above all for `inherits: false`: unregistered, these two leaked from a
+    // tagged card into the groups nested inside it, which then ran a second entrance.
+    ['--enter-dur', '<time>', '0s'], ['--stagger-i', '<integer>', '0'],
   ]
   for (const [name, syntax, initial] of dials) {
     expect(panels).toContain(
       `@property ${name} { syntax: '${syntax}'; inherits: false; initial-value: ${initial}; }`,
     )
   }
-  expect(panels).toContain('opacity: calc(var(--reveal) * var(--enter));')
-  expect(panels).toContain('transform: translateY(calc(var(--rise) + var(--enter-y)));')
   expect(read('shell/shell.css')).toContain(
     'animation: page-body-in var(--t-page) var(--ease-out) both;',
   )
+})
+
+// The regression this pins is a paint bug, not a motion one: a permanent transform makes
+// every card a stacking context and a containing block, and InfoHint bubbles and ECharts'
+// DOM tooltips then get overpainted by the next card the moment they cross a card edge.
+it('leaves the resting card with no transform at all — brightness is the only base state', () => {
+  const surface = inside(
+    panels,
+    '.page-frame-body .card:not(:has(.entry-footer)), .page-frame-body .kpi-row {',
+  )
+  expect(surface).toContain('opacity: calc(var(--reveal) * var(--enter));')
+  expect(surface).not.toContain('transform')
+  expect(surface).not.toContain('translate')
+  // `backwards`, so a finished entrance stops applying and the element falls back to that
+  // transform-free rule; `both` would pin translateY(0px) on for the life of the page.
+  expect(panels).toContain('animation-fill-mode: backwards;')
+  expect(panels).toContain('animation-fill-mode: backwards, backwards, none;')
 })
 
 // Each string carries its enclosing at-rule, so containment is pinned with the content.
@@ -36,7 +67,12 @@ it('runs the entrance under no-preference only, on tagged groups only, capped at
   expect(panels).toContain('[data-stagger] { --enter-dur: var(--t-enter); }')
   expect(panels).toContain(`[data-stagger='5'] { --stagger-i: 5; }`)
   expect(panels).not.toContain(`[data-stagger='6']`)
-  expect(panels).toContain('@keyframes card-enter { from { --enter: 0; --enter-y: 8px; }')
+  // The travel rides `translate` here and `transform` in the reveal below: two independent
+  // transform properties the browser composes for free. animation-composition cannot do
+  // that job — it is per ANIMATION, so `add` would also reach --enter, where 1 + 0 is 1.
+  expect(panels).toContain(
+    '@keyframes card-enter { from { --enter: 0; translate: 0 8px; } to { --enter: 1; translate: none; } }',
+  )
 })
 
 it('drives the reveal off a view() timeline, and turns it off for print', () => {
@@ -44,10 +80,35 @@ it('drives the reveal off a view() timeline, and turns it off for print', () => 
   expect(panels).toContain('animation-name: card-enter, reveal-in, reveal-out;')
   expect(panels).toContain('animation-timeline: auto, view(), view();')
   expect(panels).toContain('animation-range: normal, entry 0% entry var(--reveal-range), exit calc(100% - var(--reveal-range)) exit 100%;')
-  // reveal-out fills `none`: with `both` its own `from` would apply before its range and
-  // cancel reveal-in everywhere else. A card inside a card would square the floor.
-  expect(panels).toContain('animation-fill-mode: both, both, none;')
-  expect(panels).toContain('.page-frame-body .card .card { animation-name: none; }')
-  expect(panels).toContain('@keyframes reveal-in { from { --reveal: var(--reveal-floor);')
+  expect(panels).toContain(
+    '@keyframes reveal-in { from { --reveal: var(--reveal-floor); transform: translateY(var(--reveal-rise)); }',
+  )
   expect(panels).toContain('@media print { .page-frame-body .card, .page-frame-body .kpi-row {')
+})
+
+// A nested group must not run its own entrance OR its own reveal — the fade would square
+// to 0.38 and the travel would double. Registration blocks the inherited dials; this rule
+// blocks the animation, and it has to sit outside @supports because a browser with no
+// view() timeline nests cards just the same.
+it('silences nested groups outside the @supports gate, and after it', () => {
+  const nested = '.page-frame-body .card .card, .page-frame-body .card .kpi-row { animation-name: none; }'
+  const noPreference = inside(panels, '@media (prefers-reduced-motion: no-preference) { .page-frame-body')
+  expect(noPreference).toContain(nested)
+  expect(inside(panels, '@supports (animation-timeline: view())')).not.toContain(nested)
+  // AFTER the @supports block: these selectors tie at 0-3-0 with the rules they override,
+  // so source order is the only thing that breaks the tie.
+  expect(panels.indexOf(nested)).toBeGreaterThan(panels.indexOf('@keyframes reveal-out'))
+})
+
+it('gates the indicator transition on the attribute Layout sets after its first placement', () => {
+  const layout = read('Layout.css')
+  // Ungated, the opening measurement is itself a transition, and a cold load onto a page
+  // five rows down sweeps the accent past every destination above it.
+  expect(inside(layout, '.nav-indicator {')).not.toContain('transition')
+  expect(layout).toContain(
+    '.nav-indicator[data-placed] { transition: transform var(--t-nav) var(--ease-out), height var(--t-nav) var(--ease-out); }',
+  )
+  // The active icon's tint lives on a SECOND element, so .nav-link's own transition never
+  // reaches it and the glyph snapped to the accent while the bar was still sliding.
+  expect(layout).toContain('.nav-link svg { transition: color var(--t-fast) ease; }')
 })
