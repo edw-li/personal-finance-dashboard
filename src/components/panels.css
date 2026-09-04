@@ -390,7 +390,11 @@
   position: absolute;
   bottom: calc(100% + 6px);
   left: -8px;
-  /* Above the sticky scope row (8), below the drawer (15), palette (20) and toasts (30). */
+  /* WITHIN the card only — over chart canvases, table rows and sticky table headers, under
+     the drawer (15), palette (20) and toasts (30). It cannot lift the bubble over the sticky
+     scope row (8): the scroll-reveal transform makes every card its own stacking context, so
+     a bubble inside one paints with the CARD among the row's siblings. Clearing the row is
+     `.is-below`'s job, not this number's. */
   z-index: 9;
   width: max-content;
   max-width: 280px;

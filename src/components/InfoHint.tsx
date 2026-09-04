@@ -10,7 +10,9 @@ const BUBBLE_MAX_PX = 280
 // sends a borderline hint downward, which is readable; under-estimating hides it under the row.
 const BUBBLE_EST_H_PX = 96
 // The scope row (shell.css: position: sticky; top: 0; z-index: 8) covers the top of the
-// page while pinned, so "does it fit above?" has to mean "above the ROW".
+// page while pinned, so "does it fit above?" has to mean "above the ROW". This measurement
+// is the fix, not the bubble's z-index: the scroll-reveal transform makes every card its own
+// stacking context, so a bubble inside a card can never out-paint the row.
 const STUCK_ROW_SELECTOR = '.page-frame-scope'
 const EDGE_GAP_PX = 8 // air between the bubble and whatever it must clear
 

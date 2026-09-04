@@ -171,4 +171,27 @@ describe('InfoHint', () => {
     fireEvent.click(hintButton())
     expect(screen.getByRole('tooltip').className).toContain('is-below')
   })
+
+  it("counts a STUCK scope row's own height, because it cannot be painted over", () => {
+    // The scroll-reveal transform makes every card its own stacking context, so a bubble
+    // inside one paints with the CARD among the row's siblings — z-index cannot lift it over
+    // the pinned row. Opening BELOW is the fix, so the ROW'S HEIGHT has to be in the sum:
+    // 110px of headroom clears a 96px bubble on its own, and does not clear it under a
+    // 16px row (96 + 16 + 8 = 120).
+    // RTL's cleanup only removes the containers it mounted, so the previous test's hand-built
+    // row would still be here and this half would prove nothing.
+    document.body.innerHTML = ''
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 20, right: 36, top: 110, bottom: 126, width: 16, height: 16, x: 20, y: 110, toJSON: () => ({}),
+    })
+    const { unmount } = render(<InfoHint text={TEXT} />)
+    fireEvent.click(hintButton())
+    expect(screen.getByRole('tooltip').className).not.toContain('is-below')
+    unmount()
+
+    document.body.innerHTML = '<div class="page-frame-scope is-stuck"></div>'
+    render(<InfoHint text={TEXT} />)
+    fireEvent.click(hintButton())
+    expect(screen.getByRole('tooltip').className).toContain('is-below')
+  })
 })
