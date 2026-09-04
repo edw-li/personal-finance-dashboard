@@ -25,11 +25,29 @@ const GROCERIES: CategoryOut = {
   slug: 'groceries',
   sort_order: 1,
   is_active: true,
+  kind: 'living',
 }
-const PETS: CategoryOut = { id: 6, name: 'Pets', slug: 'pets', sort_order: 2, is_active: false }
+const PETS: CategoryOut = {
+  id: 6,
+  name: 'Pets',
+  slug: 'pets',
+  sort_order: 2,
+  is_active: false,
+  kind: 'living',
+}
+// The real category that started this program: $5,044.00 in April 2026, counted as living
+// spend until the kind existed (spec §0).
+const TAXES: CategoryOut = {
+  id: 7,
+  name: 'Taxes',
+  slug: 'taxes',
+  sort_order: 3,
+  is_active: true,
+  kind: 'tax',
+}
 
 beforeEach(() => {
-  vi.mocked(fetchCategories).mockResolvedValue([GROCERIES, PETS])
+  vi.mocked(fetchCategories).mockResolvedValue([GROCERIES, PETS, TAXES])
   vi.mocked(createCategory).mockResolvedValue(GROCERIES)
   vi.mocked(updateCategory).mockResolvedValue(GROCERIES)
   vi.mocked(deleteCategory).mockResolvedValue(undefined)
