@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { expect, it } from 'vitest'
-import { cssMotionDeclarations, reducedMotionDeclarations } from './motion'
+import { BUSY_DIM, REVEAL, cssMotionDeclarations, reducedMotionDeclarations } from './motion'
 
 const srcDir = path.join(__dirname, '..')
 
@@ -26,6 +26,18 @@ it(':root carries every declaration motion.ts declares', () => {
 it('reduce zeroes every duration and flattens the reveal', () => {
   const reduce = block('@media (prefers-reduced-motion: reduce)')
   for (const d of reducedMotionDeclarations()) expect(reduce).toContain(d)
+})
+
+// Two greys mean two different things, so they must never be mistaken for each other: a card
+// resting below the fold is a PLACE ("more down there"), a dimmed body is a STATE ("fetching").
+// The user read 0.62 against 0.55 as the same grey; the gap is now a fifth of the scale, and
+// the scroll shadow is the darker of the two — the state the reader can do nothing about is
+// never the loudest one on screen. The reduce block leaves --busy-dim alone on purpose: a
+// status colour is not motion.
+it('keeps the scroll shadow clearly darker than the busy dim', () => {
+  expect(Number(REVEAL.floor)).toBeLessThan(Number(BUSY_DIM))
+  expect(Number(BUSY_DIM) - Number(REVEAL.floor)).toBeGreaterThanOrEqual(0.2)
+  expect(block('@media (prefers-reduced-motion: reduce)')).not.toContain('--busy-dim')
 })
 
 /** Every stylesheet under src/, walked by hand — node 18.12 has no recursive readdirSync. */

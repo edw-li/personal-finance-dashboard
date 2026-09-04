@@ -10,8 +10,17 @@ export const MOTION_MS = {
 
 export const EASE_OUT = 'cubic-bezier(0.2, 0, 0, 1)'
 
-/** Scroll-linked reveal (spec §4). Strings: these are CSS values, never arithmetic. */
-export const REVEAL = { floor: '0.62', range: '35%', rise: '4px' } as const
+/** Scroll-linked reveal (spec §4). Strings: these are CSS values, never arithmetic.
+ *  Deepened 2026-09-05 from 0.62/35%/4px: at 0.62 the shadow was invisible next to the page's
+ *  own contrast and read as the same grey as a busy body, so it said nothing. The floor is now
+ *  a real step down, the range is wide enough that the brightening is a gradient rather than a
+ *  flick near the edge, and the rise carries the extra travel that goes with it. */
+export const REVEAL = { floor: '0.45', range: '45%', rise: '6px' } as const
+
+/** The busy body's dim (`.loading-dim.is-loading`). Lives beside REVEAL.floor because the pair
+ *  is the point: PLACE (below the fold) must never look like STATE (refetching), so the floor
+ *  is always the darker of the two and motion.test.ts pins the gap between them. */
+export const BUSY_DIM = '0.7' as const
 
 /** Six groups, 0…5. Past that the cascade reads as lag, not choreography. */
 export const STAGGER_CAP = 5
@@ -26,6 +35,7 @@ export function cssMotionDeclarations(): string[] {
     `--reveal-floor: ${REVEAL.floor};`,
     `--reveal-range: ${REVEAL.range};`,
     `--reveal-rise: ${REVEAL.rise};`,
+    `--busy-dim: ${BUSY_DIM};`,
   ]
 }
 

@@ -61,6 +61,7 @@ export default function PageFrame({
   children: ReactNode
 }) {
   const sentinelRef = useRef<HTMLDivElement>(null)
+  const scopeRef = useRef<HTMLDivElement>(null)
   const [stuck, setStuck] = useState(false)
   // Inline `scopeRow` JSX is a new object on every parent render; keying the effect on its
   // mere presence avoids a disconnect/observe cycle per render.
@@ -85,6 +86,32 @@ export default function PageFrame({
   // The cascade is the PAYLOAD's, not the skeleton's: tagging waits for `ready`, so the
   // groups measured are the real cards at the positions they actually occupy.
   const bodyRef = useStagger<HTMLDivElement>(hasData)
+
+  // How far down the viewport the content actually becomes visible (2026-09-05 spec §4). The
+  // reveal's view() timelines measure against the scrollport, but this row is pinned over its
+  // top edge, so a card scrolled back up was already fully bright by the time it emerged from
+  // under the row and the top-edge mirror was never seen. panels.css insets both timelines by
+  // this variable; the value is MEASURED, never assumed, because the row's height is the sum
+  // of the density setting, the chips the page put in it and whether they wrapped.
+  // A ref write in an effect, not state: nothing renders from it, and a setState here would
+  // re-render every page on every reflow of a row that only CSS reads.
+  useEffect(() => {
+    const body = bodyRef.current
+    const row = scopeRef.current
+    // No row (or no ResizeObserver — jsdom, old browsers) leaves the property unset, and the
+    // `var(--sticky-inset, 0px)` fallback in panels.css is exactly the right answer for both.
+    if (body === null || row === null || typeof ResizeObserver === 'undefined') return
+    const write = () => body.style.setProperty('--sticky-inset', `${row.offsetHeight}px`)
+    write()
+    const observer = new ResizeObserver(write)
+    observer.observe(row)
+    return () => {
+      observer.disconnect()
+      // The next page's row is a different height and its effect has not run yet; clearing on
+      // the way out means a stale inset can never outlive the row it was measured from.
+      body.style.removeProperty('--sticky-inset')
+    }
+  }, [hasScopeRow, bodyRef])
   const showSkeleton = resource.status === 'loading'
   const showErrorOnly = resource.status === 'error'
   const staleError = hasData && resource.error ? resource.error : null
@@ -101,7 +128,9 @@ export default function PageFrame({
       {scopeRow !== undefined && (
         <>
           <div ref={sentinelRef} className="page-frame-sentinel" aria-hidden="true" />
-          <div className={`page-frame-scope${stuck ? ' is-stuck' : ''}`}>{scopeRow}</div>
+          <div ref={scopeRef} className={`page-frame-scope${stuck ? ' is-stuck' : ''}`}>
+            {scopeRow}
+          </div>
         </>
       )}
       {/* The content region, and the only part of the page that animates in (2026-09-05

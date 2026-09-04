@@ -304,8 +304,14 @@
   }
 }
 
+/* Two dims, two meanings, and they must never read alike: --reveal-floor (0.45) says WHERE a
+   card is — resting below the fold, nothing to do about it — and this one says WHAT is
+   happening — the numbers on screen are being refetched. At 0.62 against 0.55 they were the
+   same grey, so the scroll shadow read as a page-wide "loading" and neither said anything. The
+   floor is now always the darker of the two by a fifth of the scale (motion.test.ts pins the
+   gap), which also puts the state the reader CAN wait out above the one they cannot. */
 .loading-dim.is-loading {
-  opacity: 0.55;
+  opacity: var(--busy-dim);
 }
 
 /* Skeleton → content cross-fade (motion spec §7): the content mounts in its final box and the ghost
@@ -946,7 +952,18 @@
          value, so a forwards fill would buy nothing and cost the transform-free rest. */
       animation-fill-mode: backwards, backwards, none;
       animation-delay: calc(var(--stagger-i, 0) * var(--t-stagger)), 0s, 0s;
-      animation-timeline: auto, view(), view();
+      /* A view() timeline measures against the SCROLLPORT, and the top 50-70px of this one is
+         under the sticky scope row. Un-inset, a card scrolled back up finished its exit range
+         — and was fully bright again — while still hidden behind the row, so the top-edge
+         mirror was never seen: content just appeared at full strength. The block-axis START
+         inset moves that finish line down to the row's underside; the end inset stays 0,
+         because the bottom edge of the viewport is the bottom edge of the content. PageFrame
+         measures the row and writes --sticky-inset on .page-frame-body (a ResizeObserver, so
+         the density toggle and a wrapping row are covered). The 0px fallback is the value at
+         first paint, before that effect runs, and the permanent value on a page that declares
+         no scope row — both of which are "no row, no inset". Chromium resolves var() inside
+         view() and re-resolves it live (verified in Edge 152, 2026-09-05). */
+      animation-timeline: auto, view(var(--sticky-inset, 0px) 0px), view(var(--sticky-inset, 0px) 0px);
       animation-range: normal, entry 0% entry var(--reveal-range), exit calc(100% - var(--reveal-range)) exit 100%;
     }
 

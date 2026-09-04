@@ -78,12 +78,30 @@ it('runs the entrance under no-preference only, on tagged groups only, capped at
 it('drives the reveal off a view() timeline, and turns it off for print', () => {
   expect(panels).toContain('@supports (animation-timeline: view()) { .page-frame-body')
   expect(panels).toContain('animation-name: card-enter, reveal-in, reveal-out;')
-  expect(panels).toContain('animation-timeline: auto, view(), view();')
   expect(panels).toContain('animation-range: normal, entry 0% entry var(--reveal-range), exit calc(100% - var(--reveal-range)) exit 100%;')
   expect(panels).toContain(
     '@keyframes reveal-in { from { --reveal: var(--reveal-floor); transform: translateY(var(--reveal-rise)); }',
   )
   expect(panels).toContain('@media print { .page-frame-body .card, .page-frame-body .kpi-row {')
+})
+
+// The mirror at the top edge is the whole reason for the inset: view() measures against the
+// VIEWPORT, whose top ~50-70px is under the sticky scope row, so a card scrolled back into
+// view finished its exit range — and was fully bright again — while still hidden behind the
+// row. The block-axis start inset moves the range's finish line down to the row's underside;
+// PageFrame measures the row and writes --sticky-inset on .page-frame-body. The 0px fallback
+// is load-bearing twice over: it is the first-paint value before the effect runs, and it is
+// the permanent value on a page that declares no scope row.
+it('insets both view() timelines by the sticky scope row', () => {
+  expect(panels).toContain(
+    'animation-timeline: auto, view(var(--sticky-inset, 0px) 0px), view(var(--sticky-inset, 0px) 0px);',
+  )
+})
+
+// A busy body and a card resting below the fold must not read as the same grey (user report,
+// 2026-09-05). One token so the pair can be compared in one place; motion.test.ts pins the gap.
+it('states the busy dim as a token, not a literal', () => {
+  expect(inside(panels, '.loading-dim.is-loading {')).toContain('opacity: var(--busy-dim);')
 })
 
 // A nested group must not run its own entrance OR its own reveal — the fade would square

@@ -6,6 +6,9 @@ afterEach(() => {
   cleanup()
   // Every test here stubs IntersectionObserver; restore it so a stub can never leak.
   vi.unstubAllGlobals()
+  // …and one test spies on HTMLElement.prototype.offsetHeight, which every later file in the
+  // same worker would otherwise inherit.
+  vi.restoreAllMocks()
 })
 
 // jsdom has no IntersectionObserver; PageFrame must degrade to "never stuck".
@@ -172,6 +175,67 @@ describe('PageFrame', () => {
     // The only casualty is the hairline; the row itself is still there.
     expect(document.querySelector('.page-frame-scope')).toBeTruthy()
     expect(document.querySelector('.page-frame-scope.is-stuck')).toBeNull()
+  })
+
+  // The scroll-linked reveal's view() timelines measure against the viewport, whose top is
+  // covered by this very row: without the inset a card scrolled back into view is already
+  // fully bright when it emerges from under it (2026-09-05 spec §4).
+  it('writes the sticky row height onto the body, and re-reads it when the row reflows', () => {
+    let notify: (() => void) | null = null
+    vi.stubGlobal(
+      'ResizeObserver',
+      vi.fn((cb: () => void) => ({
+        observe: () => { notify = cb },
+        disconnect: () => {},
+        unobserve: () => {},
+      })),
+    )
+    // jsdom lays nothing out, so the row's box is the one thing that has to be faked.
+    let rowHeight = 57
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains('page-frame-scope') ? rowHeight : 0
+    })
+    render(
+      <PageFrame title="Net worth" scopeRow={<span>scope</span>} resource={{ status: 'ready' }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    const body = document.querySelector<HTMLElement>('.page-frame-body')
+    expect(body?.style.getPropertyValue('--sticky-inset')).toBe('57px')
+    // The density toggle rescales the root font and the row grows with no re-render at all.
+    rowHeight = 71
+    act(() => notify?.())
+    expect(body?.style.getPropertyValue('--sticky-inset')).toBe('71px')
+  })
+
+  it('leaves the inset unset when the page declares no scope row', () => {
+    vi.stubGlobal('ResizeObserver', vi.fn(() => ({ observe: () => {}, disconnect: () => {}, unobserve: () => {} })))
+    render(
+      <PageFrame title="Overview" resource={{ status: 'ready' }}>
+        <p>body</p>
+      </PageFrame>,
+    )
+    // Absent, not '0px': the CSS fallback in view(var(--sticky-inset, 0px) 0px) is the same
+    // answer, and one source for it means one place to be wrong.
+    expect(
+      document.querySelector<HTMLElement>('.page-frame-body')?.style.getPropertyValue('--sticky-inset'),
+    ).toBe('')
+  })
+
+  it('without ResizeObserver the body still renders and simply carries no inset', () => {
+    vi.stubGlobal('ResizeObserver', undefined)
+    expect(() =>
+      render(
+        <PageFrame title="Net worth" scopeRow={<span>scope</span>} resource={{ status: 'ready' }}>
+          <p>body</p>
+        </PageFrame>,
+      ),
+    ).not.toThrow()
+    expect(
+      document.querySelector<HTMLElement>('.page-frame-body')?.style.getPropertyValue('--sticky-inset'),
+    ).toBe('')
   })
 
   it('the stale line is a status region, so it is announced without stealing focus', () => {
