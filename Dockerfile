@@ -12,7 +12,15 @@ COPY . .
 # the caller passes the commit in instead. Unset is still a valid build, just an unlabeled one.
 ARG BUILD_HASH=dev
 ENV BUILD_HASH=$BUILD_HASH
-RUN npm run build
+# vite only — no `tsc -b` in the image. V8 sizes its heap from the machine's physical memory
+# (about a quarter of it), so on a small VM the default cap lands near 480 MB; a full
+# type-check of src/ (tests included) now needs more than that and dies after minutes of GC
+# thrash (exit 134, 2026-09-04 deploy), while `vite build` fits in that heap with room to
+# spare. Type-checking is the dev/CI gate (`npm run build`, tsc + vite) and does not change
+# the emitted bundle: esbuild strips types without checking them. The explicit heap size
+# stops the build depending on the host's RAM heuristic at all.
+ENV NODE_OPTIONS=--max-old-space-size=1024
+RUN npm run build:image
 
 FROM nginx:1.25-alpine
 

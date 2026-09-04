@@ -338,6 +338,15 @@ BUILD_HASH=$(git rev-parse --short HEAD) docker compose -f docker-compose.prod.y
 First build takes a few minutes (the images build natively on aarch64 — CI only builds
 amd64, so this build is the real gate). Compose waits for the backend healthcheck —
 which requires migrations and the admin seed to have succeeded — before starting nginx.
+
+The frontend stage runs `vite build` only, under an explicit 1 GB Node heap (`NODE_OPTIONS` in
+the Dockerfile); it does not type-check. `tsc -b` over `src/` (tests included) needs more heap
+than V8 grants itself on a small VM — about a quarter of physical RAM, so roughly 480 MB on a
+2 GB instance — and the 2026-09-04 deploy died there after nine minutes of GC thrash
+(`exit code: 134`). Type-checking is the pre-deploy gate instead: run `npm run build` (tsc, then
+vite) on the dev box before pushing what the host will pull. If a build still aborts with
+"JavaScript heap out of memory", the instance has less than about 1.5 GB free — check
+`free -m` and raise the shape rather than the heap flag.
 If it fails, nothing is silently broken: the command errors and
 `docker compose -f docker-compose.prod.yml logs backend` shows why.
 
