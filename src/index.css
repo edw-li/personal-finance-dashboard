@@ -58,6 +58,15 @@
      motion. It sits here so the one comparison that matters — a card below the fold must
      always be darker than a card being refetched — is two adjacent lines. */
   --busy-dim: 0.7;
+  /* Viewport-edge scrims (spec §4b): a page-coloured fade at the top and bottom of the
+     content column that says "there is more, above and below". --scrim-h is BOTH the height
+     of the fade and the length of scroll it arrives/leaves over — one number, so the two can
+     never disagree — and --scrim-alpha multiplies the page-coloured end of the gradient
+     (1 = the page's own --bg, 0 = no scrim at all). Not in the reduce block below: reduced
+     motion switches the scrims off outright (panels.css §4b), which is a stronger statement
+     than flattening their dials. */
+  --scrim-h: 120px;
+  --scrim-alpha: 1;
   /* Density: comfortable is the pre-2026-09 geometry; compact scales the root font and the
      card/table padding (shell spec §11). */
   --density-card-pad: 1.1rem 1.25rem 1.25rem;

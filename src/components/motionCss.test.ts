@@ -25,6 +25,15 @@ function inside(css: string, opener: string): string {
   throw new Error(`unclosed ${opener}`)
 }
 
+/** The scrim block opens a rule on the SAME two pseudo-elements four times over — the shared
+ *  one, one per edge, and the two off switches — so `inside`'s first match cannot say which is
+ *  meant. This reads the last rule opened by `opener` before the block's media queries, which
+ *  is always the standalone per-edge one. */
+function edgeRule(scrims: string, opener: string): string {
+  const edges = scrims.slice(0, scrims.indexOf('@media'))
+  return inside(edges.slice(edges.lastIndexOf(opener)), opener)
+}
+
 it('registers the four dials and multiplies the two brightness ones into one opacity', () => {
   const dials = [
     ['--enter', '<number>', '1'], ['--reveal', '<number>', '1'],
@@ -116,6 +125,85 @@ it('silences nested groups outside the @supports gate, and after it', () => {
   // AFTER the @supports block: these selectors tie at 0-3-0 with the rules they override,
   // so source order is the only thing that breaks the tie.
   expect(panels.indexOf(nested)).toBeGreaterThan(panels.indexOf('@keyframes reveal-out'))
+})
+
+// §4b: two viewport-edge scrims, one per edge of the content region. The reveal dims a
+// single card as it nears an edge; these say the same thing about the PAGE — there is more
+// above, there is more below. Pseudo-elements of `.page-frame-body`, so they ride the content
+// column with no extra DOM and no JS.
+it('hangs a scrim on each viewport edge of the content region', () => {
+  const scrims = inside(panels, '@supports (animation-timeline: scroll())')
+  const shared = inside(scrims, '.page-frame-body:not(:has(.entry-footer))::before, .page-frame-body:not(:has(.entry-footer))::after {')
+  expect(shared).toContain("content: '';")
+  expect(shared).toContain('display: block;')
+  expect(shared).toContain('height: var(--scrim-h);')
+  // A scrim is a hint, never a target: the card underneath keeps every click.
+  expect(shared).toContain('pointer-events: none;')
+  // Above the cards (which declare no z-index), below the sticky scope row (8), the drawer
+  // (15), the palette (20) and the toasts (30) — a scrim is the quietest thing on the page.
+  expect(shared).toContain('z-index: 5;')
+  // The resting value, and the whole answer on a page too short to scroll: a scroll()
+  // timeline with no scroll range is INACTIVE, its animation does not apply at all, and the
+  // base style is what paints. Nothing is hidden above or below a page that already fits.
+  expect(shared).toContain('opacity: 0;')
+})
+
+// Sticky, NOT fixed: `.page-frame-body` carries a transform for the length of its own
+// entrance (shell.css, page-body-in), and a transformed ancestor re-anchors a fixed box — the
+// scrim would slide with the page instead of holding the edge. Sticky also keeps the scrim in
+// the content column, so it spans exactly the width the cards do, for free.
+it('sticks each scrim to its edge and costs the flow nothing', () => {
+  const GRAD = 'color-mix(in srgb, var(--bg) calc(var(--scrim-alpha) * 100%), transparent)'
+  const scrims = inside(panels, '@supports (animation-timeline: scroll())')
+  const top = edgeRule(scrims, '.page-frame-body:not(:has(.entry-footer))::before {')
+  const bottom = edgeRule(scrims, '.page-frame-body:not(:has(.entry-footer))::after {')
+  expect(top).toContain('position: sticky;')
+  expect(bottom).toContain('position: sticky;')
+  // The top scrim starts at the scope row's UNDERSIDE — the same --sticky-inset the reveal's
+  // view() timelines are inset by — so it can never fade the row it is sitting under.
+  expect(top).toContain('top: var(--sticky-inset, 0px);')
+  expect(bottom).toContain('bottom: 0;')
+  // Zero net height in flow: a negative margin the size of the scrim, so the top one does not
+  // push the first card down and the bottom one does not stand a 120px gap under the last.
+  expect(top).toContain('margin-bottom: calc(-1 * var(--scrim-h));')
+  expect(bottom).toContain('margin-top: calc(-1 * var(--scrim-h));')
+  // Tokens, never a literal colour: the fade has to end in the page's OWN background or it
+  // is a grey smear in light mode. --scrim-alpha dials the page-coloured end down without
+  // touching a single dimension.
+  expect(top).toContain(`background: linear-gradient(to bottom, ${GRAD}, transparent);`)
+  expect(bottom).toContain(`background: linear-gradient(to top, ${GRAD}, transparent);`)
+})
+
+// One timeline for both, the document scroller, and both ranges are stated in the height
+// token: the distance a scrim fades over is the distance it covers, and neither can drift
+// from the other. The whole block sits inside @supports, so a browser with no scroll()
+// timelines shows no scrims rather than two permanent bars.
+it('drives the scrims off a root scroll timeline, over ranges measured in --scrim-h', () => {
+  const scrims = inside(panels, '@supports (animation-timeline: scroll())')
+  const top = edgeRule(scrims, '.page-frame-body:not(:has(.entry-footer))::before {')
+  const bottom = edgeRule(scrims, '.page-frame-body:not(:has(.entry-footer))::after {')
+  // The shorthand must come FIRST: `animation` resets animation-timeline to auto, so stating
+  // the timeline before it would throw the timeline away.
+  expect(top).toContain('animation: scrim-in linear both; animation-timeline: scroll(root block); animation-range: 0 var(--scrim-h);')
+  expect(bottom).toContain('animation: scrim-out linear both; animation-timeline: scroll(root block); animation-range: calc(100% - var(--scrim-h)) 100%;')
+  expect(scrims).toContain('@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }')
+  expect(scrims).toContain('@keyframes scrim-out { from { opacity: 1; } to { opacity: 0; } }')
+})
+
+// A scrim exists only because the page moves, so a reader who asked for no motion gets none,
+// and paper has no viewport to have an edge. The wizard is exempt by the same
+// :has(.entry-footer) test the reveal uses: its sticky entry footer already owns the bottom
+// edge, and two page-coloured layers stacked there read as a rendering bug.
+it('switches both scrims off under reduced motion, in print, and in the wizard', () => {
+  const scrims = inside(panels, '@supports (animation-timeline: scroll())')
+  const off = '.page-frame-body:not(:has(.entry-footer))::before, .page-frame-body:not(:has(.entry-footer))::after { display: none; }'
+  // The off switch repeats the full selector on purpose: :not(:has(…)) carries the
+  // specificity of what it holds, so a shorter selector here would lose the cascade and the
+  // scrims would survive the very media query meant to remove them.
+  expect(inside(scrims, '@media (prefers-reduced-motion: reduce)')).toContain(off)
+  expect(inside(scrims, '@media print')).toContain(off)
+  // Pinned as an absence: no scrim rule may address the body without the wizard guard.
+  expect(scrims).not.toMatch(/\.page-frame-body::(before|after)/)
 })
 
 it('gates the indicator transition on the attribute Layout sets after its first placement', () => {

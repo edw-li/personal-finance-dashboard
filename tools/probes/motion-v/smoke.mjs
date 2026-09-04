@@ -52,7 +52,7 @@ const NAV = ['Overview', 'Monthly update', 'Net worth', 'Portfolio', 'Spending',
 const CLS_ROUTES = [['/paycheck', 'Paycheck'], ['/espp', 'ESPP'], ['/comp', 'Comp'], ['/net-worth', 'Net worth'], ['/', 'Overview']]
 const ENTRANCE = [['/net-worth', 'Net worth'], ['/taxes', 'Taxes'], ['/portfolio', 'Portfolio']]
 const THEMES = ['dark', 'light'].filter((t) => !process.env.ONLY_THEME || t === process.env.ONLY_THEME)
-const STEPS = ['entrance', 'nav', 'cls', 'indicator', 'hint', 'reveal', 'belowfold', 'drill', 'themeswap', 'reduced', 'errors'].filter((s) => !process.env.ONLY_STEP || s === process.env.ONLY_STEP)
+const STEPS = ['entrance', 'nav', 'cls', 'indicator', 'hint', 'reveal', 'scrims', 'belowfold', 'drill', 'themeswap', 'reduced', 'errors'].filter((s) => !process.env.ONLY_STEP || s === process.env.ONLY_STEP)
 const NOISE = /favicon|DevTools|\[vite\]|@vite\/client|React DevTools|React Router Future Flag/i
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const files = []
@@ -324,6 +324,95 @@ try {
         check(theme, 'reveal', 'and it brightens monotonically on the way up', steps.every((s, i) => i === 0 || s.reveal >= steps[i - 1].reveal - 0.01), steps)
       }
       drain('reveal')
+    }
+
+    // F2. the viewport-edge scrims (spec §4b). The reveal is about ONE card; these are about the
+    //     PAGE: a top scrim that is absent at rest and full once the reader has scrolled past
+    //     --scrim-h, and a bottom one that is full until the last --scrim-h and gone at the end.
+    //     Read off getComputedStyle(body, '::before'/'::after'), which resolves a scroll-driven
+    //     animation exactly as it resolves any other. The screenshots get their own folder: a
+    //     scrim photographs as a gradient at the edge of the frame and is only legible with the
+    //     whole viewport beside it.
+    if (STEPS.includes('scrims')) {
+      const shotDir = path.join(OUT, 'scrims'); mkdirSync(shotDir, { recursive: true })
+      const scrimShot = async (name) => { const file = path.join(shotDir, `${theme}-${name}.png`); await page.screenshot({ path: file }); files.push(`scrims/${path.basename(file)}`) }
+      await page.goto(BASE + '/net-worth', { waitUntil: 'networkidle' }); await sleep(2500)
+      // Two rAFs after the scroll: a scroll-driven animation is resolved on the frame the scroll
+      // offset changes, and getComputedStyle read on the same tick still sees the old value.
+      const readScrims = async (to) => page.evaluate(async (target) => {
+        const wait = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+        const doc = document.documentElement
+        const max = doc.scrollHeight - innerHeight
+        const y = target === 'top' ? 0 : target === 'bottom' ? max : Math.round(max / 2)
+        scrollTo(0, y); await wait(); await wait()
+        const body = document.querySelector('.page-frame-body')
+        const op = (pseudo) => +getComputedStyle(body, pseudo).opacity
+        return { at: target, scrollY: Math.round(scrollY), max: Math.round(max), before: op('::before'), after: op('::after'),
+          scrimH: getComputedStyle(doc).getPropertyValue('--scrim-h').trim(),
+          inset: getComputedStyle(body).getPropertyValue('--sticky-inset').trim() }
+      }, to)
+      const scrimH = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--scrim-h')))
+      const at0 = await readScrims('top'); await scrimShot('top-of-page')
+      const mid = await readScrims('mid'); await scrimShot('mid-page')
+      const end = await readScrims('bottom'); await scrimShot('bottom-of-page')
+      note(theme, 'scrims', 'measured ::before/::after opacity at the three scroll positions', { at0, mid, end })
+      // The page has to be taller than two scrims, or "mid" falls inside both ranges and the
+      // three readings are really one reading.
+      check(theme, 'scrims', `/net-worth scrolls further than two scrims (${scrimH * 2}px)`, at0.max > scrimH * 2, { max: at0.max, scrimH: at0.scrimH })
+      check(theme, 'scrims', 'at rest: no top scrim, full bottom scrim', at0.before <= 0.01 && at0.after >= 0.99, at0)
+      check(theme, 'scrims', 'mid-page: BOTH scrims full — there is more in both directions', mid.before >= 0.99 && mid.after >= 0.99, mid)
+      check(theme, 'scrims', 'at the end: full top scrim, no bottom scrim', end.before >= 0.99 && end.after <= 0.01, end)
+
+      // pointer-events: none, proved where it matters — a click aimed at a card under either
+      // scrim must reach the CARD. elementFromPoint returns the ORIGINATING element for a
+      // hit-testable pseudo, so a regression here reads back as .page-frame-body itself.
+      const hits = await page.evaluate(async () => {
+        const wait = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+        scrollTo(0, Math.round((document.documentElement.scrollHeight - innerHeight) / 2)); await wait(); await wait()
+        const body = document.querySelector('.page-frame-body'); const box = body.getBoundingClientRect()
+        const inset = parseFloat(getComputedStyle(body).getPropertyValue('--sticky-inset')) || 0
+        const x = Math.round(box.left + box.width / 2)
+        const probe = (y) => { const el = document.elementFromPoint(x, y); if (!el) return null
+          return { y, tag: el.tagName.toLowerCase(), card: !!el.closest('.card'), body: el.classList.contains('page-frame-body') } }
+        // 8px inside each scrim's own band: any further out and the check could pass by missing.
+        return { top: probe(inset + 8), bottom: probe(innerHeight - 8), inset }
+      })
+      check(theme, 'scrims', 'a point inside the top scrim still hits the card under it', hits.top !== null && hits.top.card && !hits.top.body, hits)
+      check(theme, 'scrims', 'a point inside the bottom scrim still hits the card under it', hits.bottom !== null && hits.bottom.card && !hits.bottom.body, hits)
+
+      // The negative margins, A/B. Both scrims are --scrim-h tall, so if they took that height
+      // in flow the first card would sit a scrim lower and the document two scrims taller.
+      // Measured against the same page with the pseudo-elements switched off, which is the only
+      // way to READ "zero net height" rather than assert it.
+      const flow = await page.evaluate(async () => {
+        const wait = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+        scrollTo(0, 0); await wait()
+        const cardTop = () => Math.round(document.querySelector('.page-frame-body .card').getBoundingClientRect().top)
+        const on = { cardTop: cardTop(), scrollHeight: document.documentElement.scrollHeight }
+        const style = document.createElement('style')
+        style.textContent = '.page-frame-body::before, .page-frame-body::after { display: none !important; }'
+        document.head.append(style); await wait()
+        const off = { cardTop: cardTop(), scrollHeight: document.documentElement.scrollHeight }
+        style.remove(); await wait()
+        return { on, off }
+      })
+      check(theme, 'scrims', 'the scrims cost the flow nothing — same first card, same page height with them and without',
+        flow.on.cardTop === flow.off.cardTop && flow.on.scrollHeight === flow.off.scrollHeight, flow)
+
+      // The wizard's exemption in the browser rather than only in the stylesheet: with an
+      // .entry-footer on the page the selector must not match, and an unmatched pseudo-element
+      // generates no content at all.
+      await page.goto(BASE + '/update', { waitUntil: 'networkidle' }); await page.waitForSelector('.entry-footer', { timeout: 15000 }).catch(() => {}); await sleep(1500)
+      const wiz = await page.evaluate(() => {
+        const body = document.querySelector('.page-frame-body')
+        if (body === null) return null
+        return { footer: !!document.querySelector('.entry-footer'),
+          before: getComputedStyle(body, '::before').content, after: getComputedStyle(body, '::after').content }
+      })
+      if (wiz === null || !wiz.footer) note(theme, 'scrims', 'the wizard rendered no .entry-footer on this step — the exemption was not exercised', wiz)
+      else check(theme, 'scrims', 'the wizard, which owns its own bottom edge, gets no scrims', wiz.before === 'none' && wiz.after === 'none', wiz)
+      await scrimShot('wizard-exempt')
+      drain('scrims', true)
     }
 
     // G. a chart below the fold waits to be seen, then draws ONCE.

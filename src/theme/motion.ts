@@ -17,6 +17,16 @@ export const EASE_OUT = 'cubic-bezier(0.2, 0, 0, 1)'
  *  flick near the edge, and the rise carries the extra travel that goes with it. */
 export const REVEAL = { floor: '0.45', range: '45%', rise: '6px' } as const
 
+/** The viewport-edge scrims (spec §4b). The reveal dims one CARD as it nears an edge; the
+ *  scrims say the same thing about the PAGE — a 120px page-coloured fade at each edge of the
+ *  content column, the top one arriving over the first 120px of scroll, the bottom one leaving
+ *  over the last. `height` is one number in three places (the fade's height, the range it
+ *  arrives over, the range it leaves over), so panels.css reads the token in all three rather
+ *  than letting them drift. `alpha` multiplies the page-coloured END of the gradient only: it
+ *  is a strength dial, never a geometry one, which is why it is a bare multiplier and not a
+ *  colour. Strings, like REVEAL: these are CSS values, never arithmetic. */
+export const SCRIM = { height: '120px', alpha: '1' } as const
+
 /** The busy body's dim (`.loading-dim.is-loading`). Lives beside REVEAL.floor because the pair
  *  is the point: PLACE (below the fold) must never look like STATE (refetching), so the floor
  *  is always the darker of the two and motion.test.ts pins the gap between them. */
@@ -36,6 +46,8 @@ export function cssMotionDeclarations(): string[] {
     `--reveal-range: ${REVEAL.range};`,
     `--reveal-rise: ${REVEAL.rise};`,
     `--busy-dim: ${BUSY_DIM};`,
+    `--scrim-h: ${SCRIM.height};`,
+    `--scrim-alpha: ${SCRIM.alpha};`,
   ]
 }
 

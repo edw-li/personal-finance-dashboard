@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { expect, it } from 'vitest'
-import { BUSY_DIM, REVEAL, cssMotionDeclarations, reducedMotionDeclarations } from './motion'
+import { BUSY_DIM, REVEAL, SCRIM, cssMotionDeclarations, reducedMotionDeclarations } from './motion'
 
 const srcDir = path.join(__dirname, '..')
 
@@ -38,6 +38,24 @@ it('keeps the scroll shadow clearly darker than the busy dim', () => {
   expect(Number(REVEAL.floor)).toBeLessThan(Number(BUSY_DIM))
   expect(Number(BUSY_DIM) - Number(REVEAL.floor)).toBeGreaterThanOrEqual(0.2)
   expect(block('@media (prefers-reduced-motion: reduce)')).not.toContain('--busy-dim')
+})
+
+// The scrim pair (spec §4b). The height is the ONE number three places must agree on: how
+// tall the fade is, how far into the scroll the top one has finished arriving, and how far
+// from the end the bottom one starts leaving — panels.css reads the token in all three, so
+// they cannot drift. Alpha is a strength dial and nothing else: it multiplies the
+// page-coloured end of the gradient, never the geometry, which is why it stays a bare number
+// here instead of a colour someone could later type by hand.
+it('states the scrim height once and its alpha as a plain multiplier', () => {
+  expect(SCRIM.height).toMatch(/^\d+px$/)
+  expect(Number(SCRIM.alpha)).toBeGreaterThan(0)
+  expect(Number(SCRIM.alpha)).toBeLessThanOrEqual(1)
+  expect(block(':root')).toContain(`--scrim-h: ${SCRIM.height};`)
+  expect(block(':root')).toContain(`--scrim-alpha: ${SCRIM.alpha};`)
+  // Deliberately absent from the reduce block: reduced motion switches the scrims OFF
+  // outright (`display: none`, panels.css §4b), and a second, weaker way of saying the same
+  // thing would only invite the two to disagree.
+  expect(block('@media (prefers-reduced-motion: reduce)')).not.toContain('--scrim-')
 })
 
 /** Every stylesheet under src/, walked by hand — node 18.12 has no recursive readdirSync. */

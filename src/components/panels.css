@@ -992,3 +992,114 @@
   .page-frame-body .card,
   .page-frame-body .kpi-row { opacity: 1; transform: none; translate: none; animation: none; }
 }
+
+/* ── Motion §4b: viewport-edge scrims ("there is more, above and below") ──────────── */
+
+/* The reveal above dims a single CARD as it nears an edge; these two say the same thing about
+   the PAGE. A page-coloured fade rides each edge of the content column — the top one only once
+   the reader has scrolled (nothing is above a page at rest), the bottom one only while there
+   is still something below — so the edges stop being hard cuts that could pass for the end.
+
+   position: sticky, NOT fixed. A fixed box is laid out against its nearest TRANSFORMED
+   ancestor, and .page-frame-body is transformed for the length of its own entrance (shell.css,
+   page-body-in): a fixed scrim would re-anchor mid-slide and travel with the page. Sticky also
+   keeps the scrim inside the content column, so it spans exactly the width the cards do — no
+   gutter, no sidebar — without a single measurement.
+
+   Exempt by selector: the wizard, by the same :has(.entry-footer) test the reveal uses. Its
+   entry footer already owns the bottom edge in the page's own colour, and two of those stacked
+   read as a rendering fault. Exempt by construction: the header, scope row, drawers, palette
+   and toasts, none of which live in .page-frame-body.
+
+   The whole block is inside @supports: a browser with no scroll() timelines would otherwise
+   paint two permanent bars that never fade, which is worse than no hint at all. */
+@supports (animation-timeline: scroll()) {
+  .page-frame-body:not(:has(.entry-footer))::before,
+  .page-frame-body:not(:has(.entry-footer))::after {
+    content: '';
+    display: block;
+    height: var(--scrim-h);
+    /* A hint, never a target: every click goes to the card underneath. */
+    pointer-events: none;
+    /* Above the cards (which declare no z-index at all) and below everything that is actually
+       interactive: the sticky scope row (8), the drawer (15), the palette (20), toasts (30). */
+    z-index: 5;
+    /* The resting value — and the whole answer on a page too short to scroll, where a scroll()
+       timeline has no range, is INACTIVE, and its animation does not apply: the base style is
+       what paints. Nothing is hidden above or below a page that already fits, so 0 is right. */
+    opacity: 0;
+  }
+
+  .page-frame-body:not(:has(.entry-footer))::before {
+    position: sticky;
+    /* The scope row's UNDERSIDE, not the viewport's top edge: the row is sticky at top: 0 and
+       PageFrame writes its measured height into --sticky-inset (the same inset the reveal's
+       view() timelines take). Starting at 0 would lay the fade over the row and dissolve the
+       month and owner chips the reader is steering with. The 0px fallback is first paint, and
+       the permanent value on a page that declares no scope row — no row, no inset. */
+    top: var(--sticky-inset, 0px);
+    /* Zero net height in flow: the negative margin gives back exactly what `height` took, so
+       the first card does not start 120px lower than it used to. */
+    margin-bottom: calc(-1 * var(--scrim-h));
+    /* Tokens, never a literal colour: the fade has to end in the page's OWN background or it
+       is a grey smear in light mode. --scrim-alpha dials that end down, geometry untouched. */
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) calc(var(--scrim-alpha) * 100%), transparent), transparent);
+    /* The shorthand FIRST: `animation` resets animation-timeline to auto, so a timeline
+       declared above it would be thrown away on the next line. The shorthand leaves duration
+       at its initial value, which under scroll-driven animations is `auto` — a scroll timeline
+       measures distance, not time, so a duration here would mean nothing. Verified in Edge 152
+       (2026-09-05): this rule computes to animation-duration `auto` on a real ScrollTimeline. */
+    animation: scrim-in linear both;
+    animation-timeline: scroll(root block);
+    /* Arrives over the first --scrim-h of scroll: the hint appears exactly as fast as the
+       content it is talking about disappears. `both` holds it at 1 for the rest of the page. */
+    animation-range: 0 var(--scrim-h);
+  }
+
+  .page-frame-body:not(:has(.entry-footer))::after {
+    position: sticky;
+    /* The viewport's bottom edge IS the bottom of the content — nothing is stuck down there to
+       inset past, which is why only the top scrim reads --sticky-inset. */
+    bottom: 0;
+    margin-top: calc(-1 * var(--scrim-h));
+    background: linear-gradient(to top, color-mix(in srgb, var(--bg) calc(var(--scrim-alpha) * 100%), transparent), transparent);
+    animation: scrim-out linear both;
+    animation-timeline: scroll(root block);
+    /* Leaves over the last --scrim-h of scroll, so the hint stops exactly when it stops being
+       true; `both` holds it at 1 for every position before that. */
+    animation-range: calc(100% - var(--scrim-h)) 100%;
+  }
+
+  /* Two named keyframes rather than one played backwards: `animation-direction: reverse` would
+     also have to be read together with the range to know which end is which, and a scrim that
+     needs two properties to say "fading in" is a scrim someone will invert by accident. */
+  @keyframes scrim-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes scrim-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+
+  /* A scrim exists only because the page moves, so a reader who asked for no motion gets the
+     content undimmed instead. Both off switches repeat the full selector on purpose:
+     :not(:has(…)) carries the specificity of what it holds, so a shorter selector here would
+     lose the cascade and the scrims would survive the very rule meant to remove them. */
+  @media (prefers-reduced-motion: reduce) {
+    .page-frame-body:not(:has(.entry-footer))::before,
+    .page-frame-body:not(:has(.entry-footer))::after {
+      display: none;
+    }
+  }
+
+  /* Paper has no viewport, so it has no edge to hint past — and a fade printed onto a page is
+     just ink the reader did not ask for. */
+  @media print {
+    .page-frame-body:not(:has(.entry-footer))::before,
+    .page-frame-body:not(:has(.entry-footer))::after {
+      display: none;
+    }
+  }
+}
