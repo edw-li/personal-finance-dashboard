@@ -75,7 +75,7 @@ Expected: exactly ONE line ending `(head)`, and it is lane A's `kind` revision, 
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: The suite on its own scratch database**
+- [x] **Step 1: The suite on its own scratch database**
 
 Run, from `backend/`:
 
@@ -87,7 +87,7 @@ Expected: `N passed` with no failures and no errors; `N` is at least the 1625 th
 
 A failure here is a cross-lane interaction, most likely in `backend/tests/test_spending_api.py` (A owns the GET side of `api/spending.py`, B the PUT) or `backend/tests/test_health_checks.py` (A adds `spending_gap`, B seeds the drift case). Fix it in place keeping BOTH lanes' assertions.
 
-- [ ] **Step 2: Lint and format**
+- [x] **Step 2: Lint and format**
 
 ```bash
 .venv/Scripts/python.exe -m ruff check app tests
@@ -102,7 +102,7 @@ Expected: `All checks passed!` and `N files already formatted`.
 
 **Files:** none (read-only)
 
-- [ ] **Step 1: Run all four, in order, from the repo root**
+- [x] **Step 1: Run all four, in order, from the repo root**
 
 ```bash
 npx tsc -b
@@ -123,7 +123,7 @@ Note for the build: `npm run build` is `tsc -b && vite build`. If it OOMs the wa
 
 **PRODUCTION IS NEVER TOUCHED BY THIS TASK.** `alembic` reads `backend/.env`'s `DATABASE_URL`, which on this box is `postgresql+asyncpg://finance:finance@localhost:5433/finance` — the local dev database in Docker. No step in this plan ssh-es anywhere or points alembic at `170.9.51.78`.
 
-- [ ] **Step 1: Prove which database is about to be migrated**
+- [x] **Step 1: Prove which database is about to be migrated**
 
 Run, from `backend/`:
 
@@ -133,7 +133,7 @@ Run, from `backend/`:
 
 Expected, VERBATIM: `localhost 5433 finance`. Anything else — a remote host, a port that is not 5433, a database that is not `finance` — is a STOP: do not run Step 2, report it, and end the lane's DB work here.
 
-- [ ] **Step 2: Upgrade and check**
+- [x] **Step 2: Upgrade and check** — the dev database was ALREADY at `e5a7c1d3f6b8` when this lane started, so the upgrade became a verification: `alembic current` printed `e5a7c1d3f6b8 (head)` and `alembic check` printed `No new upgrade operations detected.`
 
 ```bash
 .venv/Scripts/python.exe -m alembic upgrade head
@@ -142,7 +142,7 @@ Expected, VERBATIM: `localhost 5433 finance`. Anything else — a remote host, a
 
 Expected: the upgrade prints `Running upgrade d4f6b8c0e2a5 -> <kind revision>`; `alembic check` prints `No new upgrade operations detected.` A non-empty check output means a model column has no migration behind it (the usual cause is a `server_default` present on the model and absent from the revision — `hsa_coverage`'s precedent); that is lane A's bug, fixed as its own commit.
 
-- [ ] **Step 3: The kind seeding actually ran on real category names**
+- [x] **Step 3: The kind seeding actually ran on real category names**
 
 ```bash
 docker exec -i $(docker ps --filter name=postgres --format '{{.Names}}' | head -1) \
@@ -1176,11 +1176,11 @@ git commit -m "chore(verify): honest-numbers two-theme smoke — per-step wizard
 
 **Files:** none (artifacts only)
 
-- [ ] **Step 1: Bring the stack up FRESH**
+- [x] **Step 1: Bring the stack up FRESH** — the stack was restarted on final main immediately before this lane began (uvicorn 127.0.0.1:8000 without `--reload`, vite 5173); `GET /coverage` answered with the new `spending_empty`/`spending_missing`/`net_pay_missing`/`latest` fields, which proves it is post-merge code.
 
 From `backend/`: `SCHEDULER_ENABLED=0 .venv/Scripts/python.exe -m uvicorn app.main:app --port 8000` (kill any older uvicorn first — the backend runs without `--reload` and an old process answers with pre-merge code; that trap cost an hour on 2026-09-04). From the root: `npm run dev` (vite on 5173).
 
-- [ ] **Step 2: Record the dev database's "before"**
+- [x] **Step 2: Record the dev database's "before"**
 
 ```bash
 TOK=$(curl -s http://127.0.0.1:8000/api/v1/auth/login -H 'content-type: application/json' \
@@ -1192,7 +1192,7 @@ cat /tmp/coverage-before.json
 
 Keep this file: Step 4 diffs against it.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 ```bash
 OUT="C:/Users/edyli/AppData/Local/Temp/claude/C--Users-edyli-personal-finance-dashboard/<session>/scratchpad/honest-smoke"
@@ -1206,7 +1206,7 @@ Expected: `HONEST SMOKE OK`; 2 × 8 screenshots plus `report.json`; `report.prob
 
 A failing check is a defect in the lane that owns the string or the behaviour — fix it there as its own `fix(...)` commit and re-run with `ONLY_STEP=<step>` before re-running the whole walk.
 
-- [ ] **Step 4: Prove the dev database is as it was**
+- [x] **Step 4: Prove the dev database is as it was**
 
 ```bash
 curl -s -H "authorization: Bearer $TOK" http://127.0.0.1:8000/api/v1/coverage > /tmp/coverage-after.json
@@ -1215,7 +1215,7 @@ diff /tmp/coverage-before.json /tmp/coverage-after.json && echo "DEV DB UNCHANGE
 
 Expected: no diff, `DEV DB UNCHANGED`. A diff means the sweep missed something: find it in `report.writes`, undo it by hand through the API, and record both the miss and the undo.
 
-- [ ] **Step 5: Eyeball at least these five, one per theme**
+- [x] **Step 5: Eyeball at least these five, one per theme** — done. `dark-wizard-repair-banner`: banner above the grid, both doors ("Delete the empty month" button beside the sentence). `light-wizard-zero-checked`: box ticked, sentence legible. `dark-overview`: the three footer clauses fit one line at 1600px and both new attention items sit above the tiles, distinguishable from the balances nudge. `light-spending`: legend reads "Total (incl. payroll)" over a muted "Cash"; `TAX`/`TRANSFER` badges visible in the rollup beside Living spend / Tax paid / Transfers / Months matched. `dark-moneyflow-pending-table`: the dashed "Take-home not yet entered (7 months)" node sits BESIDE take-home in the same column and the Table twin lists it at 43,240.43. Two notes for the morning, neither wrong: the fullPage capture stacks the sticky live-totals bar over the grid rows (a screenshot artifact, not a layout bug), and the attention counts in these shots include the smoke's own scratch month (`Jan 2019 was saved with no spending`, `+62 earlier months`) because the walk is mid-run — the sweep removed it and the coverage diff is clean.
 
 `dark-wizard-repair-banner` (the banner sits above the grid and offers both doors), `light-wizard-zero-saved` (the checkbox is ticked and its sentence legible), `dark-overview` (the footer's three clauses fit on one line at 1600 px and the two new attention items are distinguishable from the balances nudge), `light-spending` (the muted cash line reads as secondary to the total line; the tax/transfer badges are visible in the rollup), `dark-moneyflow` (the dashed pending node sits beside take-home rather than on top of it, and its label names the month count). Anything ugly is a note for the morning; anything WRONG is a defect tonight.
 
@@ -1253,9 +1253,9 @@ git commit -m "docs(verify): honest-numbers retire list with its unused-proof gr
 
 **Files:** modify this plan
 
-- [ ] **Step 1: Fill in the "Production expectations" section** at the bottom of this file with the figures OBSERVED in Task 6 (not the ones written here), the rounding verdict if Task 6's note fired, and the two clock-coupled values the test printed.
+- [x] **Step 1: Fill in the "Production expectations" section** at the bottom of this file with the figures OBSERVED in Task 6 (not the ones written here), the rounding verdict if Task 6's note fired, and the two clock-coupled values the test printed.
 
-- [ ] **Step 2: Tick every checkbox** in this file. A step not run is struck through with its reason on the same line, never left blank.
+- [x] **Step 2: Tick every checkbox** in this file. A step not run is struck through with its reason on the same line, never left blank.
 
 - [ ] **Step 3: Final gate — run everything once more, on the tree as it now stands**
 
@@ -1305,7 +1305,42 @@ After the migration runs on production and the app restarts, these are the figur
 
 **Rounding rule (spec §2/§7, settled 2026-09-04):** per-month wire figures are quantized to cents ROUND_HALF_UP when emitted (`half_up2`); yearly and trailing scalars are the SUM of those emitted months; a MEAN quantizes once at the end. Hence payroll `4,450.93`/month → `31,156.51` for 2026, total savings `30,159.53` over a `75,768.11` denominator (39.8%), and money-flow pending `31,865.43`. The invariant that keeps it honest — and the one `test_after_the_rollup_scalars_equal_the_sum_of_the_months_they_cover` asserts — is that every `YearRollup` scalar equals Σ of the `MatrixOut` months it covers.
 
-**Clock-coupled, recorded not asserted:** the projection's `start_month` / `base_month`, as printed by Task 6 Step 7.
+**Clock-coupled, recorded not asserted:** the projection's `start_month` / `base_month`, as
+printed by Task 6 Step 7 on 2026-09-04: **`start_month 2026-09-01`, `base_month 2026-09-01`**.
+
+**OBSERVED, 2026-09-04 (all eight tests in `backend/tests/verify/test_honest_before_after.py`
+green).** Every figure in the table above was asserted and matched, on both columns, with two
+exceptions — both findings, both settled:
+
+1. **`payroll_savings` for a month with no net pay was `"0.00"`, not `null`.** Spec §2 conditions
+   the field on net pay being present ("a month nobody entered pay for has no deductions on
+   record either"), lane A's own comments in `services/savings.py` and `test_spending_api.py`
+   said the same, and lane D had already typed the wire `(string | null)[]` — but the service
+   emitted `ZERO` beside the `None` cash/total/rates. Fixed on main as `fix(savings): a month
+   with no net pay has no payroll figure either — null, not $0.00`; the wire field is now
+   `list[Decimal | None]`. **Production impact: an empty or never-entered month shows "—" for
+   payroll savings instead of a false $0.00.** The yearly scalars are unaffected — a rollup only
+   ever summed matched months.
+2. **The 2026 cash rate is `-0.022348`, not the `-0.022347` this plan's derivation table
+   printed.** −996.98 ÷ 44,611.60 = −0.0223479991…, which at six places ROUND_HALF_UP is
+   `-0.022348`. The plan truncated; the wire is right. The row above is corrected in place.
+
+Everything else landed to the cent: FI target `1,644,478.50` → `1,625,244.25`, annual spend
+`65,779.14` → `65,009.77` over `derived_window = {2025-08-01 … 2026-07-01, 12 months}`,
+April `4,758.63` living + `5,044.00` tax against an unchanged `9,802.63` total, coverage
+`spending_empty=["2026-09-01"]` / `spending_missing=["2026-08-01"]` /
+`net_pay_missing=["2026-08-01","2026-09-01"]` / `latest={2026-09-01, 2026-07-01, 2026-07-01}`,
+2026 rollup `months_matched=7`, living `40,564.58`, tax `5,044.00`, transfer `0.00`, cash
+`−996.98`, payroll `31,156.51` (7 × `4,450.93`), total `30,159.53`, total rate `0.398050`, and
+money-flow `take_home_pending = 31,865.43` with `take_home_months_entered = 7`, conserved out of
+`retained_equity`. The scalar-equals-sum invariant holds for all six fields.
+
+**The dev database's category kinds after the migration** (`e5a7c1d3f6b8`, already at head; the
+shape production will reproduce): `tax` = Taxes (1); `transfer` = Financial, Investments (2);
+`living` = the other 16. No NULLs. Note the dev book HAS two transfer categories where the
+census fixture has none, so production's `transfer_total` will be non-zero wherever those
+categories carry money — by design (spec §1), and the reason every historical savings figure
+moves.
 
 **Two things that will look like regressions and are not:** every historical savings figure moves the moment a category's kind changes (spec §1 — kinds apply to ALL history, and the Settings copy says so on screen); and September 2026 loses its filled ribbon dot while its `$0` rows stay in the database until somebody deletes the month from the wizard's repair banner.
 
