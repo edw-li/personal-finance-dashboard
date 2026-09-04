@@ -33,6 +33,15 @@ const EMPTY_ACCOUNT: AccountFormState = {
   is_component: false,
 }
 
+// The two sentences lane B's 422 returns for a half-set pair (2026-09-04 honest-numbers spec
+// §5), spelled here so the client refusal and the server refusal are ONE sentence rather than
+// two paraphrases. `is_component` is the rollup key and `parent_account_id` the link: a row
+// carrying one without the other counts in no total, so each message names the missing half.
+const COMPONENT_NEEDS_PARENT =
+  'is_component needs parent_account_id — name the account it folds into'
+const PARENT_NEEDS_COMPONENT =
+  'parent_account_id needs is_component — a linked account must be a component'
+
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
@@ -144,6 +153,14 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
       setError('Account name is required.')
       return
     }
+    if (form.is_component && form.parent_account_id === '') {
+      setError(COMPONENT_NEEDS_PARENT)
+      return
+    }
+    if (!form.is_component && form.parent_account_id !== '') {
+      setError(PARENT_NEEDS_COMPONENT)
+      return
+    }
     // ALL SIX keys, every time: a blank owner or parent must CLEAR the column, and PATCH
     // treats an omitted key as "leave it alone" — only an explicit null retags an account
     // to joint or unlinks a component.
@@ -193,7 +210,58 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
   }
 
   const ownerName = new Map(people.map((p) => [p.id, p.name]))
-  const accountName = new Map(accounts.map((a) => [a.id, a.name]))
+  const byId = new Map(accounts.map((a) => [a.id, a]))
+  // How many rows roll UP into each account, by the SERVER's rule rather than a looser one:
+  // `derived_parent_balances` (backend/app/services/derived_accounts.py) sums a child only
+  // when it is flagged `is_component` AND linked, so a legacy row carrying the link alone is
+  // derived by nobody. Counting that row here would tell the reader a parent is summed while
+  // the balances PUT still expects it typed by hand and the wizard still renders it as an
+  // input — the roster must not promise a roll-up nothing performs (spec §5).
+  const componentCounts = new Map<number, number>()
+  for (const a of accounts) {
+    if (a.parent_account_id === null || !a.is_component) continue
+    componentCounts.set(a.parent_account_id, (componentCounts.get(a.parent_account_id) ?? 0) + 1)
+  }
+
+  /**
+   * What the roster says about a row's place in the roll-up (2026-09-04 honest-numbers spec
+   * §5). A parent with components has no balance of its own — the wizard derives it — so the
+   * table has to say which rows are typed and which are summed, rather than printing a bare
+   * parent name that reads the same either way.
+   */
+  const rollUpNote = (account: AccountOut) => {
+    const parent =
+      account.parent_account_id === null ? undefined : byId.get(account.parent_account_id)
+    if (account.is_component) {
+      // Net worth sums the NON-component rows, so a component reaches a total only through a
+      // parent that is present and active; with the parent gone or retired its balance lands
+      // in no figure at all — hence "counts nowhere", literally. Advisory amber (--warn, the
+      // .draft-note register) and the sentence together: colour is never the only channel.
+      if (parent === undefined || !parent.is_active) {
+        return (
+          <span className="accounts-link-note is-unlinked">
+            unlinked component — counts nowhere
+          </span>
+        )
+      }
+      return <span className="accounts-link-note">component of {parent.name}</span>
+    }
+    const n = componentCounts.get(account.id) ?? 0
+    if (n > 0) {
+      return (
+        <span className="accounts-link-note">
+          derived: {n} component{n === 1 ? '' : 's'}
+        </span>
+      )
+    }
+    // A link without the flag is the half-set pair Task 4 refuses. Keep naming the parent —
+    // the roster must not hide a link it can see — but claim nothing about the roll-up: the
+    // two halves disagree about where this balance belongs, and that is the whole point.
+    if (parent !== undefined) {
+      return <span className="accounts-link-note">parent: {parent.name}</span>
+    }
+    return '—'
+  }
   // An account may not parent itself (the server 422s it); leaving it out of the select
   // means the UI never offers the mistake.
   const parentOptions = accounts.filter((a) => a.id !== editingId)
@@ -285,7 +353,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
               <input
                 type="checkbox"
                 checked={form.is_component}
-                onChange={(e) => setForm((f) => ({ ...f, is_component: e.target.checked }))}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, is_component: e.target.checked }))
+                  setError(null)
+                }}
               />
               Component of the parent
             </label>
@@ -313,7 +384,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                     <th>Group</th>
                     <th>Owner</th>
                     <th className="num">Sort</th>
-                    <th>Parent</th>
+                    <th>Roll-up</th>
                     <th>Status</th>
                     <th />
                   </tr>
@@ -337,11 +408,7 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
                           : (ownerName.get(account.person_id) ?? '—')}
                       </td>
                       <td className="num">{account.sort_order}</td>
-                      <td>
-                        {account.parent_account_id === null
-                          ? '—'
-                          : (accountName.get(account.parent_account_id) ?? '—')}
-                      </td>
+                      <td>{rollUpNote(account)}</td>
                       <td>
                         <span className="badge">{account.is_active ? 'Active' : 'Retired'}</span>
                       </td>

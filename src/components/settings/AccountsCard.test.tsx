@@ -45,6 +45,75 @@ const HSA: AccountOut = {
   parent_account_id: null,
   person_id: 1,
 }
+// The 401(k) shape production actually has (spec §0): a parent whose balance is nothing but
+// the sum of its components, typed by hand every month for 37 months.
+const TRAD: AccountOut = {
+  id: 20,
+  name: 'Fidelity Traditional 401(k)',
+  slug: 'fidelity-traditional-401k',
+  group: 'pre_tax',
+  sort_order: 3,
+  is_active: true,
+  is_component: false,
+  parent_account_id: null,
+  person_id: 1,
+}
+const TRAD_PRETAX: AccountOut = {
+  id: 21,
+  name: 'Traditional pre-tax',
+  slug: 'traditional-pre-tax',
+  group: 'pre_tax',
+  sort_order: 4,
+  is_active: true,
+  is_component: true,
+  parent_account_id: 20,
+  person_id: 1,
+}
+const TRAD_MATCH: AccountOut = {
+  id: 22,
+  name: 'Traditional employer match',
+  slug: 'traditional-employer-match',
+  group: 'pre_tax',
+  sort_order: 5,
+  is_active: true,
+  is_component: true,
+  parent_account_id: 20,
+  person_id: 1,
+}
+// Two ways to belong to nothing: no parent at all, and a parent that has been retired.
+const ORPHAN: AccountOut = {
+  id: 23,
+  name: 'Old rollover slice',
+  slug: 'old-rollover-slice',
+  group: 'pre_tax',
+  sort_order: 6,
+  is_active: true,
+  is_component: true,
+  parent_account_id: null,
+  person_id: 1,
+}
+const CLOSED_PARENT: AccountOut = {
+  id: 24,
+  name: 'Closed 401(k)',
+  slug: 'closed-401k',
+  group: 'pre_tax',
+  sort_order: 7,
+  is_active: false,
+  is_component: false,
+  parent_account_id: null,
+  person_id: 1,
+}
+const CLOSED_SLICE: AccountOut = {
+  id: 25,
+  name: 'Closed 401(k) pre-tax',
+  slug: 'closed-401k-pre-tax',
+  group: 'pre_tax',
+  sort_order: 8,
+  is_active: true,
+  is_component: true,
+  parent_account_id: 24,
+  person_id: 1,
+}
 const BROKERAGE: PortfolioAccountOut = { id: 30, label: 'Fidelity Brokerage', person_id: 1 }
 const JOINT_ROTH: PortfolioAccountOut = { id: 31, label: 'Joint Roth', person_id: null }
 
@@ -255,4 +324,112 @@ it('keeps the net-worth roster alive when the portfolio labels fail to load', as
   expect(await screen.findByText('portfolio accounts unavailable')).toBeTruthy()
   expect(roster().getByText('Fidelity HSA')).toBeTruthy()
   expect(screen.queryByRole('table', { name: 'Portfolio accounts' })).toBeNull()
+})
+
+it('says which rows are typed and which are summed', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue([CHECKING, TRAD, TRAD_PRETAX, TRAD_MATCH])
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  expect(roster().getByRole('columnheader', { name: 'Roll-up' })).toBeTruthy()
+  // A parent with components has no balance of its own — it IS its components (spec §5).
+  expect(roster().getByText('derived: 2 components')).toBeTruthy()
+  expect(roster().getAllByText('component of Fidelity Traditional 401(k)')).toHaveLength(2)
+  // A plain account is neither summed nor summed into: only Joint Checking reads '—'.
+  expect(roster().getAllByText('—')).toHaveLength(1)
+})
+
+it('flags a component whose parent is missing or retired', async () => {
+  vi.mocked(fetchAccounts).mockResolvedValue([ORPHAN, CLOSED_PARENT, CLOSED_SLICE])
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  // Net worth sums the NON-component rows, so a component only reaches a total through a
+  // present, active parent. Both of these reach none at all.
+  const cues = roster().getAllByText('unlinked component — counts nowhere')
+  expect(cues).toHaveLength(2)
+  // Amber rides a class (--warn in the sheet); the SENTENCE is the channel that always
+  // works — colour is never alone.
+  expect(cues[0].className).toBe('accounts-link-note is-unlinked')
+  // A retired parent still says how many rows roll into it, singular.
+  expect(roster().getByText('derived: 1 component')).toBeTruthy()
+})
+
+it('still names a parent the component flag forgot', async () => {
+  // A link without the flag: the half-set pair Task 4 and lane B refuse from now on. The
+  // roster must not hide a link it can see, and must not claim a roll-up either.
+  vi.mocked(fetchAccounts).mockResolvedValue([TRAD, { ...TRAD_PRETAX, is_component: false }])
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  expect(roster().getByText('parent: Fidelity Traditional 401(k)')).toBeTruthy()
+  // And the parent is NOT derived: `derived_parent_balances` skips a child that is not
+  // flagged `is_component`, so the server never sums this link and the wizard still asks for
+  // the parent's balance by hand. "derived: 1 component" here would promise a roll-up that
+  // nothing performs.
+  expect(roster().getByText('—')).toBeTruthy()
+  expect(roster().queryByText('derived: 1 component')).toBeNull()
+})
+
+it('refuses a component with no parent, in the server\'s own sentence', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  fireEvent.change(screen.getByLabelText('Account name'), {
+    target: { value: 'Traditional slice' },
+  })
+  fireEvent.click(screen.getByLabelText('Component of the parent'))
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+
+  expect(
+    await screen.findByText(
+      'is_component needs parent_account_id — name the account it folds into',
+    ),
+  ).toBeTruthy()
+  // Refused BEFORE the round trip, and lane B's 422 says the same words — the reader never
+  // meets two spellings of one rule.
+  expect(vi.mocked(createAccount)).not.toHaveBeenCalled()
+})
+
+it('refuses a parent link with no component flag, in the server\'s own sentence', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  fireEvent.change(screen.getByLabelText('Account name'), {
+    target: { value: 'Traditional slice' },
+  })
+  fireEvent.change(screen.getByLabelText('Parent account'), { target: { value: '11' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+
+  expect(
+    await screen.findByText(
+      'parent_account_id needs is_component — a linked account must be a component',
+    ),
+  ).toBeTruthy()
+  expect(vi.mocked(createAccount)).not.toHaveBeenCalled()
+})
+
+it('clears the refusal as soon as the pair is fixed', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  fireEvent.change(screen.getByLabelText('Account name'), {
+    target: { value: 'Traditional slice' },
+  })
+  fireEvent.click(screen.getByLabelText('Component of the parent'))
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+  expect(
+    await screen.findByText(
+      'is_component needs parent_account_id — name the account it folds into',
+    ),
+  ).toBeTruthy()
+
+  // Unticking removes the half the banner is about, so the banner goes with it: setText's
+  // rule for the text fields, extended to the card's one checkbox.
+  fireEvent.click(screen.getByLabelText('Component of the parent'))
+  expect(
+    screen.queryByText(
+      'is_component needs parent_account_id — name the account it folds into',
+    ),
+  ).toBeNull()
 })

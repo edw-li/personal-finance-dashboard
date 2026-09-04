@@ -126,23 +126,41 @@ export interface MonthUpsertResult {
   batch_id?: string | null
 }
 
+/**
+ * What a category's money IS (2026-09-04 honest-numbers spec §1). `living`: money that left
+ * the household — food, housing, a loan payment you must fund each month. `tax`: an
+ * income-tax payment made from take-home (the April bill, estimated payments); payroll
+ * withholding is NOT here, it never reaches net pay. `transfer`: money that stayed yours —
+ * a brokerage or savings deposit, extra principal — part of net worth, not spend.
+ *
+ * REQUIRED on the way out: the column is NOT NULL with a `'living'` server default, so every
+ * row on the wire carries it. An optional field here would let a consumer quietly read a
+ * missing kind as living and hide a wire bug behind a plausible number.
+ */
+export type CategoryKind = 'living' | 'tax' | 'transfer'
+
 export interface CategoryOut {
   id: number
   name: string
   slug: string
   sort_order: number
   is_active: boolean
+  kind: CategoryKind
 }
 
 export interface CategoryCreate {
   name: string
   sort_order?: number
+  /** Omitted = `living`, the column's server default. */
+  kind?: CategoryKind
 }
 
 export interface CategoryUpdate {
   name?: string
   sort_order?: number
   is_active?: boolean
+  /** Applies to ALL history: every figure that reads it moves retroactively (spec §1, §6). */
+  kind?: CategoryKind
 }
 
 export interface AmountEntry {
