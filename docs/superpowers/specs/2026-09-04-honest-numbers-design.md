@@ -61,7 +61,13 @@ total_rate(m)     = total_savings / (net_pay + payroll_savings)  (same guard)
 `payroll_monthly(profile)` is the projection's existing arithmetic, moved into this module and
 imported back by `api/projection.py`: `(salary / pay_periods) × (trad + roth + after_tax + espp)
 + hsa_per_check`, × `pay_periods / 12`, per person, profile chosen by `effective_date ≤ 1st of m`
-(latest wins). Sums are `Decimal`, quantized once at the API edge.
+(latest wins). Sums are `Decimal`. **Rounding rule:** every per-month figure the wire carries is
+quantized to cents with ROUND_HALF_UP (the projection's `half_up2`) when it is emitted, and every
+yearly or trailing scalar is the sum of those emitted months — so a table always adds up to its
+total. `payroll_monthly` for Edward's 2026 profile is exactly 4450.925 → 4450.93 per month.
+Rates are computed from the quantized parts and rounded to 0.1 pp at the API edge. A trailing
+mean (the money-flow pending estimate, the projection's derived figures) quantizes once, at the
+end: `mean × months`, then cents.
 
 **Wire.** `MatrixOut` gains per-month arrays `living_total`, `tax_total`, `transfer_total`,
 `cash_savings`, `payroll_savings`, `total_savings`, `total_savings_rate`; `savings_rate` KEEPS its
@@ -109,7 +115,7 @@ stays under `/coverage`.
   int`. `take_home_pending = mean(net pay over the year's entered months) × (12 −
   months_entered)`, zero when 12 are entered; `retained_equity` subtracts it. The sankey draws a
   muted dashed node "Take-home not yet entered (5 months)" from gross beside take-home; the
-  tooltip states the estimate rule. Production today: $6,373.09 × 5 = $31,865.43.
+  tooltip states the estimate rule. Production today: mean $6,373.0857… × 5 = $31,865.43 (quantized once, at the end).
 - Overview YTD card: every figure names its window — "Net worth since Dec 2025 (through Sep)",
   "Spend Jan–Jul", "Saved Jan–Jul (total / cash)" — and rates use `YearRollup.months_matched`.
 
@@ -195,7 +201,7 @@ adds one sentence: sum non-component rows for net worth.
 | Figure | Before | After |
 |---|---|---|
 | FI target (4% SWR) | $1,644,478.50 (zero month in, taxes in) | $1,625,244.25 (living spend, matched months Aug 2025–Jul 2026: $65,009.77) |
-| 2026 savings headline | −2.2% | Total +$30,159.46 (39.8%) · Cash −$996.98 (−2.2%) |
+| 2026 savings headline | −2.2% | Total +$30,159.53 (39.8%; payroll 7 × $4,450.93 = $31,156.51, denominator $75,768.11) · Cash −$996.98 (−2.2%) |
 | April 2026 | $9,802.63 spend | $4,758.63 living + $5,044.00 tax |
 | Footer | "Spending through Sep 2026" | "Spending through Jul 2026 (Aug missing, Sep empty)" |
 | Money flow 2026 | take-home $44,611.60, rest in retained equity | + "Take-home not yet entered (5 months) ≈ $31,865.43" |
