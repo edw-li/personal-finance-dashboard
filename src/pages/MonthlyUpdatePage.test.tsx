@@ -563,7 +563,10 @@ it('keeps sending the clear on the retry after a failed save', async () => {
 it('never sends net_pay for a month that had none and stays blank', async () => {
   renderWizard()
   fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  // A month has to have something to record before the leg runs at all now (spec §4); the
+  // CONTRACT under test is unchanged — a month that never had a take-home gets no net_pay
+  // key, so the server is never asked to clear a row that does not exist.
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await waitFor(() => {
@@ -966,7 +969,7 @@ it('names the half-landed save and retries only the spending leg', async () => {
   renderWizard()
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
 
@@ -988,7 +991,7 @@ it('keeps the accurate old message when the balances leg itself fails', async ()
   renderWizard()
   await screen.findByLabelText('Checking')
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
 
@@ -1007,7 +1010,7 @@ it('re-sends balances on retry when they were edited after the partial failure',
   renderWizard()
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByRole('alert')
@@ -1017,7 +1020,7 @@ it('re-sends balances on retry when they were edited after the partial failure',
   fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1700.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /retry spending/i }))
   await screen.findByText(/month saved/i)
@@ -1040,7 +1043,7 @@ it('drops the stale saved card the moment a new save attempt begins', async () =
   renderWizard()
   await screen.findByLabelText('Checking')
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByText(/month saved/i)
@@ -1049,7 +1052,7 @@ it('drops the stale saved card the moment a new save attempt begins', async () =
   fireEvent.click(screen.getByRole('button', { name: /^1\s*balances$/i }))
   fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(screen.getByRole('button', { name: /save month/i }))
 
@@ -1212,7 +1215,7 @@ it('the save toast carries Undo when a batch was written, and fires spending the
   renderWizardAt('/update?month=2026-08-01')
   await screen.findByLabelText('Checking')
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByText(/month saved/i)
@@ -1233,11 +1236,123 @@ it('an all-unchanged save toasts nothing and offers no Undo', async () => {
   renderWizardAt('/update?month=2026-08-01')
   await screen.findByLabelText('Checking')
   fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
-  await screen.findByLabelText('Food')
+  await enterSpending()
   fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByText(/month saved/i)
   expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+})
+
+// --- per-step saves (2026-09-04 honest-numbers spec §4) -----------------------------------
+
+// Enter one category amount. The spending leg now writes only when the month has something
+// to record, so a test that needs the spending PUT to go out has to say so out loud.
+async function enterSpending(amount = '250.00') {
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: amount } })
+}
+
+it('writes balances only when nothing was entered on the spending step, and says so', async () => {
+  renderWizard()
+  fireEvent.change(await screen.findByLabelText('Checking'), { target: { value: '1600.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  // The pre-save note: the user learns the spending half will be skipped BEFORE clicking.
+  await screen.findByText('Spending: nothing entered — this save writes balances only.')
+  fireEvent.click(screen.getByRole('button', { name: /save month/i }))
+
+  await screen.findByText(/month saved/i)
+  expect(vi.mocked(netWorthApi.putMonthBalances).mock.calls.length).toBe(1)
+  // The whole point of the lane: 19 rows of $0.00 are NOT a month of spending nothing.
+  expect(spendingApi.putSpendingMonth).not.toHaveBeenCalled()
+  expect(screen.getByText('Balances: 1 row (1 added, 0 changed, 0 unchanged).')).toBeTruthy()
+  expect(screen.getByText('Spending: skipped — nothing entered.')).toBeTruthy()
+})
+
+it('net pay alone saves the cashflow row, with every blank category as $0.00', async () => {
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Household take-home'), {
+    target: { value: '9000.00' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  // Blank categories inside a SAVED step are still $0.00 — the gate decides whether the leg
+  // runs, never what it contains.
+  await waitFor(() =>
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      net_pay: '9000.00',
+      amounts: [{ category_id: 7, amount: '0.00' }],
+    }),
+  )
+})
+
+it('an already-entered month always writes — zeroing a category is an edit, not a skip', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: null,
+    amounts: [{ category_id: 7, amount: '300.00' }], budgets: [],
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Food'), { target: { value: '0.00' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() =>
+    expect(spendingApi.putSpendingMonth).toHaveBeenCalledWith('2026-08-01', {
+      amounts: [{ category_id: 7, amount: '0.00' }],
+    }),
+  )
+})
+
+it('leaves an empty month on the server alone when the visit enters nothing', async () => {
+  // Production's Sep 2026: rows that are all $0.00 with no take-home. A balances-only visit
+  // must not rewrite them (and must not count as "entered" either).
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: null,
+    amounts: [{ category_id: 7, amount: '0.00' }], budgets: [],
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText('Spending: skipped — nothing entered.')
+  expect(spendingApi.putSpendingMonth).not.toHaveBeenCalled()
+})
+
+it('prints one sentence per leg after a full save, with the cleared take-home appended', async () => {
+  vi.mocked(spendingApi.fetchSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', exists: true, net_pay: '9000.00',
+    amounts: [{ category_id: 7, amount: '300.00' }], budgets: [],
+  })
+  vi.mocked(spendingApi.putSpendingMonth).mockResolvedValue({
+    month: '2026-08-01', created: 0, updated: 1, unchanged: 0,
+    net_pay_set: false, net_pay_cleared: true,
+  })
+  renderWizard()
+  fireEvent.click(await screen.findByRole('button', { name: /next: spending/i }))
+  fireEvent.change(await screen.findByLabelText('Household take-home'), { target: { value: '' } })
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  expect(screen.getByText('Balances: 1 row (1 added, 0 changed, 0 unchanged).')).toBeTruthy()
+  expect(
+    screen.getByText(
+      'Spending: 1 row (0 added, 1 changed, 0 unchanged). Household take-home cleared.',
+    ),
+  ).toBeTruthy()
+})
+
+it('the receipt belongs to the visit — switching months clears it', async () => {
+  renderWizard()
+  await screen.findByLabelText('Checking')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await enterSpending()
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await screen.findByText(/month saved/i)
+  fireEvent.click(screen.getByRole('button', { name: /^Jun 2026/ }))
+  await waitFor(() => expect(screen.queryByText(/month saved/i)).toBeNull())
 })
 
 describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => {
