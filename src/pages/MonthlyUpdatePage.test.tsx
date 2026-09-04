@@ -411,8 +411,10 @@ it('excludes components from the group subtotal and the live net worth', async (
   renderWizard()
   // The badge lives inside the label, so the component's accessible name carries it too.
   const component = await screen.findByLabelText(/^Brokerage cash/)
-  fireEvent.change(screen.getByLabelText('Brokerage'), { target: { value: '1000' } })
-  fireEvent.change(component, { target: { value: '250' } })
+  // Brokerage HAS a component, so it is a DERIVED row now (spec §5): the figure is typed into
+  // the component, and the parent shows the sum. The subtotal rule under test is unchanged —
+  // a component is counted inside its parent, never beside it.
+  fireEvent.change(component, { target: { value: '1000' } })
 
   // nestComponents puts the child right after its parent, so the subtotal row follows it.
   const subtotal = (component.closest('tr') as HTMLElement).nextElementSibling as HTMLElement
@@ -1499,6 +1501,105 @@ it('drops the banner the moment the month is given real spending', async () => {
   fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
   await screen.findByText(/month saved/i)
   expect(screen.queryByText(/saved with no spending/)).toBeNull()
+})
+
+// --- derived parents (2026-09-04 honest-numbers spec §5) ----------------------------------
+
+const parent401k = {
+  id: 8, name: 'Fidelity 401(k)', slug: 'fidelity-401k', group: 'pre_tax' as const,
+  sort_order: 6, is_active: true, is_component: false, parent_account_id: null, person_id: 1,
+}
+const preTaxPart = {
+  id: 9, name: '401(k) pre-tax', slug: 'k-pre-tax', group: 'pre_tax' as const,
+  sort_order: 7, is_active: true, is_component: true, parent_account_id: 8, person_id: 1,
+}
+const afterTaxPart = {
+  id: 10, name: '401(k) after-tax', slug: 'k-after-tax', group: 'pre_tax' as const,
+  sort_order: 8, is_active: true, is_component: true, parent_account_id: 8, person_id: 1,
+}
+
+function withComponents(accounts = [account, parent401k, preTaxPart, afterTaxPart]) {
+  vi.mocked(netWorthApi.fetchAccounts).mockResolvedValue(accounts)
+  vi.mocked(netWorthApi.fetchMonthBalances).mockImplementation(async (month: string) => ({
+    month,
+    exists: month === '2026-07-01',
+    recorded_on: null,
+    notes: null,
+    balances:
+      month === '2026-07-01'
+        ? [
+            { account_id: 1, balance: '1500.00' },
+            { account_id: 8, balance: '1000.00' },
+            { account_id: 9, balance: '600.00' },
+            { account_id: 10, balance: '400.00' },
+          ]
+        : [],
+  }))
+}
+
+it('renders a parent with components as a read-only derived row that sums its cells live', async () => {
+  withComponents()
+  renderWizard()
+  const row = (await screen.findByText('Fidelity 401(k)')).closest('tr') as HTMLElement
+  expect(row.className).toContain('entry-derived')
+  expect(within(row).getByText('derived')).toBeTruthy()
+  // No box at all: an account with components has no balance of its own (spec §5).
+  expect(within(row).queryByRole('textbox')).toBeNull()
+  const cells = within(row).getAllByRole('cell')
+  expect(cells[1].textContent).toBe('$1,000.00') // last month, as stored
+  expect(cells[2].textContent).toBe('$1,000.00') // this month, derived from the seed
+  expect(cells[3].textContent).toBe('$0.00') // Δ
+
+  // A component cell moves the parent, its Δ and the live net worth in the same keystroke.
+  fireEvent.change(screen.getByLabelText(/^401\(k\) pre-tax/), { target: { value: '700.00' } })
+  expect(within(row).getAllByRole('cell')[2].textContent).toBe('$1,100.00')
+  expect(within(row).getAllByRole('cell')[3].textContent).toBe('$100.00')
+  const footer = screen.getByRole('status', { name: /live totals/i })
+  expect(within(footer).getByText('$2,600.00')).toBeDefined() // 1,500 cash + 1,100 derived
+})
+
+it('never sends a derived parent — the server computes it from the components', async () => {
+  withComponents()
+  renderWizard()
+  await screen.findByText('Fidelity 401(k)')
+  fireEvent.click(screen.getByRole('button', { name: /next: spending/i }))
+  await screen.findByLabelText('Food')
+  fireEvent.click(screen.getByRole('button', { name: /next: review/i }))
+  fireEvent.click(await screen.findByRole('button', { name: /save month/i }))
+  await waitFor(() =>
+    expect(netWorthApi.putMonthBalances).toHaveBeenCalledWith(
+      '2026-08-01',
+      expect.objectContaining({
+        balances: [
+          { account_id: 1, balance: '1500.00' },
+          { account_id: 9, balance: '600.00' },
+          { account_id: 10, balance: '400.00' },
+        ],
+      }),
+    ),
+  )
+})
+
+it('a column paste fills the component cells and skips the derived parent', async () => {
+  withComponents()
+  renderWizard()
+  const checking = (await screen.findByLabelText('Checking')) as HTMLInputElement
+  fireEvent.paste(checking, { clipboardData: { getData: () => '1600\n700\n500' } })
+
+  expect(checking.value).toBe('1600')
+  expect((screen.getByLabelText(/^401\(k\) pre-tax/) as HTMLInputElement).value).toBe('$700.00')
+  expect((screen.getByLabelText(/^401\(k\) after-tax/) as HTMLInputElement).value).toBe('$500.00')
+  // Three targets, not four: the derived row is not a paste slot, so nothing shifts past it.
+  expect(screen.getByText(/pasted 3 of 3 values/i)).toBeDefined()
+  const row = screen.getByText('Fidelity 401(k)').closest('tr') as HTMLElement
+  expect(within(row).getAllByRole('cell')[2].textContent).toBe('$1,200.00')
+})
+
+it('autofocuses the first TYPABLE cell when the table opens on a derived parent', async () => {
+  withComponents([parent401k, preTaxPart, afterTaxPart])
+  renderWizard()
+  const first = await screen.findByLabelText(/^401\(k\) pre-tax/)
+  expect(document.activeElement).toBe(first)
 })
 
 describe('MonthlyUpdatePage — shell frame (2026-09-03 spec §5–§7)', () => {

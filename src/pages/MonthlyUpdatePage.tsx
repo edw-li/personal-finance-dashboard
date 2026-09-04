@@ -132,6 +132,48 @@ function balancesSentence(result: MonthUpsertResult): string {
   )
 }
 
+// ── Derived parents (2026-09-04 honest-numbers spec §5) ──────────────────────────────
+// An account with at least one component has NO balance of its own: its value for the month
+// IS the sum of its components' cells. Only components that are ON SCREEN count — a parent
+// whose components are all inactive keeps its own box, because there would be nothing to sum
+// (the server's drift check owns that case, and never rewrites).
+function componentsOf(accounts: AccountOut[]): Map<number, number[]> {
+  const byParent = new Map<number, number[]>()
+  const present = new Set(accounts.map((a) => a.id))
+  for (const account of accounts) {
+    // A component whose parent is not on screen derives nothing — it is just a row.
+    if (account.parent_account_id === null || !present.has(account.parent_account_id)) continue
+    byParent.set(account.parent_account_id, [
+      ...(byParent.get(account.parent_account_id) ?? []),
+      account.id,
+    ])
+  }
+  return byParent
+}
+
+// Rewrites every derived parent's entry INSIDE the balances record, rather than overlaying it
+// at render time. That is what lets the live subtotals, the live net worth, the preview memo
+// and the draft snapshot stay byte-identical: they all read this one record, and it is now
+// always right.
+function deriveParents(
+  byParent: Map<number, number[]>,
+  record: Record<number, string>,
+): Record<number, string> {
+  if (byParent.size === 0) return record
+  const next = { ...record }
+  for (const [parentId, childIds] of byParent) {
+    // CENTS, summed as integers: every cell is a 2dp decimal, so rounding each child before
+    // adding keeps the parent exact. A float sum drifts a hundredth over a long list, and the
+    // server's drift check would then report a mismatch nobody typed.
+    const cents = childIds.reduce(
+      (acc, id) => acc + Math.round((Number(canonicalAmount(next[id] ?? '')) || 0) * 100),
+      0,
+    )
+    next[parentId] = (cents / 100).toFixed(2)
+  }
+  return next
+}
+
 function spendingSentence(leg: NonNullable<SaveLegs['spending']>): string {
   if (leg.status === 'skipped') return `Spending: skipped — ${leg.reason}`
   const { created, updated, unchanged } = leg.result
@@ -323,8 +365,13 @@ export default function MonthlyUpdatePage() {
         // ritual starts from last month's numbers); otherwise 0.00.
         const source = thisMonth.exists ? thisMonth.balances : priorMonth.balances
         const byId = new Map(source.map((b) => [b.account_id, b.balance]))
-        const seededBalances = Object.fromEntries(
-          activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00']),
+        const byParent = componentsOf(activeAccounts)
+        // The parent's SEED is its components' sum, not the stored figure: a snapshot that
+        // drifted must show the truth the save will write. Taken BEFORE the baseline below,
+        // or the draft machinery would file a phantom draft for work nobody typed.
+        const seededBalances = deriveParents(
+          byParent,
+          Object.fromEntries(activeAccounts.map((a) => [a.id, byId.get(a.id) ?? '0.00'])),
         )
         // Reset on EVERY month load — stale notes/date must never leak into another
         // month's save (the next PUT would silently write them there).
@@ -367,11 +414,14 @@ export default function MonthlyUpdatePage() {
         if (stored !== null && draft === null) sessionStorage.removeItem(draftKey(month))
         setBalances(
           draft
-            ? Object.fromEntries(
-                activeAccounts.map((a) => [
-                  a.id,
-                  draft.balances?.[String(a.id)] ?? seededBalances[a.id],
-                ]),
+            ? deriveParents(
+                byParent,
+                Object.fromEntries(
+                  activeAccounts.map((a) => [
+                    a.id,
+                    draft.balances?.[String(a.id)] ?? seededBalances[a.id],
+                  ]),
+                ),
               )
             : seededBalances,
         )
@@ -438,7 +488,16 @@ export default function MonthlyUpdatePage() {
   // option-less isAmount/canonicalAmount (expressions ON) agree with what the component
   // accepts and commits. A non-money cell added here must switch BOTH sides to
   // { expressions: false }, or the page would green-light an "=" the box never evaluates.
-  const balancesValid = accounts.every((a) => isAmount(balances[a.id] ?? ''))
+  // Which parents are derived, and from which cells — ONE map, spent by the row renderer, the
+  // paste target list, the autofocus pick, the validity check and the PUT payload. Deriving
+  // it in five places is how those five drift apart.
+  const componentsByParent = useMemo(() => componentsOf(accounts), [accounts])
+
+  // A derived row has no box, so it has nothing to validate — and its value is always
+  // canonical by construction.
+  const balancesValid = accounts.every(
+    (a) => componentsByParent.has(a.id) || isAmount(balances[a.id] ?? ''),
+  )
   const amountsValid =
     categories.every((c) => isAmount(amounts[c.id] ?? '')) &&
     (netPay.trim() === '' || isAmount(netPay))
@@ -544,7 +603,11 @@ export default function MonthlyUpdatePage() {
           recorded_on: recordedOn === '' ? undefined : recordedOn,
           // null (not undefined): blanking the field must CLEAR a previously saved note.
           notes: notes.trim() === '' ? null : notes,
-          balances: accounts.map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
+          // Spec §5: a parent with components is derived server-side from the components in
+          // this very payload. Sending one would at best be noise and at worst a 422.
+          balances: accounts
+            .filter((a) => !componentsByParent.has(a.id))
+            .map((a) => ({ account_id: a.id, balance: canonBalances[a.id] })),
         })
       }
       // Deliberately NOT reusing the retired A8 state's name here: it would read as the old
@@ -804,7 +867,9 @@ export default function MonthlyUpdatePage() {
   const orderedBalanceRows = ownerSections.flatMap((section) =>
     GROUP_ORDER.flatMap((g) => section.rows.filter((a) => a.group === g)),
   )
-  const firstBalanceId = orderedBalanceRows[0]?.id
+  // The first TYPABLE row: focus() on a derived row's cell would find nothing, and the step
+  // would open with the caret nowhere.
+  const firstBalanceId = orderedBalanceRows.find((a) => !componentsByParent.has(a.id))?.id
 
   // Range paste (spec §4.1): the PARENT owns the entry state, so the scope container does
   // the filling — an AmountInput cannot write its siblings. A single-cell clipboard
@@ -894,7 +959,10 @@ export default function MonthlyUpdatePage() {
   const flipSign = (accountId: number) =>
     setBalances((cur) => {
       const canon = canonicalAmount(cur[accountId] ?? '')
-      return { ...cur, [accountId]: canon.startsWith('-') ? canon.slice(1) : `-${canon}` }
+      return deriveParents(componentsByParent, {
+        ...cur,
+        [accountId]: canon.startsWith('-') ? canon.slice(1) : `-${canon}`,
+      })
     })
 
   // Live subtotal + its prior twin for ANY row set (components excluded, exactly like net
@@ -995,7 +1063,17 @@ export default function MonthlyUpdatePage() {
           <div
             className="card"
             data-entry-scope=""
-            onPaste={(e) => handlePaste(e, orderedBalanceRows, (id) => `bal-${id}`, setBalances)}
+            onPaste={(e) =>
+              handlePaste(
+                e,
+                // Spec §5: a derived row is not a paste target. Filtering here (not inside
+                // handlePaste) keeps the positional walk's slot count honest — "3 of 3", not
+                // "3 of 4 with one silently shifted".
+                orderedBalanceRows.filter((a) => !componentsByParent.has(a.id)),
+                (id) => `bal-${id}`,
+                (updater) => setBalances((cur) => deriveParents(componentsByParent, updater(cur))),
+              )
+            }
           >
             <h2 className="eyebrow">
               {monthExisted ? 'Edit balances' : 'Enter balances (pre-filled from last month)'}
@@ -1066,51 +1144,86 @@ export default function MonthlyUpdatePage() {
                               const prior = priorBalances[account.id]
                               const delta =
                                 prior === undefined ? null : committed(value) - Number(prior)
+                              const derived = componentsByParent.has(account.id)
                               return (
-                                <tr key={account.id}>
+                                <tr
+                                  key={account.id}
+                                  className={derived ? 'entry-derived' : undefined}
+                                >
                                   <td
                                     className={account.is_component ? 'entry-component' : undefined}
                                   >
-                                    <label htmlFor={`bal-${account.id}`}>
-                                      {account.name}
-                                      {account.is_component && (
-                                        <span className="badge">component</span>
-                                      )}
-                                    </label>
+                                    {derived ? (
+                                      // No <label>: there is no control to point at. The badge
+                                      // is the row's whole explanation (spec §5).
+                                      <span>
+                                        {account.name}
+                                        <span className="badge">derived</span>
+                                      </span>
+                                    ) : (
+                                      <label htmlFor={`bal-${account.id}`}>
+                                        {account.name}
+                                        {account.is_component && (
+                                          <span className="badge">component</span>
+                                        )}
+                                      </label>
+                                    )}
                                   </td>
                                   <td className="num entry-ref">
                                     {prior === undefined ? '—' : formatCurrency(prior)}
                                   </td>
                                   <td className="num entry-cell-col">
-                                    <AmountInput
-                                      id={`bal-${account.id}`}
-                                      className={
-                                        `${isAmount(value) ? '' : 'invalid'}${
-                                          flashIds.has(`bal-${account.id}`) ? ' pasted-flash' : ''
-                                        }`.trim() || undefined
-                                      }
-                                      autoFocus={account.id === firstBalanceId}
-                                      value={value}
-                                      onValueChange={(next) =>
-                                        setBalances((cur) => ({ ...cur, [account.id]: next }))
-                                      }
-                                    />
-                                    {/* A1 (2026-08-31 tier-1): advisory amber, NEVER a gate —
-                                        a card can legitimately go positive after a refund, so
-                                        Next/Save stay enabled and the table hint below keeps
-                                        stating the sign convention. */}
-                                    {account.group === 'liability' && committed(value) > 0 && (
-                                      <span className="entry-liability-cue" role="status">
-                                        liabilities are entered negative
-                                        <button
-                                          type="button"
-                                          className="button"
-                                          aria-label={`Flip sign on ${account.name}`}
-                                          onClick={() => flipSign(account.id)}
-                                        >
-                                          Flip sign
-                                        </button>
+                                    {derived ? (
+                                      // The live sum of the component cells below it, written
+                                      // by the same state update that fills any of them.
+                                      <span className="entry-derived-value">
+                                        {formatCurrency(committed(value))}
                                       </span>
+                                    ) : (
+                                      <>
+                                        <AmountInput
+                                          id={`bal-${account.id}`}
+                                          className={
+                                            `${isAmount(value) ? '' : 'invalid'}${
+                                              flashIds.has(`bal-${account.id}`)
+                                                ? ' pasted-flash'
+                                                : ''
+                                            }`.trim() || undefined
+                                          }
+                                          autoFocus={account.id === firstBalanceId}
+                                          value={value}
+                                          onValueChange={(next) =>
+                                            setBalances((cur) =>
+                                              // Spec §5: a component's keystroke IS its
+                                              // parent's value — ONE write, so the row, the
+                                              // subtotals and the live net worth can never
+                                              // show three different answers.
+                                              deriveParents(componentsByParent, {
+                                                ...cur,
+                                                [account.id]: next,
+                                              }),
+                                            )
+                                          }
+                                        />
+                                        {/* A1 (2026-08-31 tier-1): advisory amber, NEVER a gate —
+                                            a card can legitimately go positive after a refund, so
+                                            Next/Save stay enabled and the table hint below keeps
+                                            stating the sign convention. */}
+                                        {account.group === 'liability' &&
+                                          committed(value) > 0 && (
+                                            <span className="entry-liability-cue" role="status">
+                                              liabilities are entered negative
+                                              <button
+                                                type="button"
+                                                className="button"
+                                                aria-label={`Flip sign on ${account.name}`}
+                                                onClick={() => flipSign(account.id)}
+                                              >
+                                                Flip sign
+                                              </button>
+                                            </span>
+                                          )}
+                                      </>
                                     )}
                                   </td>
                                   <td

@@ -75,6 +75,17 @@
 .entry-table .entry-ref, .entry-table .entry-delta { width: 130px; color: var(--muted); }
 .entry-table label { cursor: pointer; }
 .entry-component label { padding-left: 1.1rem; }
+
+/* Spec §5: a parent with components is DERIVED — the sum of the cells under it, never typed.
+   The row reads as a total rather than as an input: muted, tabular, sitting where every other
+   row shows a box. (Its sibling .entry-component above indents the components themselves.) */
+.entry-derived .entry-derived-value {
+  display: inline-block;
+  padding: 0.25rem 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .entry-group-row th {
   text-align: left;
   padding-top: 0.9rem;
