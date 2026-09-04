@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { echarts, registerThemeVersion } from '../charts/echarts'
 import type { EChartsOption } from '../charts/echarts'
-import { defaultCursor, quiesceRipples } from '../charts/motion'
+import { defaultCursor, pinSeriesMotion, quiesceRipples } from '../charts/motion'
 import { lightFromDark, recolorOption } from '../charts/recolor'
 import type { ZoomWindow } from '../charts/timeZoom'
 import { useChartDecals } from './useChartDecals'
@@ -276,10 +276,17 @@ export default function EChart({
     // already-drawn. Only the ENTRANCE duration is zeroed, so update animation still runs
     // (zoom morphs, Projection's trend-span toggles — Addendum §A2).
     const entrance = animateEntrance && !paintedOnceRef.current
+    // Restated on EVERY series, not only at the root: buildTheme's per-type blocks and
+    // SANKEY_MARKS' own MOTION are merged INTO the series, and echarts reads the series
+    // first — a root-only rule leaves line/pie/sankey/treemap replaying the 450ms entrance
+    // on every cached revisit, and leaves treemap animating under reduce (proved against
+    // the engine in charts/motion.ssr.test.ts).
+    const still = reducedMotion ? { animation: false } : entrance ? null : { animationDuration: 0 }
+    const painted = still === null ? base : pinSeriesMotion(base, still)
     const apply = () => {
       chart.setOption(
         {
-          ...base,
+          ...painted,
           // Decals ride echarts' aria component; its own label generation is OFF because it
           // would overwrite the container's house aria-label with a generated sentence.
           ...(decals ? { aria: { enabled: true, label: { enabled: false }, decal: { show: true } } } : {}),
@@ -287,7 +294,7 @@ export default function EChart({
             ? {
                 animation: false,
                 // notMerge: a bare tooltip object here would drop the page's own formatter.
-                tooltip: { ...(base as { tooltip?: object }).tooltip, transitionDuration: 0 },
+                tooltip: { ...(painted as { tooltip?: object }).tooltip, transitionDuration: 0 },
               }
             : entrance ? {} : { animationDuration: 0 }),
         },
@@ -302,6 +309,10 @@ export default function EChart({
       pendingPaintRef.current = apply
       return
     }
+    // A paint that happens NOW supersedes any held one: without this, a chart still below
+    // the fold that takes a cached repaint (a scope flip) would redraw the OLD scope's data
+    // when the observer finally ran the stale closure.
+    pendingPaintRef.current = null
     apply()
     // `resolved` and `themeVersion` mirror the init effect's theme deps: that effect
     // disposes and rebuilds the instance on a palette change, and a rebuilt chart holds NO

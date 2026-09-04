@@ -192,6 +192,21 @@ describe('EChart animateEntrance (2026-08-27 spec §1)', () => {
     expect('animation' in option).toBe(false)
   })
 
+  it('a cached paint restates the rule on every SERIES, not just the root', () => {
+    render(<EChart
+      ariaLabel="test chart"
+      option={{ series: [{ type: 'line', data: [1] }, { type: 'pie', data: [] }] } as EChartsOption}
+      animateEntrance={false}
+    />)
+    const [option] = lastChart().setOption.mock.calls[0] as [
+      { series: { animationDuration?: number }[] },
+    ]
+    // buildTheme's per-type blocks are merged INTO each series and out-rank the root key
+    // (charts/motion.ssr.test.ts proves it against the engine), so a root-only 0 would let
+    // line/pie/sankey/treemap replay their 450ms entrance on every cached revisit.
+    expect(option.series.map((s) => s.animationDuration)).toEqual([0, 0])
+  })
+
   it('animateEntrance defaults on (no forced animation flag)', () => {
     render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} />)
     const chart = lastChart()
@@ -492,6 +507,18 @@ describe('EChart — group, decals, live reduced motion (chart grammar)', () => 
     expect('aria' in (lastChart().setOption.mock.calls[0] as [Record<string, unknown>])[0]).toBe(false)
   })
 
+  it('under reduce every series is stilled, not just the root option', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    render(<EChart
+      ariaLabel="test chart"
+      option={{ series: [{ type: 'treemap', data: [] }] } as EChartsOption}
+    />)
+    const [applied] = lastChart().setOption.mock.calls[0] as [{ series: { animation?: boolean }[] }]
+    // treemap's own defaultOption carries animation: true, which out-ranks the root flag —
+    // the OS preference has to be restated on the series to be obeyed (motion.ssr.test.ts).
+    expect(applied.series[0].animation).toBe(false)
+  })
+
   it('re-applies animation: false when the OS preference flips while mounted', () => {
     let listeners: (() => void)[] = []
     const media = {
@@ -529,16 +556,41 @@ describe('EChart first paint waits for visibility (spec §6)', () => {
   type IOEntry = { isIntersecting: boolean; intersectionRatio: number }
   let notify: ((entries: IOEntry[]) => void)[] = []
   let disconnects: ReturnType<typeof vi.fn>[] = []
+  let armedWith: (IntersectionObserverInit | undefined)[] = []
   // jsdom has no IntersectionObserver, so only this describe has one — every other case in
   // the file keeps painting synchronously, which is the no-observer contract below.
   beforeEach(() => {
     notify = []
     disconnects = []
-    vi.stubGlobal('IntersectionObserver', vi.fn((cb: (entries: IOEntry[]) => void) => {
+    armedWith = []
+    vi.stubGlobal('IntersectionObserver', vi.fn((
+      cb: (entries: IOEntry[]) => void,
+      options?: IntersectionObserverInit,
+    ) => {
       const disconnect = vi.fn()
       disconnects.push(disconnect)
+      armedWith.push(options)
       return { observe: () => notify.push(cb), disconnect, unobserve: () => {} }
     }))
+  })
+  it('arms the observer at the 20% threshold the ratio gate reads', () => {
+    render(<EChart ariaLabel="test chart" option={OPTION} />)
+    // Without it the browser only reports the 0% crossing, so a card revealed slowly would
+    // paint on its first stray pixel and the ratio gate would never see a second delivery.
+    expect(armedWith[0]).toEqual({ threshold: 0.2 })
+  })
+  it('a paint that happens NOW drops the held one — no stale redraw on scroll-in', () => {
+    const bars = (v: number) => ({ series: [{ type: 'bar', data: [v] }] }) as EChartsOption
+    const { rerender } = render(<EChart ariaLabel="test chart" option={bars(1)} />)
+    const chart = lastChart()
+    expect(chart.setOption).not.toHaveBeenCalled() // held: the card is still below the fold
+    // A cached scope flip paints straight away, and the held closure carries the OLD scope.
+    rerender(<EChart ariaLabel="test chart" option={bars(2)} animateEntrance={false} />)
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 1 }]))
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    const [last] = chart.setOption.mock.calls.at(-1) as [{ series: { data: number[] }[] }]
+    expect(last.series[0].data).toEqual([2])
   })
   it('holds the first animated paint until 20% of the canvas is on screen, once', () => {
     render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} />)

@@ -22,6 +22,28 @@ export const MOTION = {
 // NOT the fix either: ScatterChart IS registered (the net-worth note markers), but a
 // still dot loses the live ping's one meaning — "this reading is now" — which the ripple
 // carries and a plain marker does not.
+/** Restates a motion rule on EVERY series, overwriting whatever the series already carries.
+ *
+ *  Required, not belt-and-braces: `SeriesModel.mergeDefaultAndTheme` merges `theme[seriesType]`
+ *  (buildTheme's per-type blocks) and the series' own keys (SANKEY_MARKS' MOTION spread) INTO
+ *  the series option, and `Model.getShallow` only falls back to the root option when the series
+ *  itself lacks the key. So a root-only `animationDuration: 0` — the cached-paint rule — is
+ *  invisible to line/pie/sankey/treemap, which would replay their 450ms entrance on every
+ *  revalidation, scope change and theme swap. Same for `animation: false` under reduce, where
+ *  treemap's own `defaultOption.animation` would otherwise win. Proven against the real engine
+ *  in motion.ssr.test.ts. */
+export function pinSeriesMotion(
+  option: EChartsOption,
+  motion: Record<string, unknown>,
+): EChartsOption {
+  const series = (option as { series?: unknown }).series
+  if (series === undefined) return option
+  // Spread LAST: the series' own 450 has to lose, which is the whole point.
+  const pin = (one: unknown): unknown =>
+    one !== null && typeof one === 'object' ? { ...one, ...motion } : one
+  return { ...option, series: Array.isArray(series) ? series.map(pin) : pin(series) } as EChartsOption
+}
+
 /** ECharts gives every series a 'pointer' cursor whether or not a click does anything, so a
  *  chart with no `onClick` promises a drill-in it lacks. An explicit cursor is left alone. */
 export function defaultCursor(option: EChartsOption): EChartsOption {
