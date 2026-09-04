@@ -82,7 +82,7 @@ git rm src/components/MonthRibbon.tsx src/components/MonthRibbon.test.tsx src/co
 
 ### Task 3: Success-criteria sweep (spec §5)
 
-- [ ] Run and expect NO output from each:
+- [x] Run and expect NO output from each:
 
 ```bash
 grep -rn 'className="page-header"\|className="header-actions"' src/pages
@@ -92,9 +92,17 @@ grep -rn '>Loading…<\|Loading…</p>' src/pages
 grep -rn 'SkeletonCard' src/pages
 ```
 
-- [ ] `src/components/PageSkeleton.tsx`: if `SkeletonCard` is now used only by `shell/Feed.tsx` and `PageSkeleton` only by `shell/PageFrame.tsx`, leave the module where it is (two importers, both shell) — do not move files in this plan. If it exports anything with zero importers (e.g. a `SkeletonTiles` variant), remove that export and its test case.
+- [x] `src/components/PageSkeleton.tsx`: if `SkeletonCard` is now used only by `shell/Feed.tsx` and `PageSkeleton` only by `shell/PageFrame.tsx`, leave the module where it is (two importers, both shell) — do not move files in this plan. If it exports anything with zero importers (e.g. a `SkeletonTiles` variant), remove that export and its test case.
 
-- [ ] Commit any trims: `git commit -am "chore(shell): drop unused PageSkeleton variants"`
+- [x] Commit any trims: NONE TO MAKE — the module has exactly two exports and the
+  leave-it-alone branch is the one that holds. `PageSkeleton` (default) has one importer,
+  `shell/PageFrame.tsx:3`; `SkeletonCard` has one, `shell/Feed.tsx:2`. There is no
+  `SkeletonTiles` or any other zero-importer export to trim, so no commit was made.
+
+> **Sweep 2026-09-03 (main @a0ed859).** All five greps returned nothing. Note that four of
+> them can only pass now because the classes are gone from the MARKUP — `.page-header` and
+> `.loading-fallback` still have live rules in `panels.css` (Task 2's note says who uses
+> them), which is why this sweep greps `.tsx` and Task 2 grepped `.css`.
 
 ---
 
@@ -104,11 +112,22 @@ grep -rn 'SkeletonCard' src/pages
 - Modify: `docs/superpowers/specs/2026-09-03-shell-grammar-design.md` §11 (light token values and acceptance), §5 (the `scope` prop became `scopeRow`), §6 (`owner: { joint, all }`)
 - Modify: `README.md` frontend section
 
-- [ ] **Step 1: Spec §11** — replace the "starting light values" hexes with the shipped ones from `src/theme/tokens.ts` (read the file; do not type from memory), state that acceptance is ≥ 4.5:1 on BOTH `--bg` and `--surface` for text/muted/positive/negative/warn/accent, ≥ 3:1 for the eight slots and `--other-series`, and that `--warn` equals `--chart-4` in both themes; mention `--on-accent`. **§5** — note that PageFrame takes `scopeRow?: ReactNode` and pages compose `<ScopeBar …/>` into it (the `scope` declaration object in the original API was folded into ScopeBar's props). **§6** — add `owner: { joint: false, all: false }` (Paycheck) and the legacy `month=YYYY-MM-DD` acceptance.
+- [x] **Step 1: Spec §11** — replace the "starting light values" hexes with the shipped ones from `src/theme/tokens.ts` (read the file; do not type from memory), state that acceptance is ≥ 4.5:1 on BOTH `--bg` and `--surface` for text/muted/positive/negative/warn/accent, ≥ 3:1 for the eight slots and `--other-series`, and that `--warn` equals `--chart-4` in both themes; mention `--on-accent`. **§5** — note that PageFrame takes `scopeRow?: ReactNode` and pages compose `<ScopeBar …/>` into it (the `scope` declaration object in the original API was folded into ScopeBar's props). **§6** — add `owner: { joint: false, all: false }` (Paycheck) and the legacy `month=YYYY-MM-DD` acceptance.
 
-- [ ] **Step 2: README** — in the frontend section, add a short "Shell primitives" paragraph: `PageFrame` (title row, actions, subheader, sticky scope row, five states), `ScopeBar` + `useScope` (URL grammar `owner=all|<id>|joint`, `range=all|1y|ytd`, `month=YYYY-MM`, remembered owner/range in `finance.scope`), `MonthRibbon` 2.0 (two-tone coverage, `GET /coverage`), `Segmented` (toggle/tabs/steps/chips), `Feed`/`FeedBanner`, `ThemeProvider` (`finance.theme`, `finance.density`; charts re-theme via versioned ECharts themes + option recolor), the command palette registry, session renewal (`POST /auth/renew`, `token_version`), and the `ShellErrorBoundary`. Keep it to one screen; link the spec.
+- [x] **Step 2: README** — in the frontend section, add a short "Shell primitives" paragraph: `PageFrame` (title row, actions, subheader, sticky scope row, five states), `ScopeBar` + `useScope` (URL grammar `owner=all|<id>|joint`, `range=all|1y|ytd`, `month=YYYY-MM`, remembered owner/range in `finance.scope`), `MonthRibbon` 2.0 (two-tone coverage, `GET /coverage`), `Segmented` (toggle/tabs/steps/chips), `Feed`/`FeedBanner`, `ThemeProvider` (`finance.theme`, `finance.density`; charts re-theme via versioned ECharts themes + option recolor), the command palette registry, session renewal (`POST /auth/renew`, `token_version`), and the `ShellErrorBoundary`. Keep it to one screen; link the spec.
 
-- [ ] **Step 3: Commit** `git add docs README.md && git commit -m "docs(shell): spec values as shipped; README shell primitives"`
+- [x] **Step 3: Commit** — done as `a42d5c8`. Re-verified against the merged tree on
+  2026-09-03: every §11 hex matches `src/theme/tokens.ts` value-for-value (the 14 named
+  tokens and chart slots 1–8 of `LIGHT`, plus dark's raised `--other-series` `#6b7382`);
+  the acceptance paragraph matches what `tokens.test.ts` actually asserts (4.5:1 on BOTH
+  `--bg` and `--surface` for text/muted/positive/negative/warn/accent, 3:1 for the eight
+  slots and `--other-series`, 4.5:1 for `--on-accent` on `--accent`, and `warn === palette[3]`
+  in both palettes); §5 carries the `scopeRow?: ReactNode` "As shipped" note and §6 both the
+  Paycheck `{ joint: false, all: false }` line and the legacy `YYYY-MM-DD` rewrite. The
+  README's "Shell primitives" section covers all nine primitives this step asked for and its
+  claims check out in code (`finance.scope` in `prefs/prefsStore.ts:37`, `RENEW_WITHIN_MS`
+  = six hours in `shell/session.ts:5`, four `Segmented` variants, `GET /coverage`). No drift
+  to fix.
 
 ---
 
