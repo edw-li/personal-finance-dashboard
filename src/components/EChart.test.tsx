@@ -524,3 +524,61 @@ describe('EChart resize guard (spec §6)', () => {
     expect(chart.resize).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('EChart first paint waits for visibility (spec §6)', () => {
+  type IOEntry = { isIntersecting: boolean; intersectionRatio: number }
+  let notify: ((entries: IOEntry[]) => void)[] = []
+  let disconnects: ReturnType<typeof vi.fn>[] = []
+  // jsdom has no IntersectionObserver, so only this describe has one — every other case in
+  // the file keeps painting synchronously, which is the no-observer contract below.
+  beforeEach(() => {
+    notify = []
+    disconnects = []
+    vi.stubGlobal('IntersectionObserver', vi.fn((cb: (entries: IOEntry[]) => void) => {
+      const disconnect = vi.fn()
+      disconnects.push(disconnect)
+      return { observe: () => notify.push(cb), disconnect, unobserve: () => {} }
+    }))
+  })
+  it('holds the first animated paint until 20% of the canvas is on screen, once', () => {
+    render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} />)
+    const chart = lastChart()
+    expect(chart.setOption).not.toHaveBeenCalled()
+    // isIntersecting alone is not the gate: a 5%-visible chart is reported as intersecting.
+    notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 0.05 }]))
+    expect(chart.setOption).not.toHaveBeenCalled()
+    notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 0.6 }]))
+    expect(chart.setOption).toHaveBeenCalledTimes(1)
+    const [first] = chart.setOption.mock.calls[0] as [Record<string, unknown>]
+    expect('animationDuration' in first).toBe(false)
+    expect(disconnects[0]).toHaveBeenCalled() // one-shot: scrolling away never re-arms it
+  })
+  it('a cached paint never waits — it has no entrance to protect', () => {
+    render(<EChart ariaLabel="test chart" option={{ series: [] } as EChartsOption} animateEntrance={false} />)
+    const [only] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
+    expect(only.animationDuration).toBe(0)
+  })
+  it('the entrance is the mount’s only one — the next paint is already-drawn', () => {
+    const bars = (v: number) => ({ series: [{ type: 'bar', data: [v] }] }) as EChartsOption
+    const { rerender } = render(<EChart ariaLabel="test chart" option={bars(1)} />)
+    const chart = lastChart()
+    notify.forEach((fire) => fire([{ isIntersecting: true, intersectionRatio: 1 }]))
+    rerender(<EChart ariaLabel="test chart" option={bars(2)} />)
+    const last = chart.setOption.mock.calls.at(-1) as [Record<string, unknown>]
+    expect(last[0].animationDuration).toBe(0)
+  })
+  it('with no observer nothing waits, and a theme re-init repaints already-drawn', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined)
+    function Harness() {
+      const { setTheme } = useTheme()
+      return (<><button onClick={() => setTheme('light')}>go light</button><EChart ariaLabel="test chart" option={OPTION} /></>)
+    }
+    render(<ThemeProvider><Harness /></ThemeProvider>)
+    const [first] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
+    expect('animationDuration' in first).toBe(false)
+    act(() => screen.getByText('go light').click())
+    await waitFor(() => expect(instances.length).toBe(2))
+    const [after] = lastChart().setOption.mock.calls[0] as [Record<string, unknown>]
+    expect(after.animationDuration).toBe(0)
+  })
+})

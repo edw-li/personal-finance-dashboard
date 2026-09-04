@@ -88,6 +88,13 @@ export default function EChart({
   // "nothing else changed" proof). Reset whenever the chart itself is rebuilt — a fresh
   // instance has no applied option to be equal to.
   const lastStrippedRef = useRef<string | null>(null)
+  // Has this MOUNT ever painted? Unlike lastStrippedRef this survives the init effect, so a
+  // palette re-init repaints already-drawn instead of replaying the entrance (spec §6).
+  const paintedOnceRef = useRef(false)
+  // The first paint, held until the card is on screen; latest-wins, and the init cleanup drops
+  // it because the chart its closure captured is being disposed.
+  const pendingPaintRef = useRef<(() => void) | null>(null)
+  const visibleRef = useRef(false) // opened once, by the observer below or by its absence
   const onClickRef = useRef(onClick)
   const onHoverRef = useRef(onHover)
   const onHoverEndRef = useRef(onHoverEnd)
@@ -155,6 +162,7 @@ export default function EChart({
       chart.dispose()
       chartRef.current = null
       lastStrippedRef.current = null
+      pendingPaintRef.current = null
       if (instanceRef) instanceRef.current = null
     }
   }, [instanceRef, resolved, themeVersion])
@@ -172,6 +180,31 @@ export default function EChart({
     chart.group = group ?? ''
     if (group !== undefined) echarts.connect(group)
   }, [group, instanceRef, resolved, themeVersion])
+
+  // A chart below the fold used to spend its entrance off-screen and was already still by the
+  // time it was scrolled to. One-shot gate (spec §6): the first animated paint waits until 20%
+  // of the canvas is on screen. Guarded like PageFrame's sentinel — no observer, no waiting.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      visibleRef.current = true
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // The initial delivery reports a sliver as intersecting, so the RATIO is the gate.
+        if (!entries.some((e) => e.isIntersecting && e.intersectionRatio >= 0.2)) return
+        observer.disconnect() // opened once per mount, never closed again
+        visibleRef.current = true
+        const pending = pendingPaintRef.current
+        pendingPaintRef.current = null
+        pending?.()
+      },
+      { threshold: 0.2 },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -232,21 +265,32 @@ export default function EChart({
     const themed =
       resolved === 'light' ? (recolorOption(option, lightFromDark) as EChartsOption) : option
     const base = reducedMotion ? quiesceRipples(themed) : themed
-    chart.setOption(
-      {
-        ...base,
-        // Decals ride echarts' aria component; its own label generation is OFF because it
-        // would overwrite the container's house aria-label with a generated sentence.
-        ...(decals ? { aria: { enabled: true, label: { enabled: false }, decal: { show: true } } } : {}),
-        ...(reducedMotion
-          ? { animation: false }
-          : !animateEntrance
-            ? { animationDuration: 0 }
-            : {}),
-      },
-      { notMerge: true },
-    )
-    lastStrippedRef.current = stripped
+    // The mount's ONE entrance: the first paint animates in, and everything after it — a
+    // revalidation, a scope change, the theme re-init that rebuilds the instance — repaints
+    // already-drawn. Only the ENTRANCE duration is zeroed, so update animation still runs
+    // (zoom morphs, Projection's trend-span toggles — Addendum §A2).
+    const entrance = animateEntrance && !paintedOnceRef.current
+    const apply = () => {
+      chart.setOption(
+        {
+          ...base,
+          // Decals ride echarts' aria component; its own label generation is OFF because it
+          // would overwrite the container's house aria-label with a generated sentence.
+          ...(decals ? { aria: { enabled: true, label: { enabled: false }, decal: { show: true } } } : {}),
+          ...(reducedMotion ? { animation: false } : entrance ? {} : { animationDuration: 0 }),
+        },
+        { notMerge: true },
+      )
+      paintedOnceRef.current = true
+      lastStrippedRef.current = stripped
+    }
+    // Only an animated first paint waits: a cached or reduced-motion paint has no entrance to
+    // protect, and the zoom fast path cannot fire meanwhile (lastStrippedRef stays null).
+    if (entrance && !reducedMotion && !visibleRef.current) {
+      pendingPaintRef.current = apply
+      return
+    }
+    apply()
     // `resolved` and `themeVersion` mirror the init effect's theme deps: that effect
     // disposes and rebuilds the instance on a palette change, and a rebuilt chart holds NO
     // option, so this effect must re-run in the same commit (effects fire in declaration
