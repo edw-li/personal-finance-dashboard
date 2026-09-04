@@ -130,6 +130,13 @@ describe('FeedBanner', () => {
     ).toBe(true)
   })
 
+  it('offers NO Retry without a retry prop — Retry is opt-in (motion spec §9)', () => {
+    // A Retry here invites a re-send of a form the server already refused, and looks like a fix.
+    render(<FeedBanner error="Account name is required." retryLabel="Retry loading accounts" />)
+    expect(screen.getByRole('alert').textContent).toBe('Account name is required.')
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
   it('renders Retry before an action when a banner offers both', () => {
     render(
       <FeedBanner
