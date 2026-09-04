@@ -64,9 +64,16 @@ export function matrixFixture(over: Partial<SpendingMatrix> = {}): SpendingMatri
   return {
     months: ['2026-06-01', '2026-07-01'],
     categories: [
-      { id: 1, name: 'Rent', slug: 'rent', sort_order: 0, is_active: true },
-      { id: 2, name: 'Groceries <b>& more</b>', slug: 'groceries', sort_order: 1, is_active: true },
-      { id: 3, name: 'Fun', slug: 'fun', sort_order: 2, is_active: true },
+      { id: 1, name: 'Rent', slug: 'rent', sort_order: 0, is_active: true, kind: 'living' },
+      {
+        id: 2,
+        name: 'Groceries <b>& more</b>',
+        slug: 'groceries',
+        sort_order: 1,
+        is_active: true,
+        kind: 'living',
+      },
+      { id: 3, name: 'Fun', slug: 'fun', sort_order: 2, is_active: true, kind: 'living' },
     ],
     series: [
       { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, null] },

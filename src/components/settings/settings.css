@@ -441,3 +441,26 @@
   padding: 0.3rem 0.6rem;
   font-size: 0.78rem;
 }
+
+/* --- category kinds + account roll-up cues (2026-09-04 honest-numbers spec §1, §5) --- */
+
+/* The kind picker lives in a table cell. Without this the three-button group breaks across
+   lines on a narrow card and the column's width jumps as the pressed label changes. */
+.category-table td .segmented {
+  white-space: nowrap;
+}
+
+/* "component of X" / "derived: n components" / "parent: X" are sentences ABOUT the row, not
+   values in it — muted, at the size the card's other subtexts use. */
+.accounts-link-note {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* A component whose parent is retired or gone reaches no total at all: net worth sums the
+   non-component rows, and this one has nothing to be summed into. The app's one advisory
+   register (--warn, PALETTE[3] amber, the .draft-note family) — and the sentence says it
+   too, because colour is never the only channel. */
+.accounts-link-note.is-unlinked {
+  color: var(--warn);
+}

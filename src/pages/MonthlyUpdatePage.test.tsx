@@ -63,7 +63,14 @@ const creditCard = {
   sort_order: 5, is_active: true, is_component: false, parent_account_id: null,
   person_id: 1,
 }
-const category = { id: 7, name: 'Food', slug: 'food', sort_order: 1, is_active: true }
+const category = {
+  id: 7,
+  name: 'Food',
+  slug: 'food',
+  sort_order: 1,
+  is_active: true,
+  kind: 'living' as const,
+}
 
 beforeEach(() => {
   // The ScopeBar caches /coverage under a shell:* snapshot key that outlives a test.

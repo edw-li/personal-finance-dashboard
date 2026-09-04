@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { budgetProgress, buildMonthSlices, hasVsBudget, monthMovers, typicalSpend } from './spending'
 
 const categories = [
-  { id: 1, name: 'Rent', slug: 'rent', sort_order: 1, is_active: true },
-  { id: 2, name: 'Food', slug: 'food', sort_order: 2, is_active: true },
-  { id: 3, name: 'Gas', slug: 'gas', sort_order: 3, is_active: true },
-  { id: 4, name: 'Misc', slug: 'misc', sort_order: 4, is_active: true },
+  { id: 1, name: 'Rent', slug: 'rent', sort_order: 1, is_active: true, kind: 'living' as const },
+  { id: 2, name: 'Food', slug: 'food', sort_order: 2, is_active: true, kind: 'living' as const },
+  { id: 3, name: 'Gas', slug: 'gas', sort_order: 3, is_active: true, kind: 'living' as const },
+  { id: 4, name: 'Misc', slug: 'misc', sort_order: 4, is_active: true, kind: 'living' as const },
 ]
 
 function matrix(

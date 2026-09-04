@@ -13,9 +13,9 @@ import type { SpendingMatrix } from '../../types/api'
 const matrix: SpendingMatrix = {
   months: ['2026-01-01', '2026-02-01'],
   categories: [
-    { id: 1, name: 'Food', slug: 'food', sort_order: 1, is_active: true },
-    { id: 2, name: 'Rent', slug: 'rent', sort_order: 2, is_active: true },
-    { id: 3, name: 'Old', slug: 'old', sort_order: 3, is_active: false },
+    { id: 1, name: 'Food', slug: 'food', sort_order: 1, is_active: true, kind: 'living' },
+    { id: 2, name: 'Rent', slug: 'rent', sort_order: 2, is_active: true, kind: 'living' },
+    { id: 3, name: 'Old', slug: 'old', sort_order: 3, is_active: false, kind: 'living' },
   ],
   series: [
     { category_id: 1, values: ['300.00', '450.00'], budgets: ['400.00', '400.00'] },

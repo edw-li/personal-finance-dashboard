@@ -95,9 +95,16 @@ function matrixFixture(over: Partial<SpendingMatrix> = {}): SpendingMatrix {
   return {
     months: ['2026-06-01', '2026-07-01'],
     categories: [
-      { id: 1, name: 'Rent', slug: 'rent', sort_order: 0, is_active: true },
-      { id: 2, name: 'Groceries', slug: 'groceries', sort_order: 1, is_active: true },
-      { id: 3, name: 'Fun', slug: 'fun', sort_order: 2, is_active: true },
+      { id: 1, name: 'Rent', slug: 'rent', sort_order: 0, is_active: true, kind: 'living' },
+      {
+        id: 2,
+        name: 'Groceries',
+        slug: 'groceries',
+        sort_order: 1,
+        is_active: true,
+        kind: 'living',
+      },
+      { id: 3, name: 'Fun', slug: 'fun', sort_order: 2, is_active: true, kind: 'living' },
     ],
     series: [
       { category_id: 1, values: ['2000.00', '2000.00'], budgets: [null, null] },
@@ -294,7 +301,14 @@ describe('SpendingPage — the grammar mounts (charts C3)', () => {
       matrixFixture({
         categories: [
           ...matrixFixture().categories,
-          { id: 4, name: 'Dormant', slug: 'dormant', sort_order: 3, is_active: true },
+          {
+            id: 4,
+            name: 'Dormant',
+            slug: 'dormant',
+            sort_order: 3,
+            is_active: true,
+            kind: 'living',
+          },
         ],
         series: [
           ...matrixFixture().series,
