@@ -23,6 +23,7 @@ import InfoHint from '../components/InfoHint'
 import StatTile from '../components/StatTile'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
+import { FEED_SKELETON } from '../components/skeletonMetrics'
 import type {
   EsppLotCreate,
   EsppLotOut,
@@ -1412,7 +1413,7 @@ export default function EsppPage() {
           data={lots}
           busy={lotsBusy}
           staleNoun="the table"
-          skeleton={{ height: 260, label: 'Loading lots…' }}
+          skeleton={{ height: FEED_SKELETON.esppLots, label: 'Loading lots…' }}
         >
           {(data) => <LotsPanel data={data} offerings={offerings ?? []} onChanged={reloadLots} />}
         </Feed>
@@ -1421,7 +1422,7 @@ export default function EsppPage() {
           data={offerings}
           busy={offeringsBusy}
           staleNoun="the table"
-          skeleton={{ height: 220, label: 'Loading offerings…' }}
+          skeleton={{ height: FEED_SKELETON.esppOfferings, label: 'Loading offerings…' }}
         >
           {(rows) => <OfferingsPanel offerings={rows} bars={bars} onChanged={onOfferingsChanged} />}
         </Feed>

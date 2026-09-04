@@ -294,11 +294,79 @@
 }
 
 .loading-dim {
-  transition: opacity 0.15s ease;
+  opacity: 1;
+}
+
+/* The dim was a hard-coded 0.15s (motion spec §1): one token, and only where motion is welcome. */
+@media (prefers-reduced-motion: no-preference) {
+  .loading-dim {
+    transition: opacity var(--t-fast, 120ms) ease;
+  }
 }
 
 .loading-dim.is-loading {
   opacity: 0.55;
+}
+
+/* Skeleton → content cross-fade (motion spec §7): the content mounts in its final box and the ghost
+   lies over it, so the swap is a fade, never a jump. `.is-fading` gates the incoming half — content
+   that was never behind a ghost must not fade in on every render. */
+.xfade {
+  position: relative;
+}
+
+.xfade.is-fading > .loading-dim {
+  animation: xfade-in var(--t-xfade, 180ms) var(--ease-out, ease) both;
+}
+
+.xfade-veil {
+  position: absolute;
+  inset: 0;
+  /* The ghost is sized by the content underneath it, which can be shorter than the block the
+     skeleton drew: clip rather than let a stray ghost row hang past the card it is leaving. */
+  overflow: hidden;
+  pointer-events: none;
+  animation: xfade-out var(--t-xfade, 180ms) var(--ease-out, ease) both;
+}
+
+/* The veil's ghost is ALREADY on screen — it is the skeleton the reader has been looking at. Left
+   on .loading-fallback's delayed appear it would start at opacity 0 and spend its whole 180ms life
+   invisible, so the swap read skeleton → blank → fade-in: the very flash this removes. */
+.xfade-veil .loading-fallback {
+  opacity: 1;
+  animation: none;
+}
+
+/* A ghost mid-exit must not also pulse: two animations on one element read as a glitch. */
+.xfade-veil .skeleton {
+  animation: none;
+}
+
+@keyframes xfade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes xfade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xfade.is-fading > .loading-dim,
+  .xfade-veil {
+    animation: none;
+  }
 }
 
 /* Series-picker chips (spending category trends + net-worth account drill-down). */
@@ -470,6 +538,32 @@
   height: 1.45rem;
 }
 
+/* The boxes the real layout occupies: a 76px tile ghost under a 115px tile moved every page's
+   first paint by 39px a row (motion spec §7). One variable per row, read by the REAL row and by
+   the empty twin the skeleton leaves in its place — parity by construction, not two numbers that
+   happen to agree; src/components/skeletonMetrics.ts mirrors them and its test pins the pair. */
+.page-skeleton {
+  --m-stat-tile: 115px;
+  --m-owner-strip: 41px;
+}
+
+/* Parity with the loaded blocks (motion spec §7): a ghost tile must stand as tall as the real
+   .stat-tile it is replaced by, delta line and all — the --m-* variables above hold the numbers. */
+.skeleton-tile {
+  min-height: var(--m-stat-tile);
+}
+
+.skeleton-delta {
+  width: 50%;
+  height: 0.8rem;
+  margin-top: 0.35rem;
+}
+
+.skeleton-strip {
+  min-height: var(--m-owner-strip);
+  margin: 0 0 1rem;
+}
+
 /* Delayed appearance: anything that resolves inside the delay shows NOTHING — flashing
    a fallback for 80ms reads clunkier than the wait it fills. Opacity, not display, so
    the appear can fade. Deliberately outside the reduced-motion gate: a delayed fade-in
@@ -570,6 +664,9 @@
    PortfolioPage's Holdings header — a table, not a chart. */
 
 .chart-card-header {
+  /* Pinned, so a card with small controls, large ones or none at all reserves the SAME header row
+     — otherwise skeletonMetrics.chartCardBox could only be right for one of the three. */
+  min-height: var(--m-header-row);
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -582,6 +679,7 @@
 }
 
 .chart-card-controls {
+  min-height: var(--m-header-controls);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -594,6 +692,43 @@
   margin: 0 0 0.5rem;
   color: var(--warn);
   font-size: 0.8rem;
+}
+
+/* Reserved rows (motion spec §7): one variable per row, read by the REAL row and by the empty twin
+   the skeleton leaves in its place, so the card is the same height before and after the data lands.
+   src/components/skeletonMetrics.ts mirrors these numbers and its test pins the pair. */
+.chart-card {
+  --m-header-row: 15px;
+  --m-header-controls: 30px;
+  --m-export-row: 34px;
+  --m-zoom-row: 21px;
+  --m-caption-row: 26px;
+}
+
+/* flow-root, not overflow:hidden: a block formatting context keeps the child's margins INSIDE the
+   reserved row (an escaping 0.4rem makes the loaded row taller than its twin) without clipping the
+   segmented buttons' focus ring. */
+.chart-card-row {
+  display: flow-root;
+}
+
+.chart-card-row-export {
+  min-height: var(--m-export-row);
+}
+
+/* The row owns the gap now. The menu's own 0.4rem top margin used to COLLAPSE into the header's
+   0.75rem; inside the flow-root above it cannot, so it was adding 6.4px to every loaded chart card
+   that no skeleton reserved. Zeroed here, the reserved row IS the spacing. */
+.chart-card-row-export .chart-export {
+  margin: 0;
+}
+
+.chart-card-row-zoom {
+  min-height: var(--m-zoom-row);
+}
+
+.chart-card-row-caption {
+  min-height: var(--m-caption-row);
 }
 
 .chart-card-skeleton {

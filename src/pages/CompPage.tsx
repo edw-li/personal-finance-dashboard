@@ -20,6 +20,7 @@ import {
 } from '../components/comp/compChartOptions'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
+import { FEED_SKELETON } from '../components/skeletonMetrics'
 import type { CompEventCreate, CompEventOut, VestingScheduleOut } from '../types/api'
 import { canonicalAmount } from '../utils/amount'
 import { formatCurrency, formatPct, formatShares } from '../utils/format'
@@ -597,7 +598,7 @@ export default function CompPage() {
           staleNoun="the schedule"
           // Its own sentence, not the schedule card's: two identical hidden labels would
           // read out one after the other while the one feed behind them loads.
-          skeleton={{ height: 96, label: 'Loading vesting totals…' }}
+          skeleton={{ height: FEED_SKELETON.compVesting, label: 'Loading vesting totals…' }}
         >
           {(s) => <VestingTiles schedule={s} />}
         </Feed>
@@ -610,7 +611,7 @@ export default function CompPage() {
           data={events}
           busy={busy}
           staleNoun="the table"
-          skeleton={{ height: 240, label: 'Loading comp events…' }}
+          skeleton={{ height: FEED_SKELETON.compEvents, label: 'Loading comp events…' }}
         >
           {(rows) => <EventsPanel events={rows} onChanged={onEventsChanged} />}
         </Feed>

@@ -55,7 +55,7 @@ describe('PageFrame', () => {
         title="Portfolio"
         scopeRow={<span>scope</span>}
         resource={{ status: 'loading' }}
-        skeleton={{ tiles: 3, cards: [{ span: 12, height: 200 }] }}
+        skeleton={{ tiles: 3, strip: true, cards: [{ span: 12, height: 200 }] }}
       >
         <p>body</p>
       </PageFrame>,
@@ -63,6 +63,9 @@ describe('PageFrame', () => {
     expect(screen.getByText('scope')).toBeTruthy()
     expect(screen.getByRole('status', { name: '' }).textContent).toBe('Loading…')
     expect(document.querySelectorAll('.stat-tile')).toHaveLength(3)
+    // The whole spec reaches PageSkeleton: a prop the frame forgets to forward is a ghost the
+    // page asked for and never gets — the owner strip's box would go missing on net worth.
+    expect(document.querySelector('.skeleton-strip')).toBeTruthy()
     expect(screen.queryByText('body')).toBeNull()
   })
 

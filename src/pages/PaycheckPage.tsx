@@ -22,6 +22,7 @@ import TryItPanel from '../components/paycheck/TryItPanel'
 import Feed, { FeedBanner } from '../components/shell/Feed'
 import PageFrame from '../components/shell/PageFrame'
 import ScopeBar, { HOUSEHOLD_SNAPSHOT } from '../components/shell/ScopeBar'
+import { FEED_SKELETON } from '../components/skeletonMetrics'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import type {
@@ -1112,7 +1113,7 @@ export default function PaycheckPage() {
           data={breakdownMissing ? null : breakdown}
           busy={breakdownBusy && !breakdownMissing}
           staleNoun="this breakdown"
-          skeleton={{ height: 320, label: 'Loading the breakdown…' }}
+          skeleton={{ height: FEED_SKELETON.paycheckBreakdown, label: 'Loading the breakdown…' }}
           empty={
             breakdownMissing ? (
               <section className="card">

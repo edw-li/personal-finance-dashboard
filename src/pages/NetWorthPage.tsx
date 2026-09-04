@@ -14,6 +14,7 @@ import ScopeBar from '../components/shell/ScopeBar'
 import Segmented from '../components/shell/Segmented'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
+import { chartCardBox, ghostCardBody } from '../components/skeletonMetrics'
 import { useArrivalValue } from '../components/useArrivalParam'
 import {
   STACK_MODES,
@@ -412,11 +413,17 @@ export default function NetWorthPage() {
             load()
           },
         }}
+        // strip: the owner row sits between the tiles and the first chart; unghosted it pushed both
+        // charts down when the summary landed. cards: the three boxes the page really draws —
+        // the stacked chart (360, two Segmented controls, zoomable), the What-moved waterfall
+        // (280, bare) and the account drill-down (280, zoomable, with a footer).
         skeleton={{
           tiles: 4,
+          strip: true,
           cards: [
-            { span: 12, height: 360 },
-            { span: 12, height: 300 },
+            { span: 12, height: ghostCardBody(chartCardBox(360, { controls: true, zoomable: true })) },
+            { span: 12, height: ghostCardBody(chartCardBox(280)) },
+            { span: 12, height: ghostCardBody(chartCardBox(280, { zoomable: true, footer: true })) },
           ],
         }}
       >
