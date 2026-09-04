@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RetirementOut(BaseModel):
@@ -41,6 +41,24 @@ class ContributionBreakdownOut(BaseModel):
     payroll: Decimal
     total: Decimal
     by_person: list[PayrollSavingOut]
+
+
+class DerivedWindowOut(BaseModel):
+    """The months a DERIVED `annual_spend`/`monthly_contribution` was averaged over
+    (2026-09-04 honest-numbers spec §3): the last twelve months that have both spending
+    rows and take-home. `months` is how many actually matched — the endpoints can straddle
+    a gap month, and saying "12 months" when 11 matched is the error this echo exists to
+    prevent. Null when the knobs were supplied, or when no month has both halves.
+
+    FastAPI serializes response models BY ALIAS, so the wire spells these `from` and `to`;
+    `from` is a Python keyword, hence the `_month` suffix on the fields.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_month: date = Field(alias="from")
+    to_month: date = Field(alias="to")
+    months: int
 
 
 class ProjectionOut(BaseModel):
@@ -85,3 +103,6 @@ class ProjectionOut(BaseModel):
     # Present whenever `monthly_contribution` was DERIVED (2026-09-03); None when it was
     # supplied. Nullable-with-default so an older stored payload still validates.
     contribution_breakdown: ContributionBreakdownOut | None = None
+    # The window the derivation used (2026-09-04). Null when nothing was derived, so an
+    # older stored payload still validates.
+    derived_window: DerivedWindowOut | None = None
