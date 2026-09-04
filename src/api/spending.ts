@@ -1,12 +1,12 @@
 import { api, apiWithHeaders } from './client'
 import type {
-  AmountEntry,
   CategoryBudgetEntry,
   CategoryCreate,
   CategoryOut,
   CategoryUpdate,
   SpendingMatrix,
   SpendingMonth,
+  SpendingMonthUpsert,
   SpendingUpsertResult,
   SpendingYearly,
 } from '../types/api'
@@ -48,9 +48,7 @@ export function fetchSpendingMonth(month: string): Promise<SpendingMonth> {
 
 export function putSpendingMonth(
   month: string,
-  // net_pay is tri-state: omitted leaves the saved value alone, a string upserts it, and
-  // an explicit null CLEARS the month's cashflow row (mirrors the notes: null contract).
-  body: { net_pay?: string | null; amounts: AmountEntry[] },
+  body: SpendingMonthUpsert,
 ): Promise<SpendingUpsertResult> {
   return api<SpendingUpsertResult>(`/spending/months/${month}`, {
     method: 'PUT',

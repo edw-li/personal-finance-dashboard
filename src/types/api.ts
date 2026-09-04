@@ -124,6 +124,20 @@ export interface MonthUpsertResult {
   unchanged: number
   /** The change batch this save wrote — null when nothing changed. */
   batch_id?: string | null
+  /** 2026-09-04 honest-numbers spec §5: the parents the server DERIVED from the components
+   *  in this payload (an account with components has no balance of its own). Echoed because
+   *  the client deliberately does not send those rows — this is how it learns what landed.
+   *  `BalanceEntry` and not a new shape: it is the same account_id/balance pair. */
+  derived?: BalanceEntry[]
+}
+
+/** The `PUT /net-worth/months/{m}` body. `notes: null` CLEARS a saved note; an omitted
+ *  `notes` leaves it alone. A parent account with components is derived server-side (spec
+ *  §5) and must be LEFT OUT — a mismatching parent entry is refused with a 422. */
+export interface MonthUpsert {
+  recorded_on?: string
+  notes?: string | null
+  balances: BalanceEntry[]
 }
 
 export interface CategoryOut {
@@ -189,6 +203,18 @@ export interface SpendingUpsertResult {
   net_pay_cleared: boolean
   /** The change batch this save wrote — null when nothing changed. */
   batch_id?: string | null
+}
+
+/** The `PUT /spending/months/{m}` body (2026-09-04 honest-numbers spec §4). `net_pay` is
+ *  tri-state: omitted leaves the saved value alone, a string upserts it, an explicit null
+ *  CLEARS the month's cashflow row. `confirm_zero` is the wizard's "Record this month as $0"
+ *  checkbox and nothing else — without it the server refuses an all-zero body with no
+ *  take-home (422), which is what stops a balances-only visit from writing a month of
+ *  implicit zeros that every chart would then read as a real month of spending nothing. */
+export interface SpendingMonthUpsert {
+  net_pay?: string | null
+  amounts: AmountEntry[]
+  confirm_zero?: boolean
 }
 
 export interface YearRollup {
