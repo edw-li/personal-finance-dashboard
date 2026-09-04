@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import PageSkeleton from '../PageSkeleton'
+import { useStagger } from '../useStagger'
 import '../panels.css'
 import './shell.css'
 
@@ -81,6 +82,9 @@ export default function PageFrame({
   }, [hasScopeRow])
 
   const hasData = resource.status === 'ready'
+  // The cascade is the PAYLOAD's, not the skeleton's: tagging waits for `ready`, so the
+  // groups measured are the real cards at the positions they actually occupy.
+  const bodyRef = useStagger<HTMLDivElement>(hasData)
   const showSkeleton = resource.status === 'loading'
   const showErrorOnly = resource.status === 'error'
   const staleError = hasData && resource.error ? resource.error : null
@@ -105,7 +109,7 @@ export default function PageFrame({
           eye is already on them, so they appear at once. ONE wrapper around all three
           lifecycle branches, not one per branch — the entrance then runs once per page mount
           instead of replaying when the skeleton gives way to the payload. */}
-      <div className="page-frame-body">
+      <div className="page-frame-body" ref={bodyRef}>
         {showSkeleton && <PageSkeleton tiles={skeleton.tiles ?? 0} cards={skeleton.cards ?? []} />}
         {showErrorOnly && (
           <div className="error-banner" role="alert">

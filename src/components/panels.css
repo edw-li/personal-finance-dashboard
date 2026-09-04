@@ -676,3 +676,94 @@
   max-height: 320px;
   overflow: auto;
 }
+
+/* ── Motion: entrance, stagger, scroll-linked reveal (2026-09-05 spec §3/§4) ───────── */
+
+/* Registered so they can be ANIMATED: an unregistered custom property has no type, so a
+   keyframe on it would jump between its values instead of interpolating. Each initial
+   value is the "nothing is moving" state — what a browser with no view() timeline, print,
+   and a reduced-motion reader all render. */
+@property --enter { syntax: '<number>'; inherits: false; initial-value: 1; }
+@property --enter-y { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --reveal { syntax: '<number>'; inherits: false; initial-value: 1; }
+@property --rise { syntax: '<length>'; inherits: false; initial-value: 0px; }
+
+/* Inherited default: a group useStagger never tagged runs a 0s entrance, which is no
+   entrance. The tagged rule sets it ON the element, and an own declaration beats an
+   inherited one — no specificity race with the surface rule below. */
+.page-frame-body { --enter-dur: 0s; }
+
+/* THE motion surface. Exempt by construction: header, scope row, toasts, palette and
+   drawers all live outside .page-frame-body. Exempt by selector: the wizard's entry cards,
+   whose .entry-footer rides the viewport bottom — a transformed ancestor is a containing
+   block, and it drags a position:sticky child along with its own translate, stranding the
+   live totals mid-page. Brightness is the PRODUCT of the two dials, so
+   a card entering while it straddles the bottom edge settles with no snap. */
+.page-frame-body .card:not(:has(.entry-footer)),
+.page-frame-body .kpi-row {
+  opacity: calc(var(--reveal) * var(--enter));
+  transform: translateY(calc(var(--rise) + var(--enter-y)));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page-frame-body .card:not(:has(.entry-footer)),
+  .page-frame-body .kpi-row {
+    animation-name: card-enter;
+    animation-duration: var(--enter-dur);
+    animation-timing-function: var(--ease-out);
+    animation-fill-mode: both;
+    animation-delay: calc(var(--stagger-i, 0) * var(--t-stagger));
+  }
+
+  /* attr() still cannot be read as a <number>, so six groups are six rules — and six is
+     the cap: STAGGER_CAP is 5 and useStagger clamps every later group to it. */
+  .page-frame-body [data-stagger] { --enter-dur: var(--t-enter); }
+  .page-frame-body [data-stagger='0'] { --stagger-i: 0; }
+  .page-frame-body [data-stagger='1'] { --stagger-i: 1; }
+  .page-frame-body [data-stagger='2'] { --stagger-i: 2; }
+  .page-frame-body [data-stagger='3'] { --stagger-i: 3; }
+  .page-frame-body [data-stagger='4'] { --stagger-i: 4; }
+  .page-frame-body [data-stagger='5'] { --stagger-i: 5; }
+
+  @keyframes card-enter { from { --enter: 0; --enter-y: 8px; } to { --enter: 1; --enter-y: 0px; } }
+
+  /* Scroll-linked reveal, no JS: below-the-fold content rests at --reveal-floor and
+     brightens as it enters. Nested inside the no-preference gate (so `reduce` never
+     reaches it) and inside @supports (so a browser without view() timelines shows full
+     brightness). The entrance is repeated as the FIRST animation of every comma list:
+     one element cannot carry two animation-name declarations, and this rule would
+     replace the entrance rather than join it. */
+  @supports (animation-timeline: view()) {
+    .page-frame-body .card:not(:has(.entry-footer)) {
+      animation-name: card-enter, reveal-in, reveal-out;
+      animation-duration: var(--enter-dur), auto, auto;
+      animation-timing-function: var(--ease-out), linear, linear;
+      /* reveal-out fills `none`: with `both` its own `from` (--reveal: 1) would apply
+         through the before-phase and, being later in the list, cancel reveal-in's dimming
+         on every card that has not reached the top edge yet. */
+      animation-fill-mode: both, both, none;
+      animation-delay: calc(var(--stagger-i, 0) * var(--t-stagger)), 0s, 0s;
+      animation-timeline: auto, view(), view();
+      animation-range: normal, entry 0% entry var(--reveal-range), exit calc(100% - var(--reveal-range)) exit 100%;
+    }
+
+    /* A card inside a card would square the floor (0.62 × 0.62 = 0.38). */
+    .page-frame-body .card .card { animation-name: none; }
+
+    @keyframes reveal-in {
+      from { --reveal: var(--reveal-floor); --rise: var(--reveal-rise); }
+      to { --reveal: 1; --rise: 0px; }
+    }
+
+    @keyframes reveal-out {
+      from { --reveal: 1; --rise: 0px; }
+      to { --reveal: var(--reveal-floor); --rise: calc(-1 * var(--reveal-rise)); }
+    }
+  }
+}
+
+/* Ink on paper never dims, and print has no scroller for a view() timeline to read. */
+@media print {
+  .page-frame-body .card,
+  .page-frame-body .kpi-row { opacity: 1; transform: none; animation: none; }
+}
