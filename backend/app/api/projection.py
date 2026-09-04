@@ -2,13 +2,18 @@
 
 One computed GET in the ESPP-modeler shape: what-if knobs arrive as query params, every
 knob NOT provided is seeded from the data the app already holds — the latest investable
-balance (net_worth_calc's own rule, the 4%-line's base), the trailing-12 mean of
-(net pay − spend) PLUS every earner's payroll-deducted savings as the contribution
+balance (net_worth_calc's own rule, the 4%-line's base), the mean cash savings of the
+MATCHED window PLUS every earner's payroll-deducted savings as the contribution
 (2026-09-03: 401(k), ESPP and HSA money never reaches net pay, so the cash-only derivation
-understated the stream by thousands a month and called FI unreachable), the trailing-12 mean
-spend ×12 as the annual spend, and the stored SWR — and the response echoes the values
-actually used, so the page's form seeds from the echo. A derived contribution also echoes
-its `contribution_breakdown` so the page can say what it added up.
+understated the stream by thousands a month and called FI unreachable), that same window's
+mean LIVING spend ×12 as the annual spend, and the stored SWR — and the response echoes the
+values actually used, so the page's form seeds from the echo. A derived contribution also
+echoes its `contribution_breakdown` so the page can say what it added up.
+
+The MATCHED window (2026-09-04 honest-numbers spec §3) is the last TRAILING_MONTHS months
+that carry BOTH spending rows and take-home, from services/savings.py. Before it the two
+derivations averaged DIFFERENT windows, and the spend mean counted a balances-only save's
+zero-filled month as a month of spending nothing. `derived_window` echoes what was used.
 
 The three ASSUMPTION knobs (volatility, inflation, contribution growth) have no data to
 derive from, so an absent one takes a planning default instead (the DEFAULT_* constants
