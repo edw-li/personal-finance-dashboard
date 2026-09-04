@@ -33,6 +33,15 @@ const EMPTY_ACCOUNT: AccountFormState = {
   is_component: false,
 }
 
+// The two sentences lane B's 422 returns for a half-set pair (2026-09-04 honest-numbers spec
+// §5), spelled here so the client refusal and the server refusal are ONE sentence rather than
+// two paraphrases. `is_component` is the rollup key and `parent_account_id` the link: a row
+// carrying one without the other counts in no total, so each message names the missing half.
+const COMPONENT_NEEDS_PARENT =
+  'is_component needs parent_account_id — name the account it folds into'
+const PARENT_NEEDS_COMPONENT =
+  'parent_account_id needs is_component — a linked account must be a component'
+
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback
 }
@@ -142,6 +151,14 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
     const name = form.name.trim()
     if (!name) {
       setError('Account name is required.')
+      return
+    }
+    if (form.is_component && form.parent_account_id === '') {
+      setError(COMPONENT_NEEDS_PARENT)
+      return
+    }
+    if (!form.is_component && form.parent_account_id !== '') {
+      setError(PARENT_NEEDS_COMPONENT)
       return
     }
     // ALL SIX keys, every time: a blank owner or parent must CLEAR the column, and PATCH
@@ -334,7 +351,10 @@ export default function AccountsCard({ people }: { people: PersonOut[] }) {
               <input
                 type="checkbox"
                 checked={form.is_component}
-                onChange={(e) => setForm((f) => ({ ...f, is_component: e.target.checked }))}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, is_component: e.target.checked }))
+                  setError(null)
+                }}
               />
               Component of the parent
             </label>

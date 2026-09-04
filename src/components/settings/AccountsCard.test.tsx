@@ -366,3 +366,66 @@ it('still names a parent the component flag forgot', async () => {
   // The parent still counts it: the balances PUT sums over the LINK (spec §5).
   expect(roster().getByText('derived: 1 component')).toBeTruthy()
 })
+
+it('refuses a component with no parent, in the server\'s own sentence', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  fireEvent.change(screen.getByLabelText('Account name'), {
+    target: { value: 'Traditional slice' },
+  })
+  fireEvent.click(screen.getByLabelText('Component of the parent'))
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+
+  expect(
+    await screen.findByText(
+      'is_component needs parent_account_id — name the account it folds into',
+    ),
+  ).toBeTruthy()
+  // Refused BEFORE the round trip, and lane B's 422 says the same words — the reader never
+  // meets two spellings of one rule.
+  expect(vi.mocked(createAccount)).not.toHaveBeenCalled()
+})
+
+it('refuses a parent link with no component flag, in the server\'s own sentence', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  fireEvent.change(screen.getByLabelText('Account name'), {
+    target: { value: 'Traditional slice' },
+  })
+  fireEvent.change(screen.getByLabelText('Parent account'), { target: { value: '11' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+
+  expect(
+    await screen.findByText(
+      'parent_account_id needs is_component — a linked account must be a component',
+    ),
+  ).toBeTruthy()
+  expect(vi.mocked(createAccount)).not.toHaveBeenCalled()
+})
+
+it('clears the refusal as soon as the pair is fixed', async () => {
+  render(<AccountsCard people={[ME]} />)
+  await screen.findByRole('table', { name: 'Net-worth accounts' })
+
+  fireEvent.change(screen.getByLabelText('Account name'), {
+    target: { value: 'Traditional slice' },
+  })
+  fireEvent.click(screen.getByLabelText('Component of the parent'))
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+  expect(
+    await screen.findByText(
+      'is_component needs parent_account_id — name the account it folds into',
+    ),
+  ).toBeTruthy()
+
+  // Unticking removes the half the banner is about, so the banner goes with it: setText's
+  // rule for the text fields, extended to the card's one checkbox.
+  fireEvent.click(screen.getByLabelText('Component of the parent'))
+  expect(
+    screen.queryByText(
+      'is_component needs parent_account_id — name the account it folds into',
+    ),
+  ).toBeNull()
+})
