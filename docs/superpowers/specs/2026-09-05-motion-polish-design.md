@@ -27,6 +27,8 @@ conversation 2026-09-05. Read-only audit artefacts: session scratchpad `ux-pass/
 --reveal-range: 45%     (of the card's entry over which it reaches 1.0; was 35%)
 --reveal-rise: 6px      (position-linked rise over the same range; was 4px)
 --busy-dim: 0.7         (.loading-dim.is-loading; was a literal 0.55)
+--scrim-h: 120px        (viewport-edge scrims, §4b: the fade's height AND its scroll range)
+--scrim-alpha: 1        (multiplies the page-coloured end of the scrim gradient)
 ```
 
 Revised 2026-09-05 after the first build was seen: at 0.62 the shadow was invisible against
@@ -42,6 +44,8 @@ values found by the audit (toast 160/140, palette 120/140, drawer 160, `.loading
 flash 700ms in CSS and JS) move onto tokens (`--t-fast`/`--t-page`/`--t-flash: 700ms`).
 `@media (prefers-reduced-motion: reduce)`: all durations 0ms, `--reveal-floor: 1`,
 `--reveal-rise: 0`, chart `animation: false` (already), and no scroll-linked animation at all.
+The scrim dials stay out of that block on purpose: reduce switches the scrims off outright
+(`display: none`, §4b), which is a stronger statement than flattening a dial they read.
 
 ## 2. Route transition (item 2)
 
@@ -97,6 +101,72 @@ first paint before that effect runs and the permanent value on a page with no sc
 effect clears the property on unmount so a stale inset cannot outlive its row. Verified in Edge
 152: `var()` parses inside `view()`, computes to `view(57px 0px)` and re-resolves live when the
 variable changes, so no static-class fallback is needed.
+
+## 4b. Viewport-edge scrims ("there is more, above and below")
+
+Added 2026-09-05, same pass as the token revision. §4 dims one CARD as it nears an edge; this
+says the same thing about the PAGE. Two pseudo-elements on the content region:
+
+```
+--scrim-h: 120px      (the fade's height AND the scroll distance it arrives/leaves over)
+--scrim-alpha: 1      (multiplies the page-coloured END of the gradient; 0 = no scrim)
+
+@supports (animation-timeline: scroll()) {
+  .page-frame-body:not(:has(.entry-footer))::before,
+  .page-frame-body:not(:has(.entry-footer))::after {
+    content: ''; display: block; height: var(--scrim-h);
+    pointer-events: none; z-index: 5; opacity: 0; }
+  …::before { position: sticky; top: var(--sticky-inset, 0px);
+    margin-bottom: calc(-1 * var(--scrim-h));
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) calc(var(--scrim-alpha) * 100%), transparent), transparent);
+    animation: scrim-in linear both; animation-timeline: scroll(root block);
+    animation-range: 0 var(--scrim-h); }
+  …::after  { position: sticky; bottom: 0; margin-top: calc(-1 * var(--scrim-h));
+    background: linear-gradient(to top, …); animation: scrim-out linear both;
+    animation-timeline: scroll(root block);
+    animation-range: calc(100% - var(--scrim-h)) 100%; }
+}
+@keyframes scrim-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes scrim-out { from { opacity: 1 } to { opacity: 0 } }
+```
+
+Six decisions worth the words:
+
+**Sticky, not fixed.** A fixed box is laid out against its nearest transformed ancestor, and
+`.page-frame-body` is transformed for the length of its own entrance (§2) — a fixed scrim would
+re-anchor mid-slide and travel with the page. Sticky also keeps the scrim inside the content
+column, so it spans exactly the width the cards do (no gutter, no sidebar) with no measurement.
+
+**The top scrim starts at the scope row's underside**, `top: var(--sticky-inset, 0px)` — the same
+inset §4's `view()` timelines take, written by `PageFrame` under a `ResizeObserver`. At `top: 0`
+the fade would lie over the row and dissolve the month and owner chips the reader steers with.
+The bottom scrim needs no inset: the viewport's bottom edge IS the bottom of the content.
+
+**Zero net height in flow.** Each scrim gives back its own height as a negative margin
+(`margin-bottom` on the top one, `margin-top` on the bottom), so the first card does not start
+120px lower and the document does not grow by 240px. Proved as an A/B in the smoke, not asserted.
+
+**`opacity: 0` is the base state, and it is load-bearing.** A `scroll()` timeline on a page too
+short to scroll has no range, is *inactive*, and its animation does not apply at all — the base
+style is what paints. Nothing is hidden above or below a page that already fits, so 0 is the only
+right answer there.
+
+**z-index 5**: above the cards (which declare none), below the sticky scope row (8), the drawer
+(15), the palette (20) and toasts (30). `pointer-events: none`, so every click still lands on the
+card underneath.
+
+**Off** in print, under `prefers-reduced-motion: reduce` (both `display: none`, with the full
+`:not(:has(…))` selector repeated — `:not(:has())` carries the specificity of what it holds, so a
+shorter off switch would lose the cascade), in the monthly-update wizard (its sticky
+`.entry-footer` already owns the bottom edge in the page's own colour; two stacked read as a
+rendering fault), and in any browser with no `scroll()` timelines — the whole block is inside
+`@supports`, because two permanent unfading bars would be worse than no hint.
+
+Verified in Edge 152 on `/net-worth` at 1440×900, both themes: `::before`/`::after` computed
+opacity reads **0 / 1** at `scrollTop` 0, **1 / 1** mid-page, **1 / 0** at the very bottom;
+`elementFromPoint` 8px inside each band returns an element inside a `.card`; first-card top and
+document `scrollHeight` are byte-identical with the pseudo-elements on and off. Smoke step
+`scrims` (`tools/probes/motion-v/smoke.mjs`), screenshots under `motion-smoke/scrims/`.
 
 ## 5. Sliding nav indicator
 
@@ -173,13 +243,15 @@ stuck row fully inside the viewport; `--reveal` ≈ 0.45 on the card at the bott
 and — the inset's own proof — a scroll back UP that reads ≈ 0.45 on the card whose bottom edge has
 just cleared the STUCK scope row, rising to 1 once ~45% of it is visible BELOW the row (the top edge
 of the viewport is the wrong ruler now; the row's underside is the right one);
-reduced-motion emulation: no animations, floor 1; error banner copy on a stubbed 500.
+reduced-motion emulation: no animations, floor 1; error banner copy on a stubbed 500. The
+`scrims` step (§4b) reads the two pseudo-elements' computed opacity at three scroll positions
+(0/1, 1/1, 1/0), hit-tests 8px inside each band, and A/Bs the page height with them and without.
 
 ## 11. Lanes
 
 | Lane | Scope | Owns |
 |---|---|---|
-| M2 shell motion | §1 tokens + `motion.ts`, §2 route transition, §3 stagger, §4 reveal, §5 nav indicator | `index.css`, `Layout.tsx/.css`, `RouteBoundary`, `panels.css` (reveal/stagger block), `shell/PageFrame.tsx` body wrapper, toast/palette/drawer duration tokens |
+| M2 shell motion | §1 tokens + `motion.ts`, §2 route transition, §3 stagger, §4 reveal, §4b scrims, §5 nav indicator | `index.css`, `Layout.tsx/.css`, `RouteBoundary`, `panels.css` (reveal/stagger block), `shell/PageFrame.tsx` body wrapper, toast/palette/drawer duration tokens |
 | M1 charts | §6 | `src/charts/EChart.tsx`, `theme.ts`, `sankey.ts`, `SpendingPage.tsx:497`, `TaxesPage` group |
 | M3 skeletons | §7 | `ChartCard.tsx`, `shell/Feed.tsx` (body/skeleton/xfade), `PageSkeleton.tsx`, per-page skeleton heights |
 | M4 hints + errors | §8, §9 | `InfoHint.tsx`, `panels.css` (infohint block), `api/client.ts`, settings cards, ESPP/Paycheck/Comp/wizard load catches, `FeedBanner` retry prop |
