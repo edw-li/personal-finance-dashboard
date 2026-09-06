@@ -24,7 +24,7 @@ const ROSTER = [
   'netWorthStack',
   'netWorthStackShare',
   'netWorthDrill',
-  'netWorthBridge',
+  'netWorthMovers',
   'overviewNetWorthTrend',
   'overviewRecentSpend',
   'moneyFlow',
