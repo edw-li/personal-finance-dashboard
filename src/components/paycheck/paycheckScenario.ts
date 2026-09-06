@@ -236,6 +236,10 @@ export interface ApplySeed {
   dental_vision_per_check: string
   hsa_per_check: string
   hsa_coverage: HsaCoverage
+  match_rate_1: string
+  match_band_1: string
+  match_rate_2: string
+  match_band_2: string
   notes: string
 }
 
@@ -257,6 +261,10 @@ export function applySeedFor(
     dental_vision_per_check: profile.dental_vision_per_check,
     hsa_per_check: scenario.hsa_per_check ?? profile.hsa_per_check,
     hsa_coverage: (scenario.hsa_coverage as HsaCoverage | undefined) ?? profile.hsa_coverage,
+    match_rate_1: shiftPoint(profile.match_rate_1, 2),
+    match_band_1: profile.match_band_1,
+    match_rate_2: shiftPoint(profile.match_rate_2, 2),
+    match_band_2: profile.match_band_2,
     notes: '',
   }
 }

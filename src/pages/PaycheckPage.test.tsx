@@ -519,6 +519,10 @@ describe('PaycheckPage — the profile form', () => {
       dental_vision_per_check: '12.50',
       hsa_per_check: '100.00',
       hsa_coverage: 'self',
+      match_rate_1: '1',
+      match_band_1: '6000.00',
+      match_rate_2: '0.5',
+      match_band_2: '11000.00',
       notes: 'July raise',
     })
     // A new profile moves both halves of the page: the list, and which one is in force.
@@ -553,6 +557,10 @@ describe('PaycheckPage — the profile form', () => {
       dental_vision_per_check: '12.50',
       hsa_per_check: '100.00',
       hsa_coverage: 'self',
+      match_rate_1: '1',
+      match_band_1: '6000.00',
+      match_rate_2: '0.5',
+      match_band_2: '11000.00',
       notes: 'Jan 2026 comp',
     })
   })
@@ -812,6 +820,58 @@ describe('PaycheckPage — the profile form', () => {
       .getByRole('button', { name: 'Show the breakdown for Jan 1, 2025' })
       .closest('tr')
     expect(row?.textContent).toContain('Self only')
+  })
+
+  it('carries the match policy forward into the next profile, in the box’s own words', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    // The stored fraction is 1.000000000; the box holds a percent, like every other rate.
+    expect(field('First match rate %').value).toBe('100%')
+    expect(field('First match band').value).toBe('$6,000.00')
+    expect(field('Second match rate %').value).toBe('50%')
+    expect(field('Second match band').value).toBe('$11,000.00')
+    expect(screen.getByText('100% of the first $6,000.00, then 50% of the next $11,000.00')).toBeTruthy()
+  })
+
+  it('says a household with no policy has no match, rather than printing zeros', async () => {
+    vi.mocked(fetchProfiles).mockResolvedValue([
+      { ...profile2026, match_rate_1: '0.000000000', match_band_1: '0.00', match_rate_2: '0.000000000', match_band_2: '0.00' },
+    ])
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    expect(await screen.findByText('No employer match entered.')).toBeTruthy()
+  })
+
+  it('posts the match rates as fractions and the bands as money', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    type('Effective date', '2026-07-01')
+    type('First match rate %', '75')
+    type('Second match band', '9000')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    await waitFor(() => expect(vi.mocked(createProfile)).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(createProfile).mock.calls[0][0]
+    expect(body.match_rate_1).toBe('0.75')
+    expect(body.match_band_1).toBe('6000.00')
+    expect(body.match_rate_2).toBe('0.5')
+    expect(body.match_band_2).toBe('9000')
+  })
+
+  it('bounds a match rate at a full doubling, in the box’s vocabulary', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    type('Effective date', '2026-07-01')
+    // The server's fence is the stored fraction's [0, 2]; this box says percents, so its
+    // sentence says 200 — quoting the column's would call a legal 100 out of range.
+    type('First match rate %', '250')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    expect(await screen.findByText('First match rate % must be between 0 and 200')).toBeTruthy()
+    expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
+    type('First match rate %', '100')
+    type('First match band', '-5')
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }))
+    expect(await screen.findByText('First match band must be >= 0')).toBeTruthy()
+    expect(vi.mocked(createProfile)).not.toHaveBeenCalled()
   })
 })
 

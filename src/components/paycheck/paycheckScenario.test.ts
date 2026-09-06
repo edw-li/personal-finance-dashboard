@@ -193,6 +193,10 @@ describe('paycheck scenario codec', () => {
       dental_vision_per_check: '12.50',
       hsa_per_check: '250',
       hsa_coverage: 'family',
+      match_rate_1: '100',
+      match_band_1: '6000.00',
+      match_rate_2: '50',
+      match_band_2: '11000.00',
       notes: '',
     })
   })

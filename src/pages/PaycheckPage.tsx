@@ -182,6 +182,10 @@ interface ProfileFormState {
   dental_vision_per_check: string
   hsa_per_check: string
   hsa_coverage: HsaCoverage
+  match_rate_1: string // percent form — "100" for a full match, never "1.000000000"
+  match_band_1: string
+  match_rate_2: string
+  match_band_2: string
   notes: string
 }
 
@@ -202,6 +206,30 @@ const PCT_FIELDS: { field: PctField; label: string }[] = [
   { field: 'withholding_pct', label: 'Withholding %' },
 ]
 
+type MatchField = 'match_rate_1' | 'match_band_1' | 'match_rate_2' | 'match_band_2'
+
+// ONE table in the order the policy applies, read by the boxes, the range check and the
+// sentence — so the three cannot drift. The rates may NOT join PCT_FIELDS: that loop's
+// fence is 0–100, and a match rate may double the deferral.
+const MATCH_FIELDS: { field: MatchField; label: string; rate: boolean }[] = [
+  { field: 'match_rate_1', label: 'First match rate %', rate: true },
+  { field: 'match_band_1', label: 'First match band', rate: false },
+  { field: 'match_rate_2', label: 'Second match rate %', rate: true },
+  { field: 'match_band_2', label: 'Second match band', rate: false },
+]
+
+/** The policy in words (spec §2.3), read back from the FORM's own state — typed input, not a
+ *  server figure re-derived. Zero bands are the stored way to say "no match". */
+function matchWords(form: ProfileFormState): string {
+  const num = (text: string) => Number(canonicalAmount(text.trim() || '0', { expressions: false }))
+  const band1 = num(form.match_band_1)
+  const band2 = num(form.match_band_2)
+  if (band1 <= 0 && band2 <= 0) return 'No employer match entered.'
+  const first = `${form.match_rate_1.trim() || '0'}% of the first ${formatCurrency(String(band1))}`
+  if (band2 <= 0) return `${first}.`
+  return `${first}, then ${form.match_rate_2.trim() || '0'}% of the next ${formatCurrency(String(band2))}`
+}
+
 // The tier's own vocabulary, not the column's: the stored value is 'self', the box says
 // "Self only" — the same distinction the percent boxes draw between 13 and 0.13.
 const HSA_COVERAGES: { value: HsaCoverage; label: string }[] = [
@@ -218,7 +246,9 @@ const EMPTY_PROFILE: ProfileFormState = {
   effective_date: '', annual_salary: '', pay_periods_per_year: DEFAULT_PAY_PERIODS,
   trad_401k_pct: '', roth_401k_pct: '', after_tax_401k_pct: '', espp_pct: '',
   withholding_pct: '', dental_vision_per_check: '', hsa_per_check: '',
-  hsa_coverage: 'self', notes: '',
+  hsa_coverage: 'self',
+  match_rate_1: '', match_band_1: '', match_rate_2: '', match_band_2: '',
+  notes: '',
 }
 
 /** Every box of one stored row: the server's own quantized strings, percents shifted. */
@@ -235,6 +265,10 @@ function formFrom(profile: PaycheckProfileOut): ProfileFormState {
     dental_vision_per_check: profile.dental_vision_per_check,
     hsa_per_check: profile.hsa_per_check,
     hsa_coverage: profile.hsa_coverage,
+    match_rate_1: shiftPoint(profile.match_rate_1, 2),
+    match_band_1: profile.match_band_1,
+    match_rate_2: shiftPoint(profile.match_rate_2, 2),
+    match_band_2: profile.match_band_2,
     notes: profile.notes ?? '',
   }
 }
@@ -380,6 +414,23 @@ function ProfilesPanel({
         return
       }
     }
+    for (const { field, label, rate } of MATCH_FIELDS) {
+      const text = form[field].trim()
+      // Percent boxes refuse expressions and exponents, exactly as the five pcts do.
+      if (text !== '' && !isAmount(text, rate ? { expressions: false } : undefined)) {
+        setError(`${label} must be a number`)
+        return
+      }
+      const value = Number(canonicalAmount(text || '0', rate ? { expressions: false } : undefined))
+      if (value < 0) {
+        setError(`${label} must be >= 0`)
+        return
+      }
+      if (rate && value > 200) {
+        setError(`${label} must be between 0 and 200`)
+        return
+      }
+    }
     setBusy(true)
     setError(null)
     // Blank is a real ZERO here, not "leave it alone": every box was prefilled from a row,
@@ -413,6 +464,13 @@ function ProfilesPanel({
       // and the column is NOT NULL with a server default, so it travels on both verbs like
       // every other stored column.
       hsa_coverage: form.hsa_coverage,
+      // The same shift as the five pcts, because 75 / 100 is exact only as string math — and
+      // blank is a real zero here too: every box was prefilled from a row, so clearing one
+      // means "no match on that band", not "leave it alone".
+      match_rate_1: shiftPoint(canonicalAmount(form.match_rate_1.trim() || '0', { expressions: false }), -2),
+      match_band_1: canonicalAmount(form.match_band_1.trim() || '0'),
+      match_rate_2: shiftPoint(canonicalAmount(form.match_rate_2.trim() || '0', { expressions: false }), -2),
+      match_band_2: canonicalAmount(form.match_band_2.trim() || '0'),
       notes: form.notes.trim() || null,
       // Create only, and only for an explicitly-picked person: an absent person_id resolves
       // to the primary server-side (spec §4.1), so the default create is byte-identical to
@@ -558,6 +616,22 @@ function ProfilesPanel({
             ))}
           </select>
         </label>
+        {/* One rule around four boxes, because the match is a POLICY, not four unrelated
+            columns — and the sentence under them reads it back in the order it applies. */}
+        <fieldset className="paycheck-match">
+          <legend>Employer 401(k) match</legend>
+          {MATCH_FIELDS.map(({ field, label, rate }) => (
+            <label key={field}>
+              {label}
+              <AmountInput
+                kind={rate ? 'percent' : 'money'}
+                value={form[field]}
+                onValueChange={set(field)}
+              />
+            </label>
+          ))}
+          <p className="paycheck-match-words">{matchWords(form)}</p>
+        </fieldset>
         <label className="span-2">
           Notes
           <input
