@@ -92,8 +92,12 @@ land?" The GET breakdown is the same computation with the in-force profile as th
   `projected_excess = max(0, projected_full_year − soft_limit)`.
 
 Worked example on production's profiles (Edward, 11% until 2026-08-17 then 12%, salary
-188,930, 24 checks; no stored periods): H1 10,391.15, H2 10,469.90, window 20,861.05,
+188,930, 24 checks; no stored periods), enumerating the twelve real paydays of each half at
+full precision and rounding the sum once: H1 10,391.15, H2 10,469.87, window 20,861.02,
 soft cap 21,250.00, `soft_ratio` 0.9817 → warn; projected full year 22,671.60, excess 1,421.60.
+(The figures first quoted in conversation, 10,469.90 and 20,861.05, were a hand estimate three
+cents high; the enumerated values are the contract.) The ESPP item also carries `current_rate`,
+the `espp_pct` the projection used (9 dp fraction), so the note line can say "At your current 12%".
 
 ### 1.5 The discount setting
 
@@ -122,6 +126,7 @@ halves: list[PaceHalfOut] | null    # {label, start, end, amount, source: entere
 backfilled_from: date | null
 projected_full_year: Decimal | null
 projected_excess: Decimal | null
+current_rate: Decimal | null        # ESPP only: the espp_pct the projection used, 9 dp
 employer_match: Decimal | null      # 415(c) only, §2
 ```
 
