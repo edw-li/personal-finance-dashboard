@@ -58,7 +58,7 @@ describe('marriageMarkLine', () => {
 import { tooltipRows } from '../../testing/tooltipRows'
 import { GRID_VARIANTS, compactMoney, percentLabel } from '../../charts/grammar'
 import { GROUP_COLORS, INK, MUTED, PALETTE } from '../../charts/theme'
-import type { NetWorthTimeseries, PersonOut } from '../../types/api'
+import type { AccountGroup, AccountOut, NetWorthTimeseries, PersonOut } from '../../types/api'
 import { liabilitiesMaterial, netWorthStackOption } from './netWorthChartOptions'
 
 const PEOPLE: PersonOut[] = [
@@ -393,5 +393,44 @@ describe('netWorthMoversOption — Groups', () => {
     // Nothing to compare WITH, and nothing that moved: both are the card's empty sentence.
     expect([netWorthMoversOption(MOVED, 0, 'group'), netWorthMoversOption(MOVED, -1, 'group'), netWorthMoversOption(ts(), 2, 'account')]).toEqual([null, null, null])
     expect([moversHeight(1), moversHeight(6), moversHeight(20)]).toEqual([200, 228, 420])
+  })
+})
+
+const acc = (id: number, name: string, group: AccountGroup, is_component = false): AccountOut => ({
+  id, name, slug: `a${id}`, group, sort_order: id, is_active: true, is_component, parent_account_id: null, person_id: null,
+})
+// MOVED's deltas on accounts, plus a component (already folded into its parent by the server) and an account that did not move.
+const ACCOUNTS = ts({
+  accounts: [acc(1, 'Checking', 'cash'), acc(2, 'Brokerage', 'taxable'), acc(3, 'Card', 'liability'), acc(4, 'Vanguard sleeve', 'taxable', true), acc(5, 'Sock drawer', 'cash')],
+  series: [
+    { account_id: 1, values: ['100.00', '110.00', '140.00'] }, { account_id: 2, values: ['300.00', '310.00', '410.00'] },
+    { account_id: 3, values: ['-50.00', '-40.00', '-80.00'] }, { account_id: 4, values: ['10.00', '10.00', '99.00'] },
+    { account_id: 5, values: ['5.00', '5.00', '5.00'] },
+  ],
+  net_worth: ['550.00', '590.00', '690.00'],
+})
+// Twelve cash accounts moving +12 … +1: ten bars and one folded remainder of +3.
+const MANY = ts({
+  accounts: Array.from({ length: 12 }, (_, i) => acc(i + 1, `A${i + 1}`, 'cash')),
+  series: Array.from({ length: 12 }, (_, i) => ({ account_id: i + 1, values: ['0.00', '0.00', `${12 - i}.00`] })),
+  net_worth: ['0.00', '0.00', '78.00'],
+})
+
+describe('netWorthMoversOption — Accounts', () => {
+  it('bars every non-component account that moved, coloured by its group and named in the tooltip', () => {
+    const rows = netWorthMovers(ACCOUNTS, 2, 'account')
+    expect(rows.map((m) => [m.label, m.groupLabel, m.color])).toEqual([['Brokerage', 'Taxable', GROUP_COLORS.taxable], ['Card', 'Liabilities', GROUP_COLORS.liability], ['Checking', 'Cash', GROUP_COLORS.cash]])
+    const option = movers(netWorthMoversOption(ACCOUNTS, 2, 'account'))
+    const first = tooltipRows(option.tooltip.formatter({ dataIndex: 0 }))
+    expect([first.lead, first.label, first.sub]).toEqual(['$100.00', 'Brokerage', '100% of the change · Taxable'])
+  })
+  it('keeps the ten largest and folds the rest into one grey remainder — unless it cancels', () => {
+    const rows = netWorthMovers(MANY, 2, 'account')
+    expect(rows.map((m) => m.label)).toEqual(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'Other accounts'])
+    expect(rows[10]).toMatchObject({ delta: 3, color: OTHER_SERIES_COLOR, groupLabel: null })
+    expect(moversHeight(rows.length)).toBe(368)
+    // A remainder that nets to zero is no bar at all (the rule every other row follows).
+    const cancels = { ...MANY, series: MANY.series.map((s, i) => (i === 11 ? { ...s, values: ['0.00', '0.00', '-2.00'] } : s)) }
+    expect(netWorthMovers(cancels, 2, 'account')).toHaveLength(10)
   })
 })

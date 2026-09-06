@@ -417,6 +417,8 @@ export interface Mover { label: string; groupLabel: string | null; delta: number
 
 /** A missing column is zero, not NaN: an account that starts mid-history still moved the total. */
 const num = (value: string | null | undefined): number => (value == null ? 0 : Number(value))
+/** Accounts mode draws the ten largest movers and folds the rest into one row. */
+const MAX_ACCOUNT_MOVERS = 10
 /** The movers between index−1 and index, largest first. Empty when there is nothing to
  *  compare with and when nothing moved — both render the card's empty sentence. Ties keep
  *  source order: Array.prototype.sort is stable, so GROUP_ORDER breaks them. */
@@ -433,8 +435,27 @@ export function netWorthMovers(ts: NetWorthTimeseries, index: number, mode: Move
             ? []
             : [{ label: GROUP_LABELS[g], groupLabel: GROUP_LABELS[g], delta, color: GROUP_COLORS[g], share: share(delta) }]
         })
-      : []
-  return rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      : (() => {
+          const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
+          // Components are already folded into their parents by the timeseries (spec §4.1);
+          // drawing them too would count the same money twice.
+          return ts.accounts.flatMap((a) => {
+            if (a.is_component) return []
+            const values = byId.get(a.id) ?? []
+            const delta = cents(num(values[index]) - num(values[index - 1]))
+            return delta === 0
+              ? []
+              : [{ label: a.name, groupLabel: GROUP_LABELS[a.group], delta, color: GROUP_COLORS[a.group], share: share(delta) }]
+          })
+        })()
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+  if (mode === 'group' || rows.length <= MAX_ACCOUNT_MOVERS) return rows
+  const kept = rows.slice(0, MAX_ACCOUNT_MOVERS)
+  const folded = cents(rows.slice(MAX_ACCOUNT_MOVERS).reduce((sum, r) => sum + r.delta, 0))
+  // The remainder is a TAIL, not a mover: last even when its sum outweighs the tenth bar, and dropped when it cancels to zero.
+  return folded === 0
+    ? kept
+    : [...kept, { label: 'Other accounts', groupLabel: null, delta: folded, color: OTHER_SERIES_COLOR, share: share(folded) }]
 }
 
 /** One 28px row each, floored so a lone mover is not a sliver and capped so a long Accounts
