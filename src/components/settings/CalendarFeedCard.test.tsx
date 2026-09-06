@@ -18,6 +18,7 @@ const SETTINGS = {
   espp_ticker: 'NVDA',
   price_refresh_cron: '10 13 * * mon-fri',
   calendar_update_due_day: 1,
+  espp_discount_pct: '0.150000',
 }
 
 function mount() {
@@ -102,6 +103,7 @@ describe('CalendarFeedCard', () => {
         espp_ticker: 'NVDA',
         price_refresh_cron: '10 13 * * mon-fri',
         calendar_update_due_day: 5,
+        espp_discount_pct: '0.150000',
       }),
     )
     expect(await screen.findByText('Saved.')).toBeTruthy()
@@ -123,6 +125,7 @@ describe('CalendarFeedCard', () => {
         espp_ticker: 'NVDA',
         price_refresh_cron: '10 13 * * mon-fri',
         calendar_update_due_day: 5,
+        espp_discount_pct: '0.150000',
       }),
     )
   })

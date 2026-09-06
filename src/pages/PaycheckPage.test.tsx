@@ -2,7 +2,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
-import type { HouseholdOut, PaycheckBreakdownOut, PaycheckProfileOut } from '../types/api'
+import type {
+  HouseholdOut,
+  PaycheckBreakdownOut,
+  PaycheckProfileListItem,
+  PaycheckProfileOut,
+} from '../types/api'
 import { clearSnapshots, getSnapshot, setSnapshot } from '../api/snapshotCache'
 import PaycheckPage from './PaycheckPage'
 
@@ -61,7 +66,9 @@ import { fetchHousehold } from '../api/household'
 // 6768.33), sanctioned for golden fixtures. The 2025 row is INVENTED — it exists so the
 // table has two rows and the profile switch has somewhere to go.
 
-const profile2026: PaycheckProfileOut = {
+// Typed as the LIST item (2026-09-06 spec §2.3): `GET /paycheck/profiles` is the only route
+// that computes `in_force`, and this is the payload that route answers with.
+const profile2026: PaycheckProfileListItem = {
   id: 1,
   person_id: 1,
   effective_date: '2026-01-01',
@@ -76,9 +83,10 @@ const profile2026: PaycheckProfileOut = {
   hsa_per_check: '100.00',
   hsa_coverage: 'self',
   notes: null,
+  in_force: true,
 }
 
-const profile2025: PaycheckProfileOut = {
+const profile2025: PaycheckProfileListItem = {
   id: 2,
   person_id: 1,
   effective_date: '2025-01-01',
@@ -93,6 +101,7 @@ const profile2025: PaycheckProfileOut = {
   hsa_per_check: '75.00',
   hsa_coverage: 'self',
   notes: '2025 comp',
+  in_force: false,
 }
 
 // effective_date DESC, the order the router answers in.
@@ -169,7 +178,7 @@ function household(over: Partial<HouseholdOut> = {}): HouseholdOut {
   return { people: [ME], marriage_date: null, ...over }
 }
 
-const samProfile: PaycheckProfileOut = {
+const samProfile: PaycheckProfileListItem = {
   id: 3,
   person_id: SAM.id,
   effective_date: '2026-03-01',
@@ -184,6 +193,7 @@ const samProfile: PaycheckProfileOut = {
   hsa_per_check: '0.00',
   hsa_coverage: 'none',
   notes: 'Sam base',
+  in_force: true,
 }
 
 // effective_date DESC across BOTH people — the one ordered list the router answers with.
