@@ -332,9 +332,13 @@ For the viewed index `i ≥ 1`: movers are, in **Groups** mode, each `GROUP_ORDE
 non-component account (`is_component` false — components are already folded into their parents
 by the timeseries) with a non-zero delta of its `series` values, coloured by its group. Accounts
 mode keeps the ten largest by `|delta|` and folds the rest into one "Other accounts" row
-(summed delta, `OTHER_SERIES_COLOR`). Rows sort by `|delta|` descending. Liability deltas keep
-their stored sign (more debt → negative → a loss bar). `net_delta = net_worth[i] −
-net_worth[i−1]`; `share = delta / net_delta` when `net_delta ≠ 0`.
+(summed delta, `OTHER_SERIES_COLOR`) — but only when folding removes at least one row: with
+exactly eleven movers all eleven are drawn (review decision 2026-09-06). Rows sort by `|delta|`
+descending. Liability deltas keep their stored sign (more debt → negative → a loss bar).
+`net_delta = net_worth[i] − net_worth[i−1]`; `share = delta / net_delta`, shown only when
+`|net_delta|` is at least 5% of the largest `|delta|` among the movers — a near-flat month of
+offsetting moves would otherwise print shares in the hundreds of thousands of percent, so the
+tooltip clause and the CSV cell go blank instead (review decision 2026-09-06).
 
 ### 4.2 Form
 
