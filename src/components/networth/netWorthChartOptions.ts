@@ -367,29 +367,45 @@ export type MoversMode = 'group' | 'account'
 export const MOVERS_MODES: { value: MoversMode; label: string }[] = [{ value: 'group', label: 'Groups' }, { value: 'account', label: 'Accounts' }]
 
 /** One bar: what moved, by how much, in whose colour. `groupLabel` is null only for the
- *  folded remainder; `share` is the bar's part of the month's net change, null when net
- *  worth did not move at all. */
+ *  folded remainder; `share` is the bar's part of the month's net change, null whenever that
+ *  share would not be readable (see SHARE_FLOOR). */
 export interface Mover { label: string; groupLabel: string | null; delta: number; color: string; share: number | null }
+/** A bar before its share is judged: the verdict needs the whole sorted set, so it cannot be
+ *  decided while the rows are still being built. */
+type MoverBar = Omit<Mover, 'share'>
 
 /** A missing column is zero, not NaN: an account that starts mid-history still moved the total. */
 const num = (value: string | null | undefined): number => (value == null ? 0 : Number(value))
 /** Accounts mode draws the ten largest movers and folds the rest into one row. */
 const MAX_ACCOUNT_MOVERS = 10
+/** A share is only worth printing when the month's NET change is comparable to the moves that
+ *  made it. A +$10 month built from a +$10,000 and a −$9,990 would otherwise say
+ *  "100000% of the change" — arithmetic, not information. Below this fraction of the largest
+ *  single mover every share goes blank, exactly as on a month that netted to zero. */
+const SHARE_FLOOR = 0.05
+
+/** The tail past the cap as one row. A TAIL, not a mover: last even when its sum outweighs the
+ *  tenth bar, and dropped when it cancels to zero (the rule every other row follows). */
+function foldTail(rows: MoverBar[]): MoverBar[] {
+  const kept = rows.slice(0, MAX_ACCOUNT_MOVERS)
+  const folded = cents(rows.slice(MAX_ACCOUNT_MOVERS).reduce((sum, r) => sum + r.delta, 0))
+  return folded === 0 ? kept : [...kept, { label: 'Other accounts', groupLabel: null, delta: folded, color: OTHER_SERIES_COLOR }]
+}
+
 /** The movers between index−1 and index, largest first. Empty when there is nothing to
  *  compare with and when nothing moved — both render the card's empty sentence. Ties keep
  *  source order: Array.prototype.sort is stable, so GROUP_ORDER breaks them. */
 export function netWorthMovers(ts: NetWorthTimeseries, index: number, mode: MoversMode): Mover[] {
   if (index < 1 || index >= ts.months.length) return []
   const net = cents(num(ts.net_worth[index]) - num(ts.net_worth[index - 1]))
-  const share = (delta: number) => (net === 0 ? null : delta / net)
-  const rows: Mover[] =
+  const rows: MoverBar[] =
     mode === 'group'
       ? GROUP_ORDER.flatMap((g) => {
           const delta = cents(num(ts.group_totals[g][index]) - num(ts.group_totals[g][index - 1]))
           // Liability deltas keep their stored sign: more debt is a NEGATIVE bar.
           return delta === 0
             ? []
-            : [{ label: GROUP_LABELS[g], groupLabel: GROUP_LABELS[g], delta, color: GROUP_COLORS[g], share: share(delta) }]
+            : [{ label: GROUP_LABELS[g], groupLabel: GROUP_LABELS[g], delta, color: GROUP_COLORS[g] }]
         })
       : (() => {
           const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
@@ -401,17 +417,17 @@ export function netWorthMovers(ts: NetWorthTimeseries, index: number, mode: Move
             const delta = cents(num(values[index]) - num(values[index - 1]))
             return delta === 0
               ? []
-              : [{ label: a.name, groupLabel: GROUP_LABELS[a.group], delta, color: GROUP_COLORS[a.group], share: share(delta) }]
+              : [{ label: a.name, groupLabel: GROUP_LABELS[a.group], delta, color: GROUP_COLORS[a.group] }]
           })
         })()
   rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
-  if (mode === 'group' || rows.length <= MAX_ACCOUNT_MOVERS) return rows
-  const kept = rows.slice(0, MAX_ACCOUNT_MOVERS)
-  const folded = cents(rows.slice(MAX_ACCOUNT_MOVERS).reduce((sum, r) => sum + r.delta, 0))
-  // The remainder is a TAIL, not a mover: last even when its sum outweighs the tenth bar, and dropped when it cancels to zero.
-  return folded === 0
-    ? kept
-    : [...kept, { label: 'Other accounts', groupLabel: null, delta: folded, color: OTHER_SERIES_COLOR, share: share(folded) }]
+  // Folding has to EARN its row: at exactly MAX + 1 movers it would trade a named account for
+  // a "+$3" mystery and save no height at all, so the eleventh keeps its name.
+  const drawn = mode === 'group' || rows.length <= MAX_ACCOUNT_MOVERS + 1 ? rows : foldTail(rows)
+  // Judged against the largest SINGLE mover — rows is sorted, so that is rows[0]; the folded
+  // tail is a sum, not a move anyone made.
+  const readable = net !== 0 && Math.abs(net) >= SHARE_FLOOR * Math.abs(rows[0]?.delta ?? 0)
+  return drawn.map((bar) => ({ ...bar, share: readable ? bar.delta / net : null }))
 }
 
 /** One 28px row each, floored so a lone mover is not a sliver and capped so a long Accounts

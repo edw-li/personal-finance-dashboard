@@ -25,6 +25,9 @@ const ROSTER = [
   'netWorthStackShare',
   'netWorthDrill',
   'netWorthMovers',
+  // …and the same builder in Accounts mode over twelve accounts: the branch that colours by
+  // the account's group and folds a grey remainder past the cap.
+  'netWorthMoversAccounts',
   'overviewNetWorthTrend',
   'overviewRecentSpend',
   'moneyFlow',

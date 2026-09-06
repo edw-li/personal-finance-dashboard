@@ -438,3 +438,81 @@ describe('netWorthMoversLede', () => {
     expect(netWorthMoversLede(FLAT, 2)?.tone).toBe('neutral')
   })
 })
+
+// ── Review minors (2026-09-06 lane D) ────────────────────────────────────────────────────
+// Groups that EXIST and repeat, and accounts that exist and carry flat series: "nothing
+// moved" reached down the real path, not by handing the builder an empty payload.
+const STILL = ts({
+  group_totals: {
+    cash: ['100.00', '110.00', '110.00'], pre_tax: ['200.00', '210.00', '210.00'],
+    post_tax: ['0.00', '0.00', '0.00'], taxable: ['300.00', '310.00', '310.00'],
+    equity: ['0.00', '0.00', '0.00'], other: ['0.00', '0.00', '0.00'],
+    liability: ['-50.00', '-40.00', '-40.00'],
+  },
+  net_worth: ['550.00', '590.00', '590.00'],
+})
+const STILL_ACCOUNTS = ts({
+  ...STILL,
+  accounts: [acc(1, 'Checking', 'cash'), acc(2, 'Brokerage', 'taxable')],
+  series: [{ account_id: 1, values: ['100.00', '110.00', '110.00'] }, { account_id: 2, values: ['300.00', '310.00', '310.00'] }],
+})
+// Exactly eleven movers: folding would trade a named account for a mystery row and save no
+// height at all, so all eleven are drawn.
+const ELEVEN = ts({
+  accounts: Array.from({ length: 11 }, (_, i) => acc(i + 1, `B${i + 1}`, 'cash')),
+  series: Array.from({ length: 11 }, (_, i) => ({ account_id: i + 1, values: ['0.00', '0.00', `${11 - i}.00`] })),
+  net_worth: ['0.00', '0.00', '66.00'],
+})
+// +$10 net out of ±$10,000 of offsetting moves: "100000% of the change" is arithmetic, not
+// information.
+const OFFSET = ts({
+  group_totals: {
+    cash: ['100.00', '110.00', '110.00'], pre_tax: ['200.00', '210.00', '210.00'],
+    post_tax: ['0.00', '0.00', '0.00'], taxable: ['300.00', '310.00', '10310.00'],
+    equity: ['0.00', '0.00', '0.00'], other: ['0.00', '0.00', '0.00'],
+    liability: ['-50.00', '-40.00', '-10030.00'],
+  },
+  net_worth: ['550.00', '590.00', '600.00'],
+})
+// The control: +$100 against −$80, so the month's net IS a fifth of the largest mover.
+const CLEAR = ts({
+  group_totals: {
+    cash: ['100.00', '110.00', '110.00'], pre_tax: ['200.00', '210.00', '210.00'],
+    post_tax: ['0.00', '0.00', '0.00'], taxable: ['300.00', '310.00', '410.00'],
+    equity: ['0.00', '0.00', '0.00'], other: ['0.00', '0.00', '0.00'],
+    liability: ['-50.00', '-40.00', '-120.00'],
+  },
+  net_worth: ['550.00', '590.00', '610.00'],
+})
+
+describe('netWorthMovers — a month where nothing moved', () => {
+  it('is empty down the real path: repeated group totals, and accounts whose series are flat', () => {
+    expect(netWorthMovers(STILL, 2, 'group')).toEqual([])
+    expect(netWorthMoversOption(STILL, 2, 'group')).toBeNull()
+    // The accounts are PRESENT and carry values — they simply did not move.
+    expect(STILL_ACCOUNTS.accounts).toHaveLength(2)
+    expect(netWorthMovers(STILL_ACCOUNTS, 2, 'account')).toEqual([])
+    expect(netWorthMoversOption(STILL_ACCOUNTS, 2, 'account')).toBeNull()
+  })
+})
+
+describe('netWorthMovers — the fold has to earn its row', () => {
+  it('draws all eleven when folding would remove none, and folds only from twelve up', () => {
+    expect(netWorthMovers(ELEVEN, 2, 'account').map((m) => m.label)).toEqual(
+      ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11'],
+    )
+    expect(netWorthMovers(MANY, 2, 'account').map((m) => m.label).at(-1)).toBe('Other accounts')
+  })
+})
+
+describe('netWorthMovers — the share only prints when it can be read', () => {
+  it('blanks every share on a near-flat month of offsetting moves, in the tooltip and the table alike', () => {
+    expect(netWorthMovers(OFFSET, 2, 'group').map((m) => m.share)).toEqual([null, null])
+    expect(tooltipRows(movers(netWorthMoversOption(OFFSET, 2, 'group')).tooltip.formatter({ dataIndex: 0 })).sub).toBeUndefined()
+    expect(netWorthMoversCsv(OFFSET, 2, 'group').rows).toEqual([
+      ['Taxable', 'Taxable', '10000.00', ''], ['Liabilities', 'Liabilities', '-9990.00', ''],
+    ])
+    // The control: net worth moved a fifth of the biggest mover, which is a share that reads.
+    expect(netWorthMoversCsv(CLEAR, 2, 'group').rows.map((r) => r[3])).toEqual(['500%', '-400%'])
+  })
+})

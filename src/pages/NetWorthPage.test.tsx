@@ -571,7 +571,7 @@ describe('NetWorthPage — shell scope', () => {
 
 // ── The three cards on ChartCard (charts C2, F2/F8/F9/F11/F12) ──────────────────────────
 describe('NetWorthPage — chart cards', () => {
-  it('mounts the stack, the bridge and the drill through ChartCard: labels, export rows, Share %, one group', async () => {
+  it('mounts the stack, the movers and the drill through ChartCard: labels, export rows, Share %, one group', async () => {
     renderPage()
     await screen.findByText('By group over time')
     expect(screen.getByLabelText(/Stacked area chart of asset groups over time/)).toBeTruthy()
