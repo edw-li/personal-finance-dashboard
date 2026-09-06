@@ -93,7 +93,7 @@ describe('ghost parity (motion spec §7)', () => {
     // All three cards, at the boxes they really occupy — an unghosted third card let the page
     // grow under the reader when the summary landed.
     expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(360, { controls: true, zoomable: true }))')
-    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(280))')
+    expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(255, { controls: true }))')
     expect(page('NetWorthPage')).toContain('ghostCardBody(chartCardBox(280, { zoomable: true, footer: true }))')
   })
 })

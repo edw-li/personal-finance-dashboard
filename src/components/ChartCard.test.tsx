@@ -97,6 +97,17 @@ describe('ChartCard chrome', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Table' }))
     expect(screen.queryByRole('table')).toBeNull()
   })
+  it('renders an optional lede under the header, above the export row and the plot', () => {
+    render(<ChartCard {...base} option={OPTION} lede={<>Jul 2026 <b>$170.00</b> → Aug 2026 <b>$230.00</b></>} />)
+    const lede = document.querySelector('.chart-lede') as HTMLElement
+    expect(lede.textContent).toBe('Jul 2026 $170.00 → Aug 2026 $230.00')
+    expect(lede.previousElementSibling?.className).toBe('chart-card-header')
+    expect(document.querySelector('.chart-lede + .chart-card-row-export')).toBeTruthy()
+  })
+  it('draws no lede element at all for the cards that pass none', () => {
+    render(<ChartCard {...base} option={OPTION} />)
+    expect(document.querySelector('.chart-lede')).toBeNull()
+  })
 })
 
 describe('ChartCard reserved rows (motion spec §7)', () => {

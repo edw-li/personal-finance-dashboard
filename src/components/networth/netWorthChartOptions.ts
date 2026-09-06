@@ -3,17 +3,18 @@
 // in NetWorthPage (it reads page state); only the parts worth unit-testing live here.
 import type { EChartsOption } from '../../charts/echarts'
 import { personSlot, slotColor } from '../../charts/entities'
-import { LINE, STACK_WASH, cents, grid, moneyAxis, monthAxis, pctAxis } from '../../charts/grammar'
+import { BAR_MARKS, LINE, STACK_WASH, capLabel, cents, grid, moneyAxis, monthAxis, pctAxis } from '../../charts/grammar'
 import { FOCUS, legendFor } from '../../charts/legend'
 import { GROUP_COLORS, GROUP_LABELS, GROUP_ORDER, INK, MUTED, OTHER_SERIES_COLOR } from '../../charts/theme'
 import { MARK_LINE_LABEL, MARK_LINE_STYLE, anchorMonthLabel } from '../../charts/markLine'
 import { rangeZoom } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
-import { axisTooltip } from '../../charts/tooltip'
-import { waterfallCsv, waterfallSeries, waterfallSteps, waterfallTooltip } from '../../charts/waterfall'
+import { axisTooltip, itemTooltip } from '../../charts/tooltip'
 import type { AccountGroup, NetWorthTimeseries, PersonOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { escapeHtml, formatCurrencyCompact, formatMonth } from '../../utils/format'
+import { escapeHtml, formatCurrency, formatCurrencyCompact, formatMonth, formatPct } from '../../utils/format'
+import { toneOf } from '../../utils/tone'
+import type { Tone } from '../../utils/tone'
 
 /** The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
  * the legend, the tooltip branch and the series stay in lockstep (moved verbatim from
@@ -359,46 +360,143 @@ export function netWorthDrillCsv(ts: NetWorthTimeseries, drill: DrillPick[]): Ex
   }
 }
 
-/** The bridge's steps: prior net worth → each group's month-over-month change → this month's
- *  net worth. Groups that did not move are omitted (a $0 step is a label without a bar). */
-function bridgeSteps(ts: Pick<NetWorthTimeseries, 'months' | 'group_totals' | 'net_worth'>, index: number) {
-  if (index < 1 || index >= ts.months.length) return null
-  const items = GROUP_ORDER.flatMap((g) => {
-    const delta = cents(Number(ts.group_totals[g][index]) - Number(ts.group_totals[g][index - 1]))
-    return delta === 0 ? [] : [{ label: GROUP_LABELS[g], amount: delta, delta, color: GROUP_COLORS[g] }]
-  })
-  return waterfallSteps(
-    { label: formatMonth(ts.months[index - 1]), amount: Number(ts.net_worth[index - 1]), color: OTHER_SERIES_COLOR },
-    items,
-    { label: formatMonth(ts.months[index]), amount: Number(ts.net_worth[index]), color: OTHER_SERIES_COLOR },
-  )
+
+// ── "What moved": contribution bars (2026-09-06 spec §4) ────────────────────────────────
+/** Which entity the bars measure. */
+export type MoversMode = 'group' | 'account'
+export const MOVERS_MODES: { value: MoversMode; label: string }[] = [{ value: 'group', label: 'Groups' }, { value: 'account', label: 'Accounts' }]
+
+/** One bar: what moved, by how much, in whose colour. `groupLabel` is null only for the
+ *  folded remainder; `share` is the bar's part of the month's net change, null whenever that
+ *  share would not be readable (see SHARE_FLOOR). */
+export interface Mover { label: string; groupLabel: string | null; delta: number; color: string; share: number | null }
+/** A bar before its share is judged: the verdict needs the whole sorted set, so it cannot be
+ *  decided while the rows are still being built. */
+type MoverBar = Omit<Mover, 'share'>
+
+/** A missing column is zero, not NaN: an account that starts mid-history still moved the total. */
+const num = (value: string | null | undefined): number => (value == null ? 0 : Number(value))
+/** Accounts mode draws the ten largest movers and folds the rest into one row. */
+const MAX_ACCOUNT_MOVERS = 10
+/** A share is only worth printing when the month's NET change is comparable to the moves that
+ *  made it. A +$10 month built from a +$10,000 and a −$9,990 would otherwise say
+ *  "100000% of the change" — arithmetic, not information. Below this fraction of the largest
+ *  single mover every share goes blank, exactly as on a month that netted to zero. */
+const SHARE_FLOOR = 0.05
+
+/** The tail past the cap as one row. A TAIL, not a mover: last even when its sum outweighs the
+ *  tenth bar, and dropped when it cancels to zero (the rule every other row follows). */
+function foldTail(rows: MoverBar[]): MoverBar[] {
+  const kept = rows.slice(0, MAX_ACCOUNT_MOVERS)
+  const folded = cents(rows.slice(MAX_ACCOUNT_MOVERS).reduce((sum, r) => sum + r.delta, 0))
+  return folded === 0 ? kept : [...kept, { label: 'Other accounts', groupLabel: null, delta: folded, color: OTHER_SERIES_COLOR }]
 }
 
-/** "What moved — {month}": a waterfall by group between two snapshots (F2). Null on the first
- *  month or an out-of-range index. */
-export function netWorthBridgeOption(
-  ts: Pick<NetWorthTimeseries, 'months' | 'group_totals' | 'net_worth'>,
-  index: number,
-): EChartsOption | null {
-  const steps = bridgeSteps(ts, index)
-  if (steps === null) return null
-  const [placeholder, amount] = waterfallSeries(steps)
+/** The movers between index−1 and index, largest first. Empty when there is nothing to
+ *  compare with and when nothing moved — both render the card's empty sentence. Ties keep
+ *  source order: Array.prototype.sort is stable, so GROUP_ORDER breaks them. */
+export function netWorthMovers(ts: NetWorthTimeseries, index: number, mode: MoversMode): Mover[] {
+  if (index < 1 || index >= ts.months.length) return []
+  const net = cents(num(ts.net_worth[index]) - num(ts.net_worth[index - 1]))
+  const rows: MoverBar[] =
+    mode === 'group'
+      ? GROUP_ORDER.flatMap((g) => {
+          const delta = cents(num(ts.group_totals[g][index]) - num(ts.group_totals[g][index - 1]))
+          // Liability deltas keep their stored sign: more debt is a NEGATIVE bar.
+          return delta === 0
+            ? []
+            : [{ label: GROUP_LABELS[g], groupLabel: GROUP_LABELS[g], delta, color: GROUP_COLORS[g] }]
+        })
+      : (() => {
+          const byId = new Map(ts.series.map((s) => [s.account_id, s.values]))
+          // Components are already folded into their parents by the timeseries (spec §4.1);
+          // drawing them too would count the same money twice.
+          return ts.accounts.flatMap((a) => {
+            if (a.is_component) return []
+            const values = byId.get(a.id) ?? []
+            const delta = cents(num(values[index]) - num(values[index - 1]))
+            return delta === 0
+              ? []
+              : [{ label: a.name, groupLabel: GROUP_LABELS[a.group], delta, color: GROUP_COLORS[a.group] }]
+          })
+        })()
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+  // Folding has to EARN its row: at exactly MAX + 1 movers it would trade a named account for
+  // a "+$3" mystery and save no height at all, so the eleventh keeps its name.
+  const drawn = mode === 'group' || rows.length <= MAX_ACCOUNT_MOVERS + 1 ? rows : foldTail(rows)
+  // Judged against the largest SINGLE mover — rows is sorted, so that is rows[0]; the folded
+  // tail is a sum, not a move anyone made.
+  const readable = net !== 0 && Math.abs(net) >= SHARE_FLOOR * Math.abs(rows[0]?.delta ?? 0)
+  return drawn.map((bar) => ({ ...bar, share: readable ? bar.delta / net : null }))
+}
+
+/** One 28px row each, floored so a lone mover is not a sliver and capped so a long Accounts
+ *  list is not a page (spec §4.2). */
+export function moversHeight(rows: number): number {
+  return Math.min(420, Math.max(200, 60 + 28 * rows))
+}
+/** "+$1.2K" / "-$840" — on a contribution bar the sign is the whole point. */
+const signedCompact = (value: number): string => (value > 0 ? `+${formatCurrencyCompact(value)}` : formatCurrencyCompact(value))
+/** "83%" — ONE spelling of the share, for the tooltip and the table twin alike. */
+const sharePct = (share: number | null): string | null => (share === null ? null : formatPct(share, { signed: false, decimals: 0 }))
+
+/** "What moved — {month}": sorted contribution bars between two snapshots (spec §4.2).
+ *  Null on the first month and on a month where nothing moved. */
+export function netWorthMoversOption(ts: NetWorthTimeseries, index: number, mode: MoversMode): EChartsOption | null {
+  const movers = netWorthMovers(ts, index, mode)
+  if (movers.length === 0) return null
   return {
-    grid: grid(),
-    tooltip: waterfallTooltip(steps),
-    xAxis: monthAxis(steps.map((s) => s.label), { gap: true }),
-    yAxis: moneyAxis(),
-    // No local stagger: waterfallSeries carries the §11 cascade itself (C7, 2026-09-04), so
-    // the bridge and the tax waterfall enter from ONE definition. Re-spreading it here was
-    // a no-op that also hid a missing stagger in the shared builder from this chart.
-    series: [placeholder, amount],
+    grid: grid('horizontal'),
+    tooltip: itemTooltip<{ dataIndex?: number }>({
+      // Account names are user text — itemTooltip escapes every label and sub it renders.
+      body: (p) => {
+        const mover = movers[p.dataIndex ?? -1]
+        if (mover === undefined) return null
+        const pct = sharePct(mover.share)
+        const sub = [pct === null ? null : `${pct} of the change`, mode === 'account' ? mover.groupLabel : null].filter((part): part is string => part !== null).join(' · ')
+        return { value: mover.delta, label: mover.label, sub: sub === '' ? undefined : sub }
+      },
+    }),
+    xAxis: moneyAxis(),
+    yAxis: { type: 'category' as const, data: movers.map((m) => m.label), inverse: true, axisLabel: { width: 118, overflow: 'truncate' as const } },
+    series: [
+      { type: 'bar' as const, name: 'Change', ...BAR_MARKS, barMaxWidth: 24,
+        // capLabel carries show/colour/size/formatter; each item overrides only the POSITION,
+        // so the amount sits at the bar's outer end instead of over the axis (spec §4.2).
+        label: capLabel((p) => signedCompact(movers[p.dataIndex]?.delta ?? 0)),
+        data: movers.map((m) => ({ value: m.delta, itemStyle: { color: m.color }, label: { position: m.delta > 0 ? ('right' as const) : ('left' as const) } })) },
+    ],
   }
 }
 
-export function netWorthBridgeCsv(
-  ts: Pick<NetWorthTimeseries, 'months' | 'group_totals' | 'net_worth'>,
-  index: number,
-): ExportTable {
-  const steps = bridgeSteps(ts, index)
-  return steps === null ? { headers: ['Step', 'Amount', 'Remaining'], rows: [] } : waterfallCsv(steps)
+/** The bars as a table (spec §4.2). `Change` is the plain number the bar drew; the share
+ *  carries its % sign because that column is a ratio, not money. */
+export function netWorthMoversCsv(ts: NetWorthTimeseries, index: number, mode: MoversMode): ExportTable {
+  return {
+    headers: ['Mover', 'Group', 'Change', 'Share of change'],
+    rows: netWorthMovers(ts, index, mode).map((m) => [m.label, m.groupLabel ?? '', m.delta.toFixed(2), sharePct(m.share) ?? '']),
+  }
+}
+
+/** "+$100.00" — the lede's move, signed like the bars' own labels. */
+const signedCurrency = (value: number): string => (value > 0 ? `+${formatCurrency(value)}` : formatCurrency(value))
+export interface MoversLede {
+  fromLabel: string; fromValue: string; toLabel: string; toValue: string
+  delta: string // the difference of the two SERVER totals, signed
+  pct: string | null // the server's own mom_pct — null when it sent none for this month
+  tone: Tone
+}
+
+/** The card's header strip (spec §4.2): from → to, then the move. Null on the first month.
+ *  Every figure is the server's — the two totals and the percent are printed verbatim and
+ *  the delta is the difference of those totals, never a client-recomputed percentage. */
+export function netWorthMoversLede(ts: NetWorthTimeseries, index: number): MoversLede | null {
+  if (index < 1 || index >= ts.months.length) return null
+  const delta = cents(num(ts.net_worth[index]) - num(ts.net_worth[index - 1]))
+  const pct = ts.mom_pct[index]
+  return {
+    fromLabel: formatMonth(ts.months[index - 1]), fromValue: formatCurrency(ts.net_worth[index - 1]),
+    toLabel: formatMonth(ts.months[index]), toValue: formatCurrency(ts.net_worth[index]),
+    delta: signedCurrency(delta), pct: pct == null ? null : formatPct(pct), tone: toneOf(delta),
+  }
 }

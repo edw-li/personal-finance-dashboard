@@ -31,6 +31,7 @@ vi.mock('../components/EChart', async () => {
           stack?: string
           markLine?: { data?: { xAxis?: string }[] }
         }[]
+        yAxis?: { data?: string[] }
       }
       ariaLabel?: string
       onLegendChange?: (selected: Record<string, boolean>) => void
@@ -42,6 +43,7 @@ vi.mock('../components/EChart', async () => {
         'aria-label': ariaLabel,
         'data-series': (option.series ?? []).map((s) => s.name ?? '').join('|'),
         'data-stacks': (option.series ?? []).map((s) => s.stack ?? '-').join('|'),
+        'data-categories': (option.yAxis?.data ?? []).join('|'),
         'data-marriage': (option.series ?? [])
           .flatMap((s) => s.markLine?.data ?? [])
           .map((d) => d.xAxis ?? '')
@@ -256,7 +258,7 @@ it('keeps the page alive when the household endpoint fails', async () => {
 })
 
 const stacked = () => screen.getAllByTestId('echart')[0]
-// The drill card is the page's last chart: the What-moved bridge sits between it and
+// The drill card is the page's last chart: the What-moved movers sit between it and
 // the stack whenever a prior month exists.
 const drilled = () => screen.getAllByTestId('echart').at(-1) as HTMLElement
 
@@ -569,16 +571,30 @@ describe('NetWorthPage — shell scope', () => {
 
 // ── The three cards on ChartCard (charts C2, F2/F8/F9/F11/F12) ──────────────────────────
 describe('NetWorthPage — chart cards', () => {
-  it('mounts the stack, the bridge and the drill through ChartCard: labels, export rows, Share %, one group', async () => {
+  it('mounts the stack, the movers and the drill through ChartCard: labels, export rows, Share %, one group', async () => {
     renderPage()
     await screen.findByText('By group over time')
     expect(screen.getByLabelText(/Stacked area chart of asset groups over time/)).toBeTruthy()
     expect(screen.getByLabelText(/Line chart of the selected accounts/)).toBeTruthy()
     expect(screen.getByText(/What moved — Aug 2026/)).toBeTruthy()
-    expect(screen.getByLabelText(/Waterfall chart of how each account group moved/)).toBeTruthy()
+    expect(screen.getByLabelText(/Horizontal bar chart of how each account group moved/)).toBeTruthy()
     expect(screen.getAllByRole('group', { name: /Export/ })).toHaveLength(3)
     expect(screen.getAllByText('ctrl+scroll to zoom · drag to pan')).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Share %' })).toBeTruthy()
+  })
+
+  it('breaks the movers down by group, then by account, with the lede and the table twin', async () => {
+    renderPage()
+    await screen.findByText(/What moved — Aug 2026/)
+    const card = screen.getByRole('group', { name: 'Export net-worth-movers' }).closest('section') as HTMLElement
+    expect(card.querySelector('.chart-lede')?.textContent).toBe('Jul 2026 $170.00 → Aug 2026 $230.00 · +$60.00 · +35.3%')
+    expect(within(card).getByTestId('echart').getAttribute('data-categories')).toBe('Cash')
+    fireEvent.click(within(card).getByRole('button', { name: 'Accounts' }))
+    expect(within(card).getByTestId('echart').getAttribute('data-categories')).toBe('My Checking|Joint Savings')
+    expect(within(card).getByLabelText(/Horizontal bar chart of how each account moved/)).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: 'Table' }))
+    const rows = [...card.querySelectorAll('tbody tr')].map((r) => [...r.querySelectorAll('td')].map((td) => td.textContent))
+    expect(rows).toEqual([['My Checking', 'Cash', '50.00', '83%'], ['Joint Savings', 'Cash', '10.00', '17%']])
   })
 
   it('Share % swaps the stack to composition and drops the net-worth line', async () => {

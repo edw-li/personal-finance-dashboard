@@ -58,7 +58,7 @@ describe('marriageMarkLine', () => {
 import { tooltipRows } from '../../testing/tooltipRows'
 import { GRID_VARIANTS, compactMoney, percentLabel } from '../../charts/grammar'
 import { GROUP_COLORS, INK, MUTED, PALETTE } from '../../charts/theme'
-import type { NetWorthTimeseries, PersonOut } from '../../types/api'
+import type { AccountGroup, AccountOut, NetWorthTimeseries, PersonOut } from '../../types/api'
 import { liabilitiesMaterial, netWorthStackOption } from './netWorthChartOptions'
 
 const PEOPLE: PersonOut[] = [
@@ -323,38 +323,196 @@ describe('netWorthDrillOption', () => {
   })
 })
 
-import { netWorthBridgeCsv, netWorthBridgeOption } from './netWorthChartOptions'
 import { OTHER_SERIES_COLOR } from '../../charts/theme'
 
-describe('netWorthBridgeOption', () => {
-  it('walks from the prior month to the viewed month, one step per group that moved, landing on the month’s net worth', () => {
-    const option = netWorthBridgeOption(ts(), 2) as unknown as {
-      xAxis: { data: string[] }
-      series: { data: unknown[] }[]
-      tooltip: { formatter: (p: unknown) => string }
-    }
-    // Jul → Aug: cash +10, pre-tax +10, taxable +10, liabilities +10 (−40 → −30); the three
-    // zero groups are omitted — a $0 step is a label with no bar.
-    expect(option.xAxis.data).toEqual(['Jul 2026', 'Cash', 'Pre-tax', 'Taxable', 'Liabilities', 'Aug 2026'])
-    const [placeholder, amount] = option.series
-    expect(placeholder.data).toEqual([0, 590, 600, 610, 620, 0])
-    expect((amount.data as { value: number; itemStyle: { color: string } }[]).map((d) => d.value)).toEqual([590, 10, 10, 10, 10, 630])
-    expect((amount.data as { itemStyle: { color: string } }[])[1].itemStyle.color).toBe(GROUP_COLORS.cash)
-    expect((amount.data as { itemStyle: { color: string } }[])[0].itemStyle.color).toBe(OTHER_SERIES_COLOR)
-    const parsed = tooltipRows(option.tooltip.formatter({ dataIndex: 1 }))
-    expect([parsed.lead, parsed.label, parsed.sub]).toEqual(['$10.00', 'Cash', 'Left: $600.00'])
+
+import { moversHeight, netWorthMovers, netWorthMoversOption } from './netWorthChartOptions'
+
+// Jul → Aug, four groups moving unequally: taxable +100, liability −40 (more debt is a LOSS bar), cash +30, pre-tax +10 → net +100.
+const MOVED = ts({
+  group_totals: { ...ts().group_totals, cash: ['100.00', '110.00', '140.00'], taxable: ['300.00', '310.00', '410.00'], liability: ['-50.00', '-40.00', '-80.00'] },
+  net_worth: ['550.00', '590.00', '690.00'],
+})
+type MoversRead = { yAxis: { data: string[]; inverse: boolean }; tooltip: { formatter: (p: unknown) => string }
+  series: { name: string; barMaxWidth: number; label: { formatter: (p: { dataIndex: number }) => string }
+    data: { value: number; itemStyle: { color: string }; label: { position: string } }[] }[] }
+const movers = (option: unknown) => option as MoversRead
+
+describe('netWorthMoversOption — Groups', () => {
+  it('draws one bar per group that moved, largest first, signed at its outer end', () => {
+    const option = movers(netWorthMoversOption(MOVED, 2, 'group'))
+    // Four rows, not seven: a group that did not move is a label with no bar.
+    expect(option.yAxis.data).toEqual(['Taxable', 'Liabilities', 'Cash', 'Pre-tax'])
+    expect(option.yAxis.inverse).toBe(true) // the largest mover on TOP
+    const [bars] = option.series
+    expect([bars.name, bars.barMaxWidth]).toEqual(['Change', 24])
+    expect(bars.data.map((d) => d.value)).toEqual([100, -40, 30, 10])
+    expect(bars.data.map((d) => d.itemStyle.color)).toEqual([GROUP_COLORS.taxable, GROUP_COLORS.liability, GROUP_COLORS.cash, GROUP_COLORS.pre_tax])
+    expect(bars.data.map((d) => d.label.position)).toEqual(['right', 'left', 'right', 'right'])
+    expect([0, 1].map((i) => bars.label.formatter({ dataIndex: i }))).toEqual(['+$100', '-$40'])
   })
-  it('draws a fall as a step down', () => {
-    const down = ts({ group_totals: { ...ts().group_totals, taxable: ['300.00', '310.00', '250.00'] }, net_worth: ['550.00', '590.00', '560.00'] })
-    const [placeholder, amount] = (netWorthBridgeOption(down, 2) as unknown as { series: { data: unknown[] }[] }).series
-    // Taxable −60: the segment spans [560+…]: base is the LOWER remainder.
-    expect(placeholder.data).toEqual([0, 590, 600, 550, 550, 0])
-    expect((amount.data as { value: number }[]).map((d) => d.value)).toEqual([590, 10, 10, 60, 10, 560])
+  it('tells each bar its share of the move, and refuses the months it cannot compare', () => {
+    const option = movers(netWorthMoversOption(MOVED, 2, 'group'))
+    const gain = tooltipRows(option.tooltip.formatter({ dataIndex: 0 }))
+    expect([gain.lead, gain.label, gain.sub]).toEqual(['$100.00', 'Taxable', '100% of the change'])
+    const loss = tooltipRows(option.tooltip.formatter({ dataIndex: 1 }))
+    expect([loss.lead, loss.label, loss.sub]).toEqual(['-$40.00', 'Liabilities', '-40% of the change'])
+    // Nothing to compare WITH, and nothing that moved: both are the card's empty sentence.
+    expect([netWorthMoversOption(MOVED, 0, 'group'), netWorthMoversOption(MOVED, -1, 'group'), netWorthMoversOption(ts(), 2, 'account')]).toEqual([null, null, null])
+    expect([moversHeight(1), moversHeight(6), moversHeight(20)]).toEqual([200, 228, 420])
   })
-  it('is null for the first month (nothing to bridge from) and exports the steps', () => {
-    expect(netWorthBridgeOption(ts(), 0)).toBeNull()
-    expect(netWorthBridgeOption(ts(), -1)).toBeNull()
-    expect(netWorthBridgeCsv(ts(), 2).rows[1]).toEqual(['Cash', '10.00', '600.00'])
-    expect(netWorthBridgeCsv(ts(), 0).rows).toEqual([])
+})
+
+const acc = (id: number, name: string, group: AccountGroup, is_component = false): AccountOut => ({
+  id, name, slug: `a${id}`, group, sort_order: id, is_active: true, is_component, parent_account_id: null, person_id: null,
+})
+// MOVED's deltas on accounts, plus a component (already folded into its parent by the server) and an account that did not move.
+const ACCOUNTS = ts({
+  accounts: [acc(1, 'Checking', 'cash'), acc(2, 'Brokerage', 'taxable'), acc(3, 'Card', 'liability'), acc(4, 'Vanguard sleeve', 'taxable', true), acc(5, 'Sock drawer', 'cash')],
+  series: [
+    { account_id: 1, values: ['100.00', '110.00', '140.00'] }, { account_id: 2, values: ['300.00', '310.00', '410.00'] },
+    { account_id: 3, values: ['-50.00', '-40.00', '-80.00'] }, { account_id: 4, values: ['10.00', '10.00', '99.00'] },
+    { account_id: 5, values: ['5.00', '5.00', '5.00'] },
+  ],
+  net_worth: ['550.00', '590.00', '690.00'],
+})
+// Twelve cash accounts moving +12 … +1: ten bars and one folded remainder of +3.
+const MANY = ts({
+  accounts: Array.from({ length: 12 }, (_, i) => acc(i + 1, `A${i + 1}`, 'cash')),
+  series: Array.from({ length: 12 }, (_, i) => ({ account_id: i + 1, values: ['0.00', '0.00', `${12 - i}.00`] })),
+  net_worth: ['0.00', '0.00', '78.00'],
+})
+
+describe('netWorthMoversOption — Accounts', () => {
+  it('bars every non-component account that moved, coloured by its group and named in the tooltip', () => {
+    const rows = netWorthMovers(ACCOUNTS, 2, 'account')
+    expect(rows.map((m) => [m.label, m.groupLabel, m.color])).toEqual([['Brokerage', 'Taxable', GROUP_COLORS.taxable], ['Card', 'Liabilities', GROUP_COLORS.liability], ['Checking', 'Cash', GROUP_COLORS.cash]])
+    const option = movers(netWorthMoversOption(ACCOUNTS, 2, 'account'))
+    const first = tooltipRows(option.tooltip.formatter({ dataIndex: 0 }))
+    expect([first.lead, first.label, first.sub]).toEqual(['$100.00', 'Brokerage', '100% of the change · Taxable'])
+  })
+  it('keeps the ten largest and folds the rest into one grey remainder — unless it cancels', () => {
+    const rows = netWorthMovers(MANY, 2, 'account')
+    expect(rows.map((m) => m.label)).toEqual(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'Other accounts'])
+    expect(rows[10]).toMatchObject({ delta: 3, color: OTHER_SERIES_COLOR, groupLabel: null })
+    expect(moversHeight(rows.length)).toBe(368)
+    // A remainder that nets to zero is no bar at all (the rule every other row follows).
+    const cancels = { ...MANY, series: MANY.series.map((s, i) => (i === 11 ? { ...s, values: ['0.00', '0.00', '-2.00'] } : s)) }
+    expect(netWorthMovers(cancels, 2, 'account')).toHaveLength(10)
+  })
+})
+
+import { netWorthMoversCsv, netWorthMoversLede } from './netWorthChartOptions'
+
+// Cash +10 against taxable −10: the month's NET change is zero, so no bar has a share OF
+// it — an "∞% of the change" would be a lie.
+const FLAT = ts({
+  group_totals: { ...ts().group_totals, pre_tax: ['200.00', '210.00', '210.00'], taxable: ['300.00', '310.00', '300.00'], liability: ['-50.00', '-40.00', '-40.00'] },
+  net_worth: ['550.00', '590.00', '590.00'],
+})
+
+describe('netWorthMoversCsv', () => {
+  it('exports the drawn rows under the four spec columns', () => {
+    const csv = netWorthMoversCsv(MOVED, 2, 'group')
+    expect(csv.headers).toEqual(['Mover', 'Group', 'Change', 'Share of change'])
+    expect(csv.rows).toEqual([['Taxable', 'Taxable', '100.00', '100%'], ['Liabilities', 'Liabilities', '-40.00', '-40%'],
+      ['Cash', 'Cash', '30.00', '30%'], ['Pre-tax', 'Pre-tax', '10.00', '10%']])
+    expect(netWorthMoversCsv(MOVED, 0, 'group').rows).toEqual([])
+  })
+  it('leaves the group blank for the folded remainder, and the share blank on a flat month', () => {
+    expect(netWorthMoversCsv(MANY, 2, 'account').rows.at(-1)).toEqual(['Other accounts', '', '3.00', '4%'])
+    expect(netWorthMoversCsv(FLAT, 2, 'group').rows).toEqual([['Cash', 'Cash', '10.00', ''], ['Taxable', 'Taxable', '-10.00', '']])
+    expect(tooltipRows(movers(netWorthMoversOption(FLAT, 2, 'group')).tooltip.formatter({ dataIndex: 0 })).sub).toBeUndefined()
+  })
+})
+
+describe('netWorthMoversLede', () => {
+  it('reads the two totals and the percent off the payload, and tones the move', () => {
+    expect(netWorthMoversLede(MOVED, 2)).toEqual({
+      fromLabel: 'Jul 2026', fromValue: '$590.00', toLabel: 'Aug 2026', toValue: '$690.00',
+      // The SERVER's mom_pct — deliberately NOT 100/590, what re-deriving it here would print.
+      delta: '+$100.00', pct: '+6.8%', tone: 'positive',
+    })
+    expect(netWorthMoversLede(MOVED, 0)).toBeNull()
+    expect(netWorthMoversLede(ts({ mom_pct: [null, null, null] }), 2)?.pct).toBeNull()
+    expect(netWorthMoversLede(FLAT, 2)?.tone).toBe('neutral')
+  })
+})
+
+// ── Review minors (2026-09-06 lane D) ────────────────────────────────────────────────────
+// Groups that EXIST and repeat, and accounts that exist and carry flat series: "nothing
+// moved" reached down the real path, not by handing the builder an empty payload.
+const STILL = ts({
+  group_totals: {
+    cash: ['100.00', '110.00', '110.00'], pre_tax: ['200.00', '210.00', '210.00'],
+    post_tax: ['0.00', '0.00', '0.00'], taxable: ['300.00', '310.00', '310.00'],
+    equity: ['0.00', '0.00', '0.00'], other: ['0.00', '0.00', '0.00'],
+    liability: ['-50.00', '-40.00', '-40.00'],
+  },
+  net_worth: ['550.00', '590.00', '590.00'],
+})
+const STILL_ACCOUNTS = ts({
+  ...STILL,
+  accounts: [acc(1, 'Checking', 'cash'), acc(2, 'Brokerage', 'taxable')],
+  series: [{ account_id: 1, values: ['100.00', '110.00', '110.00'] }, { account_id: 2, values: ['300.00', '310.00', '310.00'] }],
+})
+// Exactly eleven movers: folding would trade a named account for a mystery row and save no
+// height at all, so all eleven are drawn.
+const ELEVEN = ts({
+  accounts: Array.from({ length: 11 }, (_, i) => acc(i + 1, `B${i + 1}`, 'cash')),
+  series: Array.from({ length: 11 }, (_, i) => ({ account_id: i + 1, values: ['0.00', '0.00', `${11 - i}.00`] })),
+  net_worth: ['0.00', '0.00', '66.00'],
+})
+// +$10 net out of ±$10,000 of offsetting moves: "100000% of the change" is arithmetic, not
+// information.
+const OFFSET = ts({
+  group_totals: {
+    cash: ['100.00', '110.00', '110.00'], pre_tax: ['200.00', '210.00', '210.00'],
+    post_tax: ['0.00', '0.00', '0.00'], taxable: ['300.00', '310.00', '10310.00'],
+    equity: ['0.00', '0.00', '0.00'], other: ['0.00', '0.00', '0.00'],
+    liability: ['-50.00', '-40.00', '-10030.00'],
+  },
+  net_worth: ['550.00', '590.00', '600.00'],
+})
+// The control: +$100 against −$80, so the month's net IS a fifth of the largest mover.
+const CLEAR = ts({
+  group_totals: {
+    cash: ['100.00', '110.00', '110.00'], pre_tax: ['200.00', '210.00', '210.00'],
+    post_tax: ['0.00', '0.00', '0.00'], taxable: ['300.00', '310.00', '410.00'],
+    equity: ['0.00', '0.00', '0.00'], other: ['0.00', '0.00', '0.00'],
+    liability: ['-50.00', '-40.00', '-120.00'],
+  },
+  net_worth: ['550.00', '590.00', '610.00'],
+})
+
+describe('netWorthMovers — a month where nothing moved', () => {
+  it('is empty down the real path: repeated group totals, and accounts whose series are flat', () => {
+    expect(netWorthMovers(STILL, 2, 'group')).toEqual([])
+    expect(netWorthMoversOption(STILL, 2, 'group')).toBeNull()
+    // The accounts are PRESENT and carry values — they simply did not move.
+    expect(STILL_ACCOUNTS.accounts).toHaveLength(2)
+    expect(netWorthMovers(STILL_ACCOUNTS, 2, 'account')).toEqual([])
+    expect(netWorthMoversOption(STILL_ACCOUNTS, 2, 'account')).toBeNull()
+  })
+})
+
+describe('netWorthMovers — the fold has to earn its row', () => {
+  it('draws all eleven when folding would remove none, and folds only from twelve up', () => {
+    expect(netWorthMovers(ELEVEN, 2, 'account').map((m) => m.label)).toEqual(
+      ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11'],
+    )
+    expect(netWorthMovers(MANY, 2, 'account').map((m) => m.label).at(-1)).toBe('Other accounts')
+  })
+})
+
+describe('netWorthMovers — the share only prints when it can be read', () => {
+  it('blanks every share on a near-flat month of offsetting moves, in the tooltip and the table alike', () => {
+    expect(netWorthMovers(OFFSET, 2, 'group').map((m) => m.share)).toEqual([null, null])
+    expect(tooltipRows(movers(netWorthMoversOption(OFFSET, 2, 'group')).tooltip.formatter({ dataIndex: 0 })).sub).toBeUndefined()
+    expect(netWorthMoversCsv(OFFSET, 2, 'group').rows).toEqual([
+      ['Taxable', 'Taxable', '10000.00', ''], ['Liabilities', 'Liabilities', '-9990.00', ''],
+    ])
+    // The control: net worth moved a fifth of the biggest mover, which is a share that reads.
+    expect(netWorthMoversCsv(CLEAR, 2, 'group').rows.map((r) => r[3])).toEqual(['500%', '-400%'])
   })
 })

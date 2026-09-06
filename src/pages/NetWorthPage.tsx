@@ -17,15 +17,19 @@ import StatTile from '../components/StatTile'
 import { chartCardBox, ghostCardBody } from '../components/skeletonMetrics'
 import { useArrivalValue } from '../components/useArrivalParam'
 import {
+  MOVERS_MODES,
   STACK_MODES,
-  netWorthBridgeCsv,
-  netWorthBridgeOption,
+  moversHeight,
   netWorthCsv,
   netWorthDrillCsv,
   netWorthDrillOption,
+  netWorthMovers,
+  netWorthMoversCsv,
+  netWorthMoversLede,
+  netWorthMoversOption,
   netWorthStackOption,
 } from '../components/networth/netWorthChartOptions'
-import type { StackMode } from '../components/networth/netWorthChartOptions'
+import type { MoversMode, StackMode } from '../components/networth/netWorthChartOptions'
 import { resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import { GROUP_LABELS, PALETTE } from '../charts/theme'
@@ -109,6 +113,9 @@ export default function NetWorthPage() {
   // chart has always answered; "whose is it" and "what share" are the other two readings
   // of the same total.
   const [stackBy, setStackBy] = useState<StackMode>('group')
+  // Groups is the default reading (spec §4.2): "which part of the portfolio moved" comes
+  // before "which account did it". Local state like stackBy — one payload feeds both.
+  const [moversBy, setMoversBy] = useState<MoversMode>('group')
   // The initial fetch parameters are monthly + whatever the URL says, so the mount seed
   // reads exactly the key that mount's load() will write.
   const cached = getSnapshot<NetWorthSnapshot>(netWorthKey('monthly', scope.owner, scope.month))
@@ -350,12 +357,11 @@ export default function NetWorthPage() {
     () => (data === null ? null : netWorthDrillOption({ ts: data, drill, range, selected: drillLegend })),
     [data, drill, range, drillLegend],
   )
-  // The viewed month against the one before it — null on the first snapshot, where there
-  // is nothing to bridge FROM.
-  const bridgeOption = useMemo(
-    () => (data === null ? null : netWorthBridgeOption(data, viewedIndex)),
-    [data, viewedIndex],
-  )
+  // The viewed month against the one before it — null on the first snapshot, where there is
+  // nothing to compare WITH, and on a month where nothing moved.
+  const movers = useMemo(() => (data === null ? [] : netWorthMovers(data, viewedIndex, moversBy)), [data, viewedIndex, moversBy])
+  const moversOption = useMemo(() => (data === null ? null : netWorthMoversOption(data, viewedIndex, moversBy)), [data, viewedIndex, moversBy])
+  const moversLede = useMemo(() => (data === null ? null : netWorthMoversLede(data, viewedIndex)), [data, viewedIndex])
 
   const toggleDrill = (accountId: number) => {
     setDrill((current) => {
@@ -415,14 +421,15 @@ export default function NetWorthPage() {
         }}
         // strip: the owner row sits between the tiles and the first chart; unghosted it pushed both
         // charts down when the summary landed. cards: the three boxes the page really draws —
-        // the stacked chart (360, two Segmented controls, zoomable), the What-moved waterfall
-        // (280, bare) and the account drill-down (280, zoomable, with a footer).
+        // the stacked chart (360, two Segmented controls, zoomable), the What-moved movers (a
+        // six-row plot plus its lede line, one Segmented control) and the account drill-down
+        // (280, zoomable, with a footer).
         skeleton={{
           tiles: 4,
           strip: true,
           cards: [
             { span: 12, height: ghostCardBody(chartCardBox(360, { controls: true, zoomable: true })) },
-            { span: 12, height: ghostCardBody(chartCardBox(280)) },
+            { span: 12, height: ghostCardBody(chartCardBox(255, { controls: true })) },
             { span: 12, height: ghostCardBody(chartCardBox(280, { zoomable: true, footer: true })) },
           ],
         }}
@@ -568,15 +575,30 @@ export default function NetWorthPage() {
           {data !== null && viewedIndex >= 1 && (
             <ChartCard
               title={`What moved — ${formatMonth(months[viewedIndex])}`}
-              // "the previous period's", not "last month's": the same card draws the step
-              // between two QUARTERS under the Quarterly grain.
-              hint="How each account group moved net worth from the prior snapshot to this one — a waterfall from the previous period’s total to this one’s. Groups that did not move are left out."
-              ariaLabel="Waterfall chart of how each account group moved net worth from the prior month to this one"
-              option={bridgeOption}
+              hint="How each account group — or account — moved net worth from the prior snapshot to this one, largest first. Groups that did not move are left out."
+              // The aria follows the TOGGLE: a sentence saying "group" over a chart of
+              // accounts is the one reading a screen-reader user cannot check.
+              ariaLabel={`Horizontal bar chart of how each ${moversBy === 'account' ? 'account' : 'account group'} moved net worth from the prior month to this one`}
+              option={moversOption}
               empty="Nothing moved between these two months."
-              exportName="net-worth-bridge"
-              csv={() => netWorthBridgeCsv(data, viewedIndex)}
-              height={280}
+              exportName="net-worth-movers"
+              csv={() => netWorthMoversCsv(data, viewedIndex, moversBy)}
+              height={moversHeight(movers.length)}
+              controls={
+                <Segmented variant="toggle" size="sm" ariaLabel="Break down by" options={MOVERS_MODES} value={moversBy} onChange={setMoversBy} />
+              }
+              lede={
+                moversLede === null ? undefined : (
+                  <>
+                    {`${moversLede.fromLabel} `}<b>{moversLede.fromValue}</b>{` → ${moversLede.toLabel} `}
+                    <b>{moversLede.toValue}</b>{' · '}
+                    <span className={`stat-delta-${moversLede.tone}`}>{moversLede.delta}</span>
+                    {moversLede.pct !== null && (
+                      <>{' · '}<span className={`stat-delta-${moversLede.tone}`}>{moversLede.pct}</span></>
+                    )}
+                  </>
+                )
+              }
             />
           )}
 
