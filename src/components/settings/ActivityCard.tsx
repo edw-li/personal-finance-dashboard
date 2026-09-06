@@ -127,46 +127,51 @@ export default function ActivityCard() {
       {/* Absolute timestamps, not "3 minutes ago": this repo has no relative-time formatter,
           and a trail of money-bearing writes is read AGAINST the clock — which month a save
           landed in matters more here than how long ago it was. */}
-      {entries !== null && entries.length > 0 && (
-        <ul className="activity-list">
-          {entries.map((entry) =>
-            entry.type === 'batch' ? (
-              <li key={`b:${entry.batch_id}`} className="activity-row">
-                <span className="settings-note">{formatDateTime(entry.at)}</span>
-                <span className={`badge activity-source activity-source-${entry.source}`}>{entry.source}</span>
-                <span className="activity-label">{entry.label}</span>
-                {entry.undone_by !== null && <span className="settings-note">undone</span>}
-                {entry.undoable && (
-                  <button
-                    type="button"
-                    className={`button${armed === entry.batch_id ? ' danger-button' : ''}`}
-                    disabled={busy}
-                    onClick={() => undo(entry.batch_id, entry.label)}
-                  >
-                    {armed === entry.batch_id ? 'Undo?' : 'Undo'}
-                  </button>
-                )}
-              </li>
-            ) : (
-              <li key={`r:${entry.run_id}`} className="activity-row">
-                <span className="settings-note">{formatDateTime(entry.at)}</span>
-                <span className={`badge activity-source activity-source-run${entry.ok ? '' : ' is-failed'}`}>run</span>
-                <span className="activity-label">{runLine(entry)}</span>
-                {entry.has_report && (
-                  <button type="button" className="button" disabled={busy} onClick={() => viewReport(entry.run_id)}>
-                    View report
-                  </button>
-                )}
-              </li>
-            ),
-          )}
-        </ul>
-      )}
-      {nextBefore !== null && (
-        <button type="button" className="button" disabled={busy} onClick={loadMore}>
-          Load more
-        </button>
-      )}
+      {/* Capped and scrolled (2026-09-06 spec §3.3): a busy month made this card taller
+          than the rest of the page put together. Load more rides INSIDE the box, so the
+          reader never leaves the list to extend it. */}
+      <div className="settings-scroll">
+        {entries !== null && entries.length > 0 && (
+          <ul className="activity-list">
+            {entries.map((entry) =>
+              entry.type === 'batch' ? (
+                <li key={`b:${entry.batch_id}`} className="activity-row">
+                  <span className="settings-note">{formatDateTime(entry.at)}</span>
+                  <span className={`badge activity-source activity-source-${entry.source}`}>{entry.source}</span>
+                  <span className="activity-label">{entry.label}</span>
+                  {entry.undone_by !== null && <span className="settings-note">undone</span>}
+                  {entry.undoable && (
+                    <button
+                      type="button"
+                      className={`button${armed === entry.batch_id ? ' danger-button' : ''}`}
+                      disabled={busy}
+                      onClick={() => undo(entry.batch_id, entry.label)}
+                    >
+                      {armed === entry.batch_id ? 'Undo?' : 'Undo'}
+                    </button>
+                  )}
+                </li>
+              ) : (
+                <li key={`r:${entry.run_id}`} className="activity-row">
+                  <span className="settings-note">{formatDateTime(entry.at)}</span>
+                  <span className={`badge activity-source activity-source-run${entry.ok ? '' : ' is-failed'}`}>run</span>
+                  <span className="activity-label">{runLine(entry)}</span>
+                  {entry.has_report && (
+                    <button type="button" className="button" disabled={busy} onClick={() => viewReport(entry.run_id)}>
+                      View report
+                    </button>
+                  )}
+                </li>
+              ),
+            )}
+          </ul>
+        )}
+        {nextBefore !== null && (
+          <button type="button" className="button" disabled={busy} onClick={loadMore}>
+            Load more
+          </button>
+        )}
+      </div>
       {detail !== null && (
         <div className="activity-report">
           <div className="settings-card-actions">

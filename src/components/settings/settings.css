@@ -500,3 +500,38 @@
   flex-direction: column;
   gap: 0.25rem;
 }
+
+/* Appearance's four controls, two by two (spec §3.3): a single column left half the card
+   empty beside them. */
+.settings-fields {
+  display: grid;
+  gap: 0.9rem 1.25rem;
+}
+
+.settings-fields > .settings-field {
+  margin-bottom: 0;
+}
+
+/* The Calendar feed card is span-12 now: its two forms sit side by side above the table. */
+.feed-forms {
+  display: grid;
+  gap: 0.75rem 1.25rem;
+  align-items: start;
+}
+
+/* The activity feed is unbounded — a busy month made this card taller than the rest of the
+   page put together. .settings-scroll caps it at 420px and Load more rides INSIDE, so the
+   reader never leaves the list to extend it. */
+.settings-scroll .activity-list {
+  margin-bottom: 0.5rem;
+}
+
+@media (min-width: 721px) {
+  .settings-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .feed-forms {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -108,13 +108,11 @@ export default function CalendarFeedCard() {
     setBusy(true)
     setDayError(null)
     setSavedNote(false)
-    // RE-READ, then write. The PUT is full-form, and this card's copy of the other three
-    // settings is as old as its mount — but the App settings card sits on the SAME page and
-    // writes them. Sending the mount-time snapshot would silently revert a withdrawal rate
-    // the user changed a minute ago. One extra GET on an explicit button press is the whole
-    // cost; the day is the only field this card is entitled to decide.
-    fetchAppSettings()
-      .then((current) => putAppSettings({ ...current, calendar_update_due_day: day }))
+    // The PUT is PARTIAL now (2026-09-06 spec §3.5): the server reads it with exclude_unset, so
+    // an absent key leaves the stored value. The day travels alone, and the re-read this card
+    // used to make — to avoid reverting a withdrawal rate the App settings card had changed a
+    // minute ago — has nothing left to protect against.
+    putAppSettings({ calendar_update_due_day: day })
       .then((saved) => {
         // Re-seeded from the RESPONSE, like every other settings form here: the server
         // answers with what it stored, and a box holding the typed text would read as
@@ -137,65 +135,116 @@ export default function CalendarFeedCard() {
       {tokens === null && error === null && <p className="empty-note">Loading…</p>}
       {tokens !== null && (
         <>
-          {fresh !== null ? (
-            <div className="settings-card-form feed-fresh" role="status">
-              <label>
-                Feed URL
-                {/* Selectable on focus, never editable: the value is a credential the user
-                    has to get out of the page in one piece, and this is its only showing. */}
-                <input
-                  className="field-input feed-url"
-                  aria-label="Feed URL"
-                  readOnly
-                  value={fresh.url}
-                  onFocus={(e) => e.currentTarget.select()}
-                />
-              </label>
-              <p className="settings-note">
-                Copy it now — this link for <strong>{fresh.label}</strong> is shown once. Paste it
-                into your calendar app as a subscription (Google: Other calendars → From URL;
-                Apple: File → New Calendar Subscription).
-              </p>
-              <div className="settings-card-actions">
-                <button type="button" className="button button-primary" onClick={copy}>
-                  Copy
-                </button>
-                <button type="button" className="button" onClick={dismissFresh}>
-                  Done
-                </button>
+          {/* The two forms pair on the span-12 card (2026-09-06 spec §3.3); the token
+              table and the warning sentence run its full width below them. */}
+          <div className="feed-forms">
+            {fresh !== null ? (
+              <div className="settings-card-form feed-fresh" role="status">
+                <label>
+                  Feed URL
+                  {/* Selectable on focus, never editable: the value is a credential the user
+                      has to get out of the page in one piece, and this is its only showing. */}
+                  <input
+                    className="field-input feed-url"
+                    aria-label="Feed URL"
+                    readOnly
+                    value={fresh.url}
+                    onFocus={(e) => e.currentTarget.select()}
+                  />
+                </label>
+                <p className="settings-note">
+                  Copy it now — this link for <strong>{fresh.label}</strong> is shown once. Paste it
+                  into your calendar app as a subscription (Google: Other calendars → From URL;
+                  Apple: File → New Calendar Subscription).
+                </p>
+                <div className="settings-card-actions">
+                  <button type="button" className="button button-primary" onClick={copy}>
+                    Copy
+                  </button>
+                  <button type="button" className="button" onClick={dismissFresh}>
+                    Done
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : (
-            <form
-              className="settings-card-form"
-              onSubmit={(e) => {
-                e.preventDefault()
-                create()
-              }}
-            >
-              <label>
-                Label for the new link
-                <input
-                  className="field-input"
-                  aria-label="Label for the new link"
-                  placeholder="phone, laptop…"
-                  maxLength={60}
-                  value={labelBox}
-                  disabled={busy}
-                  onChange={(e) => setLabelBox(e.target.value)}
-                />
-              </label>
-              <div className="settings-card-actions">
-                <button
-                  type="submit"
-                  className="button button-primary"
-                  disabled={busy || labelBox.trim() === ''}
-                >
-                  New feed link
-                </button>
-              </div>
-            </form>
-          )}
+            ) : (
+              <form
+                className="settings-card-form"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  create()
+                }}
+              >
+                <label>
+                  Label for the new link
+                  <input
+                    className="field-input"
+                    aria-label="Label for the new link"
+                    placeholder="phone, laptop…"
+                    maxLength={60}
+                    value={labelBox}
+                    disabled={busy}
+                    onChange={(e) => setLabelBox(e.target.value)}
+                  />
+                </label>
+                <div className="settings-card-actions">
+                  <button
+                    type="submit"
+                    className="button button-primary"
+                    disabled={busy || labelBox.trim() === ''}
+                  >
+                    New feed link
+                  </button>
+                </div>
+              </form>
+            )}
+            {settings !== null && (
+              <form
+                className="settings-card-form"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  saveDay()
+                }}
+              >
+                <label>
+                  Monthly update reminder day
+                  {/* A plain box, not type=number with min/max (SettingsPage's three boxes):
+                      native constraint validation REFUSES to fire submit at all when the
+                      value is out of range, which would make the sentence below unreachable
+                      and leave the browser's own bubble as the only feedback. */}
+                  <input
+                    className="field-input"
+                    aria-label="Monthly update reminder day"
+                    inputMode="numeric"
+                    value={dayBox}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setDayBox(e.target.value)
+                      // Every keystroke retires both sentences under the form: they describe
+                      // the value that WAS in the box (SettingsPage's rule).
+                      setDayError(null)
+                      setSavedNote(false)
+                    }}
+                  />
+                </label>
+                <p className="settings-note">
+                  The &quot;Monthly update — enter last month&quot; reminder lands on this day of
+                  each month, on the calendar and in the feed (with an alarm three days before).
+                  Any day from {MIN_DAY} to {MAX_DAY} — every month has one.
+                </p>
+                <div className="settings-card-actions">
+                  <button type="submit" className="button button-primary" disabled={busy}>
+                    Save reminder day
+                  </button>
+                </div>
+                <FeedBanner error={dayError} />
+                {savedNote && (
+                  <p className="settings-note" role="status">
+                    Saved.
+                  </p>
+                )}
+              </form>
+            )}
+          </div>
           {tokens.length === 0 ? (
             <p className="empty-note">No feed links yet.</p>
           ) : (
@@ -238,53 +287,6 @@ export default function CalendarFeedCard() {
             Anyone holding a feed link can read your calendar, amounts included. Revoke a link
             here if it leaks; the calendar app using it stops updating.
           </p>
-          {settings !== null && (
-            <form
-              className="settings-card-form"
-              onSubmit={(e) => {
-                e.preventDefault()
-                saveDay()
-              }}
-            >
-              <label>
-                Monthly update reminder day
-                {/* A plain box, not type=number with min/max (SettingsPage's three boxes):
-                    native constraint validation REFUSES to fire submit at all when the
-                    value is out of range, which would make the sentence below unreachable
-                    and leave the browser's own bubble as the only feedback. */}
-                <input
-                  className="field-input"
-                  aria-label="Monthly update reminder day"
-                  inputMode="numeric"
-                  value={dayBox}
-                  disabled={busy}
-                  onChange={(e) => {
-                    setDayBox(e.target.value)
-                    // Every keystroke retires both sentences under the form: they describe
-                    // the value that WAS in the box (SettingsPage's rule).
-                    setDayError(null)
-                    setSavedNote(false)
-                  }}
-                />
-              </label>
-              <p className="settings-note">
-                The &quot;Monthly update — enter last month&quot; reminder lands on this day of
-                each month, on the calendar and in the feed (with an alarm three days before).
-                Any day from {MIN_DAY} to {MAX_DAY} — every month has one.
-              </p>
-              <div className="settings-card-actions">
-                <button type="submit" className="button button-primary" disabled={busy}>
-                  Save reminder day
-                </button>
-              </div>
-              <FeedBanner error={dayError} />
-              {savedNote && (
-                <p className="settings-note" role="status">
-                  Saved.
-                </p>
-              )}
-            </form>
-          )}
         </>
       )}
     </section>
