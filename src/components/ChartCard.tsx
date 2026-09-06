@@ -40,6 +40,8 @@ export interface ChartCardProps {
   actions?: ReactNode
   /** Drill-hint paragraph(s), pickers. */
   footer?: ReactNode
+  /** A header strip under the title: the movers card's "from → to" line (spec §4.2). */
+  lede?: ReactNode
   /** Renders ChartZoomHint; the option carries the dataZoom. */
   zoomable?: boolean
   /** echarts.connect group for same-axis siblings. */
@@ -61,7 +63,7 @@ export interface ChartCardProps {
 }
 
 export default function ChartCard({
-  title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer,
+  title, hint, ariaLabel, option, empty, exportName, csv, caption, height = 320, controls, actions, footer, lede,
   zoomable = false, group, busy = false, error = null, span = 12,
   onClick, onHover, onHoverEnd, instanceRef, onLegendChange, onDataZoom, zoomWindow,
 }: ChartCardProps) {
@@ -119,6 +121,7 @@ export default function ChartCard({
           </div>
         )}
       </div>
+      {lede !== undefined && <div className="chart-lede">{lede}</div>}
       {/* Rows the card reserves in EVERY state (spec §7). The export row and the zoom caption used
           to mount WITH the option, so the card grew the instant data landed and shoved the next
           card down the page; the twin is the same element with nothing in it, and panels.css

@@ -725,6 +725,12 @@
   gap: 0.5rem;
 }
 
+/* The optional header strip (spec §4.2): muted prose with the figures in text ink. Only a card
+   that passes a `lede` renders it, so no other card's box — nor the ghost chartCardBox reports
+   for it — changes. */
+.chart-lede { margin: -0.25rem 0 0.6rem; font-size: 0.82rem; color: var(--muted); }
+.chart-lede b { color: var(--text); font-weight: 600; }
+
 /* A card-local advisory (a failed refetch with the previous window still drawn). */
 .chart-card-error {
   margin: 0 0 0.5rem;
