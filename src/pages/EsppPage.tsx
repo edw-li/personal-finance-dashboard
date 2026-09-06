@@ -959,11 +959,18 @@ function ModelerCard({
 
   const working = busy || saving
 
+  // The SERVER's discount, echoed with the chain it priced (spec §1.5) — the page never
+  // re-derives it, and before the first echo the sentence stays generic rather than guessing.
+  const discountWords =
+    data === null ? 'the plan discount' : `a ${Number(shiftPoint(data.discount_pct, 2))}% discount`
+
   return (
     <section className="card" data-entry-scope="">
       <h2 className="eyebrow">
         Purchase modeler{data === null ? '' : ` — ${data.year}`}
-        <InfoHint text="What each period buys: your entered base and contribution % chained against the $25k IRS limit, priced at each period's offering subscription price and a 15% discount on the lower of it and the FMV." />
+        <InfoHint
+          text={`What each period buys: your entered base and contribution % chained against the $25k IRS limit, priced at each period's offering subscription price and ${discountWords} on the lower of it and the FMV.`}
+        />
       </h2>
       {data !== null && data.available_years.length > 1 && (
         // The app's segmented control (panels.css .segmented / button.active).

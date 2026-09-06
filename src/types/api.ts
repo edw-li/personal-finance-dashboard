@@ -1158,6 +1158,8 @@ export interface EsppModelerOut {
   subscription_price: string | null
   purchase_fmv: string
   carry_forward: string
+  /** The plan discount these purchase prices were computed with (spec §1.5), a fraction. */
+  discount_pct: string
   // Server-owned year-chip list (stored ∪ offering-covered ∪ {now, now+1}), sorted.
   available_years: number[]
   warnings: string[]
