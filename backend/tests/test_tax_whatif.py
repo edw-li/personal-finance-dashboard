@@ -39,8 +39,9 @@ def espp(
     subscription_price: str = "100",
     purchase_fmv: str = "120",
     purchase_price: str = "85",
+    discount: str = "0.15",
 ) -> EsppSaleDetail:
-    """One lot's decomposition. Defaults are the spec's worked example."""
+    """One lot's decomposition. Defaults are the spec's worked example, the 15 % plan."""
     return decompose_espp(
         lot_id=7,
         purchase_date=PURCHASE,
@@ -51,6 +52,7 @@ def espp(
         purchase_price=D(purchase_price),
         sale_price=D(sale_price),
         today=today,
+        discount=D(discount),
     )
 
 
@@ -243,3 +245,11 @@ def test_apply_scenario_overrides_win_and_null_zeroes():
     assert str(scenario["ltcg_brokerage"]) == "500.00"  # the component still carries it
     assert scenario["qualified_dividends"] == ZERO
     assert warnings == ["NVDA: acquisition dates unknown — treated as long-term"]
+
+
+def test_qualified_ordinary_cap_follows_the_plan_discount():
+    from app.services.tax_whatif import qualified_discount_ratio
+
+    # subscription = (1 - d) x the lookback FMV, so d of the grant FMV is sub x d/(1 - d).
+    assert qualified_discount_ratio(Decimal("0.15")) == Decimal(15) / Decimal(85)
+    assert qualified_discount_ratio(Decimal("0.10")) == Decimal(10) / Decimal(90)

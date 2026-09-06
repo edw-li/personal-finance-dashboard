@@ -26,10 +26,21 @@ from app.services.espp_calc import (
     last_weekday_of,
     lot_metrics,
     plan_year_rows,
-    run_modeler,
+)
+from app.services.espp_calc import (
+    run_modeler as _run_modeler,
 )
 
 D = Decimal
+DISCOUNT = D("0.15")
+
+
+def run_modeler(rows, **kwargs):
+    """Every golden in this file is the 15 % plan, so the discount is passed from ONE place;
+    the parametrised test below hands its own in."""
+    kwargs.setdefault("discount", DISCOUNT)
+    return _run_modeler(rows, **kwargs)
+
 
 # The sheet's what-if knobs, at the scale the router quantizes them to (5dp, the
 # espp price family) — the modeler chain must land on the sheet's cents from these.
@@ -632,3 +643,14 @@ def test_plan_year_rows_anomalous_half_passes_through_verbatim():
     # No derived filling for the year — stored data passes through in chain order.
     assert [r.label for r in rows] == ["A", "B"]
     assert all(r.stored for r in rows)
+
+
+def test_purchase_price_follows_the_plan_discount():
+    row = REAL_PERIODS[0]
+    ten = run_modeler([row], purchase_fmv=FMV, carry_forward=D("0.00"), discount=D("0.10"))
+    fifteen = run_modeler([row], purchase_fmv=FMV, carry_forward=D("0.00"))
+    lower = min(row.subscription_price, FMV)
+    # CEIL2((1 - discount) x min(sub, fmv)) — the sheet's ROUNDUP, at the plan's own rate.
+    assert ten.periods[0].purchase_price == ceil2(D("0.90") * lower)
+    assert fifteen.periods[0].purchase_price == ceil2(D("0.85") * lower)
+    assert ten.periods[0].purchase_price > fifteen.periods[0].purchase_price

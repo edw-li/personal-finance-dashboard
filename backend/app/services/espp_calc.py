@@ -25,9 +25,9 @@ from datetime import date, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 ZERO = Decimal("0")
+ONE = Decimal("1")
 MONEY_QUANTUM = Decimal("0.01")
 PCT_QUANTUM = Decimal("0.000001")
-DISCOUNT = Decimal("0.85")
 # The IRS §423 limit, spelled at money scale so the chained unused_25k stays 2dp.
 ANNUAL_LIMIT = Decimal("25000.00")
 
@@ -250,6 +250,7 @@ def run_modeler(
     rows: list[RowPlan],
     purchase_fmv: Decimal,
     carry_forward: Decimal,
+    discount: Decimal,
 ) -> ModelerResult:
     """The sheet's chained per-period model over ONE calendar year.
 
@@ -258,7 +259,8 @@ def run_modeler(
     old "computed once, echoed per period" shape was kept for. purchase_fmv stays one
     knob for the year, which keeps r31's every-share-at-the-last-FMV quirk a no-op by
     construction. `rows` must already be the target year's, in chain order; every row
-    must be priced (the router 422s unpriced rows before calling).
+    must be priced (the router 422s unpriced rows before calling). `discount` is the plan's
+    fraction — 0.15 = 15 % off — and is the caller's to supply.
 
     The two branches are the whole model. Under the limit, the leftover cash CARRIES into
     the next period; at or over it, the purchase is capped at `max_shares_25k` and the
@@ -271,8 +273,10 @@ def run_modeler(
     for row in rows:
         if row.subscription_price is None:
             raise ValueError(f"unpriced row {row.label!r} reached run_modeler")
-        # 0.85 x min(sub, fmv), rounded UP to a cent (r18) — per period, per its offering.
-        purchase_price = ceil2(DISCOUNT * min(row.subscription_price, purchase_fmv))
+        # (1 - discount) x min(sub, fmv), rounded UP to a cent (r18) — per period, per its
+        # offering, at the plan's own rate (spec §1.5). The old module constant is gone, so
+        # no caller can price a purchase at a discount nobody stored.
+        purchase_price = ceil2((ONE - discount) * min(row.subscription_price, purchase_fmv))
         eligible = row.semi_annual_base + row.additional_payments
         contribution = half_up2(eligible * row.contribution_pct)
         available = contribution + carry

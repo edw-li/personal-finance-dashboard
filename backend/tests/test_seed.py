@@ -94,7 +94,7 @@ async def test_seed_app_settings_inserts_defaults_once(db):
     await seed_app_settings(db)
     await db.commit()
     keys = set((await db.execute(select(AppSetting.key))).scalars().all())
-    assert keys == {"swr_pct", "espp_ticker", "price_refresh_cron"}
+    assert keys == {"swr_pct", "espp_ticker", "espp_discount_pct", "price_refresh_cron"}
 
 
 async def test_seed_app_settings_never_overwrites_user_edits(db):

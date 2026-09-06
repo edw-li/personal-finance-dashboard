@@ -24,8 +24,14 @@ from decimal import ROUND_HALF_UP, Decimal
 ZERO = Decimal("0")
 MONEY_Q = Decimal("0.01")
 LONG_TERM_DAYS = 365
-# subscription = 0.85 × lookback FMV, so 15% of the grant FMV is subscription × 15/85.
-QUALIFIED_DISCOUNT_RATIO = Decimal(15) / Decimal(85)
+
+
+def qualified_discount_ratio(discount: Decimal) -> Decimal:
+    """subscription = (1 - d) x the lookback FMV, so d of the grant FMV is sub x d/(1 - d).
+    `discount` is bounded to [0, 0.15] by the setting's writer AND its reader, so the
+    denominator can never reach zero."""
+    return discount / (Decimal("1") - discount)
+
 
 DATELESS_TERM_WARNING = "{ticker}: acquisition dates unknown — treated as long-term"
 QUALIFIED_FMV_WARNING = "lot {lot_id}: grant-date FMV approximated from the subscription price"
@@ -109,13 +115,14 @@ def decompose_espp(
     purchase_price: Decimal,
     sale_price: Decimal,
     today: date,
+    discount: Decimal,
 ) -> EsppSaleDetail:
     proceeds = (shares * sale_price).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
     total_gain = (shares * (sale_price - purchase_price)).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
     qualified = today >= qualifying_date
     warnings: list[str] = []
     if qualified:
-        cap = (shares * subscription_price * QUALIFIED_DISCOUNT_RATIO).quantize(
+        cap = (shares * subscription_price * qualified_discount_ratio(discount)).quantize(
             MONEY_Q, rounding=ROUND_HALF_UP
         )
         ordinary = min(total_gain, cap)

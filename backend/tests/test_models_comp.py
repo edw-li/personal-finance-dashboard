@@ -206,3 +206,38 @@ async def test_focal_year_unique(db):
     with pytest.raises(IntegrityError):
         await db.commit()
     await db.rollback()
+
+
+async def test_paycheck_profile_match_columns_round_trip(db):
+    me = Person(name="Match", is_primary=True)
+    db.add(me)
+    await db.flush()
+    db.add(
+        PaycheckProfile(
+            person_id=me.id, effective_date=date(2026, 1, 1), annual_salary=Decimal("100000")
+        )
+    )
+    db.add(
+        PaycheckProfile(
+            person_id=me.id,
+            effective_date=date(2026, 2, 1),
+            annual_salary=Decimal("188930"),
+            match_rate_1=Decimal("1"),
+            match_band_1=Decimal("6000.00"),
+            match_rate_2=Decimal("0.5"),
+            match_band_2=Decimal("11000.00"),
+        )
+    )
+    await db.commit()
+    bare, policy = (
+        await db.execute(
+            select(PaycheckProfile)
+            .where(PaycheckProfile.person_id == me.id)
+            .order_by(PaycheckProfile.effective_date)
+        )
+    ).scalars()
+    # Zero bands mean "no match" — the only honest backfill for a row nobody was asked about.
+    assert (bare.match_rate_1, bare.match_band_1) == (Decimal("0"), Decimal("0"))
+    assert (bare.match_rate_2, bare.match_band_2) == (Decimal("0"), Decimal("0"))
+    assert policy.match_rate_2 == Decimal("0.5")  # Numeric(10,9) keeps a half-rate exactly
+    assert (policy.match_rate_1, policy.match_band_2) == (Decimal("1"), Decimal("11000.00"))

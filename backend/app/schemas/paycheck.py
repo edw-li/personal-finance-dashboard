@@ -41,6 +41,13 @@ class ProfileIn(BaseModel):
     # 'none' | 'self' | 'family'; the default matches the column's server_default, so an
     # old client that never sends it stores exactly what the migration backfilled.
     hsa_coverage: str = "self"
+    # The employer 401(k) match policy (spec §2.1). The defaults match the columns'
+    # server_default, so an old client that never sends them stores exactly what the
+    # migration backfilled — no match at all.
+    match_rate_1: Decimal = Decimal("0")
+    match_band_1: Decimal = Decimal("0")
+    match_rate_2: Decimal = Decimal("0")
+    match_band_2: Decimal = Decimal("0")
     notes: str | None = None
 
 
@@ -60,6 +67,10 @@ class ProfileUpdate(BaseModel):
     dental_vision_per_check: Decimal | None = None
     hsa_per_check: Decimal | None = None
     hsa_coverage: str | None = None
+    match_rate_1: Decimal | None = None
+    match_band_1: Decimal | None = None
+    match_rate_2: Decimal | None = None
+    match_band_2: Decimal | None = None
     notes: str | None = None
 
 
@@ -81,7 +92,28 @@ class ProfileOut(BaseModel):
     dental_vision_per_check: Decimal
     hsa_per_check: Decimal
     hsa_coverage: str
+    match_rate_1: Pct9
+    match_band_1: Decimal
+    match_rate_2: Pct9
+    match_band_2: Decimal
+    # Is THIS the row `_default_profile` would pick for its owner today (spec §2.3)? The
+    # Settings summary and the Paycheck page must never disagree about whose policy is live,
+    # so the server answers once instead of both clients re-deriving it.
+    in_force: bool
     notes: str | None
+
+
+class PaceHalfOut(BaseModel):
+    """One purchase-year window on the ESPP row (2026-09-06 spec §1.6)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    label: str
+    start: date
+    end: date
+    amount: Decimal
+    source: str  # 'entered' | 'estimated'
+    basis: str | None  # 'paydays' | 'months'; null on an entered half
 
 
 class PaceItemOut(BaseModel):
@@ -102,6 +134,23 @@ class PaceItemOut(BaseModel):
     limit: Decimal | None
     ratio: Decimal | None
     tone: str
+    # 'annualized' | 'window' — what `annualized` holds: a year at this rate, or the ESPP
+    # row's purchase-year window total (spec §1.6).
+    measure: str
+    # The practical cap, `limit x (1 - discount)`, and the ratio the TONE was judged on —
+    # ESPP only, so the verdict can never disagree with the tick beside it.
+    soft_limit: Decimal | None
+    soft_ratio: Decimal | None
+    window_label: str | None
+    halves: list[PaceHalfOut] | None
+    backfilled_from: date | None
+    projected_full_year: Decimal | None
+    projected_excess: Decimal | None
+    # The ESPP percentage the projection used, so the note line can print "At your current
+    # 12%" without re-deriving it from the profile.
+    current_rate: Decimal | None
+    # 415(c) only, and only when it is > 0.
+    employer_match: Decimal | None
 
 
 class BreakdownOut(BaseModel):
@@ -124,6 +173,9 @@ class BreakdownOut(BaseModel):
     espp: Decimal
     net_pay: Decimal
     monthly_net: Decimal
+    # The employer's 401(k) match for ONE check — never a waterfall line, because it is not
+    # part of this pay; the page prints it as a muted note under the waterfall (spec §2.3).
+    employer_match: Decimal
     warnings: list[str]
     # The contribution-pace rows for THIS profile against the current year's entered
     # limits. Empty only if the profile somehow yields no rows at all — the two 401(k)
@@ -152,6 +204,10 @@ class ProfileOverrides(BaseModel):
     dental_vision_per_check: Decimal | None = None
     hsa_per_check: Decimal | None = None
     hsa_coverage: str | None = None
+    match_rate_1: Decimal | None = None
+    match_band_1: Decimal | None = None
+    match_rate_2: Decimal | None = None
+    match_band_2: Decimal | None = None
 
 
 class PreviewIn(BaseModel):

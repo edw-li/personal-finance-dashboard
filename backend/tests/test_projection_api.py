@@ -666,8 +666,16 @@ async def test_projection_derived_contribution_adds_payroll_savings(auth_client,
     assert body["contribution_breakdown"] == {
         "cash": "4000.00",
         "payroll": "400.00",
+        "employer": "0.00",
         "total": "4400.00",
-        "by_person": [{"person_id": alex.id, "name": "Alex", "monthly": "400.00"}],
+        "by_person": [
+            {
+                "person_id": alex.id,
+                "name": "Alex",
+                "monthly": "400.00",
+                "employer_monthly": "0.00",
+            }
+        ],
     }
     assert body["warnings"] == []
 
@@ -978,3 +986,42 @@ async def test_a_spending_only_book_gets_one_warning_not_two(auth_client, db):
     body = (await auth_client.get("/api/v1/projection")).json()
     assert body["warnings"] == ["no cashflow history — monthly contribution defaulted to 0"]
     assert body["annual_spend"] is None and body["derived_window"] is None
+
+
+MATCHED_PROFILE = {
+    "trad_401k_pct": Decimal("0.10"),
+    "match_rate_1": Decimal("1"),
+    "match_band_1": Decimal("1200.00"),
+    "match_rate_2": Decimal("0.5"),
+    "match_band_2": Decimal("1200.00"),
+}
+
+
+async def test_projection_adds_the_employer_match_as_its_own_leg(auth_client, db):
+    await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex, **MATCHED_PROFILE)
+    body = (await auth_client.get("/api/v1/projection")).json()
+    # 24,000 salary, 10 % elective = 2,400 a year: 100 % of the first 1,200 + 50 % of the
+    # next 1,200 = 1,800 a year = 150.00 a month, and it is the EMPLOYER's money.
+    breakdown = body["contribution_breakdown"]
+    assert breakdown["payroll"] == "200.00"
+    assert breakdown["employer"] == "150.00"
+    assert breakdown["total"] == "4350.00"
+    assert breakdown["by_person"][0]["employer_monthly"] == "150.00"
+    assert body["monthly_contribution"] == "4350.00"
+
+
+async def test_projection_retirement_also_drops_the_employer_match(auth_client, db):
+    this_month = await _seed_book(db)
+    alex = await _seed_person(db, "Alex", primary=True)
+    await _seed_profile(db, alex, **MATCHED_PROFILE)
+    body = (
+        await auth_client.get(
+            "/api/v1/projection?annual_return=0&inflation=0&contribution_growth=0&volatility=0"
+            f"&retire={alex.id}:{_month_param(month_add(this_month, 6))}"
+        )
+    ).json()
+    # Both sides stay symmetric: the leg the profile added is the leg retiring removes —
+    # take-home 1,800 + payroll 200 + employer 150.
+    assert body["retirements"][0]["monthly_drop"] == "2150.00"

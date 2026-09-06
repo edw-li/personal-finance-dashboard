@@ -25,9 +25,11 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.app_settings import read_espp_discount
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import ContributionLimit, PaycheckProfile, Person
+from app.limit_keys import LIMIT_401K_ELECTIVE, LIMIT_ESPP_423
+from app.models import ContributionLimit, EsppPeriod, PaycheckProfile, Person
 from app.schemas.paycheck import (
     BreakdownOut,
     ChangedField,
@@ -42,7 +44,9 @@ from app.schemas.paycheck import (
     ProfileOverrides,
     ProfileUpdate,
 )
-from app.services.limit_check import paycheck_pace
+from app.services.espp_calc import StoredPeriod, plan_year_rows
+from app.services.espp_pace import espp_pace_item
+from app.services.limit_check import PaceItem, employer_match, paycheck_pace
 from app.services.money import (
     MONEY_MAX_ABS_12_2,
     _quantize_bounded,
@@ -92,6 +96,12 @@ PCT_FIELDS = (
 )
 # Withholding is a tax, not a contribution — it is NOT part of the >100% check.
 CONTRIBUTION_FIELDS = ("trad_401k_pct", "roth_401k_pct", "after_tax_401k_pct", "espp_pct")
+MATCH_RATE_FIELDS = ("match_rate_1", "match_rate_2")
+MATCH_BAND_FIELDS = ("match_band_1", "match_band_2")
+MATCH_FIELDS = (*MATCH_RATE_FIELDS, *MATCH_BAND_FIELDS)
+# 2, not 1: a 200 % match is a real plan shape, so 1.0 is not the ceiling. The mis-scale
+# guard is still `_validated_pct`'s — a 50 meant as 50 % must never reach the formula.
+MATCH_RATE_MAX = Decimal(2)
 CONTRIBUTIONS_WARNING = "contribution percentages exceed 100%"
 NEGATIVE_NET_WARNING = "net pay is negative"
 # Which HSA cap applies to this person. One tuple, one message — the message names the
@@ -111,6 +121,7 @@ SCENARIO_FIELDS = (
     "dental_vision_per_check",
     "hsa_per_check",
     "hsa_coverage",
+    *MATCH_FIELDS,
 )
 FIELD_LABELS = {
     "annual_salary": "Annual salary",
@@ -123,6 +134,10 @@ FIELD_LABELS = {
     "dental_vision_per_check": "Dental & vision",
     "hsa_per_check": "HSA",
     "hsa_coverage": "HSA coverage",
+    "match_rate_1": "Match rate (first band)",
+    "match_band_1": "Match band 1",
+    "match_rate_2": "Match rate (second band)",
+    "match_band_2": "Match band 2",
 }
 
 
@@ -154,6 +169,23 @@ def _validated_pct(value: Decimal, field: str) -> Decimal:
     return quantized
 
 
+def _validated_match_rate(value: Decimal, field: str) -> Decimal:
+    """A match rate at the pcts' own 9 dp, bounded at 2 rather than 1: a 200 % match is a
+    real plan, while a 50 meant as 50 % is still the Plan 1 mis-scale mistake."""
+    quantized = _quantize_bounded(value, field, PCT_QUANTUM_9, PCT_INPUT_MAX_ABS) + ZERO
+    if value < 0 or not 0 <= quantized <= MATCH_RATE_MAX:
+        raise HTTPException(status_code=422, detail=f"{field} must be between 0 and 2")
+    return quantized
+
+
+def _validated_band(value: Decimal, field: str) -> Decimal:
+    """Dollars of elective deferrals a rate applies to — the salary column's own bound."""
+    quantized = quantize_money(value, field, max_abs=MONEY_MAX_ABS_12_2) + ZERO
+    if value < 0 or quantized < 0:
+        raise HTTPException(status_code=422, detail=f"{field} must be >= 0")
+    return quantized
+
+
 def _validated_coverage(value: str) -> str:
     if value not in HSA_COVERAGES:
         raise HTTPException(status_code=422, detail=HSA_COVERAGE_MESSAGE)
@@ -168,6 +200,7 @@ def _validated_profile(
     hsa_per_check: Decimal,
     hsa_coverage: str,
     pcts: dict[str, Decimal],
+    match: dict[str, Decimal],
 ) -> dict:
     """One profile's stored columns, validated as a WHOLE row (Plan 4 house law) so a
     PATCH can hand over the merged values and get the same rules as a POST.
@@ -187,6 +220,8 @@ def _validated_profile(
         "hsa_per_check": _non_negative_per_check(hsa_per_check, "hsa_per_check"),
         "hsa_coverage": _validated_coverage(hsa_coverage),
         **{name: _validated_pct(pcts[name], name) for name in PCT_FIELDS},
+        **{name: _validated_match_rate(match[name], name) for name in MATCH_RATE_FIELDS},
+        **{name: _validated_band(match[name], name) for name in MATCH_BAND_FIELDS},
     }
 
 
@@ -263,7 +298,7 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[PaycheckProf
     # household (the UI groups it by person_id). effective_date is only unique PER PERSON
     # now, so `id` breaks the tie two people sharing a date would otherwise leave to the
     # planner; on a one-person database no tie exists and the order is unchanged.
-    return list(
+    rows = list(
         (
             await db.execute(
                 select(PaycheckProfile).order_by(
@@ -272,6 +307,8 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[PaycheckProf
             )
         ).scalars()
     )
+    await _mark_in_force(db, rows, date.today())
+    return rows
 
 
 @router.post("/profiles", response_model=ProfileOut, status_code=201)
@@ -285,6 +322,7 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
         hsa_per_check=body.hsa_per_check,
         hsa_coverage=body.hsa_coverage,
         pcts={name: getattr(body, name) for name in PCT_FIELDS},
+        match={name: getattr(body, name) for name in MATCH_FIELDS},
     )
     # (person_id, effective_date) is the natural key. Plain check-then-409: two concurrent
     # creates of the same pair would race into an IntegrityError, an accepted house class
@@ -293,6 +331,7 @@ async def create_profile(body: ProfileIn, db: AsyncSession = Depends(get_db)) ->
     profile = PaycheckProfile(person_id=person_id, notes=body.notes, **fields)
     db.add(profile)
     await db.commit()
+    await _mark_in_force(db, [profile], date.today())
     return profile
 
 
@@ -314,6 +353,7 @@ async def update_profile(
         hsa_per_check=_merged(provided, "hsa_per_check", profile.hsa_per_check),
         hsa_coverage=_merged(provided, "hsa_coverage", profile.hsa_coverage),
         pcts={name: _merged(provided, name, getattr(profile, name)) for name in PCT_FIELDS},
+        match={name: _merged(provided, name, getattr(profile, name)) for name in MATCH_FIELDS},
     )
     if fields["effective_date"] != profile.effective_date:
         # The row's OWN owner: a PATCH never moves a profile between people.
@@ -325,6 +365,7 @@ async def update_profile(
     if "notes" in provided:
         profile.notes = provided["notes"]  # nullable: an explicit null really clears it
     await db.commit()
+    await _mark_in_force(db, [profile], date.today())
     return profile
 
 
@@ -378,6 +419,23 @@ async def _default_profile(db: AsyncSession, person_id: int, today: date) -> Pay
         .scalars()
         .first()
     )
+
+
+async def _mark_in_force(db: AsyncSession, profiles: list[PaycheckProfile], today: date) -> None:
+    """Stamp the transient `in_force` flag `ProfileOut` reads (2026-09-06 spec §2.3).
+
+    ONE rule — `_default_profile`'s — asked once per OWNER, so the Settings summary and the
+    Paycheck page can never disagree about whose policy is live. The attribute is UNMAPPED:
+    it lives on the instance for this response, never marks the row dirty, and so stays
+    invisible to the preview's purity walk (tests/test_sandbox_purity.py).
+    """
+    winners: dict[int, int | None] = {}
+    for profile in profiles:
+        if profile.person_id not in winners:
+            current = await _default_profile(db, profile.person_id, today)
+            winners[profile.person_id] = None if current is None else current.id
+    for profile in profiles:
+        profile.in_force = winners[profile.person_id] == profile.id
 
 
 async def _resolve_breakdown_profile(
@@ -446,6 +504,10 @@ class ScenarioProfile:
     dental_vision_per_check: Decimal
     hsa_per_check: Decimal
     hsa_coverage: str
+    match_rate_1: Decimal
+    match_band_1: Decimal
+    match_rate_2: Decimal
+    match_band_2: Decimal
 
 
 def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> ScenarioProfile:
@@ -466,6 +528,16 @@ def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> Sce
             else _validated_pct(getattr(overrides, name), name)
         )
         for name in PCT_FIELDS
+    }
+    match = {
+        name: (
+            getattr(base, name)
+            if getattr(overrides, name) is None
+            else (_validated_match_rate if name in MATCH_RATE_FIELDS else _validated_band)(
+                getattr(overrides, name), name
+            )
+        )
+        for name in MATCH_FIELDS
     }
     return ScenarioProfile(
         annual_salary=(
@@ -492,6 +564,7 @@ def _scenario_profile(base: PaycheckProfile, overrides: ProfileOverrides) -> Sce
             else _validated_coverage(overrides.hsa_coverage)
         ),
         **pcts,
+        **match,
     )
 
 
@@ -544,6 +617,68 @@ def _text(value) -> str:
     return format(value, "f") if isinstance(value, Decimal) else str(value)
 
 
+async def _espp_pace_rows(
+    db: AsyncSession,
+    profile,
+    person_id: int,
+    scenario,
+    limits: dict[str, Decimal],
+    today: date,
+) -> list[PaceItem]:
+    """`paycheck_pace`'s rows with the ESPP one replaced by the PURCHASE-year row (§1.6).
+
+    The windows are planned exactly as the calendar generator plans them —
+    `plan_year_rows(Y, stored, [], None, None)`, pricing inputs deliberately empty — so the
+    strip and the calendar can never disagree about which halves exist. `person_id` is a
+    parameter because a `ScenarioProfile` has no owner. SELECTs only: this runs inside the
+    preview, which writes nothing (tests/test_sandbox_purity.py).
+    """
+    items = paycheck_pace(profile, limits, profile.hsa_coverage)
+    stored = list(
+        (
+            await db.execute(select(EsppPeriod).order_by(EsppPeriod.period_end, EsppPeriod.id))
+        ).scalars()
+    )
+    rows, _warnings = plan_year_rows(
+        today.year,
+        [
+            StoredPeriod(
+                id=row.id,
+                label=row.label,
+                period_start=row.period_start,
+                period_end=row.period_end,
+                semi_annual_base=row.semi_annual_base,
+                additional_payments=row.additional_payments,
+                contribution_pct=row.contribution_pct,
+            )
+            for row in stored
+        ],
+        [],
+        None,
+        None,
+    )
+    profiles = list(
+        (
+            await db.execute(
+                select(PaycheckProfile)
+                .where(PaycheckProfile.person_id == person_id)
+                .order_by(PaycheckProfile.effective_date)
+            )
+        ).scalars()
+    )
+    espp = espp_pace_item(
+        rows=rows,
+        profiles=profiles,
+        scenario_from_today=scenario,
+        limit=limits.get(LIMIT_ESPP_423),
+        discount=await read_espp_discount(db),
+        today=today,
+    )
+    # limit_check already emits ESPP last, so appending keeps the display order intact.
+    kept = [item for item in items if item.key != LIMIT_ESPP_423]
+    return kept if espp is None else [*kept, espp]
+
+
 @router.get("/breakdown", response_model=BreakdownOut)
 async def get_breakdown(
     profile_id: IdQuery = None,
@@ -561,10 +696,22 @@ async def get_breakdown(
     limits = await _limits_for(db, today.year)
     pace = [
         PaceItemOut.model_validate(item)
-        for item in paycheck_pace(profile, limits, profile.hsa_coverage)
+        for item in await _espp_pace_rows(db, profile, profile.person_id, profile, limits, today)
     ]
+    # Per check from the ANNUAL policy, not the other way round: the bands are annual
+    # dollars, so the year is the only place the tiers can be applied honestly.
+    elective_annual = (profile.trad_401k_pct + profile.roth_401k_pct) * profile.annual_salary
+    match_per_check = half_up2(
+        employer_match(profile, elective_annual, limits.get(LIMIT_401K_ELECTIVE))
+        / Decimal(profile.pay_periods_per_year)
+    )
+    await _mark_in_force(db, [profile], today)
     return BreakdownOut(
-        profile=ProfileOut.model_validate(profile), warnings=warnings, pace=pace, **lines
+        profile=ProfileOut.model_validate(profile),
+        warnings=warnings,
+        pace=pace,
+        employer_match=match_per_check,
+        **lines,
     )
 
 
@@ -587,11 +734,11 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
     pace = PreviewPace(
         baseline=[
             PaceItemOut.model_validate(item)
-            for item in paycheck_pace(base, limits, base.hsa_coverage)
+            for item in await _espp_pace_rows(db, base, base.person_id, base, limits, today)
         ],
         scenario=[
             PaceItemOut.model_validate(item)
-            for item in paycheck_pace(scenario, limits, scenario.hsa_coverage)
+            for item in await _espp_pace_rows(db, scenario, base.person_id, scenario, limits, today)
         ],
     )
     changed = [
@@ -604,6 +751,7 @@ async def preview(body: PreviewIn, db: AsyncSession = Depends(get_db)) -> Previe
         for name in SCENARIO_FIELDS
         if getattr(base, name) != getattr(scenario, name)
     ]
+    await _mark_in_force(db, [base], today)
     return PreviewOut(
         profile=ProfileOut.model_validate(base),
         per_check=per_check,

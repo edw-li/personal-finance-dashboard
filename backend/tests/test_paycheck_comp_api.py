@@ -895,7 +895,8 @@ async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(a
     assert [row["effective_date"] for row in listed] == ["2026-01-01", "2025-01-01"]
     assert {row["person_id"] for row in listed} == {me.id}
     assert {row["hsa_coverage"] for row in listed} == {"self"}
-    # Additive ONLY: the row is the old row plus exactly two keys.
+    # Additive ONLY: the row is the old row plus `person_id`, `hsa_coverage`, the four
+    # employer-match columns and the derived `in_force` — nothing was ever taken away.
     assert set(listed[0]) == {
         "id",
         "person_id",
@@ -910,6 +911,11 @@ async def test_a_primary_only_database_answers_exactly_as_it_did_before_people(a
         "dental_vision_per_check",
         "hsa_per_check",
         "hsa_coverage",
+        "match_rate_1",
+        "match_band_1",
+        "match_rate_2",
+        "match_band_2",
+        "in_force",
         "notes",
     }
 
@@ -1203,3 +1209,145 @@ async def test_breakdown_pace_measures_this_year_not_a_stored_year(auth_client, 
     resp = await auth_client.get(BREAKDOWN)
     rows = {row["key"]: row for row in resp.json()["pace"]}
     assert rows["limit_401k_elective"]["limit"] is None
+
+
+MATCH = {
+    "match_rate_1": "1",
+    "match_band_1": "6000",
+    "match_rate_2": "0.5",
+    "match_band_2": "11000",
+}
+
+
+async def test_profile_round_trips_the_match_policy(auth_client, me):
+    created = await auth_client.post(
+        PROFILES, json={"effective_date": "2026-01-01", "annual_salary": "188930", **MATCH}
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["match_rate_1"] == "1.000000000"
+    assert created.json()["match_rate_2"] == "0.500000000"
+    assert created.json()["match_band_1"] == "6000.00"
+    bare = await auth_client.post(
+        PROFILES, json={"effective_date": "2026-02-01", "annual_salary": "100000"}
+    )
+    assert bare.json()["match_rate_1"] == "0.000000000"
+    assert bare.json()["match_band_2"] == "0.00"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        # A 50 meant as 50 % is the Plan 1 mis-scale guard; the ceiling is 2 because a 200 %
+        # match is a real plan shape and 1.0 is not the maximum.
+        ("match_rate_1", "50", "match_rate_1 must be between 0 and 2"),
+        ("match_rate_2", "-0.1", "match_rate_2 must be between 0 and 2"),
+        ("match_band_1", "-1", "match_band_1 must be >= 0"),
+    ],
+)
+async def test_profile_refuses_a_bad_match_policy(auth_client, me, field, value, message):
+    resp = await auth_client.post(
+        PROFILES,
+        json={"effective_date": "2026-03-01", "annual_salary": "100000", field: value},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == message
+
+
+async def test_patch_validates_the_match_as_a_whole_row(auth_client, me):
+    created = await auth_client.post(
+        PROFILES, json={"effective_date": "2026-04-01", "annual_salary": "100000", **MATCH}
+    )
+    pid = created.json()["id"]
+    bad = await auth_client.patch(f"{PROFILES}/{pid}", json={"match_rate_2": "3"})
+    assert bad.status_code == 422
+    assert bad.json()["detail"] == "match_rate_2 must be between 0 and 2"
+    good = await auth_client.patch(f"{PROFILES}/{pid}", json={"match_band_2": "12000"})
+    assert good.json()["match_band_2"] == "12000.00"
+    assert good.json()["match_rate_1"] == "1.000000000"  # untouched by the merge
+
+
+async def test_profiles_list_marks_the_one_in_force(auth_client, me):
+    old = await auth_client.post(
+        PROFILES, json={"effective_date": "2020-01-01", "annual_salary": "100000"}
+    )
+    now = await auth_client.post(
+        PROFILES, json={"effective_date": date.today().isoformat(), "annual_salary": "110000"}
+    )
+    later = await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": (date.today() + timedelta(days=400)).isoformat(),
+            "annual_salary": "120000",
+        },
+    )
+    rows = {row["id"]: row["in_force"] for row in (await auth_client.get(PROFILES)).json()}
+    # `_default_profile`'s rule, one place: the latest effective TODAY or earlier.
+    assert rows[now.json()["id"]] is True
+    assert rows[old.json()["id"]] is False
+    assert rows[later.json()["id"]] is False
+    assert (await auth_client.get(BREAKDOWN)).json()["profile"]["in_force"] is True
+
+
+async def test_breakdown_reports_the_employer_match_per_check(auth_client, db, me):
+    from app.models import ContributionLimit
+
+    db.add(
+        ContributionLimit(year=date.today().year, key="limit_401k_elective", value=D("24500.00"))
+    )
+    await db.commit()
+    await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2026-05-01",
+            "annual_salary": "188930",
+            "pay_periods_per_year": 24,
+            "trad_401k_pct": "0.13",
+            **MATCH,
+        },
+    )
+    # 11,500 a year over 24 checks. Not a waterfall line: it never touches this pay.
+    assert (await auth_client.get(BREAKDOWN)).json()["employer_match"] == "479.17"
+
+
+async def test_breakdown_employer_match_is_zero_without_a_policy(auth_client, me):
+    await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2026-06-01",
+            "annual_salary": "100000",
+            "trad_401k_pct": "0.1",
+        },
+    )
+    assert (await auth_client.get(BREAKDOWN)).json()["employer_match"] == "0.00"
+
+
+async def test_breakdown_espp_row_grades_the_purchase_year(auth_client, db, me):
+    from app.models import AppSetting, ContributionLimit
+
+    db.add(ContributionLimit(year=date.today().year, key="limit_espp_423", value=D("25000.00")))
+    await db.commit()
+    await auth_client.post(
+        PROFILES,
+        json={
+            "effective_date": "2020-01-01",
+            "annual_salary": "188930",
+            "pay_periods_per_year": 24,
+            "espp_pct": "0.11",
+        },
+    )
+    rows = {r["key"]: r for r in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    assert rows["limit_espp_423"]["measure"] == "window"
+    assert rows["limit_espp_423"]["soft_limit"] == "21250.00"  # 25,000 x (1 - 0.15)
+    assert len(rows["limit_espp_423"]["halves"]) == 2
+    assert rows["limit_espp_423"]["window_label"].endswith("purchases")
+    assert rows["limit_espp_423"]["projected_full_year"] == "20782.30"  # 11 % of 188,930
+    assert rows["limit_espp_423"]["current_rate"] == "0.110000000"
+    # Every other row keeps the annualized shape and none of the ESPP extras.
+    assert rows["limit_401k_elective"]["measure"] == "annualized"
+    assert rows["limit_401k_elective"]["soft_limit"] is None
+    assert rows["limit_401k_elective"]["halves"] is None
+
+    db.add(AppSetting(key="espp_discount_pct", value={"value": "0.10"}))
+    await db.commit()
+    again = {r["key"]: r for r in (await auth_client.get(BREAKDOWN)).json()["pace"]}
+    assert again["limit_espp_423"]["soft_limit"] == "22500.00"  # 25,000 x (1 - 0.10)
