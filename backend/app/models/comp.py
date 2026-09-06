@@ -67,6 +67,14 @@ class PaycheckProfile(Base):
     # would need a migration every time it grew. The server_default is repeated from the
     # migration so `alembic check` stays clean (rsu_grants.vest_quantum's precedent).
     hsa_coverage: Mapped[str] = mapped_column(String(10), default="self", server_default="self")
+    # Employer 401(k) match, per person and effective-dated with the rest of the row (spec
+    # §2.1): `rate_1` on the first `band_1` DOLLARS of elective deferrals, `rate_2` on the
+    # next `band_2`. Zero bands mean "no match" — the app has never asked, so it must not
+    # invent a policy. server_defaults repeated from the migration (hsa_coverage's rule).
+    match_rate_1: Mapped[Decimal] = mapped_column(Numeric(10, 9), default=0, server_default="0")
+    match_band_1: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
+    match_rate_2: Mapped[Decimal] = mapped_column(Numeric(10, 9), default=0, server_default="0")
+    match_band_2: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, server_default="0")
     notes: Mapped[str | None] = mapped_column(Text)
 
 
