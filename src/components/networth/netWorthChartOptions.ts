@@ -496,3 +496,35 @@ export function netWorthMoversOption(ts: NetWorthTimeseries, index: number, mode
     ],
   }
 }
+
+/** The bars as a table (spec §4.2). `Change` is the plain number the bar drew; the share
+ *  carries its % sign because that column is a ratio, not money. */
+export function netWorthMoversCsv(ts: NetWorthTimeseries, index: number, mode: MoversMode): ExportTable {
+  return {
+    headers: ['Mover', 'Group', 'Change', 'Share of change'],
+    rows: netWorthMovers(ts, index, mode).map((m) => [m.label, m.groupLabel ?? '', m.delta.toFixed(2), sharePct(m.share) ?? '']),
+  }
+}
+
+/** "+$100.00" — the lede's move, signed like the bars' own labels. */
+const signedCurrency = (value: number): string => (value > 0 ? `+${formatCurrency(value)}` : formatCurrency(value))
+export interface MoversLede {
+  fromLabel: string; fromValue: string; toLabel: string; toValue: string
+  delta: string // the difference of the two SERVER totals, signed
+  pct: string | null // the server's own mom_pct — null when it sent none for this month
+  tone: Tone
+}
+
+/** The card's header strip (spec §4.2): from → to, then the move. Null on the first month.
+ *  Every figure is the server's — the two totals and the percent are printed verbatim and
+ *  the delta is the difference of those totals, never a client-recomputed percentage. */
+export function netWorthMoversLede(ts: NetWorthTimeseries, index: number): MoversLede | null {
+  if (index < 1 || index >= ts.months.length) return null
+  const delta = cents(num(ts.net_worth[index]) - num(ts.net_worth[index - 1]))
+  const pct = ts.mom_pct[index]
+  return {
+    fromLabel: formatMonth(ts.months[index - 1]), fromValue: formatCurrency(ts.net_worth[index - 1]),
+    toLabel: formatMonth(ts.months[index]), toValue: formatCurrency(ts.net_worth[index]),
+    delta: signedCurrency(delta), pct: pct == null ? null : formatPct(pct), tone: toneOf(delta),
+  }
+}

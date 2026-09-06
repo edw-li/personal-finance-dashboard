@@ -434,3 +434,40 @@ describe('netWorthMoversOption — Accounts', () => {
     expect(netWorthMovers(cancels, 2, 'account')).toHaveLength(10)
   })
 })
+
+import { netWorthMoversCsv, netWorthMoversLede } from './netWorthChartOptions'
+
+// Cash +10 against taxable −10: the month's NET change is zero, so no bar has a share OF
+// it — an "∞% of the change" would be a lie.
+const FLAT = ts({
+  group_totals: { ...ts().group_totals, pre_tax: ['200.00', '210.00', '210.00'], taxable: ['300.00', '310.00', '300.00'], liability: ['-50.00', '-40.00', '-40.00'] },
+  net_worth: ['550.00', '590.00', '590.00'],
+})
+
+describe('netWorthMoversCsv', () => {
+  it('exports the drawn rows under the four spec columns', () => {
+    const csv = netWorthMoversCsv(MOVED, 2, 'group')
+    expect(csv.headers).toEqual(['Mover', 'Group', 'Change', 'Share of change'])
+    expect(csv.rows).toEqual([['Taxable', 'Taxable', '100.00', '100%'], ['Liabilities', 'Liabilities', '-40.00', '-40%'],
+      ['Cash', 'Cash', '30.00', '30%'], ['Pre-tax', 'Pre-tax', '10.00', '10%']])
+    expect(netWorthMoversCsv(MOVED, 0, 'group').rows).toEqual([])
+  })
+  it('leaves the group blank for the folded remainder, and the share blank on a flat month', () => {
+    expect(netWorthMoversCsv(MANY, 2, 'account').rows.at(-1)).toEqual(['Other accounts', '', '3.00', '4%'])
+    expect(netWorthMoversCsv(FLAT, 2, 'group').rows).toEqual([['Cash', 'Cash', '10.00', ''], ['Taxable', 'Taxable', '-10.00', '']])
+    expect(tooltipRows(movers(netWorthMoversOption(FLAT, 2, 'group')).tooltip.formatter({ dataIndex: 0 })).sub).toBeUndefined()
+  })
+})
+
+describe('netWorthMoversLede', () => {
+  it('reads the two totals and the percent off the payload, and tones the move', () => {
+    expect(netWorthMoversLede(MOVED, 2)).toEqual({
+      fromLabel: 'Jul 2026', fromValue: '$590.00', toLabel: 'Aug 2026', toValue: '$690.00',
+      // The SERVER's mom_pct — deliberately NOT 100/590, what re-deriving it here would print.
+      delta: '+$100.00', pct: '+6.8%', tone: 'positive',
+    })
+    expect(netWorthMoversLede(MOVED, 0)).toBeNull()
+    expect(netWorthMoversLede(ts({ mom_pct: [null, null, null] }), 2)?.pct).toBeNull()
+    expect(netWorthMoversLede(FLAT, 2)?.tone).toBe('neutral')
+  })
+})
