@@ -105,3 +105,20 @@
     grid-column: 1 / -1;
   }
 }
+
+/* The name cell becomes a column so the ESPP row can say WHICH window it graded under its
+   own label; a windowless row lays out exactly as before. The practical-cap tick restates
+   sandbox.css's `.slider-box-tick` rather than importing a sandbox sheet into a paycheck
+   component — the same rule that keeps this file off the spending stylesheet. */
+.pace-name { display: flex; flex-direction: column; gap: 0.1rem; }
+.pace-window { font-size: 0.72rem; color: var(--muted); }
+.pace-soft-tick {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--muted);
+  transform: translateX(-1px);
+  pointer-events: none;
+  opacity: 0.7;
+}

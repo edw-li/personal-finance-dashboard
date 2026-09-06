@@ -11,6 +11,12 @@ function fillPct(ratio: string): number {
   return Math.min(Number(ratio) * 100, 100)
 }
 
+// The practical cap's POSITION on the §423 track (spec §1.7) — fillPct's licence: a position
+// is the client's to compute, the dollars beside it are always the server's.
+function tickPct(soft: string, limit: string): number {
+  return Math.min(Math.max((Number(soft) / Number(limit)) * 100, 0), 100)
+}
+
 const TONE_WORD: Record<PaceItem['tone'], string> = {
   ok: 'on pace',
   warn: 'near the cap',
@@ -45,54 +51,80 @@ export default function PacePanel({ items }: { items: PaceItem[] }) {
         mid-year and this moves with it.
       </p>
       <div className="pace-rows">
-        {items.map((item) => (
-          <div className="pace-row" key={item.key}>
-            <span className="pace-name">{item.label}</span>
-            {item.limit === null || item.ratio === null ? (
-              <>
-                <span className="pace-figures">{formatCurrency(item.annualized)}</span>
-                <span className="pace-cta">
-                  <Link to="/settings">enter this year&apos;s limit</Link>
-                </span>
-              </>
-            ) : (
-              <>
-                <div
-                  className="pace-meter"
-                  role="meter"
-                  aria-label={`${item.label} annualized vs limit`}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  // Clamped like the fill: a valuenow of 108 against a valuemax of 100 is an
-                  // out-of-range meter, and a screen reader is entitled to say anything at all
-                  // about that. The TRUE over-ness rides aria-valuetext (the dollars) and the
-                  // verdict text beside it — neither of which the clamp touches.
-                  aria-valuenow={Math.min(Math.round(Number(item.ratio) * 100), 100)}
-                  aria-valuetext={`${formatCurrency(item.annualized)} of ${formatCurrency(item.limit)}`}
-                >
+        {items.map((item) => {
+          // Present together or not at all: the ESPP row is the only one the server sends a
+          // practical cap for, so every other row falls through unchanged.
+          const softLimit = item.soft_limit ?? null
+          const softRatio = item.soft_ratio ?? null
+          const figures =
+            softLimit !== null
+              ? `${formatCurrency(item.annualized)} / ${formatCurrency(softLimit)} practical`
+              : `${formatCurrency(item.annualized)} / ${formatCurrency(item.limit)}`
+          const valueText =
+            softLimit !== null
+              ? `${formatCurrency(item.annualized)} of ${formatCurrency(softLimit)} practical cap; §423 cap ${formatCurrency(item.limit)}`
+              : `${formatCurrency(item.annualized)} of ${formatCurrency(item.limit)}`
+          return (
+            <div className="pace-row" key={item.key}>
+              <span className="pace-name">
+                {item.label}
+                {item.window_label != null && <span className="pace-window">{item.window_label}</span>}
+              </span>
+              {item.limit === null || item.ratio === null ? (
+                <>
+                  <span className="pace-figures">{formatCurrency(item.annualized)}</span>
+                  <span className="pace-cta">
+                    <Link to="/settings">enter this year&apos;s limit</Link>
+                  </span>
+                </>
+              ) : (
+                <>
                   <div
-                    className={`pace-fill is-${item.tone}`}
-                    style={{ width: `${fillPct(item.ratio).toFixed(2)}%` }}
-                  />
-                  {item.tone === 'over' && <span className="pace-overflow-tick" aria-hidden="true" />}
-                </div>
-                <span className={`pace-figures tone-${item.tone}`}>
-                  {`${formatCurrency(item.annualized)} / ${formatCurrency(item.limit)}`}
-                </span>
-                {/* The tone in WORDS as well as colour — the meter's own aria-valuetext
-                    carries the dollars, and this carries the verdict. The percentage prints to
-                    2dp because the tone is judged on the server's 4dp HALF_UP ratio: at one
-                    decimal a 0.9499 ratio prints "95.0%" beside "on pace" and a 1.0004 one
-                    prints "100.0%" beside "over" — the number contradicting the verdict at
-                    exactly the boundaries the verdict is about. */}
-                <span className={`pace-verdict tone-${item.tone}`}>
-                  {`${(Number(item.ratio) * 100).toFixed(2)}%`}
-                  <span className="pace-verdict-word">{TONE_WORD[item.tone]}</span>
-                </span>
-              </>
-            )}
-          </div>
-        ))}
+                    className="pace-meter"
+                    role="meter"
+                    aria-label={`${item.label} ${item.measure === 'window' ? 'window total' : 'annualized'} vs limit`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    // Clamped like the fill: a valuenow of 108 against a valuemax of 100 is an
+                    // out-of-range meter, and a screen reader is entitled to say anything at all
+                    // about that. The TRUE over-ness rides aria-valuetext (the dollars) and the
+                    // verdict text beside it — neither of which the clamp touches.
+                    aria-valuenow={Math.min(Math.round(Number(item.ratio) * 100), 100)}
+                    aria-valuetext={valueText}
+                  >
+                    <div
+                      className={`pace-fill is-${item.tone}`}
+                      style={{ width: `${fillPct(item.ratio).toFixed(2)}%` }}
+                    />
+                    {softLimit !== null && (
+                      <span
+                        className="pace-soft-tick"
+                        aria-hidden="true"
+                        style={{ left: `${tickPct(softLimit, item.limit).toFixed(2)}%` }}
+                      />
+                    )}
+                    {/* The FILL's clamp, not the tone: the ESPP row's tone is judged on the
+                        practical cap, so an "over" row can sit mid-track — and a tick past
+                        the end would then describe an overflow that never happened. */}
+                    {Number(item.ratio) > 1 && <span className="pace-overflow-tick" aria-hidden="true" />}
+                  </div>
+                  <span className={`pace-figures tone-${item.tone}`}>{figures}</span>
+                  {/* The tone in WORDS as well as colour — the meter's own aria-valuetext
+                      carries the dollars, and this carries the verdict. The percentage prints to
+                      2dp because the tone is judged on the server's 4dp HALF_UP ratio: at one
+                      decimal a 0.9499 ratio prints "95.0%" beside "on pace" and a 1.0004 one
+                      prints "100.0%" beside "over" — the number contradicting the verdict at
+                      exactly the boundaries the verdict is about. */}
+                  <span className={`pace-verdict tone-${item.tone}`}>
+                    {/* soft_ratio where there is one: the ratio the TONE was judged on. */}
+                    {`${(Number(softRatio ?? item.ratio) * 100).toFixed(2)}%`}
+                    <span className="pace-verdict-word">{TONE_WORD[item.tone]}</span>
+                  </span>
+                </>
+              )}
+            </div>
+          )
+        })}
       </div>
     </section>
   )

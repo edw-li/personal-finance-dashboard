@@ -36,6 +36,27 @@ const MISSING: PaceItem = {
   ratio: null,
   tone: 'ok',
 }
+// Production's golden row (spec §1.4): 11 % then 12 % of 188,930 across the two halves.
+const ESPP: PaceItem = {
+  key: 'limit_espp_423',
+  label: 'ESPP §423 annual',
+  annualized: '20861.02',
+  limit: '25000.00',
+  ratio: '0.8344',
+  tone: 'warn',
+  measure: 'window',
+  soft_limit: '21250.00',
+  soft_ratio: '0.9817',
+  window_label: 'Sep 2025 – Aug 2026 purchases',
+  halves: [
+    { label: 'Feb 2026', start: '2025-09-01', end: '2026-02-27', amount: '10391.15', source: 'estimated', basis: 'paydays' },
+    { label: 'Aug 2026', start: '2026-03-01', end: '2026-08-31', amount: '10469.87', source: 'estimated', basis: 'paydays' },
+  ],
+  backfilled_from: null,
+  projected_full_year: '22671.60',
+  projected_excess: '1421.60',
+  current_rate: '0.120000000',
+}
 
 const renderPanel = (items: PaceItem[]) =>
   render(<PacePanel items={items} />, { wrapper: MemoryRouter })
@@ -112,4 +133,40 @@ it('says the figures are a projection, not a year-to-date total', () => {
 it('renders nothing at all when there are no items', () => {
   const { container } = renderPanel([])
   expect(container.firstChild).toBeNull()
+})
+
+it('grades the ESPP row against the PRACTICAL cap, not the §423 one', () => {
+  renderPanel([ESPP])
+  const meter = screen.getByRole('meter')
+  // Both caps out loud: the one the verdict used, and the statutory one it derives from —
+  // a reader who only heard "21,250" would think the law said so.
+  expect(meter.getAttribute('aria-valuetext')).toBe(
+    '$20,861.02 of $21,250.00 practical cap; §423 cap $25,000.00',
+  )
+  expect(screen.getByText('$20,861.02 / $21,250.00 practical')).toBeTruthy()
+  // The printed percentage is soft_ratio's, so it cannot contradict the tone beside it.
+  expect(screen.getByText('98.17%')).toBeTruthy()
+  expect(screen.getByText('near the cap')).toBeTruthy()
+  expect(screen.getByText('Sep 2025 – Aug 2026 purchases')).toBeTruthy()
+})
+
+it('marks the practical cap on the §423 track', () => {
+  renderPanel([ESPP])
+  const meter = screen.getByRole('meter')
+  // 21,250 / 25,000 — a POSITION, which is what the client may compute. CSSOM canonicalizes
+  // the written "85.00%" on read-back, as it does the fill's width.
+  expect((meter.querySelector('.pace-soft-tick') as HTMLElement).style.left).toBe('85%')
+  // The fill still runs on the §423 ratio: the track is the statutory cap, end to end.
+  expect((meter.querySelector('.pace-fill') as HTMLElement).style.width).toBe('83.44%')
+})
+
+it('draws the overflow tick for a clamped FILL, never for a soft-capped verdict', () => {
+  // Over the practical cap, nowhere near the §423 one: nothing overflowed the track, so a
+  // tick past its end would describe something that did not happen.
+  renderPanel([{ ...ESPP, soft_ratio: '1.0400', tone: 'over', annualized: '22100.00' }])
+  expect(screen.getByRole('meter').querySelector('.pace-overflow-tick')).toBeNull()
+  expect(screen.getByText('over')).toBeTruthy()
+  cleanup()
+  renderPanel([OVER])
+  expect(screen.getByRole('meter').querySelector('.pace-overflow-tick')).toBeTruthy()
 })
