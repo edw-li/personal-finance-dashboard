@@ -273,8 +273,11 @@ const CHECKING: AccountOut = {
 // jsdom has no ResizeObserver (EChart.test.tsx carries the same note); the anchored arrival
 // watches the page while the cards above it are still growing. The instances are kept so a
 // test can fire one and see what the page does about it.
-type ObserverRecord = { fire: () => void; disconnected: boolean }
+type ObserverRecord = { fire: () => void; disconnected: boolean; targets: Element[] }
 const resizeObservers: ObserverRecord[] = []
+/** The page's arrival chase, told apart from PageFrame's --sticky-inset observer by WHAT it
+ *  watches rather than by the order the two effects happen to run in. */
+const bodyObserver = () => resizeObservers.find((o) => o.targets.includes(document.body))
 
 beforeEach(() => {
   resizeObservers.length = 0
@@ -283,10 +286,12 @@ beforeEach(() => {
     class {
       private readonly record: ObserverRecord
       constructor(callback: () => void) {
-        this.record = { fire: callback, disconnected: false }
+        this.record = { fire: callback, disconnected: false, targets: [] }
         resizeObservers.push(this.record)
       }
-      observe() {}
+      observe(target: Element) {
+        this.record.targets.push(target)
+      }
       unobserve() {}
       disconnect() {
         this.record.disconnected = true
@@ -968,6 +973,16 @@ describe('SettingsPage — section order (2026-09-06 spec §3.1)', () => {
     // coming would promise what the API cannot give.
     expect(document.getElementById('sec-data')).toBeNull()
     expect(document.getElementById('sec-household')).toBeNull()
+    // And the rail says so: the lit chip is the only section actually on the page, not the
+    // first one in the list.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Account' }).getAttribute('aria-pressed')).toBe(
+        'true',
+      ),
+    )
+    expect(screen.getByRole('button', { name: 'Household' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    )
   })
 })
 
@@ -1054,12 +1069,14 @@ describe('SettingsPage — anchored arrival from the palette', () => {
         ),
       )
       const landed = scrollIntoView.mock.calls.length
-      // TWO: PageFrame measures the sticky scope row into --sticky-inset with one of its own
-      // (2026-09-06 spec §3.2 put the rail in that row), and it is built at mount — before
-      // this page's arrival effect, which only runs once the first load has resolved. So the
-      // chase is the LAST one made, and the page's own.
+      // TWO observers now: PageFrame measures the sticky scope row into --sticky-inset with
+      // one of its own (2026-09-06 spec §3.2 put the rail in that row). The chase is picked by
+      // WHAT it watches — the whole body — because construction order is an accident of which
+      // effect runs first, and this test is about the page's arrival, not about that.
       expect(resizeObservers).toHaveLength(2)
-      const chase = resizeObservers[1]
+      const chase = bodyObserver()
+      expect(chase).toBeDefined()
+      if (chase === undefined) throw new Error('the arrival chase never observed the body')
 
       // Every card here fetches its own data and grows as it lands, so the addressed card
       // slides DOWN after the jump: measured in the browser smoke, #calendar went from 585px

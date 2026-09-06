@@ -5,6 +5,7 @@ import { fetchHousehold } from '../../api/household'
 import { fetchProfiles } from '../../api/paycheck'
 import { fetchAppSettings, putAppSettings } from '../../api/settings'
 import type { AppSettingsOut, PaycheckProfileListItem, PersonOut } from '../../types/api'
+import { formatCurrency } from '../../utils/format'
 import { isPlainDecimal, shiftPoint } from '../../utils/percent'
 import InfoHint from '../InfoHint'
 import { FeedBanner } from '../shell/Feed'
@@ -27,28 +28,27 @@ function boxesFor(s: AppSettingsOut) {
 
 type Boxes = ReturnType<typeof boxesFor>
 
-// Whole dollars: a match band is a round policy number, and cents on it read as precision the
-// policy does not have.
-const BAND = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  maximumFractionDigits: 0,
-})
-
-const ratePct = (raw: string) => `${Number((Number(raw) * 100).toFixed(4))}%`
+// The BAND is what decides a tier exists, not the rate: an employer who matches the second
+// $11,000 at nothing has a policy, and it is one worth reading. The Paycheck profile form
+// prints that tier too — two surfaces that dropped different tiers would be describing two
+// different arrangements.
+const tier = (rate: string | undefined, band: string | undefined, ordinal: string): string =>
+  Number(band ?? '0') > 0
+    ? // shiftPoint, not rate * 100: the column is a 9dp fraction and float math turns
+      // "0.335000000" into 33.500000000000004. formatCurrency for the amount, because the
+      // profile form states it to the cent and a rounded twin here would look like a
+      // different number.
+      `${shiftPoint(rate ?? '0', 2)}% of the ${ordinal} ${formatCurrency(band ?? '0')}`
+    : ''
 
 /** The profile form's own sentence (spec §2.3), so the two surfaces describe one policy in one
- *  voice. `?? '0'` covers a snapshot restored from before the columns existed. */
-export function matchWords(p: PaycheckProfileListItem): string {
-  const first =
-    Number(p.match_rate_1 ?? '0') > 0 && Number(p.match_band_1 ?? '0') > 0
-      ? `${ratePct(p.match_rate_1 ?? '0')} of the first ${BAND.format(Number(p.match_band_1))}`
-      : ''
-  const next =
-    Number(p.match_rate_2 ?? '0') > 0 && Number(p.match_band_2 ?? '0') > 0
-      ? `${ratePct(p.match_rate_2 ?? '0')} of the next ${BAND.format(Number(p.match_band_2))}`
-      : ''
-  if (first === '' && next === '') return 'no match entered'
+ *  voice. `?? '0'` covers a snapshot restored from before the columns existed. Not exported:
+ *  the shared util that both surfaces will import is a post-merge follow-up, and an export
+ *  from a component file only trips react-refresh in the meantime. */
+function matchWords(p: PaycheckProfileListItem): string {
+  const first = tier(p.match_rate_1, p.match_band_1, 'first')
+  const next = tier(p.match_rate_2, p.match_band_2, 'next')
+  if (first === '' && next === '') return 'No employer match entered.'
   if (first === '' || next === '') return `${first}${next}`
   return `${first}, then ${next}`
 }
@@ -221,24 +221,28 @@ export default function PlanAssumptionsCard() {
           )}
         </form>
       )}
-      <div className="settings-field">
-        <span className="eyebrow">Employer 401(k) match</span>
-        <ul className="plan-match-list">
-          {people.map((person) => {
-            const profile = profiles.find((p) => p.in_force && p.person_id === person.id)
-            return (
-              <li key={person.id} className="settings-note">
-                {person.name}:{' '}
-                {profile === undefined ? 'no paycheck profile yet' : matchWords(profile)}
-              </li>
-            )
-          })}
-        </ul>
-        <p className="settings-note">
-          Read-only here — the policy is effective-dated on each person&apos;s paycheck profile.{' '}
-          <Link to="/paycheck">Set it on the Paycheck page</Link>
-        </p>
-      </div>
+      {/* Behind the same gate as the form: the read that fills this list is the read that
+          failed, and an empty list under a heading reads as "nobody has a match". */}
+      {settings !== null && (
+        <div className="settings-field">
+          <span className="eyebrow">Employer 401(k) match</span>
+          <ul className="plan-match-list">
+            {people.map((person) => {
+              const profile = profiles.find((p) => p.in_force && p.person_id === person.id)
+              return (
+                <li key={person.id} className="settings-note">
+                  {person.name}:{' '}
+                  {profile === undefined ? 'no paycheck profile yet' : matchWords(profile)}
+                </li>
+              )
+            })}
+          </ul>
+          <p className="settings-note">
+            Read-only here — the policy is effective-dated on each person&apos;s paycheck profile.{' '}
+            <Link to="/paycheck">Set it on the Paycheck page</Link>
+          </p>
+        </div>
+      )}
     </section>
   )
 }

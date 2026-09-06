@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client'
+import type { SystemStatus } from '../../types/api'
 
 vi.mock('../../api/settings', () => ({ fetchAppSettings: vi.fn(), putAppSettings: vi.fn() }))
 vi.mock('../../api/system', () => ({ fetchSystemStatus: vi.fn() }))
@@ -17,7 +18,7 @@ const SETTINGS = {
   calendar_update_due_day: 1,
   espp_discount_pct: '0.150000',
 }
-const STATUS = {
+const STATUS: SystemStatus = {
   prices: { last: null, next_run_at: '2026-09-07T13:10:00+00:00', scheduler_running: true },
   database: { size_bytes: 1024, alembic_head: null },
   backup: null,
@@ -76,6 +77,9 @@ describe('PriceRefreshCard', () => {
     expect(await screen.findByText('Saved — the schedule is applied immediately.')).toBeTruthy()
     // The save HOT-APPLIES the schedule, so "Next scheduled run" has just moved.
     await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalledTimes(2))
+    // The FACTS alone: the box is already re-seeded from the PUT's own response, and a second
+    // GET /settings behind every save would only be a second opinion about it.
+    expect(fetchAppSettings).toHaveBeenCalledTimes(1)
   })
 
   it('retires the saved note on the next keystroke', async () => {
@@ -97,7 +101,46 @@ describe('PriceRefreshCard', () => {
     // The Portfolio page's own sentence, from the shared hook.
     expect(await screen.findByText(/1 updated in 2s/)).toBeTruthy()
     await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalledTimes(2))
+    expect(fetchAppSettings).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false))
+  })
+
+  it('leaves a half-typed cron alone when Refresh now re-reads the facts', async () => {
+    render(<PriceRefreshCard />)
+    await waitFor(() => expect(cronBox().value).toBe('10 13 * * mon-fri'))
+
+    fireEvent.change(cronBox(), { target: { value: '30 15 * * mon-fri' } })
+    fireEvent.click(refreshButton())
+
+    await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalledTimes(2))
+    // A refresh re-reads the FACTS, not the settings: re-seeding the box from the stored cron
+    // would throw away an expression the reader is in the middle of writing.
+    expect(cronBox().value).toBe('30 15 * * mon-fri')
+    expect(putAppSettings).not.toHaveBeenCalled()
+  })
+
+  it('holds Refresh now disabled until the fresh facts are on screen', async () => {
+    let settle: (value: SystemStatus) => void = () => {}
+    render(<PriceRefreshCard />)
+    await screen.findByText('Next scheduled run')
+
+    vi.mocked(fetchSystemStatus).mockReturnValue(
+      new Promise<SystemStatus>((resolve) => {
+        settle = resolve
+      }),
+    )
+    fireEvent.click(refreshButton())
+
+    // The prices are in, but the numbers beside the button still describe the run BEFORE it.
+    await waitFor(() => expect(refreshPrices).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(fetchSystemStatus).toHaveBeenCalledTimes(2))
+    expect(refreshButton().hasAttribute('disabled')).toBe(true)
+
+    await act(async () => {
+      settle({ ...STATUS, prices: { ...STATUS.prices, scheduler_running: false } })
+    })
+    await waitFor(() => expect(refreshButton().hasAttribute('disabled')).toBe(false))
+    expect(screen.getByText('Not running')).toBeTruthy()
   })
 
   it('renders a refused save and a failed refresh verbatim', async () => {

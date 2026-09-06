@@ -26,27 +26,46 @@ export default function SettingsRail({ sectionsReady }: { sectionsReady: boolean
   // live behind the page's loadedOnce gates), so an observer set up at mount would find
   // nothing to watch and the chip would never follow the scroll.
   useEffect(() => {
-    if (!sectionsReady || typeof IntersectionObserver === 'undefined') return
-    const bands = RAIL_SECTIONS.map((s) => document.getElementById(s.value)).filter(
-      (el): el is HTMLElement => el !== null,
-    )
+    const present = () => RAIL_SECTIONS.filter((s) => document.getElementById(s.value) !== null)
+    const bands = present()
     if (bands.length === 0) return
     // The entries say which band CROSSED the line; the active chip is a fact about all five
     // (the lowest one still at or above it), so the callback re-measures rather than trusting
     // whichever band happened to move.
     const mark = () => {
+      const here = present()
+      if (here.length === 0) return
+      // The foot of the page IS the last section. Its band may never reach the upper third —
+      // a final section shorter than two thirds of the viewport physically cannot get there —
+      // so without this the chip sticks on whatever was above it however far the reader
+      // scrolls, which reads as a rail that has stopped working.
+      const atBottom =
+        window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 1
+      if (atBottom) {
+        setActive(here[here.length - 1].value)
+        return
+      }
       const line = window.innerHeight * UPPER_THIRD
-      let current: RailSection = RAIL_SECTIONS[0].value
-      for (const section of RAIL_SECTIONS) {
+      let current: RailSection = here[0].value
+      for (const section of here) {
         const el = document.getElementById(section.value)
         if (el !== null && el.getBoundingClientRect().top <= line) current = section.value
       }
       setActive(current)
     }
+    // Once, up front: the answer must be right before anything scrolls. It is also the ONLY
+    // way the chip is decided when there is no IntersectionObserver, and the one that fixes a
+    // settings load that failed — the page then carries the ungated Account band alone (spec
+    // §3.1), and a lit Household chip would point at a section that is not coming.
+    mark()
+    if (typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver(mark, {
       rootMargin: `0px 0px -${Math.round((1 - UPPER_THIRD) * 100)}% 0px`,
     })
-    for (const el of bands) observer.observe(el)
+    for (const section of bands) {
+      const el = document.getElementById(section.value)
+      if (el !== null) observer.observe(el)
+    }
     return () => observer.disconnect()
   }, [sectionsReady])
 

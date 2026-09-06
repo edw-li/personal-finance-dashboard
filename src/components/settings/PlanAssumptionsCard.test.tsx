@@ -63,8 +63,13 @@ describe('PlanAssumptionsCard', () => {
 
   it('states each person’s in-force match in words, with a link to the Paycheck page', async () => {
     mount()
+    // Word for word the sentence the Paycheck profile form prints (spec §2.3): whole-cent
+    // amounts through formatCurrency, the rate shifted off the stored fraction rather than
+    // multiplied. Two surfaces describing one policy must not phrase it two ways.
     expect(
-      await screen.findByText('Me: 100% of the first $6,000, then 50% of the next $11,000'),
+      await screen.findByText(
+        'Me: 100% of the first $6,000.00, then 50% of the next $11,000.00',
+      ),
     ).toBeTruthy()
     // Read-only here on purpose: the policy is effective-dated on the profile, and two places
     // to edit one number is how they drift.
@@ -82,8 +87,21 @@ describe('PlanAssumptionsCard', () => {
       marriage_date: null,
     })
     mount()
-    expect(await screen.findByText('Me: no match entered')).toBeTruthy()
+    expect(await screen.findByText('Me: No employer match entered.')).toBeTruthy()
     expect(screen.getByText('Sam: no paycheck profile yet')).toBeTruthy()
+  })
+
+  it('prints a tier the employer funds at nothing, because a zero rate is a policy', async () => {
+    // A band with a 0% rate is a real arrangement — the money is matched at nothing past the
+    // first tier — and the profile form prints it. Dropping it here would make the two
+    // surfaces disagree about a policy that exists.
+    vi.mocked(fetchProfiles).mockResolvedValue([
+      { ...PROFILE, match_rate_2: '0.000000000' },
+    ])
+    mount()
+    expect(
+      await screen.findByText('Me: 100% of the first $6,000.00, then 0% of the next $11,000.00'),
+    ).toBeTruthy()
   })
 
   it('sends ONLY its own three fields, so the partial PUT leaves the rest standing', async () => {
@@ -200,6 +218,9 @@ describe('PlanAssumptionsCard', () => {
     // A first load that failed knows nothing about the stored settings, and a form seeded with
     // blanks would offer to save them.
     expect(screen.queryByLabelText('ESPP ticker')).toBeNull()
+    // Nor an empty match list under a heading: the read that would have filled it is the one
+    // that failed, and a blank list reads as "nobody has a match".
+    expect(screen.queryByText('Employer 401(k) match')).toBeNull()
 
     vi.mocked(fetchProfiles).mockResolvedValue([PROFILE])
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading the plan assumptions' }))

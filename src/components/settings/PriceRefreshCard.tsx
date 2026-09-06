@@ -51,6 +51,27 @@ export default function PriceRefreshCard() {
   const seqRef = useRef(0)
   const { refreshing, note, error: refreshError, refresh } = usePriceRefresh()
 
+  /** The FACTS alone, and it RETURNS its promise. Two things turn on that: the Refresh-now
+   *  button must stay disabled until the fresh numbers are actually on screen (usePriceRefresh
+   *  awaits `after`), and a re-read that also re-seeded the cron box would throw away an
+   *  expression the reader is in the middle of typing. Shares `seqRef` with `load`, so
+   *  whichever read started last is the one that gets to write. */
+  const loadStatus = (): Promise<void> => {
+    const seq = ++seqRef.current
+    return fetchSystemStatus()
+      .then((current) => {
+        if (seq !== seqRef.current) return
+        setStatus(current)
+        setLoadError(null)
+      })
+      .catch((err: unknown) => {
+        if (seq !== seqRef.current) return
+        setLoadError(err instanceof ApiError ? err.message : 'Could not load the refresh schedule.')
+      })
+  }
+
+  // Mount and Retry only: the settings read is what seeds the cron box, and the box is the
+  // one thing on this card the reader can be halfway through changing.
   const load = () => {
     const seq = ++seqRef.current
     Promise.all([fetchSystemStatus(), fetchAppSettings()])
@@ -83,7 +104,9 @@ export default function PriceRefreshCard() {
         // the save hot-applies the schedule — "Next scheduled run" has just moved.
         setCronBox(saved.price_refresh_cron)
         setSavedNote(true)
-        load()
+        // The FACTS, not the whole card: the box is already re-seeded from this very response,
+        // and a second GET /settings behind every save would only be a second opinion on it.
+        loadStatus()
       })
       .catch((err: unknown) => {
         setFormError(err instanceof ApiError ? err.message : 'Could not save the schedule.')
@@ -98,55 +121,61 @@ export default function PriceRefreshCard() {
         <InfoHint text="5-field cron, America/Los_Angeles, day NAMES (e.g. 10 13 * * mon-fri). Applied to the live schedule on save. Must not fire more often than hourly. The Monday run also records the weekly performance point — keep Mondays covered." />
       </h2>
       <FeedBanner error={loadError} retry={load} retryLabel="Retry loading the refresh schedule" />
-      <form
-        className="settings-card-form"
-        onSubmit={(e) => {
-          e.preventDefault()
-          save()
-        }}
-      >
-        <label>
-          Price refresh cron
-          {/* .field-input is already monospaced, which is what a cron expression wants. */}
-          <input
-            className="field-input"
-            value={cronBox}
-            disabled={saving}
-            onChange={(e) => {
-              setCronBox(e.target.value)
-              // Every keystroke retires both sentences: they describe the value that WAS in
-              // the box (the settings family's rule).
-              setSavedNote(false)
-              setFormError(null)
-            }}
-          />
-        </label>
-        <div className="settings-card-actions">
-          <button type="submit" className="button button-primary" disabled={saving}>
-            {saving ? 'Saving…' : 'Save schedule'}
-          </button>
-          <button
-            type="button"
-            className="button"
-            disabled={refreshing}
-            onClick={() => refresh({ after: load })}
-          >
-            {refreshing ? 'Refreshing…' : 'Refresh now'}
-          </button>
-        </div>
-        <FeedBanner error={formError} />
-        <FeedBanner error={refreshError} />
-        {savedNote && (
-          <p className="settings-note" role="status">
-            Saved — the schedule is applied immediately.
-          </p>
-        )}
-        {note.text !== '' && (
-          <p className="settings-note" role="status" title={note.detail || undefined}>
-            {note.text}
-          </p>
-        )}
-      </form>
+      {status === null && loadError === null && <p className="empty-note">Loading…</p>}
+      {/* Gated on the first reading, like Plan assumptions: a cron box seeded with a
+          blank would read as "your schedule is empty" and offer to save it. The banner
+          above stays outside the gate — a failed load is exactly when it must show. */}
+      {status !== null && (
+        <form
+          className="settings-card-form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            save()
+          }}
+        >
+          <label>
+            Price refresh cron
+            {/* .field-input is already monospaced, which is what a cron expression wants. */}
+            <input
+              className="field-input"
+              value={cronBox}
+              disabled={saving}
+              onChange={(e) => {
+                setCronBox(e.target.value)
+                // Every keystroke retires both sentences: they describe the value that WAS in
+                // the box (the settings family's rule).
+                setSavedNote(false)
+                setFormError(null)
+              }}
+            />
+          </label>
+          <div className="settings-card-actions">
+            <button type="submit" className="button button-primary" disabled={saving}>
+              {saving ? 'Saving…' : 'Save schedule'}
+            </button>
+            <button
+              type="button"
+              className="button"
+              disabled={refreshing}
+              onClick={() => refresh({ after: loadStatus })}
+            >
+              {refreshing ? 'Refreshing…' : 'Refresh now'}
+            </button>
+          </div>
+          <FeedBanner error={formError} />
+          <FeedBanner error={refreshError} />
+          {savedNote && (
+            <p className="settings-note" role="status">
+              Saved — the schedule is applied immediately.
+            </p>
+          )}
+          {note.text !== '' && (
+            <p className="settings-note" role="status" title={note.detail || undefined}>
+              {note.text}
+            </p>
+          )}
+        </form>
+      )}
       {status !== null && (
         <dl className="system-facts">
           <div className="system-fact">

@@ -229,7 +229,13 @@ export default function SettingsPage() {
     <div className="page settings-page">
       <PageFrame
         title="Settings"
-        scopeRow={<SettingsRail sectionsReady={loadedOnce} />}
+        scopeRow={
+          // "The frame is showing children", the same condition as `resource.status` below —
+          // NOT `loadedOnce`. A first load that failed still renders the ungated Account band,
+          // and the rail has to find it: keyed on loadedOnce alone its effect would never
+          // re-run, and the chip would stay lit on a Household section that is not coming.
+          <SettingsRail sectionsReady={loadedOnce || error !== null} />
+        }
         resource={{
           // Ready as soon as the first load SETTLES, either way: the Appearance card below
           // owns no request, so a settings GET that failed must not blank the page.

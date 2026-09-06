@@ -46,7 +46,9 @@ export const SETTINGS_SECTIONS: { id: string; label: string; keywords: string[] 
   {
     id: 'system',
     label: 'System status',
-    keywords: ['backup', 'scheduler', 'refresh', 'database', 'alembic', 'export', 'snapshot'],
+    // No 'scheduler' or 'refresh': the Price refresh card owns those words now (2026-09-06
+    // spec §3.3), and two destinations answering to one term is how the palette gets vague.
+    keywords: ['backup', 'database', 'alembic', 'export', 'snapshot'],
   },
   {
     id: 'plan-assumptions',

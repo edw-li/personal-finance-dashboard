@@ -284,6 +284,12 @@
 .settings-page .card {
   outline: 2px solid transparent;
   outline-offset: 2px;
+  /* The same inset the section bands carry (below): the chip rail rides PageFrame's sticky
+     scope row, which paints over the top of the scrollport, so an anchored card scrolled to
+     `block: 'start'` would land UNDER it — /settings#backups from the Overview strip,
+     #restore from the ?restore= hand-off, #limits from the palette. PageFrame MEASURES the
+     row into --sticky-inset on .page-frame-body and these cards inherit it. */
+  scroll-margin-top: calc(var(--sticky-inset, 0px) + 0.75rem);
 }
 
 .settings-page .card.is-highlighted {
@@ -447,6 +453,13 @@
 .feed-url {
   width: 100%;
   text-align: left;
+}
+
+/* The form sheets cap a field at 320px so a control never becomes a canvas. This one is the
+   exception: the value is a credential the reader has to get out of the page in one piece,
+   and a third of a URL is worse than none. */
+.feed-fresh label {
+  max-width: none;
 }
 
 .feed-fresh {
