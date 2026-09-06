@@ -85,28 +85,38 @@ def _estimate(
     by_month = False
     backfilled: date | None = None
 
-    def source(day: date):
-        nonlocal backfilled
-        if day >= today:
-            return scenario
-        if day < earliest:
-            backfilled = earliest
-        return _in_force(profiles, day)
+    def priced_by(day: date):
+        """Who prices `day` — PURE, so asking the question never records an answer."""
+        return scenario if day >= today else _in_force(profiles, day)
+
+    def borrowed(day: date) -> bool:
+        """Did `priced_by` have to reach forward for a profile that did not exist yet?
+
+        Asked only where a figure was actually PRICED, never on the cadence probe below: a
+        window opening after the earliest profile has one real payday inside it and has
+        borrowed nothing, and must not say it did.
+        """
+        return day < today and day < earliest
 
     for year, month in _months(start, end):
         mid = date(year, month, 15)
-        # Clamped so a window that opens after the 15th still probes a date inside it.
-        monthly = source(min(max(mid, start), end))
+        # Clamped so a window that opens after the 15th still probes a date inside it. This
+        # read decides the CADENCE only — it prices nothing, so it flags nothing.
+        monthly = priced_by(min(max(mid, start), end))
         if monthly.pay_periods_per_year == SEMI_MONTHLY:
             for day in semi_monthly_paydays(year, month):
                 if start <= day <= end:
-                    payer = source(day)
+                    payer = priced_by(day)
+                    if borrowed(day):
+                        backfilled = earliest
                     amount += payer.espp_pct * (
                         payer.annual_salary / Decimal(payer.pay_periods_per_year)
                     )
         else:
             by_month = True
             if start <= mid <= end:
+                if borrowed(mid):
+                    backfilled = earliest
                 amount += monthly.espp_pct * (monthly.annual_salary / MONTHS_PER_YEAR)
     return half_up2(amount), ("months" if by_month else "paydays"), backfilled
 

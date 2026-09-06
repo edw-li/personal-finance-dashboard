@@ -150,12 +150,14 @@ async def test_preview_scenario_equals_a_real_profile_with_those_values(auth_cli
     assert _without_history(body["pace"]["scenario"]) == _without_history(shown["pace"])
     # ...and the ONE field the twin cannot reproduce is the one it created: back-dating a
     # profile to 2019 gives this person a timeline that reaches behind the ESPP window,
-    # which the preview (whose earliest profile is 2026-01-01) had to borrow forwards.
+    # which the preview (whose earliest profile is the payload's 2026-01-01) had to borrow
+    # forwards. Computed, not pinned: the window opens Sep 1 of LAST year, so from the 2027
+    # strip onward it no longer reaches behind that profile and nothing is borrowed.
     espp = {row["key"]: row for row in shown["pace"]}["limit_espp_423"]
     assert espp["backfilled_from"] is None
-    assert {row["key"]: row for row in body["pace"]["scenario"]}["limit_espp_423"][
-        "backfilled_from"
-    ] == "2026-01-01"
+    borrowed = "2026-01-01" if date(date.today().year - 1, 9, 1) < date(2026, 1, 1) else None
+    previewed = {row["key"]: row for row in body["pace"]["scenario"]}["limit_espp_423"]
+    assert previewed["backfilled_from"] == borrowed
     assert (await auth_client.delete(f"{PROFILES}/{twin['id']}")).status_code == 204
     # The preview modelled nothing into the database: the same request answers the same.
     assert (await preview(auth_client, overrides=overrides)) == body

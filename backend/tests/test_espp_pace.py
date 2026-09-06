@@ -154,3 +154,35 @@ def test_row_visibility_follows_the_window_and_the_current_rate():
     assert row is not None
     assert row.annualized == D("0.00")
     assert row.projected_full_year == D("18893.00")
+
+
+def test_a_window_that_opens_after_the_earliest_profile_borrows_nothing():
+    """The cadence probe is not a payday, and only a priced payday can borrow.
+
+    A stored period opening 2025-09-20 under a profile effective 2025-09-25 has exactly one
+    September payday inside it, the 30th, and that one is the real profile's. The probe for
+    the month's cadence lands on the clamped 20th — before the profile, never priced — so
+    the row must not report a backfill it did not make.
+    """
+    only = FakeProfile(effective_date=date(2025, 9, 25))
+    stored = [
+        StoredPeriod(
+            id=1,
+            label="Sep 2025–Feb 2026",
+            period_start=date(2025, 9, 20),
+            period_end=date(2026, 2, 27),
+            semi_annual_base=D("90000.00"),
+            additional_payments=D("0.00"),
+            contribution_pct=D("0.100000000"),
+        )
+    ]
+    row = espp_pace_item(
+        rows=rows_for(2026, stored),
+        profiles=[only],
+        scenario_from_today=only,
+        limit=LIMIT,
+        discount=DISCOUNT,
+        today=date(2026, 1, 5),
+    )
+    assert row.halves[0].source == "estimated"  # the February purchase has not happened yet
+    assert row.backfilled_from is None
