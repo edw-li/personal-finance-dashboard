@@ -246,10 +246,11 @@ describe('ProjectionPage', () => {
         contribution_breakdown: {
           cash: '4000.00',
           payroll: '400.00',
+          employer: '0.00',
           total: '4400.00',
           by_person: [
-            { person_id: 1, name: 'Me', monthly: '250.00' },
-            { person_id: 2, name: 'Alex', monthly: '150.00' },
+            { person_id: 1, name: 'Me', monthly: '250.00', employer_monthly: '0.00' },
+            { person_id: 2, name: 'Alex', monthly: '150.00', employer_monthly: '0.00' },
           ],
         },
       }),

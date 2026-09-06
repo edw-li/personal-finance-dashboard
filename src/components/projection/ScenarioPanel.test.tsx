@@ -206,8 +206,9 @@ describe('ScenarioPanel', () => {
       contribution_breakdown: {
         cash: '1200.00',
         payroll: '2800.00',
+        employer: '0.00',
         total: '4000.00',
-        by_person: [{ person_id: 1, name: 'Edward', monthly: '2400.00' }],
+        by_person: [{ person_id: 1, name: 'Edward', monthly: '2400.00', employer_monthly: '0.00' }],
       },
     }))
     mount()

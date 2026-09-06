@@ -25,6 +25,10 @@ const profile: PaycheckProfileOut = {
   dental_vision_per_check: '12.50',
   hsa_per_check: '100.00',
   hsa_coverage: 'self',
+  match_rate_1: '1.000000000',
+  match_band_1: '6000.00',
+  match_rate_2: '0.500000000',
+  match_band_2: '11000.00',
   notes: null,
 }
 

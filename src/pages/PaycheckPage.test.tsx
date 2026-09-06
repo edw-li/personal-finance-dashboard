@@ -75,6 +75,10 @@ const profile2026: PaycheckProfileOut = {
   dental_vision_per_check: '12.50',
   hsa_per_check: '100.00',
   hsa_coverage: 'self',
+  match_rate_1: '1.000000000',
+  match_band_1: '6000.00',
+  match_rate_2: '0.500000000',
+  match_band_2: '11000.00',
   notes: null,
 }
 
@@ -92,6 +96,10 @@ const profile2025: PaycheckProfileOut = {
   dental_vision_per_check: '11.00',
   hsa_per_check: '75.00',
   hsa_coverage: 'self',
+  match_rate_1: '1.000000000',
+  match_band_1: '6000.00',
+  match_rate_2: '0.500000000',
+  match_band_2: '11000.00',
   notes: '2025 comp',
 }
 
@@ -136,6 +144,7 @@ function breakdownOf(
     espp: '865.93',
     net_pay: '3384.16',
     monthly_net: '6768.33',
+    employer_match: '479.17',
     warnings: [],
     // The honest default for fixtures that are not about the strip — PacePanel renders
     // nothing at all for an empty list.
@@ -183,6 +192,10 @@ const samProfile: PaycheckProfileOut = {
   dental_vision_per_check: '9.00',
   hsa_per_check: '0.00',
   hsa_coverage: 'none',
+  match_rate_1: '1.000000000',
+  match_band_1: '6000.00',
+  match_rate_2: '0.500000000',
+  match_band_2: '11000.00',
   notes: 'Sam base',
 }
 

@@ -34,6 +34,10 @@ const profile: PaycheckProfileOut = {
   dental_vision_per_check: '12.50',
   hsa_per_check: '100.00',
   hsa_coverage: 'self',
+  match_rate_1: '1.000000000',
+  match_band_1: '6000.00',
+  match_rate_2: '0.500000000',
+  match_band_2: '11000.00',
   notes: null,
 }
 
@@ -54,7 +58,7 @@ const lines = (net: string, savings: string): PaycheckPreviewLines => ({
 const breakdown: PaycheckBreakdownOut = {
   profile, gross: '4166.67', trad_401k: '541.67', dental_vision: '12.50', hsa: '100.00', taxable: '3512.50',
   withholding: '1053.75', post_tax: '2458.75', roth_401k: '0.00', after_tax_401k: '125.00', espp: '458.33',
-  net_pay: '1875.42', monthly_net: '3750.84', warnings: [], pace: pace(),
+  net_pay: '1875.42', monthly_net: '3750.84', employer_match: '479.17', warnings: [], pace: pace(),
 }
 
 function previewOut(scenarioNet = '1875.42', delta = '0.00'): PaycheckPreviewOut {
