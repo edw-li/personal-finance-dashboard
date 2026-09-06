@@ -17,12 +17,24 @@
   text-align: left;
 }
 
-/* One column, so nothing in here is ever a "wide" element needing a grid-column span
-   (and `span 2` is banned house-wide — `1 / -1` is the form when it comes up). */
+/* No 420px cap (2026-09-06 spec §3.4): in a span-12 card that single column left two thirds
+   of the card empty. Fields flow into as many 240px tracks as the card can hold. */
 .settings-form {
   display: grid;
   gap: 0.75rem;
-  max-width: 420px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+/* Notes, action rows and banners are sentences about the WHOLE form, never a column of it. */
+.settings-form > :not(label) {
+  grid-column: 1 / -1;
+}
+
+/* A field is a control, not a canvas: even alone in a twelve-column card it stays readable.
+   This is the spec's single-field 320px cap, put on the FIELD rather than the form so the
+   sentences beside it still run the card's full width. */
+.settings-form label {
+  max-width: 320px;
 }
 
 .settings-form label {

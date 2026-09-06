@@ -97,6 +97,20 @@
   }
 }
 
+/* Six facts down a half-width card is a long thin list; two columns fill it (spec §3.3), and
+   the label track has to give inside the narrower column. */
+@media (min-width: 721px) {
+  .system-facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem 1.5rem;
+  }
+
+  .system-facts .system-fact {
+    grid-template-columns: minmax(110px, 40%) 1fr;
+  }
+}
+
 /* --- household / accounts / categories cards (2026-08-26 spec §6) --- */
 
 /* The field stack the management cards share. A deliberate near-twin of SettingsPage.css's
@@ -106,8 +120,16 @@
 .settings-card-form {
   display: grid;
   gap: 0.75rem;
-  max-width: 420px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   margin-bottom: 0.9rem;
+}
+
+.settings-card-form > :not(label) {
+  grid-column: 1 / -1;
+}
+
+.settings-card-form label {
+  max-width: 320px;
 }
 
 .accounts-form {
