@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, it } from 'vitest'
 import type { PaceItem } from '../../types/api'
@@ -119,11 +119,6 @@ it('renders a call to action instead of a meter when the limit is missing', () =
   expect(screen.getByText('$16,000.00')).toBeTruthy()
 })
 
-it('names the employer-match caveat the server put in the label', () => {
-  renderPanel([MISSING])
-  expect(screen.getByText(/excludes employer match/)).toBeTruthy()
-})
-
 it('says the figures are a projection, not a year-to-date total', () => {
   renderPanel([OK])
   const card = within(screen.getByRole('region', { name: 'Contribution pace' }))
@@ -169,4 +164,66 @@ it('draws the overflow tick for a clamped FILL, never for a soft-capped verdict'
   cleanup()
   renderPanel([OVER])
   expect(screen.getByRole('meter').querySelector('.pace-overflow-tick')).toBeTruthy()
+})
+
+// The card's hint is a disclosure: click the ⓘ, read the bubble, Escape (OverviewPage's helper).
+function hintText(name: RegExp): string {
+  fireEvent.click(screen.getByRole('button', { name }))
+  const text = screen.getByRole('tooltip').textContent ?? ''
+  fireEvent.keyDown(window, { key: 'Escape' })
+  return text
+}
+
+it('says where each half of the window came from, and what a full purchase year costs', () => {
+  renderPanel([ESPP])
+  expect(
+    screen.getByText(
+      'Feb 2026 estimated · Aug 2026 estimated. At your current 12%, a full purchase year is $22,671.60, which is $1,421.60 over the practical cap; the plan refunds the excess after the purchase.',
+    ),
+  ).toBeTruthy()
+})
+
+it('names the backfill and the per-month approximation, and stops projecting at a zero rate', () => {
+  renderPanel([
+    {
+      ...ESPP,
+      halves: [{ ...ESPP.halves![0], source: 'entered' }, { ...ESPP.halves![1], basis: 'months' }],
+      backfilled_from: '2026-01-01',
+      projected_full_year: '18000.00',
+      projected_excess: '0.00',
+    },
+  ])
+  expect(
+    screen.getByText(
+      'Feb 2026 entered · Aug 2026 estimated · before Jan 1, 2026 assumes your earliest profile · estimated by month. At your current 12%, a full purchase year is $18,000.00.',
+    ),
+  ).toBeTruthy()
+  cleanup()
+  // A pre-batch snapshot has no current_rate: the sentence still reads, without the number.
+  renderPanel([{ ...ESPP, current_rate: undefined }])
+  expect(screen.getByText(/At your current rate, a full purchase year is \$22,671\.60/)).toBeTruthy()
+  cleanup()
+  renderPanel([{ ...ESPP, projected_full_year: '0.00', projected_excess: '0.00' }])
+  expect(
+    screen.getByText('Feb 2026 estimated · Aug 2026 estimated. You are not contributing now.'),
+  ).toBeTruthy()
+})
+
+it('prints the employer match inside the 415(c) figure, under whichever label the server sent', () => {
+  renderPanel([{ ...MISSING, label: '415(c) total additions (incl. employer match)', employer_match: '11500.00' }])
+  expect(screen.getByText(/incl\. \$11,500\.00 match/)).toBeTruthy()
+  expect(screen.getByText(/incl\. employer match/)).toBeTruthy()
+  cleanup()
+  // No policy, no suffix — never "incl. $0.00" — and the server's other label prints too.
+  renderPanel([MISSING])
+  expect(screen.queryByText(/incl\./)).toBeNull()
+  expect(screen.getByText(/excludes employer match/)).toBeTruthy()
+})
+
+it('sends the reader to the profile for the match, and to the ESPP page for the chained figures', () => {
+  renderPanel([OK])
+  const text = hintText(/^About Each contribution line/)
+  expect(text).toContain('set your 401(k) match on your paycheck profile')
+  expect(text).not.toContain('Employer 401(k) match and employer HSA contributions')
+  expect(text).toContain('autumn checks count toward next year')
 })

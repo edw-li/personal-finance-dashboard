@@ -122,3 +122,16 @@
   pointer-events: none;
   opacity: 0.7;
 }
+
+/* The provenance sentence runs full width UNDER the four columns — it explains the row it
+   sits beneath, and squeezing it into a cell would either wrap to a column of two-word
+   lines or steal the meter's width. The match suffix keeps the muted colour whatever the
+   figures cell's tone is, so a red 415(c) row cannot make it read as a second verdict. */
+.pace-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.pace-match { color: var(--muted); font-size: 0.72rem; }
