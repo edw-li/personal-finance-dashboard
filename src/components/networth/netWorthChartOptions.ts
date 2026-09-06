@@ -10,7 +10,6 @@ import { MARK_LINE_LABEL, MARK_LINE_STYLE, anchorMonthLabel } from '../../charts
 import { rangeZoom } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
 import { axisTooltip, itemTooltip } from '../../charts/tooltip'
-import { waterfallCsv, waterfallSeries, waterfallSteps, waterfallTooltip } from '../../charts/waterfall'
 import type { AccountGroup, NetWorthTimeseries, PersonOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
 import { escapeHtml, formatCurrency, formatCurrencyCompact, formatMonth, formatPct } from '../../utils/format'
@@ -361,49 +360,6 @@ export function netWorthDrillCsv(ts: NetWorthTimeseries, drill: DrillPick[]): Ex
   }
 }
 
-/** The bridge's steps: prior net worth → each group's month-over-month change → this month's
- *  net worth. Groups that did not move are omitted (a $0 step is a label without a bar). */
-function bridgeSteps(ts: Pick<NetWorthTimeseries, 'months' | 'group_totals' | 'net_worth'>, index: number) {
-  if (index < 1 || index >= ts.months.length) return null
-  const items = GROUP_ORDER.flatMap((g) => {
-    const delta = cents(Number(ts.group_totals[g][index]) - Number(ts.group_totals[g][index - 1]))
-    return delta === 0 ? [] : [{ label: GROUP_LABELS[g], amount: delta, delta, color: GROUP_COLORS[g] }]
-  })
-  return waterfallSteps(
-    { label: formatMonth(ts.months[index - 1]), amount: Number(ts.net_worth[index - 1]), color: OTHER_SERIES_COLOR },
-    items,
-    { label: formatMonth(ts.months[index]), amount: Number(ts.net_worth[index]), color: OTHER_SERIES_COLOR },
-  )
-}
-
-/** "What moved — {month}": a waterfall by group between two snapshots (F2). Null on the first
- *  month or an out-of-range index. */
-export function netWorthBridgeOption(
-  ts: Pick<NetWorthTimeseries, 'months' | 'group_totals' | 'net_worth'>,
-  index: number,
-): EChartsOption | null {
-  const steps = bridgeSteps(ts, index)
-  if (steps === null) return null
-  const [placeholder, amount] = waterfallSeries(steps)
-  return {
-    grid: grid(),
-    tooltip: waterfallTooltip(steps),
-    xAxis: monthAxis(steps.map((s) => s.label), { gap: true }),
-    yAxis: moneyAxis(),
-    // No local stagger: waterfallSeries carries the §11 cascade itself (C7, 2026-09-04), so
-    // the bridge and the tax waterfall enter from ONE definition. Re-spreading it here was
-    // a no-op that also hid a missing stagger in the shared builder from this chart.
-    series: [placeholder, amount],
-  }
-}
-
-export function netWorthBridgeCsv(
-  ts: Pick<NetWorthTimeseries, 'months' | 'group_totals' | 'net_worth'>,
-  index: number,
-): ExportTable {
-  const steps = bridgeSteps(ts, index)
-  return steps === null ? { headers: ['Step', 'Amount', 'Remaining'], rows: [] } : waterfallCsv(steps)
-}
 
 // ── "What moved": contribution bars (2026-09-06 spec §4) ────────────────────────────────
 /** Which entity the bars measure. */

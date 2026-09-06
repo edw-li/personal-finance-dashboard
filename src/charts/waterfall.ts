@@ -2,7 +2,7 @@
 // bar on the floor, each step floating on the remainder LEFT after it, a closing bar on the
 // floor. `delta` is what a step DOES to the running total (a tax is −tax), `amount` is what
 // it REPORTS (the tax itself) — the tooltip and the cap label say the amount. Used by the tax
-// waterfall and the net-worth "What moved" bridge. Depends on: grammar.ts, tooltip.ts, theme.ts.
+// waterfall. Depends on: grammar.ts, tooltip.ts, theme.ts.
 import type { ExportTable } from '../utils/download'
 import { formatCurrency, formatCurrencyCompact } from '../utils/format'
 import { capLabel, roundTo, stagger } from './grammar'
