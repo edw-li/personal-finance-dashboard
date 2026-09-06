@@ -1,5 +1,7 @@
 """App-settings vertical (spec §6 /settings). GET returns EFFECTIVE values via the same
-readers the app uses; PUT is full-form and stores the readers' envelope {"value": ...}.
+readers the app uses; PUT is PARTIAL by field (2026-09-06 spec §3.5) and stores the
+readers' envelope {"value": ...} — several Settings cards write this one endpoint, so a
+card that does not show a field must not be able to reset it.
 
 The cron guard is server-side (plan-4 forward note: '* * * * *' would hammer Yahoo):
 parse with the scheduler's own CronTrigger, reject sub-hourly cadence and numeric
@@ -50,6 +52,42 @@ async def _read_espp_ticker(db: AsyncSession) -> str | None:
     raw = setting.value.get("value")
     ticker = raw.strip().upper() if isinstance(raw, str) else ""
     return ticker or None
+
+
+# The §423 statutory maximum discount, and the plan the app was built against.
+DEFAULT_ESPP_DISCOUNT = Decimal("0.15")
+MAX_ESPP_DISCOUNT = Decimal("0.15")
+ESPP_DISCOUNT_MESSAGE = "espp_discount_pct must be between 0 and 0.15 (the §423 maximum)"
+
+
+def _validated_discount(value: Decimal) -> Decimal:
+    # What the reader discards, the writer refuses (_validated_swr's rule). `+ ZERO` is the
+    # house signed-zero collapse: "-0" clears `< 0` and would store as "-0.000000".
+    if not value.is_finite() or value < 0 or value > MAX_ESPP_DISCOUNT:
+        raise HTTPException(status_code=422, detail=ESPP_DISCOUNT_MESSAGE)
+    return quantize_pct(value) + ZERO
+
+
+async def read_espp_discount(db: AsyncSession) -> Decimal:
+    """app_settings['espp_discount_pct'] envelope {"value": "0.15"}; any unexpected shape
+    falls back to the §423 maximum (get_swr_pct's posture, bounds included). Imported by
+    api/espp.py, api/paycheck.py and api/taxes.py — every figure the discount prices reads
+    it here, so there is exactly one place a plan-wide rate can come from."""
+    setting = await db.get(AppSetting, "espp_discount_pct")
+    if setting is None or not isinstance(setting.value, dict):
+        return DEFAULT_ESPP_DISCOUNT
+    raw = setting.value.get("value")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return DEFAULT_ESPP_DISCOUNT
+    try:
+        parsed = Decimal(str(raw))
+    except ArithmeticError:
+        return DEFAULT_ESPP_DISCOUNT
+    # Decimal("NaN")/"Infinity"/"1e100000" all CONSTRUCT successfully — a leaked non-finite
+    # or absurd rate would price every purchase in the app. Fall back rather than crash.
+    if not parsed.is_finite() or parsed < 0 or parsed > MAX_ESPP_DISCOUNT:
+        return DEFAULT_ESPP_DISCOUNT
+    return parsed
 
 
 DEFAULT_UPDATE_DUE_DAY = 1
@@ -130,6 +168,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> AppSettingsOut:
     return AppSettingsOut(
         swr_pct=await get_swr_pct(db),
         espp_ticker=await _read_espp_ticker(db),
+        espp_discount_pct=await read_espp_discount(db),
         price_refresh_cron=await read_cron_setting(db),
         calendar_update_due_day=await read_update_due_day(db),
     )
@@ -139,42 +178,46 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> AppSettingsOut:
 async def put_settings(
     body: AppSettingsUpdate, db: AsyncSession = Depends(get_db)
 ) -> AppSettingsOut:
-    swr = _validated_swr(body.swr_pct)
-    ticker = (
-        ""
-        if body.espp_ticker is None or not body.espp_ticker.strip()
-        else _normalize_ticker(body.espp_ticker)
-    )
-    cron = _validated_cron(body.price_refresh_cron)
-    # None = the writing card does not own this field; keep whatever is stored.
-    due_day = (
-        await read_update_due_day(db)
-        if body.calendar_update_due_day is None
-        else _validated_due_day(body.calendar_update_due_day)
-    )
-    # Envelope {"value": ...} is the readers' convention (Plan 1 note). swr is stored as a
-    # plain-notation STRING — get_swr_pct Decimal(str(raw))s it back losslessly, where a
-    # float would round-trip through binary. Get-then-set on three rows is the accepted
-    # single-user TOCTOU class (accounts/securities/taxes precedent).
-    for key, value in (
-        ("swr_pct", {"value": format(swr, "f")}),
-        ("espp_ticker", {"value": ticker}),
-        ("price_refresh_cron", {"value": cron}),
-        ("calendar_update_due_day", {"value": due_day}),
-    ):
+    """PARTIAL by field (2026-09-06 spec §3.5): `model_dump(exclude_unset=True)` is the house
+    PATCH convention, so an absent key keeps the stored value while an explicit null is the
+    writing card's own intention — which is what still lets a card clear the ticker.
+    Validation, and the cron's hot-apply, run only on PRESENT fields."""
+    provided = body.model_dump(exclude_unset=True)
+    updates: dict[str, dict] = {}
+    if "swr_pct" in provided and body.swr_pct is not None:
+        updates["swr_pct"] = {"value": format(_validated_swr(body.swr_pct), "f")}
+    if "espp_ticker" in provided:
+        # The one field whose null MEANS something: an empty ticker is "unconfigured".
+        ticker = (
+            ""
+            if body.espp_ticker is None or not body.espp_ticker.strip()
+            else _normalize_ticker(body.espp_ticker)
+        )
+        updates["espp_ticker"] = {"value": ticker}
+    if "espp_discount_pct" in provided and body.espp_discount_pct is not None:
+        updates["espp_discount_pct"] = {
+            "value": format(_validated_discount(body.espp_discount_pct), "f")
+        }
+    if "price_refresh_cron" in provided and body.price_refresh_cron is not None:
+        updates["price_refresh_cron"] = {"value": _validated_cron(body.price_refresh_cron)}
+    if "calendar_update_due_day" in provided and body.calendar_update_due_day is not None:
+        updates["calendar_update_due_day"] = {
+            "value": _validated_due_day(body.calendar_update_due_day)
+        }
+    # Every raise is behind us — write only now, so a 422 on the third field cannot leave the
+    # first two committed. Envelope {"value": ...} is the readers' convention, and a Decimal
+    # stores as a plain-notation STRING so the reader re-reads it losslessly.
+    for key, value in updates.items():
         setting = await db.get(AppSetting, key)
         if setting is None:
             db.add(AppSetting(key=key, value=value))
         else:
             setting.value = value
     await db.commit()
-    # AFTER the commit: the stored value is what a crashed reschedule (or a scheduler-less
-    # process — tests, SCHEDULER_ENABLED=0, where this is a plain False) falls back to at
-    # the next boot. Best-effort by design; the response is the same either way.
-    reschedule_price_refresh(cron)
-    return AppSettingsOut(
-        swr_pct=swr,
-        espp_ticker=ticker or None,
-        price_refresh_cron=cron,
-        calendar_update_due_day=due_day,
-    )
+    # AFTER the commit, and ONLY when the cron was actually written: the stored value is what
+    # a crashed reschedule (or a scheduler-less process) falls back to at the next boot.
+    if "price_refresh_cron" in updates:
+        reschedule_price_refresh(updates["price_refresh_cron"]["value"])
+    # One answer, one code path: the response is the GET's effective read, so a partial save
+    # can never echo a field it did not write.
+    return await get_settings(db)
