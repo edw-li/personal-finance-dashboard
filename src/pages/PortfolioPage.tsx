@@ -13,7 +13,7 @@ import {
   updateSecurity,
 } from '../api/portfolio'
 import type { OwnerScope } from '../api/portfolio'
-import { fetchRefreshStatus, fetchSparklines, refreshPrices } from '../api/prices'
+import { fetchRefreshStatus, fetchSparklines } from '../api/prices'
 import { getSnapshot, setSnapshot } from '../api/snapshotCache'
 import { useAssistantView } from '../components/assistant/viewState'
 import ChartCard from '../components/ChartCard'
@@ -36,6 +36,7 @@ import ScopeBar from '../components/shell/ScopeBar'
 import { useScope } from '../components/shell/useScope'
 import StatTile from '../components/StatTile'
 import { useArrivalParam, useArrivalValue } from '../components/useArrivalParam'
+import { usePriceRefresh } from '../components/usePriceRefresh'
 import { rangeZoom, resolvedWindow } from '../charts/timeZoom'
 import type { RangeState, ZoomWindow } from '../charts/timeZoom'
 import type {
@@ -45,7 +46,6 @@ import type {
   HoldingsResponse,
   PortfolioHistory,
   RealizedResponse,
-  RefreshResult,
   RefreshStatus,
   SecurityOut,
   SparklinesResponse,
@@ -63,45 +63,6 @@ type Tab = 'transactions' | 'dividends' | 'securities' | 'realized'
 // The ?tab= arrival vocabulary: the three non-default tabs (arriving at the default
 // needs no command). Module-level so the hook's deps stay identity-stable.
 const TAB_ARRIVALS: readonly Tab[] = ['dividends', 'securities', 'realized']
-
-// A whole-book failure would otherwise paste ~37 tickers into the header note.
-const MAX_FAILED_SHOWN = 5
-
-interface RefreshNote {
-  text: string
-  detail: string
-  failed: number
-}
-
-const NO_NOTE: RefreshNote = { text: '', detail: '', failed: 0 }
-
-function describeRefresh(result: RefreshResult): RefreshNote {
-  const failed = Object.entries(result.failed)
-  // `listed`, not `shown`: the page's `shown` ref (below) is the rendered snapshot, and
-  // two different meanings under one name is how a future edit picks the wrong one.
-  const listed = failed.slice(0, MAX_FAILED_SHOWN).map(([ticker]) => ticker)
-  const more = failed.length - listed.length
-  return {
-    text:
-      `${result.updated.length} updated` +
-      (failed.length > 0
-        ? `, ${failed.length} failed (${listed.join(', ')}${more > 0 ? `, +${more} more` : ''})`
-        : '') +
-      (result.skipped_manual.length > 0
-        ? `, ${result.skipped_manual.length} manual skipped`
-        : '') +
-      // Only when the run actually wrote some: a steady-state refresh between ex-dates
-      // ingests nothing, and ", 0 dividends logged" would read as a failure.
-      (result.dividends_ingested > 0
-        ? `, ${result.dividends_ingested} dividends logged`
-        : '') +
-      ` in ${Math.round(result.duration_ms / 1000)}s`,
-    // Per-ticker reasons ride in the title attribute — React escapes attribute values, so
-    // provider error text cannot inject markup (the RefreshOut.failed escaping note).
-    detail: failed.map(([ticker, reason]) => `${ticker}: ${reason}`).join('\n'),
-    failed: failed.length,
-  }
-}
 
 // Keyed by the fetch parameters, exactly like NetWorthPage's netWorthKey: an owner switch
 // is a DIFFERENT snapshot. 'all' spells the household view so the key can never collide
@@ -235,8 +196,7 @@ export default function PortfolioPage() {
   // would be a synchronous setState in an effect body (react-hooks v7). There is no
   // separate `loading` flag any more — "no holdings yet" IS the frame's loading state.
   const [reloading, setReloading] = useState(cached !== undefined)
-  const [refreshing, setRefreshing] = useState(false)
-  const [refreshNote, setRefreshNote] = useState<RefreshNote>(NO_NOTE)
+  const { refreshing, note: refreshNote, refresh } = usePriceRefresh()
   const [error, setError] = useState<string | null>(null)
   // Four things trigger a load (mount, refresh, three panels' onChanged) and the twelve
   // requests are not ordered — a slow earlier load must never overwrite a later one.
@@ -369,20 +329,10 @@ export default function PortfolioPage() {
   }, [load])
 
   const onRefresh = () => {
-    setRefreshing(true)
-    setRefreshNote(NO_NOTE)
     setError(null)
-    refreshPrices()
-      .then((result) => {
-        setRefreshNote(describeRefresh(result))
-        // Returned, not fired-and-forgotten: the button re-enables only once the fresh
-        // prices are actually on screen.
-        return load()
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : 'Price refresh failed')
-      })
-      .finally(() => setRefreshing(false))
+    // The page keeps the failure in its OWN banner, exactly as before; the hook's `error` is
+    // for callers that have nowhere else to put it.
+    refresh({ after: load, onError: setError })
   }
 
   const totals = holdings?.totals
