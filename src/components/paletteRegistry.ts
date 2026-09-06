@@ -49,9 +49,14 @@ export const SETTINGS_SECTIONS: { id: string; label: string; keywords: string[] 
     keywords: ['backup', 'scheduler', 'refresh', 'database', 'alembic', 'export', 'snapshot'],
   },
   {
-    id: 'app-settings',
-    label: 'App settings',
-    keywords: ['withdrawal rate', 'swr', 'espp ticker', 'cron'],
+    id: 'plan-assumptions',
+    label: 'Plan assumptions',
+    keywords: ['withdrawal rate', 'swr', 'espp ticker', 'espp discount', 'employer match'],
+  },
+  {
+    id: 'price-refresh',
+    label: 'Price refresh',
+    keywords: ['cron', 'schedule', 'refresh prices', 'scheduler'],
   },
   { id: 'password', label: 'Change password', keywords: ['security', 'sign out everywhere'] },
   { id: 'household', label: 'Household', keywords: ['partner', 'spouse', 'marriage', 'people'] },

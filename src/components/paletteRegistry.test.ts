@@ -92,6 +92,19 @@ describe('paletteRegistry', () => {
     expect(all.length).toBe(entries.length)
   })
 
+  it('anchors the two new Settings cards and retires app-settings (2026-09-06 spec §3.6)', () => {
+    expect(SETTINGS_SECTIONS.some((s) => s.id === 'app-settings')).toBe(false)
+    for (const [query, id] of [
+      ['withdrawal rate', 'plan-assumptions'],
+      ['espp discount', 'plan-assumptions'],
+      ['employer match', 'plan-assumptions'],
+      ['cron', 'price-refresh'],
+      ['refresh prices', 'price-refresh'],
+    ] as const) {
+      expect(matchEntries(query, entries).some((e) => e.to === `/settings#${id}`), query).toBe(true)
+    }
+  })
+
   it('anchors the four data-lifecycle cards (2026-09-03 spec §3)', () => {
     for (const [query, id] of [
       ['snapshot now', 'backups'],
