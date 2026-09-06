@@ -358,3 +358,40 @@ describe('netWorthBridgeOption', () => {
     expect(netWorthBridgeCsv(ts(), 0).rows).toEqual([])
   })
 })
+
+import { moversHeight, netWorthMovers, netWorthMoversOption } from './netWorthChartOptions'
+
+// Jul → Aug, four groups moving unequally: taxable +100, liability −40 (more debt is a LOSS bar), cash +30, pre-tax +10 → net +100.
+const MOVED = ts({
+  group_totals: { ...ts().group_totals, cash: ['100.00', '110.00', '140.00'], taxable: ['300.00', '310.00', '410.00'], liability: ['-50.00', '-40.00', '-80.00'] },
+  net_worth: ['550.00', '590.00', '690.00'],
+})
+type MoversRead = { yAxis: { data: string[]; inverse: boolean }; tooltip: { formatter: (p: unknown) => string }
+  series: { name: string; barMaxWidth: number; label: { formatter: (p: { dataIndex: number }) => string }
+    data: { value: number; itemStyle: { color: string }; label: { position: string } }[] }[] }
+const movers = (option: unknown) => option as MoversRead
+
+describe('netWorthMoversOption — Groups', () => {
+  it('draws one bar per group that moved, largest first, signed at its outer end', () => {
+    const option = movers(netWorthMoversOption(MOVED, 2, 'group'))
+    // Four rows, not seven: a group that did not move is a label with no bar.
+    expect(option.yAxis.data).toEqual(['Taxable', 'Liabilities', 'Cash', 'Pre-tax'])
+    expect(option.yAxis.inverse).toBe(true) // the largest mover on TOP
+    const [bars] = option.series
+    expect([bars.name, bars.barMaxWidth]).toEqual(['Change', 24])
+    expect(bars.data.map((d) => d.value)).toEqual([100, -40, 30, 10])
+    expect(bars.data.map((d) => d.itemStyle.color)).toEqual([GROUP_COLORS.taxable, GROUP_COLORS.liability, GROUP_COLORS.cash, GROUP_COLORS.pre_tax])
+    expect(bars.data.map((d) => d.label.position)).toEqual(['right', 'left', 'right', 'right'])
+    expect([0, 1].map((i) => bars.label.formatter({ dataIndex: i }))).toEqual(['+$100', '-$40'])
+  })
+  it('tells each bar its share of the move, and refuses the months it cannot compare', () => {
+    const option = movers(netWorthMoversOption(MOVED, 2, 'group'))
+    const gain = tooltipRows(option.tooltip.formatter({ dataIndex: 0 }))
+    expect([gain.lead, gain.label, gain.sub]).toEqual(['$100.00', 'Taxable', '100% of the change'])
+    const loss = tooltipRows(option.tooltip.formatter({ dataIndex: 1 }))
+    expect([loss.lead, loss.label, loss.sub]).toEqual(['-$40.00', 'Liabilities', '-40% of the change'])
+    // Nothing to compare WITH, and nothing that moved: both are the card's empty sentence.
+    expect([netWorthMoversOption(MOVED, 0, 'group'), netWorthMoversOption(MOVED, -1, 'group'), netWorthMoversOption(ts(), 2, 'account')]).toEqual([null, null, null])
+    expect([moversHeight(1), moversHeight(6), moversHeight(20)]).toEqual([200, 228, 420])
+  })
+})

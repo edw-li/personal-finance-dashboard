@@ -3,17 +3,19 @@
 // in NetWorthPage (it reads page state); only the parts worth unit-testing live here.
 import type { EChartsOption } from '../../charts/echarts'
 import { personSlot, slotColor } from '../../charts/entities'
-import { LINE, STACK_WASH, cents, grid, moneyAxis, monthAxis, pctAxis } from '../../charts/grammar'
+import { BAR_MARKS, LINE, STACK_WASH, capLabel, cents, grid, moneyAxis, monthAxis, pctAxis } from '../../charts/grammar'
 import { FOCUS, legendFor } from '../../charts/legend'
 import { GROUP_COLORS, GROUP_LABELS, GROUP_ORDER, INK, MUTED, OTHER_SERIES_COLOR } from '../../charts/theme'
 import { MARK_LINE_LABEL, MARK_LINE_STYLE, anchorMonthLabel } from '../../charts/markLine'
 import { rangeZoom } from '../../charts/timeZoom'
 import type { RangeState } from '../../charts/timeZoom'
-import { axisTooltip } from '../../charts/tooltip'
+import { axisTooltip, itemTooltip } from '../../charts/tooltip'
 import { waterfallCsv, waterfallSeries, waterfallSteps, waterfallTooltip } from '../../charts/waterfall'
 import type { AccountGroup, NetWorthTimeseries, PersonOut } from '../../types/api'
 import type { ExportTable } from '../../utils/download'
-import { escapeHtml, formatCurrencyCompact, formatMonth } from '../../utils/format'
+import { escapeHtml, formatCurrency, formatCurrencyCompact, formatMonth, formatPct } from '../../utils/format'
+import { toneOf } from '../../utils/tone'
+import type { Tone } from '../../utils/tone'
 
 /** The wizard's snapshot notes, drawn as markers riding the net-worth line. One name so
  * the legend, the tooltip branch and the series stay in lockstep (moved verbatim from
@@ -401,4 +403,75 @@ export function netWorthBridgeCsv(
 ): ExportTable {
   const steps = bridgeSteps(ts, index)
   return steps === null ? { headers: ['Step', 'Amount', 'Remaining'], rows: [] } : waterfallCsv(steps)
+}
+
+// ── "What moved": contribution bars (2026-09-06 spec §4) ────────────────────────────────
+/** Which entity the bars measure. */
+export type MoversMode = 'group' | 'account'
+export const MOVERS_MODES: { value: MoversMode; label: string }[] = [{ value: 'group', label: 'Groups' }, { value: 'account', label: 'Accounts' }]
+
+/** One bar: what moved, by how much, in whose colour. `groupLabel` is null only for the
+ *  folded remainder; `share` is the bar's part of the month's net change, null when net
+ *  worth did not move at all. */
+export interface Mover { label: string; groupLabel: string | null; delta: number; color: string; share: number | null }
+
+/** A missing column is zero, not NaN: an account that starts mid-history still moved the total. */
+const num = (value: string | null | undefined): number => (value == null ? 0 : Number(value))
+/** The movers between index−1 and index, largest first. Empty when there is nothing to
+ *  compare with and when nothing moved — both render the card's empty sentence. Ties keep
+ *  source order: Array.prototype.sort is stable, so GROUP_ORDER breaks them. */
+export function netWorthMovers(ts: NetWorthTimeseries, index: number, mode: MoversMode): Mover[] {
+  if (index < 1 || index >= ts.months.length) return []
+  const net = cents(num(ts.net_worth[index]) - num(ts.net_worth[index - 1]))
+  const share = (delta: number) => (net === 0 ? null : delta / net)
+  const rows: Mover[] =
+    mode === 'group'
+      ? GROUP_ORDER.flatMap((g) => {
+          const delta = cents(num(ts.group_totals[g][index]) - num(ts.group_totals[g][index - 1]))
+          // Liability deltas keep their stored sign: more debt is a NEGATIVE bar.
+          return delta === 0
+            ? []
+            : [{ label: GROUP_LABELS[g], groupLabel: GROUP_LABELS[g], delta, color: GROUP_COLORS[g], share: share(delta) }]
+        })
+      : []
+  return rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+}
+
+/** One 28px row each, floored so a lone mover is not a sliver and capped so a long Accounts
+ *  list is not a page (spec §4.2). */
+export function moversHeight(rows: number): number {
+  return Math.min(420, Math.max(200, 60 + 28 * rows))
+}
+/** "+$1.2K" / "-$840" — on a contribution bar the sign is the whole point. */
+const signedCompact = (value: number): string => (value > 0 ? `+${formatCurrencyCompact(value)}` : formatCurrencyCompact(value))
+/** "83%" — ONE spelling of the share, for the tooltip and the table twin alike. */
+const sharePct = (share: number | null): string | null => (share === null ? null : formatPct(share, { signed: false, decimals: 0 }))
+
+/** "What moved — {month}": sorted contribution bars between two snapshots (spec §4.2).
+ *  Null on the first month and on a month where nothing moved. */
+export function netWorthMoversOption(ts: NetWorthTimeseries, index: number, mode: MoversMode): EChartsOption | null {
+  const movers = netWorthMovers(ts, index, mode)
+  if (movers.length === 0) return null
+  return {
+    grid: grid('horizontal'),
+    tooltip: itemTooltip<{ dataIndex?: number }>({
+      // Account names are user text — itemTooltip escapes every label and sub it renders.
+      body: (p) => {
+        const mover = movers[p.dataIndex ?? -1]
+        if (mover === undefined) return null
+        const pct = sharePct(mover.share)
+        const sub = [pct === null ? null : `${pct} of the change`, mode === 'account' ? mover.groupLabel : null].filter((part): part is string => part !== null).join(' · ')
+        return { value: mover.delta, label: mover.label, sub: sub === '' ? undefined : sub }
+      },
+    }),
+    xAxis: moneyAxis(),
+    yAxis: { type: 'category' as const, data: movers.map((m) => m.label), inverse: true, axisLabel: { width: 118, overflow: 'truncate' as const } },
+    series: [
+      { type: 'bar' as const, name: 'Change', ...BAR_MARKS, barMaxWidth: 24,
+        // capLabel carries show/colour/size/formatter; each item overrides only the POSITION,
+        // so the amount sits at the bar's outer end instead of over the axis (spec §4.2).
+        label: capLabel((p) => signedCompact(movers[p.dataIndex]?.delta ?? 0)),
+        data: movers.map((m) => ({ value: m.delta, itemStyle: { color: m.color }, label: { position: m.delta > 0 ? ('right' as const) : ('left' as const) } })) },
+    ],
+  }
 }
