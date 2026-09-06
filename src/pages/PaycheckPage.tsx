@@ -228,12 +228,21 @@ const MATCH_FIELDS: { field: MatchField; label: string; rate: boolean }[] = [
 /** The policy in words (spec §2.3), read back from the FORM's own state — typed input, not a
  *  server figure re-derived. Zero bands are the stored way to say "no match". */
 function matchWords(form: ProfileFormState): string {
-  const num = (text: string) => Number(canonicalAmount(text.trim() || '0', { expressions: false }))
+  // The BAND boxes' own options — money, so "=" arithmetic is live, exactly as in submit's
+  // belt below. Parsing them any other way would describe a figure that is not the one being
+  // saved. A half-typed expression evaluates to nothing and travels verbatim, so Number()
+  // gives NaN: that is a zero for the purpose of this sentence, never "$NaN" on screen.
+  const num = (text: string) => {
+    const value = Number(canonicalAmount(text.trim() || '0'))
+    return Number.isFinite(value) ? value : 0
+  }
   const band1 = num(form.match_band_1)
   const band2 = num(form.match_band_2)
   if (band1 <= 0 && band2 <= 0) return 'No employer match entered.'
+  // The one-band and two-band forms are FRAGMENTS, so neither is punctuated; the sentence
+  // above is a whole sentence and keeps its full stop.
   const first = `${form.match_rate_1.trim() || '0'}% of the first ${formatCurrency(String(band1))}`
-  if (band2 <= 0) return `${first}.`
+  if (band2 <= 0) return first
   return `${first}, then ${form.match_rate_2.trim() || '0'}% of the next ${formatCurrency(String(band2))}`
 }
 

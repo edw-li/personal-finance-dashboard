@@ -4,6 +4,7 @@ import type { PaycheckScenario } from './paycheckScenario'
 import {
   applySeedFor,
   decodePaycheck,
+  LIMIT_ESPP_423,
   encodePaycheck,
   isEmptyPaycheck,
   labelForPaycheck,
@@ -134,7 +135,7 @@ describe('paycheck scenario codec', () => {
       limit_espp_423: '25000.00',
     }
     const presets = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'self', esppPct: '0.110000000', limitFor: (key) => limits[key] ?? null },
+      { salary: '100000.00', periods: 24, coverage: 'self', esppPct: '0.110000000', limitFor: (key) => limits[key] ?? null, softLimitFor: () => null },
       apply,
     )
     expect(presets.map((p) => [p.id, p.disabled ?? false])).toEqual([
@@ -153,7 +154,7 @@ describe('paycheck scenario codec', () => {
     expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0' })
 
     const family = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'family', esppPct: '0', limitFor: (key) => limits[key] ?? null },
+      { salary: '100000.00', periods: 24, coverage: 'family', esppPct: '0', limitFor: (key) => limits[key] ?? null, softLimitFor: () => null },
       apply,
     )
     expect(family[1].disabled).toBe(true)
@@ -162,7 +163,7 @@ describe('paycheck scenario codec', () => {
     expect(family[3].title).toBe('ESPP is already 0%')
 
     const none = paycheckPresets(
-      { salary: '100000.00', periods: 24, coverage: 'none', esppPct: '0.1', limitFor: () => null },
+      { salary: '100000.00', periods: 24, coverage: 'none', esppPct: '0.1', limitFor: () => null, softLimitFor: () => null },
       apply,
     )
     expect(none[0].title).toBe("Enter this year's 401(k) limit in Settings › Limits")
@@ -172,12 +173,33 @@ describe('paycheck scenario codec', () => {
     )
   })
 
+  it('sizes Max ESPP from the PRACTICAL cap when the row carries one', () => {
+    const apply = vi.fn()
+    // 21,250 is the most contribution dollars the §423 cap buys at the plan discount. Sizing
+    // from the statutory 25,000 would build a scenario the very strip beside it grades
+    // "over" — a chip that walks straight into the warning it exists to avoid.
+    const presets = paycheckPresets(
+      {
+        salary: '250000.00',
+        periods: 24,
+        coverage: 'none',
+        esppPct: '0.11',
+        limitFor: (key) => (key === LIMIT_ESPP_423 ? '25000.00' : null),
+        softLimitFor: (key) => (key === LIMIT_ESPP_423 ? '21250.00' : null),
+      },
+      apply,
+    )
+    presets[2].apply()
+    // 21250 / 250000 = 0.085, well inside the 15 % track — the §423 figure would have been 0.1.
+    expect(apply).toHaveBeenLastCalledWith({ espp_pct: '0.085' })
+  })
+
   it('caps a preset at the knob’s own track, not just at the server bound', () => {
     const apply = vi.fn()
     // 24500 / 20000 = 1.225: past the server's 1 AND past the slider's 50 %. The chip has
     // to land on the track it moves, or the thumb sits off the end and the box refuses it.
     const presets = paycheckPresets(
-      { salary: '20000', periods: 1, coverage: 'self', esppPct: '0.2', limitFor: () => '24500' },
+      { salary: '20000', periods: 1, coverage: 'self', esppPct: '0.2', limitFor: () => '24500', softLimitFor: () => null },
       apply,
     )
     presets[0].apply()

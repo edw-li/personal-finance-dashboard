@@ -854,6 +854,26 @@ describe('PaycheckPage — the profile form', () => {
     expect(await screen.findByText('No employer match entered.')).toBeTruthy()
   })
 
+  it('reads a band box the way SUBMIT will, and never prints a $NaN', async () => {
+    render(<PaycheckPage />, { wrapper: MemoryRouter })
+    await screen.findByText('$3,384.16')
+    // A money box evaluates "=" arithmetic, so the sentence has to parse with the same
+    // options the wire body does — otherwise it describes a figure that is not the one
+    // being saved.
+    type('First match band', '=5000+1000')
+    expect(screen.getByText('100% of the first $6,000.00, then 50% of the next $11,000.00')).toBeTruthy()
+    // Half-typed: nothing evaluates, so the text travels verbatim and Number() gives NaN.
+    // That is a zero for the purpose of this sentence — "$NaN" is not a thing to show anyone.
+    type('First match band', '=5000+')
+    expect(screen.queryByText(/NaN/)).toBeNull()
+    expect(screen.getByText('100% of the first $0.00, then 50% of the next $11,000.00')).toBeTruthy()
+    // One band only is a FRAGMENT, so it carries no full stop; "No employer match entered."
+    // is the one whole sentence here and the only one that keeps its period.
+    type('First match band', '6000')
+    type('Second match band', '0')
+    expect(screen.getByText('100% of the first $6,000.00')).toBeTruthy()
+  })
+
   it('posts the match rates as fractions and the bands as money', async () => {
     render(<PaycheckPage />, { wrapper: MemoryRouter })
     await screen.findByText('$3,384.16')

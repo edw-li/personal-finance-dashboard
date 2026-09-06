@@ -2018,7 +2018,9 @@ export interface PaceHalf {
   end: string
   amount: string
   source: 'entered' | 'estimated'
-  basis: 'paydays' | 'months'
+  /** How an ESTIMATED half was reached. Null on an entered one — a figure the user typed
+   *  was not approximated from anything, so it has no basis to name. */
+  basis: 'paydays' | 'months' | null
 }
 
 // One contribution line annualized from the profile in force, against the year's entered

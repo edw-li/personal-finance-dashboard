@@ -187,7 +187,7 @@ it('names the backfill and the per-month approximation, and stops projecting at 
   renderPanel([
     {
       ...ESPP,
-      halves: [{ ...ESPP.halves![0], source: 'entered' }, { ...ESPP.halves![1], basis: 'months' }],
+      halves: [{ ...ESPP.halves![0], source: 'entered', basis: null }, { ...ESPP.halves![1], basis: 'months' }],
       backfilled_from: '2026-01-01',
       projected_full_year: '18000.00',
       projected_excess: '0.00',
@@ -218,6 +218,14 @@ it('prints the employer match inside the 415(c) figure, under whichever label th
   renderPanel([MISSING])
   expect(screen.queryByText(/incl\./)).toBeNull()
   expect(screen.getByText(/excludes employer match/)).toBeTruthy()
+})
+
+it('hangs the match suffix off the METER row too, not just the call-to-action one', () => {
+  renderPanel([{ ...OK, employer_match: '11500.00' }])
+  // Beside the figures, inside the same cell: a component of the number, not a second
+  // verdict — and the figures themselves still read as they always did.
+  expect(screen.getByText('incl. $11,500.00 match')).toBeTruthy()
+  expect(screen.getByText('$10,000.00 / $24,500.00')).toBeTruthy()
 })
 
 it('sends the reader to the profile for the match, and to the ESPP page for the chained figures', () => {

@@ -180,13 +180,17 @@ export default function TryItPanel({
   // The scenario's own salary/periods/coverage size the presets; limits come from the pace
   // rows already in the payload — the scenario's first (its coverage may differ), then the
   // check's own. null → the chip is disabled with a sentence naming what to enter.
-  const limitFor = (key: string): string | null => {
+  const paceRow = (key: string) => {
     for (const rows of [result?.pace.scenario, result?.pace.baseline, breakdown.pace]) {
       const row = rows?.find((r) => r.key === key)
-      if (row !== undefined && row.limit !== null) return row.limit
+      if (row !== undefined && row.limit !== null) return row
     }
     return null
   }
+  const limitFor = (key: string): string | null => paceRow(key)?.limit ?? null
+  // The practical cap off the SAME row the limit came from, so a chip can never mix one
+  // row's statutory cap with another's practical one.
+  const softLimitFor = (key: string): string | null => paceRow(key)?.soft_limit ?? null
   const coverage = (scenario.hsa_coverage as HsaCoverage | undefined) ?? profile.hsa_coverage
   const presets = paycheckPresets(
     {
@@ -195,6 +199,7 @@ export default function TryItPanel({
       coverage,
       esppPct: scenario.espp_pct ?? profile.espp_pct,
       limitFor,
+      softLimitFor,
     },
     (patch) => sandbox.set(patch, { immediate: true }),
   )

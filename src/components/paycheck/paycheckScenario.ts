@@ -166,6 +166,10 @@ export interface PresetContext {
   esppPct: string
   /** A limit from the pace rows already in the payload; null when nothing is entered. */
   limitFor: (key: string) => string | null
+  /** The PRACTICAL cap off the same row (spec §1.7) — today only the ESPP row carries one.
+   *  Required rather than optional so no panel can quietly size a chip from the statutory
+   *  cap and walk into the "over" the practical one exists to prevent. */
+  softLimitFor: (key: string) => string | null
 }
 
 const LIMITS_HINT = 'in Settings › Limits'
@@ -179,6 +183,7 @@ export function paycheckPresets(
   const elective = ctx.limitFor(LIMIT_401K_ELECTIVE)
   const hsaLimit = ctx.coverage === 'none' ? null : ctx.limitFor(HSA_LIMIT_KEY[ctx.coverage])
   const espp = ctx.limitFor(LIMIT_ESPP_423)
+  const softEspp = ctx.softLimitFor(LIMIT_ESPP_423)
   // Two ceilings, both real: the knob's own track and the server's [0, 1]. A limit larger
   // than the salary (a part-year hire, a partner's smaller base) would otherwise ask for a
   // percentage the slider cannot show and the box would refuse — the chip must land ON the
@@ -224,9 +229,14 @@ export function paycheckPresets(
           : undefined,
       apply: () => {
         if (espp === null) return
-        // The lesser of the §423 ceiling and the limit ÷ salary — the same clamp as the
+        // The PRACTICAL cap where the row has one: the §423 limit buys fewer contribution
+        // dollars than itself at a plan discount, so sizing from 25,000 would build the very
+        // scenario the pace strip beside this chip grades "over". The statutory figure is the
+        // fallback, for a row (or a warm pre-batch snapshot) that carries no practical cap.
+        const cap = softEspp ?? espp
+        // The lesser of the §423 ceiling and the cap ÷ salary — the same clamp as the
         // other two chips, since the ESPP track's max IS the ceiling.
-        apply({ espp_pct: clamp(fraction(espp), KNOB_MAX.espp_pct) })
+        apply({ espp_pct: clamp(fraction(cap), KNOB_MAX.espp_pct) })
       },
     },
     {

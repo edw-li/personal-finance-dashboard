@@ -364,6 +364,17 @@ describe('EsppPage — lots', () => {
     expect(screen.getByText('Sold (unqualified)')).toBeTruthy()
   })
 
+  it('points the lots hint at the plan discount rather than a hardcoded 85%', async () => {
+    renderPage()
+    // The discount is a Settings figure the server prices with; a page that hardcoded the
+    // complement of 15 would quietly lie for anyone on another plan.
+    const hint = await screen.findByText(/Leave the purchase price blank/)
+    expect(hint.textContent).toContain(
+      'the lower of subscription price and purchase FMV, less the plan discount (Settings → Plan assumptions)',
+    )
+    expect(hint.textContent).not.toContain('85%')
+  })
+
   it('links every UNSOLD lot into the what-if card, and never a sold one', async () => {
     renderPage()
     await screen.findByText('$10,720.49')
