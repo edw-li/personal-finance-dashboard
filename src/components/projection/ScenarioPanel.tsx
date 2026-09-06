@@ -37,7 +37,7 @@ const LABELS: Record<ProjectionKnob, string> = {
 
 const HINTS: Partial<Record<ProjectionKnob, string>> = {
   monthly_contribution:
-    'Derived from the months that have BOTH spending and net pay entered: (net pay − living spend − tax paid) plus every earner\'s payroll deductions — 401(k), ESPP and HSA. RSU vests are not included; raise it to model them.',
+    'Derived from the months that have BOTH spending and net pay entered: (net pay − living spend − tax paid) plus every earner\'s payroll deductions — 401(k), ESPP and HSA — and their employer 401(k) match. RSU vests are not included; raise it to model them.',
   annual_spend:
     'Derived from living spend over that same window, × 12. Tax payments and transfers to your own accounts are not living spend, so neither is in this figure.',
   swr: 'Derived from Settings. The FI target is annual spend ÷ this rate.',
@@ -186,8 +186,18 @@ export default function ScenarioPanel({
               <span className="projection-derived">
                 derived: {formatCurrency(breakdown.cash)} cash savings +{' '}
                 {formatCurrency(breakdown.payroll)} payroll deductions
+                {Number(breakdown.employer) !== 0 &&
+                  ` + ${formatCurrency(breakdown.employer)} employer match`}
+                {' = '}
+                {formatCurrency(breakdown.total)}
                 {breakdown.by_person.length > 0 &&
-                  ` (${breakdown.by_person.map((row) => `${row.name} ${formatCurrency(row.monthly)}`).join(' · ')})`}
+                  ` (${breakdown.by_person
+                    .map((row) =>
+                      Number(row.employer_monthly) === 0
+                        ? `${row.name} ${formatCurrency(row.monthly)}`
+                        : `${row.name} ${formatCurrency(row.monthly)} + ${formatCurrency(row.employer_monthly)} match`,
+                    )
+                    .join(' · ')})`}
               </span>
             )}
             {windowed && derivedWindow !== null && (
@@ -227,9 +237,9 @@ export default function ScenarioPanel({
       {people.length > 0 && (
         // Named only where the boxes are: a roster-less database has no retirement to explain.
         <p className="drill-hint">
-          A retirement month drops that person&apos;s CURRENT monthly take-home and payroll
-          deductions — the paycheck profile in force today, not a projection of it — out of the
-          contribution stream from that month on; whatever is left keeps escalating at the
+          A retirement month drops that person&apos;s CURRENT monthly take-home, payroll
+          deductions and employer match — the paycheck profile in force today, not a projection
+          of it — out of the contribution stream from that month on; whatever is left keeps escalating at the
           contribution-growth rate, so a far-off retirement&apos;s cost is slightly understated,
           since the drop never gets that person&apos;s share of the modelled raises. Spending stays
           a household figure, so the FI target does not move. Blank means that person works for the

@@ -257,7 +257,9 @@ describe('ProjectionPage', () => {
     )
     renderPage()
     const note = await screen.findByText(/derived: \$4,000\.00 cash savings \+ \$400\.00 payroll/)
-    expect(note.textContent).toContain('Me $250.00 · Alex $150.00')
+    // No policy, no leg — but the sum is still spelled out, so the reader can check it.
+    expect(note.textContent).toContain('= $4,400.00 (Me $250.00 · Alex $150.00)')
+    expect(note.textContent).not.toContain('employer match')
   })
 
   it('says nothing about a derivation when the knob was typed', async () => {
